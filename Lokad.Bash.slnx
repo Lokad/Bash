@@ -1,0 +1,4 @@
+<Solution>
+  <Folder Name="/src/"><Project Path="src/Lokad.Bash/Lokad.Bash.csproj" /></Folder>
+  <Folder Name="/tests/"><Project Path="tests/Lokad.Bash.Tests/Lokad.Bash.Tests.csproj" /></Folder>
+</Solution>

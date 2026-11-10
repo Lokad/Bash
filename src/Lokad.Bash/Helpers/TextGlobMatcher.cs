@@ -1,0 +1,221 @@
+using System;
+using System.Buffers;
+using System.Text;
+using System.Threading;
+
+namespace Lokad.Bash.Helpers;
+
+/// <summary>Matches text glob patterns with optional per-character quoting metadata.</summary>
+/// <remarks>Text overloads retain UTF-16 code-unit matching; the byte overload matches UTF-8 characters. Callers own pathname policies.</remarks>
+public static class TextGlobMatcher
+{
+    /// <summary>Matches a pattern with every metacharacter active, without allocating a mask.</summary>
+    public static bool IsMatch(ReadOnlySpan<char> pattern, ReadOnlySpan<char> text)
+    {
+        var mask = default(GlobMaskSpan);
+        return IsMatch(pattern, in mask, text);
+    }
+
+    /// <summary>
+    /// Matches glob wildcards against text, supporting ?, *, and bracket expressions.
+    /// </summary>
+    public static bool IsMatch(ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text)
+    {
+        var work = long.MaxValue;
+        return MatchText(pattern, in mask, text, ref work, CancellationToken.None) == GlobMatchResult.Match;
+    }
+
+    /// <summary>Matches UTF-8 characters (or individual malformed bytes), returning the longest prefix in bytes.</summary>
+    public static GlobMatchResult MatchUtf8(
+        ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
+        bool requireEnd, ref long remainingSteps, CancellationToken cancellationToken, out int length) =>
+        Match(new GlobInput(pattern), in mask, new GlobInput(text), requireEnd,
+            ref remainingSteps, cancellationToken, out length);
+
+    /// <summary>Matches a complete text value under a shared work limit and cancellation token.</summary>
+    public static GlobMatchResult MatchText(
+        ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
+        ref long remainingSteps, CancellationToken cancellationToken) =>
+        Match(new GlobInput(pattern), in mask, new GlobInput(text), true,
+            ref remainingSteps, cancellationToken, out _);
+
+    private static GlobMatchResult Match(
+        GlobInput pattern, in GlobMaskSpan mask, GlobInput text, bool requireEnd,
+        ref long remainingSteps, CancellationToken cancellationToken, out int length)
+    {
+        length = -1;
+        var p = 0;
+        var t = 0;
+        var star = -1;
+        var match = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (--remainingSteps < 0)
+                return GlobMatchResult.LimitExceeded;
+            if (p == pattern.Length && (!requireEnd || t == text.Length))
+                length = t;
+            if (t == text.Length)
+                break;
+
+            if (p < pattern.Length
+                && mask[p] == GlobMask.Active
+                && pattern[p] == '?')
+            {
+                p++;
+                t += text.Width(t);
+                continue;
+            }
+
+            if (p < pattern.Length && mask[p] == GlobMask.Active && pattern[p] == '*')
+            {
+                star = p++;
+                match = t;
+                continue;
+            }
+
+            if (p < pattern.Length && mask[p] == GlobMask.Active && pattern[p] == '[')
+            {
+                var bracketEnd = p;
+                if (TryMatchBracket(pattern, in mask, ref bracketEnd, text[t], ref remainingSteps))
+                {
+                    p = bracketEnd;
+                    t += text.Width(t);
+                    continue;
+                }
+                if (bracketEnd != p)
+                {
+                    if (!TryAdvanceStar(ref p, ref t, star, ref match, text))
+                        break;
+                    continue;
+                }
+            }
+
+            if (p < pattern.Length && pattern[p] == text[t])
+            {
+                p += pattern.Width(p);
+                t += text.Width(t);
+                continue;
+            }
+
+            if (TryAdvanceStar(ref p, ref t, star, ref match, text))
+                continue;
+
+            break;
+        }
+
+        while (p < pattern.Length && mask[p] == GlobMask.Active && pattern[p] == '*')
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (--remainingSteps < 0)
+                return GlobMatchResult.LimitExceeded;
+            p++;
+        }
+
+        if (p == pattern.Length && (!requireEnd || t == text.Length))
+            length = t;
+        return remainingSteps < 0 ? GlobMatchResult.LimitExceeded
+            : length >= 0 ? GlobMatchResult.Match : GlobMatchResult.NoMatch;
+
+        static bool TryAdvanceStar(ref int p, ref int t, int star, ref int match, GlobInput text)
+        {
+            if (star < 0 || match == text.Length)
+                return false;
+
+            p = star + 1;
+            match += text.Width(match);
+            t = match;
+            return true;
+        }
+
+        // A valid but nonmatching class must not fall back to matching its opening bracket literally.
+        static bool TryMatchBracket(GlobInput pattern, in GlobMaskSpan mask, ref int position, int value, ref long remainingSteps)
+        {
+            var start = position;
+            position++;
+            if (position >= pattern.Length)
+            {
+                position = start;
+                return false;
+            }
+
+            var negate = false;
+            if (mask[position] == GlobMask.Active && pattern[position] is '!' or '^')
+            {
+                negate = true;
+                position++;
+            }
+
+            var matched = false;
+            // A closing bracket is a literal member when it is first, including after negation.
+            var firstMember = position;
+            for (; position < pattern.Length
+                   && (pattern[position] != ']' || mask[position] != GlobMask.Active || position == firstMember);)
+            {
+                if (--remainingSteps < 0)
+                    return false;
+                var current = pattern[position];
+                var next = position + pattern.Width(position);
+                if (next + 1 < pattern.Length && pattern[next] == '-' && mask[next] == GlobMask.Active
+                    && (pattern[next + 1] != ']' || mask[next + 1] != GlobMask.Active))
+                {
+                    var startRange = current;
+                    var endRange = pattern[next + 1];
+                    if (value >= startRange && value <= endRange)
+                    {
+                        matched = true;
+                    }
+
+                    position = next + 1 + pattern.Width(next + 1);
+                    continue;
+                }
+
+                if (current == value)
+                {
+                    matched = true;
+                }
+                position = next;
+            }
+
+            if (position >= pattern.Length || pattern[position] != ']')
+            {
+                position = start;
+                return false;
+            }
+
+            position++;
+            return negate ? !matched : matched;
+        }
+    }
+
+    // Share the matching algorithm without allocating decoded copies or changing existing UTF-16 callers.
+    private readonly ref struct GlobInput
+    {
+        private readonly ReadOnlySpan<char> _text;
+        private readonly ReadOnlySpan<byte> _bytes;
+        private readonly bool _utf8;
+
+        public GlobInput(ReadOnlySpan<char> text)
+        {
+            _text = text;
+            _bytes = default;
+            _utf8 = false;
+        }
+
+        public GlobInput(ReadOnlySpan<byte> bytes)
+        {
+            _bytes = bytes;
+            _text = default;
+            _utf8 = true;
+        }
+
+        public int Length => _utf8 ? _bytes.Length : _text.Length;
+        public int Width(int index) => _utf8 ? Utf8Text.FirstCharacterLength(_bytes[index..]) : 1;
+        public int this[int index] => !_utf8 ? _text[index]
+            : Rune.DecodeFromUtf8(_bytes[index..], out var rune, out _) == OperationStatus.Done ? rune.Value
+            : 0x110000 + _bytes[index]; // Invalid bytes must not alias Unicode replacement characters.
+    }
+}
+
+public enum GlobMatchResult { NoMatch, Match, LimitExceeded }

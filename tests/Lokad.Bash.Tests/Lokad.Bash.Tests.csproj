@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="All" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Lokad.Bash" />
+    <Using Include="Lokad.Bash.Files" />
+    <Using Include="Lokad.Bash.Helpers" />
+    <Using Include="Lokad.Bash.Memory" Alias="Memory" />
+    <ProjectReference Include="../../src/Lokad.Bash/Lokad.Bash.csproj" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,14 @@
+bin/
+obj/
+.vs/
+.idea/
+.codex/
+.claude/
+artifacts/
+TestResults/
+BenchmarkDotNet.Artifacts/
+tmp/
+*.nupkg
+*.snupkg
+*.user
+*.nettrace
