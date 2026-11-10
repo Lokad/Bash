@@ -6,7 +6,7 @@ admission through `IBashHost`. The runtime has no third-party runtime dependenci
 and does not supply a filesystem or process host.
 
 ```powershell
-dotnet add package Lokad.Bash
+dotnet add package Lokad.Bash --version 0.1.0
 ```
 
 ```csharp
@@ -49,7 +49,7 @@ dotnet test Lokad.Bash.slnx -c Release --no-restore
 dotnet pack src/Lokad.Bash/Lokad.Bash.csproj -c Release --no-restore
 ```
 
-CI runs on Windows and Linux. Packages go to `artifacts/nuget/`. Ordinary builds
-use `0.0.0-dev`; release packaging supplies an explicit version.
-Before 1.0, minor versions may change
-public APIs, with migration notes in the changelog.
+CI runs on Windows and Linux. Packages go to `artifacts/nuget/` as
+`Lokad.Bash.0.1.0.nupkg` and `Lokad.Bash.0.1.0.snupkg`.
+Before 1.0, minor versions may change public APIs, with migration notes in the
+changelog.

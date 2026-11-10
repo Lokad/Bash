@@ -6,13 +6,13 @@
     <Description>Embeddable non-interactive Bash interpreter for .NET with application-controlled commands, files, pipes and memory admission.</Description>
     <Authors>Lokad</Authors>
     <Company>Lokad</Company>
-    <Version>0.0.0-dev</Version>
-    <AssemblyVersion>0.0.0.0</AssemblyVersion>
-    <FileVersion>0.0.0.0</FileVersion>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes>See CHANGELOG.md for release details.</PackageReleaseNotes>
+    <PackageReleaseNotes>Initial release. See CHANGELOG.md for supported features and compatibility limits.</PackageReleaseNotes>
     <PackageTags>bash;shell;scripting;interpreter;embedding;sandbox</PackageTags>
     <PackageProjectUrl>https://github.com/Lokad/Bash</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Lokad/Bash.git</RepositoryUrl>
