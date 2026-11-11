@@ -7,10 +7,6 @@
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
-    <Using Include="Lokad.Bash" />
-    <Using Include="Lokad.Bash.Files" />
-    <Using Include="Lokad.Bash.Helpers" />
-    <Using Include="Lokad.Bash.Memory" Alias="Memory" />
     <ProjectReference Include="../../src/Lokad.Bash/Lokad.Bash.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>

@@ -6,6 +6,7 @@ using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Formatting;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Files;
 
 namespace Lokad.Bash.Tests.EndToEnd;
 
@@ -15,7 +16,29 @@ public static class EndToEndHarness
 {
     public sealed record ExecutionResult(int ExitCode, string StdOut, string StdErr, TestHost Host);
 
+    public static TestHost ConfigureHost(Action<TestHost> configure)
+    {
+        var host = new TestHost();
+        configure(host);
+        return host;
+    }
+
+    public static TestHost WithMemoryBudget(TestHost host, Memory.IMemoryBudget budget)
+    {
+        host.MemoryBudget = budget;
+        return host;
+    }
+
     public static TestHost BuildTree(IEnumerable<(string Path, string Content)> files) => BuildTree([], files);
+
+    public static TestHost BuildTree(IEnumerable<(string Path, DateTimeOffset ModifiedAt)> directories,
+        IEnumerable<(string Path, string Content, DateTimeOffset ModifiedAt)> files)
+    {
+        var host = new TestHost();
+        foreach (var (path, modifiedAt) in directories) host.AddDirectory(path, modifiedAt);
+        foreach (var (path, content, modifiedAt) in files) host.AddFile(path, content, modifiedAt);
+        return host;
+    }
 
     public static TestHost BuildTree(IEnumerable<string> directories, IEnumerable<(string Path, string Content)> files)
     {
@@ -31,8 +54,26 @@ public static class EndToEndHarness
     public static async Task<ExecutionResult> RunScriptAsync(string script, TestHost host, ReadOnlyMemory<byte> standardInput)
     {
         host.SetStandardInputBytes(standardInput.ToArray());
-        var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse(script));
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        return await RunParsedAsync(Parser.Parse(script), host, EvaluationOptions.Default, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+    }
+
+    public static Task<ExecutionResult> RunScriptAsync(string script, TestHost host, ReadOnlyMemory<byte> standardInput, TimeSpan timeout)
+    {
+        host.SetStandardInputBytes(standardInput.ToArray());
+        return RunParsedAsync(Parser.Parse(script), host, EvaluationOptions.Default, timeout);
+    }
+
+    public static Task<ExecutionResult> RunScriptAsync(string script, TestHost host, EvaluationOptions options) =>
+        RunParsedAsync(Parser.Parse(script), host, options, TimeSpan.FromSeconds(10));
+
+    public static Task<ExecutionResult> RunSourceAsync(ReadOnlyMemory<byte> source, TestHost host, TimeSpan timeout) =>
+        RunParsedAsync(Parser.Parse(source), host, EvaluationOptions.Default, timeout);
+
+    private static async Task<ExecutionResult> RunParsedAsync(ParsedScript parsed, TestHost host, EvaluationOptions options, TimeSpan timeout)
+    {
+        host.ResetOutput();
+        var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(parsed, options: options);
+        using var cancellation = new CancellationTokenSource(timeout);
         var result = await new Engine().RunAsync(evaluation, host, cancellation.Token).ConfigureAwait(false);
         return new(result.ExitCode, host.GetOutput(FileDescriptor.StdOut), host.GetOutput(FileDescriptor.StdErr), host);
     }
@@ -41,6 +82,9 @@ public static class EndToEndHarness
         await host.GetPathKindAsync(new FilePathLookup(new ShellPath(path), FileLinkFollowing.Follow), CancellationToken.None).ConfigureAwait(false) == FilePathKind.File;
 
     public static Task<string> ReadFileAsync(TestHost host, string path) => Task.FromResult(host.ReadFile(path));
+
+    public static async Task<bool> DirectoryExistsAsync(TestHost host, string path) =>
+        await host.GetPathKindAsync(new FilePathLookup(new ShellPath(path), FileLinkFollowing.Follow), CancellationToken.None).ConfigureAwait(false) == FilePathKind.Directory;
 }
 
 public sealed class TestHost : MockFileSystem
@@ -49,12 +93,25 @@ public sealed class TestHost : MockFileSystem
     private int _nextPipe = 1_000_000;
     public Capture StandardOutput => new(GetOutputBytes(FileDescriptor.StdOut));
     public Capture StandardError => new(GetOutputBytes(FileDescriptor.StdErr));
-    public readonly record struct Capture(ReadOnlyMemory<byte> Content);
+    public readonly record struct Capture(ReadOnlyMemory<byte> Content)
+    {
+        public string TextContent => Encoding.UTF8.GetString(Content.Span);
+    }
+
+    public Task<RunResult> RunAsync(string script, CancellationToken cancel) =>
+        BashScript.RunAsync(this, script, EvaluationOptions.Default, cancel);
+
+    public override async ValueTask DisposeAsync()
+    {
+        foreach (var descriptor in _pipes.Keys)
+            await CloseDescriptorAsync(descriptor).ConfigureAwait(false);
+        await base.DisposeAsync().ConfigureAwait(false);
+    }
 
     public override Task<IReadOnlyList<CommandLookupResult>> ResolveCommandsAsync(
         IReadOnlyList<string> names, ShellPath directory, IReadOnlyList<EnvironmentVariable> environment, CancellationToken cancel) =>
         Task.FromResult<IReadOnlyList<CommandLookupResult>>(names.Select(name =>
-            name is "cat" or "sh" or "bash" or "echo" or "printf" ? new CommandLookupResult.Found("/usr/bin/" + name)
+            name is "cat" or "sh" or "bash" or "echo" or "printf" or "fixture-bindings" ? new CommandLookupResult.Found("/usr/bin/" + name)
                 : (CommandLookupResult)new CommandLookupResult.Missing()).ToArray());
 
     public override async Task<CommandExecutionResult> RunCommandAsync(
@@ -62,6 +119,41 @@ public sealed class TestHost : MockFileSystem
     {
         try
         {
+            // Fixed byte-preserving projection for declaration assertions.
+            if (command.CommandName == "fixture-bindings")
+            {
+                using var collected = new MemoryStream();
+                while (true)
+                {
+                    using var read = await ReadAsync(command.StdIn, DescriptorReadRequest.UpTo(64 * 1024), cancel).ConfigureAwait(false);
+                    if (read.Content.IsEmpty) break;
+                    var bytes = read.Content.ToArray();
+                    read.Consume(bytes.Length);
+                    collected.Write(bytes);
+                }
+                var content = collected.ToArray();
+                var matched = false;
+                for (var start = 0; start < content.Length;)
+                {
+                    var end = Array.IndexOf(content, (byte)'\n', start);
+                    if (end < 0) end = content.Length;
+                    ReadOnlyMemory<byte> line = content.AsMemory(start, end - start);
+                    var name = line;
+                    if (line.Span.StartsWith("declare "u8))
+                    {
+                        var separator = line.Span[8..].IndexOf((byte)' ');
+                        name = separator < 0 ? ReadOnlyMemory<byte>.Empty : line[(9 + separator)..];
+                    }
+                    if (name.Span.StartsWith("probe_"u8))
+                    {
+                        await WriteAsync(command.StdOut, line, cancel).ConfigureAwait(false);
+                        await WriteAsync(command.StdOut, "\n"u8.ToArray(), cancel).ConfigureAwait(false);
+                        matched = true;
+                    }
+                    start = end + 1;
+                }
+                return new CommandExecutionResult.Completed(matched ? 0 : 1);
+            }
             if (command.CommandName is "sh" or "bash")
             {
                 var source = command.Arguments[0].ToUtf8String() == "-c"

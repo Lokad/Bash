@@ -9,13 +9,17 @@ using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
-using Lokad.Bash;
 using Lokad.Bash.Tree;
 
 namespace Lokad.Bash.Tests;
 
-public class MockFileSystem : IBashHost
+public class MockFileSystem : IBashHost, IAsyncDisposable
 {
+    public virtual async ValueTask DisposeAsync()
+    {
+        foreach (var descriptor in _openFiles.Keys.ToArray())
+            await CloseDescriptorAsync(descriptor).ConfigureAwait(false);
+    }
     public Lokad.Bash.Memory.IMemoryBudget MemoryBudget { get; set; } = new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes);
 
     public IShellTiming Timing { get; init; } = TestTiming.Instance;
@@ -39,6 +43,8 @@ public class MockFileSystem : IBashHost
     public int CommandExitCode { get; set; }
 
     public int OpenFileCount => _openFiles.Count;
+
+    public void ResetOutput() => _outputs.Clear();
 
     public bool PreparedReadsAreBuffered { get; init; } = true;
 

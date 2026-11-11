@@ -1,6 +1,7 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Tree;
+using Lokad.Bash.Files;
 
 namespace Lokad.Bash.Tests;
 

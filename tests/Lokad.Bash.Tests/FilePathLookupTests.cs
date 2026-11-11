@@ -1,3 +1,4 @@
+using Lokad.Bash.Files;
 namespace Lokad.Bash.Tests;
 
 public sealed class FilePathLookupTests

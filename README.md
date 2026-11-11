@@ -49,6 +49,10 @@ dotnet test Lokad.Bash.slnx -c Release --no-restore
 dotnet pack src/Lokad.Bash/Lokad.Bash.csproj -c Release --no-restore
 ```
 
+Language and evaluator-contract regressions use in-memory `IBashHost` fixtures.
+Their small command stubs support language assertions; utility implementations,
+storage systems and application command-adapter policies are tested by their hosts.
+
 CI runs on Windows and Linux. Packages go to `artifacts/nuget/` as
 `Lokad.Bash.0.1.0.nupkg` and `Lokad.Bash.0.1.0.snupkg`.
 Before 1.0, minor versions may change public APIs, with migration notes in the

@@ -1,4 +1,5 @@
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Files;
 
 namespace Lokad.Bash.Tests;
 

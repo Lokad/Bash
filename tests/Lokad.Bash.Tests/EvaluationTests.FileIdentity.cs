@@ -1,6 +1,7 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Syntax;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
+using Lokad.Bash.Files;
 
 namespace Lokad.Bash.Tests;
 
