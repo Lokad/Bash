@@ -3065,40 +3065,9 @@ public sealed partial class Evaluation : IFileTester
                     ErrexitIgnored = scope.Context.ErrexitIgnored
                 }
             };
-            var result = EvaluationResult.FromExitCode(0);
-            using var commands = Parser.TryParseCommandUnits(((BoundedReadResult.Complete)input).Content).GetEnumerator();
-            while (true)
-            {
-                CheckCancellation();
-                if (!commands.MoveNext())
-                    break;
-                if (commands.Current is CommandUnitParseResult.Failed failedUnit)
-                {
-                    await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
-                    return result.WithExitCode(2);
-                }
-
-                // Loop flow skips execution but still checks the remaining source syntax.
-                if (result.Flow is FlowControlKind.Break or FlowControlKind.Continue)
-                    continue;
-
-                result = await EvaluateCommandAsync(((CommandUnitParseResult.Parsed)commands.Current).Command, sourceScope, negated: false)
-                    .ConfigureAwait(false);
-                if (result.Flow == FlowControlKind.Return)
-                    return EvaluationResult.FromExitCode(result.ExitCode);
-                if (result.Flow == FlowControlKind.Exit)
-                {
-                    // Recover at the command-unit boundary, publishing its status before the next unit.
-                    result = await FinalizeResultAsync(RecoverScriptExpansionFailure(result), negated: false).ConfigureAwait(false);
-                    if (result.Flow == FlowControlKind.Exit)
-                        return result;
-                }
-
-                if (result.Flow == FlowControlKind.None && _state.TryGetStickyExitCode(out var sticky))
-                    result = result.WithExitCode(sticky);
-            }
-
-            return RecoverScriptExpansionFailure(result);
+            return await EvaluateCommandUnitsAsync(
+                ShellSource.FromBytes(((BoundedReadResult.Complete)input).Content), sourceScope, ScriptExecutionKind.Source)
+                .ConfigureAwait(false);
         }
         finally
         {

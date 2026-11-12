@@ -1,6 +1,6 @@
 namespace Lokad.Bash.Syntax;
 
-/// <summary>A complete sourced-script command unit or its terminal syntax failure.</summary>
+/// <summary>A complete script command unit or its terminal syntax failure.</summary>
 internal abstract record CommandUnitParseResult
 {
     private CommandUnitParseResult() { }

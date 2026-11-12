@@ -73,6 +73,11 @@ job/process-group control, OS signal handling, process substitution, `coproc`,
 other than errexit.
 The runtime does not import process environment variables or startup files.
 
+The public script runner, `source` and `eval` execute complete command units as
+they are parsed. Earlier units retain their effects before later syntax failure;
+the failing unit executes no partial command list. Explicit whole-script parsing
+remains available for callers that require validation before execution.
+
 Arithmetic uses wrapping signed 64-bit values, with decimal, octal, hexadecimal and
 explicit base-2-through-64 constants. Stored variable/array values are arithmetic
 expressions evaluated against current bindings; they are not re-expanded as shell

@@ -93,8 +93,10 @@ public sealed class ExecutionLifetimeTests
         }
     }
 
-    [Fact]
-    public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle()
+    [Theory]
+    [InlineData("echo borrowed >/out")]
+    [InlineData("echo borrowed >/out\n)\n")]
+    public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle(string source)
     {
         using var cancellation = new CancellationTokenSource();
         var governor = new MemoryGovernor(64 * 1024);
@@ -111,7 +113,7 @@ public sealed class ExecutionLifetimeTests
         host.EnqueueOpenFileDescriptor(9);
         host.EnqueueAppendTask(writeComplete.Task);
         host.EnqueueCloseDescriptorTask(closeComplete.Task);
-        var running = BashScript.RunAsync(host, "echo borrowed >/out", EvaluationOptions.Default, cancellation.Token);
+        var running = BashScript.RunAsync(host, source, EvaluationOptions.Default, cancellation.Token);
         try
         {
             var borrowed = await writeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));

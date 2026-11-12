@@ -83,7 +83,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
     [InlineData("x=10; eval 'exec cat <<<\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
     [InlineData("x=10; eval 'exec cat <\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
     [InlineData("x=10; eval 'exec cat >\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
-    [InlineData("x=10; eval 'exec cat <<EOF\n$((x=30,1/0))\nEOF\nprintf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
+    [InlineData("x=10; eval 'exec cat <<EOF\n$((x=30,1/0))\nEOF\nprintf bad'; printf '%s:%s' \"$?\" \"$x\"", "bad0:30", 0, "x=30,1/0: division by 0\n")]
     [InlineData("eval 'command exec cat <<<\"$((1/0))\"; printf bad' || printf caught; printf after", "caughtafter", 0, "1/0: division by 0\n")]
     [InlineData("eval 'exec cat 2>/error <<<\"$((1/0))\"'; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0\n", 0, "")]
     [InlineData("eval 'exec cat <<<\"${MISSING:?required}\"; printf bad'; printf bad", "", 1, "MISSING: required\n")]

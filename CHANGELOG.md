@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Execute complete command units through the same evaluator in `BashScript.RunAsync`,
+  `source` and `eval`. Earlier units retain their effects before later syntax errors;
+  an invalid unit causes no partial execution. Preserve explicit whole-script
+  parsing/prepared execution, early exit and descriptor cleanup.
 - Support implicit positional lists in `for name; do ...; done`, including newline
   and direct-`do` forms. Reuse quoted `"$@"` expansion and snapshot loop items before
   body changes to positional parameters.

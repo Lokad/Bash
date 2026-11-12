@@ -17,7 +17,7 @@ public sealed class BashScriptTests
     }
 
     [Fact]
-    public async Task ReportsSyntaxFailureWithoutExecutingEarlierCommands()
+    public async Task ReportsSyntaxFailureBeforeExecutingTheInvalidUnit()
     {
         var host = EndToEndHarness.BuildTree([]);
         var result = await BashScript.RunAsync(host, "printf unexpected; if", EvaluationOptions.Default, CancellationToken.None);
