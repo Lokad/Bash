@@ -32,7 +32,7 @@ public sealed class ExternalRedirectionScopeTests
     [InlineData("unset HDE_VALUE; cat(){ printf wrong; }; command cat <<< \"${HDE_VALUE:=set}\"; printf 'after:%s' \"${HDE_VALUE-unset}\"", "set\nafter:unset", "", 0)]
     [InlineData("HDE_VALUE=outer; hde_fn(){ local HDE_VALUE=inner; cat <<< \"${HDE_MISSING:?stop}\"; printf 'inside:%s:%s' \"$?\" \"$HDE_VALUE\"; }; hde_fn; printf ':outside:%s' \"$HDE_VALUE\"", "inside:1:inner:outside:outer", "HDE_MISSING: stop\n", 0)]
     [InlineData("unset HDE_VALUE HDE_LINE; read -r HDE_LINE <<< \"${HDE_VALUE:=set}\"; printf '%s:%s' \"$HDE_VALUE\" \"$HDE_LINE\"", "set:set", "", 0)]
-    [InlineData("set -o pipefail; unset HDE_MISSING; cat <<< \"${HDE_MISSING:?stop}\" | cat; printf 'after:%s' \"$?\"", "after:1", "HDE_MISSING: stop\n", 0)]
+    [InlineData("unset HDE_MISSING; cat <<< \"${HDE_MISSING:?stop}\" | cat; printf 'after:%s' \"$?\"", "after:1", "HDE_MISSING: stop\n", 0)]
     [InlineData("HDE_VALUE=; export HDE_VALUE; sh -c 'printf \"child:%s\" \"$HDE_VALUE\"' <<< \"${HDE_VALUE:=redirected}\"; printf ':caller:%s' \"$HDE_VALUE\"", "child::caller:", "", 0)]
     [InlineData("unset HDE_VALUE; exec 3<<<seed; cat <&3 <<< \"${HDE_VALUE:=set}\"; read -r HDE_LINE <&3; printf 'after:%s:%s' \"$HDE_LINE\" \"${HDE_VALUE-unset}\"", "set\nafter:seed:unset", "", 0)]
     [InlineData("HDE_ITEMS=(old); cat <<< \"${HDE_ITEMS[1]:=set}\"; printf 'caller:%s:%s' \"${HDE_ITEMS[0]}\" \"${HDE_ITEMS[1]-unset}\"", "set\ncaller:old:unset", "", 0)]

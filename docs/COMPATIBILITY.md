@@ -25,8 +25,15 @@ checks. The source bound limits parser input; nesting guards protect recursive
 syntax handling. They are independent of execution duration. There are no lifetime
 word, character, brace, argument-copy or pattern-step quotas. Callers supply
 cancellation and a live-memory allowance. Pending here-documents followed by a
-pipeline/list operator before the body are not fully supported. Builtins implement their documented option subsets;
-`set` sets positional parameters and does not toggle shell options.
+pipeline/list operator before the body are not fully supported. Builtins implement
+their documented option subsets;
+`set` sets positional parameters and supports `-e`/`+e` and
+`-o errexit`/`+o errexit`. Errexit stops unhandled failures, including failed
+pipelines under the fixed pipefail policy. Tested conditions, logical-list
+positions and negation suppress it through nested functions/groups and source/eval.
+Command substitution clears errexit by default; parenthesized subshells inherit it.
+`$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
+errexit only; other option changes return an error with a diagnostic.
 
 Regular expression conditions currently use .NET regular expressions rather than
 claiming full POSIX ERE compatibility. Each match has a 250 ms backtracking timeout;
@@ -35,7 +42,8 @@ does not interrupt an individual .NET regex call before that timeout.
 
 Out of scope: interactive prompts/history/completion, aliases, background execution,
 job/process-group control, OS signal handling, process substitution, `coproc`,
-`select`, network redirection devices, `ulimit`, `umask` and shell option toggles.
+`select`, network redirection devices, `ulimit`, `umask` and shell option toggles
+other than errexit.
 The runtime does not import process environment variables or startup files.
 
 Hosts provide external commands, including any `sh`/`bash` aliases and script-file

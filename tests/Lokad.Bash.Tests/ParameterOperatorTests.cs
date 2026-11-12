@@ -154,7 +154,6 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
-    [InlineData("-")]
     [InlineData("$")]
     public async Task Evaluation_UnsupportedSpecialParametersFailWithoutThrowing(string parameter)
     {

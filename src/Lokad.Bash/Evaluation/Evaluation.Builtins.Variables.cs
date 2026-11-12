@@ -200,40 +200,64 @@ public sealed partial class Evaluation
         Variables commandVars,
         bool negated)
     {
-        var arguments = new List<ShellValue>(Math.Max(0, words.Count - 1));
-        for (var index = 1; index < words.Count; index++)
-            arguments.Add(words[index]);
-
-        if (arguments.Count == 0)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated);
-
-        var argumentIndex = 0;
-        var option = arguments[argumentIndex];
-
-        if (option.Bytes.Span.Length == 1 && option.Bytes.Span[0] == '-')
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated);
-
-        if (option.Bytes.Span.Length == 2
-            && option.Bytes.Span[0] == '-'
-            && option.Bytes.Span[1] == '-')
+        var index = 1;
+        var replacePositionals = false;
+        while (index < words.Count)
         {
-            argumentIndex++;
-            if (argumentIndex >= arguments.Count)
+            var option = words[index];
+            var bytes = option.Bytes.Span;
+            if (bytes.SequenceEqual("--"u8))
             {
-                commandVars.ReplacePositionalParameters([]);
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated);
+                replacePositionals = true;
+                index++;
+                break;
             }
+            if (bytes.SequenceEqual("-"u8))
+            {
+                index++;
+                break;
+            }
+            if (bytes.Length < 2 || bytes[0] is not ((byte)'-' or (byte)'+'))
+                break;
+
+            var enabled = bytes[0] == (byte)'-';
+            if (bytes.Length == 2 && bytes[1] == (byte)'o')
+            {
+                if (++index == words.Count)
+                {
+                    var inspection = enabled
+                        ? "errexit\t" + (_state.ErrexitEnabled ? "on\n" : "off\n")
+                        : "set " + (_state.ErrexitEnabled ? "-o" : "+o") + " errexit\n";
+                    var written = await ExecuteWriteAsync(GetStdOutDescriptor(), Utf8Text.Encode(inspection)).ConfigureAwait(false);
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(written.IsError ? 1 : 0), negated).ConfigureAwait(false);
+                }
+                if (!words[index].Bytes.Span.SequenceEqual("errexit"u8))
+                    return await InvalidOptionAsync(words[index], named: true).ConfigureAwait(false);
+                _state.ErrexitEnabled = enabled;
+            }
+            else
+            {
+                foreach (var flag in bytes[1..])
+                {
+                    if (flag != (byte)'e')
+                        return await InvalidOptionAsync(option, named: false).ConfigureAwait(false);
+                    _state.ErrexitEnabled = enabled;
+                }
+            }
+            index++;
         }
-        else if (!option.IsEmpty && option.Bytes.Span[0] == '-')
+
+        if (replacePositionals || index < words.Count)
+            commandVars.ReplacePositionalParameters(words.Skip(index).ToArray());
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
+
+        async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, bool named)
         {
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
+            using var output = new ByteMemoryBuilder(0, Memory.Budget);
+            output.Append(option.Bytes).Append(named ? ": invalid option name"u8 : ": unsupported option"u8);
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText("set"), ShellValue.FromBytes(output.ToMemory())).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
-
-        if (argumentIndex >= arguments.Count)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated);
-
-        commandVars.ReplacePositionalParameters(arguments.GetRange(argumentIndex, arguments.Count - argumentIndex));
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated);
     }
 
     /// <summary>

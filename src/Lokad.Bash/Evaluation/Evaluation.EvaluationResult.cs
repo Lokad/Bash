@@ -13,7 +13,7 @@ public partial class Evaluation
     }
 
     /// <summary> Represents the exit code and flow-control outcome of evaluating a node. </summary>
-    private readonly struct EvaluationResult(int exitCode, FlowControlKind flow, int level)
+    private readonly struct EvaluationResult(int exitCode, FlowControlKind flow, int level, bool testedStatus)
     {
         public int ExitCode { get; } = exitCode;
 
@@ -47,25 +47,30 @@ public partial class Evaluation
         /// </remarks>
         public int Level { get; } = level;
 
-        public EvaluationResult WithExitCode(int exitCode) => new(exitCode, Flow, Level);
+        /// <summary>A compound command can finish with a failure whose status was already tested.</summary>
+        public bool TestedStatus { get; } = testedStatus;
 
-        public EvaluationResult WithLevel(int level) => new(ExitCode, Flow, level);
+        public EvaluationResult WithExitCode(int exitCode) => new(exitCode, Flow, Level, TestedStatus);
 
-        public static EvaluationResult FromExitCode(int exitCode) => new(exitCode, FlowControlKind.None, 0);
+        public EvaluationResult WithLevel(int level) => new(ExitCode, Flow, level, TestedStatus);
+
+        public EvaluationResult WithTestedStatus(bool tested) => new(ExitCode, Flow, Level, tested);
+
+        public static EvaluationResult FromExitCode(int exitCode) => new(exitCode, FlowControlKind.None, 0, false);
 
         /// <summary>
         /// Creates a break flow result with a remaining loop level count.
         /// </summary>
-        public static EvaluationResult Break(int level, int exitCode) => new(exitCode, FlowControlKind.Break, level);
+        public static EvaluationResult Break(int level, int exitCode) => new(exitCode, FlowControlKind.Break, level, false);
 
         /// <summary>
         /// Creates a continue flow result with a remaining loop level count.
         /// </summary>
-        public static EvaluationResult Continue(int level, int exitCode) => new(exitCode, FlowControlKind.Continue, level);
+        public static EvaluationResult Continue(int level, int exitCode) => new(exitCode, FlowControlKind.Continue, level, false);
 
-        public static EvaluationResult Return(int exitCode) => new(exitCode, FlowControlKind.Return, 0);
+        public static EvaluationResult Return(int exitCode) => new(exitCode, FlowControlKind.Return, 0, false);
 
-        public static EvaluationResult Exit(int exitCode) => new(exitCode, FlowControlKind.Exit, 0);
+        public static EvaluationResult Exit(int exitCode) => new(exitCode, FlowControlKind.Exit, 0, false);
     }
 
 }

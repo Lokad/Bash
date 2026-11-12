@@ -32,7 +32,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "646f6e653a31303030",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "loop-no-lifetime-credit",
@@ -45,7 +46,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "646f6e653a3230303030",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "arithmetic-control",
@@ -58,7 +60,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "373a37",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "and-or-control",
@@ -71,7 +74,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "7265636f76657265643a30",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "tested-loop-control",
@@ -84,7 +88,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "303132",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "pipefail-control",
@@ -97,7 +102,8 @@
       "files": [],
       "exitCode": 1,
       "stdoutHex": "",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "pipeline-order-control",
@@ -110,7 +116,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "616c7068610a626574610a",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "brace-order-control",
@@ -123,7 +130,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "3c61313e3c61323e3c62313e3c62323e3c63313e3c63323e",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "quoted-fields-control",
@@ -136,7 +144,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "3c6120623e3c613e3c623e",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "substitution-trim-control",
@@ -149,7 +158,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "3c76616c75653e",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "malformed-byte-control",
@@ -162,7 +172,8 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "ff",
-      "stderrHex": ""
+      "stderrHex": "",
+      "fileEffects": []
     },
     {
       "id": "function-frame-control",
@@ -175,6 +186,823 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "3c7365636f6e643e3c6f757465723e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-loop",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; for n in 1 2 3; do printf 'attempt:%s\\n' \"$n\"; false; done; printf 'finished\\n'",
+      "scriptSha256": "d6159b4ed1139a2711b1dd5e722d660fb1f8bd74520a16f1120560c9f5dd0841",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "617474656d70743a310a",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-disable-short",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; set +e; false; printf continued",
+      "scriptSha256": "45cd4d0e7df3e4fadd03f41f1da09266ad6853ae92adeecf246e50dd42d2f482",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "636f6e74696e756564",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-disable-long",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -o errexit; set +o errexit; false; printf continued",
+      "scriptSha256": "042440905ee730a627c34f998eb60d09879915d56560e782015bdf7b4c3951cf",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "636f6e74696e756564",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-long-stop",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -o errexit; false; printf wrong",
+      "scriptSha256": "60ef8dfe131b9ca6fbeb5aedb165509293aabf8cfbb3e6c66848570fdf54d0ec",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-positionals",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e -- a b; printf '<%s>' \"$@\"; set --; printf ':%s' \"$#\"",
+      "scriptSha256": "cd1910c25cd83b4b4e6bef40316109ea22c4c4b6c850e555a8e2434fa4dcdfe8",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c613e3c623e3a30",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-if",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; if false; then printf wrong; elif false; then printf wrong; else printf else; fi; printf after",
+      "scriptSha256": "c9103ab7289518ccba350e3cad66251fcd569bc769643e9c8082e873260a09d0",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "656c73656166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-while",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; while false; do printf wrong; done; printf after",
+      "scriptSha256": "087c67dda171baa192591e0075150432552ea503e3d85a898b6f3eeeb8277361",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-until",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; n=0; until ((n==2)); do printf '%s' \"$n\"; ((n+=1)); done; printf after",
+      "scriptSha256": "31be592ba50bbd4f91c79011d41615abec80fbb54bf2d8975d16a355268288b8",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "30316166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-and-tested",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; false && printf wrong; printf after",
+      "scriptSha256": "3f065fc84ce0ce175e81bc7b905eeb4f21d79c5a3a5f2661b134691edf1ec82b",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-and-final",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; true && false; printf wrong",
+      "scriptSha256": "b9bc4809aa05b53d4e1408661e61f05847009ff266a049dba156ab0cdbb435b0",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-or-tested",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; false || printf recovered; printf after",
+      "scriptSha256": "67666b4e8008a865a7d23750f4d09ca3a1696099c8977c91ccc20d9317207779",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "7265636f76657265646166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-or-final",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; false || false; printf wrong",
+      "scriptSha256": "83f279ea393df209f0978ae0d99638ce58144edb8346ade02f95cf4430189a57",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-function",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ printf first; false; printf wrong; }; f; printf wrong",
+      "scriptSha256": "71ab7f966e5e91929910a3084353fccecd9825efa5f25879b120130544c2bfc7",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "6669727374",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-function-tested",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ printf first; false; printf inner; }; if f; then printf selected; fi; printf after",
+      "scriptSha256": "9d5e26489d3c56b5e5c34ccd37b52d243085618d7283d1440dc21a024c13bc89",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6669727374696e6e657273656c65637465646166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-function-or",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ false; printf inner; }; f || printf wrong; printf after",
+      "scriptSha256": "a096996c162707981af7d853192d350da5fbe2b5cb21ad6dd74e181f93c4c630",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e65726166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-function-negated",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ false; printf inner; }; ! f; printf after",
+      "scriptSha256": "419ce50338afeb2f41953fc10adb8e89c8039baf2a149c10f7c9b93bf5e3654f",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e65726166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-double-negation",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; ! ! false; printf after",
+      "scriptSha256": "f628b99b56ef48c1cb368c14b5deb480b4f0759928ef96ec3f496299c8a93dc1",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-tested-group",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; { false; printf inner; } && printf selected; printf after",
+      "scriptSha256": "29869d50344104f89f78a667ee5472001fcc90b47deaef37d36b4261570446cc",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e657273656c65637465646166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-group-last-test",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; { false && true; }; printf after",
+      "scriptSha256": "b5c9f87638d14e06dfba94b8f176937e953b7d2e0079a26ceb54e467ec9b1b8f",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-function-last-test",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ false && true; }; f; printf wrong",
+      "scriptSha256": "f9c1703ad80d8e69fb03838cab8f24c487a13b15225a24b77b10b61c51e3df94",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-loop-last-test",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; for x in a; do false && true; done; printf after",
+      "scriptSha256": "adfea5ada3c7e8a22b9378968e984381ee877a0cacbc3e1d765f96f2c33cc38c",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-subshell-last-test",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; (false && true); printf wrong",
+      "scriptSha256": "ca1afc80d545cbfbeab09ec1125b40e8cadc6f740a7dd19043a66f754cf2bcf8",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-subshell",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; (printf first; false; printf wrong); printf wrong",
+      "scriptSha256": "72b239226cfb3034d078f18b163e260e7bd10eb636f7fb96a2eb9c77cecb41c6",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "6669727374",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-tested-subshell",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; (false; printf inner) || printf wrong; printf after",
+      "scriptSha256": "e82fdb84571aa1701f2cf92126a3d0e2731ca34d0926a584cc58201c0f8643c9",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e65726166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-substitution-default",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; x=$(false; printf inner); printf '<%s>' \"$x\"",
+      "scriptSha256": "cf29bc5c6a846c00d5898e13e232808e1284993b973d9a49278b9298505b899d",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c696e6e65723e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-substitution-status",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; x=$(false); printf wrong",
+      "scriptSha256": "e3c322890cd58971497d1d782cd4b20c6a410e58bc6588defc72f4139dd53502",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-substitution-explicit",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; x=$(set -e; false; printf wrong); printf wrong",
+      "scriptSha256": "8c343d03cf834481d624bbbbc41e9a166bf6bc96decb72973a37f8ed88a55a13",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-tested-substitution",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; if x=$(set -e; false; printf inner); then printf '<%s>' \"$x\"; fi; printf after",
+      "scriptSha256": "97263ca06a105073a6d8ec62c86884db8af4c0c456f96462da083752bbbabd35",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c696e6e65723e6166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-eval",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; eval 'printf first; false; printf wrong'; printf wrong",
+      "scriptSha256": "fd6f03afc15a8f5db48b3d52ca68083c66afa99f7d34af0f20df6fc04a7b4305",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "6669727374",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-tested-eval",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; if eval 'false; printf inner'; then printf selected; fi; printf after",
+      "scriptSha256": "b38e499584614eb52c3106eac9b47a9eb9ac4fdc9bcdfa4d2628b2ffac076b3d",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e657273656c65637465646166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-eval-last-test",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; eval 'false && true'; printf after",
+      "scriptSha256": "da58544e67a755a0744a954b94a6c0bbae169978a36fe38039d4b9d312a79488",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-pipefail",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; false | true; printf wrong",
+      "scriptSha256": "648ba67e2674681f8aedb6ceb0a8377dd863dfe233fddd4157e660b1ad5def92",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-tested-pipeline",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; if false | true; then printf wrong; fi; printf after",
+      "scriptSha256": "46e745f88f6174574ad3e3fdf240b3b611eeb298a985e51368f644e62ab61a75",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-first-pipeline-function",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ false; printf inner; }; f | cat; printf after",
+      "scriptSha256": "e7575ca23776976696212f54fa1373c6d4b923cbfbe37b048422359915999194",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-last-pipeline-function",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ false; printf wrong; }; printf input | f; printf wrong",
+      "scriptSha256": "f00bb98489bdcd4d007a48b763f7a2c28fad3db27cadb6231ae6d09885eb6a61",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-exit-trap",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; trap 'printf \"trap:%s\" \"$?\"' EXIT; false; printf wrong",
+      "scriptSha256": "dbc17cd2941573ff84b69b15bb4a10dbbd6c4cbe8fec42fd24d1852ffeb9c0b7",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "747261703a31",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-exit-trap-status",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; trap 'printf first; false; printf wrong' EXIT; (exit 3); printf wrong",
+      "scriptSha256": "a0b1ccb10939975f2a040082f82b494e264fe46ce6627a115cc6a4ac22ded42a",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "6669727374",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-option-flags",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; case $- in *e*) printf enabled;; *) printf wrong;; esac; set +e; case ${-} in *e*) printf wrong;; *) printf disabled;; esac",
+      "scriptSha256": "b3d03500fd7fefda87b968a3c89e213c5329d39229aef17e17e1f94287d6bbde",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "656e61626c656464697361626c6564",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-enable-tested-function",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "f(){ set -e; false; printf inner; }; if f; then printf selected; fi; false; printf wrong",
+      "scriptSha256": "5d08e4561ea2c527ea4f6f8b316c13a8f0f0b1cb872476efcb74681f21c98d76",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "696e6e657273656c6563746564",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-source",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; source ./sourced.sh; printf wrong",
+      "scriptSha256": "750e6f92aae0b6a8de9fbfe5f056142a3492dd3782207be25ad2976d50d58c4f",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "7072696e746620736f75726365643b2066616c73653b207072696e746620696e6e6572",
+          "sha256": "3d5072f881663bf380f3583dd9799d86415249a70dcf11d56e0eba488b54302f"
+        }
+      ],
+      "exitCode": 1,
+      "stdoutHex": "736f7572636564",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-tested-source",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; if source ./sourced.sh; then printf selected; fi; printf after",
+      "scriptSha256": "109675c4772be7f2bf829d8bea31055db0676c942c02e0cbf3d4b395509d78fe",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "7072696e746620736f75726365643b2066616c73653b207072696e746620696e6e6572",
+          "sha256": "3d5072f881663bf380f3583dd9799d86415249a70dcf11d56e0eba488b54302f"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "736f7572636564696e6e657273656c65637465646166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-prefix-source",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; value=prefix source ./sourced.sh || printf wrong; printf after",
+      "scriptSha256": "ac0385d6626f9fd7fe89e2f2b2150e1e1214df1aff3098e7aef4510a07b227e4",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "7072696e746620736f75726365643b2066616c73653b207072696e746620696e6e6572",
+          "sha256": "3d5072f881663bf380f3583dd9799d86415249a70dcf11d56e0eba488b54302f"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "736f7572636564696e6e65726166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-function-prefix-source",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ value=prefix source ./sourced.sh; printf function; }; if f; then printf selected; fi; printf after",
+      "scriptSha256": "97a1779c467ab5257b9eaed3583d7dfeaec9d700be562bdfa32cb8302a1e2c28",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "7072696e746620736f75726365643b2066616c73653b207072696e746620696e6e6572",
+          "sha256": "3d5072f881663bf380f3583dd9799d86415249a70dcf11d56e0eba488b54302f"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "736f7572636564696e6e657266756e6374696f6e73656c65637465646166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-source-last-test",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; source ./sourced.sh; printf wrong",
+      "scriptSha256": "750e6f92aae0b6a8de9fbfe5f056142a3492dd3782207be25ad2976d50d58c4f",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "66616c73652026262074727565",
+          "sha256": "e951a5efa59e4aca916fd96ac5156916c0f4845e9b8f45d4089d0eb3ef9a40b0"
+        }
+      ],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-source-option-state",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; source ./sourced.sh; false; printf after",
+      "scriptSha256": "09f1c49d2f13a6e294a29d1b8e628d488a472d99e57c87e95cc529597f36ff27",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "736574202b653b2066616c73653b207072696e746620696e6e6572",
+          "sha256": "a711eb2f21d93de04f3648c7a6e663620813f2a8e15b467ded3a03db684af185"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "696e6e65726166746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "errexit-function-while",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; i=0; f(){ false; ((i+=1)); ((i<3)); }; while f; do printf %s \"$i\"; done; printf after",
+      "scriptSha256": "bc84633a3b78ee3d0ae92417f4d910972c0d19d2c5f783addd0dd334aac1d11e",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "31326166746572",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-function-until",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; i=0; f(){ false; ((i+=1)); ((i>=3)); }; until f; do printf %s \"$i\"; done; printf after",
+      "scriptSha256": "0713bbd11e3f9114100a5d4701f4b0e7bd3c8bde00f6215a25aa0a6d556a8379",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "31326166746572",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-elif-function",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ false; printf inner; }; if false; then printf wrong; elif f; then printf selected; fi; printf after",
+      "scriptSha256": "73b1893d55928f5d548149d801727c4bac255908ca73f79e953bf681b91ea8ae",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e657273656c65637465646166746572",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-if-body",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; if true; then printf first; false; printf wrong; fi; printf wrong",
+      "scriptSha256": "36afd694a5b757d822df672354dffb56a4ee515dcda8546ba890dd1e6804830b",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 1,
+      "stdoutHex": "6669727374",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-negated-pipeline",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; ! printf inner | cat; printf after",
+      "scriptSha256": "7c322176781922229905b9ef91376d3978830d3919a8269eab567c80bb33c34d",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e65726166746572",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-tested-pipeline-function",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; f(){ false; printf inner; }; if f | cat; then printf selected; fi; printf after",
+      "scriptSha256": "653b8f4d8074648c64399894ea1d00285040e4ddd352e7d57956dfa4a13b54fd",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e657273656c65637465646166746572",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-subshell-option-isolation",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; (set +e; false; printf inner); false; printf wrong",
+      "scriptSha256": "14a1b1bbd84b9c957099d6e0e61856f9424b5d78cf1068ad57e9b31931f28ab5",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 1,
+      "stdoutHex": "696e6e6572",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-function-exit-trap-bindings",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; trap 'printf \"<%s>:%s\" \"$value\" \"$?\"' EXIT; f(){ local value=inner; false; }; f; printf wrong",
+      "scriptSha256": "255938583cddf9f23f292e9356b461100f80573ef93bac0c75451409dd8d970b",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 1,
+      "stdoutHex": "3c3e3a31",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-function-exit-trap-descriptor",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; trap 'printf \"trap:%s\" \"$?\" 2>/dev/null >&3' EXIT; f(){ false; }; f 3>out; printf wrong",
+      "scriptSha256": "81a5beaf981086e8777f657ce6fe7940f1977a3cdbdcfcfc29dab72952c510d5",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": ""
+        }
+      ],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": ""
+    },
+    {
+      "id": "errexit-group-exit-trap-descriptor",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; trap 'printf \"trap:%s\" \"$?\" 2>/dev/null >&3' EXIT; { false; } 3>out; printf wrong",
+      "scriptSha256": "252f886d20446a5707da6abad2a1948f36923f3bb62a5beb6dd5580280081221",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": ""
+        }
+      ],
+      "exitCode": 1,
+      "stdoutHex": "",
       "stderrHex": ""
     }
   ]

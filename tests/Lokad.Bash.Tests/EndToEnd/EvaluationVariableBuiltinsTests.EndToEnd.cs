@@ -186,14 +186,11 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
     [Fact]
     public async Task Evaluation_SetBuiltin_InvalidOptionReturnsFailure()
     {
-        // This test verifies that invalid set options return failure.
-        // The script "set -x" must emit no output and exit with code 1.
-        // If invalid options are accepted, the exit code would be 0.
         var script = @"set -x";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("set: -x: unsupported option\n", result.StdErr);
+        Assert.Equal(2, result.ExitCode);
     }
 }

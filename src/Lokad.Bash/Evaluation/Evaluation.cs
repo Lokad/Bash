@@ -199,6 +199,8 @@ public sealed partial class Evaluation : IFileTester
     /// <summary> Gets evaluation options. </summary>
     public EvaluationOptions Options { get; }
 
+    internal ShellValue ShellOptionFlags => _state.ErrexitEnabled ? ShellValue.FromText("e") : ShellValue.Empty;
+
     /// <summary> Gets the last recorded exit code, if any. </summary>
     public int? LastExitCode => _state.LastExitCode;
 
@@ -570,8 +572,7 @@ public sealed partial class Evaluation : IFileTester
         }
 
         result = await ApplyCloseErrorAsync(result, closeError).ConfigureAwait(false);
-        if (result.Flow != FlowControlKind.None)
-            result = EvaluationResult.FromExitCode(result.ExitCode);
+        result = EvaluationResult.FromExitCode(result.ExitCode);
 
         return ApplyNegation(result, negated);
     }
@@ -1074,7 +1075,7 @@ public sealed partial class Evaluation : IFileTester
                         enclosingFunction.Locals.WithTemporaryPrefixes(bindings), enclosingFunction);
                     builtinScope = builtinScope with
                     {
-                        Context = new EvaluationContext(builtinScope.Context.LoopDepth, scriptFunction, builtinScope.Context.ReturnTarget) { GlobalPrefixes = builtinScope.Context.GlobalPrefixes }
+                        Context = new EvaluationContext(builtinScope.Context.LoopDepth, scriptFunction, builtinScope.Context.ReturnTarget) { GlobalPrefixes = builtinScope.Context.GlobalPrefixes, ErrexitIgnored = builtinScope.Context.ErrexitIgnored }
                     };
                 }
 
@@ -1085,6 +1086,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         Context = new EvaluationContext(builtinScope.Context.LoopDepth, builtinScope.Context.FunctionContext, builtinScope.Context.ReturnTarget)
                         {
+                            ErrexitIgnored = builtinScope.Context.ErrexitIgnored,
                             GlobalPrefixes = new GlobalPrefixBindings(bindings,
                                 builtinScope.Context.FunctionContext?.Depth ?? 0, builtinScope.Context.GlobalPrefixes)
                         }
@@ -3096,7 +3098,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 Context = new EvaluationContext(scope.Context.LoopDepth, scope.Context.FunctionContext, ReturnTargetKind.Source)
                 {
-                    GlobalPrefixes = scope.Context.GlobalPrefixes
+                    GlobalPrefixes = scope.Context.GlobalPrefixes,
+                    ErrexitIgnored = scope.Context.ErrexitIgnored
                 }
             };
             var result = EvaluationResult.FromExitCode(0);
@@ -3520,15 +3523,20 @@ public sealed partial class Evaluation : IFileTester
         public FunctionContext? FunctionContext { get; } = functionContext;
         public ReturnTargetKind ReturnTarget { get; } = returnTarget;
         public GlobalPrefixBindings? GlobalPrefixes { get; init; }
+        public bool ErrexitIgnored { get; init; }
+
+        public EvaluationContext WithErrexitIgnored() =>
+            new(LoopDepth, FunctionContext, ReturnTarget) { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = true };
 
         public EvaluationContext WithLoopDepth(int loopDepth) =>
-            new(loopDepth, FunctionContext, ReturnTarget) { GlobalPrefixes = GlobalPrefixes };
+            new(loopDepth, FunctionContext, ReturnTarget) { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = ErrexitIgnored };
 
         /// <summary>Preserves local declaration identity while isolating child bindings and restoration.</summary>
         public EvaluationContext Fork(Variables variables)
         {
             var prefixes = GlobalPrefixes?.Fork(variables);
-            return new(LoopDepth, FunctionContext?.Fork(variables, prefixes), ReturnTarget) { GlobalPrefixes = prefixes };
+            return new(LoopDepth, FunctionContext?.Fork(variables, prefixes), ReturnTarget)
+                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored };
         }
 
         public Variables GetGlobalBindingOwner(BindingName name, Variables active)

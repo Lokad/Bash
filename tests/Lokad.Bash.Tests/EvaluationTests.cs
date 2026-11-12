@@ -3303,8 +3303,12 @@ public partial class EvaluationTests
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a")]);
 
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("set: -x: unsupported option\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(2, state.LastExitCode);
         Assert.Single(state.PositionalParameters);
         Assert.Equal("a", state.PositionalParameters[0].ToUtf8String());
     }

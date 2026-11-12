@@ -569,6 +569,9 @@ internal static partial class WordExpansion
                         case SpecialParameterKind.Count:
                             value = ShellValue.FromText(Integers.FormatNumber(scope.Variables.PositionalParameters.Count));
                             break;
+                        case SpecialParameterKind.Flags:
+                            value = scope.Effects.ShellOptionFlags;
+                            break;
                         case SpecialParameterKind.BackgroundProcess:
                             // Background execution is not supported, so no shell-owned job can set this parameter.
                             isSet = false;

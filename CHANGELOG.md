@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add context-sensitive errexit through `set -e`/`set +e` and
+  `set -o errexit`/`set +o errexit`, including tested contexts, function/source/eval
+  propagation, pipeline failures, command-substitution inheritance and EXIT cleanup.
+  Expose supported flags through `$-`/`${-}` and errexit inspection through
+  `set -o`/`set +o`; reject unsupported option changes with a diagnostic.
 - Remove cumulative execution quotas: long-running bounded scripts no longer spend
   lifetime word, character, brace, argument-copy or pattern-match credits. Keep
   cooperative cancellation, live-memory admission, structural parser guards and

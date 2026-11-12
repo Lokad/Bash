@@ -151,6 +151,9 @@ internal sealed class EvaluationState
     /// </summary>
     public int? LastExitCode { get; set; }
 
+    /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
+    public bool ErrexitEnabled { get; set; }
+
     /// <summary>
     /// Last substitution in the current simple command; null means none ran.
     /// Reset at command entry and do not copy into nested evaluation state.
@@ -200,6 +203,7 @@ internal sealed class EvaluationState
         var clone = new EvaluationState(script, CurrentDirectory, redirections)
         {
             LastExitCode = LastExitCode,
+            ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
             Traps = Traps?.Fork(kind)
         };
 

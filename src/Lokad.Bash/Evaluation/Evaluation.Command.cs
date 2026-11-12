@@ -22,18 +22,35 @@ public sealed partial class Evaluation
             negated = !negated;
             command = negatedCommand.Inner;
         }
+        if (negated ^ command is PipelineCommand { Negated: true })
+            scope = scope with { Context = scope.Context.WithErrexitIgnored() };
+
+        EvaluationResult result;
         try
         {
             using var memory = Memory.BeginCommand(scope);
-            return await EvaluateCommandCoreAsync(command, scope, negated).ConfigureAwait(false);
+            result = await EvaluateCommandCoreAsync(command, scope, negated).ConfigureAwait(false);
         }
         catch (MemoryBudgetExceededException)
         {
             Memory.ReleaseUnusedCapacity();
             await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1),
+            result = await FinalizeResultAsync(EvaluationResult.FromExitCode(1),
                 negated ^ command is PipelineCommand { Negated: true }).ConfigureAwait(false);
         }
+
+        // A simple command (including a function, eval or source invocation) exposes a
+        // fresh status. Compound commands retain the tested origin of their final status.
+        if (command is SimpleCommand)
+            result = result.WithTestedStatus(false);
+        if (result.Flow == FlowControlKind.None && result.ExitCode != 0)
+        {
+            if (scope.Context.ErrexitIgnored)
+                result = result.WithTestedStatus(true);
+            else if (_state.ErrexitEnabled && !result.TestedStatus)
+                result = EvaluationResult.Exit(result.ExitCode);
+        }
+        return result;
 
         async Task<EvaluationResult> EvaluateCommandCoreAsync(
             ICommand command, ScopedEvaluation scope, bool negated)
@@ -140,18 +157,21 @@ public sealed partial class Evaluation
             {
                 // The parser builds left-associated trees. Keep pending right sides off the call
                 // stack so long scripts remain safe even when commands complete synchronously.
-                var pending = new Stack<ListCommand>();
+                var pending = new Stack<(ListCommand Command, ScopedEvaluation Scope)>();
                 ICommand currentCommand = listCommand;
+                var currentScope = listScope;
                 while (true)
                 {
                     while (currentCommand is ListCommand list)
                     {
                         CheckCancellation();
-                        pending.Push(list);
+                        pending.Push((list, currentScope));
+                        if (list.Operator is ListOperator.And or ListOperator.Or)
+                            currentScope = currentScope with { Context = currentScope.Context.WithErrexitIgnored() };
                         currentCommand = list.Left;
                     }
 
-                    var result = await EvaluateCommandAsync(currentCommand, listScope, negated: false).ConfigureAwait(false);
+                    var result = await EvaluateCommandAsync(currentCommand, currentScope, negated: false).ConfigureAwait(false);
                     if (result.Flow != FlowControlKind.None)
                         return ApplyNegation(result, listNegated);
 
@@ -161,9 +181,10 @@ public sealed partial class Evaluation
                             return ApplyNegation(result, listNegated);
 
                         CheckCancellation();
-                        if (EvaluationRules.ShouldExecuteRight(next.Operator, result.ExitCode))
+                        if (EvaluationRules.ShouldExecuteRight(next.Command.Operator, result.ExitCode))
                         {
-                            currentCommand = next.Right;
+                            currentCommand = next.Command.Right;
+                            currentScope = next.Scope;
                             break;
                         }
                     }

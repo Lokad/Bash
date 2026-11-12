@@ -511,7 +511,7 @@ internal static partial class WordExpansion
         ArithmeticAssign,
     }
 
-    private enum SpecialParameterKind { None, Status, Count, At, Star, Positional, BackgroundProcess }
+    private enum SpecialParameterKind { None, Status, Count, At, Star, Positional, BackgroundProcess, Flags }
 
     private static SpecialParameterKind GetSpecialParameterKind(ReadOnlySpan<byte> name)
     {
@@ -524,6 +524,7 @@ internal static partial class WordExpansion
             [(byte)'@'] => SpecialParameterKind.At,
             [(byte)'*'] => SpecialParameterKind.Star,
             [(byte)'!'] => SpecialParameterKind.BackgroundProcess,
+            [(byte)'-'] => SpecialParameterKind.Flags,
             _ => SpecialParameterKind.None,
         };
     }

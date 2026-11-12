@@ -5,6 +5,13 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Errexit is shell state. Execution context records whether a status is tested and
+carries that context through functions, groups, source/eval and child evaluations.
+Compound commands preserve the tested origin of their final status; simple
+invocations expose a fresh status. Early exit follows the ordinary EXIT-trap and
+descriptor cleanup path. Command substitutions clear errexit on entry, while
+subshells and pipeline stages inherit it.
+
 Host calls can overlap while pipeline stages execute. Allow producers and consumers
 to progress independently: never await descriptor I/O while holding a host-wide
 filesystem lock. Pipes must preserve byte order and apply backpressure. A consumer

@@ -26,7 +26,7 @@ public sealed partial class Evaluation
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
 
         var loopContext = scope.Context.WithLoopDepth(scope.Context.LoopDepth + 1);
-        int? lastBodyExit = null;
+        var lastBodyResult = EvaluationResult.FromExitCode(0);
 
         while (true)
         {
@@ -46,7 +46,7 @@ public sealed partial class Evaluation
                 .ConfigureAwait(false);
             if (bodyResult.Flow == FlowControlKind.None)
             {
-                lastBodyExit = bodyResult.ExitCode;
+                lastBodyResult = bodyResult;
             }
             else if (bodyResult.Flow == FlowControlKind.Continue)
             {
@@ -55,7 +55,7 @@ public sealed partial class Evaluation
                     return ApplyNegation(bodyResult.WithLevel(bodyResult.Level - 1), negated);
                 }
 
-                lastBodyExit = bodyResult.ExitCode;
+                lastBodyResult = EvaluationResult.FromExitCode(bodyResult.ExitCode);
             }
             else if (bodyResult.Flow == FlowControlKind.Break)
             {
@@ -75,7 +75,7 @@ public sealed partial class Evaluation
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
         }
 
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(lastBodyExit ?? 0), negated);
+        return await FinalizeResultAsync(lastBodyResult, negated);
 
         async Task<long?> EvaluateOperandAsync(ShellSource expression)
         {

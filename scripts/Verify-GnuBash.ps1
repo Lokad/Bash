@@ -12,7 +12,7 @@ $catalogPath = Join-Path $repository 'tests/Lokad.Bash.Tests/Conformance/cases.j
 $catalog = Get-Content -LiteralPath $catalogPath -Raw -Encoding utf8 | ConvertFrom-Json
 if ($catalog.schemaVersion -ne 1) { throw 'Unsupported conformance catalog schema.' }
 
-function Invoke-Reference([string[]]$Arguments, [string]$Locale, [byte[]]$InputBytes) {
+function Invoke-Reference([string[]]$Arguments, [string]$Locale, [byte[]]$InputBytes, [string]$WorkingDirectory) {
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
@@ -20,6 +20,7 @@ function Invoke-Reference([string[]]$Arguments, [string]$Locale, [byte[]]$InputB
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.Environment.Clear()
+    if ($WorkingDirectory) { $start.WorkingDirectory = $WorkingDirectory }
     if ([System.OperatingSystem]::IsWindows()) {
         $start.Environment['SystemRoot'] = [System.Environment]::GetFolderPath('Windows')
     }
@@ -82,10 +83,34 @@ $results = foreach ($sample in $catalog.cases) {
     $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($sample.script)
     $scriptHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($scriptBytes)).ToLowerInvariant()
     if ($scriptHash -ne $sample.scriptSha256) { throw "Script hash mismatch: $($sample.id)" }
-    if ($sample.files.Count -ne 0) { throw 'File fixtures require an explicit isolated setup.' }
+    if ($sample.id -notmatch '^[a-z0-9][a-z0-9-]+$') { throw 'Unsafe correctness case identifier.' }
+    $fixtureRoot = Join-Path $repository ("artifacts/conformance/fixtures/" + [Guid]::NewGuid().ToString('N'))
+    [void][System.IO.Directory]::CreateDirectory($fixtureRoot)
+    foreach ($file in $sample.files) {
+        if ([System.IO.Path]::IsPathRooted($file.path) -or '..' -in ($file.path -split '/')) { throw 'Unsafe fixture path.' }
+        $fixturePath = [System.IO.Path]::GetFullPath((Join-Path $fixtureRoot $file.path))
+        if (-not $fixturePath.StartsWith($fixtureRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::Ordinal)) {
+            throw 'Fixture must stay within its isolated directory.'
+        }
+        $content = [Convert]::FromHexString($file.contentHex)
+        $contentHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($content)).ToLowerInvariant()
+        if ($contentHash -ne $file.sha256) { throw 'Fixture hash mismatch.' }
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($fixturePath))
+        [System.IO.File]::WriteAllBytes($fixturePath, $content)
+    }
     $arguments = @($catalog.options) + @('-c', $sample.script)
-    $actual = Invoke-Reference -Arguments $arguments -Locale $sample.locale -InputBytes ([Convert]::FromHexString($sample.stdinHex))
+    $actual = Invoke-Reference -Arguments $arguments -Locale $sample.locale -InputBytes ([Convert]::FromHexString($sample.stdinHex)) -WorkingDirectory $fixtureRoot
     $passed = $actual.exitCode -eq $sample.exitCode -and $actual.stdoutHex -eq $sample.stdoutHex -and $actual.stderrHex -eq $sample.stderrHex
+    foreach ($effect in $sample.fileEffects) {
+        if ([System.IO.Path]::IsPathRooted($effect.path) -or '..' -in ($effect.path -split '/')) { throw 'Unsafe expected effect path.' }
+        $effectPath = [System.IO.Path]::GetFullPath((Join-Path $fixtureRoot $effect.path))
+        if (-not $effectPath.StartsWith($fixtureRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::Ordinal)) {
+            throw 'Expected effect must stay within its isolated directory.'
+        }
+        if (-not [System.IO.File]::Exists($effectPath)) { $passed = $false; continue }
+        $actualHex = [Convert]::ToHexString([System.IO.File]::ReadAllBytes($effectPath)).ToLowerInvariant()
+        $passed = $passed -and $actualHex -eq $effect.contentHex
+    }
     [pscustomobject]@{ id = $sample.id; classification = $sample.classification; passed = $passed; actual = $actual }
 }
 $destination = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path $repository $OutputPath }

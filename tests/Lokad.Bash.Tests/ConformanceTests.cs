@@ -28,10 +28,9 @@ public sealed class ConformanceTests
             if (!StringComparer.OrdinalIgnoreCase.Equals(Text("scriptSha256"),
                     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script)))))
                 throw new InvalidOperationException($"Script hash mismatch: {Text("id")}");
-            if (sample.GetProperty("files").GetArrayLength() != 0)
-                throw new InvalidOperationException("File fixtures require an explicit host setup.");
             yield return [Text("id"), script, Text("stdinHex"), sample.GetProperty("exitCode").GetInt32(),
-                Text("stdoutHex"), Text("stderrHex")];
+                Text("stdoutHex"), Text("stderrHex"), sample.GetProperty("files").GetRawText(),
+                sample.GetProperty("fileEffects").GetRawText()];
 
             string Text(string property) => sample.GetProperty(property).GetString()
                 ?? throw new InvalidOperationException($"Missing {property} in conformance case.");
@@ -41,14 +40,35 @@ public sealed class ConformanceTests
     [Theory]
     [MemberData(nameof(Cases))]
     public async Task SupportedCasesMatchPinnedExpectations(
-        string id, string script, string stdinHex, int exitCode, string stdoutHex, string stderrHex)
+        string id, string script, string stdinHex, int exitCode, string stdoutHex, string stderrHex,
+        string filesJson, string effectsJson)
     {
         await using var host = new TestHost();
+        using var files = JsonDocument.Parse(filesJson);
+        foreach (var file in files.RootElement.EnumerateArray())
+        {
+            var path = file.GetProperty("path").GetString() ?? throw new InvalidOperationException("Missing fixture path.");
+            var content = Convert.FromHexString(file.GetProperty("contentHex").GetString()
+                ?? throw new InvalidOperationException("Missing fixture bytes."));
+            var hash = file.GetProperty("sha256").GetString();
+            Assert.Equal(hash, Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant());
+            Assert.DoesNotContain("..", path.Split('/'));
+            Assert.False(Path.IsPathRooted(path));
+            host.AddFile("/" + path, content);
+        }
         host.SetStandardInputBytes(Convert.FromHexString(stdinHex));
         var result = await host.RunAsync(script, CancellationToken.None);
 
         Assert.True(result.ExitCode == exitCode, $"{id}: expected exit {exitCode}, got {result.ExitCode}");
         Assert.Equal(Convert.FromHexString(stdoutHex), host.StandardOutput.Content.ToArray());
         Assert.Equal(Convert.FromHexString(stderrHex), host.StandardError.Content.ToArray());
+        using var effects = JsonDocument.Parse(effectsJson);
+        foreach (var effect in effects.RootElement.EnumerateArray())
+        {
+            var path = effect.GetProperty("path").GetString() ?? throw new InvalidOperationException("Missing effect path.");
+            var content = Convert.FromHexString(effect.GetProperty("contentHex").GetString()
+                ?? throw new InvalidOperationException("Missing expected effect bytes."));
+            Assert.Equal(content, host.ReadFileBytes("/" + path));
+        }
     }
 }

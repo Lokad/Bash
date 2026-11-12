@@ -459,6 +459,12 @@ internal static partial class WordExpansion
             }
 
             var next = content[index + 1];
+            if (next == (byte)'-')
+            {
+                output.AppendExpansion(scope.Effects.ShellOptionFlags, allowWordSplitting, globQuoted);
+                index++;
+                continue;
+            }
             if (next == (byte)'!')
             {
                 output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);

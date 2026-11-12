@@ -49,7 +49,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
             "Read standard input into an indexed array, defaulting to MAPFILE. -t removes each record's trailing newline."),
         BuiltinKind.Hash => new("", "Return success without operands; command-path caching is not implemented."),
         BuiltinKind.Shift => new("[n]", "Remove the first n positional parameters; n defaults to 1."),
-        BuiltinKind.Set => new("[--] [arg ...]", "Replace positional parameters. With no arguments, return success without listing variables."),
+        BuiltinKind.Set => new("[-e|+e] [-o errexit|+o errexit] [--] [arg ...]", "Set errexit or replace positional parameters. -o/+o alone inspect errexit. Unsupported options report an error. With no arguments, return success without listing variables."),
         BuiltinKind.Exec => new("[-cl] [-a name] [command [argument ...]] [redirection ...]",
             "Replace this evaluation with a command, or preserve redirections without a command."),
         BuiltinKind.Declare => new("[-aAfgFnprx] [name[=value] ...]",

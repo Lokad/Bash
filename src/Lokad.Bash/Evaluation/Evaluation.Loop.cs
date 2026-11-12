@@ -16,12 +16,13 @@ public sealed partial class Evaluation
         bool negated)
     {
         var loopContext = scope.Context.WithLoopDepth(scope.Context.LoopDepth + 1);
-        int? lastBodyExit = null;
+        var lastBodyResult = EvaluationResult.FromExitCode(0);
 
         while (true)
         {
             CheckCancellation();
-            var conditionResult = await EvaluateCommandAsync(condition, scope with { Context = loopContext }, negated: false)
+            var conditionResult = await EvaluateCommandAsync(condition,
+                    scope with { Context = loopContext.WithErrexitIgnored() }, negated: false)
                 .ConfigureAwait(false);
             if (conditionResult.Flow != FlowControlKind.None)
             {
@@ -43,14 +44,13 @@ public sealed partial class Evaluation
                 : conditionResult.ExitCode != 0;
             if (!shouldRun)
             {
-                var exitCode = lastBodyExit ?? 0;
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+                return await FinalizeResultAsync(lastBodyResult, negated);
             }
 
             var bodyResult = await EvaluateCommandAsync(body, scope with { Context = loopContext }, negated: false).ConfigureAwait(false);
             if (bodyResult.Flow == FlowControlKind.None)
             {
-                lastBodyExit = bodyResult.ExitCode;
+                lastBodyResult = bodyResult;
                 continue;
             }
 
@@ -61,7 +61,7 @@ public sealed partial class Evaluation
                     return ApplyNegation(bodyResult.WithLevel(bodyResult.Level - 1), negated);
                 }
 
-                lastBodyExit = bodyResult.ExitCode;
+                lastBodyResult = EvaluationResult.FromExitCode(bodyResult.ExitCode);
                 continue;
             }
 

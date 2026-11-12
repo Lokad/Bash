@@ -37,7 +37,7 @@ public sealed partial class Evaluation
             functionResult = await EvaluateCommandAsync(
                     functionDefinition.Body,
                     // A function can only break/continue its own loops, not the caller's loops.
-                    scope with { Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function) { GlobalPrefixes = scope.Context.GlobalPrefixes } },
+                    scope with { Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function) { GlobalPrefixes = scope.Context.GlobalPrefixes, ErrexitIgnored = scope.Context.ErrexitIgnored } },
                     negated: false)
                 .ConfigureAwait(false);
 

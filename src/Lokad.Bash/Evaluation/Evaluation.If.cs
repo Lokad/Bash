@@ -13,7 +13,8 @@ public sealed partial class Evaluation
         ScopedEvaluation scope,
         bool negated)
     {
-        var conditionResult = await EvaluateCommandAsync(ifCommand.Condition, scope, negated: false)
+        var testedScope = scope with { Context = scope.Context.WithErrexitIgnored() };
+        var conditionResult = await EvaluateCommandAsync(ifCommand.Condition, testedScope, negated: false)
             .ConfigureAwait(false);
         if (conditionResult.Flow != FlowControlKind.None)
         {
@@ -30,7 +31,7 @@ public sealed partial class Evaluation
         for (var index = 0; index < ifCommand.ElifClauses.Count; index++)
         {
             var clause = ifCommand.ElifClauses[index];
-            var elifCondition = await EvaluateCommandAsync(clause.Condition, scope, negated: false)
+            var elifCondition = await EvaluateCommandAsync(clause.Condition, testedScope, negated: false)
                 .ConfigureAwait(false);
             if (elifCondition.Flow != FlowControlKind.None)
             {
