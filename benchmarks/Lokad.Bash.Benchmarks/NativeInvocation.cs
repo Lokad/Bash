@@ -5,6 +5,7 @@ using System.Text.Json;
 namespace Lokad.Bash.Benchmarks;
 
 internal sealed record ReferencePin(string Id, string Version, string Sha256);
+internal sealed record ExecutableIdentity(string Version, string Sha256);
 
 /// <summary>GNU process startup, script-file parsing and byte transport are one declared boundary.</summary>
 internal sealed class NativeInvocation
@@ -13,7 +14,7 @@ internal sealed class NativeInvocation
     private readonly string _fixtures;
     private readonly ReadOnlyMemory<byte> _input;
     private readonly bool _wsl;
-    public NativeInvocation(Workload workload, string executable, string? distribution, string root)
+    public NativeInvocation(Workload workload, string executable, string? distribution, string root, string? resourceCollector)
     {
         _fixtures = Path.Combine(root, "fixtures");
         Directory.CreateDirectory(_fixtures);
@@ -26,12 +27,14 @@ internal sealed class NativeInvocation
         }
         _input = workload.Input.Bytes;
         _wsl = distribution != null;
-        _start = Start(_wsl ? "/usr/bin/timeout" : executable, distribution, workload.Locale);
+        _start = Start(_wsl ? "/usr/bin/timeout" : resourceCollector ?? executable, distribution, workload.Locale);
         if (_wsl)
         {
             var deadline = workload.Variant == WorkloadVariant.StartupAmortized ? "170s" : "55s";
-            foreach (var argument in new[] { "--kill-after=2s", deadline, executable }) _start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "--kill-after=2s", deadline, resourceCollector ?? executable }) _start.ArgumentList.Add(argument);
         }
+        if (resourceCollector != null)
+            foreach (var argument in new[] { "--quiet", "--format=%M\\n%x", "--output=../native-resource.txt", executable }) _start.ArgumentList.Add(argument);
         _start.WorkingDirectory = _fixtures;
         // A file avoids Windows argv and Linux per-argument limits for adverse source literals.
         foreach (var option in new[] { "--noprofile", "--norc", "-o", "pipefail", "../script.bash" })
@@ -57,11 +60,16 @@ internal sealed class NativeInvocation
         var pin = catalog.RootElement.GetProperty("references").EnumerateArray()
             .Select(row => new ReferencePin(row.GetProperty("id").GetString() ?? "", row.GetProperty("version").GetString() ?? "", row.GetProperty("sha256").GetString() ?? ""))
             .Single(row => row.Id == id);
-        var start = IdentityStart(executable);
-        start.ArgumentList.Add("--version");
-        var version = (await ReadIdentityAsync(start)).Split('\n')[0].TrimEnd('\r');
-        if (version != pin.Version)
+        var identity = await IdentifyExecutableAsync(executable, distribution, token).ConfigureAwait(false);
+        if (identity.Version != pin.Version)
             throw new InvalidDataException("GNU Bash version differs from the pinned reference.");
+        if (identity.Sha256 != pin.Sha256) throw new InvalidDataException("GNU Bash hash differs from the pinned reference.");
+        return pin;
+    }
+
+    public static async Task<ExecutableIdentity> IdentifyExecutableAsync(string executable, string? distribution, CancellationToken token)
+    {
+        var version = (await ReadCommandAsync(executable, ["--version"], distribution, token).ConfigureAwait(false)).Split('\n')[0].TrimEnd('\r');
         string hash;
         if (distribution == null)
         {
@@ -70,42 +78,34 @@ internal sealed class NativeInvocation
         }
         else
         {
-            var hashing = IdentityStart("/usr/bin/sha256sum");
-            hashing.ArgumentList.Add("--"); hashing.ArgumentList.Add(executable);
-            hash = (await ReadIdentityAsync(hashing)).Split(' ')[0];
+            hash = (await ReadCommandAsync("/usr/bin/sha256sum", ["--", executable], distribution, token).ConfigureAwait(false)).Split(' ')[0];
         }
-        if (hash != pin.Sha256) throw new InvalidDataException("GNU Bash hash differs from the pinned reference.");
-        return pin;
-
-        ProcessStartInfo IdentityStart(string command)
+        return new(version, hash);
+    }
+    public static async Task<string> ReadCommandAsync(string executable, IReadOnlyList<string> arguments, string? distribution, CancellationToken token)
+    {
+        var identity = Start(distribution == null ? executable : "/usr/bin/timeout", distribution, "C");
+        if (distribution != null)
+            foreach (var argument in new[] { "--kill-after=2s", "10s", executable }) identity.ArgumentList.Add(argument);
+        foreach (var argument in arguments) identity.ArgumentList.Add(argument);
+        using var process = Process.Start(identity) ?? throw new InvalidOperationException("Reference identification did not start.");
+        process.StandardInput.Close();
+        var output = process.StandardOutput.ReadToEndAsync(token);
+        var error = process.StandardError.ReadToEndAsync(token);
+        try
         {
-            var identity = Start(distribution == null ? command : "/usr/bin/timeout", distribution, "C");
-            if (distribution != null)
-                foreach (var argument in new[] { "--kill-after=2s", "10s", command }) identity.ArgumentList.Add(argument);
-            return identity;
+            await process.WaitForExitAsync(token).ConfigureAwait(false);
+            var text = await output.ConfigureAwait(false);
+            if (process.ExitCode != 0 || (await error.ConfigureAwait(false)).Length != 0)
+                throw new InvalidDataException("Reference identification failed or timed out.");
+            return text;
         }
-
-        async Task<string> ReadIdentityAsync(ProcessStartInfo identity)
+        catch
         {
-            using var process = Process.Start(identity) ?? throw new InvalidOperationException("Reference identification did not start.");
-            process.StandardInput.Close();
-            var output = process.StandardOutput.ReadToEndAsync(token);
-            var error = process.StandardError.ReadToEndAsync(token);
-            try
-            {
-                await process.WaitForExitAsync(token).ConfigureAwait(false);
-                var text = await output.ConfigureAwait(false);
-                if (process.ExitCode != 0 || (await error.ConfigureAwait(false)).Length != 0)
-                    throw new InvalidDataException("Reference identification failed or timed out.");
-                return text;
-            }
-            catch
-            {
-                if (!process.HasExited && distribution == null) process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                try { await Task.WhenAll(output, error).ConfigureAwait(false); } catch { }
-                throw;
-            }
+            if (!process.HasExited && distribution == null) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            try { await Task.WhenAll(output, error).ConfigureAwait(false); } catch { }
+            throw;
         }
     }
 

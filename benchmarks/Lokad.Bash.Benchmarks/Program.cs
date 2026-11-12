@@ -2,6 +2,11 @@ using System.Text.Json;
 using Lokad.Bash.Benchmarks;
 using Lokad.Bash.Syntax;
 
+if (args.Length > 0 && args[0].StartsWith("micro-", StringComparison.Ordinal))
+{
+    MicroDispatch.Run(args);
+    return;
+}
 if (args.Length > 0 && args[0] is "plan" or "measure")
 {
     await MeasurementDispatch.RunAsync(args);
@@ -10,6 +15,11 @@ if (args.Length > 0 && args[0] is "plan" or "measure")
 if (args.Length > 0 && args[0] == "memory-managed")
 {
     await ManagedMemory.RunAsync(args);
+    return;
+}
+if (args.Length > 0 && args[0] == "memory-native")
+{
+    await NativeMemory.RunAsync(args);
     return;
 }
 if (args.Length < 2 || args[0] is not ("prepare" or "verify-managed" or "verify-native" or "verify-process" or "verify-gates" or "smoke"))
@@ -121,14 +131,14 @@ if (args[0] == "verify-native")
     {
         foreach (var workload in prepared.Cases)
         {
-            if (workload.SkipReason.Length != 0)
+            if (workload.NativeExclusion(pin.Id) is { Length: > 0 } exclusion)
             {
-                results.Add(new(workload.Id, VerificationLane.GnuCorrectness, VerificationStatus.Skipped, workload.SkipReason, null));
+                results.Add(new(workload.Id, VerificationLane.GnuCorrectness, VerificationStatus.Skipped, exclusion, null));
                 continue;
             }
             using var deadline = new CancellationTokenSource(workload.Variant == WorkloadVariant.StartupAmortized
                 ? TimeSpan.FromMinutes(3) : TimeSpan.FromMinutes(1));
-            var invocation = new NativeInvocation(workload, native, distribution, Path.Combine(root, workload.Id));
+            var invocation = new NativeInvocation(workload, native, distribution, Path.Combine(root, workload.Id), null);
             ProcessOutput? output = null;
             IReadOnlyDictionary<string, ContentDigest>? files = null;
             try
@@ -195,6 +205,7 @@ if (args[0] == "verify-managed")
 Directory.CreateDirectory(directory);
 var catalog = CatalogBuilder.Create();
 File.WriteAllBytes(catalogPath, JsonSerializer.SerializeToUtf8Bytes(catalog, WorkloadCatalog.Json));
+MicroCatalog.Create().Write(Path.Combine(directory, "micro-catalog.json"));
 foreach (var workload in catalog.Cases)
 {
     var root = Path.Combine(directory, workload.Id);

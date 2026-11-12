@@ -17,5 +17,6 @@ internal sealed record ProbeRequest(ProbeMode Mode, int SourceBytes, int InputBy
     }
 }
 internal sealed record ProbeAllocations(long ManagedBytes, int Gen0, int Gen1, int Gen2);
-internal sealed record ProbeResult(int RuntimeMajor, ProbeMode Mode, IReadOnlyDictionary<string, ContentDigest> Files,
+internal sealed record ProbeResult(int RuntimeMajor, string Runtime, string Architecture, bool ServerGC,
+    ProbeMode Mode, IReadOnlyDictionary<string, ContentDigest> Files,
     HostCounts Host, long EstimatedPeakBytes, ProbeAllocations? Allocations);

@@ -72,6 +72,21 @@ internal static class CatalogBuilder
                 $"count=0; for ((i=0;i<{n};i++)); do ((count+=1)); done; trap 'printf \"stop:%s:%s\" \"$?\" \"$count\"' EXIT; set -e; false; printf wrong", Text($"stop:1:{n}"), n, "successful iterations before intentional errexit");
             Replace(failure with { AmortizationExclusion = "The script exits the shell; repetition would change its failure boundary.", Expected = failure.RequiredExpected with { ExitCode = 1 } });
 
+            const string utf8Exclusion = "The pinned MSYS reference has no authoritative UTF-8 supplementary-character locale; qualify this row with pinned GNU Linux C.utf8.";
+            var unicode = string.Concat(Enumerable.Repeat("é🙂", n));
+            var unicodeParameter = Add("unicode-parameter", WorkloadDomain.Language,
+                $"value='{unicode}'; for ((i=0;i<16;i++)); do part=${{value:1:3}}; done; printf '%s:%s' \"${{#value}}\" \"$part\"",
+                Text($"{n * 2}:🙂é🙂"), 16, "three-scalar UTF-8 slices over scale*2 scalars");
+            Replace(unicodeParameter with { Locale = "C.utf8", ReferenceExclusions = new Dictionary<string, string> { ["gnu-msys"] = utf8Exclusion } });
+            var unicodePattern = Add("unicode-pattern", WorkloadDomain.Language,
+                $"value='{new string('é', n)}🙂tail'; left=${{value##*🙂}}; right=${{value%%🙂*}}; result=${{value//é/x}}; printf '%s:%s:%s' \"$left\" \"${{#right}}\" \"$result\"",
+                Text($"tail:{n}:{new string('x', n)}🙂tail"), 3, "UTF-8 prefix/suffix/replacement operations over scale+5 scalars");
+            Replace(unicodePattern with { Locale = "C.utf8", ReferenceExclusions = new Dictionary<string, string> { ["gnu-msys"] = utf8Exclusion } });
+            Add("malformed-pattern", WorkloadDomain.Language,
+                $"value=$'\\377{new string('a', n)}'; for ((i=0;i<16;i++)); do head=${{value#?}}; result=${{value//a/b}}; done; printf '%s:%s' \"$head\" \"$result\"",
+                Blob.FromBytes(System.Text.Encoding.ASCII.GetBytes(new string('a', n) + ":").Concat(new byte[] { 0xff })
+                    .Concat(System.Text.Encoding.ASCII.GetBytes(new string('b', n))).ToArray()), 32, "malformed-byte prefix/replacement selections");
+
             Workload Add(string family, WorkloadDomain domain, string script, Blob stdout, long units, string unit)
             {
                 var workload = new Workload($"{family}-{n}", family, domain, n, seed, units, unit,
@@ -98,6 +113,7 @@ internal static class CatalogBuilder
         {
             var example = group.First();
             if (example.Family.StartsWith("pattern-", StringComparison.Ordinal)) return 4;
+            if (example.Family.StartsWith("unicode-", StringComparison.Ordinal) || example.Family == "malformed-pattern") return 16;
             if (example.Family == "command-substitution") return 8;
             if (example.Family is "format-output" or "raw-output" or "prefix-large") return 128;
             if (example.Domain is WorkloadDomain.ByteIo or WorkloadDomain.FileWorkflow) return 16;
@@ -120,7 +136,7 @@ internal static class CatalogBuilder
                 Rounds = rounds, WorkUnits = checked(original.WorkUnits * rounds), WorkUnit = original.WorkUnit + " across declared rounds",
                 Script = Text(script), Expected = expected with { Stdout = Repeat(expected.Stdout, rounds), Stderr = Repeat(expected.Stderr, rounds) } });
         }
-        var catalog = new WorkloadCatalog(2, seed, repetitions, ["--noprofile", "--norc", "-o", "pipefail"], cases);
+        var catalog = new WorkloadCatalog(3, seed, repetitions, ["--noprofile", "--norc", "-o", "pipefail"], cases);
         catalog.Validate();
         return catalog;
     }

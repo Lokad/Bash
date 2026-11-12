@@ -30,7 +30,8 @@ internal static class MeasurementDispatch
         var native = args.Length > prefixIndex + 1 ? Path.GetFullPath(args[prefixIndex + 1]) : null;
         var selected = catalog.Cases.Where(workload => workload.SkipReason.Length == 0
             && workload.Id.StartsWith(prefix, StringComparison.Ordinal)
-            && (lane is not (MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess) || workload.ProcessComparisonExclusion.Length == 0)
+            && (lane is not (MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess)
+                || workload.ProcessComparisonExclusion.Length == 0 && workload.NativeExclusion(OperatingSystem.IsWindows() ? "gnu-msys" : "gnu-linux").Length == 0)
             && (lane != MeasurementLane.Parse || workload.Variant == WorkloadVariant.WholeInvocation)).ToArray();
         VmDeclaration? vm = timing ? JsonSerializer.Deserialize<VmDeclaration>(File.ReadAllBytes(args[3]), WorkloadCatalog.Json) : null;
         var root = Path.Combine(directory, "measurements", lane + "-" + Guid.NewGuid().ToString("N"));
@@ -53,14 +54,7 @@ internal static class MeasurementDispatch
         Environment.SetEnvironmentVariable(MeasurementContext.EnvironmentKey, contextPath);
         try
         {
-            var role = Environment.Version.Major == 11 ? "primary" : "compatibility-control";
-            var job = Job.Default.WithId($"net{Environment.Version.Major}-{role}")
-                .WithRuntime(CoreRuntime.CreateForNewVersion($"net{Environment.Version.Major}.0", $".NET {Environment.Version.Major}"))
-                .WithLaunchCount(3).WithGcServer(System.Runtime.GCSettings.IsServerGC)
-                .WithEnvironmentVariable(MeasurementContext.EnvironmentKey, contextPath);
-            var config = ManualConfig.Create(DefaultConfig.Instance).AddJob(job)
-                .AddValidator(CompilationValidator.FailOnError)
-                .AddExporter(JsonExporter.Full).WithArtifactsPath(Path.Combine(root, "bdn"));
+            var config = Configure(root, MeasurementContext.EnvironmentKey, contextPath);
             var type = lane switch
             {
                 MeasurementLane.Parse => typeof(ParseBenchmarks),
@@ -69,14 +63,7 @@ internal static class MeasurementDispatch
                 _ => typeof(ProcessBenchmarks)
             };
             using var run = BenchmarkConverter.TypeToBenchmarks(type, config);
-            benchmarkCount = run.BenchmarksCases.Length;
-            if (benchmarkCount == 0 || benchmarkCount != selected.Length)
-                throw new InvalidDataException("Benchmark discovery did not cover the selected cases exactly once.");
-            var validation = run.Config.GetCompositeValidator().Validate(new ValidationParameters(run.BenchmarksCases, run.Config)).ToArray();
-            File.WriteAllBytes(Path.Combine(root, "validation.json"), JsonSerializer.SerializeToUtf8Bytes(
-                validation.Select(error => new { error.IsCritical, error.Message }), WorkloadCatalog.Json));
-            if (validation.Any(error => error.IsCritical))
-                throw new InvalidDataException("BenchmarkDotNet configuration validation failed: " + string.Join("; ", validation.Select(error => error.Message)));
+            benchmarkCount = ValidateDiscovery(run, selected.Length, root);
             WriteManifest();
             if (timing)
             {
@@ -113,8 +100,11 @@ internal static class MeasurementDispatch
                 selected = selected.Select(workload => new { workload.Id, workload.Family, workload.Domain, workload.Variant, workload.Scale,
                     workload.Rounds, workload.WorkUnits, workload.WorkUnit, scriptSha256 = workload.Script.Sha256, workload.Locale }),
                 exclusions = catalog.Cases.Where(workload => workload.SkipReason.Length > 0
-                    || lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess && workload.ProcessComparisonExclusion.Length > 0)
-                    .Select(workload => new { workload.Id, reason = workload.SkipReason.Length > 0 ? workload.SkipReason : workload.ProcessComparisonExclusion }),
+                    || lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess
+                        && (workload.ProcessComparisonExclusion.Length > 0 || workload.NativeExclusion(OperatingSystem.IsWindows() ? "gnu-msys" : "gnu-linux").Length > 0))
+                    .Select(workload => new { workload.Id, reason = workload.SkipReason.Length > 0 ? workload.SkipReason
+                        : workload.ProcessComparisonExclusion.Length > 0 ? workload.ProcessComparisonExclusion
+                        : workload.NativeExclusion(OperatingSystem.IsWindows() ? "gnu-msys" : "gnu-linux") }),
                 boundaries = new
                 {
                     parse = "Parser.Parse only; source and environment setup excluded; AST consumed",
@@ -159,6 +149,30 @@ internal static class MeasurementDispatch
                 finally { benchmark.AfterInvocation(); }
             }
         }
+    }
+
+    internal static ManualConfig Configure(string root, string contextKey, string contextPath)
+    {
+        var role = Environment.Version.Major == 11 ? "primary" : "compatibility-control";
+        var job = Job.Default.WithId($"net{Environment.Version.Major}-{role}")
+            .WithRuntime(CoreRuntime.CreateForNewVersion($"net{Environment.Version.Major}.0", $".NET {Environment.Version.Major}"))
+            .WithLaunchCount(3).WithGcServer(System.Runtime.GCSettings.IsServerGC)
+            .WithEnvironmentVariable(contextKey, contextPath);
+        return ManualConfig.Create(DefaultConfig.Instance).AddJob(job).AddValidator(CompilationValidator.FailOnError)
+            .AddExporter(JsonExporter.Full).WithArtifactsPath(Path.Combine(root, "bdn"));
+    }
+
+    internal static int ValidateDiscovery(BenchmarkRunInfo run, int expectedCount, string root)
+    {
+        var count = run.BenchmarksCases.Length;
+        if (count == 0 || count != expectedCount)
+            throw new InvalidDataException("Benchmark discovery did not cover the selected cases exactly once.");
+        var validation = run.Config.GetCompositeValidator().Validate(new ValidationParameters(run.BenchmarksCases, run.Config)).ToArray();
+        File.WriteAllBytes(Path.Combine(root, "validation.json"), JsonSerializer.SerializeToUtf8Bytes(
+            validation.Select(error => new { error.IsCritical, error.Message }), WorkloadCatalog.Json));
+        if (validation.Any(error => error.IsCritical))
+            throw new InvalidDataException("BenchmarkDotNet configuration validation failed: " + string.Join("; ", validation.Select(error => error.Message)));
+        return count;
     }
 
     internal static SourceIdentity IdentifySource()

@@ -104,7 +104,7 @@ public class ProcessBenchmarks
         var root = Path.Combine(context.OutputDirectory, "invocations", CaseId, Guid.NewGuid().ToString("N"));
         if (context.Lane == MeasurementLane.ManagedProcess)
             _probe = new ProbeInvocation(workload, ProbeMode.Public, false, ProbeInvocation.FindExecutable(), root);
-        else _native = new NativeInvocation(workload, context.NativeExecutable ?? throw new InvalidOperationException("Missing native executable."), null, root);
+        else _native = new NativeInvocation(workload, context.NativeExecutable ?? throw new InvalidOperationException("Missing native executable."), null, root, null);
         _output = null;
         _deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
     }

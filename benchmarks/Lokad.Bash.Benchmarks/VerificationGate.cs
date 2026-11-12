@@ -17,16 +17,8 @@ internal static class VerificationGate
 
     public static void Validate(VerificationReport report, string catalogPath, VerificationTransport transport, bool forMeasurement)
     {
-        Require(report.SchemaVersion == 2 && report.Complete, "Verification is partial or uses an unsupported schema.");
-        Require(report.CatalogSha256 == Blob.Hash(File.ReadAllBytes(catalogPath)), "Catalog changed after verification.");
-        Require(report.HarnessSha256 == Blob.Hash(File.ReadAllBytes(Assembly.GetExecutingAssembly().Location))
-            && report.InterpreterSha256 == Blob.Hash(File.ReadAllBytes(typeof(BashScript).Assembly.Location)), "Verified binaries changed.");
-        Require(report.RuntimeMajor == Environment.Version.Major && report.Runtime == RuntimeInformation.FrameworkDescription
-            && report.OS == RuntimeInformation.OSDescription && report.Architecture == RuntimeInformation.ProcessArchitecture.ToString()
-            && report.ServerGC == System.Runtime.GCSettings.IsServerGC && report.ProcessorCount == Environment.ProcessorCount,
-            "Verification belongs to another runtime/environment.");
-        Require(report.Transport == transport && Enum.IsDefined(transport), "Verification covers another transport.");
-        Require(!forMeasurement || transport != VerificationTransport.WslCorrectness, "WSL is a correctness transport, excluded from measurement.");
+        ValidateIdentity(report, catalogPath, transport, forMeasurement);
+        if (transport == VerificationTransport.MicroCore) throw new InvalidDataException("Micro evidence requires its own exact-coverage gate.");
         if (transport == VerificationTransport.InProcess)
             Require(report.HostChecksPassed && report.Reference == null && report.Probe == null, "Managed host ownership checks are missing.");
         else if (transport == VerificationTransport.ManagedProcess)
@@ -59,9 +51,11 @@ internal static class VerificationGate
         {
             Require(expected.Remove((row.Id, row.Lane), out var workload), "Verification contains a duplicate or unknown row.");
             if (workload == null) throw new InvalidDataException("Missing workload.");
-            if (workload.SkipReason.Length > 0)
+            var exclusion = transport is VerificationTransport.NativeDirect or VerificationTransport.WslCorrectness
+                ? workload.NativeExclusion((report.Reference ?? throw new InvalidDataException("Missing reference.")).Id) : workload.SkipReason;
+            if (exclusion.Length > 0)
             {
-                Require(row.Status == VerificationStatus.Skipped && row.Reason == workload.SkipReason && row.Observation == null,
+                Require(row.Status == VerificationStatus.Skipped && row.Reason == exclusion && row.Observation == null,
                     "Excluded rows need their declared reason and no invented observation.");
                 continue;
             }
@@ -82,7 +76,8 @@ internal static class VerificationGate
                 {
                     var probe = observation.GetProperty("probe").Deserialize<ProbeResult>(WorkloadCatalog.Json)
                         ?? throw new InvalidDataException("Missing probe observation.");
-                    Require(probe.RuntimeMajor == Environment.Version.Major && probe.Mode == ProbeMode.Public && probe.Allocations == null,
+                    Require(probe.RuntimeMajor == Environment.Version.Major && probe.Runtime == RuntimeInformation.FrameworkDescription
+                        && probe.Architecture == RuntimeInformation.ProcessArchitecture.ToString() && probe.Mode == ProbeMode.Public && probe.Allocations == null,
                         "Process correctness used another runtime, execution or instrumentation lane.");
                     files = probe.Files;
                 }
@@ -92,6 +87,20 @@ internal static class VerificationGate
             }
         }
         Require(expected.Count == 0, "Verification is incomplete.");
+    }
+
+    internal static void ValidateIdentity(VerificationReport report, string catalogPath, VerificationTransport transport, bool forMeasurement)
+    {
+        Require(report.SchemaVersion == 2 && report.Complete, "Verification is partial or uses an unsupported schema.");
+        Require(report.CatalogSha256 == Blob.Hash(File.ReadAllBytes(catalogPath)), "Catalog changed after verification.");
+        Require(report.HarnessSha256 == Blob.Hash(File.ReadAllBytes(Assembly.GetExecutingAssembly().Location))
+            && report.InterpreterSha256 == Blob.Hash(File.ReadAllBytes(typeof(BashScript).Assembly.Location)), "Verified binaries changed.");
+        Require(report.RuntimeMajor == Environment.Version.Major && report.Runtime == RuntimeInformation.FrameworkDescription
+            && report.OS == RuntimeInformation.OSDescription && report.Architecture == RuntimeInformation.ProcessArchitecture.ToString()
+            && report.ServerGC == System.Runtime.GCSettings.IsServerGC && report.ProcessorCount == Environment.ProcessorCount,
+            "Verification belongs to another runtime/environment.");
+        Require(report.Transport == transport && Enum.IsDefined(transport), "Verification covers another transport.");
+        Require(!forMeasurement || transport != VerificationTransport.WslCorrectness, "WSL is a correctness transport, excluded from measurement.");
     }
 
     internal static string FindReferenceCatalog()

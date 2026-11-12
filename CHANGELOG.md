@@ -7,8 +7,9 @@
   managed/GNU correctness exports. CI verifies the managed harness without timing
   campaigns. Add guarded parse/prepared/public and matched process measurement
   lanes, startup-amortized variants, strict evidence gates, lifecycle previews and
-  isolated all-thread allocation/GC observations. Core microbenchmarks and native
-  RSS collection remain open; dedicated-VM measurements are pending.
+  isolated all-thread allocation/GC observations. Add 36 direct core cases,
+  Unicode/malformed-byte macro controls with reference-specific exclusions, and a
+  separate Linux GNU-time RSS collector. Dedicated-VM measurements are pending.
 - Prepare 0.2.0 under the pre-1.0 minor-version API policy. Add isolated installed
   NuGet consumer qualification on Windows/Linux and .NET 10/.NET 11, with exact
   assembly checks and exported package/source/runtime evidence. No publication is

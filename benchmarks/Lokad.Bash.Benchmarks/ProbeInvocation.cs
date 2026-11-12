@@ -42,7 +42,9 @@ internal sealed class ProbeInvocation
     {
         var result = JsonSerializer.Deserialize<ProbeResult>(File.ReadAllBytes(_resultPath), WorkloadCatalog.Json)
             ?? throw new InvalidDataException("Probe did not report completion.");
-        if (result.RuntimeMajor != Environment.Version.Major) throw new InvalidDataException("Probe ran on a different runtime major.");
+        if (result.RuntimeMajor != Environment.Version.Major || result.Runtime != System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
+            || result.Architecture != System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString())
+            throw new InvalidDataException("Probe ran on a different runtime or architecture.");
         return result;
     }
 

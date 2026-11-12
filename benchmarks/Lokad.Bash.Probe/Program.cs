@@ -34,7 +34,9 @@ using (var inputOwner = memory.CreateScope())
     var allocated = request.AllocationCounters ? GC.GetTotalAllocatedBytes(precise: true) - before : 0;
     var allocations = request.AllocationCounters ? new ProbeAllocations(allocated,
         GC.CollectionCount(0) - gen0, GC.CollectionCount(1) - gen1, GC.CollectionCount(2) - gen2) : null;
-    var observed = new ProbeResult(Environment.Version.Major, request.Mode, host.FileDigests, host.Counts, memory.PeakBytes, allocations);
+    var observed = new ProbeResult(Environment.Version.Major, System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+        System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), System.Runtime.GCSettings.IsServerGC,
+        request.Mode, host.FileDigests, host.Counts, memory.PeakBytes, allocations);
     File.WriteAllBytes(args[2], JsonSerializer.SerializeToUtf8Bytes(observed, WorkloadCatalog.Json));
     exitCode = result.ExitCode;
 }

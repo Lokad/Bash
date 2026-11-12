@@ -39,19 +39,29 @@ universal interpreter instruction count. Seeded read input uses an explicit
 After the Release build, add `--no-build --no-restore` before `--` in driver commands
 to reuse those binaries throughout qualification.
 
-The catalog has 22 workload families at scales 16, 64 and 256: arithmetic
+The catalog has 25 workload families at scales 16, 64 and 256: arithmetic
 and branching; narrow/wide calls; shift; small/large prefix environments; arrays
 and sparse windows; IFS/read/mapfile; literals/parameters; pattern removal,
 replacement and adverse searches; formatting/raw bytes; substitutions; pipelines;
 redirection/source/eval; and intentional failure/errexit. Extended patterns remain
 an explicitly excluded row. Exact expected nonzero status is part of the failure
 workload; an unexpected nonzero, truncated output or different file set fails
-verification. Schema 2 adds startup-amortized variants, giving 123 runnable rows
-and 11 labelled exclusions. Repetition counts are fixed per family across its
+verification. Schema 3 includes startup-amortized variants and UTF-8/malformed
+controls, giving 141 runnable rows and 11 labelled exclusions. Repetition counts are fixed per family across its
 geometric scales, so growth is not hidden by inversely changing repetitions.
 Do not equate work units from different families. A function wrapper repeats the
 same reset body; its function dispatch, initialization and startup remain included.
 EOF-consuming and shell-exit scripts are excluded from this variant with reasons.
+
+UTF-8 substring/length and prefix/suffix/replacement families use pinned Linux
+`C.utf8`, including supplementary characters. Twelve whole/amortized rows carry
+an explicit MSYS reference exclusion because that pinned reference has no
+authoritative supplementary-character locale. Linux qualifies all 141 rows;
+MSYS qualifies 129 with 23 labelled exclusions. Malformed-byte matching controls
+use `C` and run against both references. Measurement gates require a reference
+that actually qualifies every selected row. Windows process comparisons exclude
+the Linux-only UTF-8 rows; managed in-process lanes can use their WSL correctness
+evidence. Reference exclusions never become invented passing observations.
 
 Managed verification executes public and prepared paths independently and runs
 controlled host checks first. GNU verification checks the existing conformance
@@ -134,6 +144,47 @@ Run all qualification commands under each runtime before its preview or timing
 job. Native evidence uses `gnu-REFERENCE-netMAJOR-verification.json`; qualifying
 .NET 10 preserves the independent .NET 11 evidence.
 
+## Isolated core microbenchmarks
+
+`prepare` also writes `micro-catalog.json`; `micro-prepare DIRECTORY` creates it
+independently. It contains 36 cases: twelve kinds at scales 16, 64 and 256.
+Their exact source, input, pattern and fixture-layout bytes carry lengths and
+hashes, alongside counts, seed, expected checksum/value and included boundaries.
+Fixture layouts specify deterministic binding names, caller/callee widths and
+sparse-index geometry; their materialization belongs to setup.
+
+The cases call existing expansion, variable/frame, arithmetic, UTF-8/byte matcher,
+indexed-window and operation APIs directly. They cover literal/parameter expansion,
+lookup in wide stores, narrow frames over wide callers, repeated shift, value versus
+prepared lexical arithmetic, Unicode and malformed-byte matching, an adverse
+no-match scan, late sparse windows and immediately completed operation dispatch.
+The benchmark assembly has intentional friend access through assembly metadata;
+no production public API is added for measurement.
+
+```powershell
+dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- micro-verify artifacts/benchmarks/prepared
+dotnet run -c Release -f net10.0 --project benchmarks/Lokad.Bash.Benchmarks -- micro-verify artifacts/benchmarks/prepared
+dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- micro-smoke artifacts/benchmarks/prepared GlobBytes-64
+dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- micro-plan artifacts/benchmarks/prepared
+# Only on the supplied quiet VM, using its actual declaration:
+dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- micro-measure artifacts/benchmarks/prepared vm.json
+```
+
+Verification executes each case twice, checking exact bytes, checksum, restored
+frame/array state and final admission refunds. Its gate requires complete, current
+coverage and rejects altered observations. The preview checks full discovery,
+configuration and a setup/run/cleanup lifecycle without a timing job. Core jobs
+use the same runtime separation, three launches, VM/clean-source gates and raw
+BenchmarkDotNet export as macros.
+
+Prepared state is reused across these synchronous kernels; temporary positional
+changes restore on every call. Task-based adapters must complete inline, or the
+case fails. Caller-thread `MemoryDiagnoser` is restricted to that synchronous
+boundary. One outer kind dispatch, checksum consumption, declared loops and
+completed adapters remain included. Fixture construction, exact verification and
+serialization are outside timing. These are core implementation measurements
+with no GNU process ratio or ambient-locale claim.
+
 ## Host and memory boundaries
 
 The small host supplies synthetic flat in-memory files, byte input/output and
@@ -175,6 +226,30 @@ steady-state claim. Peak admission includes the child's source/input owners and
 has a wider boundary than its allocation counter. Parent wrapper allocations and
 timings are absent from the report.
 
+`memory-native DIRECTORY CASE_ID BASH_PATH GNU_TIME_PATH [WSL_DISTRIBUTION]`
+executes one separate Linux resource pass, checking exact status/output/file effects.
+It records GNU time's version string and binary hash, the pinned Bash identity,
+Linux kernel/architecture, driver environment, raw `%M\n%x` output and parsed
+high-water RSS. Unmeasured/zero, missing, malformed or status-mismatched output
+fails. Distribution builds may report a version of `UNKNOWN`; that literal string
+is preserved with the identifying executable hash.
+
+```powershell
+dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- memory-native artifacts/benchmarks/prepared arithmetic-branch-64 /usr/bin/bash /usr/bin/time
+# Windows can exercise the actual Linux collector through WSL:
+dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- memory-native artifacts/benchmarks/prepared arithmetic-branch-64 /usr/bin/bash /usr/bin/time Ubuntu
+```
+
+[GNU time `%M`](https://www.gnu.org/software/time/manual/html_node/Memory-Resources.html)
+is a process high-water metric. On Linux its units are KiB; child usage does not
+represent summed simultaneous residency across a process tree, as described by
+[`getrusage`](https://man7.org/linux/man-pages/man2/getrusage.2.html). Startup and
+script parsing remain included. This pass observes the actual Linux command,
+including when transported through WSL; neither the CLR parent nor the Windows
+launcher supplies its memory figure. WSL remains excluded from process timing.
+Native Windows RSS collection has no equivalent method in this harness and must
+not be inferred from the Linux figures.
+
 ## Dedicated VM procedure and export
 
 1. Provision a quiet x64 Windows or Linux VM. Record its CPU allocation, isolation,
@@ -188,7 +263,7 @@ timings are absent from the report.
    --info` and `dotnet --list-runtimes`).
 3. Run `prepare` into a fresh directory, such as `artifacts/benchmarks/vm`. Under
    **each** of `net11.0` and `net10.0`, run `verify-managed`, `verify-process`,
-   `verify-gates` and `verify-native` on that directory. Use a direct GNU binary on
+   `verify-gates`, `micro-verify` and `verify-native` on that directory. Use a direct GNU binary on
    the VM. Recreate evidence there: development-machine reports deliberately fail
    the environment and binary gates. Keep all reports, including failed attempts.
 4. Run `plan` for the intended family and each lane. Inspect the manifest's case
@@ -196,9 +271,10 @@ timings are absent from the report.
    with the same selection. Keep process comparisons on the same OS, CPU policy,
    binary versions, options, catalog and host boundary. Run .NET 11 primary and
    .NET 10 control jobs separately; avoid concurrent measurement jobs.
-5. Use `memory-managed` as a separate cold allocation/GC pass for each selected
-   public/prepared case. Native RSS requires its own collector; that pass is still
-   pending. Do not turn either memory observation into a throughput measurement.
+5. Use `micro-plan` to inspect core cases and `micro-measure` for their separate VM
+   jobs. Use `memory-managed` as a separate cold allocation/GC pass for selected
+   public/prepared cases, and `memory-native` on Linux for native high-water RSS.
+   Do not turn either memory observation into a throughput measurement.
 6. Retain the whole prepared directory: exact inputs/expectations, all verification
    reports, memory reports, every `measurements/*/manifest.json`, context and copied
    evidence, and the complete `bdn/` trees containing logs and full JSON results.
@@ -217,9 +293,8 @@ incomplete report contributes no timing result, and reused evidence must be
 labelled. The source commit plus pinned dependencies supports reconstruction;
 the archive preserves the exact evidence from that run. Timings remain pending.
 
-## Remaining harness work
+## Measurement status
 
-P6 is still open. Isolated core microbenchmarks, Unicode controls and the native RSS
-pass remain to be finished. Measurement dispatch and its generated-case discovery are
-qualified without running a timing campaign. No timings, ratios or performance
-claims have been produced.
+Harness qualification and measurement preparation run on the shared machine;
+comparative timings require the supplied quiet dedicated VM. No timings, ratios
+or performance claims have been produced.

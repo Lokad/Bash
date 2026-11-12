@@ -5,8 +5,8 @@ using System.Text.Json;
 namespace Lokad.Bash.Benchmarks;
 
 internal enum VerificationStatus { Passed, Skipped, Failed }
-internal enum VerificationLane { ManagedPublic, ManagedPrepared, ManagedExclusion, GnuCorrectness, ManagedProcess }
-internal enum VerificationTransport { InProcess, NativeDirect, WslCorrectness, ManagedProcess }
+internal enum VerificationLane { ManagedPublic, ManagedPrepared, ManagedExclusion, GnuCorrectness, ManagedProcess, MicroCore }
+internal enum VerificationTransport { InProcess, NativeDirect, WslCorrectness, ManagedProcess, MicroCore }
 internal sealed record VerificationRow(string Id, VerificationLane Lane, VerificationStatus Status, string Reason, object? Observation);
 
 internal sealed record VerificationReport(int SchemaVersion, string CatalogSha256, string HarnessSha256,

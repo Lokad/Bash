@@ -68,7 +68,8 @@ changelog.
 
 [Benchmark preparation](https://github.com/Lokad/Bash/blob/master/BENCHMARKS.md)
 uses separate non-packable driver/probe projects. Preparation, equivalence checks,
-lifecycle previews and isolated allocation smoke modes run without comparative timings. Dedicated-VM
+lifecycle previews, core checks and isolated allocation/native RSS smoke modes run
+without comparative timings. Dedicated-VM
 measurements remain pending.
 
 ## GNU correctness controls
