@@ -114,4 +114,46 @@ public sealed class IndexedArrayRangeTests
             selected);
         Assert.Empty(new IndexedArray(isInitialized: false).ValuesFrom(default, 2));
     }
+
+    [Theory]
+    [InlineData(0, -1, "")]
+    [InlineData(0, 0, "")]
+    [InlineData(4, 1, "five")]
+    [InlineData(5, int.MaxValue, "five,twelve")]
+    [InlineData(6, int.MaxValue, "twelve")]
+    [InlineData(13, 1, "")]
+    [InlineData(long.MaxValue, int.MaxValue, "")]
+    public void ValuesFrom_HandlesEmptyAndOpenEndedWindows(long first, int count, string expected)
+    {
+        var array = new IndexedArray(isInitialized: true);
+        Assert.True(IndexedArrayIndex.TryCreate(5, out var five));
+        Assert.True(IndexedArrayIndex.TryCreate(12, out var twelve));
+        Assert.True(IndexedArrayIndex.TryCreate(first, out var start));
+        array.Set(default, ShellValue.FromText("zero"));
+        array.Set(five, ShellValue.FromText("five"));
+        array.Set(twelve, ShellValue.FromText("twelve"));
+
+        Assert.Equal(expected, string.Join(",", array.ValuesFrom(start, count).Select(value => value.ToUtf8String())));
+    }
+
+    [Fact]
+    public void ValuesFrom_LateSmallWindowsPreserveSparseOrderAfterRemovals()
+    {
+        var array = new IndexedArray(isInitialized: false);
+        const int entries = 8192;
+        for (var index = 0; index < entries; index++)
+        {
+            Assert.True(IndexedArrayIndex.TryCreate(1_000_000L * index, out var position));
+            array.Set(position, ShellValue.FromText(index.ToString()));
+        }
+        for (var index = entries - 1; index >= entries - 128; index--)
+        {
+            Assert.True(IndexedArrayIndex.TryCreate(1_000_000L * index - 1, out var start));
+            Assert.True(IndexedArrayIndex.TryCreate(1_000_000L * index, out var position));
+            Assert.Equal(index.ToString(), Assert.Single(array.ValuesFrom(start, 1)).ToUtf8String());
+            array.Remove(position);
+            Assert.Empty(array.ValuesFrom(start, 1));
+        }
+        Assert.Equal(entries - 128, array.Count);
+    }
 }

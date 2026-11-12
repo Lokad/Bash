@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Seek sparse indexed-array windows through the existing ordered position tree,
+  avoiding scans over unrelated earlier entries. Preserve deferred reads, sparse
+  order, count limits and empty/out-of-range behavior.
 - Use owned positional argument frames with a head index for `shift`. Function
   and source scopes capture and restore caller frames without copying them;
   `set` copies its selected argument tail once. Preserve live read-only views,

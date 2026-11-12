@@ -125,14 +125,15 @@ internal sealed class IndexedArray
     /// <summary>Enumerates at most count present entries starting at an index, without materializing holes.</summary>
     public IEnumerable<ShellValue> ValuesFrom(IndexedArrayIndex first, int count)
     {
-        foreach (var position in _positions)
+        if (count <= 0 || _maximumIndex is not { } maximum || first.Value > maximum)
+            yield break;
+        // Seek into the existing position tree. Do not ask the subset for Count:
+        // that would enumerate its entire range before a small window can be read.
+        foreach (var position in _positions.GetViewBetween(first.Value, maximum))
         {
-            if (count <= 0)
-                yield break;
-            if (position < first.Value)
-                continue;
             yield return _elements[position];
-            count--;
+            if (--count == 0)
+                yield break;
         }
     }
     /// <summary>Enumerates index text for shell metadata expansion without a dense view.</summary>
