@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Compile generated benchmark wrappers against qualified Release binaries, keeping
+  their identities stable through child builds. Add cross-runtime compile-only
+  checks and preserve .NET 11 identity through the pinned harness's SDK validation.
 - Add benchmark preparation: deterministic geometric workload
   catalog, bounded byte/digest host, controlled ownership/backpressure checks and
   managed/GNU correctness exports. CI verifies the managed harness without timing

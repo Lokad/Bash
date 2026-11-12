@@ -48,6 +48,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f $framework --no-build --no-restore -- micro-plan artifacts/benchmarks/prepared
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f $framework --no-build --no-restore -- build-check artifacts/benchmarks/prepared
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f $framework --no-build --no-restore -- verify-process artifacts/benchmarks/prepared
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f $framework --no-build --no-restore -- verify-gates artifacts/benchmarks/prepared
@@ -92,4 +94,5 @@ jobs:
             artifacts/benchmarks/prepared/memory/**/result.json
             artifacts/benchmarks/prepared/measurements/**/manifest.json
             artifacts/benchmarks/prepared/measurements/**/validation.json
+            artifacts/benchmarks/prepared/builds/**
           if-no-files-found: ignore

@@ -9,7 +9,7 @@ public class ParseBenchmarks
 {
     private string _source = "";
     [ParamsSource(nameof(Cases))] public string CaseId { get; set; } = "";
-    public IEnumerable<string> Cases => MeasurementContext.Load(false).CaseIds;
+    public IEnumerable<string> Cases => MeasurementContext.LoadMetadata().CaseIds;
     [GlobalSetup] public void Setup()
     {
         Prepare(MeasurementContext.Load(true));
@@ -29,7 +29,7 @@ public abstract class ScriptBenchmarks
     private CancellationTokenSource? _deadline;
     protected abstract bool Prepared { get; }
     [ParamsSource(nameof(Cases))] public string CaseId { get; set; } = "";
-    public IEnumerable<string> Cases => MeasurementContext.Load(false).CaseIds;
+    public IEnumerable<string> Cases => MeasurementContext.LoadMetadata().CaseIds;
     [GlobalSetup] public Task Setup() => PrepareAsync(MeasurementContext.Load(true));
     internal async Task PrepareAsync(MeasurementContext context)
     {
@@ -87,7 +87,7 @@ public class ProcessBenchmarks
     private ProcessOutput? _output;
     private CancellationTokenSource? _deadline;
     [ParamsSource(nameof(Cases))] public string CaseId { get; set; } = "";
-    public IEnumerable<string> Cases => MeasurementContext.Load(false).CaseIds;
+    public IEnumerable<string> Cases => MeasurementContext.LoadMetadata().CaseIds;
     [GlobalSetup] public void Setup()
     {
         Prepare(MeasurementContext.Load(true));

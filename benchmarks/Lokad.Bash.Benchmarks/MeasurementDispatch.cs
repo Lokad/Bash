@@ -155,10 +155,13 @@ internal static class MeasurementDispatch
     {
         var role = Environment.Version.Major == 11 ? "primary" : "compatibility-control";
         var job = Job.Default.WithId($"net{Environment.Version.Major}-{role}")
-            .WithRuntime(CoreRuntime.CreateForNewVersion($"net{Environment.Version.Major}.0", $".NET {Environment.Version.Major}"))
+            .WithRuntime(Environment.Version.Major == 10 ? CoreRuntime.Core10_0 : CoreRuntime.CreateForNewVersion("net11.0", ".NET 11"))
+            .WithToolchain(BenchmarkToolchain.Create($"net{Environment.Version.Major}.0"))
             .WithLaunchCount(3).WithGcServer(System.Runtime.GCSettings.IsServerGC)
             .WithEnvironmentVariable(contextKey, contextPath);
-        return ManualConfig.Create(DefaultConfig.Instance).AddJob(job).AddValidator(CompilationValidator.FailOnError)
+        // BDN 0.15.8's automatic build scheduling looks up a version enum that
+        // predates .NET 11. One explicit sequential build avoids that lookup.
+        return ManualConfig.Create(DefaultConfig.Instance).WithOptions(ConfigOptions.DisableParallelBuild).AddJob(job).AddValidator(CompilationValidator.FailOnError)
             .AddExporter(JsonExporter.Full).WithArtifactsPath(Path.Combine(root, "bdn"));
     }
 

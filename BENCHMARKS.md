@@ -16,6 +16,7 @@ Use Release throughout.
 dotnet restore Lokad.Bash.slnx --locked-mode
 dotnet build Lokad.Bash.slnx -c Release --no-restore
 dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- prepare artifacts/benchmarks/prepared
+dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- build-check artifacts/benchmarks/prepared
 dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- verify-managed artifacts/benchmarks/prepared
 dotnet run -c Release -f net10.0 --project benchmarks/Lokad.Bash.Benchmarks -- verify-managed artifacts/benchmarks/prepared
 dotnet run -c Release -f net11.0 --project benchmarks/Lokad.Bash.Benchmarks -- verify-process artifacts/benchmarks/prepared
@@ -38,6 +39,29 @@ universal interpreter instruction count. Seeded read input uses an explicit
 32-bit arithmetic formula, without ambient randomness.
 After the Release build, add `--no-build --no-restore` before `--` in driver commands
 to reuse those binaries throughout qualification.
+
+Run `build-check DIRECTORY` after preparation on each runtime. It generates and
+compiles the five distinct BenchmarkDotNet wrapper types, validates the toolchain,
+and checks every copied assembly against the qualified binary's hash. It invokes
+neither an executor nor a timing runner. Reports under `builds/` retain generated
+code/project files, asset hashes, build logs and completion status. CI exercises
+this path on Windows/Linux and .NET 10/.NET 11.
+
+Generated wrappers reference the existing Release binaries directly. This keeps
+the benchmark driver, interpreter and dependencies identical to the binaries used
+for correctness qualification, including their PE/PDB identity. The driver keeps
+its BenchmarkDotNet dependency private. Metadata discovery reads validated case
+selection; dispatch and actual benchmark setup still require complete correctness
+evidence and the quiet-VM declaration. Build checks confirm all five setup methods
+reject their declaration-free compilation contexts.
+
+The pinned BenchmarkDotNet predates a named .NET 11 runtime enum. Its version-enum
+SDK/build checks cannot handle `CreateForNewVersion`. The .NET 11 toolchain checks
+the actual SDK/target framework and delegates compilation to the pinned SDK,
+while retaining the declared .NET 11 runtime identity. .NET 10 uses its known
+runtime identity and normal SDK validation. Sequential wrapper compilation avoids
+the old version-enum lookup in automatic build scheduling. Both compile-only
+paths are checked; independent measured launches remain separate.
 
 The catalog has 25 workload families at scales 16, 64 and 256: arithmetic
 and branching; narrow/wide calls; shift; small/large prefix environments; arrays
@@ -263,7 +287,7 @@ not be inferred from the Linux figures.
    --info` and `dotnet --list-runtimes`).
 3. Run `prepare` into a fresh directory, such as `artifacts/benchmarks/vm`. Under
    **each** of `net11.0` and `net10.0`, run `verify-managed`, `verify-process`,
-   `verify-gates`, `micro-verify` and `verify-native` on that directory. Use a direct GNU binary on
+   `verify-gates`, `micro-verify`, `build-check` and `verify-native` on that directory. Use a direct GNU binary on
    the VM. Recreate evidence there: development-machine reports deliberately fail
    the environment and binary gates. Keep all reports, including failed attempts.
 4. Run `plan` for the intended family and each lane. Inspect the manifest's case
@@ -277,7 +301,7 @@ not be inferred from the Linux figures.
    Do not turn either memory observation into a throughput measurement.
 6. Retain the whole prepared directory: exact inputs/expectations, all verification
    reports, memory reports, every `measurements/*/manifest.json`, context and copied
-   evidence, and the complete `bdn/` trees containing logs and full JSON results.
+   evidence, generated `builds/` reports/logs, and the complete `bdn/` trees containing logs and full JSON results.
    Add the SDK inventory, build/test logs and `vm.json`. Archive the directory to a
    destination outside it, for example with PowerShell:
 

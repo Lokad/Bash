@@ -2,6 +2,11 @@ using System.Text.Json;
 using Lokad.Bash.Benchmarks;
 using Lokad.Bash.Syntax;
 
+if (args.Length > 0 && args[0] == "build-check")
+{
+    BuildCheck.Run(args);
+    return;
+}
 if (args.Length > 0 && args[0].StartsWith("micro-", StringComparison.Ordinal))
 {
     MicroDispatch.Run(args);
