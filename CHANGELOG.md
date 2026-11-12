@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Evaluate variable/array arithmetic values as expressions through the shared
+  arithmetic evaluator, preserving dynamic bindings, side effects and short
+  circuiting. Support octal, hexadecimal and base-2-through-64 constants with
+  wrapping 64-bit results. Cyclic expressions fail through the existing structural
+  arithmetic nesting guard rather than silently evaluating to zero.
 - Add context-sensitive errexit through `set -e`/`set +e` and
   `set -o errexit`/`set +o errexit`, including tested contexts, function/source/eval
   propagation, pipeline failures, command-substitution inheritance and EXIT cleanup.

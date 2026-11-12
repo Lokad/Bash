@@ -144,34 +144,71 @@ public static class ArithmeticEvaluation
         CancellationToken cancellationToken) =>
         new Parser<TTarget>(expression, bindReference, assignTarget, cancellationToken).EvaluateAsync();
 
-    /// <summary>Parses ASCII decimal chars or bytes modulo 2^64; strict comparison parsing must still reject overflow.</summary>
-    internal static bool TryParseDecimal<T>(ReadOnlySpan<T> text, out long value) where T : IBinaryInteger<T> =>
-        TryParseDecimal(text, CancellationToken.None, out value);
+    /// <summary>Parses Bash integer constants modulo 2^64, without decoding byte-valued operands.</summary>
+    internal static bool TryParseIntegerLiteral<T>(ReadOnlySpan<T> text, out long value) where T : IBinaryInteger<T> =>
+        TryParseIntegerLiteral(text, CancellationToken.None, out value);
 
-    internal static bool TryParseDecimal<T>(ReadOnlySpan<T> text, CancellationToken cancellationToken, out long value)
+    internal static bool TryParseIntegerLiteral<T>(ReadOnlySpan<T> text, CancellationToken cancellationToken, out long value)
         where T : IBinaryInteger<T>
     {
         value = 0;
+        cancellationToken.ThrowIfCancellationRequested();
         var negative = !text.IsEmpty && text[0] == T.CreateChecked('-');
         if (!text.IsEmpty && (negative || text[0] == T.CreateChecked('+')))
             text = text[1..];
         if (text.IsEmpty)
             return false;
 
-        foreach (var digit in text)
+        var radix = 10;
+        var separator = text.IndexOf(T.CreateChecked('#'));
+        if (separator >= 0)
+        {
+            radix = 0;
+            if (separator == 0)
+                return false;
+            foreach (var character in text[..separator])
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var digit = int.CreateChecked(character) - '0';
+                if (digit is < 0 or > 9 || radix > 64)
+                    return false;
+                radix = radix * 10 + digit;
+            }
+            if (radix is < 2 or > 64)
+                return false;
+            text = text[(separator + 1)..];
+        }
+        else if (text.Length > 1 && text[0] == T.CreateChecked('0'))
+        {
+            if (text[1] == T.CreateChecked('x') || text[1] == T.CreateChecked('X'))
+            {
+                radix = 16;
+                text = text[2..];
+            }
+            else
+                radix = 8;
+        }
+        if (text.IsEmpty)
+            return false;
+
+        long number = 0;
+        foreach (var character in text)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (digit < T.CreateChecked('0') || digit > T.CreateChecked('9'))
+            var digit = int.CreateChecked(character) switch
             {
-                value = 0;
+                >= '0' and <= '9' => int.CreateChecked(character) - '0',
+                >= 'a' and <= 'z' => int.CreateChecked(character) - 'a' + 10,
+                >= 'A' and <= 'Z' => int.CreateChecked(character) - 'A' + (radix <= 36 ? 10 : 36),
+                '@' => 62,
+                '_' => 63,
+                _ => -1
+            };
+            if (digit < 0 || digit >= radix)
                 return false;
-            }
-
-            value = unchecked(value * 10 + long.CreateChecked(digit) - '0');
+            number = unchecked(number * radix + digit);
         }
-
-        if (negative)
-            value = unchecked(-value);
+        value = negative ? unchecked(-number) : number;
         return true;
     }
 
@@ -599,7 +636,7 @@ public static class ArithmeticEvaluation
             if (kind == ArithmeticTokenKind.Number)
             {
                 _index += token.Length;
-                _parsed = TryParseDecimal(token, _cancellationToken, out var number)
+                _parsed = TryParseIntegerLiteral(token, _cancellationToken, out var number)
                     ? new ParseResult(true, IsSuppressed ? 0 : number) : default;
                 return null;
             }
@@ -891,7 +928,7 @@ public static class ArithmeticEvaluation
         {
             var token = PeekToken(out var kind);
             return kind != ArithmeticTokenKind.Invalid
-                && (kind != ArithmeticTokenKind.Number || TryParseDecimal(token, _cancellationToken, out _));
+                && (kind != ArithmeticTokenKind.Number || TryParseIntegerLiteral(token, _cancellationToken, out _));
         }
 
         // Lookahead and parsing share token boundaries; malformed decimal words are never numeric prefixes.
@@ -912,7 +949,7 @@ public static class ArithmeticEvaluation
                 kind = VariableNames.IsNameStart((char)first) ? ArithmeticTokenKind.Identifier : ArithmeticTokenKind.Number;
                 while (length < remaining.Length
                     && (VariableNames.IsNamePart((char)remaining[length])
-                        || kind == ArithmeticTokenKind.Number && remaining[length] == (byte)'#'))
+                        || kind == ArithmeticTokenKind.Number && remaining[length] is (byte)'#' or (byte)'@'))
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
                     length++;

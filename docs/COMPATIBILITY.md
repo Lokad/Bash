@@ -46,6 +46,12 @@ job/process-group control, OS signal handling, process substitution, `coproc`,
 other than errexit.
 The runtime does not import process environment variables or startup files.
 
+Arithmetic uses wrapping signed 64-bit values, with decimal, octal, hexadecimal and
+explicit base-2-through-64 constants. Stored variable/array values are arithmetic
+expressions evaluated against current bindings; they are not re-expanded as shell
+source. Active numeric recursion shares the structural nesting guard and observes
+cancellation. Completed arithmetic work consumes no execution allowance.
+
 Hosts provide external commands, including any `sh`/`bash` aliases and script-file
 launch policy. Command names and filesystem capabilities are never inferred from
 the ambient machine. Additional host tools do not expand the language grammar.

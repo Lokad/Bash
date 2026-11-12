@@ -122,8 +122,27 @@ internal static partial class WordExpansion
                         new ArithmeticError(ArithmeticErrorKind.InvalidTarget, selected.Syntax.Name.ToValue()));
                 }
                 // Bad read subscripts diagnose and yield zero. A later write may select a newly created array.
-                var value = use == ArithmeticReferenceUse.Read && target.Location != null
-                    ? target.Location.ReadArithmetic(scope.Variables, scope.Effects.CancellationToken) : 0;
+                long value = 0;
+                if (use == ArithmeticReferenceUse.Read && target.Location != null
+                    && target.Location.TryRead(scope.Variables, out var stored) && !stored.IsEmpty)
+                {
+                    if (!ArithmeticEvaluation.TryParseIntegerLiteral(stored.Bytes.Span,
+                            scope.Effects.CancellationToken, out value))
+                    {
+                        // Values are arithmetic expressions, not fresh shell source. Share the
+                        // existing numeric pump so recursive reads never grow a callback stack.
+                        scope.Effects.Memory.Charge(checked(256L + 4L * stored.Bytes.Length));
+                        var nested = await EvaluateArithmeticAsync(ArithmeticOperand.FromValue(stored),
+                            scope, failureMode, assignOutput).ConfigureAwait(false);
+                        if (nested is not { } number)
+                        {
+                            referenceFailureReported = true;
+                            return new ArithmeticBinding<ArithmeticTarget>.Failure(
+                                new ArithmeticError(ArithmeticErrorKind.InvalidExpression, stored));
+                        }
+                        value = number;
+                    }
+                }
                 return new ArithmeticBinding<ArithmeticTarget>.Bound(target, value);
             }
 

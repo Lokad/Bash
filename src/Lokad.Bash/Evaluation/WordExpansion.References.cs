@@ -17,11 +17,6 @@ internal static partial class WordExpansion
         internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName);
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
 
-        internal long ReadArithmetic(Variables variables) => ReadArithmetic(variables, CancellationToken.None);
-
-        internal long ReadArithmetic(Variables variables, CancellationToken cancellationToken) => TryRead(variables, out var value)
-            && ArithmeticEvaluation.TryParseDecimal(value.Bytes.Span, cancellationToken, out var number) ? number : 0;
-
         public bool TryRead(Variables variables, out ShellValue value)
         {
             value = ShellValue.Empty;

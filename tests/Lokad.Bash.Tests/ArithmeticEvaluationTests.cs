@@ -278,8 +278,8 @@ public sealed class ArithmeticEvaluationTests
     public void Evaluate_WrapsDecimalLiterals(string expression, long expected)
     {
         Assert.Equal(expected, Eval(expression));
-        Assert.True(ArithmeticEvaluation.TryParseDecimal(expression.AsSpan(), out var textValue));
-        Assert.True(ArithmeticEvaluation.TryParseDecimal(ShellValue.FromText(expression).Bytes.Span, out var byteValue));
+        Assert.True(ArithmeticEvaluation.TryParseIntegerLiteral(expression.AsSpan(), out var textValue));
+        Assert.True(ArithmeticEvaluation.TryParseIntegerLiteral(ShellValue.FromText(expression).Bytes.Span, out var byteValue));
         Assert.Equal(expected, textValue);
         Assert.Equal(expected, byteValue);
     }
@@ -291,10 +291,10 @@ public sealed class ArithmeticEvaluationTests
     [InlineData(" 1")]
     [InlineData("1x")]
     [InlineData("é")]
-    public void DecimalParsingRejectsNonAsciiNumbers(string text)
+    public void LiteralParsingRejectsInvalidAsciiNumbers(string text)
     {
-        Assert.False(ArithmeticEvaluation.TryParseDecimal(text.AsSpan(), out _));
-        Assert.False(ArithmeticEvaluation.TryParseDecimal(ShellValue.FromText(text).Bytes.Span, out _));
+        Assert.False(ArithmeticEvaluation.TryParseIntegerLiteral(text.AsSpan(), out _));
+        Assert.False(ArithmeticEvaluation.TryParseIntegerLiteral(ShellValue.FromText(text).Bytes.Span, out _));
     }
 
     [Fact]
@@ -333,29 +333,34 @@ public sealed class ArithmeticEvaluationTests
     }
 
     [Fact]
-    public void StoredVariableReadsDoNotAllocateDecodedCopies()
+    public void LiteralParsingDoesNotAllocateDecodedCopies()
     {
         var bytes = new byte[64 * 1024];
         bytes.AsSpan().Fill((byte)'0');
         bytes[^1] = (byte)'1';
         var variables = Variables.CreateEmpty();
         Assert.True(variables.TrySetScalar("p", ShellValue.FromBytes(bytes)));
-        var target = new WordExpansion.ResolvedVariableReference.Scalar("p");
         // Warm a full batch before measuring to exclude first-use overhead.
         for (var index = 0; index < 16; index++)
-            Assert.Equal(1, target.ReadArithmetic(variables));
+            Assert.Equal(1, ParseStored());
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         long sum = 0;
         for (var index = 0; index < 16; index++)
-            sum += target.ReadArithmetic(variables);
+            sum += ParseStored();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(16, sum);
         // Allow runtime overhead while staying below a single 128 KiB decoded copy.
         Assert.True(allocated < 32 * 1024, $"Allocated {allocated} bytes while reading stored numbers.");
         Assert.True(variables.TrySetScalar("p", ShellValue.FromBytes(new byte[] { 0xff })));
-        Assert.Equal(0, target.ReadArithmetic(variables));
+        Assert.Equal(0, ParseStored());
+
+        long ParseStored()
+        {
+            Assert.True(variables.TryGetScalar("p", out var stored));
+            return ArithmeticEvaluation.TryParseIntegerLiteral(stored.Bytes.Span, out var number) ? number : 0;
+        }
     }
 
     [Theory]

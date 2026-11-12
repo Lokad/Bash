@@ -65,9 +65,9 @@ public sealed class ByteArithmeticTests
     [InlineData("31C3")]
     [InlineData("310D")]
     [InlineData("EFBC91")]
-    public void TryParseDecimal_RejectsNonDigitsWithoutTextDecoding(string valueHex)
+    public void TryParseIntegerLiteral_RejectsNonDigitsWithoutTextDecoding(string valueHex)
     {
-        Assert.False(ArithmeticEvaluation.TryParseDecimal(Convert.FromHexString(valueHex), out var value));
+        Assert.False(ArithmeticEvaluation.TryParseIntegerLiteral(Convert.FromHexString(valueHex), out var value));
         Assert.Equal(0, value);
     }
 }
