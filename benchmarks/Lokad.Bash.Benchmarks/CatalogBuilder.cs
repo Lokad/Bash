@@ -92,11 +92,45 @@ internal static class CatalogBuilder
             SkipReason = "Extended shell patterns are explicitly outside the supported language; retained as an excluded catalog row."
         };
         cases.Add(unsupported);
-        var catalog = new WorkloadCatalog(1, seed, 128, ["--noprofile", "--norc", "-o", "pipefail"], cases);
+        // Work units differ by family. Keep repetitions fixed across that family's
+        // geometric scales, without treating one fork as one arithmetic term.
+        var repetitions = cases.GroupBy(workload => workload.Family).ToDictionary(group => group.Key, group =>
+        {
+            var example = group.First();
+            if (example.Family.StartsWith("pattern-", StringComparison.Ordinal)) return 4;
+            if (example.Family == "command-substitution") return 8;
+            if (example.Family is "format-output" or "raw-output" or "prefix-large") return 128;
+            if (example.Domain is WorkloadDomain.ByteIo or WorkloadDomain.FileWorkflow) return 16;
+            return 1024;
+        }, StringComparer.Ordinal);
+        foreach (var original in cases.ToArray())
+        {
+            var rounds = repetitions[original.Family];
+            if (original.SkipReason.Length > 0 || !original.CanAmortize)
+            {
+                cases.Add(original with { Id = original.Id + "-amortized", Variant = WorkloadVariant.StartupAmortized,
+                    Rounds = rounds, WorkUnits = 0, Expected = null,
+                    SkipReason = original.SkipReason.Length > 0 ? original.SkipReason : original.AmortizationExclusion });
+                continue;
+            }
+            var script = $"__lokad_workload() {{\n{System.Text.Encoding.UTF8.GetString(original.Script.Bytes)}\n}}\n"
+                + $"for ((__lokad_round=0;__lokad_round<{rounds};__lokad_round++)); do __lokad_workload; done";
+            var expected = original.RequiredExpected;
+            cases.Add(original with { Id = original.Id + "-amortized", Variant = WorkloadVariant.StartupAmortized,
+                Rounds = rounds, WorkUnits = checked(original.WorkUnits * rounds), WorkUnit = original.WorkUnit + " across declared rounds",
+                Script = Text(script), Expected = expected with { Stdout = Repeat(expected.Stdout, rounds), Stderr = Repeat(expected.Stderr, rounds) } });
+        }
+        var catalog = new WorkloadCatalog(2, seed, repetitions, ["--noprofile", "--norc", "-o", "pipefail"], cases);
         catalog.Validate();
         return catalog;
     }
 
     private static Blob Text(long number) => Text(number.ToString(CultureInfo.InvariantCulture));
     private static Blob Text(string text) => Blob.FromText(text);
+    private static Blob Repeat(Blob blob, int count)
+    {
+        var bytes = new byte[checked(blob.Bytes.Length * count)];
+        for (var index = 0; index < count; index++) blob.Bytes.CopyTo(bytes, index * blob.Bytes.Length);
+        return Blob.FromBytes(bytes);
+    }
 }

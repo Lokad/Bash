@@ -43,6 +43,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f net10.0 --no-build --no-restore -- verify-managed artifacts/benchmarks/prepared
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($framework in @('net11.0', 'net10.0')) {
+            dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f $framework --no-build --no-restore -- verify-process artifacts/benchmarks/prepared
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f $framework --no-build --no-restore -- verify-gates artifacts/benchmarks/prepared
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f net11.0 --no-build --no-restore -- memory-managed artifacts/benchmarks/prepared arithmetic-branch-64 public
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet run --project benchmarks/Lokad.Bash.Benchmarks -c Release -f net11.0 --no-build --no-restore -- smoke artifacts/benchmarks/prepared arithmetic-branch-64 prepared
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload test results
@@ -76,4 +84,5 @@ jobs:
             artifacts/benchmarks/prepared/catalog.json
             artifacts/benchmarks/prepared/*verification.json
             artifacts/benchmarks/prepared/smoke-*.json
+            artifacts/benchmarks/prepared/memory/**/result.json
           if-no-files-found: ignore

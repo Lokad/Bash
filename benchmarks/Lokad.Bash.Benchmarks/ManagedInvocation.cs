@@ -13,14 +13,18 @@ internal sealed class ManagedInvocation : IAsyncDisposable
 {
     private readonly MemoryGovernor _memory = new(256 * 1024 * 1024);
     private readonly IMemoryScope _evaluationMemory;
+    private readonly IMemoryScope _inputMemory;
     private readonly BenchmarkHost _host;
     private readonly Evaluation.Evaluation? _evaluation;
     private readonly string _source;
-    public ManagedInvocation(Workload workload, ParsedScript? prepared, Stream? stdout, Stream? stderr)
+    public ManagedInvocation(Workload workload, ParsedScript? prepared)
     {
         _source = new UTF8Encoding(false, true).GetString(workload.Script.Bytes);
         _evaluationMemory = _memory.CreateScope();
-        _host = new BenchmarkHost(_memory, workload, stdout, stderr);
+        _inputMemory = _memory.CreateScope();
+        _inputMemory.Reserve(checked(workload.Input.Length + workload.FixtureBytes));
+        _host = new BenchmarkHost(_memory, workload.Input.Bytes,
+            workload.Files.ToDictionary(pair => pair.Key, pair => (ReadOnlyMemory<byte>)pair.Value.Bytes, StringComparer.Ordinal), null, null);
         if (prepared != null) _evaluation = new Evaluation.Evaluation(prepared);
     }
     public async Task<ObservedResult> RunAsync(CancellationToken token)
@@ -39,6 +43,7 @@ internal sealed class ManagedInvocation : IAsyncDisposable
     {
         _evaluationMemory.Dispose();
         await _host.DisposeAsync().ConfigureAwait(false);
+        _inputMemory.Dispose();
         if (_memory.ReservedBytes != 0) throw new InvalidOperationException("Benchmark invocation retained admitted storage after cleanup.");
     }
     public static void Verify(Workload workload, ObservedResult observed)

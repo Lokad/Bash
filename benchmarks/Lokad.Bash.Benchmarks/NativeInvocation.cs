@@ -5,7 +5,6 @@ using System.Text.Json;
 namespace Lokad.Bash.Benchmarks;
 
 internal sealed record ReferencePin(string Id, string Version, string Sha256);
-internal sealed record NativeOutput(int ExitCode, ContentDigest Stdout, ContentDigest Stderr);
 
 /// <summary>GNU process startup, script-file parsing and byte transport are one declared boundary.</summary>
 internal sealed class NativeInvocation
@@ -30,7 +29,8 @@ internal sealed class NativeInvocation
         _start = Start(_wsl ? "/usr/bin/timeout" : executable, distribution, workload.Locale);
         if (_wsl)
         {
-            foreach (var argument in new[] { "--kill-after=2s", "55s", executable }) _start.ArgumentList.Add(argument);
+            var deadline = workload.Variant == WorkloadVariant.StartupAmortized ? "170s" : "55s";
+            foreach (var argument in new[] { "--kill-after=2s", deadline, executable }) _start.ArgumentList.Add(argument);
         }
         _start.WorkingDirectory = _fixtures;
         // A file avoids Windows argv and Linux per-argument limits for adverse source literals.
@@ -38,41 +38,8 @@ internal sealed class NativeInvocation
             _start.ArgumentList.Add(option);
     }
 
-    public async Task<NativeOutput> RunAsync(CancellationToken token)
-    {
-        using var process = Process.Start(_start) ?? throw new InvalidOperationException("GNU Bash did not start.");
-        using var stdout = new Digest();
-        using var stderr = new Digest();
-        var output = DrainAsync(process.StandardOutput.BaseStream, stdout, token);
-        var error = DrainAsync(process.StandardError.BaseStream, stderr, token);
-        try
-        {
-            await process.StandardInput.BaseStream.WriteAsync(_input, token).ConfigureAwait(false);
-            process.StandardInput.Close();
-            await process.WaitForExitAsync(token).ConfigureAwait(false);
-            await Task.WhenAll(output, error).ConfigureAwait(false);
-            if (_wsl && process.ExitCode is 124 or 137)
-                throw new TimeoutException("The WSL correctness transport timed out (statuses 124/137 are reserved by its wrapper).");
-            return new NativeOutput(process.ExitCode, stdout.Snapshot(), stderr.Snapshot());
-        }
-        catch
-        {
-            // A killed WSL launcher does not establish that Linux users have stopped.
-            // Its Linux-side timeout bounds cancellation drain instead.
-            if (!process.HasExited && !_wsl) process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            try { await Task.WhenAll(output, error).ConfigureAwait(false); } catch { }
-            throw;
-        }
-
-        static async Task DrainAsync(Stream stream, Digest digest, CancellationToken token)
-        {
-            var buffer = new byte[8192];
-            int length;
-            while ((length = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) != 0)
-                digest.Append(buffer.AsSpan(0, length));
-        }
-    }
+    public Task<ProcessOutput> RunAsync(CancellationToken token) =>
+        ProcessTransport.RunAsync(_start, _input, _wsl, token);
 
     public IReadOnlyDictionary<string, ContentDigest> ObserveFiles() =>
         Directory.EnumerateFiles(_fixtures, "*", SearchOption.AllDirectories).ToDictionary(
@@ -90,15 +57,10 @@ internal sealed class NativeInvocation
         var pin = catalog.RootElement.GetProperty("references").EnumerateArray()
             .Select(row => new ReferencePin(row.GetProperty("id").GetString() ?? "", row.GetProperty("version").GetString() ?? "", row.GetProperty("sha256").GetString() ?? ""))
             .Single(row => row.Id == id);
-        var start = Start(executable, distribution, "C");
+        var start = IdentityStart(executable);
         start.ArgumentList.Add("--version");
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Reference did not start.");
-        process.StandardInput.Close();
-        var stdout = process.StandardOutput.ReadToEndAsync(token);
-        var stderr = process.StandardError.ReadToEndAsync(token);
-        await process.WaitForExitAsync(token).ConfigureAwait(false);
-        var version = (await stdout.ConfigureAwait(false)).Split('\n')[0].TrimEnd('\r');
-        if (process.ExitCode != 0 || (await stderr.ConfigureAwait(false)).Length != 0 || version != pin.Version)
+        var version = (await ReadIdentityAsync(start)).Split('\n')[0].TrimEnd('\r');
+        if (version != pin.Version)
             throw new InvalidDataException("GNU Bash version differs from the pinned reference.");
         string hash;
         if (distribution == null)
@@ -108,19 +70,43 @@ internal sealed class NativeInvocation
         }
         else
         {
-            var hashing = Start("/usr/bin/sha256sum", distribution, "C");
+            var hashing = IdentityStart("/usr/bin/sha256sum");
             hashing.ArgumentList.Add("--"); hashing.ArgumentList.Add(executable);
-            using var hasher = Process.Start(hashing) ?? throw new InvalidOperationException("Reference hasher did not start.");
-            hasher.StandardInput.Close();
-            var result = hasher.StandardOutput.ReadToEndAsync(token);
-            var failure = hasher.StandardError.ReadToEndAsync(token);
-            await hasher.WaitForExitAsync(token).ConfigureAwait(false);
-            hash = (await result.ConfigureAwait(false)).Split(' ')[0];
-            if (hasher.ExitCode != 0 || (await failure.ConfigureAwait(false)).Length != 0)
-                throw new InvalidDataException("Cannot hash the pinned Linux reference.");
+            hash = (await ReadIdentityAsync(hashing)).Split(' ')[0];
         }
         if (hash != pin.Sha256) throw new InvalidDataException("GNU Bash hash differs from the pinned reference.");
         return pin;
+
+        ProcessStartInfo IdentityStart(string command)
+        {
+            var identity = Start(distribution == null ? command : "/usr/bin/timeout", distribution, "C");
+            if (distribution != null)
+                foreach (var argument in new[] { "--kill-after=2s", "10s", command }) identity.ArgumentList.Add(argument);
+            return identity;
+        }
+
+        async Task<string> ReadIdentityAsync(ProcessStartInfo identity)
+        {
+            using var process = Process.Start(identity) ?? throw new InvalidOperationException("Reference identification did not start.");
+            process.StandardInput.Close();
+            var output = process.StandardOutput.ReadToEndAsync(token);
+            var error = process.StandardError.ReadToEndAsync(token);
+            try
+            {
+                await process.WaitForExitAsync(token).ConfigureAwait(false);
+                var text = await output.ConfigureAwait(false);
+                if (process.ExitCode != 0 || (await error.ConfigureAwait(false)).Length != 0)
+                    throw new InvalidDataException("Reference identification failed or timed out.");
+                return text;
+            }
+            catch
+            {
+                if (!process.HasExited && distribution == null) process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                try { await Task.WhenAll(output, error).ConfigureAwait(false); } catch { }
+                throw;
+            }
+        }
     }
 
     private static ProcessStartInfo Start(string executable, string? distribution, string locale)

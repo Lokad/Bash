@@ -67,8 +67,8 @@ Before 1.0, minor versions may change public APIs, with migration notes in the
 changelog.
 
 [Benchmark preparation](https://github.com/Lokad/Bash/blob/master/BENCHMARKS.md)
-uses a separate non-packable project. Preparation, equivalence checks and
-single-invocation smoke modes run without comparative timings. Dedicated-VM
+uses separate non-packable driver/probe projects. Preparation, equivalence checks,
+lifecycle previews and isolated allocation smoke modes run without comparative timings. Dedicated-VM
 measurements remain pending.
 
 ## GNU correctness controls

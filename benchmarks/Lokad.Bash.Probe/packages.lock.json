@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "lokad.bash": {
+        "type": "Project"
+      }
+    },
+    "net11.0": {
+      "lokad.bash": {
+        "type": "Project"
+      }
+    }
+  }
+}

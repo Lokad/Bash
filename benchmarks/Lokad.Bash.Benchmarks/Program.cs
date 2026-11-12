@@ -2,10 +2,63 @@ using System.Text.Json;
 using Lokad.Bash.Benchmarks;
 using Lokad.Bash.Syntax;
 
-if (args.Length < 2 || args[0] is not ("prepare" or "verify-managed" or "verify-native" or "smoke"))
-    throw new ArgumentException("Usage: prepare|verify-managed OUTPUT_DIRECTORY; verify-native OUTPUT_DIRECTORY BASH_PATH [WSL_DISTRIBUTION]; smoke OUTPUT_DIRECTORY CASE_ID parse|prepared|public");
+if (args.Length > 0 && args[0] is "plan" or "measure")
+{
+    await MeasurementDispatch.RunAsync(args);
+    return;
+}
+if (args.Length > 0 && args[0] == "memory-managed")
+{
+    await ManagedMemory.RunAsync(args);
+    return;
+}
+if (args.Length < 2 || args[0] is not ("prepare" or "verify-managed" or "verify-native" or "verify-process" or "verify-gates" or "smoke"))
+    throw new ArgumentException("Usage: prepare|verify-managed|verify-process OUTPUT_DIRECTORY; verify-native OUTPUT_DIRECTORY BASH_PATH [WSL_DISTRIBUTION]; smoke OUTPUT_DIRECTORY CASE_ID parse|prepared|public");
 var directory = Path.GetFullPath(args[1]);
 var catalogPath = Path.Combine(directory, "catalog.json");
+if (args[0] == "verify-gates")
+{
+    GateChecks.Run(directory);
+    return;
+}
+if (args[0] == "verify-process")
+{
+    var path = Path.Combine(directory, $"process-net{Environment.Version.Major}-verification.json");
+    VerificationReport.Create(catalogPath, null, null, VerificationTransport.ManagedProcess, false, false, []).Write(path);
+    var executable = ProbeInvocation.FindExecutable();
+    var identity = ProbeInvocation.Identify(executable);
+    var processCatalog = WorkloadCatalog.Read(catalogPath);
+    var rows = new List<VerificationRow>();
+    var complete = false;
+    var root = Path.Combine(directory, "process", Guid.NewGuid().ToString("N"));
+    try
+    {
+        foreach (var workload in processCatalog.Cases)
+        {
+            if (workload.SkipReason.Length != 0)
+            {
+                rows.Add(new(workload.Id, VerificationLane.ManagedProcess, VerificationStatus.Skipped, workload.SkipReason, null));
+                continue;
+            }
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(190));
+            var invocation = new ProbeInvocation(workload, ProbeMode.Public, false, executable, Path.Combine(root, workload.Id));
+            ProcessOutput? output = null;
+            ProbeResult? probe = null;
+            try
+            {
+                output = await invocation.RunAsync(deadline.Token);
+                probe = invocation.ObserveResult();
+                ManagedInvocation.Verify(workload, output.ExitCode, output.Stdout, output.Stderr, probe.Files);
+            }
+            catch (Exception error) { rows.Add(new(workload.Id, VerificationLane.ManagedProcess, VerificationStatus.Failed, error.Message, new { output, probe })); throw; }
+            rows.Add(new(workload.Id, VerificationLane.ManagedProcess, VerificationStatus.Passed, "", new { output, probe }));
+        }
+        complete = true;
+    }
+    finally { VerificationReport.Create(catalogPath, null, identity, VerificationTransport.ManagedProcess, false, complete, rows).Write(path); }
+    Console.WriteLine($"Verified {rows.Count(row => row.Status == VerificationStatus.Passed)} fresh managed processes with {rows.Count(row => row.Status == VerificationStatus.Skipped)} labelled exclusions. No timings collected.");
+    return;
+}
 if (args[0] == "smoke")
 {
     if (args.Length != 4 || args[3] is not ("parse" or "prepared" or "public"))
@@ -26,7 +79,7 @@ if (args[0] == "smoke")
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var script = args[3] == "prepared" ? Parser.Parse(System.Text.Encoding.UTF8.GetString(workload.Script.Bytes)) : null;
-        await using var invocation = new ManagedInvocation(workload, script, null, null);
+        await using var invocation = new ManagedInvocation(workload, script);
         var gen0 = GC.CollectionCount(0); var gen1 = GC.CollectionCount(1); var gen2 = GC.CollectionCount(2);
         var before = GC.GetTotalAllocatedBytes(precise: true);
         var observed = await invocation.RunAsync(deadline.Token);
@@ -51,8 +104,9 @@ if (args[0] == "verify-native")
     var distribution = args.Length == 4 ? args[3] : null;
     var native = distribution == null ? Path.GetFullPath(args[2]) : args[2];
     var referenceId = distribution != null || !OperatingSystem.IsWindows() ? "gnu-linux" : "gnu-msys";
-    var reportPath = Path.Combine(directory, referenceId + "-verification.json");
-    VerificationReport.Create(catalogPath, null, false, false, []).Write(reportPath);
+    var reportPath = VerificationReport.NativePath(directory, referenceId);
+    var transport = distribution == null ? VerificationTransport.NativeDirect : VerificationTransport.WslCorrectness;
+    VerificationReport.Create(catalogPath, null, null, transport, false, false, []).Write(reportPath);
     DirectoryInfo? repository = new DirectoryInfo(AppContext.BaseDirectory);
     while (repository != null && !File.Exists(Path.Combine(repository.FullName, "Lokad.Bash.slnx"))) repository = repository.Parent;
     if (repository == null) throw new InvalidOperationException("Cannot locate the pinned reference catalog.");
@@ -72,11 +126,17 @@ if (args[0] == "verify-native")
                 results.Add(new(workload.Id, VerificationLane.GnuCorrectness, VerificationStatus.Skipped, workload.SkipReason, null));
                 continue;
             }
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            using var deadline = new CancellationTokenSource(workload.Variant == WorkloadVariant.StartupAmortized
+                ? TimeSpan.FromMinutes(3) : TimeSpan.FromMinutes(1));
             var invocation = new NativeInvocation(workload, native, distribution, Path.Combine(root, workload.Id));
-            var output = await invocation.RunAsync(deadline.Token);
-            var files = invocation.ObserveFiles();
-            try { ManagedInvocation.Verify(workload, output.ExitCode, output.Stdout, output.Stderr, files); }
+            ProcessOutput? output = null;
+            IReadOnlyDictionary<string, ContentDigest>? files = null;
+            try
+            {
+                output = await invocation.RunAsync(deadline.Token);
+                files = invocation.ObserveFiles();
+                ManagedInvocation.Verify(workload, output.ExitCode, output.Stdout, output.Stderr, files);
+            }
             catch (Exception error)
             {
                 results.Add(new(workload.Id, VerificationLane.GnuCorrectness, VerificationStatus.Failed, error.Message, new { output, files }));
@@ -86,14 +146,14 @@ if (args[0] == "verify-native")
         }
         complete = true;
     }
-    finally { VerificationReport.Create(catalogPath, pin, false, complete, results).Write(reportPath); }
+    finally { VerificationReport.Create(catalogPath, pin, null, transport, false, complete, results).Write(reportPath); }
     Console.WriteLine($"Verified {results.Count(row => row.Status == VerificationStatus.Passed)} GNU workload expectations with {results.Count(row => row.Status == VerificationStatus.Skipped)} labelled exclusions ({pin.Id}). No timings collected.");
     return;
 }
 if (args[0] == "verify-managed")
 {
     var reportPath = Path.Combine(directory, $"managed-net{Environment.Version.Major}-verification.json");
-    VerificationReport.Create(catalogPath, null, false, false, []).Write(reportPath);
+    VerificationReport.Create(catalogPath, null, null, VerificationTransport.InProcess, false, false, []).Write(reportPath);
     var results = new List<VerificationRow>();
     var complete = false;
     var hostChecks = false;
@@ -109,21 +169,26 @@ if (args[0] == "verify-managed")
                 results.Add(new(workload.Id, VerificationLane.ManagedExclusion, VerificationStatus.Skipped, workload.SkipReason, null));
                 continue;
             }
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             var script = Parser.Parse(System.Text.Encoding.UTF8.GetString(workload.Script.Bytes));
             foreach (var syntax in new[] { null, script })
             {
+                using var deadline = new CancellationTokenSource(workload.Variant == WorkloadVariant.StartupAmortized
+                    ? TimeSpan.FromMinutes(3) : TimeSpan.FromMinutes(1));
                 var lane = syntax == null ? VerificationLane.ManagedPublic : VerificationLane.ManagedPrepared;
-                await using var invocation = new ManagedInvocation(workload, syntax, null, null);
-                var observed = await invocation.RunAsync(deadline.Token);
-                try { ManagedInvocation.Verify(workload, observed); }
+                await using var invocation = new ManagedInvocation(workload, syntax);
+                ObservedResult? observed = null;
+                try
+                {
+                    observed = await invocation.RunAsync(deadline.Token);
+                    ManagedInvocation.Verify(workload, observed);
+                }
                 catch (Exception error) { results.Add(new(workload.Id, lane, VerificationStatus.Failed, error.Message, observed)); throw; }
                 results.Add(new(workload.Id, lane, VerificationStatus.Passed, "", observed));
             }
         }
         complete = true;
     }
-    finally { VerificationReport.Create(catalogPath, null, hostChecks, complete, results).Write(reportPath); }
+    finally { VerificationReport.Create(catalogPath, null, null, VerificationTransport.InProcess, hostChecks, complete, results).Write(reportPath); }
     Console.WriteLine($"Verified {results.Count} managed observations, including labelled exclusions. Host ownership/backpressure controls passed. No timings collected.");
     return;
 }

@@ -150,16 +150,20 @@ internal sealed class PipeOutput(BoundedBytePipe pipe) : BenchDescriptor
 
 internal sealed class DigestOutput : BenchDescriptor, IDisposable
 {
-    private readonly Digest _digest = new();
+    private readonly Digest? _digest;
     private readonly Stream? _forward;
-    public DigestOutput(Stream? forward) => _forward = forward;
-    public ContentDigest Snapshot() => _digest.Snapshot();
+    public DigestOutput(Stream? forward)
+    {
+        _forward = forward;
+        if (forward == null) _digest = new Digest();
+    }
+    public ContentDigest Snapshot() => (_digest ?? throw new InvalidOperationException("Forwarded bytes are observed by the parent collector.")).Snapshot();
     protected override async ValueTask<DescriptorWriteResult> WriteCoreAsync(ReadOnlyMemory<byte> content, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        _digest.Append(content.Span);
+        _digest?.Append(content.Span);
         if (_forward != null) await _forward.WriteAsync(content, token).ConfigureAwait(false);
         return DescriptorWriteResult.Open;
     }
-    public void Dispose() => _digest.Dispose();
+    public void Dispose() => _digest?.Dispose();
 }

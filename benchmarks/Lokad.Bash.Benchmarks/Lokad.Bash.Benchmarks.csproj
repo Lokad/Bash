@@ -7,5 +7,6 @@
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" PrivateAssets="All" />
     <ProjectReference Include="../../src/Lokad.Bash/Lokad.Bash.csproj" />
+    <ProjectReference Include="../Lokad.Bash.Probe/Lokad.Bash.Probe.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

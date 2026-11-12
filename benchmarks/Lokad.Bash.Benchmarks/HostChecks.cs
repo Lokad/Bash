@@ -107,7 +107,8 @@ internal static class HostChecks
         Check(refused.ReservedBytes == 0, "Refused acquisition left storage charged.");
 
         var partial = new MemoryGovernor(16 * 1024 + 96 * 1024 + 1);
-        await using (var host = new BenchmarkHost(partial, CatalogBuilder.Create().Cases[0], null, null))
+        await using (var host = new BenchmarkHost(partial, ReadOnlyMemory<byte>.Empty,
+            new Dictionary<string, ReadOnlyMemory<byte>>(), null, null))
         {
             var baseline = partial.ReservedBytes;
             try { await host.CreatePipeAsync(deadline.Token, deadline.Token); throw new InvalidOperationException("Partial acquisition did not refuse."); }

@@ -21,21 +21,22 @@ internal sealed class BenchmarkHost : IBashHost, IAsyncDisposable
     public IShellTiming Timing { get; } = new UntimedClock();
     public ShellExecutionContext? Execution => null;
 
-    public BenchmarkHost(IMemoryBudget memory, Workload workload, Stream? stdout, Stream? stderr)
+    public BenchmarkHost(IMemoryBudget memory, ReadOnlyMemory<byte> input,
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>> files, Stream? stdout, Stream? stderr)
     {
         _memory = memory.CreateScope();
-        // Active fixture bytes are included in admission; the prepared catalog is separate setup storage.
-        if (!_memory.TryReserve(checked(16 * 1024L + workload.Input.Length + workload.FixtureBytes), out _))
+        // Input and fixtures retain their caller's longer-lived admission.
+        if (!_memory.TryReserve(16 * 1024, out _))
         {
             _memory.Dispose();
             throw new MemoryBudgetExceededException();
         }
         _stdout = new DigestOutput(stdout);
         _stderr = new DigestOutput(stderr);
-        _handles[0] = new MemoryInput(workload.Input.Bytes, _memory);
+        _handles[0] = new MemoryInput(input, _memory);
         _handles[1] = _stdout;
         _handles[2] = _stderr;
-        foreach (var file in workload.Files) _files.Add("/" + file.Key, file.Value.Bytes);
+        foreach (var file in files) _files.Add("/" + file.Key, file.Value);
     }
 
     public ContentDigest Stdout => _stdout.Snapshot();

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <TargetFrameworks>net11.0;net10.0</TargetFrameworks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Lokad.Bash/Lokad.Bash.csproj" />
+    <Compile Include="../Lokad.Bash.Benchmarks/Workload.cs" Link="Shared/Workload.cs" />
+    <Compile Include="../Lokad.Bash.Benchmarks/Digest.cs" Link="Shared/Digest.cs" />
+    <Compile Include="../Lokad.Bash.Benchmarks/BenchDescriptor.cs" Link="Shared/BenchDescriptor.cs" />
+    <Compile Include="../Lokad.Bash.Benchmarks/BenchmarkHost.cs" Link="Shared/BenchmarkHost.cs" />
+    <Compile Include="../Lokad.Bash.Benchmarks/BoundedBytePipe.cs" Link="Shared/BoundedBytePipe.cs" />
+    <Compile Include="../Lokad.Bash.Benchmarks/ProbeRequest.cs" Link="Shared/ProbeRequest.cs" />
+  </ItemGroup>
+</Project>
