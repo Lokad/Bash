@@ -22,7 +22,7 @@ public sealed class PrefixScopeOwnershipTests
         var memory = new EvaluationMemory(governor);
         try
         {
-            var command = Variables.CreatePrefixScope(caller, memory, CancellationToken.None);
+            var command = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
             Assert.True(command.TrySetScalar("reference", ShellValue.FromText("inner")));
             command.SetReadonlyBinding("scalar");
             command.SetExported("scalar", false);
@@ -61,7 +61,7 @@ public sealed class PrefixScopeOwnershipTests
         var memory = new EvaluationMemory(governor);
         try
         {
-            var command = Variables.CreatePrefixScope(caller, memory, CancellationToken.None);
+            var command = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
             Assert.True(command.TrySetScalar("prepared", ShellValue.FromText("prefix")));
             Assert.True(command.TryUnset("hidden"));
             var child = memory.CloneVariables(command);
@@ -101,7 +101,7 @@ public sealed class PrefixScopeOwnershipTests
         try
         {
             memory.Charge(caller.EstimatedMemoryBytes);
-            var command = Variables.CreatePrefixScope(caller, memory, CancellationToken.None);
+            var command = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
             Assert.True(command.TrySetScalar("temporary", value));
             Assert.True(command.TryGetScalar("retained_4095", out var retained));
             Assert.Equal(value, retained);
@@ -133,7 +133,7 @@ public sealed class PrefixScopeOwnershipTests
         try
         {
             memory.Charge(caller.EstimatedMemoryBytes);
-            var command = Variables.CreatePrefixScope(caller, memory, CancellationToken.None);
+            var command = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
             Assert.Throws<MemoryBudgetExceededException>(() =>
                 command.TrySetArrayElement("array", default(IndexedArrayIndex), ShellValue.FromText("changed")));
             Assert.True(caller.IndexedArrays["array"].TryGet(default, out var retained));
@@ -149,20 +149,23 @@ public sealed class PrefixScopeOwnershipTests
     [InlineData("f")]
     [InlineData("eval :")]
     [InlineData("source ./unit.sh")]
+    [InlineData("cat </empty >\"$sink\"")]
+    [InlineData("cat </empty >\"${scratch:=/sink}\"")]
     public async Task RepeatedPrefixesFitBesideRetainedVariablesAndArrays(string command)
     {
         var governor = new MemoryGovernor(2 * 1024 * 1024);
         await using var host = new TestHost { MemoryBudget = governor };
         host.AddFile("/unit.sh", ":\n");
-        var script = "x=outer; f(){ :; };\n"
+        host.AddFile("/empty", "");
+        var script = "x=outer; sink=/sink; f(){ :; };\n"
             + "for ((i=0;i<2048;i++)); do printf -v \"retained_$i\" '%s' value; done\n"
             + "for ((i=0;i<4096;i++)); do a[i]=value; done\n"
             + "for ((i=0;i<100;i++)); do x=temporary " + command + "; done\n"
-            + "printf '%s:%s:%s' \"${#a[@]}\" \"$retained_2047\" \"$x\"";
+            + "printf '%s:%s:%s:%s' \"${#a[@]}\" \"$retained_2047\" \"$x\" \"${scratch-unset}\"";
         var result = await host.RunAsync(script, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("4096:value:outer", host.StandardOutput.TextContent);
+        Assert.Equal("4096:value:outer:unset", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, governor.ReservedBytes);
         Assert.InRange(governor.PeakBytes, 1, governor.LimitBytes);
@@ -180,7 +183,7 @@ public sealed class PrefixScopeOwnershipTests
         var memory = new EvaluationMemory(admissions);
         try
         {
-            var command = Variables.CreatePrefixScope(caller, memory, cancellation.Token);
+            var command = Variables.CreateCommandScope(caller, memory, cancellation.Token);
             admissions.AdmissionSucceeded += cancellation.Cancel;
             var failure = Assert.ThrowsAny<OperationCanceledException>(() =>
                 command.TrySetArrayElement("array", default(IndexedArrayIndex), ShellValue.FromText("changed")));

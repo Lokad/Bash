@@ -5227,6 +5227,206 @@
       "stdoutHex": "3c70726f6d6f7465643e3b3c70726f6d6f7465643e",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "redirection-scope-readonly-target",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "path=./out; cat <./in >\"$path\"; printf '<%s>' \"$path\"",
+      "scriptSha256": "c260f2ad323fd0652a5f644ccba552d57da8a7c19725197e057c1e3e07b18a3c",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "7061796c6f61640a",
+          "sha256": "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c2e2f6f75743e",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "7061796c6f61640a"
+        }
+      ]
+    },
+    {
+      "id": "redirection-scope-default-write",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "unset target; marker=prefix cat <./in >\"${target:=./out}\"; printf '<%s>:<%s>' \"${target-unset}\" \"${marker-unset}\"",
+      "scriptSha256": "09c08f13d0de6409686bc5706b3bc25513921d873aeb94df07cf7790276e3467",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "7061796c6f61640a",
+          "sha256": "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c756e7365743e3a3c756e7365743e",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "7061796c6f61640a"
+        }
+      ]
+    },
+    {
+      "id": "redirection-scope-prefix-visibility",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "path=./out; path=./prefix cat <./in >\"$path\"; printf '<%s>' \"$path\"",
+      "scriptSha256": "e6da076e5d61152d46b9a6960364054f80a2673d092ecf3eec6a11a91915d743",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "7061796c6f61640a",
+          "sha256": "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c2e2f6f75743e",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "7061796c6f61640a"
+        }
+      ]
+    },
+    {
+      "id": "redirection-scope-shared-temporary",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "unset target; cat <./in >\"${target:=./out}\" 3>\"$target\"; printf '<%s>' \"${target-unset}\"",
+      "scriptSha256": "2d891e5f06d3124bc5d8d17738e43bace2e0b9041628ea4fcb1a47639fa50ba4",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "7061796c6f61640a",
+          "sha256": "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c756e7365743e",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "7061796c6f61640a"
+        }
+      ]
+    },
+    {
+      "id": "redirection-scope-nameref-write",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "unset target; declare -n reference=target; cat <./in >\"${reference:=./out}\"; printf '<%s>' \"${target-unset}\"",
+      "scriptSha256": "92c1afdb81ff8b8b992cfa2f1d1c0446c1563a140803d263a5b33414bb0c1ee7",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "7061796c6f61640a",
+          "sha256": "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c756e7365743e",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "7061796c6f61640a"
+        }
+      ]
+    },
+    {
+      "id": "redirection-scope-array-selector",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "a=(./out); i=0; cat <./in >\"${a[i++]}\"; printf '<%s>:<%s>' \"$i\" \"${a[0]}\"",
+      "scriptSha256": "e36c124fa178720f34cc3ae19b21a262df9b74bfe3b95e2efe2b2ae354aff576",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "7061796c6f61640a",
+          "sha256": "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c303e3a3c2e2f6f75743e",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "7061796c6f61640a"
+        }
+      ]
+    },
+    {
+      "id": "redirection-scope-arithmetic-write",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "i=0; cat <./in >\"./out$((i++))\"; printf '<%s>' \"$i\"",
+      "scriptSha256": "8e511e392e7ae50f44e15bc9cd3cada505fdae0363dd8976169a120132383789",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "7061796c6f61640a",
+          "sha256": "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c303e",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out0",
+          "contentHex": "7061796c6f61640a"
+        }
+      ]
+    },
+    {
+      "id": "redirection-scope-byte-content",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "path=./out; cat <./in >\"$path\"; printf done",
+      "scriptSha256": "7e78a2443367e94c961feaf5d95763a9764f70dc1e76079b2dc696b9e27c23ac",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "in",
+          "contentHex": "00ffc30a",
+          "sha256": "3763bccd9bbd9875b771e1b7ea0ebb35d2dce4164f155f693e94cd37cff08826"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "646f6e65",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "00ffc30a"
+        }
+      ]
     }
   ]
 }

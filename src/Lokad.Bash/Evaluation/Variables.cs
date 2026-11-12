@@ -53,9 +53,9 @@ public sealed partial class Variables
     {
         get
         {
-            // The prefix source already owns borrowed positional/name/IFS bytes. Include it
+            // The command source already owns borrowed positional/name/IFS bytes. Include it
             // for full child-snapshot admission, without charging that borrowed frame twice.
-            var inherited = _prefixSource?.Variables.EstimatedMemoryBytes
+            var inherited = _commandSource?.Variables.EstimatedMemoryBytes
                 ?? checked(PositionalMemoryBytes + EstimateValueBytes(_argumentZero)
                     + EstimateValueBytes(ShellValue.FromBytes(CachedFieldSeparators.Bytes)));
             return checked(_bindingBytes + inherited

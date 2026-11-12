@@ -91,7 +91,8 @@ replacements stay charged. These reservations describe live ownership, with no
 lifetime expansion credits. A nested host must receive a memory budget under the
 same root; command inheritance does not copy or create a memory allowance.
 
-Command-prefix preparation borrows the caller's store and positional frame.
+Command-prefix preparation and isolated external redirection expansion borrow
+the caller's store and positional frame.
 Only reached bindings acquire admitted, independent containers in command
 workspace. Missing command bindings hide caller names without deleting caller
 state. Full child snapshots retain separate admission for their complete visible

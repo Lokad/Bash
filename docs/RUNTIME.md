@@ -46,6 +46,11 @@ target forwards actual RHS effects, including same-value writes, with nameref an
 array-kind rules intact. In-process execution installs only prepared prefixes on
 the active owner; full child snapshots still detach all visible state.
 
+External-command redirection expansion uses the same command-local detachment.
+Redirections share their temporary writes in order, while caller bindings remain
+unchanged. Literal targets need no temporary variable state. In-process commands
+and `exec` retain their caller-visible redirection effects.
+
 An explicit attribute promotion of a temporary prefix can survive local
 restoration, including through nested functions. Direct unset in the owning local
 scope cancels promotion; redeclaring a local after a helper unset starts a new local

@@ -94,7 +94,7 @@ public sealed partial class Variables
     private void ClearBinding(BindingName name)
     {
         using var memory = TrackBindingMemory(name);
-        if (_prefixSource == null)
+        if (_commandSource == null)
             _bindings.Remove(name);
         else
         {

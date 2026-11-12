@@ -893,7 +893,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 redirectionExpansionScope = scope with
                 {
-                    Variables = Memory.CloneVariables(scope.Variables),
+                    Variables = global::Lokad.Bash.Evaluation.Variables.CreateCommandScope(scope.Variables, Memory, _cancellationToken),
                     ExpansionWriteTarget = null
                 };
             }
@@ -1246,7 +1246,7 @@ public sealed partial class Evaluation : IFileTester
                 return null;
 
             // Copy reached bindings only; actual RHS writes still use the existing caller target.
-            commandVars = global::Lokad.Bash.Evaluation.Variables.CreatePrefixScope(scope.Variables, Memory, _cancellationToken);
+            commandVars = global::Lokad.Bash.Evaluation.Variables.CreateCommandScope(scope.Variables, Memory, _cancellationToken);
             var assignmentScope = scope with
             {
                 Variables = commandVars,

@@ -8,10 +8,10 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Variables
 {
-    private PrefixSource? _prefixSource;
+    private CommandSource? _commandSource;
 
     /// <summary>The surrounding command owns this borrow and all reached-binding copies.</summary>
-    private sealed record PrefixSource(Variables Variables, EvaluationMemory Memory, CancellationToken CancellationToken);
+    private sealed record CommandSource(Variables Variables, EvaluationMemory Memory, CancellationToken CancellationToken);
 
     /// <summary>An absent command binding hides the caller's binding without changing the caller.</summary>
     private sealed class MissingSlot : VariableSlot
@@ -20,18 +20,18 @@ public sealed partial class Variables
     }
 
     /// <summary>
-    /// Borrows caller state for prefix preparation. Each reached binding is admitted and detached once.
-    /// Positional values are borrowed until prefixes are installed on the executing owner; this scope
-    /// must not escape the surrounding command. A full Clone still creates independent child state.
+    /// Borrows caller state for prefix preparation or isolated redirection expansion. Each reached
+    /// binding is admitted and detached once. Positional values stay borrowed; this scope must not
+    /// escape the surrounding command. A full Clone still creates independent child state.
     /// </summary>
-    internal static Variables CreatePrefixScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken)
+    internal static Variables CreateCommandScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         memory.Charge(1024);
         cancellationToken.ThrowIfCancellationRequested();
         return new Variables
         {
-            _prefixSource = new PrefixSource(caller, memory, cancellationToken),
+            _commandSource = new CommandSource(caller, memory, cancellationToken),
             _positional = caller._positional,
             _argumentZero = caller._argumentZero,
             CachedFieldSeparators = caller.CachedFieldSeparators
@@ -42,7 +42,7 @@ public sealed partial class Variables
     {
         if (_bindings.TryGetValue(name, out slot))
             return slot is not MissingSlot;
-        if (_prefixSource is not { } source || !source.Variables.TryGetBinding(name, out slot))
+        if (_commandSource is not { } source || !source.Variables.TryGetBinding(name, out slot))
         {
             slot = null;
             return false;
@@ -62,7 +62,7 @@ public sealed partial class Variables
         foreach (var entry in _bindings)
             if (entry.Value is not MissingSlot)
                 yield return entry;
-        if (_prefixSource is not { } source)
+        if (_commandSource is not { } source)
             yield break;
         foreach (var entry in source.Variables.EnumerateBindings())
             if (!_bindings.ContainsKey(entry.Key))
@@ -73,7 +73,7 @@ public sealed partial class Variables
     {
         foreach (var name in _exportedIndex)
             yield return name;
-        if (_prefixSource is not { } source)
+        if (_commandSource is not { } source)
             yield break;
         foreach (var name in source.Variables.ExportedNames)
             if (!_bindings.ContainsKey(name))
@@ -83,7 +83,7 @@ public sealed partial class Variables
     /// <summary>Visits exported names only, including borrowed names not hidden by command bindings.</summary>
     private sealed class ExportedNameView(Variables owner) : IReadOnlyCollection<BindingName>
     {
-        public int Count => owner._prefixSource == null ? owner._exportedIndex.Count : owner.EnumerateExportedNames().Count();
+        public int Count => owner._commandSource == null ? owner._exportedIndex.Count : owner.EnumerateExportedNames().Count();
         public IEnumerator<BindingName> GetEnumerator() => owner.EnumerateExportedNames().GetEnumerator();
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }

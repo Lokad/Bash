@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reuse reached-binding detachment for external-command redirection expansion.
+  Preserve ordered temporary writes and caller isolation without copying unrelated
+  variables or arrays; literal redirection targets retain their direct path.
 - Prepare command-prefix assignments by copying reached bindings instead of the
   entire variable store. Borrow positional frames, preserve RHS write forwarding,
   and admit independent containers before detachment. Keep full child snapshots
