@@ -12,6 +12,12 @@ predicates use the existing file-operation path in source order. The distinct
 `test`/`[` grammar consumes completed byte arguments and shares predicate metadata
 and filesystem execution with `[[`.
 
+Regex matching publishes independently owned capture bytes to global
+`BASH_REMATCH`, after admitting the replacement array and byte storage. Nonmatches
+publish an empty array; errors leave the previous binding intact. Function-local
+shadows do not change this global publication owner. The qualified matcher and its
+individual-call cancellation limits are specified in [compatibility](COMPATIBILITY.md).
+
 Errexit is shell state. Execution context records whether a status is tested and
 carries that context through functions, groups, source/eval and child evaluations.
 Compound commands preserve the tested origin of their final status; simple

@@ -52,6 +52,8 @@ public sealed class ConditionalParserTests
     [Theory]
     [InlineData("[[ 1 =~ [[:digit:]] ]]", "[[:digit:]]")]
     [InlineData("[[ ab =~ (a|b)+ ]]", "(a|b)+")]
+    [InlineData("[[ ')' =~ [[:alpha:]()] ]]", "[[:alpha:]()]")]
+    [InlineData("[[ ']' =~ []] ]]", "[]]")]
     public void RegexWordsKeepTheirBracketsAndGrouping(string source, string pattern)
     {
         var command = Assert.IsType<ConditionalCommand>(Assert.Single(Parser.Parse(source).Commands));

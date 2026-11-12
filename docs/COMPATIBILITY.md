@@ -47,13 +47,27 @@ Command substitution clears errexit by default; parenthesized subshells inherit 
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
 
-Regular expression conditions currently use .NET regular expressions rather than
-claiming full POSIX ERE compatibility. Each match has a 250 ms backtracking timeout;
-refusal follows the conditional expression error path. The host cancellation token
-does not interrupt an individual .NET regex call before that timeout.
-Regex operands require valid UTF-8; quoted pattern bytes are literal, and dot
-includes LF. POSIX bracket classes, GNU longest-match rules and `BASH_REMATCH`
-capture state remain compatibility gaps.
+Regular expression conditions use .NET regular expressions with quote-aware pattern
+escaping and dot matching LF. They require valid UTF-8. Named bracket classes
+`alnum`, `alpha`, `blank`, `cntrl`, `digit`, `graph`, `lower`, `print`, `punct`,
+`space`, `upper` and `xdigit` use ASCII/C membership, including in direct pattern
+syntax. Unknown classes and collating/equivalence elements return status 2.
+
+Successful matches replace global indexed `BASH_REMATCH` with the complete match
+and numbered captures; unmatched groups contain empty values. A nonmatch clears
+the array. Invalid, unsupported or unreached matching preserves prior captures.
+Publication replaces prior binding kind and attributes, without following namerefs;
+a function-local shadow remains local while matching updates the global binding.
+
+This is a qualified .NET regex profile, not full POSIX ERE compatibility. Alternation
+uses .NET ordering rather than POSIX leftmost-longest selection; `$` can match before
+a final LF. Quoted bracket members follow .NET escaping, with departures from GNU's
+bracket rules. Named classes do not gain Unicode locale membership. Matching uses
+UTF-16 code units; a capture splitting a supplementary character returns status 2
+instead of publishing malformed encoded text. Each match has a 250 ms backtracking
+timeout, also returning status 2. Caller cancellation is checked around compilation,
+matching and capture publication, but cannot interrupt an individual regex call;
+compilation itself is not covered by the match timeout.
 
 `[[` retains parsed structure and operand quoting. Reached operands undergo normal
 parameter, command, arithmetic and tilde expansion, without brace generation,

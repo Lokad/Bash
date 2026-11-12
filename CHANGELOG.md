@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Publish global `BASH_REMATCH` captures, clear them on nonmatch and preserve them
+  on invalid or unreached matching. Admit capture storage before replacing the
+  prior binding. Parse direct POSIX bracket classes and support the twelve named
+  classes with ASCII/C membership. Document remaining .NET regex grammar,
+  longest-match, Unicode and cancellation departures explicitly.
 - Execute complete command units through the same evaluator in `BashScript.RunAsync`,
   `source` and `eval`. Earlier units retain their effects before later syntax errors;
   an invalid unit causes no partial execution. Preserve explicit whole-script

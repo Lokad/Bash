@@ -5,7 +5,7 @@ using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
 
-/// <summary>Runs the same explicit expectations that scripts/Verify-GnuBash.ps1 verifies against pinned GNU binaries.</summary>
+/// <summary>Verifies shared GNU expectations and separately declared managed departures from the pinned references.</summary>
 public sealed class ConformanceTests
 {
     public static IEnumerable<object[]> Cases()
@@ -18,12 +18,10 @@ public sealed class ConformanceTests
         foreach (var sample in catalog.RootElement.GetProperty("cases").EnumerateArray())
         {
             var classification = Text("classification");
-            if (classification != "supported")
-            {
-                if (classification != "deviation" || Text("reason").Length == 0)
-                    throw new InvalidOperationException("Every deviation needs a reason.");
-                continue;
-            }
+            if (classification is not ("supported" or "deviation")
+                || classification == "deviation" && Text("reason").Length == 0)
+                throw new InvalidOperationException("Every deviation needs an explicit reason.");
+            var expectation = classification == "deviation" ? sample.GetProperty("managedExpectation") : sample;
             var script = Text("script");
             if (sample.TryGetProperty("stderrNormalization", out var normalization)
                 && normalization.GetString() != "bash-command-location")
@@ -31,18 +29,20 @@ public sealed class ConformanceTests
             if (!StringComparer.OrdinalIgnoreCase.Equals(Text("scriptSha256"),
                     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script)))))
                 throw new InvalidOperationException($"Script hash mismatch: {Text("id")}");
-            yield return [Text("id"), script, Text("stdinHex"), sample.GetProperty("exitCode").GetInt32(),
-                Text("stdoutHex"), Text("stderrHex"), sample.GetProperty("files").GetRawText(),
-                sample.GetProperty("fileEffects").GetRawText()];
+            yield return [Text("id"), script, Text("stdinHex"), expectation.GetProperty("exitCode").GetInt32(),
+                ExpectedText("stdoutHex"), ExpectedText("stderrHex"),
+                sample.GetProperty("files").GetRawText(), expectation.GetProperty("fileEffects").GetRawText()];
 
             string Text(string property) => sample.GetProperty(property).GetString()
                 ?? throw new InvalidOperationException($"Missing {property} in conformance case.");
+            string ExpectedText(string property) => expectation.GetProperty(property).GetString()
+                ?? throw new InvalidOperationException($"Missing managed {property} in conformance case.");
         }
     }
 
     [Theory]
     [MemberData(nameof(Cases))]
-    public async Task SupportedCasesMatchPinnedExpectations(
+    public async Task CasesMatchDeclaredExpectations(
         string id, string script, string stdinHex, int exitCode, string stdoutHex, string stderrHex,
         string filesJson, string effectsJson)
     {

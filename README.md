@@ -62,8 +62,9 @@ changelog.
 
 The versioned corpus in `tests/Lokad.Bash.Tests/Conformance/cases.json` has explicit
 byte/status expectations, script hashes and pinned GNU reference versions/hashes.
-The ordinary test suite runs its supported cases against the managed interpreter.
-Verify the same expectations against GNU Bash using PowerShell 7:
+The ordinary test suite checks supported cases and separately declared managed
+expectations for known deviations. The native verifier checks every applicable
+case's GNU expectation, retaining each deviation's reason. Run it with PowerShell 7:
 
 ```powershell
 ./scripts/Verify-GnuBash.ps1 -ReferencePath /usr/bin/bash

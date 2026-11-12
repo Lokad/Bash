@@ -125,7 +125,7 @@ $results = foreach ($sample in $catalog.cases) {
         $actualHex = [Convert]::ToHexString([System.IO.File]::ReadAllBytes($effectPath)).ToLowerInvariant()
         $passed = $passed -and $actualHex -eq $effect.contentHex
     }
-    [pscustomobject]@{ id = $sample.id; classification = $sample.classification; passed = $passed; actual = $actual }
+    [pscustomobject]@{ id = $sample.id; classification = $sample.classification; reason = $sample.reason; passed = $passed; actual = $actual }
 }
 $destination = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path $repository $OutputPath }
 [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($destination))
@@ -141,5 +141,6 @@ $export | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $destination -Enco
 $failed = @($results | Where-Object { $_.passed -eq $false })
 $skipped = @($results | Where-Object skipped)
 $verifiedCount = $results.Count - $skipped.Count
-Write-Output "$referenceId : $($verifiedCount - $failed.Count)/$verifiedCount verified; $($skipped.Count) labelled reference exclusions. Results: $destination"
+$deviations = @($results | Where-Object { $_.classification -eq 'deviation' -and $null -ne $_.passed })
+Write-Output "$referenceId : $($verifiedCount - $failed.Count)/$verifiedCount native expectations verified; $($deviations.Count) declared managed deviations; $($skipped.Count) labelled reference exclusions. Results: $destination"
 if ($failed.Count -ne 0) { throw "GNU correctness mismatches: $($failed.id -join ', ')" }

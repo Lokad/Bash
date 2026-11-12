@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
@@ -137,7 +138,7 @@ public sealed partial class Evaluation
             if (!input.TryGetUtf8Text(out var text) || !System.Text.Unicode.Utf8.IsValid(pattern.Bytes.Span))
                 return await ErrorAsync("regex operands must be valid UTF-8").ConfigureAwait(false);
             var activity = patternWord.GetGlobMask(Memory);
-            using var encoded = new ByteMemoryBuilder(0, Memory.Budget);
+            using var quoted = new ByteMemoryBuilder(0, Memory.Budget);
             for (var index = 0; index < pattern.Bytes.Length; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
@@ -145,16 +146,121 @@ public sealed partial class Evaluation
                 if (activity.AsSpan()[index] != GlobMask.Active
                     && ch is (byte)'.' or (byte)'^' or (byte)'$' or (byte)'|' or (byte)'?' or (byte)'*'
                         or (byte)'+' or (byte)'(' or (byte)')' or (byte)'[' or (byte)']' or (byte)'{' or (byte)'}' or (byte)'\\')
-                    encoded.Append((byte)'\\');
-                encoded.Append(ch);
+                    quoted.Append((byte)'\\');
+                quoted.Append(ch);
             }
+            using var encoded = new ByteMemoryBuilder(0, Memory.Budget);
+            if (!TranslateClasses(quoted.ToMemory().Span, encoded))
+                return 2;
+            Match match;
             try
             {
-                return Regex.IsMatch(text, ShellValue.FromBytes(encoded.ToMemory()).ToUtf8String(),
-                    RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250)) ? 0 : 1;
+                _cancellationToken.ThrowIfCancellationRequested();
+                match = Regex.Match(text, ShellValue.FromBytes(encoded.ToMemory()).ToUtf8String(),
+                    RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
             }
             catch (ArgumentException) { return 2; }
             catch (RegexMatchTimeoutException) { return 2; }
+
+            var owner = scope.Context.GetGlobalBindingOwner(global::Lokad.Bash.Evaluation.Variables.RegexCaptureName, scope.Variables);
+            if (!match.Success)
+            {
+                Memory.Charge(512);
+                owner.SetRegexCaptures([]);
+                return 1;
+            }
+            if (match.Groups.Count >= Array.MaxLength)
+                throw new ByteMemoryBuilder.LimitExceededException();
+            var bytes = 0L;
+            for (var index = 0; index < match.Groups.Count; index++)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                var group = match.Groups[index];
+                // .NET matches UTF-16 code units. Never encode an isolated half-surrogate
+                // as shell data; such captures are outside the supported regex profile.
+                if (!IsScalarBoundary(group.Index) || !IsScalarBoundary(group.Index + group.Length))
+                    return 2;
+                bytes = checked(bytes + Encoding.UTF8.GetByteCount(group.ValueSpan));
+            }
+            Memory.Charge(checked(512L + 256L * match.Groups.Count + 2L * bytes));
+            var captures = new ShellValue[match.Groups.Count];
+            for (var index = 0; index < captures.Length; index++)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                var value = match.Groups[index].ValueSpan;
+                var content = new byte[Encoding.UTF8.GetByteCount(value)];
+                Encoding.UTF8.GetBytes(value, content);
+                captures[index] = ShellValue.FromBytes(content);
+            }
+            owner.SetRegexCaptures(captures);
+            return 0;
+
+            bool IsScalarBoundary(int position) => position == 0 || position == text.Length
+                || !char.IsHighSurrogate(text[position - 1]) || !char.IsLowSurrogate(text[position]);
+
+            bool TranslateClasses(ReadOnlySpan<byte> source, ByteMemoryBuilder output)
+            {
+                var bracket = false;
+                var first = false;
+                for (var index = 0; index < source.Length; index++)
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    var ch = source[index];
+                    if (ch == (byte)'\\' && index + 1 < source.Length)
+                    {
+                        output.Append(source.Slice(index, 2));
+                        index++;
+                        if (bracket) first = false;
+                        continue;
+                    }
+                    if (bracket)
+                    {
+                        if (ch == (byte)'[' && index + 1 < source.Length && source[index + 1] is (byte)':' or (byte)'=' or (byte)'.')
+                        {
+                            // Named C classes are supported. Collating/equivalence elements
+                            // require a locale-aware POSIX matcher and remain explicit exclusions.
+                            if (source[index + 1] != (byte)':')
+                                return false;
+                            var end = source[(index + 2)..].IndexOf(":]"u8);
+                            if (end < 0)
+                                return false;
+                            var members = ClassMembers(source.Slice(index + 2, end));
+                            if (members.IsEmpty)
+                                return false;
+                            output.Append(members);
+                            index += end + 3;
+                            first = false;
+                            continue;
+                        }
+                        if (ch == (byte)']' && !first) bracket = false;
+                        else if (!(first && ch == (byte)'^')) first = false;
+                    }
+                    else if (ch == (byte)'[')
+                    {
+                        bracket = true;
+                        first = true;
+                    }
+                    output.Append(ch);
+                }
+                return true;
+            }
+
+            static ReadOnlySpan<byte> ClassMembers(ReadOnlySpan<byte> name)
+            {
+                if (name.SequenceEqual("alnum"u8)) return "A-Za-z0-9"u8;
+                if (name.SequenceEqual("alpha"u8)) return "A-Za-z"u8;
+                if (name.SequenceEqual("blank"u8)) return " \\t"u8;
+                if (name.SequenceEqual("cntrl"u8)) return "\\x00-\\x1F\\x7F"u8;
+                if (name.SequenceEqual("digit"u8)) return "0-9"u8;
+                if (name.SequenceEqual("graph"u8)) return "\\x21-\\x7E"u8;
+                if (name.SequenceEqual("lower"u8)) return "a-z"u8;
+                if (name.SequenceEqual("print"u8)) return "\\x20-\\x7E"u8;
+                if (name.SequenceEqual("punct"u8)) return "\\x21-\\x2F\\x3A-\\x40\\x5B-\\x60\\x7B-\\x7E"u8;
+                if (name.SequenceEqual("space"u8)) return "\\x09-\\x0D\\x20"u8;
+                if (name.SequenceEqual("upper"u8)) return "A-Z"u8;
+                if (name.SequenceEqual("xdigit"u8)) return "A-Fa-f0-9"u8;
+                return default;
+            }
         }
 
         async Task<int> ErrorAsync(string message)

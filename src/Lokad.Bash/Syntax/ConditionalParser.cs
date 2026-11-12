@@ -173,6 +173,8 @@ internal sealed class ConditionalParser
         var cursor = new ShellSourceCursor(_source, start);
         var parentheses = 0;
         var bracket = false;
+        var firstBracketMember = false;
+        byte classTerminator = 0;
         while (!cursor.IsAtEnd)
         {
             if (!cursor.IsQuoted)
@@ -182,10 +184,35 @@ internal sealed class ConditionalParser
                     break;
                 if (regex)
                 {
-                    if (ch == (byte)'[') bracket = true;
-                    else if (ch == (byte)']') bracket = false;
-                    else if (!bracket && ch == (byte)'(') parentheses++;
-                    else if (!bracket && ch == (byte)')')
+                    if (bracket)
+                    {
+                        if (classTerminator != 0)
+                        {
+                            if (ch == classTerminator && cursor.Position + 1 < span.Length
+                                && span[cursor.Position + 1] == (byte)']')
+                            {
+                                cursor.Advance();
+                                cursor.Advance();
+                                classTerminator = 0;
+                                firstBracketMember = false;
+                                continue;
+                            }
+                        }
+                        else if (ch == (byte)'[' && cursor.Position + 1 < span.Length
+                            && span[cursor.Position + 1] is (byte)':' or (byte)'=' or (byte)'.')
+                            classTerminator = span[cursor.Position + 1];
+                        else if (ch == (byte)']' && !firstBracketMember)
+                            bracket = false;
+                        else if (!(firstBracketMember && ch == (byte)'^'))
+                            firstBracketMember = false;
+                    }
+                    else if (ch == (byte)'[')
+                    {
+                        bracket = true;
+                        firstBracketMember = true;
+                    }
+                    else if (ch == (byte)'(') parentheses++;
+                    else if (ch == (byte)')')
                     {
                         if (parentheses == 0) break;
                         parentheses--;
