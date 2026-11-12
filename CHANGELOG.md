@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Retain immutable arithmetic token decisions and split arithmetic-for clauses on
+  source syntax, including ordinary arithmetic expansions. Stable operands without
+  selectors borrow source bytes directly; runtime splicing and selector expansion
+  stay late-bound. Preserve mutation/error ordering, short-circuit validation,
+  stack-safe execution and independent bindings when a parsed script is reused.
+
 - Share directional pattern traversal for suffix removal and replacement search,
   avoiding a fresh match for every candidate position. Reuse admitted bracket-atom
   offsets, search literals with byte spans, and retain input on no replacement.

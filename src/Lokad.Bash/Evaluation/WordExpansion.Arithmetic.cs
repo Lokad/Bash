@@ -9,9 +9,22 @@ namespace Lokad.Bash.Evaluation;
 internal static partial class WordExpansion
 {
     /// <summary>Expands direct selectors before numeric writes, retaining their source and literal result.</summary>
-    internal static async Task<ArithmeticOperand?> PrepareArithmeticAsync(
-        ShellSource source, ScopedEvaluation scope, ExpansionPurpose purpose)
+    internal static Task<ArithmeticOperand?> PrepareArithmeticAsync(
+        ShellSource source, ScopedEvaluation scope, ExpansionPurpose purpose) =>
+        PrepareArithmeticAsync(source, null, scope, purpose);
+
+    internal static Task<ArithmeticOperand?> PrepareArithmeticAsync(
+        ArithmeticSource syntax, ScopedEvaluation scope, ExpansionPurpose purpose) =>
+        PrepareArithmeticAsync(syntax.Source, syntax, scope, purpose);
+
+    private static async Task<ArithmeticOperand?> PrepareArithmeticAsync(
+        ShellSource source, ArithmeticSource? syntax, ScopedEvaluation scope, ExpansionPurpose purpose)
     {
+        scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+        if (!scope.CanExpand)
+            return null;
+        if (syntax?.DirectOperand is { } direct)
+            return direct;
         if (source.Length == 0)
             return ArithmeticOperand.FromValue(ShellValue.Empty);
         var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose));
@@ -49,8 +62,11 @@ internal static partial class WordExpansion
         }
         if (scope.CanExpand)
             await FlushAsync().ConfigureAwait(false);
-        return !scope.CanExpand ? null
-            : new ArithmeticOperand(ShellValue.FromBytes(bytes.ToMemory()), subscripts, ArithmeticBracketMode.References);
+        if (!scope.CanExpand)
+            return null;
+        var value = ShellValue.FromBytes(bytes.ToMemory());
+        var lexical = syntax?.Syntax != null && value.Bytes.Span.SequenceEqual(source.AsSpan()) ? syntax.Syntax : null;
+        return new ArithmeticOperand(value, subscripts, ArithmeticBracketMode.References, lexical);
 
         async Task FlushAsync()
         {

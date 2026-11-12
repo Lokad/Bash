@@ -17,10 +17,9 @@ public sealed partial class Evaluation
         ScopedEvaluation scope,
         bool negated)
     {
-        arithmeticForCommand.Split(
-            out var initExpression,
-            out var conditionExpression,
-            out var updateExpression);
+        var initExpression = arithmeticForCommand.Initialization;
+        var conditionExpression = arithmeticForCommand.Condition;
+        var updateExpression = arithmeticForCommand.Update;
 
         if (await EvaluateOperandAsync(initExpression).ConfigureAwait(false) == null)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
@@ -32,7 +31,7 @@ public sealed partial class Evaluation
         {
             CheckCancellation();
             // Only an omitted condition is true; an explicit arithmetic zero is false.
-            if (!conditionExpression.IsEmpty)
+            if (!conditionExpression.Source.IsEmpty)
             {
                 var condition = await EvaluateOperandAsync(conditionExpression)
                     .ConfigureAwait(false);
@@ -77,7 +76,7 @@ public sealed partial class Evaluation
 
         return await FinalizeResultAsync(lastBodyResult, negated);
 
-        async Task<long?> EvaluateOperandAsync(ShellSource expression)
+        async Task<long?> EvaluateOperandAsync(ArithmeticSource expression)
         {
             // The condition and increment finish each iteration, just like the body command.
             using var memory = Memory.BeginCommand(scope);

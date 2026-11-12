@@ -113,7 +113,7 @@ public sealed partial class Evaluation
                 case PipelineCommand pipelineCommand:
                     return await EvaluatePipelineAsync(pipelineCommand, scope, negated).ConfigureAwait(false);
                 case ArithmeticCommand arithmeticCommand:
-                    var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Expression, scope)
+                    var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Syntax, scope)
                         .ConfigureAwait(false);
                     var arithmeticStatus = arithmeticResult is null or 0 ? 1 : 0;
                     if (_state.FatalExpansion == null)

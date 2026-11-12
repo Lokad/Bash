@@ -5,15 +5,20 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ArithmeticBindingTests
 {
-    [Fact]
-    public async Task Binding_ResumesAtMaximumNestingDepth()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Binding_ResumesAtMaximumNestingDepth(bool prepared)
     {
         var depth = ShellSourceCursor.MaximumNestedExpansionDepth;
         var expression = new string('(', depth) + "value" + new string(')', depth);
         var selected = new TaskCompletionSource<ArithmeticBinding<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        var source = ShellSource.FromText(expression);
+        var operand = prepared ? ArithmeticOperand.FromSyntax(source, new ArithmeticEvaluation.LexicalSyntax(source))
+            : ArithmeticOperand.FromValue(source.ToValue());
         var pending = ArithmeticEvaluation.EvaluateAsync<string>(
-            ArithmeticOperand.FromValue(ShellValue.FromText(expression)), Bind,
+            operand, Bind,
             (_, _, _) => throw new InvalidOperationException("Unexpected write")).AsTask();
 
         Assert.False(pending.IsCompleted);

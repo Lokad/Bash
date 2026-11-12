@@ -232,7 +232,7 @@ internal static partial class WordExpansion
         {
             case WordPartKind.Unquoted:
                 await ExpandSegmentAsync(
-                        ((SourceWordPart)part).Source,
+                        (SourceWordPart)part,
                         scope,
                         builder,
                         allowWordSplitting,
@@ -248,7 +248,7 @@ internal static partial class WordExpansion
                 }
 
                 await ExpandSegmentAsync(
-                        ((SourceWordPart)part).Source,
+                        (SourceWordPart)part,
                         scope,
                         builder,
                         allowWordSplitting: false,
@@ -276,7 +276,7 @@ internal static partial class WordExpansion
                 break;
             case WordPartKind.HereDocument:
                 await ExpandSegmentAsync(
-                        ((SourceWordPart)part).Source,
+                        (SourceWordPart)part,
                         scope,
                         builder,
                         allowWordSplitting: false,
@@ -381,8 +381,18 @@ internal static partial class WordExpansion
         return false;
     }
 
+    private static Task ExpandSegmentAsync(
+        SourceWordPart part, ScopedEvaluation scope, ExpandedWordBuilder output,
+        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext) =>
+        ExpandSegmentAsync(part.Source, part, scope, output, allowWordSplitting, globQuoted, quoteContext);
+
+    private static Task ExpandSegmentAsync(
+        ShellSource content, ScopedEvaluation scope, ExpandedWordBuilder output,
+        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext) =>
+        ExpandSegmentAsync(content, null, scope, output, allowWordSplitting, globQuoted, quoteContext);
+
     private static async Task ExpandSegmentAsync(
-        ShellSource content,
+        ShellSource content, SourceWordPart? syntax,
         ScopedEvaluation scope,
         ExpandedWordBuilder output,
         bool allowWordSplitting,
@@ -444,9 +454,19 @@ internal static partial class WordExpansion
                 continue;
             }
 
-            if (ArithmeticExpansionScanner.TryScan(content, index, out var arithmeticEnd, out var expression))
+            var prepared = syntax != null && syntax.TryGetArithmetic(index, out var captured) ? captured : (SourceWordPart.ArithmeticExpansion?)null;
+            var arithmeticEnd = prepared?.End ?? -1;
+            var expression = ShellSource.Empty;
+            if (prepared.HasValue || ArithmeticExpansionScanner.TryScan(content, index, out arithmeticEnd, out expression))
             {
-                var result = await ExpandArithmeticOperandAsync(expression, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
+                var arithmetic = prepared?.Operand;
+                long? result;
+                if (arithmetic != null)
+                    result = await ExpandArithmeticOperandAsync(arithmetic, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
+                else
+                {
+                    result = await ExpandArithmeticOperandAsync(expression, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
+                }
                 if (result is { } number)
                     AppendNumber(output, number, allowWordSplitting, globQuoted);
                 index = arithmeticEnd;
@@ -595,6 +615,13 @@ internal static partial class WordExpansion
     /// <summary>Expands an arithmetic operand once, preserving its writes and first failure.</summary>
     private static async Task<long?> ExpandArithmeticOperandAsync(
         ShellSource expression, ScopedEvaluation scope, ExpansionPurpose purpose)
+    {
+        var operand = await PrepareArithmeticAsync(expression, scope, purpose).ConfigureAwait(false);
+        return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Fatal).ConfigureAwait(false);
+    }
+
+    private static async Task<long?> ExpandArithmeticOperandAsync(
+        ArithmeticSource expression, ScopedEvaluation scope, ExpansionPurpose purpose)
     {
         var operand = await PrepareArithmeticAsync(expression, scope, purpose).ConfigureAwait(false);
         return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Fatal).ConfigureAwait(false);

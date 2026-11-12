@@ -5,6 +5,13 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Arithmetic commands, arithmetic-for clauses and ordinary word arithmetic
+expansions retain source-owned lexical decisions for stable source. Numeric values,
+operator classifications and raw references are immutable; execution retains the
+existing grammar driver, structural guards and numeric work pump. Bindings, selector
+expansions and writes use the current scope. Dynamic shell splicing still prepares
+fresh operands, and syntax failures remain at their reached execution point.
+
 Conditional commands retain parsed operators and operand words on the script.
 Execution expands reached operands against the current scope, preserving quotation
 and bytes; short-circuited operands cause no expansion or host work. Reached file

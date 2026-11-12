@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using Lokad.Bash.Evaluation;
 
 namespace Lokad.Bash.Syntax;
 
@@ -51,9 +53,32 @@ public abstract class WordPart
 /// <summary>Source bytes whose expansion syntax has not yet been evaluated.</summary>
 public sealed class SourceWordPart : WordPart
 {
+    private readonly IReadOnlyDictionary<int, ArithmeticExpansion> _arithmetic;
+    private static readonly IReadOnlyDictionary<int, ArithmeticExpansion> NoArithmetic = new Dictionary<int, ArithmeticExpansion>();
+
+    internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource Operand);
     internal SourceWordPart(WordPartKind kind, ShellSource source) : base(kind)
     {
         Source = source;
+        _arithmetic = PrepareArithmetic(source);
+    }
+
+    internal bool TryGetArithmetic(int start, out ArithmeticExpansion expansion) => _arithmetic.TryGetValue(start, out expansion);
+
+    private static IReadOnlyDictionary<int, ArithmeticExpansion> PrepareArithmetic(ShellSource source)
+    {
+        var first = source.AsSpan().IndexOf("$(("u8);
+        if (first < 0)
+            return NoArithmetic;
+        var result = new Dictionary<int, ArithmeticExpansion>();
+        for (var index = first; index < source.Length; index++)
+        {
+            if (!ArithmeticExpansionScanner.TryScan(source, index, out var end, out var expression))
+                continue;
+            result.Add(index, new ArithmeticExpansion(end, new ArithmeticSource(expression)));
+            index = end;
+        }
+        return result;
     }
 
     /// <summary>Gets unexpanded syntax without text conversion.</summary>

@@ -13,7 +13,7 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>
 /// Evaluates wrapping signed 64-bit arithmetic with immediate or staged assignments.
 /// </summary>
-public static class ArithmeticEvaluation
+public static partial class ArithmeticEvaluation
 {
     /// <summary>
     /// Evaluates a byte-valued arithmetic expression and returns its integer result.
@@ -275,6 +275,8 @@ public static class ArithmeticEvaluation
         public async ValueTask<ArithmeticResult> EvaluateAsync()
         {
             _cancellationToken.ThrowIfCancellationRequested();
+            if (_operand.Syntax?.LiteralValue is { } literal)
+                return new ArithmeticResult(literal, null);
             SkipWhitespace();
             if (IsAtEnd)
                 return new ArithmeticResult(0, null);
@@ -378,6 +380,12 @@ public static class ArithmeticEvaluation
         {
             static bool IsWhitespace(byte value) => value is (byte)' ' or (byte)'\t' or (byte)'\n';
 
+            if (_operand.Syntax is { } syntax && syntax.TrySkipBlanks(_index, out var end))
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                _index = end;
+                return;
+            }
             while (_index < Span.Length && IsWhitespace(Span[_index]))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
@@ -595,49 +603,21 @@ public static class ArithmeticEvaluation
             static bool TryPeekBinary(Parser<TTarget> parser, out BinaryToken binary)
             {
                 var token = parser.PeekToken(out var kind);
-                binary = kind == ArithmeticTokenKind.Operator ? token switch
-                {
-                    [(byte)'|', (byte)'|'] => new(BinaryOperator.LogicalOr, ArithmeticPrecedence.LogicalOr, 2),
-                    [(byte)'&', (byte)'&'] => new(BinaryOperator.LogicalAnd, ArithmeticPrecedence.LogicalAnd, 2),
-                    [(byte)'|'] => new(BinaryOperator.BitwiseOr, ArithmeticPrecedence.BitwiseOr, 1),
-                    [(byte)'^'] => new(BinaryOperator.BitwiseXor, ArithmeticPrecedence.BitwiseXor, 1),
-                    [(byte)'&'] => new(BinaryOperator.BitwiseAnd, ArithmeticPrecedence.BitwiseAnd, 1),
-                    [(byte)'=', (byte)'='] => new(BinaryOperator.Equal, ArithmeticPrecedence.Equality, 2),
-                    [(byte)'!', (byte)'='] => new(BinaryOperator.NotEqual, ArithmeticPrecedence.Equality, 2),
-                    [(byte)'<', (byte)'='] => new(BinaryOperator.LessOrEqual, ArithmeticPrecedence.Relational, 2),
-                    [(byte)'>', (byte)'='] => new(BinaryOperator.GreaterOrEqual, ArithmeticPrecedence.Relational, 2),
-                    [(byte)'<'] => new(BinaryOperator.Less, ArithmeticPrecedence.Relational, 1),
-                    [(byte)'>'] => new(BinaryOperator.Greater, ArithmeticPrecedence.Relational, 1),
-                    [(byte)'<', (byte)'<'] => new(BinaryOperator.LeftShift, ArithmeticPrecedence.Shift, 2),
-                    [(byte)'>', (byte)'>'] => new(BinaryOperator.RightShift, ArithmeticPrecedence.Shift, 2),
-                    [(byte)'+'] or [(byte)'+', (byte)'+'] => new(BinaryOperator.Add, ArithmeticPrecedence.Additive, 1),
-                    [(byte)'-'] or [(byte)'-', (byte)'-'] => new(BinaryOperator.Subtract, ArithmeticPrecedence.Additive, 1),
-                    [(byte)'*'] => new(BinaryOperator.Multiply, ArithmeticPrecedence.Multiplicative, 1),
-                    [(byte)'/'] => new(BinaryOperator.Divide, ArithmeticPrecedence.Multiplicative, 1),
-                    [(byte)'%'] => new(BinaryOperator.Remainder, ArithmeticPrecedence.Multiplicative, 1),
-                    [(byte)'*', (byte)'*'] => new(BinaryOperator.Power, ArithmeticPrecedence.Power, 2),
-                    _ => default
-                } : default;
+                binary = parser._operand.Syntax is { } syntax && syntax.TryGetToken(parser._index, out var cached)
+                    ? cached.Binary : GetBinaryToken(token, kind);
                 return binary.Length != 0;
             }
         }
-
-        private enum ArithmeticPrecedence
-        {
-            LogicalOr, LogicalAnd, BitwiseOr, BitwiseXor, BitwiseAnd, Equality,
-            Relational, Shift, Additive, Multiplicative, Power
-        }
-
-        private readonly record struct BinaryToken(BinaryOperator Operator, ArithmeticPrecedence Precedence, int Length);
 
         private IEnumerable<ParseStep>? TryParseUnary()
         {
             var token = PeekToken(out var kind);
             if (kind == ArithmeticTokenKind.Number)
             {
+                var valid = _operand.Syntax is { } syntax && syntax.TryGetToken(_index, out var cached)
+                    ? ReadCachedNumber(cached, out var number) : TryParseIntegerLiteral(token, _cancellationToken, out number);
                 _index += token.Length;
-                _parsed = TryParseIntegerLiteral(token, _cancellationToken, out var number)
-                    ? new ParseResult(true, IsSuppressed ? 0 : number) : default;
+                _parsed = valid ? new ParseResult(true, IsSuppressed ? 0 : number) : default;
                 return null;
             }
             return Parse(this);
@@ -777,16 +757,9 @@ public static class ArithmeticEvaluation
                 return false;
             }
 
-            var start = _index;
-            _index++;
-            while (_index < Span.Length && VariableNames.IsNamePart((char)Span[_index]))
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-                _index++;
-            }
-
-            var name = Utf8Text.Decode(_expression.Bytes[start.._index]);
-            if (_index < Span.Length && Span[_index] == (byte)'[')
+            var cached = _operand.Syntax is { } syntax && syntax.TryGetReference(_index, out var retained)
+                ? retained : ReadReferenceSyntax(ShellSource.FromBytes(_expression.Bytes), _index, PeekToken(out _).Length);
+            if (cached.Bracket >= 0)
             {
                 if (_operand.Brackets == ArithmeticBracketMode.Literal)
                 {
@@ -794,25 +767,21 @@ public static class ArithmeticEvaluation
                     Error = new ArithmeticError(ArithmeticErrorKind.InvalidExpression, _expression);
                     return false;
                 }
-                if (_operand.Subscripts.TryGetValue(_index, out var prepared))
+                if (_operand.Subscripts.TryGetValue(cached.Bracket, out var prepared))
                 {
-                    reference = new ArithmeticReference(VariableReference.ForElement(name, prepared.Source), prepared.Expansion);
-                    _index += prepared.Expansion.Value.Bytes.Length + 2;
+                    reference = new ArithmeticReference(VariableReference.ForElement(cached.Syntax.Name, prepared.Source), prepared.Expansion);
+                    _index = cached.Bracket + prepared.Expansion.Value.Bytes.Length + 2;
                     return true;
                 }
-                var source = ShellSource.FromBytes(_expression.Bytes);
-                if (!ArraySubscriptScanner.TryScan(source, _index, out var closing))
-                {
-                    reference = default;
-                    Error = new ArithmeticError(ArithmeticErrorKind.BadArraySubscript,
-                        ShellValue.FromBytes(_expression.Bytes[start..]));
-                    return false;
-                }
-                reference = new ArithmeticReference(VariableReference.ForElement(name, source.Slice(_index + 1, closing - _index - 1)), null);
-                _index = closing + 1;
             }
-            else
-                reference = new ArithmeticReference(VariableReference.ForName(name), null);
+            _index = cached.End;
+            if (cached.Failure is { } failure)
+            {
+                reference = default;
+                Error = failure;
+                return false;
+            }
+            reference = new ArithmeticReference(cached.Syntax, null);
             return true;
         }
 
@@ -928,81 +897,29 @@ public static class ArithmeticEvaluation
         {
             var token = PeekToken(out var kind);
             return kind != ArithmeticTokenKind.Invalid
-                && (kind != ArithmeticTokenKind.Number || TryParseIntegerLiteral(token, _cancellationToken, out _));
+                && (kind != ArithmeticTokenKind.Number || (_operand.Syntax is { } syntax && syntax.TryGetToken(_index, out var cached)
+                    ? cached.ValidNumber : TryParseIntegerLiteral(token, _cancellationToken, out _)));
         }
 
-        // Lookahead and parsing share token boundaries; malformed decimal words are never numeric prefixes.
+        // Prepared sources share the same token boundaries as dynamic operands.
         private ReadOnlySpan<byte> PeekToken(out ArithmeticTokenKind kind)
         {
             SkipWhitespace();
-            if (IsAtEnd)
-            {
-                kind = ArithmeticTokenKind.End;
-                return [];
-            }
-
-            var remaining = Span[_index..];
-            var first = remaining[0];
-            var length = 1;
-            if (VariableNames.IsNamePart((char)first))
-            {
-                kind = VariableNames.IsNameStart((char)first) ? ArithmeticTokenKind.Identifier : ArithmeticTokenKind.Number;
-                while (length < remaining.Length
-                    && (VariableNames.IsNamePart((char)remaining[length])
-                        || kind == ArithmeticTokenKind.Number && remaining[length] is (byte)'#' or (byte)'@'))
-                {
-                    _cancellationToken.ThrowIfCancellationRequested();
-                    length++;
-                }
-            }
-            else if (first is (byte)'(' or (byte)')' or (byte)'?' or (byte)':' or (byte)',' or (byte)'~'
-                or (byte)'+' or (byte)'-' or (byte)'*' or (byte)'/' or (byte)'%' or (byte)'<' or (byte)'>' or (byte)'&' or (byte)'|' or (byte)'^' or (byte)'=' or (byte)'!')
-            {
-                kind = ArithmeticTokenKind.Operator;
-                if (remaining.Length > 1)
-                {
-                    var next = remaining[1];
-                    if (first == next && first is (byte)'<' or (byte)'>')
-                        length = remaining.Length > 2 && remaining[2] == (byte)'=' ? 3 : 2;
-                    else if (first == next && first is (byte)'+' or (byte)'-' or (byte)'*' or (byte)'&' or (byte)'|'
-                        || next == (byte)'=' && first is (byte)'+' or (byte)'-' or (byte)'*' or (byte)'/' or (byte)'%' or (byte)'<' or (byte)'>' or (byte)'&' or (byte)'|' or (byte)'^' or (byte)'=' or (byte)'!')
-                        length = 2;
-                }
-            }
-            else
-            {
-                kind = ArithmeticTokenKind.Invalid;
-            }
-            return remaining[..length];
-        }
-
-        private enum ArithmeticTokenKind
-        {
-            End,
-            Invalid,
-            Number,
-            Identifier,
-            Operator
+            var token = _operand.Syntax is { } syntax && syntax.TryGetToken(_index, out var cached)
+                ? cached.Shape : ReadTokenShape(Span[_index..], _cancellationToken);
+            kind = token.Kind;
+            return Span.Slice(_index, token.Length);
         }
 
         private bool TryMatchAssignmentOperator(out AssignmentOperator op)
         {
-            if (TryMatch("<<="u8)) op = AssignmentOperator.LeftShift;
-            else if (TryMatch(">>="u8)) op = AssignmentOperator.RightShift;
-            else if (TryMatch("*="u8)) op = AssignmentOperator.Multiply;
-            else if (TryMatch("/="u8)) op = AssignmentOperator.Divide;
-            else if (TryMatch("%="u8)) op = AssignmentOperator.Remainder;
-            else if (TryMatch("+="u8)) op = AssignmentOperator.Add;
-            else if (TryMatch("-="u8)) op = AssignmentOperator.Subtract;
-            else if (TryMatch("&="u8)) op = AssignmentOperator.BitwiseAnd;
-            else if (TryMatch("^="u8)) op = AssignmentOperator.BitwiseXor;
-            else if (TryMatch("|="u8)) op = AssignmentOperator.BitwiseOr;
-            else if (TryMatchSingle((byte)'=')) op = AssignmentOperator.Assign;
-            else
-            {
-                op = default;
+            var token = PeekToken(out _);
+            var assignment = _operand.Syntax is { } syntax && syntax.TryGetToken(_index, out var cached)
+                ? cached.Assignment : GetAssignment(token);
+            op = assignment.GetValueOrDefault();
+            if (!assignment.HasValue)
                 return false;
-            }
+            _index += token.Length;
             return true;
         }
 
@@ -1034,44 +951,6 @@ public static class ArithmeticEvaluation
 
             _index += token.Length;
             return true;
-        }
-
-        private enum AssignmentOperator
-        {
-            Assign,
-            Add,
-            Subtract,
-            Multiply,
-            Divide,
-            Remainder,
-            LeftShift,
-            RightShift,
-            BitwiseAnd,
-            BitwiseXor,
-            BitwiseOr,
-        }
-
-        private enum BinaryOperator
-        {
-            LogicalOr,
-            LogicalAnd,
-            Equal,
-            NotEqual,
-            Less,
-            LessOrEqual,
-            Greater,
-            GreaterOrEqual,
-            Power,
-            LeftShift,
-            RightShift,
-            Add,
-            Subtract,
-            Multiply,
-            Divide,
-            Remainder,
-            BitwiseAnd,
-            BitwiseXor,
-            BitwiseOr,
         }
 
         private enum ParseProduction

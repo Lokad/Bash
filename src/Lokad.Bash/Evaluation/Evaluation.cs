@@ -3202,7 +3202,7 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>Expands a reached command or loop operand once before numeric evaluation.</summary>
-    private Task<long?> EvaluateArithmeticCommandOperandAsync(ShellSource expression, ScopedEvaluation scope)
+    private Task<long?> EvaluateArithmeticCommandOperandAsync(ArithmeticSource expression, ScopedEvaluation scope)
     {
         return AwaitWordExpansionAsync(ExpandAndEvaluateAsync());
 
