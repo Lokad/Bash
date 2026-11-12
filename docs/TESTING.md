@@ -20,8 +20,14 @@ quota-only assertions and allocation counters attached to a caller thread.
 Use the pinned SDK and run `dotnet test Lokad.Bash.slnx -c Release`. CI builds,
 tests both target frameworks and packs on Windows and Linux. A focused test run
 is useful during an edit; release qualification requires the complete boundary
-being claimed. Installed-package checks additionally need a consumer restored
-from the produced NuGet file, without a project reference to the runtime.
+being claimed. `scripts/Test-NuGetPackage.ps1` restores the public consumer in
+`validation/PackageConsumer.cs` from the produced NuGet file, using an isolated
+local feed/cache without a project reference. It rejects runtime dependencies,
+checks loaded assembly hashes and exports runtime/package/source hashes and
+individual probe names. CI executes it on both operating systems and runtimes.
+The probe checks public invocation, prepared reuse, byte arguments/output, lazy
+command units, errexit/EXIT, cancellation, memory refunds and matcher migration.
+It supplements the source suite's broader ownership and streaming controls.
 
 Native correctness controls compare exit status, exact stdout/stderr bytes and
 declared file effects. Each script and fixture has a content hash. Only the named

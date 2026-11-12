@@ -31,6 +31,9 @@ jobs:
         run: dotnet test Lokad.Bash.slnx -c Release --no-build --no-restore --logger trx --results-directory TestResults
       - name: Pack NuGet artifacts
         run: dotnet pack src/Lokad.Bash/Lokad.Bash.csproj -c Release --no-build --no-restore
+      - name: Verify installed package on both runtimes
+        shell: pwsh
+        run: ./scripts/Test-NuGetPackage.ps1 -PackagePath (Get-ChildItem artifacts/nuget/Lokad.Bash.*.nupkg).FullName
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7.0.2
@@ -44,3 +47,12 @@ jobs:
           name: packages-${{ matrix.os }}
           path: artifacts/nuget/
           if-no-files-found: error
+      - name: Upload installed-package evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: package-validation-${{ matrix.os }}
+          path: |
+            artifacts/package-validation/**/results.json
+            artifacts/package-validation/**/net*.log
+          if-no-files-found: ignore

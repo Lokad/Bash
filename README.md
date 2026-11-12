@@ -5,8 +5,12 @@ Your application controls commands, filesystem queries, files, pipes and resourc
 admission through `IBashHost`. The runtime has no third-party runtime dependencies
 and does not supply a filesystem or process host.
 
+This checkout prepares version 0.2.0, including the public API migrations in
+[the changelog](CHANGELOG.md). Build the package locally and point your consumer's
+NuGet source to the resulting `artifacts/nuget/` directory; publication is separate.
+
 ```powershell
-dotnet add package Lokad.Bash --version 0.1.0
+dotnet add package Lokad.Bash --version 0.2.0 --source ./artifacts/nuget
 ```
 
 ```csharp
@@ -47,6 +51,7 @@ is a release candidate; both target frameworks are built and tested explicitly.
 dotnet restore Lokad.Bash.slnx --locked-mode
 dotnet test Lokad.Bash.slnx -c Release --no-restore
 dotnet pack src/Lokad.Bash/Lokad.Bash.csproj -c Release --no-restore
+./scripts/Test-NuGetPackage.ps1 -PackagePath artifacts/nuget/Lokad.Bash.0.2.0.nupkg
 ```
 
 Language and evaluator-contract regressions use in-memory `IBashHost` fixtures.
@@ -55,7 +60,9 @@ storage systems and application command-adapter policies are tested by their hos
 See [test ownership](docs/TESTING.md) for boundary responsibilities and qualification.
 
 CI runs on Windows and Linux. Packages go to `artifacts/nuget/` as
-`Lokad.Bash.0.1.0.nupkg` and `Lokad.Bash.0.1.0.snupkg`.
+`Lokad.Bash.0.2.0.nupkg` and `Lokad.Bash.0.2.0.snupkg`. The installed consumer
+restores only from the produced package in an isolated feed/cache, checks assembly
+hashes and exercises both runtimes through the public API. CI retains its evidence.
 Before 1.0, minor versions may change public APIs, with migration notes in the
 changelog.
 

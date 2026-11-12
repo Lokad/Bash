@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prepare 0.2.0 under the pre-1.0 minor-version API policy. Add isolated installed
+  NuGet consumer qualification on Windows/Linux and .NET 10/.NET 11, with exact
+  assembly checks and exported package/source/runtime evidence. No publication is
+  part of this source and package qualification.
 - Breaking API change: remove the unused standalone `ByteGlobMatcher`, its compiled
   `ByteGlobPattern` model, case/separator enums and token/range/segment types. Shell
   evaluation continues through the shared matcher. For application shell-word

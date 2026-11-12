@@ -59,7 +59,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Caller => new("", "Print the current function context; return failure outside a function."),
         BuiltinKind.Source => new("filename [arguments]", "Read and execute filename in the current shell context, with optional positional parameters."),
         BuiltinKind.Eval => new("[arg ...]", "Join arguments with spaces, then parse and execute them in the current shell context."),
-        BuiltinKind.Getopts => new("optstring name [arg ...]", "Parse short options into name, using OPTIND and OPTARG; use positional parameters when arguments are omitted."),
+        BuiltinKind.Getopts => new("optstring name [arg ...]", "Parse separate short flag arguments into name and advance OPTIND; use positional parameters when arguments are omitted.\n    Bundled flags, required option arguments, OPTARG lifecycle and GNU diagnostic modes are unsupported."),
         BuiltinKind.Command => new("[-pVv] command [arg ...]", "Run a command without function lookup, or describe its resolution."),
         BuiltinKind.Type => new("[-t] [--] name [name ...]", "Describe how names resolve; -t prints function, builtin or file."),
         BuiltinKind.Builtin => new("[shell-builtin [arg ...]]", "Execute a supported shell builtin, bypassing functions."),
