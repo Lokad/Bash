@@ -4,6 +4,7 @@
     <AllowedPackageReference Include="Microsoft.NET.Test.Sdk" />
     <AllowedPackageReference Include="xunit" />
     <AllowedPackageReference Include="xunit.runner.visualstudio" />
+    <AllowedPackageReference Include="BenchmarkDotNet" />
   </ItemGroup>
   <Target Name="EnforcePackageAllowlist" BeforeTargets="CollectPackageReferences">
     <ItemGroup>

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add the first benchmark-preparation component: deterministic geometric workload
+  catalog, bounded byte/digest host, controlled ownership/backpressure checks and
+  managed/GNU correctness exports. CI verifies the managed harness without timing
+  campaigns. Measurement lanes and dedicated-VM measurements remain pending.
 - Prepare 0.2.0 under the pre-1.0 minor-version API policy. Add isolated installed
   NuGet consumer qualification on Windows/Linux and .NET 10/.NET 11, with exact
   assembly checks and exported package/source/runtime evidence. No publication is

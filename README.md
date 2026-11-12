@@ -66,6 +66,11 @@ hashes and exercises both runtimes through the public API. CI retains its eviden
 Before 1.0, minor versions may change public APIs, with migration notes in the
 changelog.
 
+[Benchmark preparation](https://github.com/Lokad/Bash/blob/master/BENCHMARKS.md)
+uses a separate non-packable project. Preparation, equivalence checks and
+single-invocation smoke modes run without comparative timings. Dedicated-VM
+measurements remain pending.
+
 ## GNU correctness controls
 
 The versioned corpus in `tests/Lokad.Bash.Tests/Conformance/cases.json` has explicit

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <TargetFrameworks>net11.0;net10.0</TargetFrameworks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" PrivateAssets="All" />
+    <ProjectReference Include="../../src/Lokad.Bash/Lokad.Bash.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,4 +1,5 @@
 <Solution>
   <Folder Name="/src/"><Project Path="src/Lokad.Bash/Lokad.Bash.csproj" /></Folder>
   <Folder Name="/tests/"><Project Path="tests/Lokad.Bash.Tests/Lokad.Bash.Tests.csproj" /></Folder>
+  <Folder Name="/benchmarks/"><Project Path="benchmarks/Lokad.Bash.Benchmarks/Lokad.Bash.Benchmarks.csproj" /></Folder>
 </Solution>
