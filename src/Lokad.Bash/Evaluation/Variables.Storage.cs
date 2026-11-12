@@ -70,7 +70,7 @@ public sealed partial class Variables
     /// <summary>Changes the value kind without losing declaration attributes.</summary>
     private void ReplaceValue(BindingName name, VariableSlot replacement)
     {
-        if (_bindings.TryGetValue(name, out var previous))
+        if (TryGetBinding(name, out var previous))
             replacement.Attributes = previous.Attributes;
         StoreBinding(name, replacement);
     }
@@ -94,7 +94,13 @@ public sealed partial class Variables
     private void ClearBinding(BindingName name)
     {
         using var memory = TrackBindingMemory(name);
-        _bindings.Remove(name);
+        if (_prefixSource == null)
+            _bindings.Remove(name);
+        else
+        {
+            _bindings[name] = new MissingSlot();
+            _bindingCapacity = Math.Max(_bindingCapacity, _bindings.Count);
+        }
         _exportedIndex.Remove(name);
     }
 
@@ -105,11 +111,11 @@ public sealed partial class Variables
     }
 
     private bool HasAttribute(BindingName name, BindingAttributes attribute) =>
-        _bindings.TryGetValue(name, out var slot) && (slot.Attributes & attribute) != 0;
+        TryGetBinding(name, out var slot) && (slot.Attributes & attribute) != 0;
 
     private void SetAttribute(BindingName name, BindingAttributes attribute, bool enabled)
     {
-        if (!_bindings.TryGetValue(name, out var slot))
+        if (!TryGetBinding(name, out var slot))
         {
             if (!enabled) return;
             slot = new AttributeSlot();
@@ -121,7 +127,7 @@ public sealed partial class Variables
     /// <summary>Removes a value kind, retaining attributes that belong to the name.</summary>
     private bool RemoveValue<TSlot>(BindingName name) where TSlot : VariableSlot
     {
-        if (!_bindings.TryGetValue(name, out var slot) || slot is not TSlot)
+        if (!TryGetBinding(name, out var slot) || slot is not TSlot)
             return false;
         StoreBinding(name, new AttributeSlot { Attributes = slot.Attributes });
         return true;
@@ -138,18 +144,18 @@ public sealed partial class Variables
 
     /// <summary>Live typed lookup; counts and enumeration scan bindings without copying their values.</summary>
     private sealed class BindingView<TSlot, TValue>(
-        IReadOnlyDictionary<BindingName, VariableSlot> bindings, Func<TSlot, TValue> select)
+        Variables owner, Func<TSlot, TValue> select)
         : IReadOnlyDictionary<BindingName, TValue> where TSlot : VariableSlot
     {
-        public int Count => bindings.Count(entry => entry.Value is TSlot);
-        public IEnumerable<BindingName> Keys => bindings.Where(entry => entry.Value is TSlot).Select(entry => entry.Key);
+        public int Count => owner.EnumerateBindings().Count(entry => entry.Value is TSlot);
+        public IEnumerable<BindingName> Keys => owner.EnumerateBindings().Where(entry => entry.Value is TSlot).Select(entry => entry.Key);
         public IEnumerable<TValue> Values => this.Select(entry => entry.Value);
         public TValue this[BindingName key] => TryGetValue(key, out var value) ? value : throw new KeyNotFoundException();
-        public bool ContainsKey(BindingName key) => bindings.TryGetValue(key, out var slot) && slot is TSlot;
+        public bool ContainsKey(BindingName key) => owner.TryGetBinding(key, out var slot) && slot is TSlot;
 
         public bool TryGetValue(BindingName key, [MaybeNullWhen(false)] out TValue value)
         {
-            if (bindings.TryGetValue(key, out var slot) && slot is TSlot typed)
+            if (owner.TryGetBinding(key, out var slot) && slot is TSlot typed)
             {
                 value = select(typed);
                 return true;
@@ -160,8 +166,8 @@ public sealed partial class Variables
 
         public IEnumerator<KeyValuePair<BindingName, TValue>> GetEnumerator()
         {
-            foreach (var entry in bindings)
-                if (entry.Value is TSlot typed)
+            foreach (var entry in owner.EnumerateBindings())
+                if (entry.Value is TSlot && owner.TryGetBinding(entry.Key, out var slot) && slot is TSlot typed)
                     yield return new(entry.Key, select(typed));
         }
 
@@ -169,14 +175,14 @@ public sealed partial class Variables
     }
 
     /// <summary>Live attribute inspection; membership remains owned by each binding.</summary>
-    private sealed class AttributeView(IReadOnlyDictionary<BindingName, VariableSlot> bindings, BindingAttributes attribute)
+    private sealed class AttributeView(Variables owner, BindingAttributes attribute)
         : IReadOnlyCollection<BindingName>
     {
-        public int Count => bindings.Count(entry => (entry.Value.Attributes & attribute) != 0);
+        public int Count => owner.EnumerateBindings().Count(entry => (entry.Value.Attributes & attribute) != 0);
 
         public IEnumerator<BindingName> GetEnumerator()
         {
-            foreach (var entry in bindings)
+            foreach (var entry in owner.EnumerateBindings())
                 if ((entry.Value.Attributes & attribute) != 0)
                     yield return entry.Key;
         }

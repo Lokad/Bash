@@ -12,7 +12,7 @@ public sealed partial class Variables
     /// <summary>Publishes completed foreground statuses without following a user-created nameref.</summary>
     internal void SetPipelineStatuses(IReadOnlyList<int> statuses, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        _bindings.TryGetValue(PipelineStatusName, out var slot);
+        TryGetBinding(PipelineStatusName, out var slot);
         // Bash leaves associative replacements alone. An existing initialized indexed
         // array accepts shell metadata even when readonly; other readonly bindings stay intact.
         if (slot is AssociativeSlot

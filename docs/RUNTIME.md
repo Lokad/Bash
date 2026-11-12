@@ -38,6 +38,19 @@ copies callee entries once while sharing immutable value bytes. Functions always
 restore their caller; source restores unless an explicit positional replacement
 survives. Saved frames remain admitted through their surrounding command scope.
 
+Prefix assignment preparation borrows caller state for the surrounding command.
+It admits and copies each reached binding once, retaining independent array
+containers and attributes. Unrelated names and containers remain with the caller;
+metadata enumeration does not copy their values. The existing expansion write
+target forwards actual RHS effects, including same-value writes, with nameref and
+array-kind rules intact. In-process execution installs only prepared prefixes on
+the active owner; full child snapshots still detach all visible state.
+
+An explicit attribute promotion of a temporary prefix can survive local
+restoration, including through nested functions. Direct unset in the owning local
+scope cancels promotion; redeclaring a local after a helper unset starts a new local
+lifetime. Isolated child contexts retain their own promotion/restoration state.
+
 Host calls can overlap while pipeline stages execute. Allow producers and consumers
 to progress independently: never await descriptor I/O while holding a host-wide
 filesystem lock. Pipes must preserve byte order and apply backpressure. A consumer

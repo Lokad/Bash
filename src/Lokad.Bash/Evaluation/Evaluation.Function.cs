@@ -66,8 +66,9 @@ public sealed partial class Evaluation
         foreach (var name in completed.PromotedNames)
         {
             var isPrefix = bindings?.Contains(name) == true;
+            var promotedPrefix = completed.Locals.PromotedPrefixes.Contains(name);
             if (completed.Locals.BlocksPromotion(name)
-                || (completed.Locals.Owns(name) && !isPrefix))
+                || (completed.Locals.Owns(name) && !isPrefix && !promotedPrefix))
                 continue;
 
             var survives = variables.HasBinding(name);
@@ -76,7 +77,7 @@ public sealed partial class Evaluation
                 variables.SetExported(name, true);
             if (survives)
                 bindings?.RetainBinding(name);
-            if (isPrefix && survives)
+            if ((isPrefix || promotedPrefix) && survives)
                 enclosing?.Locals.RecordPrefixPromotion(name);
             if (!isPrefix || survives)
                 enclosing?.PromotedNames.Add(name);

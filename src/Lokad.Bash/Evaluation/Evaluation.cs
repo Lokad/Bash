@@ -1245,8 +1245,8 @@ public sealed partial class Evaluation : IFileTester
             if (prefixNames == null)
                 return null;
 
-            // Clone once, after caller operand effects. Forward only actual RHS writes back to the caller.
-            commandVars = Memory.CloneVariables(scope.Variables);
+            // Copy reached bindings only; actual RHS writes still use the existing caller target.
+            commandVars = global::Lokad.Bash.Evaluation.Variables.CreatePrefixScope(scope.Variables, Memory, _cancellationToken);
             var assignmentScope = scope with
             {
                 Variables = commandVars,

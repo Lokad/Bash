@@ -91,6 +91,13 @@ replacements stay charged. These reservations describe live ownership, with no
 lifetime expansion credits. A nested host must receive a memory budget under the
 same root; command inheritance does not copy or create a memory allowance.
 
+Command-prefix preparation borrows the caller's store and positional frame.
+Only reached bindings acquire admitted, independent containers in command
+workspace. Missing command bindings hide caller names without deleting caller
+state. Full child snapshots retain separate admission for their complete visible
+store. Cancellation or refusal during detachment leaves the caller binding intact;
+the surrounding command owns copied storage through operation and cleanup completion.
+
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
 source-size bound, not complete accounting; manual stepping does not install a host
 budget. Keep coverage limits explicit. Test shared allowances, refusal, immediate

@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -54,9 +53,13 @@ public sealed partial class Variables
     {
         get
         {
-            var bytes = _bindingBytes + PositionalMemoryBytes + EstimateValueBytes(_argumentZero) + EstimateValueBytes(
-                ShellValue.FromBytes(CachedFieldSeparators.Bytes));
-            return checked(bytes + (long)BindingOverheadBytes * (_bindingCapacity - _bindings.Count));
+            // The prefix source already owns borrowed positional/name/IFS bytes. Include it
+            // for full child-snapshot admission, without charging that borrowed frame twice.
+            var inherited = _prefixSource?.Variables.EstimatedMemoryBytes
+                ?? checked(PositionalMemoryBytes + EstimateValueBytes(_argumentZero)
+                    + EstimateValueBytes(ShellValue.FromBytes(CachedFieldSeparators.Bytes)));
+            return checked(_bindingBytes + inherited
+                + (long)BindingOverheadBytes * (_bindingCapacity - _bindings.Count));
         }
     }
 
@@ -66,8 +69,14 @@ public sealed partial class Variables
 
     internal long EstimateBindingBytes(BindingName name)
     {
-        if (!_bindings.TryGetValue(name, out var slot))
-            return 0;
+        return TryGetBinding(name, out var slot) ? EstimateSlotBytes(name, slot) : 0;
+    }
+
+    private long EstimateOwnedBindingBytes(BindingName name) =>
+        _bindings.TryGetValue(name, out var slot) ? EstimateSlotBytes(name, slot) : 0;
+
+    private static long EstimateSlotBytes(BindingName name, VariableSlot slot)
+    {
         var overhead = BindingOverheadBytes + (long)ValueCapacityMultiplier * name.ByteLength;
         return overhead + (slot switch
         {
@@ -81,8 +90,8 @@ public sealed partial class Variables
 
     internal readonly struct BindingMemoryChange(Variables owner, BindingName name) : IDisposable
     {
-        private readonly long _before = owner.EstimateBindingBytes(name);
-        public void Dispose() => owner._bindingBytes = checked(owner._bindingBytes + owner.EstimateBindingBytes(name) - _before);
+        private readonly long _before = owner.EstimateOwnedBindingBytes(name);
+        public void Dispose() => owner._bindingBytes = checked(owner._bindingBytes + owner.EstimateOwnedBindingBytes(name) - _before);
     }
 
     internal IReadOnlyDictionary<BindingName, ShellValue> Scalars { get; }
@@ -92,15 +101,15 @@ public sealed partial class Variables
     internal IReadOnlyDictionary<BindingName, ShellValue> Namerefs =>
         NamerefTargets.ToDictionary(entry => entry.Key, entry => entry.Value.Value);
     internal IEnumerable<BindingName> BindingNames =>
-        _bindings.Where(entry => entry.Value is not AttributeSlot).Select(entry => entry.Key);
+        EnumerateBindings().Where(entry => entry.Value is not AttributeSlot).Select(entry => entry.Key);
     internal IEnumerable<BindingName> AssignedNames =>
-        _bindings.Where(entry => IsAssigned(entry.Value)).Select(entry => entry.Key);
+        EnumerateBindings().Where(entry => IsAssigned(entry.Value)).Select(entry => entry.Key);
 
     internal bool HasBinding(BindingName name) =>
-        _bindings.TryGetValue(name, out var slot) && slot is not AttributeSlot;
+        TryGetBinding(name, out var slot) && slot is not AttributeSlot;
 
     internal bool IsUnassignedScalar(BindingName name) =>
-        _bindings.TryGetValue(name, out var slot) && slot is UnassignedSlot;
+        TryGetBinding(name, out var slot) && slot is UnassignedSlot;
 
     /// <summary>Checks the binding's own attribute, without following a nameref.</summary>
     internal bool IsReadonlyBinding(BindingName name) => HasAttribute(name, BindingAttributes.Readonly);
@@ -124,12 +133,12 @@ public sealed partial class Variables
     private Variables()
     {
         _positionalView = new PositionalParametersView(this);
-        Scalars = new BindingView<ScalarSlot, ShellValue>(_bindings, slot => slot.Value);
-        IndexedArrays = new BindingView<IndexedSlot, IndexedArray>(_bindings, slot => slot.Value);
-        AssociativeArrays = new BindingView<AssociativeSlot, AssociativeArray>(_bindings, slot => slot.Value);
-        NamerefTargets = new BindingView<NamerefSlot, NamerefTarget>(_bindings, slot => slot.Value);
-        ExportedNames = new ReadOnlySet<BindingName>(_exportedIndex);
-        ReadonlyNames = new AttributeView(_bindings, BindingAttributes.Readonly);
+        Scalars = new BindingView<ScalarSlot, ShellValue>(this, slot => slot.Value);
+        IndexedArrays = new BindingView<IndexedSlot, IndexedArray>(this, slot => slot.Value);
+        AssociativeArrays = new BindingView<AssociativeSlot, AssociativeArray>(this, slot => slot.Value);
+        NamerefTargets = new BindingView<NamerefSlot, NamerefTarget>(this, slot => slot.Value);
+        ExportedNames = new ExportedNameView(this);
+        ReadonlyNames = new AttributeView(this, BindingAttributes.Readonly);
     }
 
     /// <summary>Creates empty variable state.</summary>
@@ -150,14 +159,14 @@ public sealed partial class Variables
     /// <summary>
     /// Copies bindings and collection ownership, sharing immutable value bytes.
     /// Use a clone when evaluation must observe or perform writes that should not affect the caller scope.
-    /// Used for temporary prefix bindings and child evaluation.
+    /// Used for child evaluation and explicit snapshots. Prefix preparation detaches reached bindings instead.
     /// Caller-side expansion effects are handled by ScopedEvaluation, not inferred from clone differences.
     /// </summary>
     public Variables Clone()
     {
         var clone = new Variables();
         clone.CachedFieldSeparators = CachedFieldSeparators;
-        foreach (var entry in _bindings)
+        foreach (var entry in EnumerateBindings())
             clone.StoreBinding(entry.Key, entry.Value.Clone());
         clone.ReplacePositionalParameters(PositionalParameters);
         clone._argumentZero = _argumentZero;
@@ -312,6 +321,7 @@ public sealed partial class Variables
         private readonly Variables _saved = new();
         private readonly HashSet<BindingName> _unsetNames = new();
         private readonly HashSet<BindingName> _declaredPrefixes = new();
+        private readonly HashSet<BindingName> _promotedPrefixes = new();
 
         internal long SavedMemoryBytes => _saved.EstimatedMemoryBytes;
 
@@ -330,6 +340,7 @@ public sealed partial class Variables
 
         internal Variables? ExportSnapshot => _parent == null ? _saved : null;
         internal IReadOnlySet<BindingName> SavedNames => _names;
+        internal IReadOnlySet<BindingName> PromotedPrefixes => _promotedPrefixes;
 
         internal Variables HiddenOwner(BindingName name, Variables visible) => _parent != null
             ? _parent.HiddenOwner(name, visible) : _names.Contains(name) ? _saved : visible;
@@ -357,6 +368,7 @@ public sealed partial class Variables
         public void RecordUnset(BindingName name)
         {
             var owner = DeclarationOwner(name);
+            owner._promotedPrefixes.Remove(name);
             if (owner._names.Contains(name) || owner._prefixes?.Contains(name) == true)
                 owner._unsetNames.Add(name);
         }
@@ -376,7 +388,12 @@ public sealed partial class Variables
         }
 
         /// <summary>A nested command's promoted prefix replaces the enclosing binding's canceled lifetime.</summary>
-        public void RecordPrefixPromotion(BindingName name) => DeclarationOwner(name)._unsetNames.Remove(name);
+        public void RecordPrefixPromotion(BindingName name)
+        {
+            var owner = DeclarationOwner(name);
+            owner._unsetNames.Remove(name);
+            owner._promotedPrefixes.Add(name);
+        }
 
         private LocalBindings DeclarationOwner(BindingName name) =>
             _parent != null && !IsScriptPrefix(name) ? _parent.DeclarationOwner(name) : this;
@@ -457,6 +474,10 @@ public sealed partial class Variables
             var updated = command;
             if (declarationOwner._names.Contains(name))
             {
+                // A helper can unset this local without ending its namespace. An explicit
+                // redeclaration starts a fresh local lifetime rather than reviving its promotion.
+                if (!command.HasBinding(name))
+                    declarationOwner._promotedPrefixes.Remove(name);
                 if (unsetPrefixes != null)
                 {
                     updated = new Variables();
@@ -594,6 +615,7 @@ public sealed partial class Variables
             child._names.UnionWith(_names);
             child._unsetNames.UnionWith(_unsetNames);
             child._declaredPrefixes.UnionWith(_declaredPrefixes);
+            child._promotedPrefixes.UnionWith(_promotedPrefixes);
             foreach (var name in _names)
                 child._saved.CopyBindingFrom(_saved, name);
             return child;
@@ -603,7 +625,8 @@ public sealed partial class Variables
         public void Restore()
         {
             foreach (var name in _names)
-                _owner.CopyBindingFrom(_saved, name);
+                if (!_promotedPrefixes.Contains(name) || !_owner.HasBinding(name))
+                    _owner.CopyBindingFrom(_saved, name);
         }
     }
 
@@ -744,7 +767,7 @@ public sealed partial class Variables
     /// <summary>Replaces a resolved binding; callers own name and readonly validation.</summary>
     private void SetResolvedScalar(BindingName resolved, ShellValue value)
     {
-        if (_bindings.TryGetValue(resolved, out var slot) && slot is ScalarSlot scalar)
+        if (TryGetBinding(resolved, out var slot) && slot is ScalarSlot scalar)
         {
             using var memory = TrackBindingMemory(resolved);
             scalar.Value = value;
@@ -788,7 +811,7 @@ public sealed partial class Variables
         else
         {
             SetAttribute(name, BindingAttributes.Exported, false);
-            if (_bindings.TryGetValue(name, out var slot) && (slot switch
+            if (TryGetBinding(name, out var slot) && (slot switch
                 {
                     ScalarSlot or UnassignedSlot => flags.HasFlag(UnsetFlags.ScalarOnly),
                     IndexedSlot or AssociativeSlot => flags.HasFlag(UnsetFlags.ArrayOnly),
@@ -1037,7 +1060,7 @@ public sealed partial class Variables
     /// <remarks>False leaves an incomplete row; the caller must discard it.</remarks>
     internal bool TryAppendVariable(BindingName name, ByteMemoryBuilder output, VariableDisplayStyle style)
     {
-        _bindings.TryGetValue(name, out var slot);
+        TryGetBinding(name, out var slot);
         if (style == VariableDisplayStyle.Assignment && slot is not (null or AttributeSlot) && !IsAssigned(slot))
             return true;
         if (style != VariableDisplayStyle.Assignment)
@@ -1108,7 +1131,7 @@ public sealed partial class Variables
     /// <summary>Copies one complete binding, including its value kind and attributes.</summary>
     internal void CopyBindingFrom(Variables source, BindingName name)
     {
-        if (source._bindings.TryGetValue(name, out var slot))
+        if (source.TryGetBinding(name, out var slot))
             StoreBinding(name, slot.Clone());
         else
             ClearBinding(name);
@@ -1293,7 +1316,7 @@ public sealed partial class Variables
         {
             var name = binding.Name;
             var scope = binding.Owner;
-            if (selected.Contains(name) || !scope._bindings.TryGetValue(name, out var slot)) continue;
+            if (selected.Contains(name) || !scope.TryGetBinding(name, out var slot)) continue;
             ShellValue value;
             switch (slot)
             {

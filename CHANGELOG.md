@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Prepare command-prefix assignments by copying reached bindings instead of the
+  entire variable store. Borrow positional frames, preserve RHS write forwarding,
+  and admit independent containers before detachment. Keep full child snapshots
+  isolated. Honor explicit prefix promotion through local and nested function
+  restoration, including unset and redeclaration lifetime rules.
 - Seek sparse indexed-array windows through the existing ordered position tree,
   avoiding scans over unrelated earlier entries. Preserve deferred reads, sparse
   order, count limits and empty/out-of-range behavior.
