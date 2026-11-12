@@ -37,7 +37,7 @@ public partial class EvaluationTests
     public async Task SameFile_DeduplicatesBothOperandsAndPreservesMixedResultPositions()
     {
         var identity = new FileIdentity(new object(), "file");
-        var state = new Eval(Parser.Parse("[[ -e a && -r a && ! -O b && a -ef a && a -ef b && b -ef a && ! a -ef unknown && ! missing -ef a && ! a -ef missing && -L link ]]"),
+        var state = new Eval(Parser.Parse("test -e a -a -r a -a ! -O b -a a -ef a -a a -ef b -a b -ef a -a ! a -ef unknown -a ! missing -ef a -a ! a -ef missing -a -L link"),
             options: EvaluationOptions.Default with { CurrentDirectory = new ShellPath("/work") });
         var kinds = await NextPathKindsAsync(state);
         Assert.Equal(new[] { "/work/a", "/work/link" }, kinds.Paths.Select(path => path.Path));
@@ -58,7 +58,7 @@ public partial class EvaluationTests
     [InlineData(OperationErrorKind.Unknown)]
     public async Task SameFile_MetadataFailuresDoNotInvalidateKindsOrOtherComparisons(OperationErrorKind error)
     {
-        var state = new Eval(Parser.Parse("[[ -e denied && ! denied -ef good && ! good -ef denied && good -ef good && ! unavailable -ef good ]]"));
+        var state = new Eval(Parser.Parse("test -e denied -a ! denied -ef good -a ! good -ef denied -a good -ef good -a ! unavailable -ef good"));
         var kinds = await NextPathKindsAsync(state);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
         var metadata = await NextMetadataAsync(state);
@@ -74,7 +74,7 @@ public partial class EvaluationTests
     public async Task SameFile_ReusesTimeComparisonMetadataAlongsideOtherMetadataPredicates()
     {
         var identity = new FileIdentity(new object(), "file");
-        var state = new Eval(Parser.Parse("[[ a -ef b && -r a && ! -O b && -u extra && ! a -nt b && -e a ]]"));
+        var state = new Eval(Parser.Parse("test a -ef b -a -r a -a ! -O b -a -u extra -a ! a -nt b -a -e a"));
         var kinds = await NextPathKindsAsync(state);
         Assert.Equal("/a", Assert.Single(kinds.Paths).Path);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
@@ -92,7 +92,7 @@ public partial class EvaluationTests
     [InlineData(OperationErrorKind.Unknown)]
     public async Task SameFile_ReusesFailedMetadataWithoutRetryingOrInvalidatingKinds(OperationErrorKind error)
     {
-        var state = new Eval(Parser.Parse("[[ -e failed && ! failed -nt good && ! failed -ef good && ! -r failed && good -ef good && -r good ]]"));
+        var state = new Eval(Parser.Parse("test -e failed -a ! failed -nt good -a ! failed -ef good -a ! -r failed -a good -ef good -a -r good"));
         var kinds = await NextPathKindsAsync(state);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
         var metadata = await NextMetadataAsync(state);
@@ -137,7 +137,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task SameFile_FailedTraversalDoesNotInvalidateAnotherComparisonForTheSamePath()
     {
-        var state = new Eval(Parser.Parse("[[ ! a -ef dir/../a && a -ef ./a ]]"));
+        var state = new Eval(Parser.Parse("test ! a -ef dir/../a -a a -ef ./a"));
         var metadata = await NextMetadataAsync(state);
         Assert.Equal(new[] { "/a", "/dir/../a", "/./a" }, metadata.Paths.Select(path => path.Path));
         var identity = new FileIdentity(new object(), "a");
@@ -180,7 +180,7 @@ public partial class EvaluationTests
         var host = new TestOperationVisitor([]);
         host.EnqueuePathInfo(IdentityResult(identity, FilePathKind.File).Info);
         host.EnqueuePathInfo(IdentityResult(identity, FilePathKind.File).Info);
-        var state = new Eval(Parser.Parse("[[ a -ef b && b -ef a ]]"));
+        var state = new Eval(Parser.Parse("test a -ef b -a b -ef a"));
         await new Engine().RunAsync(state, host, CancellationToken.None);
         Assert.Equal(0, state.LastExitCode);
         Assert.Equal(2, Assert.Single(host.PathInfoBatches).Count);

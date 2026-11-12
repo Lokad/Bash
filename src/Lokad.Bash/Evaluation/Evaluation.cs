@@ -721,34 +721,6 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>
-    /// Evaluates a [[ ... ]] conditional command by parsing and dispatching file tests.
-    /// </summary>
-    private async Task<EvaluationResult> EvaluateConditionalCommandAsync(
-        ConditionalCommand conditionalCommand,
-        bool negated)
-    {
-        if (!conditionalCommand.Expression.ToValue().TryGetUtf8Text(out var expression))
-        {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("[["),
-                ShellValue.FromText("conditional expression must be valid UTF-8")).ConfigureAwait(false);
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
-        }
-        var evaluation = ConditionalEvaluation.Parse(expression, _cancellationToken, _state.ErrexitEnabled);
-        if (evaluation.HasParseError)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
-
-        var fileTests = evaluation.CollectFileTests(out var result);
-        if (result.HasValue)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.Value ? 0 : 1), negated)
-                .ConfigureAwait(false);
-
-        var exitCode = await ExecuteFileTestsForEvaluationAsync(fileTests, evaluation.CompleteFileTests)
-            .ConfigureAwait(false);
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
-    }
-
-
-    /// <summary>
     /// Evaluates a simple command, including assignments, builtins, functions, and external invocations.
     /// </summary>
     private async Task<EvaluationResult> EvaluateSimpleCommandAsync(

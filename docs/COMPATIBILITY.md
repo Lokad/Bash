@@ -47,6 +47,17 @@ Regular expression conditions currently use .NET regular expressions rather than
 claiming full POSIX ERE compatibility. Each match has a 250 ms backtracking timeout;
 refusal follows the conditional expression error path. The host cancellation token
 does not interrupt an individual .NET regex call before that timeout.
+Regex operands require valid UTF-8; quoted pattern bytes are literal, and dot
+includes LF. POSIX bracket classes, GNU longest-match rules and `BASH_REMATCH`
+capture state remain compatibility gaps.
+
+`[[` retains parsed structure and operand quoting. Reached operands undergo normal
+parameter, command, arithmetic and tilde expansion, without brace generation,
+field splitting or pathname expansion. Equality uses shell patterns with quoted
+pieces treated literally; numeric predicates evaluate arithmetic expressions after
+both operand words expand. Logical operators skip unreached expansions and host
+queries. Each reached file predicate observes its own host result. Invalid
+conditional structure, including an empty `[[ ]]`, is a syntax error.
 
 Out of scope: interactive prompts/history/completion, aliases, background execution,
 job/process-group control, OS signal handling, process substitution, `coproc`,

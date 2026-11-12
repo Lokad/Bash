@@ -10,8 +10,6 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -t 0 -a ! -t 1 -a -t 3 -a ! -t invalid -a ! -t 99 3<&0", false)]
     [InlineData("test -t 0 -a ! -t 1 -a -t 3 -a ! -t invalid -a ! -t 99 3<&0", true)]
-    [InlineData("[[ -t 0 && ! -t 1 && -t 3 && ! -t invalid && ! -t 99 ]] 3<&0", false)]
-    [InlineData("[[ -t 0 && ! -t 1 && -t 3 && ! -t invalid && ! -t 99 ]] 3<&0", true)]
     public async Task TerminalStatuses_DispatchAliasesAndPreserveResultOrder(string script, bool logging)
     {
         var basic = new TestOperationVisitor([]);
@@ -66,8 +64,7 @@ public partial class EvaluationTests
 
     [Theory]
     [InlineData("test -d before -a ! -t invalid -a ! -d missing -a ! -e '\r' -a -f after -a ! -t -1")]
-    [InlineData("[[ -d before && ! -t invalid && ! -d missing && ! -e '\r' && -f after && ! -t -1 ]]")]
-    [InlineData("[[ ! -t invalid && -d before && ! -d missing && -f after ]]")]
+    [InlineData("test ! -t invalid -a -d before -a ! -d missing -a -f after")]
     public async Task FileTests_KeepResultPositionsWhenInvalidOperandsAreOmitted(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -119,7 +116,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task FileTests_CancellationStopsWaitingForHostResults()
     {
-        var state = new Eval(Parser.Parse("[[ ! -t invalid && -e path ]]; after=1"));
+        var state = new Eval(Parser.Parse("test ! -t invalid -a -e path; after=1"));
         using var cancellation = new CancellationTokenSource();
         var completion = state.EnsureRunning(cancellation.Token);
         var operation = Assert.IsType<PathInfosOperation>(await state.GetNextStep(CancellationToken.None));
@@ -133,7 +130,6 @@ public partial class EvaluationTests
     }
     [Theory]
     [InlineData("test -e same -a -t 0 -a -f same -a ! -d same -a -d dir -a ! -e missing")]
-    [InlineData("[[ -e same && -t 0 && -f same && ! -d same && -d dir && ! -e missing ]]")]
     public async Task FileTests_BatchDistinctPathsAndKeepHostPredicatePositions(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -153,7 +149,6 @@ public partial class EvaluationTests
 
     [Theory]
     [InlineData("test -e special -a -a special -a ! -f special -a ! -d special -a -p special")]
-    [InlineData("[[ -e special && -a special && ! -f special && ! -d special && -p special ]]")]
     public async Task FileTests_SpecialFilesExistWithoutBeingRegularFilesOrDirectories(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -222,7 +217,6 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -b block -a -e block -a ! -f block -a -c char -a -p pipe -a -S socket -a -d dir -a -f regular -a ! -p missing -a ! -S denied -a -t 0")]
     [InlineData("[ -b block -a -e block -a ! -f block -a -c char -a -p pipe -a -S socket -a -d dir -a -f regular -a ! -p missing -a ! -S denied -a -t 0 ]")]
-    [InlineData("[[ -b block && -e block && ! -f block && -c char && -p pipe && -S socket && -d dir && -f regular && ! -p missing && ! -S denied && -t 0 ]]")]
     public async Task FileTests_SpecialKindsShareDeduplicatedLookupsAndKeepDescriptorTestsSeparate(string script)
     {
         var state = new Eval(Parser.Parse(script));

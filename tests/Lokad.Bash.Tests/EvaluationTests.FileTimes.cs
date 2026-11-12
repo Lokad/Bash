@@ -9,7 +9,6 @@ public partial class EvaluationTests
 {
     [Theory]
     [InlineData("test -r new -a old -ot new -a new -nt ./old -a ! old -nt new -a ! new -ot old -a ! -t invalid -a ! old -nt '\r' -a -w old")]
-    [InlineData("[[ -r new && old -ot new && new -nt ./old && ! old -nt new && ! new -ot old && ! -t invalid && ! old -nt '\r' && -w old ]]")]
     public async Task FileTimeComparisons_BatchDistinctOperandsAndKeepAccessPredicatePositions(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -37,8 +36,8 @@ public partial class EvaluationTests
     [Fact]
     public async Task FileTimeComparisons_DeduplicatePreservedOperands()
     {
-        var state = new Eval(Parser.Parse("[[ -d dir && new -nt dir/../old && new -nt dir/../old"
-            + " && new -nt old/ && ! new/ -nt old && ! missing/../new -nt old ]]"));
+        var state = new Eval(Parser.Parse("test -d dir -a new -nt dir/../old -a new -nt dir/../old"
+            + " -a new -nt old/ -a ! new/ -nt old -a ! missing/../new -nt old"));
         var kinds = await NextPathKindsAsync(state);
         Assert.Equal("/dir", Assert.Single(kinds.Paths).Path);
         kinds.SetResult([PathKindResult(FilePathKind.Directory)]);
@@ -67,7 +66,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task FileTimeComparisons_MetadataFailuresDoNotInvalidateKindPredicates()
     {
-        var state = new Eval(Parser.Parse("[[ -f new && ! new -nt missing ]]"));
+        var state = new Eval(Parser.Parse("test -f new -a ! new -nt missing"));
         var kinds = await NextPathKindsAsync(state);
         Assert.Equal("/new", Assert.Single(kinds.Paths).Path);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
@@ -80,9 +79,9 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test new -nt dir/../old -o dir -nt missing", false)]
     [InlineData("[ new -nt dir/../old -a ! dir -nt missing ]", false)]
-    [InlineData("[[ new -nt dir/../old && ! dir -nt missing ]]", false)]
-    [InlineData("[[ -d dir && dir/../new -nt dir/../old && ! dir -nt missing ]]", false)]
-    [InlineData("[[ new -nt dir/../old || dir -nt missing ]]", true)]
+    [InlineData("test new -nt dir/../old -a ! dir -nt missing", false)]
+    [InlineData("test -d dir -a dir/../new -nt dir/../old -a ! dir -nt missing", false)]
+    [InlineData("test new -nt dir/../old -o dir -nt missing", true)]
     public async Task FileTimeComparisons_OperandFailuresDoNotInvalidateOtherPaths(
         string script, bool directoryLookupFails)
     {
@@ -171,7 +170,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task FileTimeComparisons_FailedLookupsDoNotDiscardSuccessfulComparisons()
     {
-        var state = new Eval(Parser.Parse("[[ ! new -nt denied && new -nt old && ! denied -ot old ]]"));
+        var state = new Eval(Parser.Parse("test ! new -nt denied -a new -nt old -a ! denied -ot old"));
         var operation = Assert.IsType<PathInfosOperation>(await NextStepAsync(state));
         Assert.Equal(new[] { "/new", "/denied", "/old" }, operation.Paths.Select(path => path.Path));
         operation.SetResult([TimeInfo(1), FilePathResolutionResult.Failure(new OperationError("unavailable\n")), TimeInfo(0)]);
@@ -208,7 +207,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task FileTimeComparisons_CancellationStopsBeforeHostPredicatesAndFollowingCommands()
     {
-        var state = new Eval(Parser.Parse("[[ new -nt old && -r new ]]; after=1"));
+        var state = new Eval(Parser.Parse("test new -nt old -a -r new; after=1"));
         using var cancellation = new CancellationTokenSource();
         var completion = state.EnsureRunning(cancellation.Token);
         var operation = Assert.IsType<PathInfosOperation>(await state.GetNextStep(CancellationToken.None));

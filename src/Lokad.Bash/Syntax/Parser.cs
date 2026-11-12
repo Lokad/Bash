@@ -393,7 +393,12 @@ public static class Parser
                     // Reserved words introduce syntax only at a command boundary.
                     if (!tokenizer.TryReadConditionalExpression(tokenizer.NextTokenCore(), out var expression))
                         return null;
-                    command = new ConditionalCommand(expression);
+                    if (!ConditionalParser.TryParse(expression, out var condition, out var conditionalError))
+                    {
+                        tokenizer.RecordError(conditionalError.Message, token.Source.End.Value + conditionalError.Offset);
+                        return null;
+                    }
+                    command = new ConditionalCommand(expression, condition);
                     break;
                 case TokenKind.OpenParen:
                     command = ParseSubshell(tokenizer);

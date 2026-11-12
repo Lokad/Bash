@@ -35,7 +35,6 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -e a -a -r a -a ! -w a -a -x a -a ! -N a -a -u a -a ! -g a -a ! -k a -a -O a -a -G a -a -G dir -a ! -O other -a ! -G unknown -a ! -O missing -a -t 0")]
     [InlineData("[ -e a -a -r a -a ! -w a -a -x a -a ! -N a -a -u a -a ! -g a -a ! -k a -a -O a -a -G a -a -G dir -a ! -O other -a ! -G unknown -a ! -O missing -a -t 0 ]")]
-    [InlineData("[[ -e a && -r a && ! -w a && -x a && ! -N a && -u a && ! -g a && ! -k a && -O a && -G a && -G dir && ! -O other && ! -G unknown && ! -O missing && -t 0 ]]")]
     public async Task OwnershipPredicates_ShareMetadataAndPreserveMixedResultPositions(string script)
     {
         var state = new Eval(Parser.Parse(script), options:
@@ -69,7 +68,7 @@ public partial class EvaluationTests
     [InlineData(OperationErrorKind.Unknown)]
     public async Task OwnershipPredicates_FailuresDoNotInvalidateKindsOrOtherMetadata(OperationErrorKind errorKind)
     {
-        var state = new Eval(Parser.Parse("[[ -e denied && ! denied -nt old && ! -O denied && ! -G denied && -O good && -G good ]]"));
+        var state = new Eval(Parser.Parse("test -e denied -a ! denied -nt old -a ! -O denied -a ! -G denied -a -O good -a -G good"));
         var kinds = await NextPathKindsAsync(state);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
         var metadata = await NextMetadataAsync(state);
@@ -85,7 +84,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task OwnershipPredicates_UnavailableMetadataIsFalse()
     {
-        var state = new Eval(Parser.Parse("[[ ! -O item && ! -G item ]]"));
+        var state = new Eval(Parser.Parse("test ! -O item -a ! -G item"));
         var metadata = await NextMetadataAsync(state);
         Assert.Single(metadata.Paths);
         metadata.SetResult([PathKindResult(FilePathKind.File)]);
@@ -113,7 +112,7 @@ public partial class EvaluationTests
     {
         foreach (var operand in new[] { new string('a', 4097), string.Concat(Enumerable.Repeat("a/../", 33)) + "item" })
         {
-            var state = new Eval(Parser.Parse($"[[ -O {operand} || -G {operand} ]]"));
+            var state = new Eval(Parser.Parse($"test -O {operand} -o -G {operand}"));
             Assert.Null(await NextStepAsync(state));
             Assert.Equal(1, state.LastExitCode);
         }
@@ -136,7 +135,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task OwnershipPredicates_FailedTraversalDoesNotInvalidateAnotherOperandForTheSamePath()
     {
-        var state = new Eval(Parser.Parse("[[ ! -O dir/../target && -G target ]]"));
+        var state = new Eval(Parser.Parse("test ! -O dir/../target -a -G target"));
         var metadata = await NextMetadataAsync(state);
         Assert.Equal(new[] { "/dir/../target", "/target" }, metadata.Paths.Select(path => path.Path));
         metadata.SetResult([FilePathResolutionResult.Failure(new OperationError("Permission denied\n")), OwnershipResult(FileOwnershipMatch.EffectiveGroup, FilePathKind.File)]);
@@ -165,7 +164,7 @@ public partial class EvaluationTests
     {
         var host = new TestOperationVisitor([]);
         host.EnqueuePathInfo(OwnershipResult(FileOwnershipMatch.EffectiveUser, FilePathKind.File).Info);
-        var state = new Eval(Parser.Parse("[[ -O item && ! -G item ]]"));
+        var state = new Eval(Parser.Parse("test -O item -a ! -G item"));
 
         await new Engine().RunAsync(state, host, CancellationToken.None);
 

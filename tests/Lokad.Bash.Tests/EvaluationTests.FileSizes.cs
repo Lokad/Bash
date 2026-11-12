@@ -10,7 +10,6 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -s same -a -f same -a -r same -a -s same -a ! -s empty -a ! -s missing -a ! -s '\r' -a -w same")]
     [InlineData("[ -s same -a -f same -a -r same -a -s same -a ! -s empty -a ! -s missing -a ! -s '\r' -a -w same ]")]
-    [InlineData("[[ -s same && -f same && -r same && -s same && ! -s empty && ! -s missing && ! -s '\r' && -w same ]]")]
     public async Task NonEmptyPredicates_BatchDistinctPathsAndKeepResultPositions(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -52,7 +51,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task NonEmptyPredicates_SizeFailuresDoNotInvalidateOtherPredicates()
     {
-        var state = new Eval(Parser.Parse("[[ -f failed && ! -s failed && failed -nt old && -N failed && ! -u failed && -s good ]]"));
+        var state = new Eval(Parser.Parse("test -f failed -a ! -s failed -a failed -nt old -a -N failed -a ! -u failed -a -s good"));
         var kinds = await NextPathKindsAsync(state);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
         var metadata = await NextMetadataAsync(state);
@@ -69,7 +68,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task NonEmptyPredicates_PreserveTraversalInTheSizeRequest()
     {
-        var state = new Eval(Parser.Parse("[[ -s dir/../file && -s dir/../file ]]"));
+        var state = new Eval(Parser.Parse("test -s dir/../file -a -s dir/../file"));
         var sizes = Assert.IsType<PathInfosOperation>(await NextStepAsync(state));
         Assert.Equal(FilePathInfoRequest.MetadataWithExactSize, sizes.Request);
         Assert.Equal("/dir/../file", Assert.Single(sizes.Paths).Path);
@@ -81,7 +80,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task NonEmptyPredicates_KeepRawOperandsDistinctWhenCanonicalPathsMatch()
     {
-        var state = new Eval(Parser.Parse("[[ ! -s file/ && -s file && ! -s missing/../file ]]"));
+        var state = new Eval(Parser.Parse("test ! -s file/ -a -s file -a ! -s missing/../file"));
         var sizes = Assert.IsType<PathInfosOperation>(await NextStepAsync(state));
         Assert.Equal(FilePathInfoRequest.MetadataWithExactSize, sizes.Request);
         Assert.Equal(new[] { "/file/", "/file", "/missing/../file" }, sizes.Paths.Select(path => path.Path));
@@ -129,8 +128,8 @@ public partial class EvaluationTests
 
     [Theory]
     [InlineData("[[ -s file ]]; after=1", FilePathInfoRequest.MetadataWithExactSize)]
-    [InlineData("[[ -s file && -r file ]]; after=1", FilePathInfoRequest.Metadata)]
-    [InlineData("[[ -s dir/../file && -r file ]]; after=1", FilePathInfoRequest.Metadata)]
+    [InlineData("test -s file -a -r file; after=1", FilePathInfoRequest.Metadata)]
+    [InlineData("test -s dir/../file -a -r file; after=1", FilePathInfoRequest.Metadata)]
     public async Task NonEmptyPredicates_CancellationStopsBeforeLaterOperations(string script, FilePathInfoRequest request)
     {
         var state = new Eval(Parser.Parse(script));

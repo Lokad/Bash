@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Parse conditional structure once, retain word quoting and expand only reached
+  operands in scope. `[[` supports byte-valued string/pattern tests and genuine
+  arithmetic comparisons, with GNU expansion order and short-circuit behavior.
+  File checks occur in reached order; quoted/nested `]]` and regex brackets no
+  longer close the command early. Regex dot includes LF.
+- Breaking API changes: remove the scope-free `ConditionalEvaluation` helper;
+  execute conditionals through `BashScript` or a parsed script and `Engine`.
+  `ConditionalCommand` is an immutable class with parsed structure and a read-only
+  `Expression`, rather than a positional record. Its source constructor validates
+  structure; `Parser.TryParse` reports syntax errors without throwing.
 - Preserve byte-valued `test`/`[` string operands. Apply argument-count precedence
   and strict signed decimal rules; malformed integers, missing `]` and syntax
   errors return status 2 with diagnostics. Share predicate metadata with `[[`.

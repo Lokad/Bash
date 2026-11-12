@@ -12,10 +12,11 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ConditionalEvaluationTestsEndToEnd
 {
     [Fact]
-    public async Task ConditionalEvaluation_EmptyExpressionIsFalse()
+    public async Task ConditionalEvaluation_EmptyExpressionIsASyntaxError()
     {
         var result = await RunConditionAsync(string.Empty);
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("syntax error", result.StdErr);
     }
 
     [Fact]
@@ -314,10 +315,11 @@ public sealed class ConditionalEvaluationTestsEndToEnd
         yield return ["-t"];
     }
 
-    private static Task<EndToEndHarness.ExecutionResult> RunConditionAsync(string expression)
+    private static async Task<EndToEndHarness.ExecutionResult> RunConditionAsync(string expression)
     {
         var tree = EndToEndHarness.BuildTree(["/dir"], [("/file", "content\n")]);
         var script = string.IsNullOrEmpty(expression) ? "[[ ]]" : $"[[ {expression} ]]";
-        return EndToEndHarness.RunScriptAsync(script, tree);
+        var result = await tree.RunAsync(script, CancellationToken.None);
+        return new(result.ExitCode, tree.StandardOutput.TextContent, tree.StandardError.TextContent, tree);
     }
 }

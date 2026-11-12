@@ -115,7 +115,7 @@ public sealed partial class Evaluation
                     return await FinalizeResultAsync(
                         EvaluationResult.FromExitCode(arithmeticResult is null or 0 ? 1 : 0), negated);
                 case ConditionalCommand conditionalCommand:
-                    return await EvaluateConditionalCommandAsync(conditionalCommand, negated).ConfigureAwait(false);
+                    return await EvaluateConditionalCommandAsync(conditionalCommand, scope, negated).ConfigureAwait(false);
                 case CaseCommand caseCommand:
                     return await EvaluateCaseAsync(caseCommand, scope, negated).ConfigureAwait(false);
                 case SimpleCommand simpleCommand:

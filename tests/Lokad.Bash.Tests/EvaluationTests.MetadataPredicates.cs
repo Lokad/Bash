@@ -71,7 +71,6 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -N same -a -w same -a -e same -a -r same -a -x same -a -t 0 -a -N same -a ! -N missing -a ! -r missing -a ! -w missing -a ! -x missing")]
     [InlineData("[ -N same -a -w same -a -e same -a -r same -a -x same -a -t 0 -a -N same -a ! -N missing -a ! -r missing -a ! -w missing -a ! -x missing ]")]
-    [InlineData("[[ -N same && -w same && -e same && -r same && -x same && -t 0 && -N same && ! -N missing && ! -r missing && ! -w missing && ! -x missing ]]")]
     public async Task MetadataPredicates_BatchDistinctPathsAndPreserveOtherPredicateResults(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -94,7 +93,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task MetadataPredicates_EvaluateAccessAndTimestampsIndependentlyWithinOneBatch()
     {
-        var state = new Eval(Parser.Parse("[[ -w writable && ! -r writable && ! -x writable && ! -N writable && -N modified && -r modified && -x modified && ! -w modified ]]"));
+        var state = new Eval(Parser.Parse("test -w writable -a ! -r writable -a ! -x writable -a ! -N writable -a -N modified -a -r modified -a -x modified -a ! -w modified"));
         var metadata = await NextMetadataAsync(state);
         Assert.Equal(new[] { "/writable", "/modified" }, metadata.Paths.Select(path => path.Path));
         metadata.SetResult([
@@ -114,7 +113,7 @@ public partial class EvaluationTests
     [InlineData(OperationErrorKind.Unknown)]
     public async Task MetadataPredicates_LookupFailuresDoNotInvalidateKindOrOtherMetadataResults(OperationErrorKind errorKind)
     {
-        var state = new Eval(Parser.Parse("[[ -e denied && ! denied -nt old && ! -N denied && ! -r denied && ! -w denied && ! -x denied && -N good && -r good && -w good && -x good ]]"));
+        var state = new Eval(Parser.Parse("test -e denied -a ! denied -nt old -a ! -N denied -a ! -r denied -a ! -w denied -a ! -x denied -a -N good -a -r good -a -w good -a -x good"));
         var kinds = await NextPathKindsAsync(state);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
         var metadata = await NextMetadataAsync(state);
@@ -183,10 +182,10 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("[[ ! -w file/ && -N file ]]")]
-    [InlineData("[[ -w file && ! -N file/ ]]")]
-    [InlineData("[[ ! -r file/ && -x file ]]")]
-    [InlineData("[[ -r file && ! -x file/ ]]")]
+    [InlineData("test ! -w file/ -a -N file")]
+    [InlineData("test -w file -a ! -N file/")]
+    [InlineData("test ! -r file/ -a -x file")]
+    [InlineData("test -r file -a ! -x file/")]
     public async Task MetadataPredicates_InvalidTraversalDoesNotInvalidateAnotherOperandForTheSamePath(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -231,7 +230,7 @@ public partial class EvaluationTests
     {
         var failure = new InvalidOperationException("provider failure");
         var host = new MockFileSystem { BeforeGetPathInfo = _ => throw failure };
-        var state = new Eval(Parser.Parse("[[ -N file && -r file && -w file && -x file ]]; after=1"));
+        var state = new Eval(Parser.Parse("test -N file -a -r file -a -w file -a -x file; after=1"));
 
         Assert.Same(failure, await Record.ExceptionAsync(() => new Engine().RunAsync(state, host, CancellationToken.None)));
         Assert.False(state.Variables.ContainsKey("after"));

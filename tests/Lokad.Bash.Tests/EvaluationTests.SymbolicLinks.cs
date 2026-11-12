@@ -101,7 +101,6 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -L link -a -h link -a -f link -a -L dangling -a ! -e dangling -a ! -h absent -a ! -L denied -a -e good")]
     [InlineData("[ -L link -a -h link -a -f link -a -L dangling -a ! -e dangling -a ! -h absent -a ! -L denied -a -e good ]")]
-    [InlineData("[[ -L link && -h link && -f link && -L dangling && ! -e dangling && ! -h absent && ! -L denied && -e good ]]")]
     public async Task SymbolicLinks_BatchByPathAndPolicyAndDistinguishDanglingLinks(string script)
     {
         var state = new Eval(Parser.Parse(script));

@@ -37,7 +37,6 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -e a -a ! -N a -a -r a -a ! -w a -a -x a -a -u a -a -g a -a -k dir -a ! -u unset -a ! -k unknown -a ! -g missing -a -t 0")]
     [InlineData("[ -e a -a ! -N a -a -r a -a ! -w a -a -x a -a -u a -a -g a -a -k dir -a ! -u unset -a ! -k unknown -a ! -g missing -a -t 0 ]")]
-    [InlineData("[[ -e a && ! -N a && -r a && ! -w a && -x a && -u a && -g a && -k dir && ! -u unset && ! -k unknown && ! -g missing && -t 0 ]]")]
     public async Task SpecialModePredicates_ShareMetadataAndPreserveMixedResultPositions(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -67,7 +66,7 @@ public partial class EvaluationTests
     [InlineData(OperationErrorKind.Unknown)]
     public async Task SpecialModePredicates_FailuresDoNotInvalidateKindsOrOtherMetadata(OperationErrorKind errorKind)
     {
-        var state = new Eval(Parser.Parse("[[ -e denied && ! denied -nt old && ! -N denied && ! -u denied && ! -g denied && ! -k denied && -u good && -g good && -k good ]]"));
+        var state = new Eval(Parser.Parse("test -e denied -a ! denied -nt old -a ! -N denied -a ! -u denied -a ! -g denied -a ! -k denied -a -u good -a -g good -a -k good"));
         var kinds = await NextPathKindsAsync(state);
         kinds.SetResult([PathKindResult(FilePathKind.File)]);
         var metadata = await NextMetadataAsync(state);
@@ -84,7 +83,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task SpecialModePredicates_UnavailableMetadataIsFalse()
     {
-        var state = new Eval(Parser.Parse("[[ ! -u item && ! -g item && ! -k item ]]"));
+        var state = new Eval(Parser.Parse("test ! -u item -a ! -g item -a ! -k item"));
         var metadata = await NextMetadataAsync(state);
         Assert.Single(metadata.Paths);
         metadata.SetResult([PathKindResult(FilePathKind.File)]);
@@ -124,7 +123,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task SpecialModePredicates_FailedTraversalDoesNotInvalidateAnotherOperandForTheSamePath()
     {
-        var state = new Eval(Parser.Parse("[[ ! -u dir/../target && -g target ]]"));
+        var state = new Eval(Parser.Parse("test ! -u dir/../target -a -g target"));
         var metadata = await NextMetadataAsync(state);
         Assert.Equal(new[] { "/dir/../target", "/target" }, metadata.Paths.Select(path => path.Path));
         metadata.SetResult([FilePathResolutionResult.Failure(new OperationError("Permission denied\n")), SpecialModeResult(FileSpecialModeBits.SetGroupId, FilePathKind.File)]);
@@ -153,7 +152,7 @@ public partial class EvaluationTests
     {
         var host = new TestOperationVisitor([]);
         host.EnqueuePathInfo(SpecialModeResult(FileSpecialModeBits.SetUserId | FileSpecialModeBits.Sticky, FilePathKind.File).Info);
-        var state = new Eval(Parser.Parse("[[ -u item && -k item && ! -g item ]]"));
+        var state = new Eval(Parser.Parse("test -u item -a -k item -a ! -g item"));
 
         await new Engine().RunAsync(state, host, CancellationToken.None);
 

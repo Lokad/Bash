@@ -5,6 +5,13 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Conditional commands retain parsed operators and operand words on the script.
+Execution expands reached operands against the current scope, preserving quotation
+and bytes; short-circuited operands cause no expansion or host work. Reached file
+predicates use the existing file-operation path in source order. The distinct
+`test`/`[` grammar consumes completed byte arguments and shares predicate metadata
+and filesystem execution with `[[`.
+
 Errexit is shell state. Execution context records whether a status is tested and
 carries that context through functions, groups, source/eval and child evaluations.
 Compound commands preserve the tested origin of their final status; simple

@@ -641,11 +641,15 @@ internal sealed class Tokenizer
         expression = default;
         var span = _input.AsSpan();
         var start = opening.Source.End.Value;
-        var index = start;
-        while (index < span.Length)
+        var cursor = new ShellSourceCursor(_input, start);
+        var wordStart = true;
+        while (!cursor.IsAtEnd)
         {
-            if (span[index] == (byte)']'
-                && ShellSourceCursor.TryMatchLogicalText(span, index, "]]", out var end))
+            var index = cursor.Position;
+            if (!cursor.IsQuoted && wordStart && span[index] == (byte)']'
+                && ShellSourceCursor.TryMatchLogicalText(span, index, "]]", out var end)
+                && (end == span.Length || span[end] is (byte)' ' or (byte)'\t' or (byte)'\n'
+                    or (byte)';' or (byte)'&' or (byte)'|' or (byte)'(' or (byte)')' or (byte)'<' or (byte)'>'))
             {
                 var source = _input.Slice(start, index - start);
                 Position = end;
@@ -653,7 +657,14 @@ internal sealed class Tokenizer
                 return Error == null;
             }
 
-            index++;
+            if (!cursor.IsQuoted)
+                wordStart = span[index] is (byte)' ' or (byte)'\t' or (byte)'\n'
+                    or (byte)'(' or (byte)')' or (byte)'&' or (byte)'|';
+            if (cursor.TryConsumeQuoteOrEscape())
+                continue;
+            if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
+                continue;
+            cursor.Advance();
         }
 
         RecordError("Unterminated conditional command.", opening.Source.Start.Value);

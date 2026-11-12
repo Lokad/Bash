@@ -1,4 +1,4 @@
-using Lokad.Bash.Evaluation;
+using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
 
@@ -9,9 +9,10 @@ public sealed class ConditionalRegexTimeoutTests
     {
         var input = new string('a', 1000) + "!" + new string('a', 1000);
         const string pattern = "^[a-z]*[a-y]*[a-x]*[a-w]*[a-v]*$";
-        Assert.False(ConditionalEvaluation.Parse("a =~ " + pattern).HasParseError);
-        var result = await Task.Run(() => ConditionalEvaluation.Parse("\"" + input + "\" =~ " + pattern))
+        await using var host = new TestHost();
+        Assert.Equal(0, (await host.RunAsync("[[ a =~ " + pattern + " ]]", CancellationToken.None)).ExitCode);
+        var result = await Task.Run(() => host.RunAsync("[[ \"" + input + "\" =~ " + pattern + " ]]", CancellationToken.None))
             .WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.True(result.HasParseError);
+        Assert.Equal(2, result.ExitCode);
     }
 }
