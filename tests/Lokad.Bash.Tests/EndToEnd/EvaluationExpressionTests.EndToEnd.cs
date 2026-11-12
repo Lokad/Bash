@@ -166,13 +166,11 @@ public sealed class EvaluationExpressionTestsEndToEnd
     public async Task Evaluation_BracketBuiltin_MissingClosingBracketReturnsUsageError()
     {
         // This test verifies that "[" requires a closing "]" and returns a usage error when missing.
-        // The script "[ foo" must emit no output and return exit code 2.
-        // If the missing bracket is ignored, the exit code would be 0 or 1.
         var script = @"[ foo";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("[: missing `]'\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 

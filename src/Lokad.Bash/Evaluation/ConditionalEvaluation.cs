@@ -6,6 +6,7 @@ using System.Threading;
 using Lokad.Bash.Helpers;
 
 using Lokad.Bash.Files;
+using static Lokad.Bash.Evaluation.ShellPredicates;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -20,6 +21,7 @@ public sealed class ConditionalEvaluation
     /// <summary> Stores the conditional expression to tokenize and parse. </summary>
     private readonly string _expression;
     private readonly CancellationToken _cancellationToken;
+    private readonly bool _errexitEnabled;
 
     /// <summary> Stores the parsed expression tree after parsing succeeds; null when parsing fails. </summary>
     private TestNode? _root;
@@ -32,10 +34,11 @@ public sealed class ConditionalEvaluation
     /// <summary>
     /// Initializes the evaluation with the raw expression to tokenize and parse.
     /// </summary>
-    private ConditionalEvaluation(string expression, CancellationToken cancellationToken)
+    private ConditionalEvaluation(string expression, CancellationToken cancellationToken, bool errexitEnabled)
     {
         _expression = expression;
         _cancellationToken = cancellationToken;
+        _errexitEnabled = errexitEnabled;
     }
 
     /// <summary>
@@ -48,11 +51,11 @@ public sealed class ConditionalEvaluation
     /// </summary>
     /// <param name="expression">The conditional expression.</param>
     /// <returns>The parsed <see cref="ConditionalEvaluation"/>.</returns>
-    public static ConditionalEvaluation Parse(string expression) => Parse(expression, CancellationToken.None);
+    public static ConditionalEvaluation Parse(string expression) => Parse(expression, CancellationToken.None, false);
 
-    internal static ConditionalEvaluation Parse(string expression, CancellationToken cancellationToken)
+    internal static ConditionalEvaluation Parse(string expression, CancellationToken cancellationToken, bool errexitEnabled)
     {
-        var evaluation = new ConditionalEvaluation(expression, cancellationToken);
+        var evaluation = new ConditionalEvaluation(expression, cancellationToken, errexitEnabled);
         evaluation.ParseExpression();
         return evaluation;
     }
@@ -109,7 +112,7 @@ public sealed class ConditionalEvaluation
             return;
         }
 
-        var parser = new Parser(tokens, _cancellationToken);
+        var parser = new Parser(tokens, _cancellationToken, _errexitEnabled);
         _root = parser.ParseExpression(_fileTests);
         if (parser.HasError || !parser.AtEnd)
         {
@@ -305,7 +308,7 @@ public sealed class ConditionalEvaluation
     }
 
     /// <summary> Parses the token stream into a boolean expression tree. </summary>
-    private sealed class Parser(IReadOnlyList<ConditionalToken> tokens, CancellationToken cancellationToken)
+    private sealed class Parser(IReadOnlyList<ConditionalToken> tokens, CancellationToken cancellationToken, bool errexitEnabled)
     {
         /// <summary> Stores the token stream produced by tokenization. </summary>
         private readonly IReadOnlyList<ConditionalToken> _tokens = tokens;
@@ -412,7 +415,7 @@ public sealed class ConditionalEvaluation
                     return CreateFileTestNode(fileTests, new UnresolvedFileTest(unaryPredicate.FileKind, operand.Content, null));
                 }
 
-                return new ConstantNode(EvaluateUnary(unaryPredicate.Operator, operand.Content));
+                return new ConstantNode(EvaluateUnary(unaryPredicate.Operator, operand.Content, errexitEnabled));
             }
 
             var left = NextToken();
@@ -529,265 +532,19 @@ public sealed class ConditionalEvaluation
         /// <summary> Returns true when the token is a closing parenthesis. </summary>
         private static bool IsCloseParenthesis(ReadOnlySpan<char> token) => token is [')'];
 
-        /// <summary>
-        /// Parses a unary predicate token into its evaluation metadata.
-        /// </summary>
-        private static bool TryGetUnaryPredicate(ReadOnlySpan<char> token, out UnaryPredicate predicate)
-        {
-            if (token is ['-', 'n'])
-            {
-                predicate = new UnaryPredicate(UnaryPredicateKind.StringLengthNonZero, false, default);
-                return true;
-            }
 
-            if (token is ['-', 'z'])
-            {
-                predicate = new UnaryPredicate(UnaryPredicateKind.StringLengthZero, false, default);
-                return true;
-            }
-
-            if (TryGetFilePredicate(token, out var fileKind))
-            {
-                predicate = new UnaryPredicate(UnaryPredicateKind.FilePredicate, true, fileKind);
-                return true;
-            }
-
-            predicate = default;
-            return false;
-        }
-
-        /// <summary>
-        /// Parses a binary predicate token into its evaluation metadata.
-        /// </summary>
-        private static bool TryGetBinaryPredicate(ReadOnlySpan<char> token, out BinaryPredicate predicate)
-        {
-            if (token is ['-', 'e', 'q'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericEqual, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'n', 'e'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericNotEqual, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'l', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericLess, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'l', 'e'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericLessOrEqual, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'g', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericGreater, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'g', 'e'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericGreaterOrEqual, false, default);
-                return true;
-            }
-
-            if (token is ['='])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringEqual, false, default);
-                return true;
-            }
-
-            if (token is ['=', '='])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringEqual, false, default);
-                return true;
-            }
-
-            if (token is ['!', '='])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringNotEqual, false, default);
-                return true;
-            }
-
-            if (token is ['<'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringLess, false, default);
-                return true;
-            }
-
-            if (token is ['>'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringGreater, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'e', 'f'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.FilePredicate, true, FilePredicateKind.SameFile);
-                return true;
-            }
-
-            if (token is ['-', 'n', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.FilePredicate, true, FilePredicateKind.NewerThan);
-                return true;
-            }
-
-            if (token is ['-', 'o', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.FilePredicate, true, FilePredicateKind.OlderThan);
-                return true;
-            }
-
-            if (token is ['=', '~'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.RegexMatch, false, default);
-                return true;
-            }
-
-            predicate = default;
-            return false;
-        }
-
-        /// <summary>
-        /// Parses a file predicate token into a <see cref="FilePredicateKind"/> value.
-        /// </summary>
-        private static bool TryGetFilePredicate(ReadOnlySpan<char> token, out FilePredicateKind fileKind)
-        {
-            if (token is ['-', 'a'] || token is ['-', 'e'])
-            {
-                fileKind = FilePredicateKind.Exists;
-                return true;
-            }
-
-            if (token is ['-', 'b'])
-            {
-                fileKind = FilePredicateKind.BlockDevice;
-                return true;
-            }
-
-            if (token is ['-', 'c'])
-            {
-                fileKind = FilePredicateKind.CharacterDevice;
-                return true;
-            }
-
-            if (token is ['-', 'd'])
-            {
-                fileKind = FilePredicateKind.Directory;
-                return true;
-            }
-
-            if (token is ['-', 'f'])
-            {
-                fileKind = FilePredicateKind.File;
-                return true;
-            }
-
-            if (token is ['-', 'g'])
-            {
-                fileKind = FilePredicateKind.SetGroupId;
-                return true;
-            }
-
-            if (token is ['-', 'h'] || token is ['-', 'L'])
-            {
-                fileKind = FilePredicateKind.SymbolicLink;
-                return true;
-            }
-
-            if (token is ['-', 'k'])
-            {
-                fileKind = FilePredicateKind.Sticky;
-                return true;
-            }
-
-            if (token is ['-', 'p'])
-            {
-                fileKind = FilePredicateKind.Fifo;
-                return true;
-            }
-
-            if (token is ['-', 'r'])
-            {
-                fileKind = FilePredicateKind.Readable;
-                return true;
-            }
-
-            if (token is ['-', 's'])
-            {
-                fileKind = FilePredicateKind.NonEmpty;
-                return true;
-            }
-
-            if (token is ['-', 't'])
-            {
-                fileKind = FilePredicateKind.Terminal;
-                return true;
-            }
-
-            if (token is ['-', 'u'])
-            {
-                fileKind = FilePredicateKind.SetUserId;
-                return true;
-            }
-
-            if (token is ['-', 'w'])
-            {
-                fileKind = FilePredicateKind.Writable;
-                return true;
-            }
-
-            if (token is ['-', 'x'])
-            {
-                fileKind = FilePredicateKind.Executable;
-                return true;
-            }
-
-            if (token is ['-', 'G'])
-            {
-                fileKind = FilePredicateKind.OwnedByEffectiveGroup;
-                return true;
-            }
-
-            if (token is ['-', 'N'])
-            {
-                fileKind = FilePredicateKind.ModifiedSinceAccess;
-                return true;
-            }
-
-            if (token is ['-', 'O'])
-            {
-                fileKind = FilePredicateKind.OwnedByEffectiveUser;
-                return true;
-            }
-
-            if (token is ['-', 'S'])
-            {
-                fileKind = FilePredicateKind.Socket;
-                return true;
-            }
-
-            fileKind = default;
-            return false;
-        }
     }
 
     /// <summary>
     /// Evaluates a unary predicate that does not require filesystem access.
     /// </summary>
-    private static bool EvaluateUnary(UnaryPredicateKind kind, string operand)
+    private static bool EvaluateUnary(UnaryPredicateKind kind, string operand, bool errexitEnabled)
     {
         return kind switch
         {
             UnaryPredicateKind.StringLengthNonZero => !string.IsNullOrEmpty(operand),
             UnaryPredicateKind.StringLengthZero => string.IsNullOrEmpty(operand),
+            UnaryPredicateKind.OptionEnabled => IsOptionEnabled(Utf8Text.Encode(operand).Span, errexitEnabled),
             _ => false
         };
     }
@@ -1189,16 +946,6 @@ public sealed class ConditionalEvaluation
         }
     }
 
-    /// <summary> Captures a parsed unary predicate and whether it is a file test. </summary>
-    private readonly struct UnaryPredicate(UnaryPredicateKind @operator, bool isFilePredicate, FilePredicateKind fileKind)
-    {
-        public UnaryPredicateKind Operator { get; } = @operator;
-
-        public bool IsFilePredicate { get; } = isFilePredicate;
-
-        public FilePredicateKind FileKind { get; } = fileKind;
-    }
-
     /// <summary> Represents a token produced by conditional expression tokenization. </summary>
     private readonly struct ConditionalToken(string content, string literalMask)
     {
@@ -1211,39 +958,6 @@ public sealed class ConditionalEvaluation
     {
         public bool Result { get; } = result;
         public bool HasError { get; } = hasError;
-    }
-
-    /// <summary> Captures a parsed binary predicate and whether it is a file test. </summary>
-    private readonly struct BinaryPredicate(BinaryPredicateKind @operator, bool isFilePredicate, FilePredicateKind fileKind)
-    {
-        public BinaryPredicateKind Operator { get; } = @operator;
-        public bool IsFilePredicate { get; } = isFilePredicate;
-        public FilePredicateKind FileKind { get; } = fileKind;
-    }
-
-    /// <summary> Enumerates unary predicate kinds recognized in conditional expressions. </summary>
-    private enum UnaryPredicateKind
-    {
-        StringLengthNonZero,
-        StringLengthZero,
-        FilePredicate
-    }
-
-    /// <summary> Enumerates binary predicate kinds recognized in conditional expressions. </summary>
-    private enum BinaryPredicateKind
-    {
-        NumericEqual,
-        NumericNotEqual,
-        NumericLess,
-        NumericLessOrEqual,
-        NumericGreater,
-        NumericGreaterOrEqual,
-        StringEqual,
-        StringNotEqual,
-        StringLess,
-        StringGreater,
-        RegexMatch,
-        FilePredicate
     }
 
     /// <summary> Enumerates unary logical operators in conditional expressions. </summary>

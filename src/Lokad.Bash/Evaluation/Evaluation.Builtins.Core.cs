@@ -24,30 +24,41 @@ public sealed partial class Evaluation
     /// </returns>
     private async Task<EvaluationResult> EvaluateBuiltinTestAsync(
         string commandName,
-        IReadOnlyList<string> words,
+        IReadOnlyList<ShellValue> words,
         bool negated)
     {
         var argumentLimit = words.Count;
         if (commandName == "[")
         {
-            if (words.Count < 2)
+            if (words.Count < 2 || !words[^1].Bytes.Span.SequenceEqual("]"u8))
+            {
+                await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("missing `]'"))
+                    .ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
-
-            var closing = words[^1];
-
-            if (closing != "]")
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
+            }
 
             argumentLimit--;
         }
 
-        var arguments = new List<string>(Math.Max(0, argumentLimit - 1));
+        Memory.Charge(checked(128L * argumentLimit));
+        var arguments = new List<ShellValue>(Math.Max(0, argumentLimit - 1));
         for (var index = 1; index < argumentLimit; index++)
             arguments.Add(words[index]);
 
-        var evaluation = TestEvaluation.Parse(arguments);
+        var evaluation = TestEvaluation.ParseValues(arguments, _cancellationToken, _state.ErrexitEnabled, Memory);
         if (evaluation.HasParseError)
+        {
+            using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
+            if (evaluation.ErrorOperand is { } errorOperand)
+            {
+                diagnostic.Append(errorOperand.Bytes);
+                diagnostic.Append(": "u8);
+            }
+            diagnostic.Append(Utf8Text.Encode(evaluation.ErrorMessage));
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromBytes(diagnostic.ToMemory()))
+                .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
+        }
 
         var fileTests = evaluation.CollectFileTests(out var result);
         if (result.HasValue)

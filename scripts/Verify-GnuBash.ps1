@@ -103,9 +103,18 @@ $results = foreach ($sample in $catalog.cases) {
         [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($fixturePath))
         [System.IO.File]::WriteAllBytes($fixturePath, $content)
     }
-    $arguments = @($catalog.options) + @('-c', $sample.script)
+    $arguments = @($catalog.options) + @('-c', $sample.script, 'lokad-conformance')
     $actual = Invoke-Reference -Arguments $arguments -Locale $sample.locale -InputBytes ([Convert]::FromHexString($sample.stdinHex)) -WorkingDirectory $fixtureRoot
-    $passed = $actual.exitCode -eq $sample.exitCode -and $actual.stdoutHex -eq $sample.stdoutHex -and $actual.stderrHex -eq $sample.stderrHex
+    $comparedStderr = $actual.stderrHex
+    if ($sample.stderrNormalization) {
+        if ($sample.stderrNormalization -ne 'bash-command-location') { throw 'Unknown diagnostic normalization.' }
+        # Latin-1 maps every byte reversibly, including malformed UTF-8 diagnostic operands.
+        $raw = [System.Text.Encoding]::Latin1.GetString([Convert]::FromHexString($actual.stderrHex))
+        $normalized = [regex]::Replace($raw, '(?m)^lokad-conformance: line [1-9][0-9]*: ', '')
+        $comparedStderr = [Convert]::ToHexString([System.Text.Encoding]::Latin1.GetBytes($normalized)).ToLowerInvariant()
+        $actual | Add-Member -NotePropertyName normalizedStderrHex -NotePropertyValue $comparedStderr
+    }
+    $passed = $actual.exitCode -eq $sample.exitCode -and $actual.stdoutHex -eq $sample.stdoutHex -and $comparedStderr -eq $sample.stderrHex
     foreach ($effect in $sample.fileEffects) {
         if ([System.IO.Path]::IsPathRooted($effect.path) -or '..' -in ($effect.path -split '/')) { throw 'Unsafe expected effect path.' }
         $effectPath = [System.IO.Path]::GetFullPath((Join-Path $fixtureRoot $effect.path))

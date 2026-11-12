@@ -5,14 +5,25 @@ namespace Lokad.Bash.Tests;
 
 public sealed class TestEvaluationTests
 {
+    [Theory]
+    [InlineData("-eq\0")]
+    [InlineData("=\0")]
+    [InlineData("-\u00e9")]
+    public void OperatorRecognitionRequiresExactAscii(string op)
+    {
+        Assert.True(TestEvaluation.Parse(["1", op, "1"]).HasParseError);
+    }
+
     [Fact]
-    public void TestEvaluation_ParseError_MissingOperand()
+    public void TestEvaluation_SingleOperatorLookingArgumentIsANonemptyString()
     {
         var evaluation = TestEvaluation.Parse([
             Utf8("-z")
         ]);
 
-        Assert.True(evaluation.HasParseError);
+        Assert.False(evaluation.HasParseError);
+        evaluation.CollectFileTests(out var result);
+        Assert.True(result);
     }
 
     [Fact]

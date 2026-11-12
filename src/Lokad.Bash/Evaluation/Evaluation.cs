@@ -733,7 +733,7 @@ public sealed partial class Evaluation : IFileTester
                 ShellValue.FromText("conditional expression must be valid UTF-8")).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
-        var evaluation = ConditionalEvaluation.Parse(expression, _cancellationToken);
+        var evaluation = ConditionalEvaluation.Parse(expression, _cancellationToken, _state.ErrexitEnabled);
         if (evaluation.HasParseError)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
 
@@ -835,7 +835,7 @@ public sealed partial class Evaluation : IFileTester
                     Kind: BuiltinKind.Printf or BuiltinKind.Echo or BuiltinKind.Hash or BuiltinKind.Type or BuiltinKind.Help or BuiltinKind.Export
                         or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
                         or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
-                        or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap
+                        or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
                 })
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
@@ -1098,6 +1098,7 @@ public sealed partial class Evaluation : IFileTester
 
                 var builtinResult = evaluatorBuiltin.Kind switch
                 {
+                    BuiltinKind.Test => await EvaluateBuiltinTestAsync(commandName, byteOperands, false).ConfigureAwait(false),
                     BuiltinKind.Echo => await EvaluateBuiltinEchoAsync(echoContent, false).ConfigureAwait(false),
                     BuiltinKind.Type => await EvaluateBuiltinTypeAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Help => await AwaitWordExpansionAsync(EvaluateBuiltinHelpAsync(byteOperands, false)).ConfigureAwait(false),
@@ -2302,9 +2303,6 @@ public sealed partial class Evaluation : IFileTester
         var function = scope.Context.FunctionContext;
         switch (builtin)
         {
-            case BuiltinKind.Test:
-                return await EvaluateBuiltinTestAsync(commandName, words, negated)
-                    .ConfigureAwait(false);
             case BuiltinKind.Pwd:
                 return await EvaluateBuiltinPwdAsync(negated).ConfigureAwait(false);
             case BuiltinKind.Cd:

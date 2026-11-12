@@ -1,866 +1,302 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Lokad.Bash.Helpers;
-
-using Lokad.Bash.Files;
+using Lokad.Bash.Syntax;
+using static Lokad.Bash.Evaluation.ShellPredicates;
 
 namespace Lokad.Bash.Evaluation;
 
-/// <summary>
-/// Parses and evaluates test/[ arguments into a boolean result.
-/// </summary>
-/// <remarks>
-/// Supports the conditional expression primaries documented in docs/COMPATIBILITY.md.
-/// </remarks>
+/// <summary>Parses test/[ arguments with argument-count rules and strict decimal integers.</summary>
 public sealed class TestEvaluation
 {
-    /// <summary> Stores the test arguments to parse. </summary>
-    private readonly IReadOnlyList<string> _arguments;
-    /// <summary> Stores the parsed expression tree after parsing succeeds; null when parsing fails. </summary>
-    private TestNode? _root;
-    /// <summary>
-    /// Stores the expression tree with file predicates replaced; set during collection and reused for completion.
-    /// </summary>
-    private TestNode? _rootWithFiles;
+    private readonly IReadOnlyList<ShellValue> _arguments;
+    private readonly CancellationToken _cancellationToken;
+    private readonly bool _errexitEnabled;
+    // Standalone parsing has no execution owner; the evaluator supplies its command workspace.
+    private readonly EvaluationMemory? _memory;
+    private readonly List<Step> _steps = [];
+    private readonly List<UnresolvedFileTest> _files = [];
+    private int _index;
+    private int _end;
 
-    /// <summary>
-    /// Initializes a new instance with the provided test arguments.
-    /// </summary>
-    private TestEvaluation(IReadOnlyList<string> arguments)
+    private TestEvaluation(IReadOnlyList<ShellValue> arguments, CancellationToken cancellationToken, bool errexitEnabled, EvaluationMemory? memory)
     {
-        _arguments = arguments ?? throw new ArgumentNullException(nameof(arguments));
+        _arguments = arguments;
+        _cancellationToken = cancellationToken;
+        _errexitEnabled = errexitEnabled;
+        _memory = memory;
+        _end = arguments.Count;
+        ParseArguments();
+        if (!HasParseError && _index != _end)
+            Fail(null, "too many arguments");
     }
 
-    /// <summary>
-    /// Gets whether parsing failed.
-    /// </summary>
-    public bool HasParseError { get; private set; }
+    /// <summary>Gets whether arguments contain a syntax, integer or text-boundary error.</summary>
+    public bool HasParseError => ErrorMessage.Length != 0;
+    internal ShellValue? ErrorOperand { get; private set; }
+    internal string ErrorMessage { get; private set; } = string.Empty;
 
-    /// <summary>
-    /// Parses a test argument list into an evaluatable instance.
-    /// </summary>
-    /// <param name="arguments">The arguments to test.</param>
-    /// <returns>The parsed <see cref="TestEvaluation"/>.</returns>
+    /// <summary>Encodes text arguments and parses them through the byte-valued test grammar.</summary>
     public static TestEvaluation Parse(IReadOnlyList<string> arguments)
     {
-        var evaluation = new TestEvaluation(arguments);
-        evaluation.ParseArguments();
-        return evaluation;
+        ArgumentNullException.ThrowIfNull(arguments);
+        var values = new ShellValue[arguments.Count];
+        for (var index = 0; index < arguments.Count; index++)
+            values[index] = ShellValue.FromText(arguments[index]);
+        return new TestEvaluation(values, CancellationToken.None, false, null);
     }
 
-    /// <summary>
-    /// Evaluates non-filesystem predicates and collects filesystem tests.
-    /// </summary>
-    /// <param name="result">The result when no filesystem tests are required.</param>
-    /// <returns>The filesystem tests to evaluate.</returns>
+    internal static TestEvaluation ParseValues(IReadOnlyList<ShellValue> arguments, CancellationToken cancellationToken,
+        bool errexitEnabled, EvaluationMemory memory) => new(arguments, cancellationToken, errexitEnabled, memory);
+
+    /// <summary>Collects host predicates; pure predicates are already validated during parsing.</summary>
     internal IReadOnlyList<UnresolvedFileTest> CollectFileTests(out bool? result)
     {
-        result = null;
-        if (HasParseError || _root == null)
-        {
-            return [];
-        }
-
-        var fileTests = new List<UnresolvedFileTest>();
-        _rootWithFiles = ReplaceFileTests(_root, fileTests);
-        if (fileTests.Count == 0)
-        {
-            result = _rootWithFiles.Evaluate([]);
-            return [];
-        }
-
-        return fileTests;
+        result = !HasParseError && _files.Count == 0 ? CompleteFileTests([]) : null;
+        return HasParseError ? [] : _files;
     }
 
-    /// <summary>
-    /// Completes evaluation using filesystem predicate results.
-    /// </summary>
-    /// <param name="fileResults">The filesystem predicate results.</param>
-    /// <returns>The final test result.</returns>
+    /// <summary>Completes the parsed expression using filesystem predicate results in collection order.</summary>
     public bool CompleteFileTests(IReadOnlyList<bool> fileResults)
     {
-        if (HasParseError || _rootWithFiles == null)
-        {
+        ArgumentNullException.ThrowIfNull(fileResults);
+        if (HasParseError)
             return false;
-        }
-
-        if (fileResults == null)
+        var values = new bool[_steps.Count];
+        var count = 0;
+        foreach (var step in _steps)
         {
-            throw new ArgumentNullException(nameof(fileResults));
+            _cancellationToken.ThrowIfCancellationRequested();
+            switch (step.Kind)
+            {
+                case StepKind.Constant: values[count++] = step.Value != 0; break;
+                case StepKind.File: values[count++] = fileResults[step.Value]; break;
+                case StepKind.Not: values[count - 1] = !values[count - 1]; break;
+                case StepKind.And:
+                case StepKind.Or:
+                    var right = values[--count];
+                    values[count - 1] = step.Kind == StepKind.And
+                        ? values[count - 1] && right : values[count - 1] || right;
+                    break;
+            }
         }
-
-        return _rootWithFiles.Evaluate(fileResults);
+        return count == 1 && values[0];
     }
 
-    /// <summary>
-    /// Parses arguments into an expression tree and records parse errors.
-    /// </summary>
+    // The zero-to-four argument rules precede the ordinary -a/-o expression grammar.
     private void ParseArguments()
     {
-        if (_arguments.Count == 0)
+        _cancellationToken.ThrowIfCancellationRequested();
+        switch (_end - _index)
         {
-            _root = new ConstantNode(false);
+            case 0: Constant(false); return;
+            case 1: Constant(!Next().IsEmpty); return;
+            case 2:
+                var first = Next();
+                if (Is(first, "!"u8))
+                    Constant(Next().IsEmpty);
+                else if (TryGetUnaryPredicate(first.Bytes.Span, out var unary))
+                    Unary(unary, Next());
+                else
+                    Fail(first, "unary operator expected");
+                return;
+            case 3:
+                var op = _arguments[_index + 1];
+                if (TryTestBinary(op, out var binary))
+                {
+                    var left = Next();
+                    _index++;
+                    Binary(binary, left, Next());
+                    return;
+                }
+                if (Is(op, "-a"u8) || Is(op, "-o"u8))
+                {
+                    var left = !Next().IsEmpty;
+                    _index++;
+                    var right = !Next().IsEmpty;
+                    Constant(Is(op, "-a"u8) ? left && right : left || right);
+                    return;
+                }
+                goto case 4;
+            case 4:
+                if (Is(_arguments[_index], "!"u8))
+                {
+                    _index++;
+                    ParseArguments();
+                    _steps.Add(new(StepKind.Not, 0));
+                    return;
+                }
+                if (Is(_arguments[_index], "("u8) && Is(_arguments[_end - 1], ")"u8))
+                {
+                    _index++;
+                    _end--;
+                    ParseArguments();
+                    _end++;
+                    _index++;
+                    return;
+                }
+                break;
+        }
+        ParseOr(0);
+    }
+
+    private void ParseOr(int depth)
+    {
+        ParseAnd(depth);
+        while (!HasParseError && Consume("-o"u8))
+        {
+            ParseAnd(depth);
+            _steps.Add(new(StepKind.Or, 0));
+        }
+    }
+
+    private void ParseAnd(int depth)
+    {
+        ParseTerm(depth);
+        while (!HasParseError && Consume("-a"u8))
+        {
+            ParseTerm(depth);
+            _steps.Add(new(StepKind.And, 0));
+        }
+    }
+
+    private void ParseTerm(int depth)
+    {
+        _cancellationToken.ThrowIfCancellationRequested();
+        var negated = false;
+        while (_index + 1 < _end && Consume("!"u8))
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            negated = !negated;
+        }
+        if (_index >= _end)
+        {
+            Fail(null, "argument expected");
             return;
         }
-
-        var parser = new Parser(_arguments);
-        _root = parser.ParseExpression();
-        if (parser.HasError || !parser.AtEnd)
+        if (Consume("("u8))
         {
-            HasParseError = true;
-            _root = null;
+            if (depth >= ShellSourceCursor.MaximumNestedExpansionDepth)
+                Fail(null, "expression nesting limit exceeded");
+            else
+            {
+                ParseOr(depth + 1);
+                if (!Consume(")"u8))
+                    Fail(null, "closing parenthesis expected");
+            }
         }
-    }
-
-    /// <summary>
-    /// Replaces file predicate nodes with indexed file test nodes for deferred evaluation.
-    /// </summary>
-    private static TestNode ReplaceFileTests(TestNode node, List<UnresolvedFileTest> fileTests)
-    {
-        return node switch
+        else if (_index + 2 < _end && TryTestBinary(_arguments[_index + 1], out var binary))
         {
-            FilePredicateNode filePredicate => new FileTestNode(
-                fileTests.Count,
-                AddFileTest(fileTests, filePredicate)),
-            FileBinaryPredicateNode fileBinaryPredicate => new FileTestNode(
-                fileTests.Count,
-                AddFileTest(fileTests, fileBinaryPredicate)),
-            UnaryNode unary => new UnaryNode(
-                unary.Operator,
-                ReplaceFileTests(unary.Inner, fileTests)),
-            BinaryNode binary => new BinaryNode(
-                binary.Operator,
-                ReplaceFileTests(binary.Left, fileTests),
-                ReplaceFileTests(binary.Right, fileTests)),
-            _ => node
-        };
-    }
-
-    /// <summary>
-    /// Appends a unary file test request and returns it for node replacement.
-    /// </summary>
-    private static UnresolvedFileTest AddFileTest(List<UnresolvedFileTest> fileTests, FilePredicateNode predicate)
-    {
-        var request = new UnresolvedFileTest(predicate.Kind, predicate.Operand, null);
-        fileTests.Add(request);
-        return request;
-    }
-
-    /// <summary>
-    /// Appends a binary file test request and returns it for node replacement.
-    /// </summary>
-    private static UnresolvedFileTest AddFileTest(List<UnresolvedFileTest> fileTests, FileBinaryPredicateNode predicate)
-    {
-        var request = new UnresolvedFileTest(predicate.Kind, predicate.Left, predicate.Right);
-        fileTests.Add(request);
-        return request;
-    }
-
-    /// <summary> Parses test arguments into a boolean expression tree. </summary>
-    private sealed class Parser
-    {
-        /// <summary> Stores the token list derived from the argument array. </summary>
-        private readonly IReadOnlyList<string> _tokens;
-        /// <summary>
-        /// Tracks the current token index while parsing; increments as tokens are consumed.
-        /// </summary>
-        private int _index;
-
-        public Parser(IReadOnlyList<string> tokens)
-        {
-            _tokens = tokens;
-        }
-
-        public bool HasError { get; private set; }
-
-        public bool AtEnd => _index >= _tokens.Count;
-
-        /// <summary>
-        /// Parses the full expression with lowest-precedence OR handling.
-        /// </summary>
-        public TestNode ParseExpression()
-        {
-            return ParseOr();
-        }
-
-        /// <summary>
-        /// Parses a chain of OR expressions.
-        /// </summary>
-        private TestNode ParseOr()
-        {
-            var left = ParseAnd();
-            while (TryConsumeOperator(IsOrOperator))
-            {
-                var right = ParseAnd();
-                left = new BinaryNode(BinaryOperator.Or, left, right);
-            }
-
-            return left;
-        }
-
-        /// <summary>
-        /// Parses a chain of AND expressions.
-        /// </summary>
-        private TestNode ParseAnd()
-        {
-            var left = ParseUnary();
-            while (TryConsumeOperator(IsAndOperator))
-            {
-                var right = ParseUnary();
-                left = new BinaryNode(BinaryOperator.And, left, right);
-            }
-
-            return left;
-        }
-
-        /// <summary>
-        /// Parses unary operators or delegates to primary parsing.
-        /// </summary>
-        private TestNode ParseUnary()
-        {
-            if (TryConsumeOperator(IsNotOperator))
-            {
-                var inner = ParseUnary();
-                return new UnaryNode(UnaryOperator.Not, inner);
-            }
-
-            return ParsePrimary();
-        }
-
-        /// <summary>
-        /// Parses parentheses, predicates, or literal operands.
-        /// </summary>
-        private TestNode ParsePrimary()
-        {
-            if (AtEnd)
-            {
-                HasError = true;
-                return new ConstantNode(false);
-            }
-
-            var token = PeekSpan();
-            if (IsOpenParenthesis(token))
-            {
-                _index++;
-                var inner = ParseExpression();
-                if (!TryConsumeOperator(IsCloseParenthesis))
-                {
-                    HasError = true;
-                    return new ConstantNode(false);
-                }
-
-                return inner;
-            }
-
-            if (TryGetUnaryPredicate(token, out var unaryPredicate))
-            {
-                _index++;
-                if (AtEnd)
-                {
-                    HasError = true;
-                    return new ConstantNode(false);
-                }
-
-                var operand = NextToken();
-                return unaryPredicate.IsFilePredicate
-                    ? new FilePredicateNode(unaryPredicate.FileKind, operand)
-                    : new ConstantNode(EvaluateUnary(unaryPredicate.Operator, operand));
-            }
-
-            var left = NextToken();
-            if (AtEnd)
-            {
-                return new ConstantNode(!string.IsNullOrEmpty(left));
-            }
-
-            var op = PeekSpan();
-            if (TryGetBinaryPredicate(op, out var binaryPredicate))
-            {
-                _index++;
-                if (AtEnd)
-                {
-                    HasError = true;
-                    return new ConstantNode(false);
-                }
-
-                var right = NextToken();
-                return binaryPredicate.IsFilePredicate
-                    ? new FileBinaryPredicateNode(binaryPredicate.FileKind, left, right)
-                    : new ConstantNode(EvaluateBinary(binaryPredicate.Operator, left, right));
-            }
-
-            return new ConstantNode(!string.IsNullOrEmpty(left));
-        }
-
-        /// <summary>
-        /// Consumes the current token when it matches a predicate operator.
-        /// </summary>
-        private bool TryConsumeOperator(Func<ReadOnlySpan<char>, bool> match)
-        {
-            if (AtEnd)
-            {
-                return false;
-            }
-
-            var span = PeekSpan();
-            if (!match(span))
-            {
-                return false;
-            }
-
+            var left = Next();
             _index++;
-            return true;
+            Binary(binary, left, Next());
         }
-
-        /// <summary>
-        /// Returns the next token and advances the parser index.
-        /// </summary>
-        private string NextToken()
+        else
         {
-            return _tokens[_index++];
+            var first = Next();
+            if (_index < _end && TryGetUnaryPredicate(first.Bytes.Span, out var unary))
+                Unary(unary, Next());
+            else
+                Constant(!first.IsEmpty);
         }
+        if (negated)
+            _steps.Add(new(StepKind.Not, 0));
+    }
 
-        /// <summary>
-        /// Returns the current token span without advancing the parser.
-        /// </summary>
-        private ReadOnlySpan<char> PeekSpan()
+    private void Unary(UnaryPredicate predicate, ShellValue operand)
+    {
+        if (predicate.IsFilePredicate)
+            File(predicate.FileKind, operand, null);
+        else if (predicate.Operator == UnaryPredicateKind.OptionEnabled)
+            Constant(IsOptionEnabled(operand.Bytes.Span, _errexitEnabled));
+        else
+            Constant(predicate.Operator == UnaryPredicateKind.StringLengthZero ? operand.IsEmpty : !operand.IsEmpty);
+    }
+
+    private void Binary(BinaryPredicate predicate, ShellValue left, ShellValue right)
+    {
+        if (predicate.IsFilePredicate)
+            File(predicate.FileKind, left, right);
+        else if (predicate.IsNumeric)
         {
-            return _tokens[_index].AsSpan();
+            if (!TryInteger(left, out var l))
+                Fail(left, "integer expression expected");
+            else if (!TryInteger(right, out var r))
+                Fail(right, "integer expression expected");
+            else
+                Constant(CompareNumbers(predicate.Operator, l, r));
         }
-
-        /// <summary>
-        /// Returns true when the token is the logical NOT operator.
-        /// </summary>
-        private static bool IsNotOperator(ReadOnlySpan<char> token)
+        else
         {
-            return token is ['!'];
-        }
-
-        /// <summary>
-        /// Returns true when the token is the logical AND operator.
-        /// </summary>
-        private static bool IsAndOperator(ReadOnlySpan<char> token)
-        {
-            return token is ['-', 'a'];
-        }
-
-        /// <summary>
-        /// Returns true when the token is the logical OR operator.
-        /// </summary>
-        private static bool IsOrOperator(ReadOnlySpan<char> token)
-        {
-            return token is ['-', 'o'];
-        }
-
-        /// <summary>
-        /// Returns true when the token is an opening parenthesis.
-        /// </summary>
-        private static bool IsOpenParenthesis(ReadOnlySpan<char> token)
-        {
-            return token is ['('];
-        }
-
-        /// <summary>
-        /// Returns true when the token is a closing parenthesis.
-        /// </summary>
-        private static bool IsCloseParenthesis(ReadOnlySpan<char> token)
-        {
-            return token is [')'];
-        }
-
-        /// <summary>
-        /// Attempts to map a token to a unary predicate or file predicate.
-        /// </summary>
-        private static bool TryGetUnaryPredicate(ReadOnlySpan<char> token, out UnaryPredicate predicate)
-        {
-            if (token is ['-', 'n'])
+            var comparison = ShellValue.ByteOrder.Compare(left, right);
+            Constant(predicate.Operator switch
             {
-                predicate = new UnaryPredicate(UnaryPredicateKind.StringLengthNonZero, false, default);
-                return true;
-            }
+                BinaryPredicateKind.StringEqual => comparison == 0,
+                BinaryPredicateKind.StringNotEqual => comparison != 0,
+                BinaryPredicateKind.StringLess => comparison < 0,
+                BinaryPredicateKind.StringGreater => comparison > 0,
+                _ => throw new InvalidOperationException("Unsupported test predicate.")
+            });
+        }
 
-            if (token is ['-', 'z'])
+        bool TryInteger(ShellValue value, out long number)
+        {
+            var span = value.Bytes.Span;
+            var start = 0;
+            var end = span.Length;
+            while (start < end && AsciiByte.IsPosixWhitespace(span[start]))
             {
-                predicate = new UnaryPredicate(UnaryPredicateKind.StringLengthZero, false, default);
-                return true;
+                _cancellationToken.ThrowIfCancellationRequested();
+                start++;
             }
-
-            if (TryGetFilePredicate(token, out var fileKind))
+            while (end > start && AsciiByte.IsPosixWhitespace(span[end - 1]))
             {
-                predicate = new UnaryPredicate(UnaryPredicateKind.FilePredicate, true, fileKind);
-                return true;
+                _cancellationToken.ThrowIfCancellationRequested();
+                end--;
             }
+            return Integers.TryParseNumber(span[start..end], out number);
+        }
+    }
 
-            predicate = default;
+    private void File(FilePredicateKind kind, ShellValue left, ShellValue? right)
+    {
+        _memory?.Charge(checked(4L * (left.Bytes.Length + (long)(right?.Bytes.Length ?? 0))));
+        if (!left.TryGetUtf8Text(out var path))
+        {
+            Fail(left, "file operand is not valid UTF-8");
+            return;
+        }
+        string? otherPath = null;
+        if (right.HasValue && !right.Value.TryGetUtf8Text(out otherPath))
+        {
+            Fail(right.Value, "file operand is not valid UTF-8");
+            return;
+        }
+        _steps.Add(new(StepKind.File, _files.Count));
+        _files.Add(new(kind, path, otherPath));
+    }
+
+    private static bool TryTestBinary(ShellValue token, out BinaryPredicate predicate) =>
+        TryGetBinaryPredicate(token.Bytes.Span, out predicate) && predicate.Operator != BinaryPredicateKind.RegexMatch;
+
+    private ShellValue Next() => _arguments[_index++];
+    private static bool Is(ShellValue value, ReadOnlySpan<byte> token) => value.Bytes.Span.SequenceEqual(token);
+    private bool Consume(ReadOnlySpan<byte> token)
+    {
+        if (_index >= _end || !Is(_arguments[_index], token))
             return false;
-        }
-
-        /// <summary>
-        /// Attempts to map a token to a binary predicate or file predicate.
-        /// </summary>
-        private static bool TryGetBinaryPredicate(ReadOnlySpan<char> token, out BinaryPredicate predicate)
-        {
-            if (token is ['-', 'e', 'q'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericEqual, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'n', 'e'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericNotEqual, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'l', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericLess, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'l', 'e'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericLessOrEqual, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'g', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericGreater, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'g', 'e'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.NumericGreaterOrEqual, false, default);
-                return true;
-            }
-
-            if (token is ['='])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringEqual, false, default);
-                return true;
-            }
-
-            if (token is ['=', '='])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringEqual, false, default);
-                return true;
-            }
-
-            if (token is ['!', '='])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringNotEqual, false, default);
-                return true;
-            }
-
-            if (token is ['<'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringLess, false, default);
-                return true;
-            }
-
-            if (token is ['>'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.StringGreater, false, default);
-                return true;
-            }
-
-            if (token is ['-', 'e', 'f'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.FilePredicate, true, FilePredicateKind.SameFile);
-                return true;
-            }
-
-            if (token is ['-', 'n', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.FilePredicate, true, FilePredicateKind.NewerThan);
-                return true;
-            }
-
-            if (token is ['-', 'o', 't'])
-            {
-                predicate = new BinaryPredicate(BinaryPredicateKind.FilePredicate, true, FilePredicateKind.OlderThan);
-                return true;
-            }
-
-            predicate = default;
-            return false;
-        }
-
-        /// <summary>
-        /// Maps a file-test token to its corresponding file test kind.
-        /// </summary>
-        private static bool TryGetFilePredicate(ReadOnlySpan<char> token, out FilePredicateKind fileKind)
-        {
-            if (token is ['-', 'a'] || token is ['-', 'e'])
-            {
-                fileKind = FilePredicateKind.Exists;
-                return true;
-            }
-
-            if (token is ['-', 'b'])
-            {
-                fileKind = FilePredicateKind.BlockDevice;
-                return true;
-            }
-
-            if (token is ['-', 'c'])
-            {
-                fileKind = FilePredicateKind.CharacterDevice;
-                return true;
-            }
-
-            if (token is ['-', 'd'])
-            {
-                fileKind = FilePredicateKind.Directory;
-                return true;
-            }
-
-            if (token is ['-', 'f'])
-            {
-                fileKind = FilePredicateKind.File;
-                return true;
-            }
-
-            if (token is ['-', 'g'])
-            {
-                fileKind = FilePredicateKind.SetGroupId;
-                return true;
-            }
-
-            if (token is ['-', 'h'] || token is ['-', 'L'])
-            {
-                fileKind = FilePredicateKind.SymbolicLink;
-                return true;
-            }
-
-            if (token is ['-', 'k'])
-            {
-                fileKind = FilePredicateKind.Sticky;
-                return true;
-            }
-
-            if (token is ['-', 'p'])
-            {
-                fileKind = FilePredicateKind.Fifo;
-                return true;
-            }
-
-            if (token is ['-', 'r'])
-            {
-                fileKind = FilePredicateKind.Readable;
-                return true;
-            }
-
-            if (token is ['-', 's'])
-            {
-                fileKind = FilePredicateKind.NonEmpty;
-                return true;
-            }
-
-            if (token is ['-', 't'])
-            {
-                fileKind = FilePredicateKind.Terminal;
-                return true;
-            }
-
-            if (token is ['-', 'u'])
-            {
-                fileKind = FilePredicateKind.SetUserId;
-                return true;
-            }
-
-            if (token is ['-', 'w'])
-            {
-                fileKind = FilePredicateKind.Writable;
-                return true;
-            }
-
-            if (token is ['-', 'x'])
-            {
-                fileKind = FilePredicateKind.Executable;
-                return true;
-            }
-
-            if (token is ['-', 'G'])
-            {
-                fileKind = FilePredicateKind.OwnedByEffectiveGroup;
-                return true;
-            }
-
-            if (token is ['-', 'N'])
-            {
-                fileKind = FilePredicateKind.ModifiedSinceAccess;
-                return true;
-            }
-
-            if (token is ['-', 'O'])
-            {
-                fileKind = FilePredicateKind.OwnedByEffectiveUser;
-                return true;
-            }
-
-            if (token is ['-', 'S'])
-            {
-                fileKind = FilePredicateKind.Socket;
-                return true;
-            }
-
-            fileKind = default;
-            return false;
-        }
+        _index++;
+        return true;
     }
-
-    /// <summary>
-    /// Evaluates non-filesystem unary predicates directly.
-    /// </summary>
-    private static bool EvaluateUnary(UnaryPredicateKind kind, string operand)
+    private void Constant(bool value) => _steps.Add(new(StepKind.Constant, value ? 1 : 0));
+    private void Fail(ShellValue? operand, string message)
     {
-        return kind switch
-        {
-            UnaryPredicateKind.StringLengthNonZero => !string.IsNullOrEmpty(operand),
-            UnaryPredicateKind.StringLengthZero => string.IsNullOrEmpty(operand),
-            _ => false
-        };
+        if (HasParseError)
+            return;
+        ErrorOperand = operand;
+        ErrorMessage = message;
     }
-
-    /// <summary>
-    /// Evaluates non-filesystem binary predicates directly.
-    /// </summary>
-    private static bool EvaluateBinary(BinaryPredicateKind predicate, string left, string right)
-    {
-        return predicate switch
-        {
-            BinaryPredicateKind.NumericEqual => Integers.TryParseNumber(left.AsSpan(), out var l)
-                && Integers.TryParseNumber(right.AsSpan(), out var r)
-                && l == r,
-            BinaryPredicateKind.NumericNotEqual => Integers.TryParseNumber(left.AsSpan(), out var l)
-                && Integers.TryParseNumber(right.AsSpan(), out var r)
-                && l != r,
-            BinaryPredicateKind.NumericLess => Integers.TryParseNumber(left.AsSpan(), out var l)
-                && Integers.TryParseNumber(right.AsSpan(), out var r)
-                && l < r,
-            BinaryPredicateKind.NumericLessOrEqual => Integers.TryParseNumber(left.AsSpan(), out var l)
-                && Integers.TryParseNumber(right.AsSpan(), out var r)
-                && l <= r,
-            BinaryPredicateKind.NumericGreater => Integers.TryParseNumber(left.AsSpan(), out var l)
-                && Integers.TryParseNumber(right.AsSpan(), out var r)
-                && l > r,
-            BinaryPredicateKind.NumericGreaterOrEqual => Integers.TryParseNumber(left.AsSpan(), out var l)
-                && Integers.TryParseNumber(right.AsSpan(), out var r)
-                && l >= r,
-            BinaryPredicateKind.StringEqual => string.Equals(left, right, StringComparison.Ordinal),
-            BinaryPredicateKind.StringNotEqual => !string.Equals(left, right, StringComparison.Ordinal),
-            BinaryPredicateKind.StringLess => string.CompareOrdinal(left, right) < 0,
-            BinaryPredicateKind.StringGreater => string.CompareOrdinal(left, right) > 0,
-            _ => false
-        };
-    }
-
-    /// <summary> Represents a node in the test expression evaluation tree. </summary>
-    private abstract class TestNode
-    {
-        public abstract bool Evaluate(IReadOnlyList<bool> fileResults);
-    }
-
-    /// <summary> Represents a constant boolean value in the expression tree. </summary>
-    private sealed class ConstantNode : TestNode
-    {
-        /// <summary> Stores the constant value returned by this node. </summary>
-        private readonly bool _value;
-
-        public ConstantNode(bool value)
-        {
-            _value = value;
-        }
-
-        public override bool Evaluate(IReadOnlyList<bool> fileResults)
-        {
-            return _value;
-        }
-    }
-
-    /// <summary> Represents a filesystem predicate that must be evaluated externally. </summary>
-    private sealed class FilePredicateNode : TestNode
-    {
-        public FilePredicateNode(FilePredicateKind kind, string operand)
-        {
-            Kind = kind;
-            Operand = operand;
-        }
-
-        public FilePredicateKind Kind { get; }
-
-        public string Operand { get; }
-
-        public override bool Evaluate(IReadOnlyList<bool> fileResults)
-        {
-            return false;
-        }
-    }
-
-    /// <summary> Represents a binary filesystem predicate that must be evaluated externally. </summary>
-    private sealed class FileBinaryPredicateNode : TestNode
-    {
-        public FileBinaryPredicateNode(FilePredicateKind kind, string left, string right)
-        {
-            Kind = kind;
-            Left = left;
-            Right = right;
-        }
-
-        public FilePredicateKind Kind { get; }
-
-        public string Left { get; }
-
-        public string Right { get; }
-
-        public override bool Evaluate(IReadOnlyList<bool> fileResults)
-        {
-            return false;
-        }
-    }
-
-    /// <summary> Represents a resolved file test that evaluates using the provided results list. </summary>
-    private sealed class FileTestNode : TestNode
-    {
-        /// <summary> Stores the index into the file test result list for this node. </summary>
-        private readonly int _index;
-
-        public FileTestNode(int index, UnresolvedFileTest request)
-        {
-            _index = index;
-            Request = request;
-        }
-
-        public UnresolvedFileTest Request { get; }
-
-        public override bool Evaluate(IReadOnlyList<bool> fileResults)
-        {
-            return fileResults[_index];
-        }
-    }
-
-    /// <summary> Represents a unary logical operation in the expression tree. </summary>
-    private sealed class UnaryNode : TestNode
-    {
-        public UnaryNode(UnaryOperator @operator, TestNode inner)
-        {
-            Operator = @operator;
-            Inner = inner ?? throw new ArgumentNullException(nameof(inner));
-        }
-
-        public UnaryOperator Operator { get; }
-
-        public TestNode Inner { get; }
-
-        public override bool Evaluate(IReadOnlyList<bool> fileResults)
-        {
-            var value = Inner.Evaluate(fileResults);
-            return Operator switch
-            {
-                UnaryOperator.Not => !value,
-                _ => value
-            };
-        }
-    }
-
-    /// <summary> Represents a binary logical operation in the expression tree. </summary>
-    private sealed class BinaryNode : TestNode
-    {
-        public BinaryNode(BinaryOperator @operator, TestNode left, TestNode right)
-        {
-            Operator = @operator;
-            Left = left ?? throw new ArgumentNullException(nameof(left));
-            Right = right ?? throw new ArgumentNullException(nameof(right));
-        }
-
-        public BinaryOperator Operator { get; }
-
-        public TestNode Left { get; }
-
-        public TestNode Right { get; }
-
-        public override bool Evaluate(IReadOnlyList<bool> fileResults)
-        {
-            return Operator switch
-            {
-                BinaryOperator.And => Left.Evaluate(fileResults) && Right.Evaluate(fileResults),
-                BinaryOperator.Or => Left.Evaluate(fileResults) || Right.Evaluate(fileResults),
-                _ => false
-            };
-        }
-    }
-
-    /// <summary> Captures a parsed unary predicate and whether it is a file test. </summary>
-    private readonly struct UnaryPredicate
-    {
-        public UnaryPredicate(UnaryPredicateKind @operator, bool isFilePredicate, FilePredicateKind fileKind)
-        {
-            Operator = @operator;
-            IsFilePredicate = isFilePredicate;
-            FileKind = fileKind;
-        }
-
-        public UnaryPredicateKind Operator { get; }
-
-        public bool IsFilePredicate { get; }
-
-        public FilePredicateKind FileKind { get; }
-    }
-
-    /// <summary> Captures a parsed binary predicate and whether it is a file test. </summary>
-    private readonly struct BinaryPredicate
-    {
-        public BinaryPredicate(BinaryPredicateKind @operator, bool isFilePredicate, FilePredicateKind fileKind)
-        {
-            Operator = @operator;
-            IsFilePredicate = isFilePredicate;
-            FileKind = fileKind;
-        }
-
-        public BinaryPredicateKind Operator { get; }
-
-        public bool IsFilePredicate { get; }
-
-        public FilePredicateKind FileKind { get; }
-    }
-
-    /// <summary> Enumerates unary predicate kinds recognized in test expressions. </summary>
-    private enum UnaryPredicateKind
-    {
-        StringLengthNonZero,
-        StringLengthZero,
-        FilePredicate
-    }
-
-    /// <summary> Enumerates binary predicate kinds recognized in test expressions. </summary>
-    private enum BinaryPredicateKind
-    {
-        NumericEqual,
-        NumericNotEqual,
-        NumericLess,
-        NumericLessOrEqual,
-        NumericGreater,
-        NumericGreaterOrEqual,
-        StringEqual,
-        StringNotEqual,
-        StringLess,
-        StringGreater,
-        FilePredicate
-    }
-
-    /// <summary> Enumerates unary logical operators in test expressions. </summary>
-    private enum UnaryOperator
-    {
-        Not
-    }
-
-    /// <summary> Enumerates binary logical operators in test expressions. </summary>
-    private enum BinaryOperator
-    {
-        And,
-        Or
-    }
+    private enum StepKind { Constant, File, Not, And, Or }
+    private readonly record struct Step(StepKind Kind, int Value);
 }

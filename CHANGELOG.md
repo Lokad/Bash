@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve byte-valued `test`/`[` string operands. Apply argument-count precedence
+  and strict signed decimal rules; malformed integers, missing `]` and syntax
+  errors return status 2 with diagnostics. Share predicate metadata with `[[`.
+  Option queries reflect supported `errexit` and fixed `pipefail` state.
 - Preserve quote provenance and arbitrary shell bytes in case patterns and parameter
   prefix/suffix removal. Match valid UTF-8 characters without splitting surrogate
   pairs; use GNU's byte-matching fallback for malformed pattern/value bytes.

@@ -60,6 +60,14 @@ expressions evaluated against current bindings; they are not re-expanded as shel
 source. Active numeric recursion shares the structural nesting guard and observes
 cancellation. Completed arithmetic work consumes no execution allowance.
 
+`test`/`[` preserve bytes in string equality, ordering and length predicates. Their
+zero-to-four argument rules precede the `!`, parenthesis, `-a` and `-o` expression
+grammar. Numeric operands must be signed 64-bit decimal integers, with optional
+surrounding ASCII whitespace; they do not evaluate arithmetic expressions or base
+prefixes. Invalid integers, malformed expressions and a missing closing `]` report
+a diagnostic and status 2. `-o` queries recognize `errexit` and the fixed `pipefail`
+policy; unknown option names are false. File predicates retain the UTF-8 path boundary.
+
 Hosts provide external commands, including any `sh`/`bash` aliases and script-file
 launch policy. Command names and filesystem capabilities are never inferred from
 the ambient machine. Additional host tools do not expand the language grammar.

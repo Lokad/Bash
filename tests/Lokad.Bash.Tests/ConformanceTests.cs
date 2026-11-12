@@ -25,6 +25,9 @@ public sealed class ConformanceTests
                 continue;
             }
             var script = Text("script");
+            if (sample.TryGetProperty("stderrNormalization", out var normalization)
+                && normalization.GetString() != "bash-command-location")
+                throw new InvalidOperationException("Unknown diagnostic normalization.");
             if (!StringComparer.OrdinalIgnoreCase.Equals(Text("scriptSha256"),
                     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script)))))
                 throw new InvalidOperationException($"Script hash mismatch: {Text("id")}");
