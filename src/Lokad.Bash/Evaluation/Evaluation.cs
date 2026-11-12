@@ -574,6 +574,7 @@ public sealed partial class Evaluation : IFileTester
         result = await ApplyCloseErrorAsync(result, closeError).ConfigureAwait(false);
         result = EvaluationResult.FromExitCode(result.ExitCode);
 
+        scope.Variables.SetPipelineStatuses([result.ExitCode], Memory, _cancellationToken);
         return ApplyNegation(result, negated);
     }
 
@@ -651,6 +652,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 // The host propagates cancellation to the stages. Await their cleanup before taking ownership.
                 var results = await pipelineTask.ConfigureAwait(false);
+                scope.Variables.SetPipelineStatuses(results, Memory, _cancellationToken);
                 var exitCode = ComputePipelineExitCode(results);
                 var pipelineNegated = pipelineCommand.Negated ^ negated;
                 var result = EvaluationResult.FromExitCode(EvaluationRules.ApplyNegation(exitCode, pipelineNegated));
@@ -808,6 +810,7 @@ public sealed partial class Evaluation : IFileTester
                         or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
                         or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
                         or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
+                        or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue
                 })
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
@@ -1070,6 +1073,9 @@ public sealed partial class Evaluation : IFileTester
 
                 var builtinResult = evaluatorBuiltin.Kind switch
                 {
+                    BuiltinKind.Break or BuiltinKind.Continue => await EvaluateBuiltinLoopControlAsync(
+                        evaluatorBuiltin.Kind, byteOperands, builtinScope, false).ConfigureAwait(false),
+                    BuiltinKind.Exit => await EvaluateBuiltinExitAsync(byteOperands, builtinScope, executable.Completion).ConfigureAwait(false),
                     BuiltinKind.Test => await EvaluateBuiltinTestAsync(commandName, byteOperands, false).ConfigureAwait(false),
                     BuiltinKind.Echo => await EvaluateBuiltinEchoAsync(echoContent, false).ConfigureAwait(false),
                     BuiltinKind.Type => await EvaluateBuiltinTypeAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
@@ -1105,10 +1111,6 @@ public sealed partial class Evaluation : IFileTester
                         bindings,
                         false).ConfigureAwait(false)
                 };
-                // Explicit exit must run cleanup before the function's locals and temporary bindings unwind.
-                if (evaluatorBuiltin.Kind == BuiltinKind.Exit && builtinResult.Flow == FlowControlKind.Exit
-                    && builtinScope.Context.FunctionContext != null && executable.Completion != CommandCompletion.ExitEvaluation)
-                    builtinResult = await RunExitTrapAsync(builtinScope, builtinResult).ConfigureAwait(false);
                 if (scriptFunction != null)
                     CompletePromotions(scriptFunction, enclosingFunction, commandVars, bindings);
                 return CompleteCommandResult(builtinResult, executable.Completion, commandInvoked: true);
@@ -1400,8 +1402,7 @@ public sealed partial class Evaluation : IFileTester
                 BuiltinKind.Colon or BuiltinKind.True or BuiltinKind.False
                     or BuiltinKind.Pwd or BuiltinKind.Popd or BuiltinKind.Caller => 0,
                 BuiltinKind.Cd or BuiltinKind.Dirs or BuiltinKind.Pushd
-                    or BuiltinKind.Shift or BuiltinKind.Break or BuiltinKind.Continue
-                    or BuiltinKind.Exit => 1,
+                    or BuiltinKind.Shift => 1,
                 _ => words.Count - 1
             };
 
@@ -2293,14 +2294,6 @@ public sealed partial class Evaluation : IFileTester
             case BuiltinKind.Shift:
                 return await EvaluateBuiltinShiftAsync(words, commandVars, negated)
                     .ConfigureAwait(false);
-            case BuiltinKind.Break:
-                return await EvaluateBuiltinBreakAsync(words, scope, negated)
-                    .ConfigureAwait(false);
-            case BuiltinKind.Continue:
-                return await EvaluateBuiltinContinueAsync(words, scope, negated)
-                    .ConfigureAwait(false);
-            case BuiltinKind.Exit:
-                return await EvaluateBuiltinExitAsync(words).ConfigureAwait(false);
             case BuiltinKind.Colon:
             case BuiltinKind.True:
             case BuiltinKind.False:
@@ -3239,21 +3232,6 @@ public sealed partial class Evaluation : IFileTester
         return BindingName.FromValue(ShellValue.FromBytes(name.ToValue().Bytes[..bracketIndex]));
     }
 
-    /// <summary>
-    /// Reads and validates loop level arguments for break/continue builtins.
-    /// </summary>
-    private static LoopLevelInfo GetLoopLevel(IReadOnlyList<string> words)
-    {
-        if (words.Count < 2)
-            return new LoopLevelInfo(true, 1, 0);
-
-        var word = words[1];
-        if (!Integers.TryParseExitStatus(word.AsSpan(), out var parsed) || parsed <= 0)
-            return new LoopLevelInfo(false, 1, 2);
-
-        return new LoopLevelInfo(true, parsed, 0);
-    }
-
     /// <summary>Expands a reached command or loop operand once before numeric evaluation.</summary>
     private Task<long?> EvaluateArithmeticCommandOperandAsync(ShellSource expression, ScopedEvaluation scope)
     {
@@ -3266,9 +3244,6 @@ public sealed partial class Evaluation : IFileTester
                 operand, scope, WordExpansion.ArithmeticFailureMode.Diagnostic).ConfigureAwait(false);
         }
     }
-
-    /// <summary> Holds parsed loop level arguments for break/continue builtins. </summary>
-    private readonly record struct LoopLevelInfo(bool Success, int Level, int ErrorExitCode);
 
     /// <summary>Captures resolved command dispatch and completion semantics.</summary>
     private abstract record PreparedCommand(

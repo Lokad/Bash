@@ -37,7 +37,7 @@ public partial class Evaluation
         /// The value is only meaningful when <see cref="Flow"/> is <see cref="FlowControlKind.Break"/> or
         /// <see cref="FlowControlKind.Continue"/>. It encodes how many loop levels should still be unwound
         /// before the flow is consumed. The break/continue builtins set this from their numeric argument
-        /// (see <see cref="Evaluation.GetLoopLevel"/>),
+        /// (see <see cref="Evaluation.EvaluateBuiltinLoopControlAsync"/>),
         /// and each loop evaluation method decrements it as it exits a loop boundary
         /// (see <see cref="Evaluation.EvaluateLoopAsync"/>, <see cref="Evaluation.EvaluateForAsync"/>, and
         /// <see cref="Evaluation.EvaluateArithmeticForAsync"/>). When the level reaches 1, the current loop

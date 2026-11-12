@@ -693,29 +693,41 @@ public static class Parser
             return null;
         }
 
-        if (!TryConsumeKeyword(tokenizer, KeywordIn, "in"))
-
-            return null;
-
         var items = new List<Word>();
-        while (true)
+        var separator = tokenizer.PeekTokenCore();
+        var hadNewline = separator.Kind == TokenKind.Newline;
+        SkipNewlines(tokenizer);
+        if (IsKeyword(tokenizer.PeekTokenCore(), KeywordIn))
         {
-            var token = tokenizer.PeekTokenCore();
-            if (token.Kind is TokenKind.Newline or TokenKind.Semicolon)
+            tokenizer.NextTokenCore();
+            while (true)
             {
-                tokenizer.NextTokenCore();
-                break;
-            }
+                var token = tokenizer.PeekTokenCore();
+                if (token.Kind is TokenKind.Newline or TokenKind.Semicolon)
+                {
+                    tokenizer.NextTokenCore();
+                    break;
+                }
 
-            if (token.TryGetWordToken(out var itemToken))
-            {
-                items.Add(itemToken.Word);
-                tokenizer.NextTokenCore();
-                continue;
-            }
+                if (token.TryGetWordToken(out var itemToken))
+                {
+                    items.Add(itemToken.Word);
+                    tokenizer.NextTokenCore();
+                    continue;
+                }
 
-            tokenizer.RecordError("Expected word list or terminator after in.", tokenizer.Position);
-            return null;
+                tokenizer.RecordError("Expected word list or terminator after in.", tokenizer.Position);
+                return null;
+            }
+        }
+        else
+        {
+            // Bash's implicit list is exactly the quoted positional expansion. Lower it
+            // to the existing word path, including the snapshot taken before the body.
+            items.Add(Tokenizer.ReadExpansionWord(ShellSource.FromText("\"$@\""),
+                ExpansionWordSyntax.Parameter, ShellQuoteKind.None));
+            if (!hadNewline && tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
+                tokenizer.NextTokenCore();
         }
 
         SkipNewlines(tokenizer);

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Support implicit positional lists in `for name; do ...; done`, including newline
+  and direct-`do` forms. Reuse quoted `"$@"` expansion and snapshot loop items before
+  body changes to positional parameters.
+- Validate byte-valued `exit`, `break` and `continue` operands with GNU status and
+  flow distinctions, diagnostics, signed statuses, argument counts and EXIT scope.
+- Publish `PIPESTATUS` for completed foreground commands and pipelines. Keep stage
+  statuses before negation, preserve metadata through compound syntax, and replace
+  it after the next command's argument expansion and completion.
 - Parse conditional structure once, retain word quoting and expand only reached
   operands in scope. `[[` supports byte-valued string/pattern tests and genuine
   arithmetic comparisons, with GNU expansion order and short-circuit behavior.

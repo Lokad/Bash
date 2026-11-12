@@ -50,9 +50,6 @@ public sealed class ByteValuedWordTests
     [InlineData("dirs -c $'\\377' >/dev/null; printf after", "after", 0)]
     [InlineData("pushd /tmp $'\\377' >/dev/null; pwd", "/tmp\n", 0)]
     [InlineData("set -- a b; shift 1 $'\\377'; printf '%s' \"$1\"", "b", 0)]
-    [InlineData("for n in one two; do break 1 $'\\377'; printf unreachable; done; printf after", "after", 0)]
-    [InlineData("for n in one two; do printf '%s' \"$n\"; continue 1 $'\\377'; printf unreachable; done", "onetwo", 0)]
-    [InlineData("exit 7 $'\\377'; printf unreachable", "", 7)]
     public async Task IgnoredTrailingOperands_DoNotRequireText(string script, string expected, int expectedExitCode)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree(["/tmp"], []));

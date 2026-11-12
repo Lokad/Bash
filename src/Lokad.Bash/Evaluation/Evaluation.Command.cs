@@ -112,14 +112,21 @@ public sealed partial class Evaluation
                 case ArithmeticCommand arithmeticCommand:
                     var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Expression, scope)
                         .ConfigureAwait(false);
+                    var arithmeticStatus = arithmeticResult is null or 0 ? 1 : 0;
+                    if (_state.FatalExpansion == null)
+                        scope.Variables.SetPipelineStatuses([arithmeticStatus], Memory, _cancellationToken);
                     return await FinalizeResultAsync(
-                        EvaluationResult.FromExitCode(arithmeticResult is null or 0 ? 1 : 0), negated);
+                        EvaluationResult.FromExitCode(arithmeticStatus), negated);
                 case ConditionalCommand conditionalCommand:
                     return await EvaluateConditionalCommandAsync(conditionalCommand, scope, negated).ConfigureAwait(false);
                 case CaseCommand caseCommand:
                     return await EvaluateCaseAsync(caseCommand, scope, negated).ConfigureAwait(false);
                 case SimpleCommand simpleCommand:
-                    return ApplyNegation(await EvaluateSimpleCommandAsync(simpleCommand, scope).ConfigureAwait(false), negated);
+                    var simpleResult = await EvaluateSimpleCommandAsync(simpleCommand, scope).ConfigureAwait(false);
+                    if (simpleResult.Flow != FlowControlKind.Exit
+                        && (simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0 || simpleCommand.Redirections.Count != 0))
+                        scope.Variables.SetPipelineStatuses([simpleResult.ExitCode], Memory, _cancellationToken);
+                    return ApplyNegation(simpleResult, negated);
                 default:
                     throw new NotSupportedException("Only simple commands, list control operators, pipelines, groups, subshells, if/elif/else, loops, for-in, arithmetic for, case, function definitions, arithmetic commands, conditional commands, and ! negation are supported in this evaluation stage.");
             }

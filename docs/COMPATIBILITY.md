@@ -27,8 +27,12 @@ UTF-8 locale. Removal slices the selected bytes directly and can therefore produ
 malformed byte values without passing through a text encoder. Pathname operations
 retain their separate text-only host boundary and path component policies.
 
-Pipeline status uses fixed `pipefail`: the rightmost failing stage wins. Scripts
-are limited to 4 MiB, with structural syntax/nesting guards and CLR collection-size
+Pipeline status uses fixed `pipefail`: the rightmost failing stage wins. The
+indexed `PIPESTATUS` array exposes individual foreground statuses.
+The array records statuses before pipeline negation; a subsequent command expands
+its operands against the previous array and replaces it when it completes. Empty
+loops and function definitions preserve the previous array.
+Scripts are limited to 4 MiB, with structural syntax/nesting guards and CLR collection-size
 checks. The source bound limits parser input; nesting guards protect recursive
 syntax handling. They are independent of execution duration. There are no lifetime
 word, character, brace, argument-copy or pattern-step quotas. Callers supply
@@ -59,6 +63,10 @@ both operand words expand. Logical operators skip unreached expansions and host
 queries. Each reached file predicate observes its own host result. Invalid
 conditional structure, including an empty `[[ ]]`, is a syntax error.
 
+Extended shell patterns `?(...)`, `*(...)`, `+(...)`, `@(...)` and `!(...)` are
+unsupported in `[[`, case arms and parameter pattern operators. Case arms support
+the `;;` terminator; `;&` fallthrough and `;;&` retesting are unsupported.
+
 Out of scope: interactive prompts/history/completion, aliases, background execution,
 job/process-group control, OS signal handling, process substitution, `coproc`,
 `select`, network redirection devices, `ulimit`, `umask` and shell option toggles
@@ -78,6 +86,14 @@ surrounding ASCII whitespace; they do not evaluate arithmetic expressions or bas
 prefixes. Invalid integers, malformed expressions and a missing closing `]` report
 a diagnostic and status 2. `-o` queries recognize `errexit` and the fixed `pipefail`
 policy; unknown option names are false. File predicates retain the UTF-8 path boundary.
+
+Implicit `for name; do ...; done` iterates a snapshot of quoted positional
+parameters, preserving empty arguments and bytes. Explicit `in` lists retain their
+usual expansion rules. `exit` accepts signed 64-bit decimal statuses modulo 256;
+invalid numbers and surplus arguments diagnose and stop non-interactive execution.
+Outside a loop, `break`/`continue` warn and return 0. Within loops, nonpositive counts
+abandon all active loops with status 1; malformed counts and surplus operands have
+their distinct shell-exit statuses (128 and 1).
 
 Hosts provide external commands, including any `sh`/`bash` aliases and script-file
 launch policy. Command names and filesystem capabilities are never inferred from

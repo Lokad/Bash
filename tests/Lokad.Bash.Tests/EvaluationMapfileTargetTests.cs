@@ -63,7 +63,7 @@ public sealed class EvaluationMapfileTargetTests
 
         Assert.Equal(ShellValue.FromText(circular ? "second" : string.Empty), state.Namerefs["ref"]);
         if (circular) Assert.Equal(ShellValue.FromText("ref"), state.Namerefs["second"]);
-        Assert.Empty(state.IndexedArrays);
+        Assert.Equal((BindingName)"PIPESTATUS", Assert.Single(state.IndexedArrays).Key);
         Assert.Empty(host.ClosedDescriptors);
     }
 

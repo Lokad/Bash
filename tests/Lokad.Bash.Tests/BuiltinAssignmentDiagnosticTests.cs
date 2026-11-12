@@ -32,7 +32,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
         Assert.Equal("missing: bad array subscript\n", Encoding.UTF8.GetString(diagnostic.Content));
         Assert.False(state.Variables.ContainsKey("changed"));
-        Assert.Empty(state.IndexedArrays);
+        Assert.Equal((BindingName)"PIPESTATUS", Assert.Single(state.IndexedArrays).Key);
     }
 
     [Theory]
@@ -73,7 +73,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
         Assert.False(state.Variables.ContainsKey("later"));
         Assert.False(state.Variables.ContainsKey("output"));
-        Assert.Empty(state.IndexedArrays);
+        Assert.Equal((BindingName)"PIPESTATUS", Assert.Single(state.IndexedArrays).Key);
         if (declaration.StartsWith("declare -n arr;", StringComparison.Ordinal))
             Assert.Equal(ShellValue.Empty, state.Namerefs["arr"]);
     }
@@ -131,7 +131,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(closed ? 0 : 1, state.LastExitCode);
         Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
         Assert.Equal(ShellValue.FromText(circular ? "other" : ""), state.Namerefs["ref"]);
-        Assert.Empty(state.IndexedArrays);
+        Assert.Equal((BindingName)"PIPESTATUS", Assert.Single(state.IndexedArrays).Key);
         Assert.Empty(host.ClosedDescriptors);
     }
 

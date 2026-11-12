@@ -954,7 +954,9 @@ public class EngineTests
         var descriptor = new FileDescriptor(11);
         pipeline.Stages[0].Evaluation.TrackOwnedDescriptor(descriptor);
         pipeline.SetResult([0, 0]);
-        await state.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            state.Completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
 
         Assert.Equal(descriptor, Assert.Single(state.GetDescriptorsForCleanup()));
         Assert.Empty(pipeline.Stages[0].Evaluation.GetDescriptorsForCleanup());

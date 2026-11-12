@@ -699,8 +699,12 @@ public partial class EvaluationTests
         var cond = await NextCommandAsync(state, "cond");
         cond.SetResult(new CommandExecutionResult.Completed(0));
 
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("break: nope: numeric argument required\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal(2, state.LastExitCode);
+        Assert.Equal(128, state.LastExitCode);
     }
 
     [Fact]

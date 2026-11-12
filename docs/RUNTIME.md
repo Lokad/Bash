@@ -19,6 +19,11 @@ invocations expose a fresh status. Early exit follows the ordinary EXIT-trap and
 descriptor cleanup path. Command substitutions clear errexit on entry, while
 subshells and pipeline stages inherit it.
 
+Completed foreground commands publish `PIPESTATUS` after their operands expand.
+Pipelines publish the settled stage statuses before applying negation; compound
+syntax preserves the last executed command's metadata. Publication follows binding
+ownership in the active shell and uses the command's admitted workspace.
+
 Host calls can overlap while pipeline stages execute. Allow producers and consumers
 to progress independently: never await descriptor I/O while holding a host-wide
 filesystem lock. Pipes must preserve byte order and apply backpressure. A consumer

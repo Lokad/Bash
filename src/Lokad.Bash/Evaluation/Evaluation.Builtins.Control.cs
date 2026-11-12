@@ -37,8 +37,7 @@ public sealed partial class Evaluation
         {
             var operand = words[firstOperand];
             // Bash accepts leading C whitespace, but only space/tab after the number.
-            var number = operand.Bytes.Span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8);
-            if (!Integers.TryParseNumber(number, out var status))
+            if (!TryParseControlNumber(operand, out var status))
             {
                 await ReportExpansionDiagnosticAsync(ShellValue.FromText("return"),
                     WordExpansion.AppendAssignmentValue(operand, ShellValue.FromText(": numeric argument required"), scope))
@@ -67,68 +66,102 @@ public sealed partial class Evaluation
         return await FinalizeResultAsync(EvaluationResult.Return(exitCode), negated).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Handles the <c>break</c> builtin by producing break flow control with a loop level.
-    /// </summary>
-    /// <returns>The finalized evaluation result.</returns>
-    private async Task<EvaluationResult> EvaluateBuiltinBreakAsync(
-        IReadOnlyList<string> words,
-        ScopedEvaluation scope,
-        bool negated)
+    /// <summary>Validates a reached loop-control builtin and preserves its distinct failure flows.</summary>
+    private async Task<EvaluationResult> EvaluateBuiltinLoopControlAsync(
+        BuiltinKind builtin, IReadOnlyList<ShellValue> words, ScopedEvaluation scope, bool negated)
     {
-        var loopLevel = GetLoopLevel(words);
-        if (!loopLevel.Success)
+        var name = ShellValue.FromText(builtin == BuiltinKind.Break ? "break" : "continue");
+        if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
+            return await WriteControlHelpAsync(builtin, negated).ConfigureAwait(false);
+        if (scope.Context.LoopDepth == 0)
         {
-            if (scope.Context.LoopDepth == 0)
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(loopLevel.ErrorExitCode), negated);
-
-            var breakLevel = Math.Min(1, scope.Context.LoopDepth);
-            return await FinalizeResultAsync(EvaluationResult.Break(breakLevel, loopLevel.ErrorExitCode), negated);
+            await ReportExpansionDiagnosticAsync(name,
+                ShellValue.FromText("only meaningful in a `for', `while', or `until' loop")).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
         }
-
-        if (scope.Context.LoopDepth == 0)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
-
-        var breakLevelAdjusted = Math.Min(loopLevel.Level, scope.Context.LoopDepth);
-        return await FinalizeResultAsync(EvaluationResult.Break(breakLevelAdjusted, 0), negated);
+        var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
+        var count = 1L;
+        if (first < words.Count)
+        {
+            if (!TryParseControlNumber(words[first], out count))
+            {
+                await ReportExpansionDiagnosticAsync(name,
+                    WordExpansion.AppendAssignmentValue(words[first], ShellValue.FromText(": numeric argument required"), scope))
+                    .ConfigureAwait(false);
+                return EvaluationResult.Exit(128);
+            }
+            if (words.Count - first > 1)
+            {
+                await ReportExpansionDiagnosticAsync(name, ShellValue.FromText("too many arguments")).ConfigureAwait(false);
+                return EvaluationResult.Exit(1);
+            }
+            if (count <= 0)
+            {
+                await ReportExpansionDiagnosticAsync(name,
+                    WordExpansion.AppendAssignmentValue(words[first], ShellValue.FromText(": loop count out of range"), scope))
+                    .ConfigureAwait(false);
+                // Both builtins abandon every active loop after a nonpositive count.
+                return await FinalizeResultAsync(EvaluationResult.Break(scope.Context.LoopDepth, 1), negated).ConfigureAwait(false);
+            }
+        }
+        var level = (int)Math.Min(count, scope.Context.LoopDepth);
+        return await FinalizeResultAsync(builtin == BuiltinKind.Break
+            ? EvaluationResult.Break(level, 0) : EvaluationResult.Continue(level, 0), negated).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Handles the <c>continue</c> builtin by producing continue flow control with a loop level.
-    /// </summary>
-    /// <returns>The finalized evaluation result.</returns>
-    private async Task<EvaluationResult> EvaluateBuiltinContinueAsync(
-        IReadOnlyList<string> words,
-        ScopedEvaluation scope,
-        bool negated)
-    {
-        var loopLevel = GetLoopLevel(words);
-        if (!loopLevel.Success)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(loopLevel.ErrorExitCode), negated);
-
-        if (scope.Context.LoopDepth == 0)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
-
-        var continueLevelAdjusted = Math.Min(loopLevel.Level, scope.Context.LoopDepth);
-        return await FinalizeResultAsync(EvaluationResult.Continue(continueLevelAdjusted, 0), negated);
-    }
-
-    /// <summary>
-    /// Handles the <c>exit</c> builtin by producing an exit flow control result.
-    /// </summary>
-    /// <returns>The finalized evaluation result.</returns>
+    /// <summary>Validates exit arguments before unwinding through the existing EXIT/descriptor path.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinExitAsync(
-        IReadOnlyList<string> words)
+        IReadOnlyList<ShellValue> words, ScopedEvaluation scope, CommandCompletion completion)
     {
+        if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
+            return await WriteControlHelpAsync(BuiltinKind.Exit, false).ConfigureAwait(false);
         var exitCode = _state.Traps?.ExitTrapStatus ?? _state.LastExitCode ?? 0;
-        if (words.Count > 1)
+        var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
+        if (first < words.Count)
         {
-            var statusWord = words[1];
-
-            if (!Integers.TryParseExitStatus(statusWord.AsSpan(), out exitCode))
-                exitCode = 2;
+            if (!TryParseControlNumber(words[first], out var status))
+            {
+                await ReportExpansionDiagnosticAsync(ShellValue.FromText("exit"),
+                    WordExpansion.AppendAssignmentValue(words[first], ShellValue.FromText(": numeric argument required"), scope))
+                    .ConfigureAwait(false);
+                return await CompleteExitAsync(2).ConfigureAwait(false);
+            }
+            if (words.Count - first > 1)
+            {
+                await ReportExpansionDiagnosticAsync(ShellValue.FromText("exit"), ShellValue.FromText("too many arguments"))
+                    .ConfigureAwait(false);
+                return EvaluationResult.Exit(1);
+            }
+            exitCode = (int)(status & 255);
         }
+        return await CompleteExitAsync(exitCode).ConfigureAwait(false);
 
-        return EvaluationResult.Exit(exitCode);
+        async Task<EvaluationResult> CompleteExitAsync(int status)
+        {
+            var result = EvaluationResult.Exit(status);
+            // An explicit exit, including an invalid numeric operand, runs EXIT while
+            // function locals are still visible. An arity failure unwinds those locals first.
+            return scope.Context.FunctionContext != null && completion != CommandCompletion.ExitEvaluation
+                ? await RunExitTrapAsync(scope, result).ConfigureAwait(false) : result;
+        }
+    }
+
+    private static bool TryParseControlNumber(ShellValue operand, out long status) =>
+        Integers.TryParseNumber(operand.Bytes.Span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8), out status);
+
+    private async Task<EvaluationResult> WriteControlHelpAsync(BuiltinKind builtin, bool negated)
+    {
+        var name = builtin switch
+        {
+            BuiltinKind.Break => "break",
+            BuiltinKind.Continue => "continue",
+            BuiltinKind.Exit => "exit",
+            _ => throw new ArgumentOutOfRangeException(nameof(builtin))
+        };
+        var documentation = BuiltinDocumentation.For(builtin);
+        await ExecuteWriteAsync(GetStdOutDescriptor(),
+            Utf8Text.Encode(name + ": " + documentation.Synopsis(name) + "\n" + documentation.Description + "\n"))
+            .ConfigureAwait(false);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
     }
 }

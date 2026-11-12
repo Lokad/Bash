@@ -54,16 +54,12 @@ public sealed class EvaluationLoopTestsEndToEnd
     [Fact]
     public async Task Evaluation_WhileCommand_BreakInvalidArgumentReturnsFailure()
     {
-        // This test verifies that "break" with an invalid argument inside a loop returns a usage
-        // error exit code and stops the loop.
-        // The script uses "break nope" so a correct implementation must emit no output and return 2.
-        // If the invalid argument is ignored, the exit code would be 0 or 1.
         var script = @"while true; do break nope; done";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("break: nope: numeric argument required\n", result.StdErr);
+        Assert.Equal(128, result.ExitCode);
     }
 
     [Fact]
