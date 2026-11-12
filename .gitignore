@@ -4,6 +4,7 @@ obj/
 .idea/
 .codex/
 .claude/
+PLAN.md
 artifacts/
 TestResults/
 BenchmarkDotNet.Artifacts/
