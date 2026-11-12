@@ -6,7 +6,7 @@ using System.Threading;
 namespace Lokad.Bash.Helpers;
 
 /// <summary>Matches text glob patterns with optional per-character quoting metadata.</summary>
-/// <remarks>Text overloads retain UTF-16 code-unit matching; the byte overload matches UTF-8 characters. Callers own pathname policies.</remarks>
+/// <remarks>Text overloads retain UTF-16 code-unit matching; byte overloads use UTF-8 or malformed-input byte matching. Callers own pathname policies.</remarks>
 public static class TextGlobMatcher
 {
     /// <summary>Matches a pattern with every metacharacter active, without allocating a mask.</summary>
@@ -24,23 +24,36 @@ public static class TextGlobMatcher
         return MatchText(pattern, in mask, text, CancellationToken.None) == GlobMatchResult.Match;
     }
 
-    /// <summary>Matches UTF-8 characters (or individual malformed bytes), returning the longest prefix in bytes.</summary>
+    /// <summary>Matches UTF-8 characters, falling back to bytes for malformed operands; returns a prefix length in bytes.</summary>
     public static GlobMatchResult MatchUtf8(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
         bool requireEnd, CancellationToken cancellationToken, out int length) =>
-        Match(new GlobInput(pattern), in mask, new GlobInput(text), requireEnd,
-            cancellationToken, out length);
+        MatchUtf8(pattern, in mask, text, requireEnd,
+            !System.Text.Unicode.Utf8.IsValid(pattern) || !System.Text.Unicode.Utf8.IsValid(text), cancellationToken, out length);
+
+    internal static GlobMatchResult MatchUtf8(
+        ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
+        bool requireEnd, bool byteCharacters, CancellationToken cancellationToken, out int length) =>
+        Match(new GlobInput(pattern, byteCharacters), in mask, new GlobInput(text, byteCharacters), requireEnd,
+            shortestPrefix: false, cancellationToken, out length);
+
+    /// <summary>Finds a character-aligned prefix without rescanning every candidate length.</summary>
+    internal static GlobMatchResult MatchUtf8Prefix(
+        ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
+        bool shortest, bool byteCharacters, CancellationToken cancellationToken, out int length) =>
+        Match(new GlobInput(pattern, byteCharacters), in mask, new GlobInput(text, byteCharacters), requireEnd: false,
+            shortest, cancellationToken, out length);
 
     /// <summary>Matches a complete text value with cooperative cancellation.</summary>
     public static GlobMatchResult MatchText(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
         CancellationToken cancellationToken) =>
         Match(new GlobInput(pattern), in mask, new GlobInput(text), true,
-            cancellationToken, out _);
+            shortestPrefix: false, cancellationToken, out _);
 
     private static GlobMatchResult Match(
         GlobInput pattern, in GlobMaskSpan mask, GlobInput text, bool requireEnd,
-        CancellationToken cancellationToken, out int length)
+        bool shortestPrefix, CancellationToken cancellationToken, out int length)
     {
         length = -1;
         var p = 0;
@@ -52,7 +65,11 @@ public static class TextGlobMatcher
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (p == pattern.Length && (!requireEnd || t == text.Length))
+            {
                 length = t;
+                if (shortestPrefix)
+                    return GlobMatchResult.Match;
+            }
             if (t == text.Length)
                 break;
 
@@ -188,24 +205,28 @@ public static class TextGlobMatcher
         private readonly ReadOnlySpan<char> _text;
         private readonly ReadOnlySpan<byte> _bytes;
         private readonly bool _utf8;
+        private readonly bool _byteCharacters;
 
         public GlobInput(ReadOnlySpan<char> text)
         {
             _text = text;
             _bytes = default;
             _utf8 = false;
+            _byteCharacters = false;
         }
 
-        public GlobInput(ReadOnlySpan<byte> bytes)
+        public GlobInput(ReadOnlySpan<byte> bytes, bool byteCharacters)
         {
             _bytes = bytes;
             _text = default;
             _utf8 = true;
+            _byteCharacters = byteCharacters;
         }
 
         public int Length => _utf8 ? _bytes.Length : _text.Length;
-        public int Width(int index) => _utf8 ? Utf8Text.FirstCharacterLength(_bytes[index..]) : 1;
+        public int Width(int index) => _utf8 && !_byteCharacters ? Utf8Text.FirstCharacterLength(_bytes[index..]) : 1;
         public int this[int index] => !_utf8 ? _text[index]
+            : _byteCharacters ? _bytes[index]
             : Rune.DecodeFromUtf8(_bytes[index..], out var rune, out _) == OperationStatus.Done ? rune.Value
             : 0x110000 + _bytes[index]; // Invalid bytes must not alias Unicode replacement characters.
     }

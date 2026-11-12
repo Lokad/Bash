@@ -6,31 +6,31 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationParameterOperatorTestsEndToEnd
 {
-    // Text-pattern operators deliberately reject byte operands instead of adopting byte-glob semantics.
+    // Pattern operations preserve shell bytes and allow later operands to execute.
     [Theory]
-    [InlineData("a=$'\\377'", "${a%%x}", "pattern removal value must be valid UTF-8")]
-    [InlineData("a=(ok $'\\377')", "${a[@]%x}", "pattern removal value must be valid UTF-8")]
-    [InlineData("a=($'\\377')", "${a[*]#x}", "pattern removal value must be valid UTF-8")]
-    [InlineData("declare -A a; a[key]=$'\\377'", "${a[@]##x}", "pattern removal value must be valid UTF-8")]
-    [InlineData("set -- ok $'\\377'", "${@##x}", "pattern removal value must be valid UTF-8")]
-    [InlineData("a=(abc def); pattern=$'\\377'", "${a[@]%$pattern}", "pattern must be valid UTF-8")]
-    public async Task PatternRemoval_RejectsNonUtf8ThroughTheExpansionErrorPath(
-        string setup, string expansion, string diagnostic)
+    [InlineData("a=$'\\377'", "${a%%x}", "FF6166746572")]
+    [InlineData("a=(ok $'\\377')", "${a[@]%x}", "6F6BFF6166746572")]
+    [InlineData("a=($'\\377')", "${a[*]#x}", "FF6166746572")]
+    [InlineData("declare -A a; a[key]=$'\\377'", "${a[@]##x}", "FF6166746572")]
+    [InlineData("set -- ok $'\\377'", "${@##x}", "6F6BFF6166746572")]
+    [InlineData("a=(abc def); pattern=$'\\377'", "${a[@]%$pattern}", "6162636465666166746572")]
+    public async Task PatternRemoval_PreservesBytesAndLaterEffects(
+        string setup, string expansion, string stdoutHex)
     {
         var result = await EvaluationTestHelper.RunAsync(setup
             + "; printf '%s' \"$(printf before >&2)\" \"" + expansion
             + "\" \"$(printf later >&2)\"; printf after");
 
-        Assert.Equal(1, result.ExitCode);
-        Assert.Empty(result.StdOut);
-        Assert.Equal("before" + expansion + ": " + diagnostic + "\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(stdoutHex), result.Host.StandardOutput.Content.ToArray());
+        Assert.Equal("beforelater", result.StdErr);
     }
 
     [Fact]
-    public async Task PatternRemoval_DoesNotValidateUnreachedOperands()
+    public async Task PatternRemoval_DoesNotExpandUnreachedOperands()
     {
         var result = await EvaluationTestHelper.RunAsync(
-            "value=ok; a=($'\\377'); printf '%s' \"${value:-${a[@]%x}}\"");
+            "value=ok; a=($'\\377'); printf '%s' \"${value:-${a[@]%$(printf unexpected >&2)}}\"");
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("ok", result.StdOut);

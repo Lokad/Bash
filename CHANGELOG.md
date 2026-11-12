@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve quote provenance and arbitrary shell bytes in case patterns and parameter
+  prefix/suffix removal. Match valid UTF-8 characters without splitting surrogate
+  pairs; use GNU's byte-matching fallback for malformed pattern/value bytes.
+  Retained removal results own their byte storage independently of the input.
 - Evaluate variable/array arithmetic values as expressions through the shared
   arithmetic evaluator, preserving dynamic bindings, side effects and short
   circuiting. Support octal, hexadecimal and base-2-through-64 constants with

@@ -83,6 +83,11 @@ $results = foreach ($sample in $catalog.cases) {
     $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($sample.script)
     $scriptHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($scriptBytes)).ToLowerInvariant()
     if ($scriptHash -ne $sample.scriptSha256) { throw "Script hash mismatch: $($sample.id)" }
+    if ($sample.referenceIds -and $referenceId -notin $sample.referenceIds) {
+        if (-not $sample.referenceReason) { throw 'Every excluded reference needs a reason.' }
+        [pscustomobject]@{ id = $sample.id; classification = $sample.classification; passed = $null; skipped = $sample.referenceReason; actual = $null }
+        continue
+    }
     if ($sample.id -notmatch '^[a-z0-9][a-z0-9-]+$') { throw 'Unsafe correctness case identifier.' }
     $fixtureRoot = Join-Path $repository ("artifacts/conformance/fixtures/" + [Guid]::NewGuid().ToString('N'))
     [void][System.IO.Directory]::CreateDirectory($fixtureRoot)
@@ -124,6 +129,8 @@ $export = [ordered]@{
     results = @($results)
 }
 $export | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $destination -Encoding utf8NoBOM
-$failed = @($results | Where-Object { -not $_.passed })
-Write-Output "$referenceId : $($results.Count - $failed.Count)/$($results.Count) verified. Results: $destination"
+$failed = @($results | Where-Object { $_.passed -eq $false })
+$skipped = @($results | Where-Object skipped)
+$verifiedCount = $results.Count - $skipped.Count
+Write-Output "$referenceId : $($verifiedCount - $failed.Count)/$verifiedCount verified; $($skipped.Count) labelled reference exclusions. Results: $destination"
 if ($failed.Count -ne 0) { throw "GNU correctness mismatches: $($failed.id -join ', ')" }

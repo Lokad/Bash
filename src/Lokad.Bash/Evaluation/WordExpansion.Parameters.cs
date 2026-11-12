@@ -223,34 +223,24 @@ internal static partial class WordExpansion
                 if (!scope.CanExpand)
                     return;
                 var budget = scope.Effects.Memory;
-                if (!GlobPattern.TryFromExpandedWord(ExpandedWord.JoinWithSpaces(words, budget), budget, out var pattern))
-                {
-                    await ReportSubstitutionFailureAsync("pattern must be valid UTF-8", ExpansionFailureKind.Parameter)
-                        .ConfigureAwait(false);
-                    return;
-                }
-                // Keep text-glob semantics and the selected field boundaries; no byte-oriented fallback.
-                budget.Charge(checked(256L * (parameter.Fields.Count)));
+                var pattern = ShellPattern.FromWord(ExpandedWord.JoinWithSpaces(words, budget),
+                    budget, scope.Effects.CancellationToken);
+                budget.Charge(checked(256L * parameter.Fields.Count));
                 var removed = new List<ShellValue>(parameter.Fields.Count);
                 foreach (var value in parameter.Fields)
                 {
                     scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                    budget.Charge(checked(4L * value.Bytes.Length));
-                    if (!value.TryGetUtf8Text(out var text))
-                    {
-                        await ReportSubstitutionFailureAsync("pattern removal value must be valid UTF-8", ExpansionFailureKind.Parameter)
-                            .ConfigureAwait(false);
-                        return;
-                    }
-                    var slice = ApplyPatternRemoval(text, pattern, parsed.Kind, scope.Effects.CancellationToken);
-                    if (slice.Length == text.Length)
-                    {
+                    var slice = ApplyPatternRemoval(value, pattern, parsed.Kind, scope.Effects.CancellationToken);
+                    if (slice.Length == value.Bytes.Length)
                         removed.Add(value);
-                        continue;
+                    else if (slice.IsEmpty)
+                        removed.Add(ShellValue.Empty);
+                    else
+                    {
+                        // Own the retained result independently of a larger input backing buffer.
+                        budget.Charge(checked(2L * slice.Length));
+                        removed.Add(ShellValue.FromBytes(slice.ToArray()));
                     }
-                    // Materialize the slice and encode at most three bytes per UTF-16 unit.
-                    budget.Charge(checked(4L * (4L * slice.Length)));
-                    removed.Add(ShellValue.FromText(slice.ToString()));
                 }
                 Emit(removed);
                 return;
@@ -801,19 +791,7 @@ internal static partial class WordExpansion
                     ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve).ConfigureAwait(false);
                 var word = ExpandedWord.JoinWithSpaces(words, budget);
                 var value = word.ToValue(budget);
-                if (!word.Segments.Any(segment => segment.IsGlobQuoted && !segment.Content.IsEmpty))
-                    return new ParameterOperand(value, new GlobMask(ReadOnlyMemory<byte>.Empty));
-                budget.Charge(checked(4L * value.Bytes.Length));
-                var mask = new byte[value.Bytes.Length];
-                var position = 0;
-                foreach (var segment in word.Segments)
-                {
-                    var length = segment.Content.Bytes.Length;
-                    if (!segment.IsGlobQuoted)
-                        mask.AsSpan(position, length).Fill(GlobMask.Active);
-                    position += length;
-                }
-                return new ParameterOperand(value, new GlobMask(mask));
+                return new ParameterOperand(value, word.GetGlobMask(budget));
             }
 
             int Match(ParameterOperand pattern, ReadOnlySpan<byte> value, bool requireEnd)
@@ -855,23 +833,15 @@ internal static partial class WordExpansion
             }
         }
 
-        static ReadOnlySpan<char> ApplyPatternRemoval(string value, GlobPattern pattern, BracedParameterOperatorKind kind,
-            CancellationToken cancellationToken)
+        static ReadOnlyMemory<byte> ApplyPatternRemoval(ShellValue value, ShellPattern pattern,
+            BracedParameterOperatorKind kind, CancellationToken cancellationToken)
         {
-            var removePrefix = kind is BracedParameterOperatorKind.RemovePrefixShortest
-                or BracedParameterOperatorKind.RemovePrefixLongest;
-            var longest = kind is BracedParameterOperatorKind.RemovePrefixLongest
-                or BracedParameterOperatorKind.RemoveSuffixLongest;
-            for (var offset = 0; offset <= value.Length; offset++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var length = longest ? value.Length - offset : offset;
-                var candidate = removePrefix ? value.AsSpan(0, length) : value.AsSpan(value.Length - length);
-                if (pattern.IsMatch(candidate, cancellationToken))
-                    return removePrefix ? value.AsSpan(length) : value.AsSpan(0, value.Length - length);
-            }
-
-            return value.AsSpan();
+            var shortest = kind is BracedParameterOperatorKind.RemovePrefixShortest or BracedParameterOperatorKind.RemoveSuffixShortest;
+            if (kind is BracedParameterOperatorKind.RemovePrefixShortest or BracedParameterOperatorKind.RemovePrefixLongest)
+                return pattern.TryMatchPrefix(value.Bytes.Span, shortest, cancellationToken, out var length)
+                    ? value.Bytes[length..] : value.Bytes;
+            return pattern.TryMatchSuffix(value.Bytes.Span, shortest, cancellationToken, out var start)
+                ? value.Bytes[..start] : value.Bytes;
         }
 
         static async Task ExpandSubstringAsync(

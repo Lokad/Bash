@@ -19,6 +19,14 @@ Command substitution removes NUL bytes and trailing LF bytes while retaining sta
 File paths use the contained POSIX-style namespace defined by `ShellPath` and
 `FilePathLookup`, including their size, control-character and traversal constraints.
 
+The deterministic character profile is UTF-8 with invariant character operations.
+Length and substring operations count Unicode scalar values and individual malformed
+bytes. Shell-word patterns preserve quoting and match scalars when both operands
+are valid UTF-8; a malformed pattern or value selects byte matching, as in GNU's
+UTF-8 locale. Removal slices the selected bytes directly and can therefore produce
+malformed byte values without passing through a text encoder. Pathname operations
+retain their separate text-only host boundary and path component policies.
+
 Pipeline status uses fixed `pipefail`: the rightmost failing stage wins. Scripts
 are limited to 4 MiB, with structural syntax/nesting guards and CLR collection-size
 checks. The source bound limits parser input; nesting guards protect recursive

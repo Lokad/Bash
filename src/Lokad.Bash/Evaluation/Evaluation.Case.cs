@@ -13,7 +13,9 @@ public sealed partial class Evaluation
         ScopedEvaluation scope,
         bool negated)
     {
-        var subject = await ExpandWordAsync(caseCommand.Subject, scope).ConfigureAwait(false);
+        var subjectWord = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
+            caseCommand.Subject, scope, ExpansionPurpose.Scalar, allowLeadingTilde: true)).ConfigureAwait(false);
+        var subject = subjectWord.ToValue(Memory);
         if (_state.HasPendingExpansionError)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
@@ -21,11 +23,12 @@ public sealed partial class Evaluation
         {
             foreach (var pattern in item.Patterns)
             {
-                var expanded = await ExpandWordAsync(pattern, scope).ConfigureAwait(false);
+                var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
+                    pattern, scope, ExpansionPurpose.Scalar, allowLeadingTilde: true)).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
-                var mask = default(GlobMaskSpan);
-                if (TextGlobMatcher.MatchText(expanded.AsSpan(), in mask, subject.AsSpan(), _cancellationToken) != GlobMatchResult.Match)
+                var prepared = ShellPattern.FromWord(expanded, Memory, _cancellationToken);
+                if (!prepared.IsMatch(subject.Bytes.Span, _cancellationToken))
                     continue;
 
                 var result = await EvaluateCommandAsync(item.Body, scope, negated: false).ConfigureAwait(false);

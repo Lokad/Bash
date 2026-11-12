@@ -67,6 +67,27 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments)
         return ShellValue.FromBytes(bytes);
     }
 
+    /// <summary>Retains per-byte quoting for shell-word patterns and replacement operands.</summary>
+    public GlobMask GetGlobMask(EvaluationMemory memory)
+    {
+        if (!Segments.Any(segment => segment.IsGlobQuoted && !segment.Content.IsEmpty))
+            return new GlobMask(ReadOnlyMemory<byte>.Empty);
+        var length = Segments.Sum(segment => (long)segment.Content.Bytes.Length);
+        if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+        memory.Charge(checked(2L * length));
+        var mask = new byte[(int)length];
+        var position = 0;
+        foreach (var segment in Segments)
+        {
+            var count = segment.Content.Bytes.Length;
+            if (!segment.IsGlobQuoted)
+                mask.AsSpan(position, count).Fill(GlobMask.Active);
+            position += count;
+        }
+        return new GlobMask(mask);
+    }
+
     /// <summary>Decodes the joined value only at a text-only consumer boundary.</summary>
     public string ToText(EvaluationMemory memory)
     {
