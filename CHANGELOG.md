@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Share directional pattern traversal for suffix removal and replacement search,
+  avoiding a fresh match for every candidate position. Reuse admitted bracket-atom
+  offsets, search literals with byte spans, and retain input on no replacement.
+  Preserve leftmost/longest selection, quoting, supplementary characters and
+  GNU's malformed-byte profile across global replacement iterations.
 - Reuse reached-binding detachment for external-command redirection expansion.
   Preserve ordered temporary writes and caller isolation without copying unrelated
   variables or arrays; literal redirection targets retain their direct path.

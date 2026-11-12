@@ -12,6 +12,13 @@ predicates use the existing file-operation path in source order. The distinct
 `test`/`[` grammar consumes completed byte arguments and shares predicate metadata
 and filesystem execution with `[[`.
 
+Shell-word pattern matching shares one traversal core for complete matches,
+prefixes, suffixes and replacement search. Suffix traversal reads characters
+backward and retains bracket expressions as prepared atoms; it does not reverse
+or copy the subject. Replacement searches track the leftmost start and longest
+match in one shared search. Literal searches use byte spans. Prepared offsets belong
+to the current command and are admitted once per reached character profile.
+
 Regex matching publishes independently owned capture bytes to global
 `BASH_REMATCH`, after admitting the replacement array and byte storage. Nonmatches
 publish an empty array; errors leave the previous binding intact. Function-local

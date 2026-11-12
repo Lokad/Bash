@@ -99,6 +99,12 @@ state. Full child snapshots retain separate admission for their complete visible
 store. Cancellation or refusal during detachment leaves the caller binding intact;
 the surrounding command owns copied storage through operation and cleanup completion.
 
+Suffix pattern traversal retains admitted atom offsets on the command-local
+prepared pattern, with separate byte/scalar profiles when both are reached.
+Subjects stay borrowed during matching; retained removal slices and changed
+replacement output own their result bytes. Matching creates no reversed subject
+copy or global pattern cache.
+
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
 source-size bound, not complete accounting; manual stepping does not install a host
 budget. Keep coverage limits explicit. Test shared allowances, refusal, immediate

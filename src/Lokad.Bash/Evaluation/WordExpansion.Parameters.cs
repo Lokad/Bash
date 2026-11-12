@@ -661,8 +661,9 @@ internal static partial class WordExpansion
                 if (!scope.CanExpand)
                     return [];
                 var template = EncodeReplacement(replacement);
+                var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken) : null;
                 foreach (var value in ReadFields())
-                    result.Add(canMatch ? Replace(value, pattern, template, mode) : value);
+                    result.Add(matcher == null ? value : Replace(value, matcher, template, mode));
                 return result;
 
                 static int FindReplacementSeparator(ShellSource source, ParameterReplacementMode mode)
@@ -701,29 +702,59 @@ internal static partial class WordExpansion
                     return ShellValue.FromBytes(builder.ToMemory());
                 }
 
-                ShellValue Replace(ShellValue value, ParameterOperand pattern, ShellValue replacement, ParameterReplacementMode mode)
+                ShellValue Replace(ShellValue value, ShellPattern pattern, ShellValue replacement, ParameterReplacementMode mode)
                 {
                     var bytes = value.Bytes.Span;
-                    if (pattern.Value.IsEmpty && mode is ParameterReplacementMode.First or ParameterReplacementMode.All)
+                    if (pattern.IsEmpty && mode is ParameterReplacementMode.First or ParameterReplacementMode.All)
                         return value;
+                    var byteCharacters = pattern.UsesByteCharacters(bytes);
+                    var lastMalformed = -1;
+                    if (mode == ParameterReplacementMode.All && byteCharacters && !pattern.RequiresByteCharacters)
+                    {
+                        // Later global matches can return to scalar matching after malformed
+                        // input is consumed. Remember suffix validity without rescanning it.
+                        for (var index = 0; index < bytes.Length;)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            if (Rune.DecodeFromUtf8(bytes[index..], out _, out var width) != OperationStatus.Done)
+                            {
+                                lastMalformed = index;
+                                width = 1;
+                            }
+                            index += width;
+                        }
+                    }
+                    var replaced = false;
                     var builder = ByteMemoryBuilder.CreateUnaccounted(0);
                     var position = 0;
                     var copiedThrough = 0;
                     do
                     {
-                        var length = Match(pattern, bytes[position..], mode == ParameterReplacementMode.Suffix);
-                        if (length < 0)
+                        int offset;
+                        int length;
+                        bool found;
+                        if (mode == ParameterReplacementMode.Prefix)
                         {
-                            if (mode == ParameterReplacementMode.Prefix || position == bytes.Length)
-                                break;
-                            position += Utf8Text.FirstCharacterLength(bytes[position..]);
-                            continue;
+                            offset = 0;
+                            found = pattern.TryMatchPrefix(bytes[position..], shortest: false, byteCharacters, cancellationToken, out length);
                         }
+                        else if (mode == ParameterReplacementMode.Suffix)
+                        {
+                            found = pattern.TryMatchSuffix(bytes[position..], shortest: false, byteCharacters, cancellationToken, out offset);
+                            length = found ? bytes.Length - position - offset : 0;
+                        }
+                        else
+                            found = pattern.TryFind(bytes[position..], byteCharacters, cancellationToken, out offset, out length);
+                        if (!found)
+                            break;
+                        replaced = true;
+                        position += offset;
                         Append(bytes[copiedThrough..position]);
                         var insert = replacement.Bytes.Span;
                         var literalStart = 0;
                         for (var index = 0; index < insert.Length; index++)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             if (insert[index] == (byte)'&')
                             {
                                 Append(insert[literalStart..index]);
@@ -743,8 +774,12 @@ internal static partial class WordExpansion
                         if (mode != ParameterReplacementMode.All || position == bytes.Length)
                             break;
                         if (length == 0)
-                            position += Utf8Text.FirstCharacterLength(bytes[position..]);
-                    } while (position < bytes.Length || mode == ParameterReplacementMode.Suffix && position == bytes.Length);
+                            position += byteCharacters ? 1 : Utf8Text.FirstCharacterLength(bytes[position..]);
+                        if (byteCharacters && !pattern.RequiresByteCharacters && position < bytes.Length)
+                            byteCharacters = position <= lastMalformed || (bytes[position] & 0xc0) == 0x80;
+                    } while (position < bytes.Length);
+                    if (!replaced)
+                        return value;
                     Append(bytes[copiedThrough..]);
                     return ShellValue.FromBytes(builder.ToMemory());
 

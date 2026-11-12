@@ -27,6 +27,12 @@ UTF-8 locale. Removal slices the selected bytes directly and can therefore produ
 malformed byte values without passing through a text encoder. Pathname operations
 retain their separate text-only host boundary and path component policies.
 
+Replacement chooses the leftmost, longest match. A global replacement applies
+the character profile to each remaining operand: after consuming malformed bytes
+it can resume scalar matching, while a remainder beginning inside a multibyte
+character continues in byte mode. Candidate positions within one search share
+that operand's profile. Suffix replacement uses the complete operand's profile.
+
 Pipeline status uses fixed `pipefail`: the rightmost failing stage wins. The
 indexed `PIPESTATUS` array exposes individual foreground statuses.
 The array records statuses before pipeline negation; a subsequent command expands
