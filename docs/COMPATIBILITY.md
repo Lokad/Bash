@@ -87,6 +87,11 @@ job/process-group control, OS signal handling, process substitution, `coproc`,
 other than errexit.
 The runtime does not import process environment variables or startup files.
 
+`getopts` currently supports separate flag arguments and advances `OPTIND` over
+the active positional window or explicit arguments. Bundled flags, required option
+arguments, `OPTARG` lifecycle and GNU diagnostic/silent modes remain unsupported.
+The correctness corpus records the required-argument departure explicitly.
+
 The public script runner, `source` and `eval` execute complete command units as
 they are parsed. Earlier units retain their effects before later syntax failure;
 the failing unit executes no partial command list. Explicit whole-script parsing

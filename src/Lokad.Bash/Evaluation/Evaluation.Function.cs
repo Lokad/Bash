@@ -18,8 +18,8 @@ public sealed partial class Evaluation
         IReadOnlySet<BindingName>? prefixNames,
         bool negated)
     {
-        // Positional arguments are saved now; locals reserve only bindings they actually hide.
-        Memory.Charge(scope.Variables.PositionalMemoryBytes);
+        // Keep the inactive caller frame admitted and reserve the callee's owned entry array.
+        Memory.Charge(checked(scope.Variables.PositionalMemoryBytes + 32L * arguments.Count));
         using var bindings = prefixNames == null
             ? null
             : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames);

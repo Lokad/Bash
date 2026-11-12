@@ -248,7 +248,10 @@ public sealed partial class Evaluation
         }
 
         if (replacePositionals || index < words.Count)
-            commandVars.ReplacePositionalParameters(words.Skip(index).ToArray());
+        {
+            Memory.Charge(checked(32L * (words.Count - index)));
+            commandVars.ReplacePositionalParameters(words, index);
+        }
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
 
         async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, bool named)

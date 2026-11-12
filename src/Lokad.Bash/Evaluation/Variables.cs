@@ -9,16 +9,6 @@ using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
-/// <summary>Determines when a scoped positional-parameter replacement is restored.</summary>
-internal enum PositionalParametersRestorePolicy
-{
-    /// <summary>Restore the captured values regardless of replacements performed inside the scope.</summary>
-    Always,
-
-    /// <summary>Restore the captured values only when no wholesale replacement occurred inside the scope.</summary>
-    UnlessReplaced
-}
-
 /// <summary>Whether a kind-only local declaration discards an existing scalar value.</summary>
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
@@ -49,27 +39,11 @@ public sealed partial class Variables
         public bool IsEmpty => Value.IsEmpty;
     }
     /// <summary>
-    /// Holds positional parameters ($1, $2, ...). The list instance remains stable so previously returned
-    /// read-only views stay live. Mutations are centralized below: replacement changes the logical identity,
-    /// while <c>shift</c> retains it so source/function restoration can distinguish the two operations.
-    /// </summary>
-    private readonly List<ShellValue> _positional = [];
-
-    /// <summary>Stable live read-only view over the owned positional values.</summary>
-    private readonly ReadOnlyCollection<ShellValue> _positionalView;
-
-    /// <summary>
-    /// Identifies the last wholesale replacement. A sourced script that only shifts its temporary arguments
-    /// restores its caller's values, while one that executes <c>set</c> keeps that explicit replacement.
-    /// </summary>
-    private PositionalParametersIdentity _positionalIdentity = new();
-    /// <summary>
     /// Holds the shell name used for $0 expansion.
     /// </summary>
     private ShellValue _argumentZero = ShellValue.Empty;
     private int _bindingCapacity;
     private long _bindingBytes;
-    private long _positionalValueBytes;
 
     // Account bindings as a coarse owner. Shared values can be counted twice; no object identities
     // are registered. Callers keep saved bindings charged through restoration.
@@ -80,14 +54,11 @@ public sealed partial class Variables
     {
         get
         {
-            var bytes = _bindingBytes + _positionalValueBytes + EstimateValueBytes(_argumentZero) + EstimateValueBytes(
+            var bytes = _bindingBytes + PositionalMemoryBytes + EstimateValueBytes(_argumentZero) + EstimateValueBytes(
                 ShellValue.FromBytes(CachedFieldSeparators.Bytes));
-            return checked(bytes + (long)BindingOverheadBytes * (_bindingCapacity - _bindings.Count)
-                + (long)PositionalEntryBytes * _positional.Capacity);
+            return checked(bytes + (long)BindingOverheadBytes * (_bindingCapacity - _bindings.Count));
         }
     }
-
-    internal long PositionalMemoryBytes => _positionalValueBytes + (long)PositionalEntryBytes * _positional.Capacity;
 
     // Storage replacements and in-place value mutations each update the affected binding once.
     // Command boundaries read a constant-time total; arrays already cache their element estimates.
@@ -152,7 +123,7 @@ public sealed partial class Variables
 
     private Variables()
     {
-        _positionalView = _positional.AsReadOnly();
+        _positionalView = new PositionalParametersView(this);
         Scalars = new BindingView<ScalarSlot, ShellValue>(_bindings, slot => slot.Value);
         IndexedArrays = new BindingView<IndexedSlot, IndexedArray>(_bindings, slot => slot.Value);
         AssociativeArrays = new BindingView<AssociativeSlot, AssociativeArray>(_bindings, slot => slot.Value);
@@ -188,7 +159,7 @@ public sealed partial class Variables
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in _bindings)
             clone.StoreBinding(entry.Key, entry.Value.Clone());
-        clone.ReplacePositionalParameters(_positional);
+        clone.ReplacePositionalParameters(PositionalParameters);
         clone._argumentZero = _argumentZero;
 
         return clone;
@@ -1344,95 +1315,6 @@ public sealed partial class Variables
         }
 
         return results;
-    }
-
-    /// <summary>
-    /// Gets a stable live read-only view of positional parameters ($1, $2, ...), or replaces their values.
-    /// </summary>
-    public IReadOnlyList<ShellValue> PositionalParameters
-    {
-        get => _positionalView;
-        set => ReplacePositionalParameters(value);
-    }
-
-    /// <summary>Replaces positional parameters without exposing their mutable backing list.</summary>
-    internal void ReplacePositionalParameters(IReadOnlyList<ShellValue> values) =>
-        RestorePositionalParameters(values.ToArray(), new PositionalParametersIdentity());
-
-    /// <summary>
-    /// Replaces positional parameters for a scope and captures the state selected by its restore policy.
-    /// </summary>
-    internal PositionalParametersScope EnterPositionalParametersScope(
-        IReadOnlyList<ShellValue> values,
-        PositionalParametersRestorePolicy restorePolicy) =>
-        new(this, values, restorePolicy);
-
-    /// <summary>Removes leading positional values without changing their logical identity.</summary>
-    internal bool TryShiftPositionalParameters(int count)
-    {
-        if (_positional.Count < count)
-            return false;
-
-        for (var index = 0; index < count; index++)
-            _positionalValueBytes -= EstimateValueBytes(_positional[index]);
-        _positional.RemoveRange(0, count);
-        return true;
-    }
-
-    /// <summary>Copies detached values into the stable live list without cloning the snapshot again.</summary>
-    private void RestorePositionalParameters(
-        ShellValue[] values,
-        PositionalParametersIdentity identity)
-    {
-        _positional.Clear();
-        _positional.AddRange(values);
-        _positionalValueBytes = 0;
-        foreach (var value in values)
-            _positionalValueBytes = checked(_positionalValueBytes + EstimateValueBytes(value));
-        _positionalIdentity = identity;
-    }
-
-    /// <summary>Opaque identity for one wholesale positional-parameter replacement.</summary>
-    private sealed class PositionalParametersIdentity;
-
-    /// <summary>
-    /// Owns a detached positional-parameter snapshot and restores it according to the scope policy.
-    /// </summary>
-    /// <remarks>Dispose nested scopes innermost first; repeated disposal does not restore again.</remarks>
-    internal sealed class PositionalParametersScope : IDisposable
-    {
-        private readonly Variables _variables;
-        private readonly ShellValue[] _savedValues;
-        private readonly PositionalParametersIdentity _savedIdentity;
-        private readonly PositionalParametersIdentity _scopeIdentity = new();
-        private readonly PositionalParametersRestorePolicy _restorePolicy;
-        private bool _isDisposed;
-
-        internal PositionalParametersScope(
-            Variables variables,
-            IReadOnlyList<ShellValue> values,
-            PositionalParametersRestorePolicy restorePolicy)
-        {
-            _variables = variables;
-            _savedValues = variables._positional.ToArray();
-            _savedIdentity = variables._positionalIdentity;
-            _restorePolicy = restorePolicy;
-            variables.RestorePositionalParameters(values.ToArray(), _scopeIdentity);
-        }
-
-        /// <summary>Restores the captured state when required by this scope's policy.</summary>
-        public void Dispose()
-        {
-            if (_isDisposed)
-                return;
-
-            _isDisposed = true;
-            if (_restorePolicy == PositionalParametersRestorePolicy.Always ||
-                ReferenceEquals(_variables._positionalIdentity, _scopeIdentity))
-            {
-                _variables.RestorePositionalParameters(_savedValues, _savedIdentity);
-            }
-        }
     }
 
     /// <summary>

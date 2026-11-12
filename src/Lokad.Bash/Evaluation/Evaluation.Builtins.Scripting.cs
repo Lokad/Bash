@@ -48,7 +48,7 @@ public sealed partial class Evaluation
             return ApplyNegation(resultWithoutArguments, negated);
         }
 
-        Memory.Charge(commandVars.PositionalMemoryBytes);
+        Memory.Charge(checked(commandVars.PositionalMemoryBytes + 32L * arguments.Count));
         using var positionalParametersScope = commandVars.EnterPositionalParametersScope(
             arguments,
             PositionalParametersRestorePolicy.UnlessReplaced);

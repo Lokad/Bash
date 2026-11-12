@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use owned positional argument frames with a head index for `shift`. Function
+  and source scopes capture and restore caller frames without copying them;
+  `set` copies its selected argument tail once. Preserve live read-only views,
+  byte values, independent child state and source replacement rules.
 - Publish global `BASH_REMATCH` captures, clear them on nonmatch and preserve them
   on invalid or unreached matching. Admit capture storage before replacing the
   prior binding. Parse direct POSIX bracket classes and support the twelve named

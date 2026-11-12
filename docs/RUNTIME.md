@@ -30,6 +30,14 @@ Pipelines publish the settled stage statuses before applying negation; compound
 syntax preserves the last executed command's metadata. Publication follows binding
 ownership in the active shell and uses the command's admitted workspace.
 
+Positional parameters use owned argument frames behind a stable live read-only
+view. Shifting advances a head index and releases consumed value references;
+surviving entries are not moved. Functions and argument-bearing source calls
+retain the caller frame and restore it without copying its entries. A new frame
+copies callee entries once while sharing immutable value bytes. Functions always
+restore their caller; source restores unless an explicit positional replacement
+survives. Saved frames remain admitted through their surrounding command scope.
+
 Host calls can overlap while pipeline stages execute. Allow producers and consumers
 to progress independently: never await descriptor I/O while holding a host-wide
 filesystem lock. Pipes must preserve byte order and apply backpressure. A consumer

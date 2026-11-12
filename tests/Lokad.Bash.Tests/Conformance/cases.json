@@ -4561,6 +4561,204 @@
         "stderrHex": "",
         "fileEffects": []
       }
+    },
+    {
+      "id": "positional-shift-bytes",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- discard '' $'\\377' 'a b'; shift; IFS=:; printf '%s:' \"$#\"; printf '<%s>' \"$@\"; printf ':<%s>' \"$*\"",
+      "scriptSha256": "125fa662a73815f930be331a3c2f411e2d580027473a675fb600d1ade1d626cd",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "333a3c3e3cff3e3c6120623e3a3c3aff3a6120623e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-function-window",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- drop outer ''; shift; f(){ shift; printf 'f:%s:<%s>:' \"$#\" \"$*\"; set -- replacement; }; f first second ''; printf 'outer:%s:' \"$#\"; printf '<%s>' \"$@\"",
+      "scriptSha256": "ca00e0f332d7983274a908e5c8c8e730b69c8794abe24aa387b7b433766ba38a",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "663a323a3c7365636f6e64203e3a6f757465723a323a3c6f757465723e3c3e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-recursive-frames",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- outer tail; f(){ local n=$1; shift; printf '%s:%s:<%s>;' \"$n\" \"$#\" \"$*\"; if ((n)); then f \"$((n-1))\" inner; fi; printf 'r%s:%s:<%s>;' \"$n\" \"$#\" \"$*\"; }; f 2 a b; printf 'outer:<%s>' \"$*\"",
+      "scriptSha256": "9d9351c81473cbe346f1d2c2d8ea6d527d292c6abb18cec27f3dcd4d3c917fb2",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "323a323a3c6120623e3b313a313a3c696e6e65723e3b303a313a3c696e6e65723e3b72303a313a3c696e6e65723e3b72313a313a3c696e6e65723e3b72323a323a3c6120623e3b6f757465723a3c6f75746572207461696c3e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-source-shift-restore",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- drop outer ''; shift; source ./sourced.sh first second ''; printf 'outer:%s:' \"$#\"; printf '<%s>' \"$@\"",
+      "scriptSha256": "1b3a28123686082717926b918ea88c5339768cfa513b41c8a3e46488884b6597",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "73686966743b207072696e74662027736f757263653a25733a2720222423223b207072696e746620273c25733e2720222440223b2072657475726e20340a",
+          "sha256": "510d8810ab3acc8c44b72418bf857e0517e92021f7f85ef5da1eef1aa75d2783"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "736f757263653a323a3c7365636f6e643e3c3e6f757465723a323a3c6f757465723e3c3e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-source-set-persists",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- outer; source ./sourced.sh first second; printf 'after:%s:' \"$#\"; printf '<%s>' \"$@\"",
+      "scriptSha256": "2b08af6903e3d88e39331f221b1fdd298eddbe3c3aba2eccd1236e59b3e7b8d4",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "73686966743b20736574202d2d20222440223b2073686966743b207072696e74662027736f757263653a25733b2720222423220a",
+          "sha256": "6e7f7aa8fea46a79288fae87b5745a5b00ad174e1891e70a80f270a8467200a3"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "736f757263653a303b61667465723a303a3c3e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-source-no-args",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- drop first second; shift; source ./sourced.sh; printf '%s:<%s>' \"$#\" \"$*\"",
+      "scriptSha256": "2986ec8badce9f5281c5b076966c956137aff2c1075f1b06d9981257173b9545",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "73686966740a",
+          "sha256": "258b716f8d599fa5f21af375d831d5e9e9b86c25f409f7e9b53bde24a2b695fc"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "313a3c7365636f6e643e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-source-nested-function",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- outer tail; source ./sourced.sh first second; printf 'outer:%s:<%s>' \"$#\" \"$*\"",
+      "scriptSha256": "9cbced89332a1dafb293b7c48c329da97c62a18169b971c5010b6b894eae64ef",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "sourced.sh",
+          "contentHex": "73686966743b206628297b20736574202d2d206368616e6765643b2073686966743b207d3b206620696e6e65723b207072696e74662027736f757263653a25733a3c25733e3b2720222423222022242a220a",
+          "sha256": "c09d388141a4fef4eca2f6c48c8d675b240b9ed669ed07ab798f370d03afd86d"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "736f757263653a313a3c7365636f6e643e3b6f757465723a323a3c6f75746572207461696c3e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-set-from-live-window",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- drop '' 'a b' $'\\377'; shift; set -- \"$@\"; shift; printf '%s:' \"$#\"; printf '<%s>' \"$@\"; shift 2; printf ':empty%s' \"$#\"",
+      "scriptSha256": "fab750f54be2149129dcfdbc04f395b722555b5ca0eda3f8efcfff2f0abe3455",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "323a3c6120623e3cff3e3a656d70747930",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-empty-function-args",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- drop outer; shift; f(){ printf '%s:<%s>;' \"$#\" \"$*\"; shift; printf 'shift%s;' \"$?\"; }; f; printf 'outer:<%s>' \"$*\"",
+      "scriptSha256": "e8e52f1e6e2cec7826e0ee0bb97507f813b4fc9effbd343c2ecdee2fa254c799",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "303a3c3e3b7368696674313b6f757465723a3c6f757465723e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-loop-snapshot-after-shift",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- drop a '' b; shift; for x; do printf '<%s>' \"$x\"; shift; done; printf ':%s' \"$#\"",
+      "scriptSha256": "fb798455cb6be001e7bd7b622f27250ba62c1f245678cdc4d8f540f9484013e4",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c613e3c3e3c623e3a30",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "positional-getopts-after-shift",
+      "classification": "deviation",
+      "reason": "getopts currently supports separate flag arguments; required option arguments are unsupported.",
+      "locale": "C",
+      "script": "set -- drop -a -b value tail; shift; while getopts ab: option; do printf '<%s:%s>' \"$option\" \"$OPTARG\"; done; shift \"$((OPTIND-1))\"; printf ':<%s>' \"$*\"",
+      "scriptSha256": "2e6f7e03994a86289aa43d64518d75258c477f1d89d062342b564ea0b20de065",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c613a3e3c623a76616c75653e3a3c7461696c3e",
+      "stderrHex": "",
+      "fileEffects": [],
+      "managedExpectation": {
+        "exitCode": 0,
+        "stdoutHex": "3c613a3e3c623a3e3a3c76616c7565207461696c3e",
+        "stderrHex": "",
+        "fileEffects": []
+      }
+    },
+    {
+      "id": "positional-getopts-flags-after-shift",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- drop -a -b tail; shift; while getopts ab option; do printf \"<%s>\" \"$option\"; done; shift \"$((OPTIND-1))\"; printf \":<%s>\" \"$*\"",
+      "scriptSha256": "c8f103a354b0965aa0aed543bd2d01617747e964e0db31208c2178b9af61c3fb",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c613e3c623e3a3c7461696c3e",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }
