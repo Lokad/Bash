@@ -86,12 +86,9 @@ internal static partial class WordExpansion
         if (!scope.CanExpand)
             return [];
 
-        if (word.Parts is [LiteralWordPart { Kind: WordPartKind.SingleQuoted } literal])
-        {
-            // Retain frozen fields for scalar and argument consumers; only the word/segment entries are new.
-            scope.Effects.Memory.Charge(checked(512L));
-            return [new ExpandedWord([new ExpandedSegment(literal.Value, isGlobQuoted: true)])];
-        }
+        scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+        if (word.LiteralFields is { } literal)
+            return literal;
 
         var braceExpanded = ExpandBraceWords(word, scope);
         var results = new List<ExpandedWord>();
@@ -186,6 +183,11 @@ internal static partial class WordExpansion
         ExpansionPurpose purpose,
         bool allowLeadingTilde)
     {
+        if (!scope.CanExpand)
+            return [];
+        scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+        if (word.LiteralFields is { } literal)
+            return literal;
         if (word.Parts.Count == 0)
             return [];
 

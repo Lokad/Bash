@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reuse immutable literal-word fields with their bytes and glob quote flags, while
+  preserving dynamic expansions and pending failure/cancellation checks. Prepare
+  command-list navigation once per syntax root instead of allocating a traversal
+  stack on every execution. Keep execution state local, skip complete short-circuit
+  subtrees and combine errexit positions with the current invocation context.
 - Retain immutable arithmetic token decisions and split arithmetic-for clauses on
   source syntax, including ordinary arithmetic expansions. Stable operands without
   selectors borrow source bytes directly; runtime splicing and selector expansion

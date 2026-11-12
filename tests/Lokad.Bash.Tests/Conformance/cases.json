@@ -5859,6 +5859,115 @@
       "stdoutHex": "313a30",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "literal-fields-quotes-empties-and-bytes",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "IFS=' *'; printf '<%s>' '' \"\" $'\\377\\r' \"a b\" a*b",
+      "scriptSha256": "82ce8f54686324280168bc1cf2d310b1d9180c4c4251d0d2af5d77b19e405051",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c3e3c3e3cff0d3e3c6120623e3c612a623e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "literal-fields-pathname-quote-mask",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "printf '<%s>' *.txt '*.txt' \\*.txt \"*.txt\"",
+      "scriptSha256": "52c2e15c21caa76dba212bc737900da3da5665d0b3c45a76a2a077329bb45946",
+      "stdinHex": "",
+      "files": [
+        {
+          "path": "a.txt",
+          "contentHex": "61",
+          "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+        },
+        {
+          "path": "b.txt",
+          "contentHex": "62",
+          "sha256": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d"
+        }
+      ],
+      "exitCode": 0,
+      "stdoutHex": "3c612e7478743e3c622e7478743e3c2a2e7478743e3c2a2e7478743e3c2a2e7478743e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "literal-fields-fresh-tilde",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "HOME=/first; f() { printf '%s|%s|%s|' '~' \"~\" ~; }; f; HOME=/second; f",
+      "scriptSha256": "045883d7b2e1fac626fa33ad4030c3f028253ad4127a0062c86c2b8ed565c39d",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "7e7c7e7c2f66697273747c7e7c7e7c2f7365636f6e647c",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "literal-fields-dynamic-braces-and-parameters",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "value=one; f() { printf '<%s>' {a,b} \"$value\"; }; f; value=two; f",
+      "scriptSha256": "c0e29deea7f000372c656f4b700d1518f0fc38a49ede9e8b9959f232151ac38e",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c613e3c623e3c6f6e653e3c613e3c623e3c74776f3e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "list-traversal-fresh-errexit-context",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e\nf() { printf enter; false; printf tail; }\nf && printf ok\nprintf between\nf\nprintf wrong",
+      "scriptSha256": "bd149d2d6aedc8b5d5c587e1ebe91c694f35bf5c061d60d3554e4286bbeafebd",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "656e7465727461696c6f6b6265747765656e656e746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "list-traversal-fresh-loop-status",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "count=0; f() { false && ((count+=100)) || ((count+=1)); true || ((count+=100)); printf '%s|' \"$count\"; }; for ((i=0;i<3;i++)); do f; done",
+      "scriptSha256": "08228d4479231cf749e125ea356b45868d6cbe567be5c7cbbfb7b3458ac5eb9d",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "317c327c337c",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "list-traversal-return-and-loop-flow",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "f() { for ((i=0;i<3;i++)); do ((i==1)) && continue; printf '%s' \"$i\"; done; true && return 7; printf wrong; }; f; printf ':%s' \"$?\"",
+      "scriptSha256": "3e782f6a7c09555115041f91d7a6d8fa63ac2c7af896a89dd9ed2b1b8d9a7684",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "30323a37",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -165,40 +164,26 @@ public sealed partial class Evaluation
                 ScopedEvaluation listScope,
                 bool listNegated)
             {
-                // The parser builds left-associated trees. Keep pending right sides off the call
-                // stack so long scripts remain safe even when commands complete synchronously.
-                var pending = new Stack<(ListCommand Command, ScopedEvaluation Scope)>();
-                ICommand currentCommand = listCommand;
-                var currentScope = listScope;
-                while (true)
+                var traversal = listCommand.GetTraversal(CancellationToken).Steps;
+                var result = EvaluationResult.FromExitCode(0);
+                for (var index = 0; index < traversal.Count; index++)
                 {
-                    while (currentCommand is ListCommand list)
+                    CheckCancellation();
+                    switch (traversal[index])
                     {
-                        CheckCancellation();
-                        pending.Push((list, currentScope));
-                        if (list.Operator is ListOperator.And or ListOperator.Or)
-                            currentScope = currentScope with { Context = currentScope.Context.WithErrexitIgnored() };
-                        currentCommand = list.Left;
-                    }
-
-                    var result = await EvaluateCommandAsync(currentCommand, currentScope, negated: false).ConfigureAwait(false);
-                    if (result.Flow != FlowControlKind.None)
-                        return ApplyNegation(result, listNegated);
-
-                    while (true)
-                    {
-                        if (!pending.TryPop(out var next))
-                            return ApplyNegation(result, listNegated);
-
-                        CheckCancellation();
-                        if (EvaluationRules.ShouldExecuteRight(next.Command.Operator, result.ExitCode))
-                        {
-                            currentCommand = next.Command.Right;
-                            currentScope = next.Scope;
+                        case ListTraversal.Step.Execute execute:
+                            var currentScope = execute.ErrexitIgnored
+                                ? listScope with { Context = listScope.Context.WithErrexitIgnored() } : listScope;
+                            result = await EvaluateCommandAsync(execute.Command, currentScope, negated: false).ConfigureAwait(false);
+                            if (result.Flow != FlowControlKind.None)
+                                return ApplyNegation(result, listNegated);
                             break;
-                        }
+                        case ListTraversal.Step.Select select when !EvaluationRules.ShouldExecuteRight(select.Operator, result.ExitCode):
+                            index = select.EndExclusive - 1;
+                            break;
                     }
                 }
+                return ApplyNegation(result, listNegated);
             }
         }
     }

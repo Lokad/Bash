@@ -105,10 +105,11 @@ Subjects stay borrowed during matching; retained removal slices and changed
 replacement output own their result bytes. Matching creates no reversed subject
 copy or global pattern cache.
 
-Immutable arithmetic source metadata belongs to the parsed syntax and is shared
-across executions. Direct stable operands borrow its bytes; runtime-expanded
-operands and selectors retain command workspace admission. This metadata falls
-under the parser's bounded-source coverage rather than evaluation reservations.
+Immutable arithmetic metadata, literal word fields and prepared list navigation
+belong to the syntax and are shared across executions. Stable operands and literal
+fields borrow its bytes; runtime-expanded operands, selectors and argument
+collections retain command workspace admission. Syntax metadata falls under the
+parser's bounded-source coverage rather than evaluation reservations.
 
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
 source-size bound, not complete accounting; manual stepping does not install a host

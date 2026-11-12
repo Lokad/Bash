@@ -108,6 +108,35 @@ public sealed class ByteValuedWordTests
         Assert.True(scalar.Bytes.Equals(bytes.AsMemory()));
     }
 
+    [Theory]
+    [InlineData(WordPartKind.SingleQuoted)]
+    [InlineData(WordPartKind.Escaped)]
+    [InlineData(WordPartKind.DoubleQuoted)]
+    [InlineData(WordPartKind.Unquoted)]
+    public async Task LiteralFieldsReuseSyntaxStorageWithoutSplittingOrLosingGlobQuoting(WordPartKind kind)
+    {
+        var evaluation = new Evaluation.Evaluation(Parser.Parse(string.Empty));
+        var bytes = new byte[] { 0xff, 0x20, 0x0d, (byte)'*' };
+        var word = new Word([WordPart.FromSource(kind, ShellSource.FromBytes(bytes))]);
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(" *")));
+        var scope = new ScopedEvaluation(evaluation, variables,
+            new Evaluation.Evaluation.EvaluationContext(0, null, Evaluation.Evaluation.ReturnTargetKind.None));
+
+        var first = await WordExpansion.ExpandToWordsAsync(word, scope);
+        var second = await WordExpansion.ExpandToWordsAsync(word, scope);
+        var unsplit = await WordExpansion.ExpandUnsplitWordAsync(word, scope, ExpansionPurpose.Scalar, true);
+        Assert.Same(first, second);
+        Assert.Same(Assert.Single(first), unsplit);
+        var segment = Assert.Single(unsplit.Segments);
+        Assert.True(segment.Content.Bytes.Equals(bytes.AsMemory()));
+        Assert.Equal(kind != WordPartKind.Unquoted, segment.IsGlobQuoted);
+
+        evaluation.SetFatalExpansionError(ExpansionFailureKind.NamerefDefault);
+        Assert.Empty(await WordExpansion.ExpandToWordsAsync(word, scope));
+        Assert.Empty(await WordExpansion.ExpandWithoutBraceAsync(word, scope, false, ExpansionPurpose.Scalar, true));
+    }
+
     [Fact]
     public void FlatteningJoinsBytesAndRetainsSingleSegments()
     {

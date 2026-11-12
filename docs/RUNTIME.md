@@ -12,6 +12,18 @@ existing grammar driver, structural guards and numeric work pump. Bindings, sele
 expansions and writes use the current scope. Dynamic shell splicing still prepares
 fresh operands, and syntax failures remain at their reached execution point.
 
+Literal-only single-part words retain their expanded fields and quote flags on
+the immutable word, borrowing its byte storage. Expansion still observes pending
+failure and cancellation; tilde, brace, parameter and other dynamic syntax stay
+late-bound. Pathname lookup retains the ordinary active quote mask and host path.
+
+Command lists prepare immutable navigation once per reached syntax root. Each
+execution keeps its cursor, status and scope locally and dispatches leaves through
+the same evaluator. Short-circuit jumps skip complete right subtrees, while
+errexit suppression combines the source position with the current invocation
+context. Preparation and execution are iterative and cancellable; cache publication
+does not wait for another execution. Record operand changes invalidate navigation.
+
 Conditional commands retain parsed operators and operand words on the script.
 Execution expands reached operands against the current scope, preserving quotation
 and bytes; short-circuited operands cause no expansion or host work. Reached file
