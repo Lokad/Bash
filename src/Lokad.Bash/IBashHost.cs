@@ -65,8 +65,8 @@ public interface IBashHost
     /// ownership of command descriptors. Do not infer launch failure from a tool's numeric exit code.
     /// Direct-script open, read and pre-execution close failures return NotExecutable with their original
     /// OperationError detail and kind. NotFound requires established command or path absence.
-    /// The result must capture whether this invocation rejected an argument copy before completion. A shared
-    /// allocation budget being exhausted does not by itself mean this invocation rejected a copy.
+    /// Admit retained argument copies through the shared memory budget before copying. Keep their owner
+    /// alive until all command users finish; release it after completion, cancellation and cleanup.
     /// </remarks>
     Task<CommandExecutionResult> RunCommandAsync(
         CommandInvocation command,

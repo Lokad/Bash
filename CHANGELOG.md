@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Breaking API change: remove the unused standalone `ByteGlobMatcher`, its compiled
+  `ByteGlobPattern` model, case/separator enums and token/range/segment types. Shell
+  evaluation continues through the shared matcher. For application shell-word
+  patterns, use `TextGlobMatcher.MatchUtf8` with an empty `GlobMaskSpan`,
+  `requireEnd: true` and a cancellation token. It matches UTF-8 scalar values with
+  malformed-input byte fallback; it does not replace the removed raw-byte,
+  ASCII-insensitive or globstar pathname policies. Keep pathname policy with its
+  application owner. This change follows the pre-1.0 minor-version API policy.
 - Reuse immutable literal-word fields with their bytes and glob quote flags, while
   preserving dynamic expansions and pending failure/cancellation checks. Prepare
   command-list navigation once per syntax root instead of allocating a traversal

@@ -71,15 +71,13 @@ public sealed class TextGlobMatcherTests
     }
 
     [Theory]
-    [InlineData("?", "é", true, false)]
-    [InlineData("??", "é", false, true)]
-    [InlineData("??", "😀", true, false)]
-    [InlineData("[é]", "é", true, false)]
-    public void TextAndByteWildcardsRetainTheirDifferentCharacterUnits(
-        string pattern, string text, bool textMatches, bool bytesMatch)
+    [InlineData("?", "é", true)]
+    [InlineData("??", "é", false)]
+    [InlineData("??", "😀", true)]
+    [InlineData("[é]", "é", true)]
+    public void TextOverloadsRetainUtf16CodeUnitMatching(string pattern, string text, bool expected)
     {
-        Assert.Equal(textMatches, TextGlobMatcher.IsMatch(pattern, text));
-        Assert.Equal(bytesMatch, ByteGlobMatcher.IsMatch(Encoding.UTF8.GetBytes(pattern), Encoding.UTF8.GetBytes(text)));
+        Assert.Equal(expected, TextGlobMatcher.IsMatch(pattern, text));
     }
 
     [Fact]
