@@ -13,24 +13,6 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
-    /// <summary>Reserves echo output before allocating it or applying command effects.</summary>
-    internal static bool TryFormatEcho(
-        IReadOnlyList<ShellValue> arguments,
-        ArgumentCopyAllowance budget,
-        IMemoryScope memory,
-        out ReadOnlyMemory<byte> content)
-    {
-        var format = EchoFormatting.GetOutputFormat(arguments);
-        if (!budget.TryCharge(format.Length))
-        {
-            content = ReadOnlyMemory<byte>.Empty;
-            return false;
-        }
-
-        content = EchoFormatting.Format(arguments, format, memory);
-        return true;
-    }
-
     /// <summary>
     /// Handles the <c>test</c> and <c>[</c> builtins, evaluating predicates and filesystem tests as needed.
     /// </summary>
@@ -137,8 +119,8 @@ public sealed partial class Evaluation
             return 0;
 
         var resolutions = await ResolveCommandQueriesAsync().ConfigureAwait(false);
-        using var output = new ByteMemoryBuilder(0, ExpansionBudget.MemoryBudget);
-        using var encodingMemory = new MemoryCapacity(ExpansionBudget.MemoryBudget, 0);
+        using var output = new ByteMemoryBuilder(0, Memory.Budget);
+        using var encodingMemory = new MemoryCapacity(Memory.Budget, 0);
         try
         {
             // Build the whole display payload before emitting any channel; endpoints retain operand order.

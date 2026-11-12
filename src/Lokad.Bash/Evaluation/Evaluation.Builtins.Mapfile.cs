@@ -54,7 +54,7 @@ public sealed partial class Evaluation
             parseOptions = false;
         }
 
-        if (!VariableReference.TryParse(ShellSource.FromBytes(targetValue.Bytes), ExpansionBudget.Words, out var reference)
+        if (!VariableReference.TryParse(ShellSource.FromBytes(targetValue.Bytes), Memory, out var reference)
             || reference.Kind != VariableReferenceKind.Name)
             return await InvalidTargetAsync(targetValue).ConfigureAwait(false);
 
@@ -62,7 +62,7 @@ public sealed partial class Evaluation
         var resolvedBinding = variables.TryResolveBinding(target, selectOwner: null, out var binding);
         BindingName resolved = resolvedBinding ? binding.Name : target;
         if (resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name)
-            return await InvalidTargetAsync(binding.Reference.ToValue(ExpansionBudget.Words)).ConfigureAwait(false);
+            return await InvalidTargetAsync(binding.Reference.ToValue(Memory)).ConfigureAwait(false);
         if (!resolved.IsIdentifier)
             return await InvalidTargetAsync(resolved.ToValue()).ConfigureAwait(false);
 
@@ -89,7 +89,7 @@ public sealed partial class Evaluation
         }
 
         var descriptor = GetStdInDescriptor();
-        using var valuesMemory = ExpansionBudget.MemoryBudget.CreateScope();
+        using var valuesMemory = Memory.Budget.CreateScope();
         // Keep one owned copy per batch; array entries borrow slices for the same lifetime.
         using var reader = new AsyncLineReader(
             (limit, memory, cancellation) =>
@@ -102,7 +102,7 @@ public sealed partial class Evaluation
             batchSize: ReadBatchLines, valuesMemory);
         var values = new List<ShellValue>();
         long backingBytes = 0;
-        using var inputMemory = ExpansionBudget.MemoryBudget.Reserve(0);
+        using var inputMemory = Memory.Budget.Reserve(0);
         var assigned = false;
         try
         {
@@ -130,7 +130,7 @@ public sealed partial class Evaluation
             foreach (var value in values)
                 valueBytes = checked(valueBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
             var retainedBytes = checked((long)values.Count * IndexedArray.ElementMemoryBytes + backingBytes + valueBytes);
-            ExpansionBudget.Memory.Charge(retainedBytes);
+            Memory.Charge(retainedBytes);
             var array = IndexedArray.FromSequential(values);
             array.RetainedBackingBytes = backingBytes;
 

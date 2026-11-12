@@ -249,16 +249,16 @@ public sealed partial class Variables
 
         /// <summary>Direct outputs preserve caller bindings; indirect writes use the command scope.</summary>
         public bool TryApplyOutputAssignment(
-            VariableReference reference, ShellValue value, AllocationAllowance allowance)
+            VariableReference reference, ShellValue value, EvaluationMemory memory)
         {
             var destination = SelectOutputVariables(reference.Name);
-            if (!destination.TryApplyAssignment(reference, value, allowance))
+            if (!destination.TryApplyAssignment(reference, value, memory))
                 return false;
             if (ReferenceEquals(destination, _owner))
                 return true;
 
             // Arithmetic and getopts read subsequent results from their temporary scope.
-            if (!_owner.TryApplyAssignment(reference, value, allowance))
+            if (!_owner.TryApplyAssignment(reference, value, memory))
                 return false;
 
             _retainedNames.Add(reference.Name);
@@ -419,7 +419,6 @@ public sealed partial class Variables
             IReadOnlySet<BindingName>? prefixes,
             ArrayAssignmentKind arrayKind,
             bool isNameref,
-            AllocationAllowance allowance,
             EvaluationMemory memory)
         {
             var hasAssignment = operand.Kind == VariableOperandKind.Assignment;
@@ -461,7 +460,7 @@ public sealed partial class Variables
                     if (binding.Reference.IsAggregate)
                         return false;
                     if (binding.Reference.Kind != VariableReferenceKind.Name)
-                        resolved = BindingNameExpansion.FromValue(binding.Reference.ToValue(allowance), allowance);
+                        resolved = BindingNameExpansion.FromValue(binding.Reference.ToValue(memory), memory);
                     // A declaration localizes the complete target spelling (even "a[1]"),
                     // not an element of the array "a". Only the operand supplies a selector.
                     name = resolved;
@@ -546,8 +545,8 @@ public sealed partial class Variables
 
                     var target = hasAssignment ? operand.Value
                         : variables.Scalars.GetValueOrDefault(name, ShellValue.Empty);
-                    allowance.Charge(0, target.Bytes.Length);
-                    if (!variables.TrySetNameref(name, target, allowance))
+                    memory.Charge(checked(4L * target.Bytes.Length));
+                    if (!variables.TrySetNameref(name, target, memory))
                         return false;
                     return true;
                 }
@@ -695,14 +694,14 @@ public sealed partial class Variables
 
     /// <summary>Expansion assignments update element zero without replacing an existing array.</summary>
     /// <remarks>The expansion caller checks readonly status before applying or forwarding the write.</remarks>
-    internal void SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, AllocationAllowance allowance)
+    internal void SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, EvaluationMemory memory)
     {
         if (!TryResolveWholeName(name, out var resolved))
             return;
 
         if (resolved.IsEmpty)
         {
-            _ = TrySetScalar(name, value, allowance);
+            _ = TrySetScalar(name, value, memory);
             return;
         }
         SetResolvedValuePreservingArray(resolved, value);
@@ -722,9 +721,9 @@ public sealed partial class Variables
     /// <summary>
     /// Attempts to set a scalar value, resolving namerefs and enforcing readonly constraints.
     /// </summary>
-    public bool TrySetScalar(BindingName name, ShellValue value) => TrySetScalar(name, value, allowance: null);
+    public bool TrySetScalar(BindingName name, ShellValue value) => TrySetScalar(name, value, memory: null);
 
-    internal bool TrySetScalar(BindingName name, ShellValue value, AllocationAllowance? allowance)
+    internal bool TrySetScalar(BindingName name, ShellValue value, EvaluationMemory? memory)
     {
         if (!TryResolveWritableName(name, out var resolved))
             return false;
@@ -733,8 +732,8 @@ public sealed partial class Variables
         {
             if (!NamerefTargets.TryGetValue(name, out var target) || !target.IsEmpty || value.IsEmpty)
                 return false;
-            allowance?.Charge(0, value.Bytes.Length);
-            return TrySetNameref(name, value, allowance);
+            memory?.Charge(checked(4L * value.Bytes.Length));
+            return TrySetNameref(name, value, memory);
         }
         SetResolvedScalar(resolved, value);
         return true;
@@ -754,12 +753,12 @@ public sealed partial class Variables
         SetResolvedScalar(resolved, value);
     }
 
-    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, AllocationAllowance allowance)
+    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory)
     {
         if (name.IsEmpty || IsReadonly(name))
             return false;
         if (NamerefTargets.TryGetValue(name, out var target) && target.IsEmpty)
-            return TrySetScalar(name, value, allowance);
+            return TrySetScalar(name, value, memory);
         SetResolvedScalar(name, value);
         return true;
     }
@@ -951,7 +950,7 @@ public sealed partial class Variables
     /// <summary>
     /// Applies a parsed operand or an already selected literal binding used by builtin output.
     /// </summary>
-    internal bool TryApplyAssignment(VariableReference reference, ShellValue value, AllocationAllowance? allowance)
+    internal bool TryApplyAssignment(VariableReference reference, ShellValue value, EvaluationMemory? memory)
     {
         if (reference.Kind != VariableReferenceKind.Name)
             return TryAssignArrayElement(reference.Name, reference.Subscript.ToValue(), value, ArrayAssignmentKind.Auto);
@@ -961,7 +960,7 @@ public sealed partial class Variables
             || IsReadonly(reference.Name) || binding.Owner.IsReadonly(binding.Name))
             return false;
         if (binding.IsUnsetNameref)
-            return TrySetScalar(reference.Name, value, allowance);
+            return TrySetScalar(reference.Name, value, memory);
         binding.Owner.SetResolvedValuePreservingArray(binding.Name, value);
         return true;
     }
@@ -1147,9 +1146,9 @@ public sealed partial class Variables
     /// <summary>
     /// Stores an unset or syntactically valid target without evaluating its selector.
     /// </summary>
-    public bool TrySetNameref(BindingName name, ShellValue target) => TrySetNameref(name, target, allowance: null);
+    public bool TrySetNameref(BindingName name, ShellValue target) => TrySetNameref(name, target, memory: null);
 
-    internal bool TrySetNameref(BindingName name, ShellValue target, AllocationAllowance? allowance)
+    internal bool TrySetNameref(BindingName name, ShellValue target, EvaluationMemory? memory)
     {
         if (!name.IsIdentifier)
             return false;
@@ -1162,13 +1161,13 @@ public sealed partial class Variables
         BindingName? literalName = null;
         if (!target.IsEmpty)
         {
-            if (!VariableReference.TryParse(ShellSource.FromBytes(target.Bytes), allowance, out var parsed))
+            if (!VariableReference.TryParse(ShellSource.FromBytes(target.Bytes), memory, out var parsed))
                 return false;
             reference = parsed;
             if (parsed.Kind != VariableReferenceKind.Name)
             {
                 // Local declarations can create a binding whose literal name includes the selector.
-                allowance?.Charge(0, target.Bytes.Length);
+                memory?.Charge(checked(4L * target.Bytes.Length));
                 literalName = BindingName.FromValue(target);
             }
         }
@@ -1218,7 +1217,7 @@ public sealed partial class Variables
     }
 
     internal NamerefAssignmentFailure GetNamerefAssignmentFailure(
-        BindingName sourceName, BindingName selectedName, ShellValue value, AllocationAllowance allowance)
+        BindingName sourceName, BindingName selectedName, ShellValue value, EvaluationMemory memory)
     {
         if (!TryResolveBinding(selectedName, selectOwner: null, out var binding)
             || !binding.IsUnsetNameref)
@@ -1228,7 +1227,7 @@ public sealed partial class Variables
         // Plain names need only byte validation; selectors also require structural parsing.
         var valid = !value.Bytes.Span.Contains((byte)'[')
             ? VariableNames.IsValidVariableName(value.Bytes.Span)
-            : VariableReference.TryParse(ShellSource.FromBytes(value.Bytes), allowance, out _);
+            : VariableReference.TryParse(ShellSource.FromBytes(value.Bytes), memory, out _);
         return valid
             ? NamerefAssignmentFailure.None : NamerefAssignmentFailure.InvalidTarget;
     }

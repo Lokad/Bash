@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 1,
+  "options": [
+    "--noprofile",
+    "--norc",
+    "-o",
+    "pipefail"
+  ],
+  "references": [
+    {
+      "id": "gnu-linux",
+      "version": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+      "sha256": "bc5945feb8bd26203ebfafea5ce1878bb2e32cb8fb50ab7ae395cfb1e1aaaef1",
+      "utf8Locale": "C.utf8"
+    },
+    {
+      "id": "gnu-msys",
+      "version": "GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)",
+      "sha256": "fc362aae1f217d34d02237d99527839dd6cf85b37c7a0277109400bfa0faa594",
+      "utf8Locale": ""
+    }
+  ],
+  "cases": [
+    {
+      "id": "loop-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "for ((i=0; i<1000; i++)); do :; done; printf 'done:%s' \"$i\"",
+      "scriptSha256": "4e236af4ad26c6038a05440b23ecf62b1d043489d28a2bd40c3fde44fe5f5704",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "646f6e653a31303030",
+      "stderrHex": ""
+    },
+    {
+      "id": "loop-no-lifetime-credit",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "for ((i=0; i<20000; i++)); do :; done; printf 'done:%s' \"$i\"",
+      "scriptSha256": "ff98024816668de8b58265696256d06f3789babae83606d7b737f342fc502b5d",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "646f6e653a3230303030",
+      "stderrHex": ""
+    },
+    {
+      "id": "arithmetic-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "x=3; printf '%s:%s' \"$((x+=4))\" \"$x\"",
+      "scriptSha256": "3a1a69184aaf9f742506e5e6ca1003bce2e2e725109cb2934d31e1ea55246235",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "373a37",
+      "stderrHex": ""
+    },
+    {
+      "id": "and-or-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "false && printf wrong; false || printf recovered; printf ':%s' \"$?\"",
+      "scriptSha256": "d4476125fdf97bb8f09eeee680f09b0bacb7d97ff98b34fbd15dbc17421edf0a",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "7265636f76657265643a30",
+      "stderrHex": ""
+    },
+    {
+      "id": "tested-loop-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "i=0; while ((i<3)); do printf '%s' \"$i\"; ((i++)); done",
+      "scriptSha256": "8b124854397546ce049e74f6c9b2e7ca70bc3fd42c2dc2aaabb37e5e51c7d42a",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "303132",
+      "stderrHex": ""
+    },
+    {
+      "id": "pipefail-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "false | true",
+      "scriptSha256": "d0288be0eaed4bceedfbcc811592951892a471ed5a9360a84091ca4534e9c3de",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "",
+      "stderrHex": ""
+    },
+    {
+      "id": "pipeline-order-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "printf 'alpha\\nbeta\\n' | cat",
+      "scriptSha256": "7e39e9e9024d11dbad62abf0c689b9f6324c92c7dbcc5d3eef6c28be51d1e6e3",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "616c7068610a626574610a",
+      "stderrHex": ""
+    },
+    {
+      "id": "brace-order-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "printf '<%s>' {a,{b,c}}{1..2}",
+      "scriptSha256": "48685f0d68a39bad8fd2706f9dcf32f7b8f1859a1bd1fcb42a32ea9fb07ae47e",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c61313e3c61323e3c62313e3c62323e3c63313e3c63323e",
+      "stderrHex": ""
+    },
+    {
+      "id": "quoted-fields-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "x='a b'; printf '<%s>' \"$x\" $x",
+      "scriptSha256": "60afc201060cc27ff3beee89439eb41d392658eb40565038cbb43dcbd0b5acb5",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c6120623e3c613e3c623e",
+      "stderrHex": ""
+    },
+    {
+      "id": "substitution-trim-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "x=$(printf 'value\\n\\n'); printf '<%s>' \"$x\"",
+      "scriptSha256": "0bb228c1205dde228da7a956006acb02846716ec4c14ddf8b383b00735d70ccf",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c76616c75653e",
+      "stderrHex": ""
+    },
+    {
+      "id": "malformed-byte-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "printf '%s' $'\\377'",
+      "scriptSha256": "2272300950cce83f3f48db320dd38238df03a6b3aa3653877eabc8abe659636e",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "ff",
+      "stderrHex": ""
+    },
+    {
+      "id": "function-frame-control",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- outer; f(){ shift; printf '<%s>' \"$@\"; }; f first second; printf '<%s>' \"$@\"",
+      "scriptSha256": "4b370e7a0140e6cd87e40ec08191559c8e4423081b03dec1bd29bfcd706f0408",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3c7365636f6e643e3c6f757465723e",
+      "stderrHex": ""
+    }
+  ]
+}

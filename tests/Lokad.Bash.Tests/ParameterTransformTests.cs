@@ -136,27 +136,8 @@ public sealed class ParameterTransformTests
         Assert.Equal(expectedError, result.StdErr);
     }
 
-    [Theory]
-    [InlineData("${x@Q}")]
-    [InlineData("${x@E}")]
-    [InlineData("${x@U}")]
-    [InlineData("${x//a/xxxxxxxx}")]
-    public async Task TransformsChargeTheSharedExpansionBudget(string expression)
-    {
-        var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse("printf '%s' \"" + expression + "\"; printf after"));
-        evaluation.SetVariable("x", ShellValue.FromText(new string('a', 1024)));
-        evaluation.ExpansionBudget.Words.Charge(0, 16 * 1024 * 1024 - 800);
-        var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes));
-
-        await new Engine().RunAsync(evaluation, host, CancellationToken.None);
-
-        Assert.Equal(2, evaluation.LastExitCode);
-        Assert.Empty(host.StandardOutput.TextContent);
-        Assert.Equal("shell: word expansion exceeds its word or character limit\n", host.StandardError.TextContent);
-    }
-
     [Fact]
-    public async Task ReplacementBoundsUnsuccessfulPatternSearch()
+    public async Task UnsuccessfulReplacementCompletesWithoutExecutionGas()
     {
         var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse("printf '%s' \"${x//*z/Y}\"; printf after"));
         evaluation.SetVariable("x", ShellValue.FromText(new string('a', 2000)));
@@ -164,8 +145,8 @@ public sealed class ParameterTransformTests
 
         await new Engine().RunAsync(evaluation, host, CancellationToken.None);
 
-        Assert.Equal(2, evaluation.LastExitCode);
-        Assert.Empty(host.StandardOutput.TextContent);
-        Assert.Equal("shell: parameter pattern matching exceeds its work limit\n", host.StandardError.TextContent);
+        Assert.Equal(0, evaluation.LastExitCode);
+        Assert.Equal(new string('a', 2000) + "after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
     }
 }

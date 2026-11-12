@@ -19,7 +19,7 @@ public sealed partial class Evaluation
         bool negated)
     {
         // Positional arguments are saved now; locals reserve only bindings they actually hide.
-        ExpansionBudget.Memory.Charge(scope.Variables.PositionalMemoryBytes);
+        Memory.Charge(scope.Variables.PositionalMemoryBytes);
         using var bindings = prefixNames == null
             ? null
             : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames);

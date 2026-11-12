@@ -63,7 +63,7 @@ public partial class EvaluationTests
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [inputHandle, errorHandle]);
         var command = logicalNumber == 0 ? "read value" : "read -u3 value";
         var state = new Eval(Parser.Parse(Utf8("value=old; " + command)), descriptors,
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new ExpansionBudget());
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         var firstRead = await NextReadAsync(state);
         Assert.Equal(inputHandle, firstRead.FileDescriptor);

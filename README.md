@@ -57,3 +57,22 @@ CI runs on Windows and Linux. Packages go to `artifacts/nuget/` as
 `Lokad.Bash.0.1.0.nupkg` and `Lokad.Bash.0.1.0.snupkg`.
 Before 1.0, minor versions may change public APIs, with migration notes in the
 changelog.
+
+## GNU correctness controls
+
+The versioned corpus in `tests/Lokad.Bash.Tests/Conformance/cases.json` has explicit
+byte/status expectations, script hashes and pinned GNU reference versions/hashes.
+The ordinary test suite runs its supported cases against the managed interpreter.
+Verify the same expectations against GNU Bash using PowerShell 7:
+
+```powershell
+./scripts/Verify-GnuBash.ps1 -ReferencePath /usr/bin/bash
+# Windows with the pinned Ubuntu/WSL reference:
+./scripts/Verify-GnuBash.ps1 -ReferencePath /usr/bin/bash -WslDistribution Ubuntu
+```
+
+The verifier rejects an unexpected reference binary and writes results under
+`artifacts/conformance/`. These are correctness controls, not a conformance score
+or performance measurements. The MSYS reference covers byte/C-locale controls;
+Linux `C.utf8` is the character-semantics reference. Broader compatibility gaps
+remain documented in [compatibility](docs/COMPATIBILITY.md).

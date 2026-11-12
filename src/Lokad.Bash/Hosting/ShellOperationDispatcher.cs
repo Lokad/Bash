@@ -205,7 +205,7 @@ internal static class ShellOperationDispatcher
         var closeFailure = new DescriptorCloseResult(true, null, null);
         try
         {
-            var result = await new Engine().RunAsync(stage.Evaluation, host, stage.Evaluation.ExpansionBudget.MemoryBudget, cancellationToken).ConfigureAwait(false);
+            var result = await new Engine().RunAsync(stage.Evaluation, host, stage.Evaluation.Memory.Budget, cancellationToken).ConfigureAwait(false);
             exitCode = result.ExitCode;
         }
         catch (Exception ex)

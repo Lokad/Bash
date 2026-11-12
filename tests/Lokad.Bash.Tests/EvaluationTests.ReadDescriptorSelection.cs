@@ -19,7 +19,7 @@ public partial class EvaluationTests
         table.Set(new LogicalDescriptor(logicalDescriptor), handle);
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
         var state = new Eval(Parser.Parse(Utf8($"read -u{logicalDescriptor} value")), descriptors,
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new ExpansionBudget());
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         var read = await NextReadAsync(state);
         Assert.Equal(handle, read.FileDescriptor);
@@ -44,7 +44,7 @@ public partial class EvaluationTests
             table.Set(new LogicalDescriptor(9), FileDescriptor.Closed);
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
         var state = new Eval(Parser.Parse(Utf8("value=old; read -u9 value")), descriptors,
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new ExpansionBudget());
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
@@ -67,7 +67,7 @@ public partial class EvaluationTests
         table.Set(new LogicalDescriptor(3), handle);
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
         var state = new Eval(Parser.Parse(Utf8("value=old; read -u3 value")), descriptors,
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new ExpansionBudget());
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         var read = await NextReadAsync(state);
         Assert.Equal(handle, read.FileDescriptor);

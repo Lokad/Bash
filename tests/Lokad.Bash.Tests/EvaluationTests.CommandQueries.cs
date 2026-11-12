@@ -10,29 +10,6 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Theory]
-    [InlineData("type")]
-    [InlineData("command -v")]
-    [InlineData("command -V")]
-    [InlineData("builtin")]
-    public async Task Evaluation_CommandDiagnostics_ReserveCopiesBeforeLaterCommandEffects(string query)
-    {
-        var state = new Eval(Parser.Parse(
-            "later=0; assigned=0; prefix=$((assigned=1)) " + query + " '" + new string('x', 1024)
-            + "' \"$((later=1))\" 2>/errors; printf unexpected"));
-        state.ExpansionBudget.Words.Charge(0, 16 * 1024 * 1024 - 256);
-
-        var diagnostic = await NextWriteAsync(state);
-        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal(state.ExpansionBudget.Words.LimitMessage, Text(diagnostic.Content));
-        diagnostic.SetResult(DescriptorWriteResult.Open);
-
-        Assert.Null(await NextStepAsync(state));
-        Assert.Equal(2, state.LastExitCode);
-        Assert.Equal("0", GetVariable(state, "later"));
-        Assert.Equal("0", GetVariable(state, "assigned"));
-    }
-
-    [Theory]
     [InlineData("command -V")]
     [InlineData("type")]
     public async Task Evaluation_CommandQueries_OperandFailureStopsBeforeLookupAndLaterEffects(string query)
@@ -99,7 +76,7 @@ public partial class EvaluationTests
     {
         var state = new Eval(Parser.Parse(Utf8(command + " echo missing enormous")));
         const int MemoryBudgetBytes = 16 * 1024;
-        state.ExpansionBudget.MemoryBudget = new Lokad.Bash.Memory.MemoryGovernor(MemoryBudgetBytes);
+        state.Memory.Budget = new Lokad.Bash.Memory.MemoryGovernor(MemoryBudgetBytes);
         var lookup = await NextResolveCommandsAsync(state);
         Assert.Equal(["missing", "enormous"], lookup.CommandNames);
         var resolvedName = new string('x', MemoryBudgetBytes);

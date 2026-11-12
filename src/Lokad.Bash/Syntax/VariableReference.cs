@@ -26,11 +26,13 @@ internal readonly record struct VariableReference
     /// <summary>Creates a reference to an already selected binding, including literal local names.</summary>
     public static VariableReference ForName(BindingName name) => new(name, VariableReferenceKind.Name, ShellSource.Empty);
 
-    internal ShellValue ToValue(AllocationAllowance allowance)
+    internal ShellValue ToValue(EvaluationMemory? memory)
     {
         var nameLength = Name.ByteLength;
         var length = nameLength + (Kind == VariableReferenceKind.Name ? 0L : Subscript.Length + 2L);
-        allowance.Charge(0, Kind == VariableReferenceKind.Name ? nameLength : nameLength + length);
+        if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+        memory?.Charge(checked(4L * (Kind == VariableReferenceKind.Name ? nameLength : nameLength + length)));
         var name = Name.ToValue();
         return Kind == VariableReferenceKind.Name ? name
             : ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted((int)length)
@@ -39,9 +41,9 @@ internal readonly record struct VariableReference
 
     /// <summary>Recognizes a whole reference without expanding or flattening its selector.</summary>
     public static bool TryParse(string text, out VariableReference reference)
-        => TryParse(text, allowance: null, out reference);
+        => TryParse(text, memory: null, out reference);
 
-    internal static bool TryParse(string text, AllocationAllowance? allowance, out VariableReference reference)
+    internal static bool TryParse(string text, EvaluationMemory? memory, out VariableReference reference)
     {
         if (!text.Contains('['))
         {
@@ -51,18 +53,18 @@ internal readonly record struct VariableReference
             reference = new VariableReference(text, VariableReferenceKind.Name, ShellSource.Empty);
             return true;
         }
-        allowance?.Charge(0, System.Text.Encoding.UTF8.GetByteCount(text));
-        return TryParse(ShellSource.FromText(text), allowance, out reference);
+        memory?.Charge(checked(4L * (System.Text.Encoding.UTF8.GetByteCount(text))));
+        return TryParse(ShellSource.FromText(text), memory, out reference);
     }
 
     public static bool TryParse(ShellSource text, out VariableReference reference)
-        => TryParse(text, allowance: null, out reference);
+        => TryParse(text, memory: null, out reference);
 
-    internal static bool TryParse(ShellSource text, AllocationAllowance? allowance, out VariableReference reference)
+    internal static bool TryParse(ShellSource text, EvaluationMemory? memory, out VariableReference reference)
     {
         reference = default;
         var opening = text.AsSpan().IndexOf((byte)'[');
-        allowance?.Charge(0, opening < 0 ? text.Length : opening);
+        memory?.Charge(checked(4L * (opening < 0 ? text.Length : opening)));
         if (opening < 0)
         {
             if (!VariableNames.IsValidVariableName(text.AsSpan()))

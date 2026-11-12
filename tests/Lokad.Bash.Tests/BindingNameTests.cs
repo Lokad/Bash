@@ -8,14 +8,13 @@ public sealed class BindingNameTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void BytePrefixComparisonsChargeUncachedText(bool textIsPrefix)
+    public void BytePrefixComparisonsPreserveUncachedText(bool textIsPrefix)
     {
         BindingName text = "é";
         var bytes = BindingName.FromValue(ShellValue.FromBytes(new byte[] { 0xc3, 0xa9, 0xff }));
-        var allowance = new AllocationAllowance("test limit");
-        allowance.Charge(0, 16 * 1024 * 1024);
+        var allowance = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
-        Assert.Throws<ExpansionBudget.LimitExceededException>(() => textIsPrefix
+        Assert.Equal(textIsPrefix, textIsPrefix
             ? bytes.StartsWith(text, allowance) : text.StartsWith(bytes, allowance));
     }
 
@@ -28,8 +27,7 @@ public sealed class BindingNameTests
     {
         var name = BindingName.FromValue(ShellValue.FromBytes(Convert.FromHexString(nameHex)));
         var prefix = BindingName.FromValue(ShellValue.FromBytes(Convert.FromHexString(prefixHex)));
-        var allowance = new AllocationAllowance("test limit");
-        allowance.Charge(0, 16 * 1024 * 1024);
+        var allowance = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         Assert.Equal(matches, name.StartsWith(prefix, allowance));
     }

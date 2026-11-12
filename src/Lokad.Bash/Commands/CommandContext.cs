@@ -4,17 +4,14 @@ using Lokad.Bash.Helpers;
 namespace Lokad.Bash.Commands;
 
 /// <summary>
-/// Owns command cleanup and argument-copy credit. Typed inheritance is stored inline in
+/// Owns command cleanup. Typed inheritance is stored inline in
 /// the same allocation, without requiring interpreters to specialize command ownership.
 /// </summary>
-public class CommandContext : ArgumentCopyAllowance
+public class CommandContext
 {
     public CommandContext(
         IReadOnlyList<FileDescriptor> descriptorsToClose,
-        IReadOnlyList<FileDescriptor> borrowedDescriptors,
-        CommandAllocationBudget allocationBudget,
-        long reservedArgumentCharacters)
-        : base(allocationBudget, reservedArgumentCharacters)
+        IReadOnlyList<FileDescriptor> borrowedDescriptors)
     {
         DescriptorsToClose = descriptorsToClose;
         BorrowedDescriptors = borrowedDescriptors;
@@ -26,8 +23,7 @@ public class CommandContext : ArgumentCopyAllowance
     public static CommandContext CreateIndependent(
         FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr,
         IReadOnlyList<FileDescriptor> borrowedDescriptors) =>
-        new(BuildDescriptorsToClose(stdIn, stdOut, stdErr, borrowedDescriptors), borrowedDescriptors,
-            new CommandAllocationBudget(), reservedArgumentCharacters: 0);
+        new(BuildDescriptorsToClose(stdIn, stdOut, stdErr, borrowedDescriptors), borrowedDescriptors);
 
     public CommandContext CreateChild(
         CommandInvocation parent, FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr)
@@ -45,13 +41,13 @@ public class CommandContext : ArgumentCopyAllowance
     }
 
     /// <summary>
-    /// Creates fresh copy credit under the same cumulative budget with the supplied ownership and borrowed handles.
+    /// Creates a child context with the supplied ownership and borrowed handles.
     /// Typed contexts must retain their inheritance value unchanged; interpreters rebind it when starting.
     /// </summary>
     public virtual CommandContext CreateChildContext(
         IReadOnlyList<FileDescriptor> descriptorsToClose,
         IReadOnlyList<FileDescriptor> borrowedDescriptors) =>
-        new(descriptorsToClose, borrowedDescriptors, AllocationBudget, reservedArgumentCharacters: 0);
+        new(descriptorsToClose, borrowedDescriptors);
 
     public static IReadOnlyList<FileDescriptor> BuildDescriptorsToClose(
         FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr,
@@ -87,10 +83,8 @@ public sealed class CommandContext<TInheritance> : CommandContext where TInherit
     public CommandContext(
         IReadOnlyList<FileDescriptor> descriptorsToClose,
         IReadOnlyList<FileDescriptor> borrowedDescriptors,
-        CommandAllocationBudget allocationBudget,
-        long reservedArgumentCharacters,
         TInheritance inheritance)
-        : base(descriptorsToClose, borrowedDescriptors, allocationBudget, reservedArgumentCharacters)
+        : base(descriptorsToClose, borrowedDescriptors)
     {
         Inheritance = inheritance;
     }
@@ -101,6 +95,5 @@ public sealed class CommandContext<TInheritance> : CommandContext where TInherit
     public override CommandContext CreateChildContext(
         IReadOnlyList<FileDescriptor> descriptorsToClose,
         IReadOnlyList<FileDescriptor> borrowedDescriptors) =>
-        new CommandContext<TInheritance>(descriptorsToClose, borrowedDescriptors, AllocationBudget,
-            reservedArgumentCharacters: 0, Inheritance);
+        new CommandContext<TInheritance>(descriptorsToClose, borrowedDescriptors, Inheritance);
 }

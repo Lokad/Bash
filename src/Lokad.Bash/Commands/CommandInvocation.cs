@@ -15,14 +15,11 @@ public sealed class CommandInvocation
 {
     private readonly CommandContext _context;
     public CommandContext Context => _context;
-    /// <summary>Shared value and storage limits; excludes prepaid argument-copy credit.</summary>
-    public CommandAllocationBudget AllocationBudget => _context.AllocationBudget;
     /// <summary>Handles a nested interpreter borrows without taking responsibility for closing them.</summary>
     /// <remarks>The caller must not mutate this retained list. It may include handles owned by this command.</remarks>
     public IReadOnlyList<FileDescriptor> BorrowedDescriptors => _context.BorrowedDescriptors;
-    public bool ArgumentCopyLimitExceeded => _context.LimitExceeded;
 
-    /// <summary> Creates an independent command owning its non-reserved stream handles and allocation budget. </summary>
+    /// <summary> Creates an independent command owning its non-reserved stream handles. </summary>
     /// <param name="commandName">The command name.</param>
     /// <param name="arguments">The byte-valued command arguments.</param>
     /// <param name="currentDirectory">The working directory for relative paths, independent of PWD.</param>
@@ -44,7 +41,7 @@ public sealed class CommandInvocation
     {
     }
 
-    /// <summary>Creates an equivalent invocation sharing descriptor ownership and its argument-copy allowance.</summary>
+    /// <summary>Creates an equivalent invocation sharing descriptor ownership.</summary>
     public CommandInvocation WithCommandName(string commandName) =>
         new(commandName, this);
 
@@ -87,11 +84,8 @@ public sealed class CommandInvocation
     /// borrowedDescriptors excludes caller-owned handles from command cleanup. nestedBorrowedDescriptors
     /// also includes handles owned by this command that a nested interpreter must leave open.
     /// Neither retained descriptor list may be mutated by callers. Use immutable snapshots for inherited state;
-    /// referenced services such as allocation budgets follow their own mutation rules.
-    /// Aliases share copy credit; child commands preserve inheritance but start with no prepaid copies.
-    /// Prepaid copies must already have been charged to allocationBudget.
+    /// child commands preserve inheritance while retaining their own descriptor ownership.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException">The prepaid copy count is negative.</exception>
     public static CommandInvocation CreateWithInheritance<TInheritance>(
         string commandName,
         IReadOnlyList<ShellValue> arguments,
@@ -102,20 +96,17 @@ public sealed class CommandInvocation
         FileDescriptor stdErr,
         IReadOnlyList<FileDescriptor> borrowedDescriptors,
         IReadOnlyList<FileDescriptor> nestedBorrowedDescriptors,
-        CommandAllocationBudget allocationBudget,
-        long reservedArgumentCharacters,
         TInheritance inheritance,
         ShellValue? argumentZero,
         IReadOnlyList<ExportedFunction> functions) where TInheritance : struct
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(reservedArgumentCharacters);
         return new(commandName, arguments, currentDirectory, environment, stdIn, stdOut, stdErr,
             new CommandContext<TInheritance>(CommandContext.BuildDescriptorsToClose(stdIn, stdOut, stdErr, borrowedDescriptors),
-                nestedBorrowedDescriptors, allocationBudget, reservedArgumentCharacters, inheritance))
+                nestedBorrowedDescriptors, inheritance))
         { ArgumentZeroOverride = argumentZero, Functions = functions };
     }
 
-    /// <summary>Reads the interpreter's value without exposing command ownership or copy-credit storage.</summary>
+    /// <summary>Reads the interpreter's value without exposing command ownership.</summary>
     public bool TryGetInheritance<TInheritance>(out TInheritance inheritance) where TInheritance : struct
     {
         if (_context is CommandContext<TInheritance> context)
@@ -128,7 +119,7 @@ public sealed class CommandInvocation
     }
 
     /// <summary>
-    /// Creates an independent command that borrows descriptors and has its own allocation budget.
+    /// Creates an independent command that borrows descriptors.
     /// </summary>
     /// <remarks>
     /// Borrowed descriptors are passed to the command for use, but their lifetime remains owned by the caller.
@@ -155,8 +146,8 @@ public sealed class CommandInvocation
             CommandContext.CreateIndependent(stdIn, stdOut, stdErr, borrowedDescriptors));
 
     /// <summary>
-    /// Creates a command on the same host, borrowing parent handles and preserving its budget and interpreter inheritance.
-    /// The child receives its own argument-copy allowance and retains the parent's working directory and exported definitions.
+    /// Creates a command on the same host, borrowing parent handles and preserving interpreter inheritance.
+    /// The child retains the parent's working directory and exported definitions.
     /// </summary>
     public CommandInvocation CreateChild(
         string childCommandName,
@@ -180,7 +171,7 @@ public sealed class CommandInvocation
     /// <summary>Serialized definitions for hosted child shells, separate from the scalar environment.</summary>
     public IReadOnlyList<ExportedFunction> Functions { get; init; } = [];
 
-    /// <summary>Decodes arguments for text-only tools, charging copies to the shared allocation budget.</summary>
+    /// <summary>Decodes arguments for text-only tools; the consuming host owns the decoded copies.</summary>
     public bool TryGetTextArguments(out IReadOnlyList<string> arguments, out ReadOnlyMemory<byte> error)
     {
         var decoded = new List<string>();
@@ -198,35 +189,10 @@ public sealed class CommandInvocation
         return true;
     }
 
-    /// <summary>Charges byte-native consumers the same conservative argument copy as text decoding.</summary>
-    public bool TryChargeArgumentCopies(out ReadOnlyMemory<byte> error)
-    {
-        long characters = 0;
-        foreach (var argument in Arguments)
-            characters += argument.Bytes.Length;
-        return TryChargeArgumentCopies(characters, out error);
-    }
-
-    /// <summary>Spends prepaid copies first, then charges additional bytes or UTF-16 units to the shared budget.</summary>
-    /// <remarks>Call before allocating argument copies or normalized arguments; failure latches for this invocation.</remarks>
-    public bool TryChargeArgumentCopies(long characters, out ReadOnlyMemory<byte> error)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(characters);
-        if (!_context.TryCharge(characters))
-        {
-            error = Utf8Text.Encode(_context.AllocationBudget.Values.LimitMessage);
-            return false;
-        }
-        error = ReadOnlyMemory<byte>.Empty;
-        return true;
-    }
-
-    /// <summary>Requires UTF-8 and reserves the decoding allocation before creating a string.</summary>
+    /// <summary>Requires UTF-8; the consuming host owns and admits the decoded storage.</summary>
     public bool TryDecodeArgument(ShellValue value, out string text, out ReadOnlyMemory<byte> error)
     {
         text = string.Empty;
-        if (!TryChargeArgumentCopies(value.Bytes.Length, out error))
-            return false;
         if (!value.TryGetUtf8Text(out text))
         {
             error = "shell: text argument must be valid UTF-8\n"u8.ToArray();
@@ -236,7 +202,7 @@ public sealed class CommandInvocation
         return true;
     }
 
-    /// <summary>Reuses cached name text and decodes values under the shared text-boundary budget.</summary>
+    /// <summary>Reuses cached name text and decodes values at a text-only host boundary.</summary>
     public bool TryDecodeEnvironmentVariable(EnvironmentVariable variable,
         out string name, out string value, out ReadOnlyMemory<byte> error)
     {

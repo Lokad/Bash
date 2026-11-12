@@ -80,7 +80,7 @@ public sealed partial class Evaluation
         async Task<long?> EvaluateOperandAsync(ShellSource expression)
         {
             // The condition and increment finish each iteration, just like the body command.
-            using var memory = ExpansionBudget.Memory.BeginCommand(scope);
+            using var memory = Memory.BeginCommand(scope);
             return await EvaluateArithmeticCommandOperandAsync(expression, scope).ConfigureAwait(false);
         }
     }

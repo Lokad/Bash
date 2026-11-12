@@ -7,18 +7,11 @@ namespace Lokad.Bash.Tests;
 
 public sealed class EvaluationStartupTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DirectStartupUsesItsOwnStateAndStandardDescriptors(bool nested)
+    [Fact]
+    public async Task DirectStartupUsesItsOwnStateAndStandardDescriptors()
     {
         var directory = new ShellPath("/work");
-        var parent = nested
-            ? new CommandInvocation("parent", [ShellValue.FromText("argument")], new ShellPath("/parent"),
-                [new EnvironmentVariable("PARENT_VALUE", ShellValue.FromText("inherited"))],
-                new FileDescriptor(11), new FileDescriptor(12), new FileDescriptor(13))
-            : null;
-        var evaluation = ShellEvaluationStartup.CreateForNewHost(parent,
+        var evaluation = ShellEvaluationStartup.CreateForNewHost(
             Parser.Parse("inspect \"$#\" \"$PWD\" \"${PARENT_VALUE-unset}\""), new EvaluationOptions(0, directory));
         var host = new MockFileSystem();
 
@@ -33,8 +26,6 @@ public sealed class EvaluationStartupTests
         Assert.Equal(FileDescriptor.StdOut, command.StdOut);
         Assert.Equal(FileDescriptor.StdErr, command.StdErr);
         Assert.Empty(evaluation.GetDescriptorsForCleanup());
-        if (parent is not null)
-            Assert.Same(parent.Context.AllocationBudget, evaluation.ExpansionBudget.AllocationBudget);
     }
 
     [Fact]
@@ -54,9 +45,8 @@ public sealed class EvaluationStartupTests
         var descriptors = new EvaluationDescriptorSetup(
             DescriptorTable.Snapshot.Standard.WithStandardStreams(FileDescriptor.StdIn, output, FileDescriptor.StdErr),
             [output]);
-        var budget = new ExpansionBudget();
         var evaluation = new ShellEvaluation(Parser.Parse("inspect \"$0\" \"$1\" \"$#\" \"$PWD\" \"$VALUE\""),
-            new EvaluationOptions(0, directory), descriptors, budget, environment, argumentZero, arguments);
+            new EvaluationOptions(0, directory), descriptors, environment, argumentZero, arguments);
 
         arguments.Clear();
         environment.Clear();
@@ -71,7 +61,5 @@ public sealed class EvaluationStartupTests
         Assert.Equal(output, command.StdOut);
         Assert.Empty(command.DescriptorsToClose);
         Assert.Empty(evaluation.GetDescriptorsForCleanup());
-        Assert.Same(budget.AllocationBudget, evaluation.ExpansionBudget.AllocationBudget);
-        Assert.NotSame(budget, evaluation.ExpansionBudget);
     }
 }

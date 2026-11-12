@@ -48,7 +48,7 @@ public sealed class Engine
         IMemoryBudget evaluationMemory,
         CancellationToken cancellationToken)
     {
-        state.ExpansionBudget.MemoryBudget = evaluationMemory;
+        state.Memory.Budget = evaluationMemory;
         using var timing = visitor.Timing.BeginEvaluation();
         // Builtins and argument expansion can wait before any tool command starts.
         // Keep this producer connection through evaluation and descriptor cleanup.

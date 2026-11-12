@@ -20,9 +20,12 @@ File paths use the contained POSIX-style namespace defined by `ShellPath` and
 `FilePathLookup`, including their size, control-character and traversal constraints.
 
 Pipeline status uses fixed `pipefail`: the rightmost failing stage wins. Scripts
-are limited to 4 MiB, with additional syntax, nesting and cumulative expansion
-limits. Pending here-documents followed by a pipeline/list operator before the
-body are not fully supported. Builtins implement their documented option subsets;
+are limited to 4 MiB, with structural syntax/nesting guards and CLR collection-size
+checks. The source bound limits parser input; nesting guards protect recursive
+syntax handling. They are independent of execution duration. There are no lifetime
+word, character, brace, argument-copy or pattern-step quotas. Callers supply
+cancellation and a live-memory allowance. Pending here-documents followed by a
+pipeline/list operator before the body are not fully supported. Builtins implement their documented option subsets;
 `set` sets positional parameters and does not toggle shell options.
 
 Regular expression conditions currently use .NET regular expressions rather than

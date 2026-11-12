@@ -17,8 +17,10 @@ internal static partial class WordExpansion
         internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName);
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
 
-        internal long ReadArithmetic(Variables variables) => TryRead(variables, out var value)
-            && ArithmeticEvaluation.TryParseDecimal(value.Bytes.Span, out var number) ? number : 0;
+        internal long ReadArithmetic(Variables variables) => ReadArithmetic(variables, CancellationToken.None);
+
+        internal long ReadArithmetic(Variables variables, CancellationToken cancellationToken) => TryRead(variables, out var value)
+            && ArithmeticEvaluation.TryParseDecimal(value.Bytes.Span, cancellationToken, out var number) ? number : 0;
 
         public bool TryRead(Variables variables, out ShellValue value)
         {
@@ -73,7 +75,7 @@ internal static partial class WordExpansion
 
             if (declarationWrite == DeclarationWrite.ActiveGlobalIndexed)
             {
-                target.SetExpansionValueIgnoringReadonly(sourceName, value, scope.Effects.ExpansionBudget.Words);
+                target.SetExpansionValueIgnoringReadonly(sourceName, value, scope.Effects.Memory);
                 return true;
             }
 
@@ -85,7 +87,7 @@ internal static partial class WordExpansion
             // Keep the receiver's array kind, even when a temporary scalar was indexed.
             bool TryForwardTo(Variables variables, BindingName name) => this switch
             {
-                Scalar => variables.TrySetScalar(name, value, scope.Effects.ExpansionBudget.Words),
+                Scalar => variables.TrySetScalar(name, value, scope.Effects.Memory),
                 Indexed indexed => variables.TryAssignArrayElement(name,
                     ShellValue.FromText(Integers.FormatNumber(indexed.Index.Value)), value, ArrayAssignmentKind.Auto),
                 Associative associative => variables.TryAssignArrayElement(name, associative.Key.Value, value, ArrayAssignmentKind.Auto),
@@ -96,7 +98,7 @@ internal static partial class WordExpansion
             bool TryAssignTo(Variables variables, BindingName name) => !name.IsEmpty
                 && (declarationWrite == DeclarationWrite.ActiveGlobalIndexed || !variables.IsReadonly(name)) && this switch
             {
-                Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.ExpansionBudget.Words),
+                Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory),
                 Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value),
                 Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
@@ -167,7 +169,7 @@ internal static partial class WordExpansion
         ShellSource source, ShellValue value, AssignmentOperator operation, ScopedEvaluation scope)
     {
         var opening = source.AsSpan().IndexOf((byte)'[');
-        scope.Effects.ExpansionBudget.Words.Charge(0, opening < 0 ? source.Length : opening);
+        scope.Effects.Memory.Charge(checked(4L * (opening < 0 ? source.Length : opening)));
         if (!VariableReference.TryParse(source, out var reference))
             return false;
 
@@ -196,14 +198,14 @@ internal static partial class WordExpansion
     private static async Task<NamerefAssignmentResult> PrepareNamerefAssignmentAsync(
         BindingName name, ShellValue value, AssignmentOperator operation, ScopedEvaluation scope, ExpansionFailureKind failure)
     {
-        switch (scope.Variables.GetNamerefAssignmentFailure(name, name, value, scope.Effects.ExpansionBudget.Words))
+        switch (scope.Variables.GetNamerefAssignmentFailure(name, name, value, scope.Effects.Memory))
         {
             case NamerefAssignmentFailure.None:
                 return new(NamerefAssignmentAction.Assign, value);
             case NamerefAssignmentFailure.InvalidTarget:
                 return await RejectAssignmentAsync(NamerefAssignmentFailure.InvalidTarget).ConfigureAwait(false);
             case NamerefAssignmentFailure.IndirectUnsetTarget:
-                if (scope.Context.TryResolveLocalNamerefAssignment(name, scope.Variables, scope.Effects.ExpansionBudget.Memory, out var fallback))
+                if (scope.Context.TryResolveLocalNamerefAssignment(name, scope.Variables, scope.Effects.Memory, out var fallback))
                 {
                     VariableBinding? selected = null;
                     if (fallback is Evaluation.LocalNamerefAssignment.Circular circular)
@@ -221,7 +223,7 @@ internal static partial class WordExpansion
                             return new(NamerefAssignmentAction.Fail, value);
                         }
                         // Retrying does not make an indirectly reached unset nameref a direct initializer.
-                        var retryFailure = global.Owner.GetNamerefAssignmentFailure(name, global.Name, value, scope.Effects.ExpansionBudget.Words);
+                        var retryFailure = global.Owner.GetNamerefAssignmentFailure(name, global.Name, value, scope.Effects.Memory);
                         if (retryFailure != NamerefAssignmentFailure.None)
                             return await RejectAssignmentAsync(retryFailure).ConfigureAwait(false);
                         selected = global;
@@ -278,7 +280,9 @@ internal static partial class WordExpansion
     internal static ShellValue AppendAssignmentValue(ShellValue previous, ShellValue value, ScopedEvaluation scope)
     {
         var length = (long)previous.Bytes.Length + value.Bytes.Length;
-        scope.Effects.ExpansionBudget.Words.Charge(0, length);
+        if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+        scope.Effects.Memory.Charge(checked(4L * length));
         var bytes = new byte[(int)length];
         previous.Bytes.Span.CopyTo(bytes);
         value.Bytes.Span.CopyTo(bytes.AsSpan(previous.Bytes.Length));

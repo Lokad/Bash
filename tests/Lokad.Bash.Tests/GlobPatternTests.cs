@@ -12,32 +12,8 @@ public sealed class GlobPatternTests
     {
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromBytes(new byte[] { 0xff }), false)]);
 
-        Assert.False(GlobPattern.TryFromExpandedWord(word, new ExpansionBudget().Words, out var pattern));
+        Assert.False(GlobPattern.TryFromExpandedWord(word, new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes)), out var pattern));
         Assert.Null(pattern);
-    }
-
-    [Fact]
-    public void PathComponentsAreChargedOnlyWhenRequested()
-    {
-        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("a/b"), isGlobQuoted: false)]);
-        var budget = new ExpansionBudget().Words;
-        budget.Charge(65536, 0);
-
-        Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
-
-        Assert.True(pattern.IsMatch("a/b"));
-        Assert.Throws<ExpansionBudget.LimitExceededException>(() => pattern.SplitPathSegments(budget));
-    }
-
-    [Fact]
-    public void QuoteMetadataRetainsTheCharacterAllowance()
-    {
-        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("a/b"), isGlobQuoted: false)]);
-        var budget = new ExpansionBudget().Words;
-        // Decoding fits, but quote metadata still reserves three more character units.
-        budget.Charge(0, 16 * 1024 * 1024 - 5);
-
-        Assert.Throws<ExpansionBudget.LimitExceededException>(() => GlobPattern.TryFromExpandedWord(word, budget, out _));
     }
 
     [Fact]
@@ -47,7 +23,7 @@ public sealed class GlobPatternTests
             new ExpandedSegment(ShellValue.FromText("dir/"), isGlobQuoted: false),
             new ExpandedSegment(ShellValue.Empty, isGlobQuoted: true),
             new ExpandedSegment(ShellValue.FromText("?/[a]"), isGlobQuoted: false)]);
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
 
         Assert.True(pattern.IsMatch("dir/é/a"));
@@ -58,37 +34,10 @@ public sealed class GlobPatternTests
     }
 
     [Fact]
-    public void PathSubstringCopiesRetainTheCharacterAllowance()
-    {
-        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("a/b"), isGlobQuoted: false)]);
-        var budget = new ExpansionBudget().Words;
-        budget.Charge(0, 16 * 1024 * 1024 - 8);
-        Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
-
-        Assert.Throws<ExpansionBudget.LimitExceededException>(() => pattern.SplitPathSegments(budget));
-    }
-
-    [Theory]
-    [InlineData("*", 200)]
-    [InlineData("*/..", 64)]
-    public async Task GlobPathCopiesConsumeTheCharacterAllowance(string pattern, int nameLength)
-    {
-        var budget = new ExpansionBudget().Words;
-        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(pattern), isGlobQuoted: false)]);
-        Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
-        var glob = new GlobEvaluation(parsed, "/", budget, CancellationToken.None);
-        // Leave room for a short name, but not a long name or the subsequent parent path copies.
-        budget.Charge(0, 16 * 1024 * 1024 - 128);
-        var listing = new GlobListing(() => [new DirectoryEntry(new string('a', nameLength), FilePathKind.Directory)]);
-
-        await Assert.ThrowsAsync<ExpansionBudget.LimitExceededException>(() => glob.EvaluateAsync(listing));
-    }
-
-    [Fact]
     public async Task GlobExpansionObservesCancellationAfterListing()
     {
         using var cancellation = new CancellationTokenSource();
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("*"), isGlobQuoted: false)]);
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
         var glob = new GlobEvaluation(parsed, "/", budget, cancellation.Token);
@@ -123,7 +72,7 @@ public sealed class GlobPatternTests
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(pattern), isGlobQuoted: false)]);
 
         Assert.Equal(expected, GlobPattern.RequiresExpansion(word));
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
         Assert.Equal(expected, parsed.SplitPathSegments(budget).Any(static segment =>
             GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), segment.MetaMask.AsSpan())));
@@ -152,7 +101,7 @@ public sealed class GlobPatternTests
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(pattern), isGlobQuoted: true)]);
 
         Assert.False(GlobPattern.RequiresExpansion(word));
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
         Assert.DoesNotContain(parsed.SplitPathSegments(budget), static segment =>
             GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), segment.MetaMask.AsSpan()));
@@ -174,7 +123,7 @@ public sealed class GlobPatternTests
             new ExpandedSegment(ShellValue.FromText(suffix), isGlobQuoted: false)]);
 
         Assert.Equal(expected, GlobPattern.RequiresExpansion(word));
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
         Assert.Equal(expected, parsed.SplitPathSegments(budget).Any(static segment =>
             GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), segment.MetaMask.AsSpan())));

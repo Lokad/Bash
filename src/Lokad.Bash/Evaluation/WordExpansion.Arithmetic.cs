@@ -18,7 +18,7 @@ internal static partial class WordExpansion
         var bytes = ByteMemoryBuilder.CreateUnaccounted(0);
         var subscripts = new Dictionary<int, ArithmeticOperand.Subscript>();
         var pending = new List<WordPart>();
-        var budget = scope.Effects.ExpansionBudget.Words;
+        var budget = scope.Effects.Memory;
         foreach (var part in word.Parts)
         {
             if (!scope.CanExpand)
@@ -43,7 +43,7 @@ internal static partial class WordExpansion
                 break;
             var expanded = ExpandedWord.JoinWithSpaces(builder.Build(), budget).ToValue(budget);
             var brackets = !associative && builder.HasExpansion ? ArithmeticBracketMode.Literal : ArithmeticBracketMode.References;
-            budget.Charge(1, expanded.Bytes.Length + 2L);
+            budget.Charge(checked(256L + 4L * (expanded.Bytes.Length + 2L)));
             subscripts.Add(bytes.Length, new ArithmeticOperand.Subscript(subscript, new ExpandedArraySubscript(expanded, brackets)));
             bytes.Append((byte)'[').Append(expanded.Bytes).Append((byte)']');
         }
@@ -58,14 +58,14 @@ internal static partial class WordExpansion
                 return;
             var builder = await ExpandAsync(new Word(pending), purpose).ConfigureAwait(false);
             var value = ExpandedWord.JoinWithSpaces(builder.Build(), budget).ToValue(budget);
-            budget.Charge(0, value.Bytes.Length);
+            budget.Charge(checked(4L * value.Bytes.Length));
             bytes.Append(value.Bytes);
             pending = [];
         }
 
         async Task<ExpandedWordBuilder> ExpandAsync(Word operand, ExpansionPurpose operandPurpose)
         {
-            var builder = new ExpandedWordBuilder(scope.Variables, budget, operandPurpose, ImplicitEmptyPolicy.Preserve);
+            var builder = new ExpandedWordBuilder(scope.Variables, budget, operandPurpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
             await ExpandWordPartsAsync(operand, scope, builder, allowWordSplitting: false, allowLeadingTilde: false).ConfigureAwait(false);
             return builder;
         }
@@ -102,7 +102,8 @@ internal static partial class WordExpansion
             }
             scope = scope with { Arithmetic = context with { Depth = context.Depth + 1 } };
             var referenceFailureReported = false;
-            var result = await ArithmeticEvaluation.EvaluateAsync<ArithmeticTarget>(expression, BindAsync, WriteAsync).ConfigureAwait(false);
+            var result = await ArithmeticEvaluation.EvaluateAsync<ArithmeticTarget>(expression, BindAsync, WriteAsync,
+                scope.Effects.CancellationToken).ConfigureAwait(false);
             if (!scope.CanExpand)
                 return null;
             if (result.Error is not { } error)
@@ -121,7 +122,8 @@ internal static partial class WordExpansion
                         new ArithmeticError(ArithmeticErrorKind.InvalidTarget, selected.Syntax.Name.ToValue()));
                 }
                 // Bad read subscripts diagnose and yield zero. A later write may select a newly created array.
-                var value = use == ArithmeticReferenceUse.Read && target.Location != null ? target.Location.ReadArithmetic(scope.Variables) : 0;
+                var value = use == ArithmeticReferenceUse.Read && target.Location != null
+                    ? target.Location.ReadArithmetic(scope.Variables, scope.Effects.CancellationToken) : 0;
                 return new ArithmeticBinding<ArithmeticTarget>.Bound(target, value);
             }
 
@@ -167,7 +169,7 @@ internal static partial class WordExpansion
                 if (assignOutput == null && !readOnly && AssignExpansion(reference, target, formatted))
                     return null;
                 var namerefFailure = scope.Variables.GetNamerefAssignmentFailure(
-                    reference.Name, target.Name, formatted, scope.Effects.ExpansionBudget.Words);
+                    reference.Name, target.Name, formatted, scope.Effects.Memory);
                 if (!readOnly && namerefFailure != NamerefAssignmentFailure.None)
                 {
                     // A rejected nameref initializer diagnoses without discarding the arithmetic value.
@@ -243,7 +245,7 @@ internal static partial class WordExpansion
                     {
                         scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding);
                         fallback = new ArithmeticElementFallback.Invalid(binding.Reference.Kind == VariableReferenceKind.Name
-                            ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.ExpansionBudget.Words));
+                            ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory));
                     }
                     target = null;
                 }

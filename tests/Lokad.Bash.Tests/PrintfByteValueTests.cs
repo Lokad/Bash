@@ -20,7 +20,7 @@ public sealed class PrintfByteValueTests
         var governor = new MemoryGovernor((enoughMemory ? 5L : 2L) * OutputBytes);
         using var memory = governor.CreateScope();
         var evaluation = new Evaluation.Evaluation(Parser.Parse($"printf -v saved '%{PrefixBytes}s\\0' x"));
-        evaluation.ExpansionBudget.MemoryBudget = memory;
+        evaluation.Memory.Budget = memory;
 
         var step = await evaluation.GetNextStep();
         if (enoughMemory)

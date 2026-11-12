@@ -110,7 +110,9 @@ public sealed partial class Evaluation
         ShellValue QuoteLiteral(ShellValue value)
         {
             var length = (long)value.Bytes.Length + 2 + 3L * value.Bytes.Span.Count((byte)'\'');
-            ExpansionBudget.Words.Charge(0, length);
+            if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                throw new ByteMemoryBuilder.LimitExceededException();
+            Memory.Charge(checked(4L * length));
             var quoted = BoundedByteMemoryBuilder.CreateUnaccounted((int)length, (int)length);
             if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(quoted, value.Bytes.Span))
                 throw new InvalidOperationException("Precomputed literal quoting length was too small.");
@@ -152,13 +154,13 @@ public sealed partial class Evaluation
 
     private ShellValue FlattenCompoundArrayItem(ShellValue selector, ShellValue value, AssignmentOperator operation)
     {
-        ExpansionBudget.Words.Charge(4, 0);
+        Memory.Charge(checked(1024L));
         var word = new ExpandedWord([
             new ExpandedSegment(ShellValue.FromText("["), isGlobQuoted: true),
             new ExpandedSegment(selector, isGlobQuoted: true),
             new ExpandedSegment(ShellValue.FromText(operation == AssignmentOperator.Append ? "]+=" : "]="), isGlobQuoted: true),
             new ExpandedSegment(value, isGlobQuoted: true)]);
-        return word.ToValue(ExpansionBudget.Words);
+        return word.ToValue(Memory);
     }
 
     /// <summary>Applies expanded items in order; selector effects observe earlier writes.</summary>

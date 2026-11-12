@@ -6,21 +6,6 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteFieldBoundaryTests
 {
-    [Fact]
-    public void SplittingCopiesShareTheExpansionAllowance()
-    {
-        var budget = new ExpansionBudget().Words;
-        budget.Charge(0, 16 * 1024 * 1024 - 8);
-        var builder = new ExpandedWordBuilder(
-            Variables.CreateInitial(new Dictionary<BindingName, ShellValue>(), []), budget, ExpansionPurpose.Normal,
-            ImplicitEmptyPolicy.Preserve);
-        builder.AppendExpansion(ShellValue.FromBytes(new byte[] { 0xff, 0xfe, 0xfd }),
-            allowWordSplitting: true, globQuoted: false);
-
-        // Input, pending-boundary and output buffers each copy the three bytes.
-        Assert.Throws<ExpansionBudget.LimitExceededException>(() => builder.Build());
-    }
-
     [Theory]
     [InlineData(false, false, new[] { "707265", "706F7374" })]
     [InlineData(true, false, new[] { "707265C3", "706F7374" })]
@@ -30,7 +15,7 @@ public sealed class ByteFieldBoundaryTests
     {
         var variables = Variables.CreateInitial(
             new Dictionary<BindingName, ShellValue> { ["IFS"] = ShellValue.FromText("é") }, []);
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var builder = new ExpandedWordBuilder(variables, budget, ExpansionPurpose.Normal, ImplicitEmptyPolicy.Preserve);
         builder.AppendSource(ShellSource.FromText("pre"), globQuoted: false);
         builder.AppendExpansion(ShellValue.FromBytes(new byte[] { 0xc3 }),
@@ -47,7 +32,7 @@ public sealed class ByteFieldBoundaryTests
     {
         var variables = Variables.CreateInitial(
             new Dictionary<BindingName, ShellValue> { ["IFS"] = ShellValue.FromText("é") }, []);
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var builder = new ExpandedWordBuilder(variables, budget, ExpansionPurpose.Normal, ImplicitEmptyPolicy.Preserve);
         builder.AppendText("pre", globQuoted: false);
         builder.AppendExpansion(ShellValue.FromBytes(new byte[] { 0xc3 }),
@@ -68,7 +53,7 @@ public sealed class ByteFieldBoundaryTests
     {
         var variables = Variables.CreateInitial(
             new Dictionary<BindingName, ShellValue> { ["IFS"] = ShellValue.FromText("é") }, []);
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var builder = new ExpandedWordBuilder(variables, budget, ExpansionPurpose.Normal, ImplicitEmptyPolicy.Preserve);
         builder.AppendSource(ShellSource.FromText(prefix), globQuoted: false);
         builder.AppendExpansion(ShellValue.FromBytes(Convert.FromHexString(expansionHex)),

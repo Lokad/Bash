@@ -314,7 +314,7 @@ internal sealed class RedirectionEvaluation
             if (!variables.IsReadonlyBinding(readonlyName)
                 && variables.TryResolveBinding(readonlyName, selectOwner: null, out var binding))
                 readonlyName = binding.Name;
-            using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.ExpansionBudget.MemoryBudget);
+            using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
             diagnostic.Append(readonlyName.ToValue().Bytes).Append(": readonly variable\n"u8)
                 .Append(Utf8Text.Encode(redirection.VariableName)).Append(": cannot assign fd to variable\n"u8);
             await ReportFailureAsync(scope, diagnostic.ToMemory())

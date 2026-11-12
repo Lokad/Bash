@@ -43,15 +43,15 @@ public sealed class EvaluationCommandQueryDescriptionTestsEndToEnd
     [InlineData("type")]
     [InlineData("command -v")]
     [InlineData("command -V")]
-    public async Task RepeatedLiteralQueriesShareTheAllocationBudget(string command)
+    public async Task RepeatedLiteralQueriesCompleteWithoutLifetimeCredits(string command)
     {
         // Single-quoted literals retain their source bytes; query decoding still allocates each time.
         var script = "for ((i=0;i<2200;i++)); do " + command + " '" + new string('x', 8192)
-            + "' >/dev/null 2>&1; done; printf unexpected";
+            + "' >/dev/null 2>&1; done; printf done";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal(2, result.ExitCode);
-        Assert.Empty(result.StdOut);
-        Assert.Contains("word expansion exceeds", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("done", result.StdOut);
+        Assert.Empty(result.StdErr);
     }
 }

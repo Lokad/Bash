@@ -20,7 +20,7 @@ public sealed partial class Evaluation
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
 
         var functionName = context.FunctionContext.FunctionName;
-        using var output = new ByteMemoryBuilder(0, ExpansionBudget.MemoryBudget);
+        using var output = new ByteMemoryBuilder(0, Memory.Budget);
         output.Append("0 "u8).Append(functionName.Bytes).Append((byte)'\n');
         var exitCode = (await ExecuteWriteAsync(
             GetStdOutDescriptor(),
@@ -48,7 +48,7 @@ public sealed partial class Evaluation
             return ApplyNegation(resultWithoutArguments, negated);
         }
 
-        ExpansionBudget.Memory.Charge(commandVars.PositionalMemoryBytes);
+        Memory.Charge(commandVars.PositionalMemoryBytes);
         using var positionalParametersScope = commandVars.EnterPositionalParametersScope(
             arguments,
             PositionalParametersRestorePolicy.UnlessReplaced);

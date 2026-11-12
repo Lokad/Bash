@@ -84,7 +84,7 @@ public sealed partial class Evaluation
             else if (reset)
                 traps.Reset(condition);
             else
-                traps.Set(condition, action, ExpansionBudget.Memory);
+                traps.Set(condition, action, Memory);
         }
         return EvaluationResult.FromExitCode(status);
 
@@ -106,10 +106,10 @@ public sealed partial class Evaluation
                 return true;
             var name = ShellTraps.GetName(condition);
             var length = 8L + handler.Bytes.Length + 3L * handler.Bytes.Span.Count((byte)'\'') + 2 + 1 + name.Length + 1;
-            ExpansionBudget.Words.Charge(0, length);
+            Memory.Charge(checked(4L * length));
             if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
-                throw new ExpansionBudget.LimitExceededException(ExpansionBudget.Words.LimitMessage);
-            using var output = new BoundedByteMemoryBuilder(0, (int)length, ExpansionBudget.MemoryBudget);
+                throw new ByteMemoryBuilder.LimitExceededException();
+            using var output = new BoundedByteMemoryBuilder(0, (int)length, Memory.Budget);
             if (!output.TryAppend("trap -- "u8)
                 || !ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, handler.Bytes.Span)
                 || !output.TryAppend((byte)' ')

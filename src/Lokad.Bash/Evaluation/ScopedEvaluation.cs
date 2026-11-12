@@ -43,13 +43,13 @@ internal readonly record struct ScopedEvaluation(
             }
         }
 
-        Variables.SetExpansionValueIgnoringReadonly(name, value, Effects.ExpansionBudget.Words);
+        Variables.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
         if (SelectorBindings != null)
         {
             var resolved = Variables.ResolveNamerefName(name);
             GetSelectorWriteTarget(name, resolved)?.SetResolvedValuePreservingArray(resolved, value);
         }
-        GetExpansionWriteTarget(name)?.SetExpansionValueIgnoringReadonly(name, value, Effects.ExpansionBudget.Words);
+        GetExpansionWriteTarget(name)?.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
     }
 
     /// <summary>Retains selected builtin writes, except indirect writes into temporary prefixes.</summary>

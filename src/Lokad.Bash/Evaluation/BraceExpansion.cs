@@ -22,36 +22,36 @@ internal static class BraceExpansion
     /// </summary>
     /// <param name="input">The input to expand.</param>
     /// <returns>The expanded source variants, or the original input if no expansion applies.</returns>
-    /// <param name="budget">The cumulative allocation allowance shared by related evaluations.</param>
+    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
     /// <param name="cancellationToken">Cancels computation and pending reads.</param>
     public static IReadOnlyList<ShellSource> Expand(
-        ShellSource input, AllocationAllowance budget, CancellationToken cancellationToken) =>
-        ExpandSource(input, budget, cancellationToken, 0);
-
-    /// <summary>Recursively expands generated source while sharing the brace allowance.</summary>
-    private static IReadOnlyList<ShellSource> ExpandSource(
-        ShellSource input, AllocationAllowance budget, CancellationToken cancellationToken, int depth)
+        ShellSource input, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (depth >= 256)
-            throw new ExpansionBudget.LimitExceededException("shell: brace expansion exceeds the 256-step nesting limit\n");
-
-        if (!TryFindExpansion(input.AsSpan(), budget, cancellationToken, out var openIndex, out var closeIndex, out var expansions))
-            return [input];
-
-        var prefix = input.AsSpan()[..openIndex];
-        var suffix = input.AsSpan()[(closeIndex + 1)..];
+        var pending = new Stack<ShellSource>();
+        pending.Push(input);
         var results = new List<ShellSource>();
-
-        foreach (var expansion in expansions)
+        while (pending.TryPop(out var current))
         {
-            budget.Charge(1, (long)prefix.Length + expansion.Length + suffix.Length);
-            var combined = Combine(prefix, expansion.AsSpan(), suffix);
-            var nested = ExpandSource(combined, budget, cancellationToken, depth + 1);
-            budget.Charge(nested.Count, 0);
-            results.AddRange(nested);
-        }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryFindExpansion(current.AsSpan(), memory, cancellationToken,
+                    out var openIndex, out var closeIndex, out var expansions))
+            {
+                memory.Charge(256);
+                results.Add(current);
+                continue;
+            }
 
+            var prefix = current.AsSpan()[..openIndex];
+            var suffix = current.AsSpan()[(closeIndex + 1)..];
+            // Reverse the push order to retain left-to-right expansion without recursive calls.
+            for (var index = expansions.Count - 1; index >= 0; index--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var expansion = expansions[index];
+                memory.Charge(checked(256L + 4L * ((long)prefix.Length + expansion.Length + suffix.Length)));
+                pending.Push(Combine(prefix, expansion.AsSpan(), suffix));
+            }
+        }
         return results;
 
         static ShellSource Combine(
@@ -59,7 +59,7 @@ internal static class BraceExpansion
             ReadOnlySpan<byte> middle,
             ReadOnlySpan<byte> suffix)
         {
-            var bytes = ByteMemoryBuilder.CreateUnaccounted(prefix.Length + middle.Length + suffix.Length);
+            var bytes = ByteMemoryBuilder.CreateUnaccounted(checked(prefix.Length + middle.Length + suffix.Length));
             bytes.Append(prefix);
             bytes.Append(middle);
             bytes.Append(suffix);
@@ -75,11 +75,11 @@ internal static class BraceExpansion
     /// <param name="closeIndex">The index of the closing brace.</param>
     /// <param name="expansions">The expanded elements found within the braces.</param>
     /// <returns>True when a valid expansion candidate is found.</returns>
-    /// <param name="budget">The cumulative allocation allowance shared by related evaluations.</param>
+    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
     /// <param name="cancellationToken">Cancels computation and pending reads.</param>
     private static bool TryFindExpansion(
         ReadOnlySpan<byte> input,
-        AllocationAllowance budget,
+        EvaluationMemory memory,
         CancellationToken cancellationToken,
         out int openIndex,
         out int closeIndex,
@@ -91,23 +91,24 @@ internal static class BraceExpansion
 
         for (var index = 0; index < input.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (input[index] != (byte)'{')
                 continue;
 
             if (index > 0 && input[index - 1] == (byte)'$')
             {
-                if (!TryFindClosingBrace(input, index, out var skipClose))
+                if (!TryFindClosingBrace(input, index, cancellationToken, out var skipClose))
                     return false;
 
                 index = skipClose;
                 continue;
             }
 
-            if (!TryFindClosingBrace(input, index, out var candidateClose))
+            if (!TryFindClosingBrace(input, index, cancellationToken, out var candidateClose))
                 return false;
 
             var content = input.Slice(index + 1, candidateClose - index - 1);
-            if (TryExpandContent(content, budget, cancellationToken, out expansions))
+            if (TryExpandContent(content, memory, cancellationToken, out expansions))
             {
                 openIndex = index;
                 closeIndex = candidateClose;
@@ -125,13 +126,15 @@ internal static class BraceExpansion
     /// </summary>
     /// <param name="input">The source bytes to scan.</param>
     /// <param name="start">The index of the opening brace.</param>
+    /// <param name="cancellationToken">Cancels scanning nested source.</param>
     /// <param name="closeIndex">The index of the matching closing brace.</param>
     /// <returns>True when a matching closing brace is found.</returns>
-    private static bool TryFindClosingBrace(ReadOnlySpan<byte> input, int start, out int closeIndex)
+    private static bool TryFindClosingBrace(ReadOnlySpan<byte> input, int start, CancellationToken cancellationToken, out int closeIndex)
     {
         var depth = 0;
         for (var index = start; index < input.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var value = input[index];
             if (value == (byte)'{')
             {
@@ -162,20 +165,20 @@ internal static class BraceExpansion
     /// <param name="content">The source bytes inside braces.</param>
     /// <param name="expansions">The expanded values when parsing succeeds.</param>
     /// <returns>True when the content represents a valid expansion.</returns>
-    /// <param name="budget">The cumulative allocation allowance shared by related evaluations.</param>
+    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
     /// <param name="cancellationToken">Cancels computation and pending reads.</param>
     private static bool TryExpandContent(
         ReadOnlySpan<byte> content,
-        AllocationAllowance budget,
+        EvaluationMemory memory,
         CancellationToken cancellationToken,
         out IReadOnlyList<ShellSource> expansions)
     {
         expansions = [];
 
-        if (!HasTopLevelComma(content))
-            return TryExpandSequence(content, budget, cancellationToken, out expansions);
+        if (!HasTopLevelComma(content, cancellationToken))
+            return TryExpandSequence(content, memory, cancellationToken, out expansions);
 
-        expansions = SplitCommaList(content, budget);
+        expansions = SplitCommaList(content, memory, cancellationToken);
         return true;
     }
 
@@ -184,11 +187,13 @@ internal static class BraceExpansion
     /// </summary>
     /// <param name="content">The source bytes inside braces.</param>
     /// <returns>True when a top-level comma is present.</returns>
-    private static bool HasTopLevelComma(ReadOnlySpan<byte> content)
+    /// <param name="cancellationToken">Cancels scanning the source.</param>
+    private static bool HasTopLevelComma(ReadOnlySpan<byte> content, CancellationToken cancellationToken)
     {
         var depth = 0;
         for (var index = 0; index < content.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var value = content[index];
             if (value == (byte)'{' && !(index > 0 && content[index - 1] == (byte)'$'))
             {
@@ -214,8 +219,9 @@ internal static class BraceExpansion
     /// </summary>
     /// <param name="content">The source bytes inside braces.</param>
     /// <returns>The top-level comma-separated segments.</returns>
-    /// <param name="budget">The cumulative allocation allowance shared by related evaluations.</param>
-    private static IReadOnlyList<ShellSource> SplitCommaList(ReadOnlySpan<byte> content, AllocationAllowance budget)
+    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
+    /// <param name="cancellationToken">Cancels scanning the source.</param>
+    private static IReadOnlyList<ShellSource> SplitCommaList(ReadOnlySpan<byte> content, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         var results = new List<ShellSource>();
         var depth = 0;
@@ -223,6 +229,7 @@ internal static class BraceExpansion
 
         for (var index = 0; index < content.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var value = content[index];
             if (value == (byte)'{' && !(index > 0 && content[index - 1] == (byte)'$'))
             {
@@ -238,13 +245,13 @@ internal static class BraceExpansion
 
             if (value == (byte)',' && depth == 0)
             {
-                budget.Charge(1, index - start);
+                memory.Charge(checked(256L + 4L * (index - start)));
                 results.Add(ShellSource.FromBytes(content.Slice(start, index - start).ToArray()));
                 start = index + 1;
             }
         }
 
-        budget.Charge(1, content.Length - start);
+        memory.Charge(checked(256L + 4L * (content.Length - start)));
         results.Add(ShellSource.FromBytes(content[start..].ToArray()));
         return results;
     }
@@ -255,17 +262,17 @@ internal static class BraceExpansion
     /// <param name="source">The source bytes inside braces.</param>
     /// <param name="expansions">The expanded sequence values.</param>
     /// <returns>True when the content is a valid sequence expression.</returns>
-    /// <param name="budget">The cumulative allocation allowance shared by related evaluations.</param>
+    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
     /// <param name="cancellationToken">Cancels computation and pending reads.</param>
     private static bool TryExpandSequence(
         ReadOnlySpan<byte> source,
-        AllocationAllowance budget,
+        EvaluationMemory memory,
         CancellationToken cancellationToken,
         out IReadOnlyList<ShellSource> expansions)
     {
         expansions = [];
         // Sequence endpoints and decimal increments are a text grammar; comma-list data is not.
-        budget.Charge(0, 2L * source.Length);
+        memory.Charge(checked(4L * (2L * source.Length)));
         if (!ShellValue.FromBytes(source.ToArray()).TryGetUtf8Text(out var text))
             return false;
         var content = text.AsSpan();
@@ -274,11 +281,11 @@ internal static class BraceExpansion
             if (character == ',')
                 return false;
 
-        var first = IndexOfDoubleDot(content, 0);
+        var first = IndexOfDoubleDot(content, 0, cancellationToken);
         if (first < 0) return false;
 
-        var second = IndexOfDoubleDot(content, first + 2);
-        if (second >= 0 && IndexOfDoubleDot(content, second + 2) >= 0)
+        var second = IndexOfDoubleDot(content, first + 2, cancellationToken);
+        if (second >= 0 && IndexOfDoubleDot(content, second + 2, cancellationToken) >= 0)
             return false;
 
         var startSpan = content[..first];
@@ -327,9 +334,11 @@ internal static class BraceExpansion
             // Widen before subtraction/absolute value, including int.MinValue increments.
             // Enumerate by count so stepping past either int endpoint cannot wrap.
             var count = Math.Abs((long)end - start) / Math.Abs((long)increment) + 1;
-            // Reject excessive counts before preflighting formatted text and encoded byte copies.
-            budget.Charge(count, 0);
-            budget.Charge(0, count * maximumCopiedUnits);
+            // CLR collections require a representable backing array, independently of execution duration.
+            if (count >= Array.MaxLength)
+                throw new ByteMemoryBuilder.LimitExceededException();
+            memory.Charge(checked(256L * (count)));
+            memory.Charge(checked(4L * (count * maximumCopiedUnits)));
             var results = new List<ShellSource>((int)count);
             for (var index = 0; index < count; index++)
             {
@@ -370,10 +379,12 @@ internal static class BraceExpansion
     /// <param name="span">The sequence text to scan.</param>
     /// <param name="start">The index to start scanning.</param>
     /// <returns>The index of the first dot in a ".." sequence, or -1 if none found.</returns>
-    private static int IndexOfDoubleDot(ReadOnlySpan<char> span, int start)
+    /// <param name="cancellationToken">Cancels scanning the source.</param>
+    private static int IndexOfDoubleDot(ReadOnlySpan<char> span, int start, CancellationToken cancellationToken)
     {
         for (var index = start; index + 1 < span.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (span[index] == '.' && span[index + 1] == '.')
             {
                 return index;

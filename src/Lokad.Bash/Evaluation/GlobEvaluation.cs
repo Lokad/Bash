@@ -22,7 +22,7 @@ internal sealed class GlobEvaluation
     private readonly string _pattern;
     /// <summary> Owns the pathname segments prepared for this expansion. </summary>
     private readonly IReadOnlyList<GlobPattern.PatternSegment> _segments;
-    private readonly AllocationAllowance _budget;
+    private readonly EvaluationMemory _memory;
     private readonly CancellationToken _cancellationToken;
     /// <summary> Holds the active candidate list for the current segment; rebuilt as segments advance. </summary>
     private readonly List<Candidate> _candidates = [];
@@ -56,19 +56,19 @@ internal sealed class GlobEvaluation
     /// </summary>
     /// <param name="pattern">The glob pattern with quote metadata.</param>
     /// <param name="directory">The directory path.</param>
-    /// <param name="budget">Shared allowance for pathname components, intermediate candidates and copied path characters.</param>
+    /// <param name="memory">Shared memory for pathname components, intermediate candidates and copied path characters.</param>
     /// <param name="cancellationToken">Cancels directory traversal and candidate construction.</param>
     public GlobEvaluation(
         GlobPattern pattern,
         string directory,
-        AllocationAllowance budget,
+        EvaluationMemory memory,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        budget.Charge(1, 0);
+        memory.Charge(256);
         _pattern = pattern.Pattern;
-        _segments = pattern.SplitPathSegments(budget);
-        _budget = budget;
+        _segments = pattern.SplitPathSegments(memory);
+        _memory = memory;
         _cancellationToken = cancellationToken;
 
         var listBase = pattern.IsAbsolute ? RootPath : (string.IsNullOrEmpty(directory) ? "." : directory);
@@ -190,7 +190,8 @@ internal sealed class GlobEvaluation
             if (!matchDot && nameSpan[0] == '.')
                 continue;
 
-            if (TextGlobMatcher.IsMatch(_currentSegment.AsSpan(), _currentMask.AsSpan(), nameSpan))
+            if (TextGlobMatcher.MatchText(_currentSegment.AsSpan(), _currentMask.AsSpan(), nameSpan,
+                    _cancellationToken) == GlobMatchResult.Match)
             {
                 if (!_currentSegmentIsFinal && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
                     continue;
@@ -233,7 +234,7 @@ internal sealed class GlobEvaluation
     private Candidate AppendSegment(Candidate candidate, string segment)
     {
         _cancellationToken.ThrowIfCancellationRequested();
-        _budget.Charge(1, 0);
+        _memory.Charge(256);
         return new Candidate(
             CombinePath(candidate.ListPath, segment, collapseDot: true),
             CombinePath(candidate.OutputPath, segment, collapseDot: false));
@@ -251,11 +252,11 @@ internal sealed class GlobEvaluation
 
             if (prefix is ['/'])
             {
-                _budget.Charge(0, 1L + suffix.Length);
+                _memory.Charge(checked(4L * (1L + suffix.Length)));
                 return "/" + suffix;
             }
 
-            _budget.Charge(0, (long)prefix.Length + 1 + suffix.Length);
+            _memory.Charge(checked(4L * ((long)prefix.Length + 1 + suffix.Length)));
             return prefix + "/" + suffix;
         }
     }

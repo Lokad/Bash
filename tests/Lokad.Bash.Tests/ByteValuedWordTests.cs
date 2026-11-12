@@ -92,32 +92,14 @@ public sealed class ByteValuedWordTests
             word, new ScopedEvaluation(evaluation, Variables.CreateEmpty(), new Evaluation.Evaluation.EvaluationContext(0, null, Evaluation.Evaluation.ReturnTargetKind.None)));
 
         Assert.Collection(expanded,
-            value => Assert.Equal(first, value.ToValue(evaluation.ExpansionBudget.Words).Bytes.ToArray()),
-            value => Assert.Equal(second, value.ToValue(evaluation.ExpansionBudget.Words).Bytes.ToArray()));
-    }
-
-    [Fact]
-    public async Task ConcatenatedLiteralByteCopiesShareTheExpansionAllowance()
-    {
-        var evaluation = new Evaluation.Evaluation(Parser.Parse(string.Empty));
-        evaluation.ExpansionBudget.Words.Charge(0, 16 * 1024 * 1024 - 3);
-        var word = new Word([
-            WordPart.FromValue(WordPartKind.SingleQuoted, ShellValue.FromBytes(new byte[] { 0xff, 0xfe })),
-            WordPart.FromValue(WordPartKind.SingleQuoted, ShellValue.FromBytes(new byte[] { 0xfd }))]);
-        var expanded = await WordExpansion.ExpandToWordsAsync(
-            word, new ScopedEvaluation(evaluation, Variables.CreateEmpty(), new Evaluation.Evaluation.EvaluationContext(0, null, Evaluation.Evaluation.ReturnTargetKind.None)));
-
-        Assert.Equal(new byte[] { 0xff, 0xfe, 0xfd },
-            Assert.Single(expanded).ToValue(evaluation.ExpansionBudget.Words).Bytes.ToArray());
-        await Assert.ThrowsAsync<ExpansionBudget.LimitExceededException>(() => WordExpansion.ExpandToWordsAsync(
-            word, new ScopedEvaluation(evaluation, Variables.CreateEmpty(), new Evaluation.Evaluation.EvaluationContext(0, null, Evaluation.Evaluation.ReturnTargetKind.None))));
+            value => Assert.Equal(first, value.ToValue(evaluation.Memory).Bytes.ToArray()),
+            value => Assert.Equal(second, value.ToValue(evaluation.Memory).Bytes.ToArray()));
     }
 
     [Fact]
     public async Task SingleLiteralRetainsBytesAcrossScalarAndFieldExpansion()
     {
         var evaluation = new Evaluation.Evaluation(Parser.Parse(string.Empty));
-        evaluation.ExpansionBudget.Words.Charge(0, 16 * 1024 * 1024);
         var bytes = new byte[] { 0xff, 0xfe, 0xfd };
         var word = new Word([WordPart.FromValue(WordPartKind.SingleQuoted, ShellValue.FromBytes(bytes))]);
         var scope = new ScopedEvaluation(evaluation, Variables.CreateEmpty(), new Evaluation.Evaluation.EvaluationContext(0, null, Evaluation.Evaluation.ReturnTargetKind.None));
@@ -125,23 +107,20 @@ public sealed class ByteValuedWordTests
         var expanded = await WordExpansion.ExpandToWordsAsync(word, scope);
         var scalar = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
 
-        Assert.True(Assert.Single(expanded).ToValue(evaluation.ExpansionBudget.Words).Bytes.Equals(bytes.AsMemory()));
+        Assert.True(Assert.Single(expanded).ToValue(evaluation.Memory).Bytes.Equals(bytes.AsMemory()));
         Assert.True(scalar.Bytes.Equals(bytes.AsMemory()));
-        Assert.False(evaluation.ExpansionBudget.Words.TryCharge(65536, 0));
     }
 
     [Fact]
-    public void FlatteningPreflightsCopiesButRetainsSingleSegments()
+    public void FlatteningJoinsBytesAndRetainsSingleSegments()
     {
-        var budget = new ExpansionBudget().Words;
-        budget.Charge(0, 16 * 1024 * 1024 - 3);
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var bytes = new byte[] { 0xff, 0xfe };
         var segment = new ExpandedSegment(ShellValue.FromBytes(bytes), true);
 
-        Assert.Throws<ExpansionBudget.LimitExceededException>(() => new ExpandedWord([segment, segment]).ToValue(budget));
+        Assert.Equal(new byte[] { 0xff, 0xfe, 0xff, 0xfe }, new ExpandedWord([segment, segment]).ToValue(budget).Bytes.ToArray());
         Assert.True(new ExpandedWord([segment]).ToValue(budget).Bytes.Equals(bytes.AsMemory()));
         Assert.True(new ExpandedWord([]).ToValue(budget).IsEmpty);
-        Assert.Throws<ExpansionBudget.LimitExceededException>(() => new ExpandedWord([segment, segment]).ToText(budget));
     }
 
     [Theory]
@@ -164,7 +143,7 @@ public sealed class ByteValuedWordTests
         var expanded = await WordExpansion.ExpandToWordsAsync(
             word, new ScopedEvaluation(evaluation, Variables.CreateEmpty(), new Evaluation.Evaluation.EvaluationContext(0, null, Evaluation.Evaluation.ReturnTargetKind.None)));
 
-        Assert.Equal(expected, Assert.Single(expanded).ToValue(evaluation.ExpansionBudget.Words).Bytes.ToArray());
+        Assert.Equal(expected, Assert.Single(expanded).ToValue(evaluation.Memory).Bytes.ToArray());
         Assert.All(Assert.Single(expanded).Segments, segment => Assert.True(segment.IsGlobQuoted));
     }
 
@@ -254,7 +233,7 @@ public sealed class ByteValuedWordTests
             new ExpandedSegment(ShellValue.FromText("*"), false)
         ]);
 
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
         Assert.Equal("é*", pattern.Pattern);
         Assert.Equal(new byte[] { 0, GlobMask.Active }, Assert.Single(pattern.SplitPathSegments(budget)).MetaMask.Memory.ToArray());

@@ -62,7 +62,7 @@ public sealed partial class Evaluation
                 outputVariable = operands[operandIndex];
             }
 
-            if (!VariableReference.TryParse(ShellSource.FromBytes(outputVariable.Bytes), ExpansionBudget.Words, out var reference)
+            if (!VariableReference.TryParse(ShellSource.FromBytes(outputVariable.Bytes), Memory, out var reference)
                 || reference.Kind != VariableReferenceKind.Name && reference.Subscript.IsEmpty)
                 return await FailAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
                     .Append("printf: "u8).Append(ShellArgumentEscaping.QuoteDiagnosticOperand(outputVariable).Bytes)
@@ -82,7 +82,7 @@ public sealed partial class Evaluation
 
         var scope = new ScopedEvaluation(this, targetVars, context) { SelectorBindings = bindings };
         using var diagnostics = new BuiltinDiagnosticScope(this);
-        var outputMemory = ExpansionBudget.MemoryBudget.CreateScope();
+        var outputMemory = Memory.Budget.CreateScope();
         IMemoryReservation? truncatedMemory = null;
         try
         {
@@ -93,11 +93,11 @@ public sealed partial class Evaluation
             if (outputReference is { } destination && !HasPendingExpansionError && diagnostics.Result.CanAcceptMore)
             {
                 var value = ShellValue.FromBytes(result.Output).BeforeFirstNul();
-                ExpansionBudget.Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
+                Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
                 if (value.Bytes.Length < result.Output.Length)
                 {
                     // Admit the compact copy before releasing the discarded formatted buffer.
-                    value = ShellValue.FromBytes(ScopedMemory.Copy(value.Bytes, ExpansionBudget.MemoryBudget, out truncatedMemory));
+                    value = ShellValue.FromBytes(ScopedMemory.Copy(value.Bytes, Memory.Budget, out truncatedMemory));
                     outputMemory.Dispose();
                 }
                 var assignment = await AssignBuiltinAsync(destination, value,

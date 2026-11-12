@@ -34,7 +34,7 @@ public sealed partial class Evaluation
             CheckCancellation();
             // A nameref loop variable selects a new referent for each item, rather than writing through it.
             var assigned = scope.Variables.TryGetNameref(forCommand.Name, out _)
-                ? scope.Variables.TrySetNameref(forCommand.Name, item, ExpansionBudget.Words)
+                ? scope.Variables.TrySetNameref(forCommand.Name, item, Memory)
                 : TrySetVariable(forCommand.Name, item, scope.Variables);
             if (!assigned)
             {

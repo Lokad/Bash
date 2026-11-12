@@ -24,12 +24,12 @@ public sealed partial class Evaluation
         }
         try
         {
-            using var memory = ExpansionBudget.Memory.BeginCommand(scope);
+            using var memory = Memory.BeginCommand(scope);
             return await EvaluateCommandCoreAsync(command, scope, negated).ConfigureAwait(false);
         }
         catch (MemoryBudgetExceededException)
         {
-            ExpansionBudget.Memory.ReleaseUnusedCapacity();
+            Memory.ReleaseUnusedCapacity();
             await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1),
                 negated ^ command is PipelineCommand { Negated: true }).ConfigureAwait(false);
@@ -120,7 +120,7 @@ public sealed partial class Evaluation
                     : scope.Variables.TryGetExpansionValue("TIMEFORMAT", out var value)
                         ? value
                         : ShellTimeFormatting.DefaultFormat;
-                using var outputMemory = ExpansionBudget.MemoryBudget.CreateScope();
+                using var outputMemory = Memory.Budget.CreateScope();
                 if (ShellTimeFormatting.TryFormat(format, ended - started, out var output, out var error, outputMemory))
                 {
                     if (!output.IsEmpty)

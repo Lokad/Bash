@@ -141,27 +141,6 @@ public sealed class ByteStoredValueTests
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Theory]
-    [InlineData("source")]
-    [InlineData(".")]
-    public async Task Source_PathBudgetFailureReportsBeforeCommandEffects(string command)
-    {
-        var evaluation = new Evaluation.Evaluation(Parser.Parse(
-            command + " \"$p\" >/created; printf should-not-run"));
-        evaluation.SetVariable("p", ShellValue.FromText(new string('x', 60)));
-        evaluation.ExpansionBudget.Words.Charge(0, 16 * 1024 * 1024 - 100);
-
-        // A diagnostic must be the only operation: no redirection, file read, or next command.
-        var diagnostic = Assert.IsType<WriteOperation>(await evaluation.GetNextStep());
-        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("shell: word expansion exceeds its word or character limit\n"u8.ToArray(),
-            diagnostic.Content.ToArray());
-        diagnostic.SetResult(DescriptorWriteResult.Open);
-
-        Assert.Null(await evaluation.GetNextStep());
-        Assert.Equal(2, evaluation.LastExitCode);
-    }
-
     [Fact]
     public void AssociativeAssignment_RejectsEmptyKeysWithoutReplacingExistingValues()
     {

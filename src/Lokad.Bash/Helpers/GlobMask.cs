@@ -18,7 +18,7 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
     public GlobMaskSpan AsSpan() => new(mask.Span);
 
     /// <summary>Removes active backslash escapes while retaining which resulting bytes are literal.</summary>
-    public bool TryUnescape(ShellValue value, AllocationAllowance budget, CancellationToken cancellationToken,
+    internal bool TryUnescape(ShellValue value, EvaluationMemory memory, CancellationToken cancellationToken,
         out ShellValue unescaped, out GlobMask unescapedMask)
     {
         unescaped = value;
@@ -38,7 +38,7 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
         if (firstEscape < 0)
             return true;
 
-        budget.Charge(0, 2L * bytes.Length);
+        memory.Charge(checked(4L * (2L * bytes.Length)));
         var content = new byte[bytes.Length];
         var activity = new byte[bytes.Length];
         bytes[..firstEscape].CopyTo(content);

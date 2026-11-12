@@ -116,7 +116,7 @@ public sealed partial class Evaluation
         if (!TryParseTarget(firstName, out var firstReference))
             return await InvalidTargetAsync(firstName).ConfigureAwait(false);
 
-        var memory = _readWorkspace ??= new ReadWorkspace(ExpansionBudget.MemoryBudget);
+        var memory = _readWorkspace ??= new ReadWorkspace(Memory.Budget);
         memory.Content.Truncate(0);
         memory.FieldListMemory.Resize(0);
         memory.DecodedFieldMemory.Resize(0);
@@ -138,7 +138,7 @@ public sealed partial class Evaluation
                     return await InvalidTargetAsync(name).ConfigureAwait(false);
                 // Each retained field owns a compact copy. Command scratch covers publication;
                 // the variable estimate keeps accepted fields charged after the command ends.
-                ExpansionBudget.Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(fields[index]));
+                Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(fields[index]));
                 var copy = fields[index].Bytes.ToArray();
                 var assignment = await AssignBuiltinAsync(reference, ShellValue.FromBytes(copy), scope,
                     persistentOutputs: null, BuiltinOutputVisibility.Caller, ShellValue.FromText("read")).ConfigureAwait(false);
@@ -179,7 +179,7 @@ public sealed partial class Evaluation
         }
 
         bool TryParseTarget(ShellValue name, out VariableReference reference) =>
-            VariableReference.TryParse(ShellSource.FromBytes(name.Bytes), ExpansionBudget.Words, out reference)
+            VariableReference.TryParse(ShellSource.FromBytes(name.Bytes), Memory, out reference)
             && (reference.Kind == VariableReferenceKind.Name || !reference.Subscript.IsEmpty);
 
         async Task<EvaluationResult> InvalidTargetAsync(ShellValue name)
@@ -195,7 +195,7 @@ public sealed partial class Evaluation
                 return await CollectDelimitedInputAsync().ConfigureAwait(false);
 
             var content = memory.Content;
-            var physicalLine = memory.PhysicalLine ??= new ByteMemoryBuilder(0, ExpansionBudget.MemoryBudget);
+            var physicalLine = memory.PhysicalLine ??= new ByteMemoryBuilder(0, Memory.Budget);
             try
             {
                 var exitCode = 0;
@@ -354,7 +354,7 @@ public sealed partial class Evaluation
 
                     ByteMemoryBuilder GetScratch()
                     {
-                        var scratch = memory.PhysicalLine ??= new ByteMemoryBuilder(0, ExpansionBudget.MemoryBudget);
+                        var scratch = memory.PhysicalLine ??= new ByteMemoryBuilder(0, Memory.Budget);
                         scratch.Truncate(0);
                         return scratch;
                     }

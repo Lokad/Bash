@@ -85,9 +85,11 @@ without rollback or safe replay.
 effects/output retain host owners. Retained evaluator state requires a longer-lived
 caller-owned budget.
 
-`CommandAllocationBudget` bounds cumulative expansion work, without refunds; it
-does not replace memory admission. A new host sharing parent expansion limits
-must separately receive a memory budget under the same root.
+`EvaluationMemory` owns coarse estimates of command workspace and retained values.
+Completed sibling commands reuse workspace; pending parents and overlapping
+replacements stay charged. These reservations describe live ownership, with no
+lifetime expansion credits. A nested host must receive a memory budget under the
+same root; command inheritance does not copy or create a memory allowance.
 
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
 source-size bound, not complete accounting; manual stepping does not install a host

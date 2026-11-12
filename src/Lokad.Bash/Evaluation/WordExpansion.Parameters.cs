@@ -138,7 +138,7 @@ internal static partial class WordExpansion
                     if (!scope.CanExpand)
                         return;
 
-                    var budget = scope.Effects.ExpansionBudget.Words;
+                    var budget = scope.Effects.Memory;
                     var expanded = ExpandedWord.JoinWithSpaces(words, budget).ToValue(budget);
                     // Indirect defaults can assign bare names only, after the RHS has expanded.
                     if (parsed.Modifier == ParameterModifier.Indirect
@@ -200,7 +200,7 @@ internal static partial class WordExpansion
                     {
                         var messageWord = await ExpandExpressionAsync(parsed.Word, scope, ExpansionPurpose.ErrorMessage, allowWordSplitting: true)
                             .ConfigureAwait(false);
-                        message = messageWord.ToValue(scope.Effects.ExpansionBudget.Words);
+                        message = messageWord.ToValue(scope.Effects.Memory);
                     }
                     if (scope.CanExpand)
                         await scope.Effects.ReportFatalExpansionAsync(ParameterSubject(), message, ExpansionFailureKind.Parameter)
@@ -222,7 +222,7 @@ internal static partial class WordExpansion
                     .ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
-                var budget = scope.Effects.ExpansionBudget.Words;
+                var budget = scope.Effects.Memory;
                 if (!GlobPattern.TryFromExpandedWord(ExpandedWord.JoinWithSpaces(words, budget), budget, out var pattern))
                 {
                     await ReportSubstitutionFailureAsync("pattern must be valid UTF-8", ExpansionFailureKind.Parameter)
@@ -230,26 +230,26 @@ internal static partial class WordExpansion
                     return;
                 }
                 // Keep text-glob semantics and the selected field boundaries; no byte-oriented fallback.
-                budget.Charge(parameter.Fields.Count, 0);
+                budget.Charge(checked(256L * (parameter.Fields.Count)));
                 var removed = new List<ShellValue>(parameter.Fields.Count);
                 foreach (var value in parameter.Fields)
                 {
                     scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                    budget.Charge(0, value.Bytes.Length);
+                    budget.Charge(checked(4L * value.Bytes.Length));
                     if (!value.TryGetUtf8Text(out var text))
                     {
                         await ReportSubstitutionFailureAsync("pattern removal value must be valid UTF-8", ExpansionFailureKind.Parameter)
                             .ConfigureAwait(false);
                         return;
                     }
-                    var slice = ApplyPatternRemoval(text, pattern, parsed.Kind);
+                    var slice = ApplyPatternRemoval(text, pattern, parsed.Kind, scope.Effects.CancellationToken);
                     if (slice.Length == text.Length)
                     {
                         removed.Add(value);
                         continue;
                     }
                     // Materialize the slice and encode at most three bytes per UTF-16 unit.
-                    budget.Charge(0, 4L * slice.Length);
+                    budget.Charge(checked(4L * (4L * slice.Length)));
                     removed.Add(ShellValue.FromText(slice.ToString()));
                 }
                 Emit(removed);
@@ -379,7 +379,7 @@ internal static partial class WordExpansion
 
         async Task<ParameterValue> ReadParameterAsync()
         {
-            var budget = scope.Effects.ExpansionBudget.Words;
+            var budget = scope.Effects.Memory;
             if (parsed.Kind is BracedParameterOperatorKind.NamesAt or BracedParameterOperatorKind.NamesStar)
             {
                 var prefix = BindingNameExpansion.FromValue(parsed.Name.ToValue(), budget);
@@ -387,7 +387,7 @@ internal static partial class WordExpansion
                     .Select(name =>
                     {
                         // Preflight distinct, sort and output entries before materializing them.
-                        budget.Charge(3, name.ByteLength);
+                        budget.Charge(checked(768L + 4L * name.ByteLength));
                         return name.ToValue();
                     })
                     .Distinct().Order(ShellValue.ByteOrder).ToArray();
@@ -424,7 +424,7 @@ internal static partial class WordExpansion
                     await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
                     return source;
                 }
-                var joined = new ExpandedWordBuilder(scope.Variables, budget, ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve);
+                var joined = new ExpandedWordBuilder(scope.Variables, budget, ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
                 var fields = source.RangeSource?.Fields ?? source.Fields;
                 // Positional @ joins with spaces; array @ also uses spaces when IFS is empty.
                 if (source.Kind == VariableReferenceKind.At
@@ -474,7 +474,7 @@ internal static partial class WordExpansion
                     return new ParameterValue(VariableReferenceKind.Name,
                         [ShellValue.FromText(Integers.FormatNumber(length))], true, null, null);
                 }
-                budget.Charge(0, name.Length);
+                budget.Charge(checked(4L * name.Length));
                 if (!VariableReference.TryParse(name, out var reference))
                 {
                     await ReportSubstitutionFailureAsync("unsupported special parameter", ExpansionFailureKind.Parameter)
@@ -533,7 +533,7 @@ internal static partial class WordExpansion
                     }
 
                     // Operand expansion can mutate the source array; retain the selected values first.
-                    budget.Charge(count, 0);
+                    budget.Charge(checked(256L * (count)));
                     var fields = values.ToArray();
                     return new ParameterValue(reference.Kind, fields, fields.Length != 0, reference, null);
                 }
@@ -587,7 +587,7 @@ internal static partial class WordExpansion
 
             ShellValue EncodeName(string name)
             {
-                budget.Charge(0, 3L * name.Length);
+                budget.Charge(checked(4L * (3L * name.Length)));
                 return ShellValue.FromText(name);
             }
         }
@@ -612,10 +612,8 @@ internal static partial class WordExpansion
             if (!parameter.IsSet)
                 return parameter.Fields;
 
-            var budget = scope.Effects.ExpansionBudget.Words;
+            var budget = scope.Effects.Memory;
             var cancellationToken = scope.Effects.CancellationToken;
-            // Replacement can retry a pattern at every character. Bound that work across all fields.
-            var remainingMatchSteps = 1_000_000L;
             var result = new List<ShellValue>();
             if (parsed.Kind == BracedParameterOperatorKind.Transform)
             {
@@ -624,13 +622,13 @@ internal static partial class WordExpansion
                     switch (parsed.Word[0])
                     {
                         case (byte)'E':
-                            budget.Charge(0, value.Bytes.Length);
+                            budget.Charge(checked(4L * value.Bytes.Length));
                             result.Add(ShellEscapeDecoder.DecodeAnsiCValue(value.Bytes.Span));
                             break;
                         case (byte)'Q':
                             // Every input byte can become a four-byte escape; reserve before building it.
                             var maximumLength = 4L * value.Bytes.Length + 3;
-                            budget.Charge(0, maximumLength);
+                            budget.Charge(checked(4L * maximumLength));
                             var quoted = BoundedByteMemoryBuilder.CreateUnaccounted(0, (int)maximumLength);
                             if (!ShellArgumentEscaping.TryAppendQuoted(quoted, value.Bytes.Span, ShellQuoteStyle.SingleQuoted))
                                 throw new InvalidOperationException("Parameter quote exceeded its reserved bound.");
@@ -697,7 +695,7 @@ internal static partial class WordExpansion
                         return replacement.Value;
                     var bytes = replacement.Value.Bytes.Span;
                     var mask = replacement.Mask.AsSpan();
-                    budget.Charge(0, 2L * bytes.Length);
+                    budget.Charge(checked(4L * (2L * bytes.Length)));
                     var builder = ByteMemoryBuilder.CreateUnaccounted(0);
                     for (var index = 0; index < bytes.Length; index++)
                     {
@@ -760,7 +758,7 @@ internal static partial class WordExpansion
                     void Append(ReadOnlySpan<byte> content)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        budget.Charge(0, content.Length);
+                        budget.Charge(checked(4L * content.Length));
                         builder.Append(content);
                     }
                 }
@@ -789,7 +787,7 @@ internal static partial class WordExpansion
                 foreach (var value in parameter.RangeSource?.Fields ?? parameter.Fields)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    budget.Charge(1, 0);
+                    budget.Charge(256);
                     yield return value;
                 }
             }
@@ -802,7 +800,7 @@ internal static partial class WordExpansion
                 var value = word.ToValue(budget);
                 if (!word.Segments.Any(segment => segment.IsGlobQuoted && !segment.Content.IsEmpty))
                     return new ParameterOperand(value, new GlobMask(ReadOnlyMemory<byte>.Empty));
-                budget.Charge(0, value.Bytes.Length);
+                budget.Charge(checked(4L * value.Bytes.Length));
                 var mask = new byte[value.Bytes.Length];
                 var position = 0;
                 foreach (var segment in word.Segments)
@@ -819,9 +817,7 @@ internal static partial class WordExpansion
             {
                 var mask = pattern.Mask.AsSpan();
                 var matched = TextGlobMatcher.MatchUtf8(pattern.Value.Bytes.Span, in mask, value,
-                    requireEnd, ref remainingMatchSteps, cancellationToken, out var length);
-                if (matched == GlobMatchResult.LimitExceeded)
-                    throw new ExpansionBudget.LimitExceededException("shell: parameter pattern matching exceeds its work limit\n");
+                    requireEnd, cancellationToken, out var length);
                 return matched == GlobMatchResult.Match ? length : -1;
             }
 
@@ -830,7 +826,7 @@ internal static partial class WordExpansion
                 var bytes = value.Bytes.Span;
                 // ASCII stays one byte; any other valid character starts with at least two bytes.
                 // Reserve a twofold bound instead of locking the shared allowance for every character.
-                budget.Charge(0, 2L * bytes.Length);
+                budget.Charge(checked(4L * (2L * bytes.Length)));
                 var builder = ByteMemoryBuilder.CreateUnaccounted(0);
                 Span<byte> encoded = stackalloc byte[4];
                 for (var position = 0; position < bytes.Length;)
@@ -856,7 +852,8 @@ internal static partial class WordExpansion
             }
         }
 
-        static ReadOnlySpan<char> ApplyPatternRemoval(string value, GlobPattern pattern, BracedParameterOperatorKind kind)
+        static ReadOnlySpan<char> ApplyPatternRemoval(string value, GlobPattern pattern, BracedParameterOperatorKind kind,
+            CancellationToken cancellationToken)
         {
             var removePrefix = kind is BracedParameterOperatorKind.RemovePrefixShortest
                 or BracedParameterOperatorKind.RemovePrefixLongest;
@@ -864,9 +861,10 @@ internal static partial class WordExpansion
                 or BracedParameterOperatorKind.RemoveSuffixLongest;
             for (var offset = 0; offset <= value.Length; offset++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var length = longest ? value.Length - offset : offset;
                 var candidate = removePrefix ? value.AsSpan(0, length) : value.AsSpan(value.Length - length);
-                if (pattern.IsMatch(candidate))
+                if (pattern.IsMatch(candidate, cancellationToken))
                     return removePrefix ? value.AsSpan(length) : value.AsSpan(0, value.Length - length);
             }
 

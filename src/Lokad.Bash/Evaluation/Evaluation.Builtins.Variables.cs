@@ -60,11 +60,11 @@ public sealed partial class Evaluation
         for (var index = argumentIndex; index < words.Count; index++)
         {
             var nameValue = words[index];
-            var name = BindingNameExpansion.FromValue(nameValue, ExpansionBudget.Words);
+            var name = BindingNameExpansion.FromValue(nameValue, Memory);
             var directReference = default(VariableReference);
             var directSelector = !functions && !namerefs && !commandVars.HasBinding(name)
                 && context.FunctionContext?.IsLocal(name) != true && nameValue.Bytes.Span.Contains((byte)'[')
-                && VariableReference.TryParse(ShellSource.FromBytes(nameValue.Bytes), ExpansionBudget.Words, out directReference)
+                && VariableReference.TryParse(ShellSource.FromBytes(nameValue.Bytes), Memory, out directReference)
                 && directReference.Kind != VariableReferenceKind.Name && !directReference.Subscript.IsEmpty;
             var resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out var binding);
             // Explicit selectors never fall back to functions; element namerefs still can.
@@ -300,8 +300,8 @@ public sealed partial class Evaluation
         if (resolution != BuiltinReferenceResolution.Write)
             return resolution == BuiltinReferenceResolution.NoWrite;
         return bindings != null && ReferenceEquals(binding.Owner, variables)
-            ? bindings.TryApplyOutputAssignment(binding.Reference, value, ExpansionBudget.Words)
-            : binding.Owner.TryApplyAssignment(binding.Reference, value, ExpansionBudget.Words);
+            ? bindings.TryApplyOutputAssignment(binding.Reference, value, Memory)
+            : binding.Owner.TryApplyAssignment(binding.Reference, value, Memory);
     }
 
     private enum BuiltinReferenceResolution { Write, NoWrite, Invalid }
@@ -319,7 +319,7 @@ public sealed partial class Evaluation
             return BuiltinReferenceResolution.Invalid;
         if (reference.Kind == VariableReferenceKind.Name && binding.IsUnsetNameref && binding.Name != reference.Name)
         {
-            if (!context.TryResolveLocalNamerefAssignment(reference.Name, variables, ExpansionBudget.Memory, out var fallback)
+            if (!context.TryResolveLocalNamerefAssignment(reference.Name, variables, Memory, out var fallback)
                 || fallback is not LocalNamerefAssignment.Write write)
                 return BuiltinReferenceResolution.NoWrite;
             binding = write.Binding;
@@ -359,7 +359,7 @@ public sealed partial class Evaluation
             await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
             return BuiltinAssignmentResult.Failed;
         }
-        var failure = destination.GetNamerefAssignmentFailure(reference.Name, target.Name, value, ExpansionBudget.Words);
+        var failure = destination.GetNamerefAssignmentFailure(reference.Name, target.Name, value, Memory);
         if (failure != NamerefAssignmentFailure.None)
         {
             if (failure == NamerefAssignmentFailure.InvalidTarget)
@@ -378,7 +378,7 @@ public sealed partial class Evaluation
             // Count writes are visible to later selectors, without replaying an element selector
             // or imposing the caller's array kind on a temporary scalar prefix.
             assigned = reference.Kind == VariableReferenceKind.Name
-                ? binding.Owner.TryApplyAssignment(reference, value, ExpansionBudget.Words)
+                ? binding.Owner.TryApplyAssignment(reference, value, Memory)
                 : target.TryAssign(scope with { Variables = binding.Owner, ExpansionWriteTarget = null, SelectorBindings = null },
                     reference.Name, value, AssignmentOperator.Replace);
         }

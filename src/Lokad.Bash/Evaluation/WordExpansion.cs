@@ -35,7 +35,7 @@ internal static partial class WordExpansion
             .ConfigureAwait(false);
         if (!scope.CanExpand)
             return ShellValue.Empty;
-        var budget = scope.Effects.ExpansionBudget.Words;
+        var budget = scope.Effects.Memory;
         return ExpandedWord.JoinWithSpaces(fields, budget).ToValue(budget);
     }
 
@@ -53,7 +53,7 @@ internal static partial class WordExpansion
     {
         var expanded = await ExpandInternalAsync(word, scope, allowWordSplitting: false, purpose)
             .ConfigureAwait(false);
-        return expanded.Count == 0 ? ShellValue.Empty : expanded[0].ToValue(scope.Effects.ExpansionBudget.Words);
+        return expanded.Count == 0 ? ShellValue.Empty : expanded[0].ToValue(scope.Effects.Memory);
     }
 
     /// <summary>
@@ -81,7 +81,7 @@ internal static partial class WordExpansion
         if (word.Parts is [LiteralWordPart { Kind: WordPartKind.SingleQuoted } literal])
         {
             // Retain frozen fields for scalar and argument consumers; only the word/segment entries are new.
-            scope.Effects.ExpansionBudget.Words.Charge(2, 0);
+            scope.Effects.Memory.Charge(checked(512L));
             return [new ExpandedWord([new ExpandedSegment(literal.Value, isGlobQuoted: true)])];
         }
 
@@ -103,7 +103,7 @@ internal static partial class WordExpansion
 
             // Join operand fields, not brace alternatives: scalar consumers still select the first alternative.
             if (purpose == ExpansionPurpose.Scalar)
-                results.Add(ExpandedWord.JoinWithSpaces(expanded, scope.Effects.ExpansionBudget.Words));
+                results.Add(ExpandedWord.JoinWithSpaces(expanded, scope.Effects.Memory));
             else
                 results.AddRange(expanded);
         }
@@ -120,7 +120,7 @@ internal static partial class WordExpansion
         var changed = false;
         // Shared source or literal parts are copied when each generated word is flattened.
         var totalCharacters = 0L;
-        var budget = scope.Effects.ExpansionBudget.Braces;
+        var budget = scope.Effects.Memory;
 
         foreach (var part in word.Parts)
         {
@@ -133,7 +133,7 @@ internal static partial class WordExpansion
             {
                 var addedCharacters = (long)expanded.Count * length;
                 if (changed)
-                    budget.Charge(expanded.Count, addedCharacters);
+                    budget.Charge(checked(256L * (expanded.Count) + 4L * addedCharacters));
                 foreach (var branch in expanded)
                     branch.Add(part);
                 totalCharacters += addedCharacters;
@@ -142,15 +142,18 @@ internal static partial class WordExpansion
 
             changed = true;
             var nextCount = (long)expanded.Count * variants.Count;
+            if (nextCount >= Array.MaxLength)
+                throw new ByteMemoryBuilder.LimitExceededException();
             var nextCharacters = totalCharacters * variants.Count
                 + expanded.Count * variants.Sum(static variant => (long)variant.Length);
-            budget.Charge(nextCount * (expanded[0].Count + 1L), nextCharacters);
+            budget.Charge(checked(256L * (nextCount * (expanded[0].Count + 1L)) + 4L * nextCharacters));
             var nextExpanded = new List<List<WordPart>>((int)nextCount);
 
             foreach (var baseParts in expanded)
             {
                 foreach (var variant in variants)
                 {
+                    scope.Effects.CancellationToken.ThrowIfCancellationRequested();
                     var newParts = new List<WordPart>(baseParts.Count + 1);
                     newParts.AddRange(baseParts);
                     newParts.Add(WordPart.FromSource(WordPartKind.Unquoted, variant));
@@ -179,7 +182,7 @@ internal static partial class WordExpansion
             return [];
 
         var builder = new ExpandedWordBuilder(
-            scope.Variables, scope.Effects.ExpansionBudget.Words, purpose, ImplicitEmptyPolicy.Preserve);
+            scope.Variables, scope.Effects.Memory, purpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
         await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, allowLeadingTilde)
             .ConfigureAwait(false);
 
@@ -618,7 +621,7 @@ internal static partial class WordExpansion
             .ConfigureAwait(false);
         if (words.Count == 0 || !scope.CanExpand)
             return new ExpandedWord([]);
-        return ExpandedWord.JoinWithSpaces(words, scope.Effects.ExpansionBudget.Words);
+        return ExpandedWord.JoinWithSpaces(words, scope.Effects.Memory);
     }
 
     /// <summary>Expands a selected operand once, retaining fields and quotes until its consumer joins or splits them.</summary>
@@ -636,7 +639,7 @@ internal static partial class WordExpansion
             GetOperandSyntax(purpose),
             quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double);
         var builder = new ExpandedWordBuilder(
-            scope.Variables, scope.Effects.ExpansionBudget.Words, purpose, implicitEmptyPolicy);
+            scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken);
         await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, allowLeadingTilde: purpose is not (ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource))
             .ConfigureAwait(false);
         return !scope.CanExpand ? [] : builder.Build();
@@ -661,7 +664,7 @@ internal static partial class WordExpansion
 
         var key = name;
         if (scope.Variables.IsReadonly(key)
-            || scope.Variables.GetNamerefAssignmentFailure(key, key, value, scope.Effects.ExpansionBudget.Words)
+            || scope.Variables.GetNamerefAssignmentFailure(key, key, value, scope.Effects.Memory)
                 != NamerefAssignmentFailure.None)
         {
             return false;

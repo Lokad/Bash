@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
+using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -96,7 +97,6 @@ public static class ArithmeticEvaluation
         out long value,
         [NotNullWhen(false)] out ArithmeticError? error)
     {
-        AllocationAllowance? allowance = null;
         var pending = EvaluateAsync<string>(ArithmeticOperand.FromValue(expression), Bind, Assign);
         // These adapters only return completed values; never block a synchronous caller.
         if (!pending.IsCompleted)
@@ -112,7 +112,7 @@ public static class ArithmeticEvaluation
             var name = reference.Syntax.Name.CachedText ?? string.Empty;
             if (reference.Syntax.Kind != VariableReferenceKind.Name)
             {
-                var target = reference.Syntax.ToValue(allowance ??= new AllocationAllowance("Arithmetic reference exceeds its allocation limit.\n"));
+                var target = reference.Syntax.ToValue(null);
                 if (!target.TryGetUtf8Text(out name))
                     return ValueTask.FromResult<ArithmeticBinding<string>>(new ArithmeticBinding<string>.Failure(
                         new ArithmeticError(ArithmeticErrorKind.InvalidTarget, target)));
@@ -135,10 +135,21 @@ public static class ArithmeticEvaluation
         ArithmeticOperand expression,
         Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> bindReference,
         Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> assignTarget) =>
-        new Parser<TTarget>(expression, bindReference, assignTarget).EvaluateAsync();
+        EvaluateAsync(expression, bindReference, assignTarget, CancellationToken.None);
+
+    internal static ValueTask<ArithmeticResult> EvaluateAsync<TTarget>(
+        ArithmeticOperand expression,
+        Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> bindReference,
+        Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> assignTarget,
+        CancellationToken cancellationToken) =>
+        new Parser<TTarget>(expression, bindReference, assignTarget, cancellationToken).EvaluateAsync();
 
     /// <summary>Parses ASCII decimal chars or bytes modulo 2^64; strict comparison parsing must still reject overflow.</summary>
-    internal static bool TryParseDecimal<T>(ReadOnlySpan<T> text, out long value) where T : IBinaryInteger<T>
+    internal static bool TryParseDecimal<T>(ReadOnlySpan<T> text, out long value) where T : IBinaryInteger<T> =>
+        TryParseDecimal(text, CancellationToken.None, out value);
+
+    internal static bool TryParseDecimal<T>(ReadOnlySpan<T> text, CancellationToken cancellationToken, out long value)
+        where T : IBinaryInteger<T>
     {
         value = 0;
         var negative = !text.IsEmpty && text[0] == T.CreateChecked('-');
@@ -149,6 +160,7 @@ public static class ArithmeticEvaluation
 
         foreach (var digit in text)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (digit < T.CreateChecked('0') || digit > T.CreateChecked('9'))
             {
                 value = 0;
@@ -197,6 +209,7 @@ public static class ArithmeticEvaluation
         private ReadOnlySpan<byte> Span => _expression.Bytes.Span;
         private readonly Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> _bindReference;
         private readonly Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> _assignTarget;
+        private readonly CancellationToken _cancellationToken;
         private int _index;
         private int _suppressedEvaluation;
         private int _nestedParseDepth;
@@ -212,16 +225,19 @@ public static class ArithmeticEvaluation
         public Parser(
             ArithmeticOperand expression,
             Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> bindReference,
-            Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> assignTarget)
+            Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> assignTarget,
+            CancellationToken cancellationToken)
         {
             _operand = expression;
             _expression = expression.Value;
             _bindReference = bindReference;
             _assignTarget = assignTarget;
+            _cancellationToken = cancellationToken;
         }
 
         public async ValueTask<ArithmeticResult> EvaluateAsync()
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             SkipWhitespace();
             if (IsAtEnd)
                 return new ArithmeticResult(0, null);
@@ -234,6 +250,7 @@ public static class ArithmeticEvaluation
             {
                 while (frames.TryPeek(out var frame))
                 {
+                    _cancellationToken.ThrowIfCancellationRequested();
                     if (!frame.MoveNext())
                     {
                         frames.Pop().Dispose();
@@ -326,6 +343,7 @@ public static class ArithmeticEvaluation
 
             while (_index < Span.Length && IsWhitespace(Span[_index]))
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 _index++;
             }
         }
@@ -581,7 +599,7 @@ public static class ArithmeticEvaluation
             if (kind == ArithmeticTokenKind.Number)
             {
                 _index += token.Length;
-                _parsed = TryParseDecimal(token, out var number)
+                _parsed = TryParseDecimal(token, _cancellationToken, out var number)
                     ? new ParseResult(true, IsSuppressed ? 0 : number) : default;
                 return null;
             }
@@ -726,6 +744,7 @@ public static class ArithmeticEvaluation
             _index++;
             while (_index < Span.Length && VariableNames.IsNamePart((char)Span[_index]))
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 _index++;
             }
 
@@ -872,7 +891,7 @@ public static class ArithmeticEvaluation
         {
             var token = PeekToken(out var kind);
             return kind != ArithmeticTokenKind.Invalid
-                && (kind != ArithmeticTokenKind.Number || TryParseDecimal(token, out _));
+                && (kind != ArithmeticTokenKind.Number || TryParseDecimal(token, _cancellationToken, out _));
         }
 
         // Lookahead and parsing share token boundaries; malformed decimal words are never numeric prefixes.
@@ -894,7 +913,10 @@ public static class ArithmeticEvaluation
                 while (length < remaining.Length
                     && (VariableNames.IsNamePart((char)remaining[length])
                         || kind == ArithmeticTokenKind.Number && remaining[length] == (byte)'#'))
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
                     length++;
+                }
             }
             else if (first is (byte)'(' or (byte)')' or (byte)'?' or (byte)':' or (byte)',' or (byte)'~'
                 or (byte)'+' or (byte)'-' or (byte)'*' or (byte)'/' or (byte)'%' or (byte)'<' or (byte)'>' or (byte)'&' or (byte)'|' or (byte)'^' or (byte)'=' or (byte)'!')

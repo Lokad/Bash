@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
 
@@ -75,17 +76,19 @@ internal sealed class GlobPattern
     }
 
     /// <summary>Matches the whole pattern as text, without pathname component boundaries.</summary>
-    public bool IsMatch(ReadOnlySpan<char> text)
+    public bool IsMatch(ReadOnlySpan<char> text) => IsMatch(text, CancellationToken.None);
+
+    public bool IsMatch(ReadOnlySpan<char> text, CancellationToken cancellationToken)
     {
         var mask = MetaMask.AsSpan();
-        return TextGlobMatcher.IsMatch(Pattern.AsSpan(), in mask, text);
+        return TextGlobMatcher.MatchText(Pattern.AsSpan(), in mask, text, cancellationToken) == GlobMatchResult.Match;
     }
 
     /// <summary>
     /// Builds a text glob with quoting metadata, rejecting non-UTF-8 input without throwing.
     /// </summary>
     public static bool TryFromExpandedWord(
-        ExpandedWord word, AllocationAllowance budget, [NotNullWhen(true)] out GlobPattern? result)
+        ExpandedWord word, EvaluationMemory memory, [NotNullWhen(true)] out GlobPattern? result)
     {
         if (word.Segments.Count == 0)
         {
@@ -93,14 +96,14 @@ internal sealed class GlobPattern
             return true;
         }
 
-        var value = word.ToValue(budget);
-        budget.Charge(0, value.Bytes.Length);
+        var value = word.ToValue(memory);
+        memory.Charge(checked(4L * value.Bytes.Length));
         if (!value.TryGetUtf8Text(out var pattern))
         {
             result = null;
             return false;
         }
-        budget.Charge(0, pattern.Length);
+        memory.Charge(checked(4L * pattern.Length));
         // Retain the same conservative reservation when active metadata needs no storage.
         var hasQuotedContent = false;
         for (var index = 0; index < word.Segments.Count; index++)
@@ -137,9 +140,9 @@ internal sealed class GlobPattern
     }
 
     /// <summary>Builds pathname components only for directory expansion, charging their copies and entries.</summary>
-    public IReadOnlyList<PatternSegment> SplitPathSegments(AllocationAllowance budget)
+    public IReadOnlyList<PatternSegment> SplitPathSegments(EvaluationMemory memory)
     {
-        budget.Charge(0, Pattern.Length);
+        memory.Charge(checked(4L * Pattern.Length));
         var span = Pattern.AsSpan();
         var maskMemory = MetaMask.Memory;
         var start = IsAbsolute ? 1 : 0;
@@ -152,7 +155,7 @@ internal sealed class GlobPattern
                 var length = index - start;
                 if (length > 0)
                 {
-                    budget.Charge(1, 0);
+                    memory.Charge(256);
                     result.Add(new PatternSegment(
                         Pattern.Substring(start, length),
                         new GlobMask(maskMemory.IsEmpty ? ReadOnlyMemory<byte>.Empty : maskMemory.Slice(start, length))));

@@ -41,22 +41,35 @@ internal enum ImplicitEmptyPolicy
 internal sealed class ExpandedWordBuilder
 {
     private readonly Variables _variables;
-    private readonly AllocationAllowance _budget;
+    private readonly EvaluationMemory _memory;
+    private readonly CancellationToken _cancellationToken;
     private readonly ImplicitEmptyPolicy _implicitEmptyPolicy;
     private readonly List<InputWord> _words = [];
     private InputWord _current;
 
     public ExpandedWordBuilder(
         Variables variables,
-        AllocationAllowance budget,
+        EvaluationMemory memory,
         ExpansionPurpose purpose,
         ImplicitEmptyPolicy implicitEmptyPolicy)
+        : this(variables, memory, purpose, implicitEmptyPolicy, CancellationToken.None)
     {
+    }
+
+    public ExpandedWordBuilder(
+        Variables variables,
+        EvaluationMemory memory,
+        ExpansionPurpose purpose,
+        ImplicitEmptyPolicy implicitEmptyPolicy,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _cancellationToken = cancellationToken;
         Purpose = purpose;
         _variables = variables;
-        _budget = budget;
+        _memory = memory;
         _implicitEmptyPolicy = implicitEmptyPolicy;
-        budget.Charge(1, 0);
+        memory.Charge(256);
         _current = new();
         _words.Add(_current);
     }
@@ -125,6 +138,7 @@ internal sealed class ExpandedWordBuilder
         var first = true;
         foreach (var value in fields)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             if (!first)
                 StartNewWord();
             first = false;
@@ -157,6 +171,7 @@ internal sealed class ExpandedWordBuilder
 
         for (var index = 0; index < words.Count; index++)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             if (index > 0)
                 StartNewWord();
             var word = words[index];
@@ -170,7 +185,7 @@ internal sealed class ExpandedWordBuilder
 
     private void StartNewWord()
     {
-        _budget.Charge(1, 0);
+        _memory.Charge(256);
         _current = new InputWord();
         _words.Add(_current);
     }
@@ -201,6 +216,7 @@ internal sealed class ExpandedWordBuilder
         var first = true;
         foreach (var value in fields)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             if (!first)
                 AppendExpansion(separator, allowWordSplitting, globQuoted);
             first = false;
@@ -220,6 +236,7 @@ internal sealed class ExpandedWordBuilder
         var results = new List<ExpandedWord>();
         foreach (var word in _words)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             var split = word.NeedsSplitting && !fieldSeparators.IsEmpty;
             if (!split)
             {
@@ -232,7 +249,7 @@ internal sealed class ExpandedWordBuilder
                 continue;
             }
 
-            _budget.Charge(1, 0);
+            _memory.Charge(256);
             var fields = new List<List<SegmentBuilder>> { new() };
             var emitEmpty = new List<bool> { false };
             var pendingBreak = false;
@@ -241,6 +258,7 @@ internal sealed class ExpandedWordBuilder
 
             foreach (var part in word.Parts)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 var value = part.Segment.ToValue();
                 var quoted = part.Segment.IsGlobQuoted;
                 if (part.Origin == PartOrigin.Protected)
@@ -265,6 +283,7 @@ internal sealed class ExpandedWordBuilder
                     var bytes = value.Bytes;
                     for (var position = 0; position < bytes.Length;)
                     {
+                        _cancellationToken.ThrowIfCancellationRequested();
                         var length = Utf8Text.FirstCharacterLength(bytes.Span[position..]);
                         // Bash protects one source byte per literal character before field splitting.
                         AppendLiteral(bytes.Slice(position, 1), quoted);
@@ -278,6 +297,7 @@ internal sealed class ExpandedWordBuilder
 
             for (var index = 0; index < fields.Count; index++)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 if (fields[index].Count > 0 || emitEmpty[index])
                 {
                     results.Add(new ExpandedWord(fields[index]
@@ -290,14 +310,14 @@ internal sealed class ExpandedWordBuilder
             {
                 if (bytes.IsEmpty)
                     return;
-                _budget.Charge(0, bytes.Length);
+                _memory.Charge(checked(4L * bytes.Length));
                 pendingBytes.Append(bytes);
                 var run = new QuoteRun(pendingBytes.Length, globQuoted);
                 if (quoteRuns.Count > 0 && quoteRuns[^1].IsGlobQuoted == globQuoted)
                     quoteRuns[^1] = run;
                 else
                 {
-                    _budget.Charge(1, 0);
+                    _memory.Charge(256);
                     quoteRuns.Add(run);
                 }
             }
@@ -315,7 +335,7 @@ internal sealed class ExpandedWordBuilder
             {
                 var current = fields[^1];
                 if (current.Count == 0 || current[^1].IsGlobQuoted != globQuoted)
-                    current.Add(new SegmentBuilder(globQuoted, _budget));
+                    current.Add(new SegmentBuilder(globQuoted, _memory));
                 current[^1].AppendValue(ShellValue.FromBytes(bytes));
             }
 
@@ -330,6 +350,7 @@ internal sealed class ExpandedWordBuilder
                 var quoteIndex = 0;
                 while (position < bytes.Length)
                 {
+                    _cancellationToken.ThrowIfCancellationRequested();
                     var status = Rune.DecodeFromUtf8(bytes.Span[position..], out var character, out var length);
                     var isCharacter = status == OperationStatus.Done;
                     if (!isCharacter)
@@ -374,6 +395,7 @@ internal sealed class ExpandedWordBuilder
                     ApplyPendingBreak();
                     while (start < end)
                     {
+                        _cancellationToken.ThrowIfCancellationRequested();
                         while (start >= quoteRuns[quoteIndex].End)
                             quoteIndex++;
                         var run = quoteRuns[quoteIndex];
@@ -395,7 +417,7 @@ internal sealed class ExpandedWordBuilder
 
             void StartNewField()
             {
-                _budget.Charge(1, 0);
+                _memory.Charge(256);
                 pendingBreak = false;
                 fields.Add([]);
                 emitEmpty.Add(false);
@@ -410,7 +432,7 @@ internal sealed class ExpandedWordBuilder
             || _current.Parts[^1].Origin != origin
             || _current.Parts[^1].Segment.IsGlobQuoted != globQuoted)
         {
-            _current.Parts.Add(new InputPart(origin, new SegmentBuilder(globQuoted, _budget)));
+            _current.Parts.Add(new InputPart(origin, new SegmentBuilder(globQuoted, _memory)));
         }
         return _current.Parts[^1].Segment;
     }
@@ -440,12 +462,12 @@ internal sealed class ExpandedWordBuilder
     {
         private readonly StringBuilder _text = new();
         private readonly ByteMemoryBuilder _bytes = ByteMemoryBuilder.CreateUnaccounted(0);
-        private readonly AllocationAllowance _budget;
+        private readonly EvaluationMemory _memory;
 
-        public SegmentBuilder(bool isGlobQuoted, AllocationAllowance budget)
+        public SegmentBuilder(bool isGlobQuoted, EvaluationMemory memory)
         {
-            budget.Charge(1, 0);
-            _budget = budget;
+            memory.Charge(256);
+            _memory = memory;
             IsGlobQuoted = isGlobQuoted;
         }
 
@@ -453,14 +475,14 @@ internal sealed class ExpandedWordBuilder
 
         public void AppendText(ReadOnlySpan<char> text)
         {
-            _budget.Charge(0, text.Length);
+            _memory.Charge(checked(4L * text.Length));
             _text.Append(text);
         }
 
         public void AppendValue(ShellValue value)
         {
             FlushText();
-            _budget.Charge(0, value.Bytes.Length);
+            _memory.Charge(checked(4L * value.Bytes.Length));
             if (value.IsEmpty)
                 return;
             AppendBytes(value.Bytes.Span);
@@ -474,8 +496,8 @@ internal sealed class ExpandedWordBuilder
 
         private void AppendBytes(ReadOnlySpan<byte> bytes)
         {
-            // TODO: Pass the execution budget into this builder and reserve its
-            // concatenation buffer before growth.
+            // The enclosing command admits segment storage before appending; its
+            // coarse estimate includes geometric capacity and overlapping copies.
             _bytes.Append(bytes);
         }
 
@@ -490,7 +512,7 @@ internal sealed class ExpandedWordBuilder
 
             bool AppendEncoded(ReadOnlySpan<byte> bytes)
             {
-                _budget.Charge(0, bytes.Length);
+                _memory.Charge(checked(4L * bytes.Length));
                 AppendBytes(bytes);
                 return true;
             }

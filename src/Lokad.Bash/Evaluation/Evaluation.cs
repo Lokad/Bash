@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 
 using Lokad.Bash.Commands;
 using Lokad.Bash.Files;
+using Lokad.Bash.Formatting;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
@@ -48,8 +49,8 @@ public sealed partial class Evaluation : IFileTester
     /// Tracks the cancellation token driving this evaluation, if any.
     /// </summary>
     private CancellationToken _cancellationToken;
-    /// <summary>Shares cumulative expansion limits across the entire evaluation tree.</summary>
-    internal ExpansionBudget ExpansionBudget { get; }
+    /// <summary>Owns command workspace and retained values under the caller's live-memory allowance.</summary>
+    internal EvaluationMemory Memory { get; }
     /// <summary>
     /// Carries the shell context visible when this evaluation starts.
     /// </summary>
@@ -102,7 +103,7 @@ public sealed partial class Evaluation : IFileTester
             onComplete,
             options ?? EvaluationOptions.Default,
             [],
-            new ExpansionBudget())
+            new MemoryGovernor(long.MaxValue))
     {
     }
 
@@ -113,7 +114,7 @@ public sealed partial class Evaluation : IFileTester
         Action? onComplete,
         EvaluationOptions options,
         IReadOnlyList<FileDescriptor> borrowedDescriptors,
-        ExpansionBudget expansionBudget)
+        IMemoryBudget memoryBudget)
         : this(
             new EvaluationState(script, options.CurrentDirectory, descriptorSetup.Bindings.Fork()),
             global::Lokad.Bash.Evaluation.Variables.CreateEmpty(),
@@ -124,13 +125,13 @@ public sealed partial class Evaluation : IFileTester
             RootFlowHandling.Normalize,
             publishNextStep,
             onComplete,
-            expansionBudget)
+            memoryBudget)
     {
         _vars.TrySetScalar("PWD", ShellValue.FromText(_state.CurrentDirectory.Path));
         _vars.SetExported("PWD", true);
     }
 
-    /// <summary>Forks bindings and shell state; descriptors stay borrowed and the expansion budget stays shared.</summary>
+    /// <summary>Forks bindings and shell state; descriptors stay borrowed and live memory shares the caller's allowance.</summary>
     internal static Evaluation CreateCommandSubstitution(
         ScopedEvaluation scope,
         ParsedScript script,
@@ -139,7 +140,7 @@ public sealed partial class Evaluation : IFileTester
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
         var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution);
-        var variables = outer.ExpansionBudget.Memory.CloneVariables(scope.Variables);
+        var variables = outer.Memory.CloneVariables(scope.Variables);
         return new Evaluation(
             state,
             variables,
@@ -150,7 +151,7 @@ public sealed partial class Evaluation : IFileTester
             RootFlowHandling.Preserve,
             publishNextStep: null,
             onComplete: null,
-            outer.ExpansionBudget);
+            outer.Memory.Budget);
     }
 
     private Evaluation(
@@ -163,7 +164,7 @@ public sealed partial class Evaluation : IFileTester
         RootFlowHandling rootFlowHandling,
         Action<EvaluationOperation?>? publishNextStep,
         Action? onComplete,
-        ExpansionBudget expansionBudget)
+        IMemoryBudget memoryBudget)
     {
         Options = options;
         _state = state;
@@ -178,7 +179,7 @@ public sealed partial class Evaluation : IFileTester
         _borrowedDescriptors = MergeBorrowedDescriptors(
             borrowedDescriptors,
             descriptorSetup.BorrowedDescriptors);
-        ExpansionBudget = expansionBudget.Fork();
+        Memory = new EvaluationMemory(memoryBudget);
 
         static IReadOnlyList<FileDescriptor> MergeBorrowedDescriptors(
             IReadOnlyList<FileDescriptor> first,
@@ -317,7 +318,7 @@ public sealed partial class Evaluation : IFileTester
                 result = await EvaluateScriptAsync(new ScopedEvaluation(this, _vars, _initialContext), _rootFlowHandling).ConfigureAwait(false);
                 result = await RunExitTrapAsync(new ScopedEvaluation(this, _vars, _initialContext), result).ConfigureAwait(false);
             }
-            catch (ExpansionBudget.LimitExceededException)
+            catch (ByteMemoryBuilder.LimitExceededException)
             {
                 result = EvaluationResult.FromExitCode(2);
             }
@@ -338,7 +339,7 @@ public sealed partial class Evaluation : IFileTester
                 finally
                 {
                     ReleaseReadWorkspace();
-                    ExpansionBudget.FinishMemory(_rootFlowHandling == RootFlowHandling.Normalize || _retainCompletedMemory);
+                    Memory.Finish(_rootFlowHandling == RootFlowHandling.Normalize || _retainCompletedMemory);
                 }
             }
 
@@ -528,9 +529,9 @@ public sealed partial class Evaluation : IFileTester
         var inheritedRedirectionDescriptors = parentState.CurrentRedirectionOpenedDescriptors;
         var borrowedDescriptors = new HashSet<FileDescriptor>(CollectDescriptorsAvailableToNestedEvaluation());
         // Child resets must not release the parent's saved handlers before restoration.
-        ExpansionBudget.Memory.Charge(RetainedTrapMemoryBytes);
+        Memory.Charge(RetainedTrapMemoryBytes);
         var childState = parentState.CloneForSubshell();
-        var childVars = ExpansionBudget.Memory.CloneVariables(scope.Variables);
+        var childVars = Memory.CloneVariables(scope.Variables);
         var childContext = scope.Context.Fork(childVars);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
@@ -605,7 +606,7 @@ public sealed partial class Evaluation : IFileTester
                 pipes.Add(pipe);
             }
 
-            using var pipelineMemory = ExpansionBudget.MemoryBudget.CreateScope();
+            using var pipelineMemory = Memory.Budget.CreateScope();
             var stages = new List<PipelineEvaluationStage>(commands.Count);
             for (var index = 0; index < commands.Count; index++)
             {
@@ -619,7 +620,7 @@ public sealed partial class Evaluation : IFileTester
                     CaptureDescriptorBindings().WithStandardStreams(stdIn, stdOut, stdErr), []);
                 var forkKind = commands[index] is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
                 var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind);
-                var stageVars = ExpansionBudget.Memory.CloneVariables(scope.Variables);
+                var stageVars = Memory.CloneVariables(scope.Variables);
                 var stageContext = scope.Context.Fork(stageVars);
                 var stage = new Evaluation(
                     stageState,
@@ -631,7 +632,7 @@ public sealed partial class Evaluation : IFileTester
                     RootFlowHandling.Preserve,
                     publishNextStep: null,
                     onComplete: null,
-                    ExpansionBudget);
+                    Memory.Budget);
                 var descriptorsToClose = new List<FileDescriptor>(2);
                 if (index > 0)
                     descriptorsToClose.Add(stdIn);
@@ -639,7 +640,7 @@ public sealed partial class Evaluation : IFileTester
                     descriptorsToClose.Add(stdOut);
 
                 stage._retainCompletedMemory = true;
-                stage.ExpansionBudget.MemoryBudget = pipelineMemory;
+                stage.Memory.Budget = pipelineMemory;
                 stages.Add(new PipelineEvaluationStage(stage, descriptorsToClose));
             }
 
@@ -731,7 +732,7 @@ public sealed partial class Evaluation : IFileTester
                 ShellValue.FromText("conditional expression must be valid UTF-8")).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
-        var evaluation = ConditionalEvaluation.Parse(expression);
+        var evaluation = ConditionalEvaluation.Parse(expression, _cancellationToken);
         if (evaluation.HasParseError)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
 
@@ -824,7 +825,6 @@ public sealed partial class Evaluation : IFileTester
         // Expand once in the caller scope before redirections and temporary bindings.
         IReadOnlyList<string> arguments = [];
         IReadOnlyList<ShellValue> byteOperands = [];
-        long reservedArgumentCharacters = 0;
         string? sourcePath = null;
         if (preparation is PreparedCommand.Executable command)
         {
@@ -838,8 +838,6 @@ public sealed partial class Evaluation : IFileTester
                 })
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
-                var reserveArgumentCopies = kind is BuiltinKind.Echo or BuiltinKind.Eval or BuiltinKind.Type
-                    || command.Resolution is CommandResolution.Host or CommandResolution.HostBuiltin;
                 var operands = new List<ShellValue>();
                 if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo and not BuiltinKind.Hash and not BuiltinKind.Source)
                     operands.Add(ShellValue.FromText(command.CommandName));
@@ -853,20 +851,11 @@ public sealed partial class Evaluation : IFileTester
                     else
                     {
                         var expanded = await ExpandToWordsAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false);
-                        if (reserveArgumentCopies)
-                        {
-                            // Reserve one copy plus a separator/LF byte before later operand effects.
-                            // Hosts may spend it on text decoding or byte output, without charging twice.
-                            foreach (var operand in expanded)
-                                await ReserveArgumentCopyAsync((long)operand.Bytes.Length + 1).ConfigureAwait(false);
-                        }
                         operands.AddRange(expanded);
                     }
                     if (_state.HasPendingExpansionError)
                         break;
                 }
-                if (reserveArgumentCopies && operands.Count == 0 && !_state.HasPendingExpansionError)
-                    await ReserveArgumentCopyAsync(1).ConfigureAwait(false);
                 byteOperands = operands;
             }
             else
@@ -891,27 +880,19 @@ public sealed partial class Evaluation : IFileTester
         ReadOnlyMemory<byte> echoContent = default;
         using var echoMemory = preparation is PreparedCommand.Executable
             { Resolution: CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Echo } }
-            ? ExpansionBudget.MemoryBudget.CreateScope() : null;
+            ? Memory.Budget.CreateScope() : null;
         if (echoMemory != null)
         {
-            bool formatted;
             try
             {
-                formatted = TryFormatEcho(byteOperands,
-                    new ArgumentCopyAllowance(ExpansionBudget.AllocationBudget, reservedArgumentCharacters),
-                    echoMemory, out echoContent);
+                echoContent = EchoFormatting.Format(byteOperands, EchoFormatting.GetOutputFormat(byteOperands), echoMemory);
             }
             catch (MemoryBudgetExceededException)
             {
                 await ReportMemoryRefusalAsync("echo").ConfigureAwait(false);
                 return await FailPreparationAsync(1).ConfigureAwait(false);
             }
-            if (!formatted)
-            {
-                await ExecuteWriteAsync(GetStdErrDescriptor(), Utf8Text.Encode(ExpansionBudget.Words.LimitMessage))
-                    .ConfigureAwait(false);
-                throw new ExpansionBudget.LimitExceededException(ExpansionBudget.Words.LimitMessage);
-            }
+
         }
 
         var commandVars = scope.Variables;
@@ -936,7 +917,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 redirectionExpansionScope = scope with
                 {
-                    Variables = ExpansionBudget.Memory.CloneVariables(scope.Variables),
+                    Variables = Memory.CloneVariables(scope.Variables),
                     ExpansionWriteTarget = null
                 };
             }
@@ -1017,7 +998,7 @@ public sealed partial class Evaluation : IFileTester
                 var queryScope = scope with { Variables = commandVars };
                 if (query.ExecutionOptions is { } queryOptions)
                 {
-                    var queryName = await PrepareExecArgumentZeroAsync(queryOptions, "command").ConfigureAwait(false);
+                    var queryName = PrepareExecArgumentZero(queryOptions, "command");
                     queryScope = ForkExecScope(queryScope, queryName);
                     if (queryOptions.ClearEnvironment)
                         ClearExecExports(queryScope, queryScope.Variables);
@@ -1048,7 +1029,7 @@ public sealed partial class Evaluation : IFileTester
             commandName = executable.CommandName;
             // A failed redirection must not change exports or $0.
             ShellValue? argumentZero = executable.ExecutionOptions is { } executionOptions
-                ? await PrepareExecArgumentZeroAsync(executionOptions, commandName).ConfigureAwait(false) : null;
+                ? PrepareExecArgumentZero(executionOptions, commandName) : null;
             if (executable.Resolution is CommandResolution.Function function)
             {
                 var functionResult = await EvaluateFunctionAsync(
@@ -1179,13 +1160,8 @@ public sealed partial class Evaluation : IFileTester
                 GetStdErrDescriptor(),
                 CollectDescriptorsAvailableToNestedEvaluation(),
                 CaptureDescriptorBindings().Bindings,
-                ExpansionBudget,
-                reservedArgumentCharacters,
                 functions);
             var execution = await ExecuteRunCommandAsync(commandInvocation).ConfigureAwait(false);
-            // The argument consumer has already reported the failure through the command's stderr.
-            if (execution.ArgumentCopyLimitExceeded)
-                throw new ExpansionBudget.LimitExceededException(ExpansionBudget.Words.LimitMessage);
             var commandResult = await FinalizeResultAsync(
                     EvaluationResult.FromExitCode(execution.ShellExitCode),
                     false)
@@ -1226,19 +1202,19 @@ public sealed partial class Evaluation : IFileTester
             return source with { Words = words };
         }
 
-        async Task<ShellValue> PrepareExecArgumentZeroAsync(ExecOptions options, string defaultName)
+        ShellValue PrepareExecArgumentZero(ExecOptions options, string defaultName)
         {
             var name = options.ArgumentZero ?? ShellValue.FromText(defaultName);
             if (!options.Login)
                 return name;
-            await ChargeArgumentCopyAsync(1L + name.Bytes.Length).ConfigureAwait(false);
+            Memory.Charge(checked(4L * (1L + name.Bytes.Length)));
             return ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(name.Bytes.Length + 1)
                 .Append((byte)'-').Append(name.Bytes).ToMemory());
         }
 
         ScopedEvaluation ForkExecScope(ScopedEvaluation source, ShellValue name)
         {
-            var variables = ExpansionBudget.Memory.CloneVariables(source.Variables);
+            var variables = Memory.CloneVariables(source.Variables);
             variables.ArgumentZero = name;
             return source with { Variables = variables, Context = source.Context.Fork(variables) };
         }
@@ -1269,12 +1245,6 @@ public sealed partial class Evaluation : IFileTester
             }
         }
 
-        async Task ReserveArgumentCopyAsync(long characters)
-        {
-            await ChargeArgumentCopyAsync(characters).ConfigureAwait(false);
-            reservedArgumentCharacters += characters;
-        }
-
         bool TryBuildFunctionExports(out IReadOnlyList<ExportedFunction> exports)
         {
             exports = [];
@@ -1285,7 +1255,7 @@ public sealed partial class Evaluation : IFileTester
             foreach (var function in _state.Functions.Values)
             {
                 if (!function.Attributes.HasFlag(FunctionAttributes.Exported)) continue;
-                if (!function.TryGetExport(remaining, ExpansionBudget.MemoryBudget, out var export)) return false;
+                if (!function.TryGetExport(remaining, Memory.Budget, out var export)) return false;
                 remaining -= export.Source.Length;
                 result.Add(export);
             }
@@ -1299,7 +1269,7 @@ public sealed partial class Evaluation : IFileTester
                 return null;
 
             // Clone once, after caller operand effects. Forward only actual RHS writes back to the caller.
-            commandVars = ExpansionBudget.Memory.CloneVariables(scope.Variables);
+            commandVars = Memory.CloneVariables(scope.Variables);
             var assignmentScope = scope with
             {
                 Variables = commandVars,
@@ -1356,7 +1326,7 @@ public sealed partial class Evaluation : IFileTester
                     if (assignment.Operator == AssignmentOperator.Append)
                     {
                         // += reads the selected binding after RHS effects, without following a newly initialized nameref.
-                        var previous = elementNameref ? prefixBinding.Reference.ToValue(ExpansionBudget.Words)
+                        var previous = elementNameref ? prefixBinding.Reference.ToValue(Memory)
                             : commandVars.TryGetNameref(prefixBinding.Name, out var reference) ? reference : ShellValue.Empty;
                         value = WordExpansion.AppendAssignmentValue(previous, value, assignmentScope);
                     }
@@ -1402,11 +1372,13 @@ public sealed partial class Evaluation : IFileTester
                     if (expanded.Count == 0)
                         AddItem(ShellValue.Empty);
                     foreach (var field in expanded)
-                        AddItem(field.ToValue(ExpansionBudget.Words));
+                        AddItem(field.ToValue(Memory));
                 }
 
                 // Build the parentheses and separators in one budgeted copy, without an intermediate join.
-                ExpansionBudget.Words.Charge(0, length);
+                if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                Memory.Charge(checked(4L * length));
                 var joined = new byte[(int)length];
                 joined[0] = (byte)'(';
                 joined[^1] = (byte)')';
@@ -1514,7 +1486,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     if (HasPendingExpansionError)
                         break;
-                    var name = BindingNameExpansion.FromValue(nameValue, ExpansionBudget.Words);
+                    var name = BindingNameExpansion.FromValue(nameValue, Memory);
                     if (!SelectVariables(name).HasBinding(name)
                         || options.Builtin == BuiltinKind.Local && declarationScope.Context.FunctionContext?.Locals.Declares(name) != true)
                     {
@@ -1523,7 +1495,7 @@ public sealed partial class Evaluation : IFileTester
                             WordExpansion.AppendAssignmentValue(nameValue, ShellValue.FromText(": not found"), declarationScope)).ConfigureAwait(false);
                         continue;
                     }
-                    using var output = new ByteMemoryBuilder(0, ExpansionBudget.MemoryBudget);
+                    using var output = new ByteMemoryBuilder(0, Memory.Budget);
                     if (!SelectVariables(name).TryAppendVariable(name, output, style))
                     {
                         printStatus = 1;
@@ -1557,7 +1529,7 @@ public sealed partial class Evaluation : IFileTester
 
                     ShellValue EncodeName(BindingName name)
                     {
-                        ExpansionBudget.Words.Charge(0, name.ByteLength);
+                        Memory.Charge(checked(4L * name.ByteLength));
                         return name.ToValue();
                     }
                 }
@@ -1650,7 +1622,7 @@ public sealed partial class Evaluation : IFileTester
                         continue;
                     }
 
-                    using var output = new ByteMemoryBuilder(0, ExpansionBudget.MemoryBudget);
+                    using var output = new ByteMemoryBuilder(0, Memory.Budget);
                     var style = !options.FunctionNamesOnly
                         ? noOperands || options.Print ? FunctionDisplayStyle.DefinitionWithAttributes : FunctionDisplayStyle.Definition
                         : noOperands || options.Print ? FunctionDisplayStyle.Attributes : FunctionDisplayStyle.Name;
@@ -1675,7 +1647,7 @@ public sealed partial class Evaluation : IFileTester
 
                     ShellValue ChargeName(ShellValue name)
                     {
-                        ExpansionBudget.Words.Charge(1, 0);
+                        Memory.Charge(256);
                         return name;
                     }
                 }
@@ -1865,7 +1837,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     // Test the immediate target: an existing intermediate nameref also detaches +n.
                     // A missing target instead becomes local, leaving this reference intact.
-                    keepLocalNameref = !targetVars.HasBinding(BindingNameExpansion.FromValue(localTarget, ExpansionBudget.Words));
+                    keepLocalNameref = !targetVars.HasBinding(BindingNameExpansion.FromValue(localTarget, Memory));
                     if (!keepLocalNameref)
                     {
                         var retainedTarget = localTarget;
@@ -1874,7 +1846,7 @@ public sealed partial class Evaluation : IFileTester
                             await DiagnoseAsync(name.ToValue(), "readonly variable").ConfigureAwait(false);
                             continue;
                         }
-                        targetVars.TrySetResolvedScalar(name, retainedTarget, ExpansionBudget.Words);
+                        targetVars.TrySetResolvedScalar(name, retainedTarget, Memory);
                     }
                 }
                 var convertedReference = false;
@@ -1905,7 +1877,7 @@ public sealed partial class Evaluation : IFileTester
                             await DiagnoseAsync(name.ToValue(), "readonly variable").ConfigureAwait(false);
                             continue;
                         }
-                        targetVars.TrySetResolvedScalar(name, arrayReference, ExpansionBudget.Words);
+                        targetVars.TrySetResolvedScalar(name, arrayReference, Memory);
                     }
                     convertedReference = true;
                 }
@@ -1927,7 +1899,7 @@ public sealed partial class Evaluation : IFileTester
                         hasReferenceValue ? VariableOperandKind.Assignment : VariableOperandKind.Name,
                         reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
                     if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
-                            localOperand, prefixNames, options.ArrayKind, options.Nameref, ExpansionBudget.Words, ExpansionBudget.Memory))
+                            localOperand, prefixNames, options.ArrayKind, options.Nameref, Memory))
                     {
                         var message = targetVars.IsReadonly(name) ? "readonly variable"
                             : options.ArrayKind != ArrayAssignmentKind.Auto
@@ -1995,8 +1967,8 @@ public sealed partial class Evaluation : IFileTester
                     if ((options.Nameref || circularLocalReference) && !localReferenceAssigned)
                     {
                         var target = namerefTarget ?? ShellValue.Empty;
-                        ExpansionBudget.Words.Charge(0, target.Bytes.Length);
-                        if (!targetVars.TrySetNameref(name, target, ExpansionBudget.Words))
+                        Memory.Charge(checked(4L * target.Bytes.Length));
+                        if (!targetVars.TrySetNameref(name, target, Memory))
                         {
                             exitCode = 1;
                             continue;
@@ -2051,7 +2023,7 @@ public sealed partial class Evaluation : IFileTester
                         }
                         if (writeReference.Kind == VariableReferenceKind.Name && options.NamerefChange != DeclarationAttributeChange.Set)
                         {
-                            var failure = writeVariables.GetNamerefAssignmentFailure(sourceName, writeReference.Name, value, ExpansionBudget.Words);
+                            var failure = writeVariables.GetNamerefAssignmentFailure(sourceName, writeReference.Name, value, Memory);
                             if (failure != NamerefAssignmentFailure.None)
                             {
                                 // Declarations recover and visit later operands; indirect unset targets remain unchanged.
@@ -2199,7 +2171,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         var subject = variables.TryResolveBinding(name, selectOwner: null, out var binding)
                             && binding.Reference.Kind != VariableReferenceKind.Name
-                            ? binding.Reference.ToValue(ExpansionBudget.Words) : ShellValue.Empty;
+                            ? binding.Reference.ToValue(Memory) : ShellValue.Empty;
                         await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
                             WordExpansion.AppendAssignmentValue(ShellArgumentEscaping.QuoteDiagnosticOperand(subject),
                                 ShellValue.FromText(": not a valid identifier"), declarationScope)).ConfigureAwait(false);
@@ -2253,7 +2225,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var opening = assignment.Target.AsSpan().IndexOf((byte)'[');
-            ExpansionBudget.Words.Charge(0, opening < 0 ? assignment.Target.Length : opening);
+            Memory.Charge(checked(4L * (opening < 0 ? assignment.Target.Length : opening)));
             if (!VariableReference.TryParse(assignment.Target, out var compoundTarget))
                 return false;
             var name = scope.Variables.ResolveNamerefName(compoundTarget.Name);
@@ -2590,7 +2562,7 @@ public sealed partial class Evaluation : IFileTester
     {
         if (_state.HasPendingExpansionError)
             return string.Empty;
-        ExpansionBudget.Words.Charge(0, value.Bytes.Length);
+        Memory.Charge(checked(4L * value.Bytes.Length));
         if (value.TryGetUtf8Text(out var text))
             return text;
 
@@ -2605,9 +2577,10 @@ public sealed partial class Evaluation : IFileTester
         {
             return await expansion.ConfigureAwait(false);
         }
-        catch (ExpansionBudget.LimitExceededException ex) when (!ex.IsReported)
+        catch (ByteMemoryBuilder.LimitExceededException error) when (_state.FatalExpansion == null)
         {
-            await ReportWordExpansionLimitAsync(ex).ConfigureAwait(false);
+            _state.FatalExpansion = new ExpansionFailure(ExpansionFailureKind.Parameter, 2);
+            await ExecuteWriteAsync(GetStdErrDescriptor(), Utf8Text.Encode($"shell: {error.Message}\n")).ConfigureAwait(false);
             throw;
         }
         catch (SyntaxException exception)
@@ -2672,24 +2645,6 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    private async Task ReportWordExpansionLimitAsync(ExpansionBudget.LimitExceededException error)
-    {
-        error.IsReported = true;
-        // Use the descriptors active at the failing copy, before unwinding enclosing scopes.
-        await ExecuteWriteAsync(GetStdErrDescriptor(), Utf8Text.Encode(error.Message)).ConfigureAwait(false);
-    }
-
-    /// <summary>Reserves a consumer copy before later operands, assignments or redirections run.</summary>
-    private async Task ChargeArgumentCopyAsync(long characters)
-    {
-        if (!ExpansionBudget.Words.TryCharge(0, characters))
-        {
-            await ExecuteWriteAsync(GetStdErrDescriptor(), Utf8Text.Encode(ExpansionBudget.Words.LimitMessage))
-                .ConfigureAwait(false);
-            throw new ExpansionBudget.LimitExceededException(ExpansionBudget.Words.LimitMessage);
-        }
-    }
-
     private async Task<IReadOnlyList<ShellValue>> ExpandExpandedWordsAsync(
         IReadOnlyList<ExpandedWord> expanded)
     {
@@ -2698,11 +2653,11 @@ public sealed partial class Evaluation : IFileTester
         {
             if (!GlobPattern.RequiresExpansion(expandedWord))
             {
-                results.Add(expandedWord.ToValue(ExpansionBudget.Words));
+                results.Add(expandedWord.ToValue(Memory));
                 continue;
             }
 
-            if (!GlobPattern.TryFromExpandedWord(expandedWord, ExpansionBudget.Words, out var pattern))
+            if (!GlobPattern.TryFromExpandedWord(expandedWord, Memory, out var pattern))
             {
                 await ReportFatalExpansionAsync(ShellValue.FromText("shell"),
                     ShellValue.FromText("pathname pattern must be valid UTF-8"), ExpansionFailureKind.Parameter)
@@ -2710,13 +2665,13 @@ public sealed partial class Evaluation : IFileTester
                 return [];
             }
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory.Path,
-                ExpansionBudget.Words, _cancellationToken);
+                Memory, _cancellationToken);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
             foreach (var match in matches)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 // Glob paths are UTF-16; reserve their UTF-8 copies before building argument values.
-                ExpansionBudget.Words.Charge(1, Encoding.UTF8.GetByteCount(match));
+                Memory.Charge(checked(256L + 4L * (Encoding.UTF8.GetByteCount(match))));
                 results.Add(ShellValue.FromText(match));
             }
         }
@@ -3098,7 +3053,7 @@ public sealed partial class Evaluation : IFileTester
         if (!descriptor.HasValue)
             return EvaluationResult.FromExitCode(1);
 
-        var sourceMemory = ExpansionBudget.MemoryBudget.CreateScope();
+        var sourceMemory = Memory.Budget.CreateScope();
         var definitionVersion = _state.FunctionDefinitionVersion;
         OperationError? closeError = null;
         try

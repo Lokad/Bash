@@ -23,7 +23,7 @@ public partial class EvaluationTests
         var descriptors = new EvaluationDescriptorSetup(DescriptorTable.Snapshot.Standard, second);
         var state = new Eval(
             Parser.Parse(":"), descriptors, publishNextStep: null, onComplete: null,
-            EvaluationOptions.Default, first, new ExpansionBudget());
+            EvaluationOptions.Default, first, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         Assert.Equal(
             new[] { 0, 1, 2 }.Concat(expectedIds),
@@ -136,32 +136,14 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("cmd; after=1", 0)]
-    [InlineData("cmd || after=1", 2)]
-    [InlineData("! cmd; after=1", 2)]
-    public async Task Evaluation_ResultCopyRejectionIsFatalWithoutInvocationMutation(string script, int exitCode)
-    {
-        var state = new Eval(Parser.Parse(script));
-        var operation = await NextCommandAsync(state, "cmd");
-        Assert.False(operation.Command.ArgumentCopyLimitExceeded);
-
-        operation.SetResult(new CommandExecutionResult.Completed(exitCode) { ArgumentCopyLimitExceeded = true });
-
-        Assert.Null(await NextStepAsync(state));
-        Assert.Equal(2, state.LastExitCode);
-        Assert.False(state.Variables.ContainsKey("after"));
-    }
-
-    [Theory]
     [InlineData("cmd", 2)]
     [InlineData("cmd || after=1", 0)]
     [InlineData("! cmd; after=1", 0)]
-    public async Task Evaluation_OrdinaryStatusIgnoresLaterInvocationRejection(string script, int expectedExitCode)
+    public async Task Evaluation_OrdinaryStatusControlsFollowingCommands(string script, int expectedExitCode)
     {
         var state = new Eval(Parser.Parse(script));
         var operation = await NextCommandAsync(state, "cmd");
         var result = new CommandExecutionResult.Completed(2);
-        Assert.False(operation.Command.TryChargeArgumentCopies(long.MaxValue, out _));
 
         operation.SetResult(result);
 
@@ -1877,7 +1859,7 @@ public partial class EvaluationTests
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(3), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new ExpansionBudget());
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(900, run.Command.StdIn.Id);
@@ -1908,7 +1890,7 @@ public partial class EvaluationTests
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(9), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new ExpansionBudget());
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         var first = await NextCommandAsync(state, "first");
         Assert.Equal(new FileDescriptor(900), first.Command.StdOut);

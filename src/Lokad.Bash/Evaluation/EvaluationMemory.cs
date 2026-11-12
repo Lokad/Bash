@@ -6,18 +6,37 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>One evaluator's prepaid scratch space and retained variable/handler estimate.</summary>
 /// <remarks>
 /// Pending commands keep their scratch while nested commands run. Completed siblings reuse
-/// credit; only current bindings survive the outer command. Saved bindings are charged by their caller.
+/// capacity; only current bindings survive the outer command. Saved bindings are charged by their caller.
 /// This follows lexical execution without tracking object identities, aliases or GC reachability.
 /// Array estimates are cached.
 /// </remarks>
-internal sealed class EvaluationMemory(IMemoryBudget budget)
+internal sealed class EvaluationMemory
 {
-    private const int WordWorkspaceBytes = 256;
-    private const int BytesPerCharacter = 4;
-    private readonly MemoryCapacity _memory = new(budget, 0);
+    private MemoryCapacity _memory;
+    private IMemoryBudget _budget;
     private Command? _command;
     private long _retainedBytes;
     private bool _refused;
+
+    public EvaluationMemory(IMemoryBudget budget)
+    {
+        _budget = budget;
+        _memory = new MemoryCapacity(budget, 0);
+    }
+
+    /// <summary>The shared allowance owning this evaluator's live storage.</summary>
+    public IMemoryBudget Budget
+    {
+        get => _budget;
+        set
+        {
+            // Engine installs the owner before execution, including prepared evaluations.
+            _memory.Dispose();
+            _budget = value;
+            _memory = new MemoryCapacity(value, 0);
+            _retainedBytes = 0;
+        }
+    }
 
     public IDisposable BeginCommand(ScopedEvaluation scope)
     {
@@ -31,11 +50,6 @@ internal sealed class EvaluationMemory(IMemoryBudget budget)
         _command = command;
         return command;
     }
-
-    // Existing expansion work checks precede the allocations they describe. Cover headers,
-    // decoded text, geometric buffer capacity and overlapping copies with a coarse multiplier.
-    public void ChargeExpansion(long words, long characters) =>
-        Charge(checked(words * WordWorkspaceBytes + characters * BytesPerCharacter));
 
     public void Charge(long bytes)
     {

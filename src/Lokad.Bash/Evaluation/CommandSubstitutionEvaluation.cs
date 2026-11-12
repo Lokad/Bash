@@ -33,7 +33,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
         outer.TrackOwnedDescriptor(pipe.Read);
         outer.TrackOwnedDescriptor(pipe.Write);
         var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write);
-        using var outputMemory = outer.ExpansionBudget.MemoryBudget.CreateScope();
+        using var outputMemory = outer.Memory.Budget.CreateScope();
         CapturedEvaluationResult result;
         try
         {
@@ -54,7 +54,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
         switch (result.Output)
         {
             case BoundedReadResult.Complete complete:
-                outer.ExpansionBudget.Memory.Charge(Variables.EstimateValueBytes(ShellValue.FromBytes(complete.Content)));
+                outer.Memory.Charge(Variables.EstimateValueBytes(ShellValue.FromBytes(complete.Content)));
                 var error = await outer.CloseDescriptorsAsync([pipe.Read], operationFailed: result.ExitCode != 0).ConfigureAwait(false);
                 if (error is { } failure)
                 {
@@ -63,7 +63,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                 }
                 return new CommandSubstitutionResult(ShellValue.FromBytes(complete.Content), result.ExitCode);
             case BoundedReadResult.TooLarge:
-                throw new ExpansionBudget.LimitExceededException("shell: command substitution exceeds the CLR array length limit\n");
+                throw new ByteMemoryBuilder.LimitExceededException();
             case BoundedReadResult.Failed failed:
                 failed.Failure.ThrowIfError();
                 break;

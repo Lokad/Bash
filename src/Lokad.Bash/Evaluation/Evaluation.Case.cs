@@ -24,7 +24,8 @@ public sealed partial class Evaluation
                 var expanded = await ExpandWordAsync(pattern, scope).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
-                if (!TextGlobMatcher.IsMatch(expanded.AsSpan(), subject.AsSpan()))
+                var mask = default(GlobMaskSpan);
+                if (TextGlobMatcher.MatchText(expanded.AsSpan(), in mask, subject.AsSpan(), _cancellationToken) != GlobMatchResult.Match)
                     continue;
 
                 var result = await EvaluateCommandAsync(item.Body, scope, negated: false).ConfigureAwait(false);

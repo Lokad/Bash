@@ -21,27 +21,26 @@ public static class TextGlobMatcher
     /// </summary>
     public static bool IsMatch(ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text)
     {
-        var work = long.MaxValue;
-        return MatchText(pattern, in mask, text, ref work, CancellationToken.None) == GlobMatchResult.Match;
+        return MatchText(pattern, in mask, text, CancellationToken.None) == GlobMatchResult.Match;
     }
 
     /// <summary>Matches UTF-8 characters (or individual malformed bytes), returning the longest prefix in bytes.</summary>
     public static GlobMatchResult MatchUtf8(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
-        bool requireEnd, ref long remainingSteps, CancellationToken cancellationToken, out int length) =>
+        bool requireEnd, CancellationToken cancellationToken, out int length) =>
         Match(new GlobInput(pattern), in mask, new GlobInput(text), requireEnd,
-            ref remainingSteps, cancellationToken, out length);
+            cancellationToken, out length);
 
-    /// <summary>Matches a complete text value under a shared work limit and cancellation token.</summary>
+    /// <summary>Matches a complete text value with cooperative cancellation.</summary>
     public static GlobMatchResult MatchText(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
-        ref long remainingSteps, CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken) =>
         Match(new GlobInput(pattern), in mask, new GlobInput(text), true,
-            ref remainingSteps, cancellationToken, out _);
+            cancellationToken, out _);
 
     private static GlobMatchResult Match(
         GlobInput pattern, in GlobMaskSpan mask, GlobInput text, bool requireEnd,
-        ref long remainingSteps, CancellationToken cancellationToken, out int length)
+        CancellationToken cancellationToken, out int length)
     {
         length = -1;
         var p = 0;
@@ -52,8 +51,6 @@ public static class TextGlobMatcher
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (--remainingSteps < 0)
-                return GlobMatchResult.LimitExceeded;
             if (p == pattern.Length && (!requireEnd || t == text.Length))
                 length = t;
             if (t == text.Length)
@@ -78,7 +75,7 @@ public static class TextGlobMatcher
             if (p < pattern.Length && mask[p] == GlobMask.Active && pattern[p] == '[')
             {
                 var bracketEnd = p;
-                if (TryMatchBracket(pattern, in mask, ref bracketEnd, text[t], ref remainingSteps))
+                if (TryMatchBracket(pattern, in mask, ref bracketEnd, text[t], cancellationToken))
                 {
                     p = bracketEnd;
                     t += text.Width(t);
@@ -108,15 +105,12 @@ public static class TextGlobMatcher
         while (p < pattern.Length && mask[p] == GlobMask.Active && pattern[p] == '*')
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (--remainingSteps < 0)
-                return GlobMatchResult.LimitExceeded;
             p++;
         }
 
         if (p == pattern.Length && (!requireEnd || t == text.Length))
             length = t;
-        return remainingSteps < 0 ? GlobMatchResult.LimitExceeded
-            : length >= 0 ? GlobMatchResult.Match : GlobMatchResult.NoMatch;
+        return length >= 0 ? GlobMatchResult.Match : GlobMatchResult.NoMatch;
 
         static bool TryAdvanceStar(ref int p, ref int t, int star, ref int match, GlobInput text)
         {
@@ -130,7 +124,7 @@ public static class TextGlobMatcher
         }
 
         // A valid but nonmatching class must not fall back to matching its opening bracket literally.
-        static bool TryMatchBracket(GlobInput pattern, in GlobMaskSpan mask, ref int position, int value, ref long remainingSteps)
+        static bool TryMatchBracket(GlobInput pattern, in GlobMaskSpan mask, ref int position, int value, CancellationToken cancellationToken)
         {
             var start = position;
             position++;
@@ -153,8 +147,7 @@ public static class TextGlobMatcher
             for (; position < pattern.Length
                    && (pattern[position] != ']' || mask[position] != GlobMask.Active || position == firstMember);)
             {
-                if (--remainingSteps < 0)
-                    return false;
+                cancellationToken.ThrowIfCancellationRequested();
                 var current = pattern[position];
                 var next = position + pattern.Width(position);
                 if (next + 1 < pattern.Length && pattern[next] == '-' && mask[next] == GlobMask.Active
@@ -218,4 +211,4 @@ public static class TextGlobMatcher
     }
 }
 
-public enum GlobMatchResult { NoMatch, Match, LimitExceeded }
+public enum GlobMatchResult { NoMatch, Match }

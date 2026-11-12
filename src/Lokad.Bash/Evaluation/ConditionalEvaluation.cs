@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Lokad.Bash.Helpers;
 
 using Lokad.Bash.Files;
@@ -18,6 +19,7 @@ public sealed class ConditionalEvaluation
 {
     /// <summary> Stores the conditional expression to tokenize and parse. </summary>
     private readonly string _expression;
+    private readonly CancellationToken _cancellationToken;
 
     /// <summary> Stores the parsed expression tree after parsing succeeds; null when parsing fails. </summary>
     private TestNode? _root;
@@ -30,9 +32,10 @@ public sealed class ConditionalEvaluation
     /// <summary>
     /// Initializes the evaluation with the raw expression to tokenize and parse.
     /// </summary>
-    private ConditionalEvaluation(string expression)
+    private ConditionalEvaluation(string expression, CancellationToken cancellationToken)
     {
         _expression = expression;
+        _cancellationToken = cancellationToken;
     }
 
     /// <summary>
@@ -45,9 +48,11 @@ public sealed class ConditionalEvaluation
     /// </summary>
     /// <param name="expression">The conditional expression.</param>
     /// <returns>The parsed <see cref="ConditionalEvaluation"/>.</returns>
-    public static ConditionalEvaluation Parse(string expression)
+    public static ConditionalEvaluation Parse(string expression) => Parse(expression, CancellationToken.None);
+
+    internal static ConditionalEvaluation Parse(string expression, CancellationToken cancellationToken)
     {
-        var evaluation = new ConditionalEvaluation(expression);
+        var evaluation = new ConditionalEvaluation(expression, cancellationToken);
         evaluation.ParseExpression();
         return evaluation;
     }
@@ -90,7 +95,7 @@ public sealed class ConditionalEvaluation
     /// </summary>
     private void ParseExpression()
     {
-        var tokens = Tokenize(_expression, out var hasError);
+        var tokens = Tokenize(_expression, _cancellationToken, out var hasError);
         if (hasError)
         {
             HasParseError = true;
@@ -104,7 +109,7 @@ public sealed class ConditionalEvaluation
             return;
         }
 
-        var parser = new Parser(tokens);
+        var parser = new Parser(tokens, _cancellationToken);
         _root = parser.ParseExpression(_fileTests);
         if (parser.HasError || !parser.AtEnd)
         {
@@ -118,9 +123,11 @@ public sealed class ConditionalEvaluation
     /// </summary>
     /// <param name="expression">The expression to tokenize.</param>
     /// <param name="hasError">True when unterminated quotes or invalid syntax is detected.</param>
+    /// <param name="cancellationToken">Cancels scanning the expression.</param>
     /// <returns>The list of parsed tokens.</returns>
     private static IReadOnlyList<ConditionalToken> Tokenize(
         string expression,
+        CancellationToken cancellationToken,
         out bool hasError)
     {
         var tokens = new List<ConditionalToken>();
@@ -134,6 +141,7 @@ public sealed class ConditionalEvaluation
 
         for (var index = 0; index < span.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var value = span[index];
             if (inSingle)
             {
@@ -297,7 +305,7 @@ public sealed class ConditionalEvaluation
     }
 
     /// <summary> Parses the token stream into a boolean expression tree. </summary>
-    private sealed class Parser(IReadOnlyList<ConditionalToken> tokens)
+    private sealed class Parser(IReadOnlyList<ConditionalToken> tokens, CancellationToken cancellationToken)
     {
         /// <summary> Stores the token stream produced by tokenization. </summary>
         private readonly IReadOnlyList<ConditionalToken> _tokens = tokens;
@@ -316,6 +324,7 @@ public sealed class ConditionalEvaluation
         /// </summary>
         public TestNode ParseExpression(List<UnresolvedFileTest> fileTests)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return ParseOr(fileTests);
         }
 
@@ -430,7 +439,7 @@ public sealed class ConditionalEvaluation
                         new UnresolvedFileTest(binaryPredicate.FileKind, left.Content, right.Content));
                 }
 
-                var evaluation = EvaluateBinary(binaryPredicate.Operator, left, right);
+                var evaluation = EvaluateBinary(binaryPredicate.Operator, left, right, cancellationToken);
                 if (evaluation.HasError)
                 {
                     HasError = true;
@@ -789,7 +798,7 @@ public sealed class ConditionalEvaluation
     private static BinaryEvaluation EvaluateBinary(
         BinaryPredicateKind predicate,
         ConditionalToken left,
-        ConditionalToken right)
+        ConditionalToken right, CancellationToken cancellationToken)
     {
         switch (predicate)
         {
@@ -855,10 +864,10 @@ public sealed class ConditionalEvaluation
             }
             case BinaryPredicateKind.StringEqual:
                 return new BinaryEvaluation(
-                    MatchPattern(left.Content.AsSpan(), right.Content.AsSpan(), right.LiteralMask.AsSpan()));
+                    MatchPattern(left.Content.AsSpan(), right.Content.AsSpan(), right.LiteralMask.AsSpan(), cancellationToken));
             case BinaryPredicateKind.StringNotEqual:
                 return new BinaryEvaluation(
-                    !MatchPattern(left.Content.AsSpan(), right.Content.AsSpan(), right.LiteralMask.AsSpan()));
+                    !MatchPattern(left.Content.AsSpan(), right.Content.AsSpan(), right.LiteralMask.AsSpan(), cancellationToken));
             case BinaryPredicateKind.StringLess:
                 return new BinaryEvaluation(string.CompareOrdinal(left.Content, right.Content) < 0);
             case BinaryPredicateKind.StringGreater:
@@ -881,7 +890,7 @@ public sealed class ConditionalEvaluation
     private static bool MatchPattern(
         ReadOnlySpan<char> input,
         ReadOnlySpan<char> pattern,
-        ReadOnlySpan<char> literalMask)
+        ReadOnlySpan<char> literalMask, CancellationToken cancellationToken)
     {
         var inputIndex = 0;
         var patternIndex = 0;
@@ -890,6 +899,7 @@ public sealed class ConditionalEvaluation
 
         while (inputIndex < input.Length)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (patternIndex < pattern.Length)
             {
                 if (!IsLiteral(literalMask, patternIndex) && pattern[patternIndex] == '*')
@@ -914,6 +924,7 @@ public sealed class ConditionalEvaluation
                             pattern,
                             literalMask,
                             patternIndex,
+                            cancellationToken,
                             out var nextIndex,
                             out var matched))
                     {
@@ -969,6 +980,7 @@ public sealed class ConditionalEvaluation
         ReadOnlySpan<char> pattern,
         ReadOnlySpan<char> literalMask,
         int patternIndex,
+        CancellationToken cancellationToken,
         out int nextIndex,
         out bool matched)
     {
@@ -992,6 +1004,7 @@ public sealed class ConditionalEvaluation
         char prev = '\0';
         for (; index < pattern.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (pattern[index] == ']' && !IsLiteral(literalMask, index))
             {
                 nextIndex = index + 1;

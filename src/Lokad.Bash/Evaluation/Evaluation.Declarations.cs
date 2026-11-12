@@ -106,7 +106,7 @@ public sealed partial class Evaluation
                             : options.ArrayKind;
                         if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
                                 new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
-                                declarationKind, isNameref: false, ExpansionBudget.Words, ExpansionBudget.Memory))
+                                declarationKind, isNameref: false, Memory))
                         {
                             var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
                             await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(message)).ConfigureAwait(false);
@@ -164,7 +164,7 @@ public sealed partial class Evaluation
 
                     async Task<IReadOnlyList<ExpandedArrayItem>> ReclassifyAssociativeItemsAsync()
                     {
-                        ExpansionBudget.Words.Charge(expanded.Count, 0);
+                        Memory.Charge(checked(256L * (expanded.Count)));
                         var result = new List<ExpandedArrayItem>();
                         if (items.Count > 0 && items[0].Element != null)
                         {
@@ -204,7 +204,7 @@ public sealed partial class Evaluation
                         .ConfigureAwait(false);
                     if (HasPendingExpansionError)
                         break;
-                    // Retain the pieces; ordinary dispatch flattens them through the shared word budget.
+                    // Retain the pieces; ordinary dispatch flattens them through the shared word memory.
                     var operand = new PreparedDeclarationOperand(name, value, assignment.Operator, CompoundApplied: false);
                     words.Add(operand.ToWord());
                     operands.Add(operand);
@@ -218,7 +218,7 @@ public sealed partial class Evaluation
             foreach (var field in fields)
             {
                 AddField(field);
-                if (options.TryConsume(field, ExpansionBudget.Words))
+                if (options.TryConsume(field, Memory))
                     continue;
                 operands.Add(PrepareVariableOperand(field));
             }
@@ -238,7 +238,7 @@ public sealed partial class Evaluation
     }
 
     private bool TryParseDeclarationReference(ShellSource source, out VariableReference reference)
-        => VariableReference.TryParse(source, ExpansionBudget.Words, out reference);
+        => VariableReference.TryParse(source, Memory, out reference);
 
     internal Task ReportCircularNameReferenceAsync(BindingName name) =>
         ReportExpansionDiagnosticAsync(ShellValue.FromText("warning"), ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(name.ToValue().Bytes).Append(": circular name reference"u8).ToMemory()));
@@ -305,7 +305,7 @@ public sealed partial class Evaluation
 
         public void EndOptions() => _readingOptions = false;
 
-        public bool TryConsume(ShellValue field, AllocationAllowance allowance)
+        public bool TryConsume(ShellValue field, EvaluationMemory memory)
         {
             if (!_readingOptions)
                 return false;
@@ -326,7 +326,7 @@ public sealed partial class Evaluation
             var optionField = field;
             if (remove)
             {
-                allowance.Charge(0, bytes.Length);
+                memory.Charge(checked(4L * bytes.Length));
                 var normalized = bytes.ToArray();
                 normalized[0] = (byte)'-';
                 optionField = ShellValue.FromBytes(normalized);

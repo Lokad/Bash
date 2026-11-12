@@ -55,7 +55,7 @@ public sealed partial class Evaluation
 
         var format = descriptions ? BuiltinHelpFormat.Description : manual ? BuiltinHelpFormat.Manual
             : synopses ? BuiltinHelpFormat.Synopsis : BuiltinHelpFormat.Detailed;
-        using var output = new ByteMemoryBuilder(0, ExpansionBudget.MemoryBudget);
+        using var output = new ByteMemoryBuilder(0, Memory.Budget);
         var matched = false;
         if (firstPattern == words.Count)
         {
@@ -70,10 +70,9 @@ public sealed partial class Evaluation
             for (var index = firstPattern; index < words.Count; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                if (!allActive.TryUnescape(words[index], ExpansionBudget.Words, _cancellationToken,
+                if (!allActive.TryUnescape(words[index], Memory, _cancellationToken,
                         out var pattern, out var mask))
                     continue;
-                var remainingSteps = long.MaxValue;
                 var patternMatched = SelectTopics(prefix: false);
                 if (!patternMatched)
                     patternMatched = SelectTopics(prefix: true);
@@ -87,7 +86,7 @@ public sealed partial class Evaluation
                     {
                         if (!(prefix ? registration.NameBytes.Span.StartsWith(words[index].Bytes.Span)
                             : TextGlobMatcher.MatchUtf8(pattern.Bytes.Span, in activity, registration.NameBytes.Span,
-                                requireEnd: true, ref remainingSteps, _cancellationToken, out _) == GlobMatchResult.Match))
+                                requireEnd: true, _cancellationToken, out _) == GlobMatchResult.Match))
                             continue;
                         found = true;
                         var (name, kind) = registration;
@@ -125,7 +124,7 @@ public sealed partial class Evaluation
 
         void Append(string text)
         {
-            ExpansionBudget.Words.Charge(0, Encoding.UTF8.GetByteCount(text));
+            Memory.Charge(checked(4L * (Encoding.UTF8.GetByteCount(text))));
             output.Append(Utf8Text.Encode(text));
         }
     }

@@ -18,9 +18,10 @@ all users before releasing memory or returning a command's completion.
 
 `CommandInvocation` carries byte arguments, environment, working directory, stdio,
 exported function definitions, ownership and an optional typed interpreter payload.
-Same-host Bash startup imports captured bindings; new-host startup shares expansion
-allowances without importing environment or descriptor ownership. Child commands
-retain their parent's cumulative allowance and get their own argument-copy credit.
+Same-host Bash startup imports captured bindings. New-host startup uses its own
+environment and descriptors. Child commands preserve captured descriptor bindings,
+exported functions and the working directory without taking ownership of borrowed
+handles. The host owns and admits any copies made by its argument consumers.
 
 Read buffers are borrowed until disposal. Mark the consumed prefix before disposal;
 unconsumed bytes remain available through aliases. Retain or copy bytes before
@@ -28,7 +29,8 @@ their owner ends. Host snapshot tokens select immutable content versions without
 opening streams; path mutation cannot change a captured version.
 
 Memory admission and scope ownership follow the [memory design](MEMORY.md).
-Cumulative expansion work allowances are separate from refundable memory admission.
+Completed commands relinquish their scratch storage; execution has no cumulative
+word, character, brace, argument-copy or pattern-step allowance.
 
 Caller cancellation controls evaluation lifetime. A separate token can wait for
 the next operation without rebinding that lifetime. Cancellation drains descriptor

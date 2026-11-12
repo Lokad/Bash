@@ -15,7 +15,7 @@ public sealed class FieldSeparatorsTests
         Assert.False(separators.IsEmpty);
         Assert.Equal(ShellValue.FromText("é"), separators.First);
 
-        var budget = new ExpansionBudget().Words;
+        var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var builder = new ExpandedWordBuilder(variables, budget, ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve);
         builder.AppendJoinedFields([ShellValue.FromText("left"), ShellValue.FromText("right")],
             allowWordSplitting: false, globQuoted: true);

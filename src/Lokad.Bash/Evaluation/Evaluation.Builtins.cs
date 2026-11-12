@@ -55,12 +55,11 @@ public sealed partial class Evaluation
 
                 if (next is not { } name)
                     return Terminal(0, ShellValue.Empty, CommandMessageChannel.StandardError, builtinKind);
-                ExpansionBudget.Words.Charge(0, name.Bytes.Length);
+                Memory.Charge(checked(4L * name.Bytes.Length));
                 if (!name.TryGetUtf8Text(out var builtinName)
                     || !BuiltinClassification.TryResolve(builtinName.AsSpan(), out _))
                 {
-                    ExpansionBudget.Words.Charge(0,
-                        "builtin: "u8.Length + (long)name.Bytes.Length + ": not a shell builtin\n"u8.Length);
+                    Memory.Charge(checked(4L * ("builtin: "u8.Length + (long)name.Bytes.Length + ": not a shell builtin\n"u8.Length)));
                     return Terminal(1, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
                         .Append("builtin: "u8).Append(name.Bytes).Append(": not a shell builtin\n"u8).ToMemory()),
                         CommandMessageChannel.StandardError, builtinKind);
@@ -139,7 +138,7 @@ public sealed partial class Evaluation
                     if (word.Parts is [LiteralWordPart { Kind: WordPartKind.SingleQuoted } literal])
                     {
                         // Option scanning may already have captured this field; retain it without another byte copy.
-                        ExpansionBudget.Words.Charge(1, 0);
+                        Memory.Charge(256);
                         names.Add(literal.Value);
                     }
                     else
@@ -149,7 +148,7 @@ public sealed partial class Evaluation
                     // Reserve decoding before later operand effects; malformed bytes need no text copy.
                     for (var nameIndex = firstName; nameIndex < names.Count; nameIndex++)
                         if (System.Text.Unicode.Utf8.IsValid(names[nameIndex].Bytes.Span))
-                            ExpansionBudget.Words.Charge(0, (long)names[nameIndex].Bytes.Length + 1);
+                            Memory.Charge(checked(4L * ((long)names[nameIndex].Bytes.Length + 1)));
                 }
 
                 return new PreparedCommand.Query(
@@ -190,8 +189,8 @@ public sealed partial class Evaluation
         PreparedCommand.Terminal OptionFailure(BuiltinKind kind, ShellValue message)
         {
             var usageBytes = Utf8Text.Encode(BuiltinDocumentation.For(kind).Synopsis(commandName));
-            ExpansionBudget.Words.Charge(0, 2L * commandName.Length + message.Bytes.Length + usageBytes.Length
-                + ": "u8.Length + ": usage: "u8.Length + 2);
+            Memory.Charge(checked(4L * (2L * commandName.Length + message.Bytes.Length + usageBytes.Length
+                + ": "u8.Length + ": usage: "u8.Length + 2)));
             var output = ByteMemoryBuilder.CreateUnaccounted(0);
             output.Append(Utf8Text.Encode(commandName)).Append(": "u8).Append(message.Bytes).Append((byte)'\n')
                 .Append(Utf8Text.Encode(commandName)).Append(": usage: "u8).Append(usageBytes).Append((byte)'\n');
@@ -203,7 +202,7 @@ public sealed partial class Evaluation
             // Describe the hosted subset; do not promise Bash process replacement or execfail support.
             var documentation = BuiltinDocumentation.For(kind);
             var message = ShellValue.FromText($": {documentation.Synopsis(commandName)}\n    {documentation.Description}\n");
-            ExpansionBudget.Words.Charge(0, (long)commandName.Length + message.Bytes.Length);
+            Memory.Charge(checked(4L * ((long)commandName.Length + message.Bytes.Length)));
             return Terminal(2, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(128).Append(Utf8Text.Encode(commandName))
                 .Append(message.Bytes).ToMemory()), CommandMessageChannel.StandardOutput, kind);
         }

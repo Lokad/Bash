@@ -8,27 +8,6 @@ namespace Lokad.Bash.Tests;
 public sealed class ReturnArgumentTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DiagnosticBudgetFailureIsReportedOnTheActiveErrorDescriptor(bool redirected)
-    {
-        var redirection = redirected ? " 2>&1" : "";
-        var state = new Evaluation.Evaluation(Parser.Parse($"f() {{ return abc{redirection}; }}; f; after=wrong"));
-        // The operand fits; copying it into a numeric-argument diagnostic does not.
-        state.ExpansionBudget.Words.Charge(0, 16 * 1024 * 1024 - 20);
-        var host = new TestOperationVisitor([]) { RecordAppends = true };
-        host.EnqueueAppendResult(DescriptorWriteResult.Open);
-
-        await new Engine().RunAsync(state, host);
-
-        Assert.Equal(2, state.LastExitCode);
-        Assert.False(state.Variables.ContainsKey("after"));
-        var diagnostic = Assert.Single(host.Appends);
-        Assert.Equal(redirected ? FileDescriptor.StdOut : FileDescriptor.StdErr, diagnostic.Descriptor);
-        Assert.Equal("shell: word expansion exceeds its word or character limit\n"u8.ToArray(), diagnostic.Content);
-    }
-
-    [Theory]
     [InlineData("f(){ set -- 5 6; return -1; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
         0, "[root:255]", "")]
     [InlineData("f(){ set -- 5 6; return 257; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
