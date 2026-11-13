@@ -66,11 +66,11 @@ hashes and exercises both runtimes through the public API. CI retains its eviden
 Before 1.0, minor versions may change public APIs, with migration notes in the
 changelog.
 
-[Benchmark preparation](https://github.com/Lokad/Bash/blob/master/BENCHMARKS.md)
-uses separate non-packable driver/probe projects. Preparation, equivalence checks,
+The [benchmarks](https://github.com/Lokad/Bash/blob/master/BENCHMARKS.md)
+use separate non-packable driver/probe projects. Preparation, equivalence checks,
 lifecycle previews, core checks and isolated allocation/native RSS smoke modes run
-without comparative timings. Dedicated-VM
-measurements remain pending.
+without comparative timings. The dedicated-VM campaign is running: its cold memory
+and synchronous core passes are complete, and the full macro report remains pending.
 
 ## GNU correctness controls
 

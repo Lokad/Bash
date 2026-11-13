@@ -1,8 +1,9 @@
-# Benchmark preparation
+# Benchmarks
 
-**Comparative timings are pending. Do not run a timing campaign on the shared
-development machine.** P6 prepares and checks the harness; P7 requires a quiet,
-dedicated VM and independent measured launches.
+**The VM throughput campaign is in progress; its complete comparative report is
+pending. Keep timing campaigns off the shared development machine.** The separate
+cold memory and synchronous core passes are complete. Timings require a quiet VM
+and independent measured launches.
 
 The non-packable `benchmarks/Lokad.Bash.Benchmarks` project pins development-only
 [BenchmarkDotNet 0.15.8](https://www.nuget.org/packages/BenchmarkDotNet/0.15.8).
@@ -316,10 +317,146 @@ Keep whole invocation, amortized, parse, prepared, public and effectful host row
 distinct. Normalize work only within a declared family and boundary. A failed or
 incomplete report contributes no timing result, and reused evidence must be
 labelled. The source commit plus pinned dependencies supports reconstruction;
-the archive preserves the exact evidence from that run. Timings remain pending.
+the archive preserves the exact evidence from that run. The complete throughput
+report remains pending.
 
 ## Measurement status
 
-Harness qualification and measurement preparation run on the shared machine;
-comparative timings require the supplied quiet dedicated VM. No timings, ratios
-or performance claims have been produced.
+The supplied Linux VM is running the qualified campaign on the clean measured
+commit `c3139d757334b39c6acc3b701c90b7a9ad239b49`. All timing and memory observations
+come from that build. Later documentation edits do not change its identity.
+The complete throughput matrix and its cross-family priorities are still pending;
+partial results do not establish general GNU Bash parity.
+
+The guest has four AMD EPYC 9V45 vCPUs and runs Ubuntu 24.04.5. Actual runtimes are
+.NET `11.0.0-rc.3.26522.148` and `10.0.14`; the former is a preview build. GNU Bash
+is the pinned Linux `5.2.21` executable. The default Azure guest power policy is
+recorded; frequency controls are unavailable to the guest. Normal Azure/Ubuntu
+agents remain, and no physical-host isolation is claimed. A shared lock prevents
+overlapping benchmark work; VM access is coordinated with the other project.
+
+### Complete cold memory pass
+
+All 141 runnable catalog cases have one public managed, one prepared managed and
+one GNU RSS observation under each runtime's collection driver: 846 observations.
+The audit checks source/catalog/qualified binary identities, exact status and output
+digests, file effects, counter boundaries and raw Linux RSS/status bytes. These are
+single cold invocations, with no spread or steady-state inference.
+
+The following selected .NET 11 prepared observations use the whole-invocation
+variant at N=256. Allocation is cumulative process-wide managed bytes during
+awaited execution and evaluation cleanup. Admission is the separate coarse peak
+ownership estimate, with its wider source/input/host boundary. It excludes CLR and
+native overhead and delayed collection. It is not process RSS.
+
+| Family | Declared work per invocation | Allocation (MiB) | Estimated peak admitted (KiB) | Gen0/1/2 collections |
+|---|---|---:|---:|---|
+| Arithmetic/branch | 256 loop iterations | 3.658 | 36.291 | 0/0/0 |
+| Narrow function | 256 calls with three arguments | 4.947 | 36.357 | 0/0/0 |
+| Wide function | 16 calls with 256 arguments | 2.388 | 70.519 | 0/0/0 |
+| Large prefix environment | Initialize 4,096 bindings, then 256 prefixed commands | 63.828 | 800.611 | 3/1/0 |
+| Sparse windows | Build 256 entries, then select 256 late one-element windows | 10.127 | 93.868 | 0/0/0 |
+| Pipeline | 16,384 five-byte records through the bounded managed host pipe | 482.499 | 143.736 | 30/1/0 |
+
+For example, the longer arithmetic/branch variant performs 1,024 declared rounds
+at N=256. Its prepared cold pass allocates 3,729.988 MiB cumulatively, records
+233/1/0 collections, and has estimated peak admission of 37.573 KiB. The rounds
+add their own function/loop wrapper and retain shell state; dividing this result
+by the repetition count does not reproduce independent whole invocations.
+
+GNU RSS comes from separate GNU time invocations including startup and parsing.
+For example, the whole large-prefix case above has native high-water RSS of
+4,352 KiB. This does not measure managed allocation or admission and does not
+describe summed simultaneous process-tree residency. Managed in-memory input,
+pipe and file workflows retain their declared host differences from native OS
+workflows; equal script results do not remove that boundary difference.
+
+The full cold-memory tables, per-scale observations and separate plots are retained
+in the local review checkpoint `vm-completed-20261113T123846Z-review.zip`, SHA-256
+`791c7e155b7c1b5ba3594728db1a0ea781f01d73a13ce548c665248bfb0f2a80`.
+Its 1,075 file hashes were verified, including raw completed result metadata and
+the exact analysis/plot generators. This checkpoint is not the full prepared
+directory archive; the complete invocation, fixture and build trees remain on
+the VM for final collection. Generated evidence stays outside Git.
+
+The allocation totals identify useful workloads for investigation. Source review
+finds per-evaluation arithmetic parser/work-pump objects and per-call function
+local-binding containers as candidates. These observations do not assign a
+percentage of time or allocation to either path. The core controls below identify
+further candidates; the remaining macro families must inform priorities before
+implementation changes.
+
+### Complete synchronous core pass
+
+All 12 core kinds have completed at N=16, 64 and 256 on both runtimes: 72 timing
+rows, each with three independent launches and automatic BenchmarkDotNet warmup
+and iterations. Each timing below is the median of the three launch medians.
+Observed launch ranges and full per-scale data remain in the retained exports;
+those ranges are not confidence intervals.
+
+Fixture construction, source/key preparation and exact verification are outside
+the kernel. Declared loops, kind dispatch and result consumption remain included.
+The synchronous callbacks must complete immediately. Allocation is the reported
+BenchmarkDotNet caller-thread counter per kernel, with no allocation-spread
+estimate here. It has a different boundary from the process-wide cold async pass.
+These kernels have no host I/O or GNU comparison.
+
+The following are complete kernel invocations at N=256. Reported allocation is
+identical on the two runtimes for these rows.
+
+| Kernel | Measured work per invocation | .NET 11 (us) | .NET 10 (us) | Reported bytes/kernel |
+|---|---|---:|---:|---:|
+| ArithmeticPrepared | One expression with 256 binding terms; lexical metadata prepared | 40.490 | 42.429 | 90,736 |
+| ArithmeticValue | The same expression as a value operand | 46.503 | 49.193 | 98,960 |
+| GlobAdverse | One full no-match over 32,768 ASCII bytes | 349.223 | 350.138 | 0 |
+| GlobBytes | One full match over 256 malformed bytes and a final `z` | 2.372 | 2.462 | 0 |
+| GlobUtf8 | One full match over 512 Unicode scalars / 1,536 UTF-8 bytes | 13.364 | 13.438 | 0 |
+| Literal | 256 quoted literal expansions, each with one command workspace | 13.093 | 12.913 | 69,632 |
+| OperationDispatch | 256 operations with immediately completed synthetic callbacks | 6.165 | 6.210 | 40,960 |
+| Parameter | 256 quoted parameter expansions, each with one command workspace | 257.406 | 258.501 | 649,216 |
+| PositionalFrame | 256 three-argument callee installations/restorations; 4,096 caller arguments | 5.152 | 5.350 | 40,960 |
+| Shift | One 256-argument frame installation, 256 drops, and caller restoration | 0.978 | 0.989 | 4,160 |
+| SparseWindow | 256 last one-element windows in 16,384 prepared sparse entries | 16.519 | 17.995 | 118,784 |
+| VariableLookup | 256 reads of the last of 4,096 prepared bindings | 11.359 | 11.029 | 0 |
+
+The frame control reports 160 bytes per installation/restoration at all three
+scales, with about 20–21 ns per call as caller width grows from 256 to 4,096.
+The shift counter includes its one callee installation. Its bytes per declared
+drop are 20, 17 and 16.25 at the three scales; they are not isolated allocations
+made by the drop operation.
+
+On .NET 11, a last sparse window takes 55.664, 58.528 and 64.527 ns per declared
+selection as prepared entries grow from 1,024 to 16,384; reported bytes per window
+are 400, 432 and 464. These hot repeated selections exclude array construction.
+The direct lookup control repeatedly selects one prepared key, rather than random
+keys or a newly constructed environment. Three finite scales do not establish
+asymptotic complexity or an old-versus-new library speedup.
+
+The quoted literal and parameter controls return the same six UTF-8 bytes.
+Across scales, they report 272 and 2,536 bytes per call respectively. At N=256
+their .NET 11 times are 51.146 and 1,005.491 ns per call. This comparison applies
+to these prepared words and fixed bindings; it is not a ratio for all parameter
+forms or complete scripts. Source review shows the parameter path reaches general
+brace preparation, word/result builders, braced-syntax parsing and scalar field
+construction. Reusing syntax must still evaluate current bindings, quoting,
+array/nameref selection, errors and cancellation.
+
+The arithmetic metadata control uses the same expression and immediate constant
+bindings. Prepared metadata reduces work inside that numeric kernel; substantial
+per-term allocation remains. It excludes shell operand preparation, the numeric
+work pump, writes and host effects. Neither these controls nor the dispatch kernel
+can be added or subtracted to assign a percentage of macro cost to a component.
+
+Full glob calls include UTF-8/profile validation. The adverse .NET 11 no-match
+case takes 22.755, 92.666 and 349.223 us over 2,048, 8,192 and 32,768 bytes, with
+zero reported allocation. The UTF-8 and malformed-byte controls have different
+patterns and input units. Full matching does not measure prefix/suffix selection
+or repeated replacement search; those retain their macro boundaries.
+
+Complete core tables, all scales and launch ranges, source anchors, cold memory
+observations, plots and exact generators are retained in
+`vm-completed-20261113T141717Z-review.zip`, SHA-256
+`d50aaf645153f01225aa63a4b35062a9d4edd8f27ccceecca806634c8d6017b1`.
+All 1,219 file hashes were verified. It is a completed-results checkpoint; the
+full prepared directory and remaining macro data still need final collection.
+Plots retain their partial-campaign label until that matrix is complete.
