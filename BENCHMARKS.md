@@ -278,8 +278,9 @@ not be inferred from the Linux figures.
 
 1. Provision a quiet x64 Windows or Linux VM. Record its CPU allocation, isolation,
    background services and power policy in `vm.json` using the declaration fields
-   above. Install the SDK from `global.json` and both .NET runtime majors. Supply
-   the GNU binary pinned for that OS in the conformance catalog. A binary or locale
+   above. Install the SDK from `global.json` and the .NET and ASP.NET Core runtimes
+   for both .NET 10 and .NET 11. The source test host uses the ASP.NET Core shared
+   framework. Supply the GNU binary pinned for that OS in the conformance catalog. A binary or locale
    change requires deliberate requalification; an unpinned system Bash is rejected.
 2. Check out the intended commit in a clean checkout, restore with `--locked-mode`,
    build Release, and run `dotnet test Lokad.Bash.slnx -c Release --no-build
