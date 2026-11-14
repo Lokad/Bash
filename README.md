@@ -69,8 +69,10 @@ changelog.
 The [benchmarks](https://github.com/Lokad/Bash/blob/master/BENCHMARKS.md)
 use separate non-packable driver/probe projects. Preparation, equivalence checks,
 lifecycle previews, core checks and isolated allocation/native RSS smoke modes run
-without comparative timings. The dedicated-VM campaign is running: its cold memory
-and synchronous core passes are complete, and the full macro report remains pending.
+without comparative timings. The dedicated-VM campaign is complete: 1,254 timing
+rows, 846 separate cold memory observations and explicit startup controls cover
+25 macro families and 12 core kernels on both runtimes. The report retains each
+family's boundaries, scaling, limitations and subsequent investigation priorities.
 
 ## GNU correctness controls
 

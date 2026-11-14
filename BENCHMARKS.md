@@ -1,9 +1,9 @@
 # Benchmarks
 
-**The VM throughput campaign is in progress; its complete comparative report is
-pending. Keep timing campaigns off the shared development machine.** The separate
-cold memory and synchronous core passes are complete. Timings require a quiet VM
-and independent measured launches.
+**The dedicated-VM campaign is complete:** 1,254 timing rows, 846 separate cold
+memory observations and explicit startup controls. The results below retain
+per-family boundaries, scaling and limitations. Keep timing campaigns off the
+shared development machine; use a quiet VM and independent measured launches.
 
 The non-packable `benchmarks/Lokad.Bash.Benchmarks` project pins development-only
 [BenchmarkDotNet 0.15.8](https://www.nuget.org/packages/BenchmarkDotNet/0.15.8).
@@ -317,16 +317,18 @@ Keep whole invocation, amortized, parse, prepared, public and effectful host row
 distinct. Normalize work only within a declared family and boundary. A failed or
 incomplete report contributes no timing result, and reused evidence must be
 labelled. The source commit plus pinned dependencies supports reconstruction;
-the archive preserves the exact evidence from that run. The complete throughput
-report remains pending.
+the archive preserves the exact evidence from that run. The completed campaign
+and its retained report are described below.
 
 ## Measurement status
 
-The supplied Linux VM is running the qualified campaign on the clean measured
+The supplied Linux VM completed the qualified campaign on the clean measured
 commit `c3139d757334b39c6acc3b701c90b7a9ad239b49`. All timing and memory observations
 come from that build. Later documentation edits do not change its identity.
-The complete throughput matrix and its cross-family priorities are still pending;
-partial results do not establish general GNU Bash parity.
+The matrix covers all 25 macro families at N=16/64/256, their runnable whole and
+startup-amortized variants, and all 12 core kernels on both runtimes. There are
+234 eligible matched process comparisons. These results do not establish general
+GNU Bash parity or a before/after library speedup.
 
 The guest has four AMD EPYC 9V45 vCPUs and runs Ubuntu 24.04.5. Actual runtimes are
 .NET `11.0.0-rc.3.26522.148` and `10.0.14`; the former is a preview build. GNU Bash
@@ -376,15 +378,14 @@ in the local review checkpoint `vm-completed-20261113T123846Z-review.zip`, SHA-2
 `791c7e155b7c1b5ba3594728db1a0ea781f01d73a13ce548c665248bfb0f2a80`.
 Its 1,075 file hashes were verified, including raw completed result metadata and
 the exact analysis/plot generators. This checkpoint is not the full prepared
-directory archive; the complete invocation, fixture and build trees remain on
-the VM for final collection. Generated evidence stays outside Git.
+directory archive; the complete invocation, fixture and build trees are retained
+in the final archive below. Generated evidence stays outside Git.
 
 The allocation totals identify useful workloads for investigation. Source review
 finds per-evaluation arithmetic parser/work-pump objects and per-call function
 local-binding containers as candidates. These observations do not assign a
 percentage of time or allocation to either path. The core controls below identify
-further candidates; the remaining macro families must inform priorities before
-implementation changes.
+further candidates; the completed macro review below informs subsequent priorities.
 
 ### Complete synchronous core pass
 
@@ -457,6 +458,182 @@ Complete core tables, all scales and launch ranges, source anchors, cold memory
 observations, plots and exact generators are retained in
 `vm-completed-20261113T141717Z-review.zip`, SHA-256
 `d50aaf645153f01225aa63a4b35062a9d4edd8f27ccceecca806634c8d6017b1`.
-All 1,219 file hashes were verified. It is a completed-results checkpoint; the
-full prepared directory and remaining macro data still need final collection.
-Plots retain their partial-campaign label until that matrix is complete.
+All 1,219 file hashes were verified. This earlier checkpoint retains its original
+partial-campaign plots. The complete matrix and figures are retained separately below.
+
+### Complete macro pass
+
+The campaign finished on 2026-11-14, retaining all 254 successful scheduled job
+receipts. Each timing row uses three independent launches and automatic
+BenchmarkDotNet warmup/iterations. The primary value is the median of the three
+launch medians. Bracketed ranges are observed launch-median extrema, not confidence
+intervals. Raw unfiltered samples, BDN filtering/overhead adjustments and warnings
+remain in the exports; no manual trimming was applied.
+
+The following N=256 overview includes every family. `AM` means the catalog's
+`StartupAmortized` variant; `Whole` means one whole invocation. Repetitions are
+fixed within each family across scales. The wrapper repeats the complete body,
+adds its own function/loop work and retains shell state between rounds. The AM
+label does not prove startup is negligible or every iteration is long enough for
+a steady-state claim. `*` retains a short-iteration warning.
+
+All values are milliseconds per complete invocation. Each embedded cell gives
+**prepared/public**; each process cell gives **managed/GNU**. These boundaries
+are not additive components. Process measurements include their actual child
+bootstrap and common parent byte collector. No startup subtraction or
+prepared-managed/fresh-GNU ratio is used. Different work units and repetition
+counts make these invocation totals unsuitable for a cross-family ranking.
+
+| Family | Variant / rounds | Declared work at N=256 | .NET 11 embedded ms | .NET 11 process ms | .NET 10 embedded ms | .NET 10 process ms |
+|---|---|---|---:|---:|---:|---:|
+| arithmetic-branch | AM / 1024 | 262,144 loop iterations | 1383.009/1358.080 | 2605.757/277.989 | 1416.931/1438.696 | 2548.636/278.136 |
+| function-narrow | AM / 1024 | 262,144 calls with three arguments | 1797.881/1798.945 | 3319.672/587.138 | 1866.463/1884.773 | 3272.078/586.498 |
+| function-wide | AM / 1024 | 16,384 calls with 256 arguments | 519.250/523.101 | 2001.702/571.460 | 552.719/546.365 | 1892.272/570.793 |
+| shift | AM / 1024 | 262,144 single-argument shifts | 1191.152/1198.458 | 2765.101/331.907 | 1251.394/1256.398 | 2683.665/332.771 |
+| prefix-small | AM / 1024 | 262,144 prefix commands against 8 retained bindings | 1285.180/1292.516 | 2825.233/637.515 | 1366.921/1358.557 | 2845.970/636.860 |
+| prefix-large | AM / 128 | 32,768 prefix commands against 4096 retained bindings | 3305.350/3256.193 | 4538.015/1167.173 | 3415.749/3364.879 | 4838.922/1165.691 |
+| array-aggregation | AM / 1024 | 262,144 array insertions and aggregation terms | 2107.666/2116.968 | 3578.582/537.408 | 2186.765/2199.665 | 3632.935/534.618 |
+| sparse-window | AM / 1024 | 262,144 late one-element sparse windows | 4012.063/4020.951 | 5368.781/3334.806 | 4137.668/4153.332 | 5580.287/3331.676 |
+| ifs | AM / 1024 | 262,144 IFS-separated fields | 582.242/575.889 | 2087.858/160.011 | 616.205/617.443 | 2030.214/159.952 |
+| literal-quoted | AM / 1024 | 786,432 literal argument expansions | 1546.646/1529.528 | 2967.578/459.000 | 1596.353/1620.595 | 3000.369/459.248 |
+| parameter | AM / 1024 | 262,144 parameter slices and length queries | 2756.688/2780.148 | 4195.145/559.707 | 2848.492/2856.561 | 4307.597/560.797 |
+| pattern-prefix-suffix | AM / 4 | 128 unmatched prefix/suffix selections | 5.367*/5.838* | 190.959/2235.445 | 5.309*/6.076* | 200.514/2238.832 |
+| pattern-replacement | AM / 4 | 64 global literal replacements | 4.289*/4.498* | 188.166/1.646* | 4.346*/4.564* | 195.570/1.650* |
+| pattern-adverse | AM / 4 | 4 adverse no-match search over scale*128 bytes | 4.501*/5.712* | 197.282/1.734* | 4.505*/5.499* | 205.677/1.731* |
+| read | Whole / 1 | 256 deterministically seeded LF input records | 12.336*/14.665* | excluded | 12.257*/12.298* | excluded |
+| mapfile | Whole / 1 | 256 mapfile records | 0.298*/0.354* | excluded | 0.316*/0.371* | excluded |
+| format-output | AM / 128 | 32,768 formatted output records | 270.487/269.840 | 1810.207/91.602* | 227.639/228.237 | 1482.097/118.343* |
+| raw-output | AM / 128 | 32,768 two-byte malformed/CR output records | 224.289/229.783 | 1574.284/81.519* | 192.537/196.584 | 1222.420/103.315* |
+| command-substitution | AM / 8 | 2,048 builtin command substitutions | 52.361*/52.690* | excluded | 52.150*/52.248* | excluded |
+| pipeline | AM / 16 | 262,144 five-byte pipe records (largest scale exceeds pipe capacity) | 2128.008/2131.160 | excluded | 2116.910/2131.193 | excluded |
+| redirection-source-eval | AM / 16 | 4,096 function/eval pairs; 16 source/file workflows | 44.158*/44.099* | excluded | 45.545*/45.597* | excluded |
+| failure-errexit | Whole / 1 | 256 successful iterations before intentional errexit | 6.153*/6.331* | 181.375/1.021* | 6.469*/6.315* | 190.668/1.001* |
+| unicode-parameter | AM / 16 | 256 three-scalar UTF-8 slices over scale*2 scalars | 13.206*/15.408* | 199.727/4.096* | 13.067*/13.634* | 207.634/4.092* |
+| unicode-pattern | AM / 16 | 48 UTF-8 prefix/suffix/replacement operations over scale+5 scalars | 4.103*/4.294* | 189.949/7.459* | 4.181*/4.366* | 196.928/7.451* |
+| malformed-pattern | AM / 16 | 512 malformed-byte prefix/replacement selections | 14.541*/20.605* | 214.024/4.462* | 12.809*/21.070* | 222.582/4.452* |
+
+The full report retains **every N=16/64/256 row, both runnable variants, both
+runtimes, all five macro lanes, launch ranges, cold counters and untimed host
+counts**, including the whole controls omitted from this overview. Read/mapfile
+consume stdin to EOF and failure/errexit exits the shell, so their AM variants
+are excluded. Managed input/pipe/capture/file hosts have no process parity ratio.
+An exclusion is not a measured zero.
+
+### Matched process scaling
+
+Each cell below lists **N=16; N=64; N=256** managed/GNU ratios and their observed
+extrema. A value above one means the managed process took longer at that declared
+boundary. The variant and rounds match the overview. All process bootstrap,
+short-iteration warnings and family-specific work remain included; short controls
+are not interpreter-only throughput measurements. The complete per-case report
+retains the warning flags and unrounded component times for all scales/variants.
+
+| Family | Variant / rounds | .NET 11 ratios [observed extrema], N=16;64;256 | .NET 10 ratios [observed extrema], N=16;64;256 |
+|---|---|---|---|
+| arithmetic-branch | AM / 1024 | 29.678 [28.096, 29.905]; 21.758 [21.688, 21.955]; 9.374 [9.324, 9.576] | 30.522 [30.251, 30.572]; 20.756 [20.258, 20.879]; 9.163 [9.131, 9.258] |
+| function-narrow | AM / 1024 | 20.972 [20.502, 21.164]; 13.828 [13.777, 13.925]; 5.654 [5.639, 5.684] | 21.556 [21.235, 21.654]; 12.680 [12.611, 12.703]; 5.579 [5.559, 5.600] |
+| function-wide | AM / 1024 | 17.184 [17.100, 17.347]; 10.999 [10.988, 11.090]; 3.503 [3.463, 3.549] | 17.106 [16.939, 17.164]; 10.235 [10.107, 10.331]; 3.315 [3.292, 3.339] |
+| shift | AM / 1024 | 23.849 [23.730, 23.993]; 20.112 [19.967, 20.221]; 8.331 [8.156, 8.426] | 24.469 [24.418, 24.626]; 19.332 [19.180, 19.404]; 8.065 [7.944, 8.132] |
+| prefix-small | AM / 1024 | 16.086 [15.989, 16.179]; 10.403 [10.346, 10.569]; 4.432 [4.429, 4.503] | 16.485 [16.196, 16.597]; 10.118 [10.047, 10.270]; 4.469 [4.425, 4.511] |
+| prefix-large | AM / 128 | 20.464 [20.131, 20.495]; 8.575 [8.422, 8.581]; 3.888 [3.858, 3.914] | 21.142 [20.996, 21.420]; 8.967 [8.936, 9.021]; 4.151 [4.139, 4.164] |
+| array-aggregation | AM / 1024 | 26.500 [26.432, 26.525]; 16.202 [16.087, 16.246]; 6.659 [6.614, 6.709] | 26.514 [26.444, 26.550]; 15.224 [15.105, 15.330]; 6.795 [6.745, 6.818] |
+| sparse-window | AM / 1024 | 22.396 [22.269, 22.657]; 7.688 [7.671, 7.716]; 1.610 [1.599, 1.621] | 21.052 [20.857, 21.284]; 7.444 [7.357, 7.556]; 1.675 [1.661, 1.679] |
+| ifs | AM / 1024 | 26.822 [26.645, 27.007]; 23.333 [23.069, 23.553]; 13.048 [13.018, 13.213] | 27.443 [27.177, 27.862]; 23.367 [22.709, 23.439]; 12.693 [12.510, 12.780] |
+| literal-quoted | AM / 1024 | 22.242 [21.250, 22.382]; 15.884 [15.758, 16.029]; 6.465 [6.397, 6.523] | 22.855 [22.525, 22.989]; 15.140 [14.969, 15.182]; 6.533 [6.489, 6.554] |
+| parameter | AM / 1024 | 31.875 [31.407, 32.025]; 16.606 [16.359, 16.614]; 7.495 [7.488, 7.525] | 30.256 [30.026, 30.332]; 15.690 [15.537, 15.715]; 7.681 [7.604, 7.728] |
+| pattern-prefix-suffix | AM / 4 | 14.950 [14.908, 14.980]; 1.249 [1.246, 1.255]; 0.085 [0.085, 0.086] | 15.653 [15.505, 15.838]; 1.312 [1.304, 1.313]; 0.090 [0.089, 0.090] |
+| pattern-replacement | AM / 4 | 192.700 [190.886, 193.147]; 167.900 [167.541, 169.121]; 114.302 [112.859, 115.081] | 198.051 [195.423, 200.968]; 175.814 [173.748, 176.761]; 118.542 [118.052, 119.450] |
+| pattern-adverse | AM / 4 | 205.146 [202.376, 206.238]; 180.131 [178.577, 181.432]; 113.747 [112.818, 116.413] | 215.780 [212.037, 219.594]; 189.711 [185.161, 192.122]; 118.835 [118.199, 122.571] |
+| format-output | AM / 128 | 38.577 [37.575, 38.674]; 19.245 [18.821, 19.712]; 19.762 [19.346, 20.165] | 37.909 [37.126, 38.404]; 18.552 [18.336, 18.702]; 12.524 [11.763, 12.559] |
+| raw-output | AM / 128 | 38.276 [37.738, 38.673]; 18.577 [18.087, 19.029]; 19.312 [18.847, 19.358] | 37.230 [36.846, 37.433]; 17.221 [17.018, 17.552]; 11.832 [11.393, 11.900] |
+| failure-errexit | Whole / 1 | 215.223 [214.350, 215.973]; 204.122 [203.141, 207.018]; 177.644 [176.361, 181.084] | 225.653 [223.786, 228.565]; 219.075 [214.500, 223.150]; 190.392 [188.362, 191.939] |
+| unicode-parameter | AM / 16 | 120.387 [120.190, 120.667]; 93.352 [93.120, 93.485]; 48.757 [48.647, 49.019] | 126.421 [125.779, 126.839]; 97.491 [96.881, 98.317]; 50.745 [50.602, 50.982] |
+| unicode-pattern | AM / 16 | 157.761 [157.413, 158.600]; 111.378 [110.972, 111.509]; 25.465 [25.344, 25.546] | 164.742 [163.751, 165.299]; 116.021 [115.457, 117.759]; 26.431 [26.335, 26.466] |
+| malformed-pattern | AM / 16 | 120.068 [119.347, 120.677]; 91.227 [90.994, 91.268]; 47.965 [47.892, 48.129] | 126.298 [125.390, 127.052]; 95.268 [95.029, 95.498]; 49.997 [49.958, 50.203] |
+
+The prefix/suffix no-match family crosses the native process curve as its subject
+grows to 16,385 ASCII bytes, while keeping 32 removals per body. That result
+coexists with much slower managed process results for several other families.
+Managed removal uses the shared forward/reverse matcher; these finite observations
+do not explain GNU's algorithm, prove complexity or establish general parity.
+Literal replacement already uses byte-span `IndexOf`; its complete expansion and
+builder work remains measured. A single aggregate would hide these differences.
+
+The largest sparse macro builds 256 entries and makes 256 late selections per
+body. Its core control instead selects from a prebuilt 16,384-entry array. Array
+aggregation clears, fills and sums its array. Prefix bodies execute binding writes
+as well as prefixed commands: eight per small body and 4,096 per large body at
+N=256. AM state persists, so these are not newly created bindings every round.
+None of the whole macro costs can be assigned directly to the seek or prefix overlay.
+
+Read accumulates seeded key/value records; mapfile loads different `line-i` input
+and selects array metadata. Their different times and host read counts do not
+isolate a bulk-I/O factor. Source/eval includes dynamic parsing even with a prepared
+outer script; the parse-only lane covers only outer syntax. The failure row checks
+expected status 1 and one EXIT trap, not successful continuation.
+
+Unicode slices keep their operation count fixed as literal/source length grows.
+Unicode global replacement has N occurrences despite a fixed transformation count.
+Those rows use pinned Linux `C.utf8`; malformed-byte controls use `C`. All exact
+outputs remain qualified. The malformed AM N=256 prepared launch ranges are
+11.362–20.183 ms (.NET 11) and 12.716–31.032 ms (.NET 10). Preserve this spread and
+the short warnings. The output families also reverse runtime ordering seen in
+several language families; there is no universal .NET 11/.NET 10 ordering here.
+
+### Separate startup control
+
+The explicit `:` script has four timing rows and six separate cold memory rows.
+These process times include apphost/runtime/request/source/host/result bootstrap;
+they are not pure CLR startup and are never subtracted from another measurement.
+Milliseconds and observed launch-median extrema:
+
+| Collection runtime | Managed process ms | GNU process ms |
+|---|---:|---:|
+| 11 | 111.808 [111.807, 112.248] | 0.741 [0.731, 0.761]* |
+| 10 | 121.620 [121.506, 122.541] | 0.733 [0.728, 0.735]* |
+
+### Subsequent priorities
+
+The measured scripts, isolated controls and source review support the following
+order of investigation. They do not provide CPU profiles or assign time/allocation
+percentages to individual source lines. No new optimization or harness change was
+made during this frozen campaign.
+
+| Priority | Evidence and next investigation | Required controls |
+|---|---|---|
+| 1. Expansion and arithmetic workspace turnover | The quoted parameter control reports 2,536 bytes/call versus 272 for the same-output literal control; prepared arithmetic still reports 90,736 bytes for 256 terms. Profile reached braced-syntax/result builders and the arithmetic parser/work pump in representative scripts. Reuse immutable syntax only where effects stay late-bound. | Current bindings, quote/byte provenance, assignment effects, recursion, cancellation and refusal/cleanup remain correct. Check public/prepared macros as well as the isolated kernels. |
+| 2. Host and operation scheduling | Pipeline's whole N=256 cold allocation is 482.499 MiB for 16,384 records, while its transport has fixed 64-KiB payload storage. Capture constructs an ordinary pipe per substitution; each pipe eagerly allocates sixteen 4-KiB arrays after a separate 96-KiB coarse admission reservation. Profile host construction, record/operation scheduling, command lifetimes and printf formatting separately. | A queued short write occupies one block: sixteen five-byte fragments use only 80 payload bytes. Preserve independent stage progress, backpressure, cancellation, borrowed I/O settlement and one cleanup path. Report a changed host/harness under its own identity. |
+| 3. Function and prefix command setup | Core frame restoration does not copy the caller, and binding-admission totals are cached. Narrow/wide calls and prefix scripts still allocate and execute substantial surrounding work. Profile local-binding containers, reached detachment and command/format work before changing the namespace representation. | Retain caller restoration, dynamic scope, namerefs, prefix RHS effects and failure behavior. Distinguish initial binding writes, retained targets and repeated commands. |
+| 4. Preserve the useful controls | Direct lookup and glob kernels report zero allocation; sparse window selection already seeks its prepared tree. Their finite results do not identify them as the source of whole-script allocation or justify another matching engine. Use them to detect costs introduced by broader changes. | Requalify source/binaries and compare against this frozen baseline on the same declared boundaries. Judge representative gains together with control costs; use no universal fixed regression veto. |
+
+Short controls need a separately qualified longer-duration campaign before making
+steady-state claims. Longer repetitions would be a new workload identity; they
+must not replace, trim or silently relabel these observations. The supported Bash
+subset and declared regex/getopts departures remain in
+[compatibility](docs/COMPATIBILITY.md); benchmark equivalence is scoped to the catalog.
+
+### Complete evidence
+
+The full prepared-directory archive is `vm-c3139d7-evidence.tar.gz`: 129,179
+individually verified files, 128,466,258 bytes, SHA-256
+`7febc74a697b5ffa34dad024ae1dcd7682f37161c60cdeae2274b4597acfda81`.
+It retains exact invocation/fixture/build trees, raw BDN exports/logs, qualification,
+VM/runtime/native identities and measured binaries. The VM finalizer and independent
+local extraction both passed; failed/partial attempts remain retained and unscored.
+
+The portable report is `c3139d7-20261114T005207177846Z-review-bundle.zip`:
+3,377 verified files, 30,648,531 bytes, SHA-256
+`e63b1a11f0a2844414f7762095bca3c89411a8ed0830b138ac9b7112553541ad`.
+Its entry README links all 25 complete family tables, all scales/variants and both
+runtimes, separate startup/cold-memory/host observations, source reviews and 44
+standalone SVG/PNG figures. Input hashes, exact generators and relative links were
+verified. This report bundle is separate from the full prepared archive.
+
+The review retains 47 host/workload source anchors and 13 first-family structural
+anchors, checked byte-for-byte against the measured commit. These support source
+hypotheses without pretending to be profiles. Analysis corruption controls and
+their restoration/deployment proofs remain retained in the earlier 300-row review
+checkpoint, SHA-256
+`0409f24f4f59358d2f129e64ab75f1e445e624e1fbe1f8a7dd4e307f45cf086f`.
+Generated evidence remains under ignored `artifacts/`; documentation-only commits
+keep the original measured source identity.
