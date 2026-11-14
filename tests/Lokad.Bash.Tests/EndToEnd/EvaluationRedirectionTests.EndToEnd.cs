@@ -10,6 +10,25 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationRedirectionTestsEndToEnd
 {
+    [Theory]
+    [InlineData("time cat <<END\nbody\nEND\n", "body\n")]
+    [InlineData("time ! cat <<END\nbody\nEND\n", "body\n")]
+    [InlineData("time { cat <<END; }\nbody\nEND\n", "body\n")]
+    [InlineData("time (cat <<END)\nbody\nEND\n", "body\n")]
+    [InlineData("f(){ time cat <<END; }; f\nbody\nEND\n", "body\n")]
+    [InlineData("time cat <<ONE | cat <<TWO\nfirst\nONE\nsecond\nTWO\n", "second\n")]
+    [InlineData("time if cat <<END; then printf yes; fi\nbody\nEND\n", "body\nyes")]
+    [InlineData("time for x in a b; do cat <<END; done\n$x\nEND\n", "a\nb\n")]
+    public async Task TimedHereDocumentsCompleteThroughNestedWrappers(string script, string output)
+    {
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var result = await host.RunAsync("TIMEFORMAT=; " + script, deadline.Token);
+
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(script.StartsWith("time !", StringComparison.Ordinal) ? 1 : 0, result.ExitCode);
+    }
 
     // Git Bash 5.2.37, isolated environment: bodies follow the physical line, not each command.
     [Theory]

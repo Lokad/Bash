@@ -42,9 +42,10 @@ Scripts are limited to 4 MiB, with structural syntax/nesting guards and CLR coll
 checks. The source bound limits parser input; nesting guards protect recursive
 syntax handling. They are independent of execution duration. There are no lifetime
 word, character, brace, argument-copy or pattern-step quotas. Callers supply
-cancellation and a live-memory allowance. Pending here-documents followed by a
-pipeline/list operator before the body are not fully supported. Builtins implement
-their documented option subsets;
+cancellation and a live-memory allowance. Here-document bodies are collected in
+physical source order across pipeline/list headers and completed through timing,
+negation and compound-command wrappers. An incomplete body is rejected rather
+than accepted with GNU's end-of-input warning. Builtins implement their documented option subsets;
 `set` sets positional parameters and supports `-e`/`+e` and
 `-o errexit`/`+o errexit`. Errexit stops unhandled failures, including failed
 pipelines under the fixed pipefail policy. Tested conditions, logical-list

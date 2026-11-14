@@ -69,6 +69,7 @@ internal sealed class HereDocumentReader
                     case SubshellCommand subshell: Visit(subshell.Body); break;
                     case RedirectedCommand redirected: Visit(redirected.Body); break;
                     case NegatedCommand negated: Visit(negated.Inner); break;
+                    case TimedCommand timed: Visit(timed.Inner); break;
                     case FunctionDefinition function: Visit(function.Body); break;
                     case ForCommand loop: Visit(loop.Body); break;
                     case ArithmeticForCommand loop: Visit(loop.Body); break;
@@ -95,6 +96,7 @@ internal sealed class HereDocumentReader
                 SubshellCommand subshell when Changed(subshell.Body) => subshell with { Body = Get(subshell.Body) },
                 RedirectedCommand redirected => ReplaceRedirected(redirected),
                 NegatedCommand negated when Changed(negated.Inner) => negated with { Inner = Get(negated.Inner) },
+                TimedCommand timed when Changed(timed.Inner) => timed with { Inner = Get(timed.Inner) },
                 FunctionDefinition function when Changed(function.Body) => function with { Body = Get(function.Body) },
                 ForCommand loop when Changed(loop.Body) => loop with { Body = Get(loop.Body) },
                 ArithmeticForCommand loop when Changed(loop.Body) => loop with { Body = Get(loop.Body) },

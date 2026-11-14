@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Complete here-document bodies through `time` wrappers, including timed compound
+  commands and multiple documents sharing pipeline/list headers.
 - Traverse flat pipelines iteratively in execution and display extraction, avoiding
   process-fatal stack overflow. Start here-input producers independently of their
   readers so bounded pipe backpressure cannot deadlock setup; retain admitted

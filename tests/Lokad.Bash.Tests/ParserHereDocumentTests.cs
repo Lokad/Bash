@@ -4,6 +4,29 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ParserHereDocumentTests
 {
+    [Theory]
+    [InlineData("time cat <<END\nbody\nEND\n", false)]
+    [InlineData("time -p cat <<END\nbody\nEND\n", true)]
+    public void CompletingTimedBodiesRetainsTheWrapperAndProvisionalDelimiter(string source, bool portable)
+    {
+        var tokenizer = new Tokenizer(ShellSource.FromText(source));
+        var provisional = Assert.IsType<TimedCommand>(Parser.ParsePipeline(tokenizer));
+        var originalCommand = Assert.IsType<SimpleCommand>(provisional.Inner);
+        var original = Assert.Single(originalCommand.Redirections);
+        var reader = tokenizer.HereDocuments;
+        Assert.NotNull(reader);
+
+        var completed = Assert.IsType<TimedCommand>(reader.Complete(provisional));
+        var command = Assert.IsType<SimpleCommand>(completed.Inner);
+        var redirection = Assert.Single(command.Redirections);
+        Assert.Equal(portable, completed.Portable);
+        Assert.Equal("body\n", Assert.Single(redirection.Target.Parts).GetUtf8Text());
+        Assert.Same(original.Target, redirection.HereDocumentDelimiter);
+        Assert.Equal("END", Assert.Single(original.Target.Parts).GetUtf8Text());
+        Assert.Same(originalCommand.Words, command.Words);
+        Assert.Same(originalCommand.Assignments, command.Assignments);
+    }
+
     [Fact]
     public void CompletingBodies_PreservesProvisionalNodesAndUnchangedCollections()
     {
