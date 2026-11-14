@@ -6,6 +6,31 @@ namespace Lokad.Bash.Tests;
 public class ShellCommandParserTests
 {
     [Theory]
+    [InlineData(512)]
+    [InlineData(20000)]
+    public void LongFlatPipelinePreservesStageOrderWithoutRecursiveTraversal(int count)
+    {
+        var source = string.Join(" | ", Enumerable.Range(0, count).Select(index => $"stage{index}"));
+        var stages = ShellCommandParser.TryParsePipeline(source);
+        Assert.NotNull(stages);
+        Assert.Equal(count, stages.Count);
+        for (var index = 0; index < count; index++)
+        {
+            Assert.Equal($"stage{index}", stages[index].Name);
+            Assert.Empty(stages[index].Arguments);
+        }
+
+        var chain = ShellCommandParser.TryParseChain(source + "; next");
+        Assert.NotNull(chain);
+        Assert.Equal(2, chain.Count);
+        Assert.Equal(source, chain[0].Text);
+        var chainStages = chain[0].Stages;
+        Assert.NotNull(chainStages);
+        Assert.Equal(count, chainStages.Count);
+        Assert.Equal("next", chain[1].Text);
+    }
+
+    [Theory]
     [InlineData("cat ${missing:-$(echo nope)}")]
     [InlineData("cat \"${missing:-$(echo nope)}\"")]
     [InlineData("cat \"${missing:-$(echo nope}\"")]

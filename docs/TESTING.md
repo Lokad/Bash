@@ -27,7 +27,9 @@ checks loaded assembly hashes and exports runtime/package/source hashes and
 individual probe names. CI executes it on both operating systems and runtimes.
 The probe checks public invocation, prepared reuse, byte arguments/output, lazy
 command units, errexit/EXIT, cancellation, memory refunds and matcher migration.
-It supplements the source suite's broader ownership and streaming controls.
+The isolated consumer also checks that a long accepted pipeline reaches host pipe
+refusal without a process-fatal stack overflow. It supplements the source suite's
+broader ownership and streaming controls.
 
 Native correctness controls compare exit status, exact stdout/stderr bytes and
 declared file effects. Each script and fixture has a content hash. Only the named

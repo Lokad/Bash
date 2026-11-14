@@ -59,6 +59,17 @@ internal static class PackageConsumer
             host.Expect([], []);
             Check(governor.ReservedBytes == ConsumerHost.OutputEstimate, "Evaluation retained memory after cleanup.");
             VerifyPublicMatcher();
+
+            // This consumer runs in its own process. Accepted flat syntax used to
+            // abort that process before the host could refuse the first pipe.
+            host.Reset();
+            var pipeline = string.Join(" | ", Enumerable.Repeat(":", 20000));
+            var stages = ShellCommandParser.TryParsePipeline(pipeline);
+            Check(stages?.Count == 20000, "Long pipeline display traversal failed.");
+            run = await BashScript.RunAsync(host, pipeline, EvaluationOptions.Default, deadline.Token);
+            Check(run.ExitCode == 1 && host.PipeRequests == 1, "Long pipeline did not reach the host's pipe refusal.");
+            host.Expect([], "shell: probe pipe refusal\n"u8);
+            Check(governor.ReservedBytes == ConsumerHost.OutputEstimate, "Pipeline setup retained memory after refusal.");
         }
         Check(governor.ReservedBytes == 0, "Host output ownership was not released.");
         Console.WriteLine(JsonSerializer.Serialize(new
@@ -68,7 +79,8 @@ internal static class PackageConsumer
             runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
             assembly = typeof(BashScript).Assembly.GetName().Version?.ToString(),
             checks = new[] { "public-invocation", "host-byte-arguments", "prepared-reuse", "byte-output",
-                "lazy-command-units", "errexit-exit-trap", "cancellation", "memory-refund", "public-utf8-matcher" },
+                "lazy-command-units", "errexit-exit-trap", "cancellation", "memory-refund", "public-utf8-matcher",
+                "long-pipeline-containment" },
             estimatedPeakBytes = governor.PeakBytes
         }));
     }
@@ -99,6 +111,7 @@ internal sealed class ConsumerHost : IBashHost, IDisposable
     public ShellExecutionContext? Execution => null;
     public byte[] Output => _output.ToArray();
     public byte[] Error => _error.ToArray();
+    public int PipeRequests { get; private set; }
 
     public ConsumerHost(IMemoryBudget memory)
     {
@@ -149,7 +162,12 @@ internal sealed class ConsumerHost : IBashHost, IDisposable
         DirectoryMetadataRequest metadata, DirectorySnapshotRequest snapshots, DirectoryAccessPattern access, CancellationToken token) => throw Unexpected();
     public ValueTask<DescriptorReadBuffer> ReadAsync(FileDescriptor descriptor, DescriptorReadRequest request, CancellationToken token) => throw Unexpected();
     public Task<IReadOnlyList<bool>> GetTerminalStatusesAsync(IReadOnlyList<FileDescriptor> descriptors, CancellationToken token) => throw Unexpected();
-    public Task<PipeCreationResult> CreatePipeAsync(CancellationToken lifetime, CancellationToken token) => throw Unexpected();
+    public Task<PipeCreationResult> CreatePipeAsync(CancellationToken lifetime, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        PipeRequests++;
+        return Task.FromResult(PipeCreationResult.Failed(new OperationError("probe pipe refusal\n")));
+    }
     public Task<IReadOnlyList<FilePathResolutionResult>> ResolvePathsAsync(IReadOnlyList<FilePathLookup> paths,
         FilePathInfoRequest request, FileSnapshotRequest snapshots, CancellationToken token) => throw Unexpected();
 

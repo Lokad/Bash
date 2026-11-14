@@ -144,20 +144,28 @@ public static class ShellCommandParser
     /// </summary>
     private static bool TryFlattenPipeline(ICommand command, List<(string Name, IReadOnlyList<string> Arguments)> stages)
     {
-        if (command is PipelineCommand { Operator: PipelineOperator.Pipe, Negated: false } pipeline)
+        // Parsed pipelines have a left spine; display extraction additionally
+        // rejects operators/negation that execution supports.
+        while (command is PipelineCommand pipeline)
         {
-            return TryFlattenPipeline(pipeline.Left, stages)
-                   && TryFlattenPipeline(pipeline.Right, stages);
+            if (pipeline is not { Operator: PipelineOperator.Pipe, Negated: false }
+                || !AppendStage(pipeline.Right))
+                return false;
+            command = pipeline.Left;
         }
 
-        if (command is not SimpleCommand simple)
+        if (!AppendStage(command))
             return false;
-
-        if (!TryFlattenSimpleCommand(simple, out var stage))
-            return false;
-
-        stages.Add(stage);
+        stages.Reverse();
         return true;
+
+        bool AppendStage(ICommand item)
+        {
+            if (item is not SimpleCommand simple || !TryFlattenSimpleCommand(simple, out var stage))
+                return false;
+            stages.Add(stage);
+            return true;
+        }
     }
 
     /// <summary>

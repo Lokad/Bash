@@ -706,20 +706,27 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Flattens a nested pipeline command into a left-to-right command list and operator list.
     /// </summary>
-    private static void FlattenPipeline(
+    private void FlattenPipeline(
         ICommand command,
         List<ICommand> commands,
         List<PipelineOperator> operators)
     {
-        if (command is PipelineCommand pipeline)
+        // The grammar builds a left spine. Collect it backwards without consuming
+        // the CLR stack; a right-hand compound command remains one pipeline stage.
+        while (command is PipelineCommand pipeline)
         {
-            FlattenPipeline(pipeline.Left, commands, operators);
+            CheckCancellation();
+            Memory.Charge(32); // Command/operator list capacities, including growth slack.
             commands.Add(pipeline.Right);
             operators.Add(pipeline.Operator);
-            return;
+            command = pipeline.Left;
         }
 
+        CheckCancellation();
+        Memory.Charge(32);
         commands.Add(command);
+        commands.Reverse();
+        operators.Reverse();
     }
 
     /// <summary>
