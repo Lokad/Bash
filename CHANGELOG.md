@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Resolve descriptor filename fallback once, support expanded close operands and
+  source move suffixes, and diagnose invalid descriptor words as shell failures.
+  Preserve quoted/expanded filename operands, lexical close suffixes, command
+  restoration and cleanup without adding public redirection kinds.
 - Complete here-document bodies through `time` wrappers, including timed compound
   commands and multiple documents sharing pipeline/list headers.
 - Traverse flat pipelines iteratively in execution and display extraction, avoiding

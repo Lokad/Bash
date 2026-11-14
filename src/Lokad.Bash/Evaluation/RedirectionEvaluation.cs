@@ -149,6 +149,14 @@ internal sealed class RedirectionEvaluation
             return;
         }
 
+        await OpenResolvedPathAsync(scope, path, targetDescriptor, mode, secondaryTargetDescriptor).ConfigureAwait(false);
+    }
+
+    /// <summary>Opens an already expanded path without repeating expansion effects.</summary>
+    private async Task OpenResolvedPathAsync(
+        ScopedEvaluation scope, string path, LogicalDescriptor targetDescriptor, FileOpenMode mode,
+        LogicalDescriptor? secondaryTargetDescriptor)
+    {
         if (string.Equals(path, FileDescriptor.DevNullPath.Path, StringComparison.Ordinal))
         {
             var nullDescriptor = FileDescriptor.ForDevNull(mode);
@@ -180,19 +188,48 @@ internal sealed class RedirectionEvaluation
         Redirection redirection,
         LogicalDescriptor targetDescriptor)
     {
-        var sourceWord = await ExpandRedirectionTargetAsync(scope, redirection.Target).ConfigureAwait(false);
-        if (sourceWord == null)
+        var move = redirection.MovesDescriptor;
+        var target = redirection.DescriptorOperand;
+        if (move && target.Parts.Count == 0)
+        {
+            await ReportFailureAsync(scope, new OperationError($"{targetDescriptor}: Bad file descriptor\n")).ConfigureAwait(false);
             return RedirectionOutcome.Failure;
+        }
+        var sourceWords = await scope.Effects.ExpandTextWordsAsync(target, scope).ConfigureAwait(false);
+        if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
+        if (sourceWords.Count > 1 || sourceWords.Count == 0 && !move)
+        {
+            await ReportFailureAsync(scope, new OperationError("ambiguous redirect\n")).ConfigureAwait(false);
+            return RedirectionOutcome.Failure;
+        }
+        var sourceWord = sourceWords.Count == 0 ? string.Empty : sourceWords[0];
+        if (sourceWord == "-" || move && sourceWord.Length == 0)
+        {
+            SetDescriptor(targetDescriptor, FileDescriptor.Closed);
+            return RedirectionOutcome.Success;
+        }
 
         if (!LogicalDescriptor.TryParse(sourceWord.AsSpan(), out var sourceDescriptor))
         {
-            if (targetDescriptor != LogicalDescriptor.StdOut)
-                throw new NotSupportedException(
-                    "Only numeric descriptor duplication is supported in this evaluation stage.");
+            var numericOverflow = sourceWord.Length > 0 && sourceWord.AsSpan().IndexOfAnyExceptInRange('0', '9') < 0;
+            if (numericOverflow || sourceWord.Length == 0)
+            {
+                await ReportFailureAsync(scope, new OperationError($"{sourceWord}: Bad file descriptor\n")).ConfigureAwait(false);
+                return RedirectionOutcome.Failure;
+            }
+            if (move || redirection.Kind != RedirectionKind.DuplicateOutput || targetDescriptor != LogicalDescriptor.StdOut)
+            {
+                // GNU expands an invalid word again while forming this diagnostic.
+                // Valid filename fallback deliberately keeps the first expansion only.
+                var diagnostic = await ExpandRedirectionTargetAsync(scope, target).ConfigureAwait(false);
+                if (diagnostic != null)
+                    await ReportFailureAsync(scope, new OperationError($"{diagnostic}: ambiguous redirect\n")).ConfigureAwait(false);
+                return RedirectionOutcome.Failure;
+            }
 
-            await OpenAndAssignAsync(
+            await OpenResolvedPathAsync(
                     scope,
-                    redirection,
+                    sourceWord,
                     LogicalDescriptor.StdOut,
                     FileOpenMode.WriteTruncate,
                     LogicalDescriptor.StdErr)
@@ -210,7 +247,9 @@ internal sealed class RedirectionEvaluation
         }
 
         SetDescriptor(targetDescriptor, resolvedSource);
+        if (move) SetDescriptor(sourceDescriptor, FileDescriptor.Closed);
         return RedirectionOutcome.Success;
+
     }
 
     /// <summary> Writes a here-string into a pipe and assigns it to the target descriptor. </summary>

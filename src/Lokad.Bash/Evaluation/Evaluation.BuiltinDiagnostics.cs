@@ -12,7 +12,8 @@ public sealed partial class Evaluation
 
     /// <summary>Reports a known output failure through the builtin's current stderr mapping.</summary>
     private Task ReportBuiltinWriteFailureAsync(ShellValue name, DescriptorWriteResult result) =>
-        result.Error is { } cause
+        result.Error is { } cause && !GetStdErrDescriptor().IsClosed
+            && GetStdErrDescriptor() != GetStdOutDescriptor()
             ? ReportExpansionDiagnosticAsync(name, ShellValue.FromText("write error: " + cause.MessageWithoutTerminator))
             : Task.CompletedTask;
 

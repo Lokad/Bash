@@ -11,6 +11,85 @@ namespace Lokad.Bash.Tests;
 public sealed class QueryWriteFailureTests
 {
     [Theory]
+    [InlineData("printf x 1>&-", "printf: write error: Bad file descriptor\n")]
+    [InlineData("printf x 1>&-3", "printf: write error: Bad file descriptor\n")]
+    [InlineData("printf x 1>&-0", "printf: write error: Bad file descriptor\n")]
+    [InlineData("echo x 1>&-", "echo: write error: Bad file descriptor\n")]
+    public async Task FormattingBuiltinsReportClosedOutput(string script, string error)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal(error, host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("printf '' 1>&-")]
+    [InlineData("echo -n 1>&-")]
+    [InlineData("printf -v value x 1>&-")]
+    public async Task FormattingWithoutOutputDoesNotTouchAClosedOutputDescriptor(string script)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("printf x")]
+    [InlineData("echo x")]
+    [InlineData("printf --help")]
+    public async Task FormattingWriteFailureKeepsTheHostCause(string script)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("reported output failure\n")));
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        var result = await BashScript.RunAsync(host, script, EvaluationOptions.Default, CancellationToken.None);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, host.Appends.Count);
+        Assert.Equal(FileDescriptor.StdErr, host.Appends[1].Descriptor);
+        Assert.Contains("write error: reported output failure", Encoding.UTF8.GetString(host.Appends[1].Content));
+    }
+
+    [Theory]
+    [InlineData("printf x")]
+    [InlineData("echo x")]
+    public async Task FormattingDoesNotRetryAMergedFailedDescriptor(string script)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.WriteFailure);
+        var result = await BashScript.RunAsync(host, script + " 2>&1", EvaluationOptions.Default, CancellationToken.None);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(FileDescriptor.StdOut, Assert.Single(host.Appends).Descriptor);
+    }
+
+    [Theory]
+    [InlineData("printf x")]
+    [InlineData("echo x")]
+    public async Task FormattingDoesNotWriteADiagnosticToAClosedErrorDescriptor(string script)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.WriteFailure);
+        var result = await BashScript.RunAsync(host, script + " 2>&-", EvaluationOptions.Default, CancellationToken.None);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(FileDescriptor.StdOut, Assert.Single(host.Appends).Descriptor);
+    }
+
+    [Theory]
+    [InlineData("printf x")]
+    [InlineData("echo x")]
+    public async Task FormattingDownstreamClosureHasNoFailureDiagnostic(string script)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Closed);
+        var result = await BashScript.RunAsync(host, script, EvaluationOptions.Default, CancellationToken.None);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(FileDescriptor.StdOut, Assert.Single(host.Appends).Descriptor);
+    }
+
+    [Theory]
     [InlineData("command -x echo", 2)]
     [InlineData("command -v -x echo", 2)]
     [InlineData("builtin missing", 1)]

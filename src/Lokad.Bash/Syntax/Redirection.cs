@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Lokad.Bash.Syntax;
 
 /// <summary>
@@ -20,6 +22,32 @@ public sealed class Redirection
         Target = target;
         VariableName = variableName;
         HereDocumentDelimiter = hereDocumentDelimiter;
+        DescriptorOperand = target;
+        if (kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput)
+        {
+            MovesDescriptor = TryTakeMoveSuffix(target, out var operand);
+            DescriptorOperand = operand;
+        }
+
+        static bool TryTakeMoveSuffix(Word word, out Word operand)
+        {
+            operand = word;
+            if (word.Parts.Count == 0) return false;
+            var last = word.Parts[^1];
+            if (last.Kind is not (WordPartKind.Unquoted or WordPartKind.Escaped)) return false;
+            var value = last.GetUnexpandedValue();
+            if (value.Bytes.IsEmpty || value.Bytes.Span[^1] != (byte)'-') return false;
+            if (word.Parts.Count == 1 && value.Bytes.Length == 1 && last.Kind == WordPartKind.Unquoted)
+                return false;
+            var parts = new List<WordPart>(word.Parts.Count);
+            for (var index = 0; index < word.Parts.Count - 1; index++) parts.Add(word.Parts[index]);
+            if (value.Bytes.Length > 1)
+                parts.Add(last is SourceWordPart source
+                    ? WordPart.FromSource(last.Kind, source.Source.Slice(0, source.Source.Length - 1))
+                    : WordPart.FromValue(last.Kind, ShellValue.FromBytes(value.Bytes[..^1])));
+            operand = new Word(parts);
+            return true;
+        }
     }
 
     /// <summary>
@@ -44,4 +72,8 @@ public sealed class Redirection
 
     /// <summary>Retains the parsed delimiter separately from the completed body in Target.</summary>
     public Word? HereDocumentDelimiter { get; }
+
+    /// <summary>Source-final move syntax is prepared once; expanded digits followed by '-' remain ordinary words.</summary>
+    internal bool MovesDescriptor { get; }
+    internal Word DescriptorOperand { get; }
 }

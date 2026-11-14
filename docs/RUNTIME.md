@@ -99,6 +99,12 @@ handles are closed after their last alias is released; close is uncancellable an
 retires the handle even when cleanup fails. Preserve earlier failures and finish
 all users before releasing memory or returning a command's completion.
 
+Descriptor redirections prepare source move syntax on their immutable node and
+resolve its operand against current bindings. Valid filename fallback opens the
+already expanded target; it does not repeat its effects. Closing or moving a
+logical descriptor uses the same alias/restoration and cleanup path. Invalid
+descriptor words report shell failures rather than escaping implementation exceptions.
+
 `CommandInvocation` carries byte arguments, environment, working directory, stdio,
 exported function definitions, ownership and an optional typed interpreter payload.
 Same-host Bash startup imports captured bindings. New-host startup uses its own

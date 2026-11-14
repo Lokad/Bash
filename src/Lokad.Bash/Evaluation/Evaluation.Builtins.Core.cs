@@ -77,7 +77,14 @@ public sealed partial class Evaluation
         ReadOnlyMemory<byte> content,
         bool negated)
     {
-        var exitCode = (await ExecuteWriteAsync(GetStdOutDescriptor(), content).ConfigureAwait(false)).IsError ? 1 : 0;
+        var write = content.IsEmpty ? DescriptorWriteResult.Open
+            : await ExecuteWriteAsync(GetStdOutDescriptor(), content).ConfigureAwait(false);
+        if (write.IsError)
+        {
+            using var diagnostics = new BuiltinDiagnosticScope(this);
+            await ReportBuiltinWriteFailureAsync(ShellValue.FromText("echo"), write).ConfigureAwait(false);
+        }
+        var exitCode = write.IsError ? 1 : 0;
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
     }
 

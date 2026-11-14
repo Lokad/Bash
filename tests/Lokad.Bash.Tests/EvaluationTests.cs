@@ -2865,15 +2865,10 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_PrintfBuiltin_AllowsOnlyFormat()
+    public async Task Evaluation_PrintfBuiltin_AllowsOnlyFormatWithoutEmptyHostWrites()
     {
         var script = Parser.Parse(Utf8("printf %s"));
         var state = new Eval(script);
-
-        var operation = await NextWriteAsync(state);
-        Assert.Equal(1, operation.FileDescriptor.Id);
-        Assert.True(operation.Content.IsEmpty);
-        operation.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);

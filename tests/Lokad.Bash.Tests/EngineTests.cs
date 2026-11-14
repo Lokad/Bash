@@ -475,19 +475,23 @@ public class EngineTests
     }
 
     [Theory]
-    [InlineData("echo value >/out 3>&word")]
-    [InlineData(": {fd}>/out 3>&word")]
+    [InlineData("echo value >/out 3>/fails")]
+    [InlineData(": {fd}>/out 3>/fails")]
     public async Task Engine_RunAsync_PreservesRedirectionSetupFailureWhenCleanupFails(string script)
     {
         var state = new Eval(Parser.Parse(script));
         var visitor = new TestOperationVisitor([]);
+        var setupFailure = new IOException("host open failed");
         visitor.EnqueueOpenFileDescriptor(10);
+        visitor.EnqueueFileOpenTask(Task.FromException<FileOpenResult>(setupFailure));
+        visitor.EnqueueCloseDescriptorException(new IOException("later cleanup failed"));
 
-        var exception = await Assert.ThrowsAsync<NotSupportedException>(
+        var exception = await Assert.ThrowsAsync<IOException>(
             () => new Engine().RunAsync(state, visitor));
 
-        Assert.Equal("Only numeric descriptor duplication is supported in this evaluation stage.", exception.Message);
+        Assert.Same(setupFailure, exception);
         Assert.Equal([new FileDescriptor(10)], visitor.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
     }
 
     [Fact]
@@ -523,16 +527,37 @@ public class EngineTests
     [Fact]
     public async Task Engine_RunAsync_OuterRedirectionScopeClosesAfterNestedEvaluatorFailure()
     {
-        var state = new Eval(Parser.Parse("{ : 3>&word; } >/out"));
+        var state = new Eval(Parser.Parse("{ : 3>/fails; } >/out"));
         var visitor = new TestOperationVisitor([]);
+        var setupFailure = new IOException("nested host open failed");
         visitor.EnqueueOpenFileDescriptor(10);
+        visitor.EnqueueFileOpenTask(Task.FromException<FileOpenResult>(setupFailure));
         visitor.EnqueueCloseDescriptor();
 
-        var exception = await Assert.ThrowsAsync<NotSupportedException>(
+        var exception = await Assert.ThrowsAsync<IOException>(
             () => new Engine().RunAsync(state, visitor));
 
-        Assert.Equal("Only numeric descriptor duplication is supported in this evaluation stage.", exception.Message);
+        Assert.Same(setupFailure, exception);
         Assert.Equal([new FileDescriptor(10)], visitor.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
+    [Fact]
+    public async Task InvalidDescriptorWordKeepsItsShellFailureWhenCleanupThrows()
+    {
+        var state = new Eval(Parser.Parse(": 3>/out 2>&word; recover"));
+        var visitor = new TestOperationVisitor([0]) { RecordAppends = true };
+        visitor.EnqueueOpenFileDescriptor(10);
+        visitor.EnqueueAppendResult(DescriptorWriteResult.Open);
+        visitor.EnqueueCloseDescriptorException(new IOException("secondary close failure"));
+
+        var result = await new Engine().RunAsync(state, visitor);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(["recover"], visitor.CommandNames);
+        Assert.Equal("word: ambiguous redirect\n"u8.ToArray(), Assert.Single(visitor.Appends).Content);
+        Assert.Equal([new FileDescriptor(10)], visitor.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
     }
 
     [Fact]

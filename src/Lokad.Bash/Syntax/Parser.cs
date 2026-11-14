@@ -1244,12 +1244,27 @@ public static class Parser
         }
 
         if (kind is RedirectionKind.DuplicateOutput or RedirectionKind.DuplicateInput
-            && TryGetPlainUnquotedText(targetWord.Word, out var text)
-            && text is "-")
+            && targetWord.Word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted } first, ..]
+            && first.Source.Length > 0 && first.Source[0] == (byte)'-')
         {
+            // The source '-' is a close operand; subsequent source remains an ordinary
+            // argument, even without whitespace (>&-3). Quoted/expanded '-' stays a word.
+            var remaining = new List<WordPart>();
+            if (first.Source.Length > 1)
+                remaining.Add(WordPart.FromSource(WordPartKind.Unquoted, first.Source.Slice(1)));
+            for (var index = 1; index < targetWord.Word.Parts.Count; index++)
+                remaining.Add(targetWord.Word.Parts[index]);
+            if (remaining.Count > 0)
+                tokenizer.PushBack(Token.FromWord(new Word(remaining)) with
+                {
+                    Source = (target.Source.Start.Value + 1)..target.Source.End.Value
+                });
             kind = kind == RedirectionKind.DuplicateOutput
                 ? RedirectionKind.CloseOutput
                 : RedirectionKind.CloseInput;
+            redirections.Add(new Redirection(kind, fileDescriptor,
+                new Word([WordPart.FromText(WordPartKind.Unquoted, "-")]), string.Empty, hereDocumentDelimiter: null));
+            return;
         }
 
         redirections.Add(new Redirection(kind, fileDescriptor, targetWord.Word, string.Empty, hereDocumentDelimiter: null));

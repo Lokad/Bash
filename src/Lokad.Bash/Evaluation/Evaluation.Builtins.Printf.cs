@@ -40,9 +40,12 @@ public sealed partial class Evaluation
             if (optionBytes.Span.SequenceEqual("--help"u8))
             {
                 var documentation = BuiltinDocumentation.For(BuiltinKind.Printf);
-                var helpExitCode = (await ExecuteWriteAsync(GetStdOutDescriptor(),
+                var helpWrite = await ExecuteWriteAsync(GetStdOutDescriptor(),
                         Utf8Text.Encode("printf: " + documentation.Synopsis("printf") + "\n    " + documentation.Description + "\n"))
-                    .ConfigureAwait(false)).IsError ? 1 : 0;
+                    .ConfigureAwait(false);
+                if (helpWrite.IsError)
+                    await ReportBuiltinWriteFailureAsync(ShellValue.FromText("printf"), helpWrite).ConfigureAwait(false);
+                var helpExitCode = helpWrite.IsError ? 1 : 0;
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(helpExitCode), negated);
             }
 
@@ -106,11 +109,14 @@ public sealed partial class Evaluation
                     exitCode = 1;
             }
 
-            if (outputReference == null && diagnostics.Result.CanAcceptMore)
+            if (outputReference == null && diagnostics.Result.CanAcceptMore && !result.Output.IsEmpty)
             {
-                var outputExitCode = (await ExecuteWriteAsync(GetStdOutDescriptor(), result.Output).ConfigureAwait(false)).IsError ? 1 : 0;
-                if (outputExitCode != 0)
-                    exitCode = outputExitCode;
+                var write = await ExecuteWriteAsync(GetStdOutDescriptor(), result.Output).ConfigureAwait(false);
+                if (write.IsError)
+                {
+                    await ReportBuiltinWriteFailureAsync(ShellValue.FromText("printf"), write).ConfigureAwait(false);
+                    exitCode = 1;
+                }
             }
             if (diagnostics.Result.IsError)
                 exitCode = 1;

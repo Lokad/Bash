@@ -323,6 +323,6 @@ public sealed class EvaluationPipelineTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("after\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("echo: write error: Bad file descriptor\n", result.StdErr);
     }
 }
