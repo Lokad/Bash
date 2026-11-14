@@ -36,6 +36,9 @@ public sealed class CloseDescriptorOperation(
 {
     public FileDescriptor Descriptor { get; } = descriptor;
 
+    /// <summary>When present, closing the reader also settles its independently owned producer.</summary>
+    internal PipeInputWriter? PipeInput { get; init; }
+
     public static Task<OperationError?> AsTask(Action<EvaluationOperation> use, FileDescriptor descriptor)
     {
         var tcs = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);

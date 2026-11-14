@@ -30,6 +30,8 @@ internal static class ShellOperationDispatcher
             CloseDescriptorOperation close => CloseAsync(close, host),
             CreatePipeOperation pipe => pipe.UseResult(state, static (request, state) =>
                 state.Host.CreatePipeAsync(lifetimeToken: state.CancellationToken, state.CancellationToken)),
+            StartPipeInputOperation input => input.UseResult(state, static (request, state) =>
+                new ValueTask<OperationError?>(request.Writer.Start(state.Host, state.CancellationToken))),
             TerminalStatusesOperation terminals => terminals.UseResult(state, static (request, state) =>
                 state.Host.GetTerminalStatusesAsync(request.Descriptors, state.CancellationToken)),
             PathInfosOperation paths => paths.UseResult(state, static (request, state) =>
@@ -61,7 +63,9 @@ internal static class ShellOperationDispatcher
         {
             try
             {
-                var error = await host.CloseDescriptorAsync(operation.Descriptor).ConfigureAwait(false);
+                var error = operation.PipeInput is { } input
+                    ? await input.CloseAsync(host).ConfigureAwait(false)
+                    : await host.CloseDescriptorAsync(operation.Descriptor).ConfigureAwait(false);
                 operation.SetResult(error);
             }
             catch (OperationCanceledException exception)

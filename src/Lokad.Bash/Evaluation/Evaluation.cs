@@ -71,6 +71,7 @@ public sealed partial class Evaluation : IFileTester
     private readonly Stack<HashSet<FileDescriptor>> _subshellBorrowedDescriptorScopes = new();
     /// <summary> Retains owned descriptors until their terminal close completes. </summary>
     private readonly List<FileDescriptor> _pendingDescriptorCleanup = new();
+    private Dictionary<FileDescriptor, PipeInputWriter>? _pipeInputs;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Evaluation"/> class.
@@ -3097,6 +3098,23 @@ public sealed partial class Evaluation : IFileTester
     internal Task<PipeCreationResult> ExecuteCreatePipeAsync() =>
         AwaitOperationAsync(CreatePipeOperation.AsTask(PublishOperation));
 
+    /// <summary>Transfers a here-input's writer/payload to an independent owner registered on its reader.</summary>
+    internal async Task<OperationError?> StartPipeInputAsync(PipeDescriptors pipe, ReadOnlyMemory<byte> content, bool appendNewline)
+    {
+        PipeInputWriter writer;
+        try { writer = new PipeInputWriter(pipe, content, appendNewline, Memory.Budget); }
+        catch
+        {
+            await CloseDescriptorsAsync([pipe.Write], operationFailed: true).ConfigureAwait(false);
+            throw;
+        }
+        (_pipeInputs ??= new()).Add(pipe.Read, writer);
+        var completion = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        PublishOperation(new StartPipeInputOperation(completion, writer));
+        // Keep the registration/payload until dispatch settles, even if the caller cancels startup.
+        return await completion.Task.ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Emits a list-directory operation and applies glob expansion's error policy.
     /// </summary>
@@ -3123,7 +3141,11 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Transfers an owned descriptor to the host and awaits cleanup without cancellation.</summary>
     private async Task<OperationError?> CloseOwnedDescriptorAsync(FileDescriptor descriptor)
     {
-        var completion = CloseDescriptorOperation.AsTask(PublishOperation, descriptor);
+        var source = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var input = _pipeInputs != null && _pipeInputs.Remove(descriptor, out var writer) ? writer : null;
+        if (_pipeInputs?.Count == 0) _pipeInputs = null;
+        PublishOperation(new CloseDescriptorOperation(source, descriptor) { PipeInput = input });
+        var completion = source.Task;
         try
         {
             return await completion.ConfigureAwait(false);

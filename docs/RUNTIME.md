@@ -87,6 +87,12 @@ to progress independently: never await descriptor I/O while holding a host-wide
 filesystem lock. Pipes must preserve byte order and apply backpressure. A consumer
 closing early is distinct from a write failure.
 
+Here-input producers start independently before their consumers. Their payload
+copies have separate admitted ownership, surviving command workspace reuse when
+an `exec` descriptor persists. The reader's last owner retires the input, stops an
+unused writer and awaits borrowed writes and both endpoint closes. Producer failure
+also retires the reader so a consumer cannot remain stranded waiting for EOF.
+
 Logical descriptor numbers are evaluator state. Host handles are capabilities and
 can have multiple aliases. Borrowed handles stay owned by their caller. Owned
 handles are closed after their last alias is released; close is uncancellable and

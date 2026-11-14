@@ -465,21 +465,14 @@ public partial class EvaluationTests
         var hereStringPipe = await NextPipeAsync(pipeline.Stages[0].Evaluation);
         hereStringPipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(12, 13)));
 
-        var append = await NextWriteAsync(pipeline.Stages[0].Evaluation);
-        Assert.Equal(13, append.FileDescriptor.Id);
-        Assert.Equal("value\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
-
-        var closeHereStringWrite = await NextCloseDescriptorAsync(pipeline.Stages[0].Evaluation);
-        Assert.Equal(13, closeHereStringWrite.Descriptor.Id);
-        closeHereStringWrite.SetResult(null);
+        var inputHost = await StartHereInputAsync(pipeline.Stages[0].Evaluation, 13, "value\n");
 
         var left = await NextCommandAsync(pipeline.Stages[0].Evaluation, "left");
         left.SetResult(new CommandExecutionResult.Completed(1));
 
         var closeHereStringRead = await NextCloseDescriptorAsync(pipeline.Stages[0].Evaluation);
         Assert.Equal(12, closeHereStringRead.Descriptor.Id);
-        closeHereStringRead.SetResult(null);
+        await ShellOperationDispatcher.DispatchAsync(closeHereStringRead, inputHost, CancellationToken.None);
         Assert.Null(await NextStepAsync(pipeline.Stages[0].Evaluation));
 
         var right = await NextCommandAsync(pipeline.Stages[1].Evaluation, "right");
@@ -1923,14 +1916,7 @@ public partial class EvaluationTests
         var pipe = await NextPipeAsync(state);
         pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(10, 11)));
 
-        var append = await NextWriteAsync(state);
-        Assert.Equal(11, append.FileDescriptor.Id);
-        Assert.Equal("value\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
-
-        var close = await NextCloseDescriptorAsync(state);
-        Assert.Equal(11, close.Descriptor.Id);
-        close.SetResult(null);
+        var inputHost = await StartHereInputAsync(state, 11, "value\n");
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(10, run.Command.StdIn.Id);
@@ -1938,7 +1924,7 @@ public partial class EvaluationTests
 
         var closeRead = await NextCloseDescriptorAsync(state);
         Assert.Equal(10, closeRead.Descriptor.Id);
-        closeRead.SetResult(null);
+        await ShellOperationDispatcher.DispatchAsync(closeRead, inputHost, CancellationToken.None);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
@@ -1968,14 +1954,7 @@ public partial class EvaluationTests
         var pipe = await NextPipeAsync(state);
         pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(20, 21)));
 
-        var append = await NextWriteAsync(state);
-        Assert.Equal(21, append.FileDescriptor.Id);
-        Assert.Equal("line1\nline2\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
-
-        var close = await NextCloseDescriptorAsync(state);
-        Assert.Equal(21, close.Descriptor.Id);
-        close.SetResult(null);
+        var inputHost = await StartHereInputAsync(state, 21, "line1\nline2\n");
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(20, run.Command.StdIn.Id);
@@ -1983,7 +1962,7 @@ public partial class EvaluationTests
 
         var closeRead = await NextCloseDescriptorAsync(state);
         Assert.Equal(20, closeRead.Descriptor.Id);
-        closeRead.SetResult(null);
+        await ShellOperationDispatcher.DispatchAsync(closeRead, inputHost, CancellationToken.None);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
@@ -1998,14 +1977,7 @@ public partial class EvaluationTests
         var pipe = await NextPipeAsync(state);
         pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(22, 23)));
 
-        var append = await NextWriteAsync(state);
-        Assert.Equal(23, append.FileDescriptor.Id);
-        Assert.Equal("line1\nline2\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
-
-        var close = await NextCloseDescriptorAsync(state);
-        Assert.Equal(23, close.Descriptor.Id);
-        close.SetResult(null);
+        var inputHost = await StartHereInputAsync(state, 23, "line1\nline2\n");
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(22, run.Command.StdIn.Id);
@@ -2013,7 +1985,7 @@ public partial class EvaluationTests
 
         var closeRead = await NextCloseDescriptorAsync(state);
         Assert.Equal(22, closeRead.Descriptor.Id);
-        closeRead.SetResult(null);
+        await ShellOperationDispatcher.DispatchAsync(closeRead, inputHost, CancellationToken.None);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
@@ -2028,14 +2000,7 @@ public partial class EvaluationTests
         var pipe = await NextPipeAsync(state);
         pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(24, 25)));
 
-        var append = await NextWriteAsync(state);
-        Assert.Equal(25, append.FileDescriptor.Id);
-        Assert.Equal("bar\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
-
-        var close = await NextCloseDescriptorAsync(state);
-        Assert.Equal(25, close.Descriptor.Id);
-        close.SetResult(null);
+        var inputHost = await StartHereInputAsync(state, 25, "bar\n");
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(24, run.Command.StdIn.Id);
@@ -2043,7 +2008,7 @@ public partial class EvaluationTests
 
         var closeRead = await NextCloseDescriptorAsync(state);
         Assert.Equal(24, closeRead.Descriptor.Id);
-        closeRead.SetResult(null);
+        await ShellOperationDispatcher.DispatchAsync(closeRead, inputHost, CancellationToken.None);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
@@ -2058,14 +2023,7 @@ public partial class EvaluationTests
         var pipe = await NextPipeAsync(state);
         pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(26, 27)));
 
-        var append = await NextWriteAsync(state);
-        Assert.Equal(27, append.FileDescriptor.Id);
-        Assert.Equal("$FOO\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
-
-        var close = await NextCloseDescriptorAsync(state);
-        Assert.Equal(27, close.Descriptor.Id);
-        close.SetResult(null);
+        var inputHost = await StartHereInputAsync(state, 27, "$FOO\n");
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(26, run.Command.StdIn.Id);
@@ -2073,7 +2031,7 @@ public partial class EvaluationTests
 
         var closeRead = await NextCloseDescriptorAsync(state);
         Assert.Equal(26, closeRead.Descriptor.Id);
-        closeRead.SetResult(null);
+        await ShellOperationDispatcher.DispatchAsync(closeRead, inputHost, CancellationToken.None);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
@@ -2093,14 +2051,7 @@ public partial class EvaluationTests
         var pipe = await NextPipeAsync(state);
         pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(30, 31)));
 
-        var append = await NextWriteAsync(state);
-        Assert.Equal(31, append.FileDescriptor.Id);
-        Assert.Equal("hi\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
-
-        var closeHereDoc = await NextCloseDescriptorAsync(state);
-        Assert.Equal(31, closeHereDoc.Descriptor.Id);
-        closeHereDoc.SetResult(null);
+        var inputHost = await StartHereInputAsync(state, 31, "hi\n");
 
         var first = await NextCommandAsync(state, "cat");
         Assert.Equal(30, first.Command.StdIn.Id);
@@ -2110,7 +2061,7 @@ public partial class EvaluationTests
 
         var closeRead = await NextCloseDescriptorAsync(state);
         Assert.Equal(30, closeRead.Descriptor.Id);
-        closeRead.SetResult(null);
+        await ShellOperationDispatcher.DispatchAsync(closeRead, inputHost, CancellationToken.None);
 
         var closeFile = await NextCloseDescriptorAsync(state);
         Assert.Equal(32, closeFile.Descriptor.Id);
@@ -2123,6 +2074,21 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
+    }
+
+    private static async Task<TestOperationVisitor> StartHereInputAsync(Eval state, int writer, string content)
+    {
+        var operation = Assert.IsType<StartPipeInputOperation>(await NextStepAsync(state));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueueCloseDescriptor();
+        host.EnqueueCloseDescriptor();
+        await ShellOperationDispatcher.DispatchAsync(operation, host, CancellationToken.None);
+        var append = Assert.Single(host.Appends);
+        Assert.Equal(writer, append.Descriptor.Id);
+        Assert.Equal(content, Text(append.Content));
+        Assert.Equal(writer, Assert.Single(host.ClosedDescriptors).Id);
+        return host;
     }
 
     [Fact]

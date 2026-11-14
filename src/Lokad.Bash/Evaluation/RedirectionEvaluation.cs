@@ -223,10 +223,7 @@ internal sealed class RedirectionEvaluation
         if (scope.Effects.HasPendingExpansionError)
             return;
 
-        var withNewline = new byte[content.Bytes.Length + 1];
-        content.Bytes.CopyTo(withNewline);
-        withNewline[^1] = (byte)'\n';
-        await WritePipeInputAsync(scope, targetDescriptor, withNewline).ConfigureAwait(false);
+        await WritePipeInputAsync(scope, targetDescriptor, content.Bytes, appendNewline: true).ConfigureAwait(false);
     }
 
     /// <summary> Writes a here-document into a pipe and assigns it to the target descriptor. </summary>
@@ -239,11 +236,12 @@ internal sealed class RedirectionEvaluation
         if (scope.Effects.HasPendingExpansionError)
             return;
 
-        await WritePipeInputAsync(scope, targetDescriptor, content.Bytes).ConfigureAwait(false);
+        await WritePipeInputAsync(scope, targetDescriptor, content.Bytes, appendNewline: false).ConfigureAwait(false);
     }
 
-    /// <summary>Closes a populated pipe before exposing its input, preserving setup failures.</summary>
-    private async Task WritePipeInputAsync(ScopedEvaluation scope, LogicalDescriptor targetDescriptor, ReadOnlyMemory<byte> content)
+    /// <summary>Publishes the reader while its independently owned producer can wait for pipe capacity.</summary>
+    private async Task WritePipeInputAsync(
+        ScopedEvaluation scope, LogicalDescriptor targetDescriptor, ReadOnlyMemory<byte> content, bool appendNewline)
     {
         var creation = await scope.Effects.ExecuteCreatePipeAsync().ConfigureAwait(false);
         if (creation.Descriptors is not { } pipe)
@@ -252,21 +250,10 @@ internal sealed class RedirectionEvaluation
             return;
         }
         _openedDescriptors.Add(pipe.Read);
-        var failed = true;
-        OperationError? closeError = null;
-        try
+        var error = await scope.Effects.StartPipeInputAsync(pipe, content, appendNewline).ConfigureAwait(false);
+        if (error is { } failure)
         {
-            await scope.Effects.ExecuteWriteAsync(pipe.Write, content).ConfigureAwait(false);
-            failed = false;
-        }
-        finally
-        {
-            closeError = await scope.Effects.CloseDescriptorsAsync([pipe.Write], operationFailed: failed).ConfigureAwait(false);
-        }
-
-        if (closeError is { } error)
-        {
-            await ReportFailureAsync(scope, error).ConfigureAwait(false);
+            await ReportFailureAsync(scope, failure).ConfigureAwait(false);
             return;
         }
         SetDescriptor(targetDescriptor, pipe.Read);

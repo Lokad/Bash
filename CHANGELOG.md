@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Traverse flat pipelines iteratively in execution and display extraction, avoiding
+  process-fatal stack overflow. Start here-input producers independently of their
+  readers so bounded pipe backpressure cannot deadlock setup; retain admitted
+  payload ownership through pending writes, persistent descriptors and cleanup.
 - Compile generated benchmark wrappers against qualified Release binaries, keeping
   their identities stable through child builds. Add cross-runtime compile-only
   checks and preserve .NET 11 identity through the pinned harness's SDK validation.
