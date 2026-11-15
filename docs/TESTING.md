@@ -32,6 +32,15 @@ The isolated consumer also checks that a long accepted pipeline reaches host pip
 refusal without a process-fatal stack overflow. It supplements the source suite's
 broader ownership and streaming controls.
 
+`EndToEndHarness.RunScriptAsync` prepares the complete script before execution.
+Use `TestHost.RunAsync` for public command-unit behavior and its earlier effects
+before later syntax failure. The mock `cat` resolves byte-validated text paths
+against the invocation directory. Ordinary mock files support truncate, append and
+read/write handles with shared file content and per-handle positions. Writes are
+visible before close; captured read snapshots retain their original bytes. Fixture
+content is retained until the fixture is discarded, independently of runtime-value
+admission assertions. Benchmark hosts have their separate ownership controls.
+
 Native correctness controls compare exit status, exact stdout/stderr bytes and
 declared file effects. Each script and fixture has a content hash. Only the named
 GNU command-location diagnostic prefix may be normalized. Controls that explicitly

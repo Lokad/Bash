@@ -268,39 +268,31 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             return FileOpenResult.Opened(FileDescriptor.ForWritableDevNull(mode), readSize: null);
         }
 
+        var (parentPath, name) = GetParentAndName(pathString);
+        if (string.IsNullOrEmpty(name))
+        {
+            return FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
+        }
+        if (!TryResolveNode(parentPath, out var parentNode))
+            return FileOpenResult.Failed(await MissingPathErrorAsync(resolved, "No such file or directory\n", cancellationToken));
+        if (parentNode is not DirectoryNode parent)
+            return FileOpenResult.Failed(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
+        if (parent.Children.TryGetValue(name, out var target) && target is DirectoryNode)
+            return FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
+        if (target == null && creationMode == FileCreationMode.OpenExisting)
+            return FileOpenResult.Failed(new OperationError("No such file or directory\n") { Kind = OperationErrorKind.NotFound });
+
+        var descriptor = new FileDescriptor(_nextDescriptor++);
+        var modifiedAt = DateTimeOffset.UtcNow;
+        var file = target as FileNode ?? new FileNode([], modifiedAt, FileTreePermission.ReadWrite);
         if (mode == WritableFileOpenMode.WriteTruncate)
         {
-            var (parentPath, name) = GetParentAndName(pathString);
-            if (string.IsNullOrEmpty(name))
-            {
-                return FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
-            }
-
-            if (!TryResolveNode(parentPath, out var parentNode))
-                return FileOpenResult.Failed(await MissingPathErrorAsync(resolved, "No such file or directory\n", cancellationToken));
-            if (parentNode is not DirectoryNode parent)
-                return FileOpenResult.Failed(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
-
-            if (parent.Children.TryGetValue(name, out var target) && target is DirectoryNode)
-                return FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
-            if (target == null && creationMode == FileCreationMode.OpenExisting)
-                return FileOpenResult.Failed(new OperationError("No such file or directory\n") { Kind = OperationErrorKind.NotFound });
-
-            var descriptor = new FileDescriptor(_nextDescriptor++);
-            var modifiedAt = DateTimeOffset.UtcNow;
-            var file = target as FileNode ?? new FileNode([], modifiedAt, FileTreePermission.ReadWrite);
             file.Content = [];
             file.StatusChangedAt = file.ModifiedAt = modifiedAt;
-            parent.Children[name] = file;
-            _openFiles[descriptor] = OpenFileState.ForWrite(content =>
-            {
-                file.Content = content;
-                file.StatusChangedAt = file.ModifiedAt = DateTimeOffset.UtcNow;
-            });
-            return FileOpenResult.Opened(descriptor, readSize: null);
         }
-
-        return FileOpenResult.Failed(new OperationError("Mock filesystem does not support this write mode\n"));
+        parent.Children[name] = file;
+        _openFiles[descriptor] = OpenFileState.ForWrite(file, mode, RecordConsumption);
+        return FileOpenResult.Opened(descriptor, readSize: null);
     }
 
     public List<IReadOnlyList<FilePathLookup>> ResolutionBatches { get; } = [];
@@ -519,7 +511,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             ? FileAccessRights.Read | FileAccessRights.Execute : FileAccessRights.Read | FileAccessRights.Write | FileAccessRights.Execute;
         return node switch
         {
-            FileNode file => new FileMetadata(file.Content.Length, file.ModifiedAt, access, file.StatusChangedAt,
+            FileNode file => new FileMetadata(file.Length, file.ModifiedAt, access, file.StatusChangedAt,
                 accessedAt: null, specialModeBits: FileSpecialModeBits.None, ownershipMatch: null, identity: null),
             DirectoryNode directory => new FileMetadata(0, directory.ModifiedAt, access, directory.StatusChangedAt,
                 accessedAt: null, specialModeBits: FileSpecialModeBits.None, ownershipMatch: null, identity: null),
@@ -944,13 +936,87 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
     /// <summary> Represents an in-memory file node. </summary>
     private sealed class FileNode : Node
     {
+        private readonly Lock _contentLock = new();
+        private byte[] _snapshot;
+        private bool _snapshotCurrent = true;
+        private MemoryStream? _writeData;
+        private int _writers;
+
         public FileNode(byte[] content, DateTimeOffset modifiedAt, FileTreePermission permission) : base(permission)
         {
-            Content = content ?? [];
+            _snapshot = content;
             ModifiedAt = modifiedAt;
         }
 
-        public byte[] Content { get; set; }
+        // Snapshot copies happen on observation, not after every small append. Existing
+        // snapshots remain immutable while writers share one geometrically grown store.
+        public byte[] Content
+        {
+            get
+            {
+                lock (_contentLock)
+                {
+                    if (!_snapshotCurrent && _writeData is { } data)
+                    {
+                        _snapshot = data.ToArray();
+                        _snapshotCurrent = true;
+                    }
+                    return _snapshot;
+                }
+            }
+            set
+            {
+                lock (_contentLock)
+                {
+                    _writeData?.Dispose();
+                    _writeData = null;
+                    _snapshot = value;
+                    _snapshotCurrent = true;
+                }
+            }
+        }
+
+        public int Length
+        {
+            get { lock (_contentLock) return _writeData is { } data ? checked((int)data.Length) : _snapshot.Length; }
+        }
+
+        public void OpenWriter() { lock (_contentLock) _writers++; }
+
+        public void CloseWriter()
+        {
+            lock (_contentLock)
+            {
+                if (--_writers != 0 || _writeData is not { } data) return;
+                if (!_snapshotCurrent) _snapshot = data.ToArray();
+                _snapshotCurrent = true;
+                _writeData = null;
+                data.Dispose();
+            }
+        }
+
+        public int Write(int position, ReadOnlyMemory<byte> content, bool append)
+        {
+            // This per-file lock covers synchronous storage only, never host I/O or a borrow.
+            lock (_contentLock)
+            {
+                if (content.IsEmpty) return position;
+                if (_writeData == null)
+                {
+                    _writeData = new MemoryStream(Math.Max(256, _snapshot.Length));
+                    _writeData.Write(_snapshot);
+                }
+                _writeData.Position = append ? _writeData.Length : position;
+                _writeData.Write(content.Span);
+                if (!content.IsEmpty)
+                {
+                    _snapshot = [];
+                    _snapshotCurrent = false;
+                    StatusChangedAt = ModifiedAt = DateTimeOffset.UtcNow;
+                }
+                return checked((int)_writeData.Position);
+            }
+        }
 
         public DateTimeOffset ModifiedAt { get; set; }
     }
@@ -961,56 +1027,57 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
     {
         /// <summary> Stores the file content bytes. </summary>
         private readonly byte[] _content;
-        private readonly ByteMemoryBuilder? _writeBuffer;
-        private readonly Action<byte[]>? _onClose;
+        private readonly FileNode? _file;
+        private readonly WritableFileOpenMode? _mode;
         private readonly Action<int> _onRead;
         /// <summary> Tracks the current read offset into <see cref="_content"/>. </summary>
         private int _offset;
 
-        private OpenFileState(byte[] content, ByteMemoryBuilder? writeBuffer, Action<byte[]>? onClose, Action<int> onRead)
+        private OpenFileState(byte[] content, FileNode? file, WritableFileOpenMode? mode, Action<int> onRead)
         {
-            _content = content ?? [];
-            _writeBuffer = writeBuffer;
-            _onClose = onClose;
+            _content = content;
+            _file = file;
+            _mode = mode;
             _onRead = onRead;
+            if (file != null)
+            {
+                file.OpenWriter();
+                if (mode == WritableFileOpenMode.WriteAppend) _offset = file.Length;
+            }
         }
 
         public static OpenFileState ForRead(byte[] content, Action<int> onRead) => new(content, null, null, onRead);
 
-        public static OpenFileState ForWrite(Action<byte[]> onClose) => new([], ByteMemoryBuilder.CreateUnaccounted(256), onClose, static _ => { });
-
-        public bool IsWritable => _writeBuffer != null;
+        public static OpenFileState ForWrite(FileNode file, WritableFileOpenMode mode, Action<int> onRead) => new([], file, mode, onRead);
 
         public bool TryAppend(ReadOnlyMemory<byte> content)
         {
-            if (_writeBuffer == null)
+            if (_file == null)
             {
                 return false;
             }
 
-            _writeBuffer.Append(content);
+            _offset = _file.Write(_offset, content, _mode == WritableFileOpenMode.WriteAppend);
             return true;
         }
 
         public void Close()
         {
-            if (_writeBuffer == null || _onClose == null)
-            {
-                return;
-            }
-
-            _onClose(_writeBuffer.ToMemory().ToArray());
+            _file?.CloseWriter();
         }
 
         private DescriptorReadBufferOwner? _readBuffers;
 
         public DescriptorReadBuffer Read(int maxBytes)
         {
-            if (_offset >= _content.Length)
+            if (_mode is not null and not WritableFileOpenMode.ReadWrite)
+                return DescriptorReadBuffer.Failure(ByteReadResult.ReadFailure);
+            var content = _file?.Content ?? _content;
+            if (_offset >= content.Length)
                 return DescriptorReadBuffer.EndOfFile;
-            var length = Math.Min(maxBytes, _content.Length - _offset);
-            return (_readBuffers ??= new(count => { _offset += count; _onRead(count); }, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes))).Borrow(_content.AsMemory(_offset, length),
-                ByteReadResult.Success(length, _offset + length == _content.Length), canRetain: true);
+            var length = Math.Min(maxBytes, content.Length - _offset);
+            return (_readBuffers ??= new(count => { _offset += count; _onRead(count); }, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes))).Borrow(content.AsMemory(_offset, length),
+                ByteReadResult.Success(length, _offset + length == content.Length), canRetain: true);
         }
     }
 }

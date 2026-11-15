@@ -51,6 +51,7 @@ public static class EndToEndHarness
     public static Task<ExecutionResult> RunScriptAsync(string script, TestHost host) =>
         RunScriptAsync(script, host, ReadOnlyMemory<byte>.Empty);
 
+    /// <summary>Parses the whole script before prepared execution; use TestHost.RunAsync for lazy public command units.</summary>
     public static async Task<ExecutionResult> RunScriptAsync(string script, TestHost host, ReadOnlyMemory<byte> standardInput)
     {
         host.SetStandardInputBytes(standardInput.ToArray());
@@ -171,7 +172,9 @@ public sealed class TestHost : MockFileSystem
                     await CopyAsync(command.StdIn).ConfigureAwait(false);
                 foreach (var argument in command.Arguments)
                 {
-                    var opened = await this.OpenFileAsync(new FilePathLookup(new ShellPath(argument.ToUtf8String()), FileLinkFollowing.Follow), cancel).ConfigureAwait(false);
+                    if (!argument.TryGetUtf8Text(out var text) || !RawShellPath.TryParse(text, out var path))
+                        return new CommandExecutionResult.Completed(1);
+                    var opened = await this.OpenFileAsync(new FilePathLookup(path, command.CurrentDirectory, FileLinkFollowing.Follow), cancel).ConfigureAwait(false);
                     if (opened.FileDescriptor is not { } descriptor) return new CommandExecutionResult.Completed(1);
                     try { await CopyAsync(descriptor).ConfigureAwait(false); }
                     finally { await CloseDescriptorAsync(descriptor).ConfigureAwait(false); }
