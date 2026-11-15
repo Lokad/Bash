@@ -56,9 +56,9 @@ internal sealed class RedirectionEvaluation
 
     /// <summary>
     /// Evaluates all redirections sequentially, issuing operations as needed.
-    /// Expansion bindings may be isolated; allocated descriptor variables keep their caller-owned assignment scope.
+    /// Allocation uses the active expansion bindings and the command's descriptor lifetime.
     /// </summary>
-    public async Task EvaluateAsync(ScopedEvaluation scope, ScopedEvaluation descriptorAssignmentScope)
+    public async Task EvaluateAsync(ScopedEvaluation scope, bool persistAllocations)
     {
         foreach (var redirection in _redirections)
         {
@@ -66,13 +66,35 @@ internal sealed class RedirectionEvaluation
                 break;
 
             var targetDescriptor = GetTargetDescriptor(redirection);
+            var allocate = redirection.VariableName.Length != 0;
+            if (redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput)
+            {
+                var outcome = await DuplicateDescriptorAsync(scope, redirection, targetDescriptor,
+                    persistAllocations).ConfigureAwait(false);
+                if (outcome == RedirectionOutcome.Failure) return;
+                continue;
+            }
+            if (allocate && redirection.Kind is RedirectionKind.CloseInput or RedirectionKind.CloseOutput)
+            {
+                if (await CloseVariableAsync(scope, redirection.VariableName).ConfigureAwait(false)
+                    == RedirectionOutcome.Failure) return;
+                continue;
+            }
+            if (allocate && !_descriptorTable.TryFindAvailableDescriptor(out targetDescriptor))
+            {
+                await ReportFailureAsync(scope, new OperationError("Too many open files\n")).ConfigureAwait(false);
+                return;
+            }
+            var previouslyTouched = _touchedDescriptors.Contains(targetDescriptor);
             switch (redirection.Kind)
             {
                 case RedirectionKind.Input:
+                case RedirectionKind.AllocateInput:
                     await OpenAndAssignAsync(scope, redirection, targetDescriptor, FileOpenMode.Read, null)
                         .ConfigureAwait(false);
                     break;
                 case RedirectionKind.Output:
+                case RedirectionKind.AllocateOutput:
                 case RedirectionKind.ForceOutput:
                     await OpenAndAssignAsync(scope, redirection, targetDescriptor, FileOpenMode.WriteTruncate, null)
                         .ConfigureAwait(false);
@@ -93,25 +115,12 @@ internal sealed class RedirectionEvaluation
                     await OpenAndAssignAsync(scope, redirection, LogicalDescriptor.StdOut, FileOpenMode.WriteAppend, LogicalDescriptor.StdErr)
                         .ConfigureAwait(false);
                     break;
-                case RedirectionKind.DuplicateOutput:
-                case RedirectionKind.DuplicateInput:
-                    var outcome = await DuplicateDescriptorAsync(scope, redirection, targetDescriptor)
-                        .ConfigureAwait(false);
-                    if (outcome == RedirectionOutcome.Failure)
-                        return;
-                    break;
                 case RedirectionKind.HereDocument:
                 case RedirectionKind.HereDocumentStripTabs:
                     await HereDocumentAsync(scope, redirection, targetDescriptor).ConfigureAwait(false);
                     break;
                 case RedirectionKind.HereString:
                     await HereStringAsync(scope, redirection, targetDescriptor).ConfigureAwait(false);
-                    break;
-                case RedirectionKind.AllocateOutput:
-                    await AllocateRedirectionAsync(scope, descriptorAssignmentScope, redirection, FileOpenMode.WriteTruncate).ConfigureAwait(false);
-                    break;
-                case RedirectionKind.AllocateInput:
-                    await AllocateRedirectionAsync(scope, descriptorAssignmentScope, redirection, FileOpenMode.Read).ConfigureAwait(false);
                     break;
                 case RedirectionKind.CloseOutput:
                 case RedirectionKind.CloseInput:
@@ -120,6 +129,9 @@ internal sealed class RedirectionEvaluation
                 default:
                     throw new NotSupportedException($"Redirection kind '{redirection.Kind}' is not supported in this evaluation stage.");
             }
+            if (allocate && !scope.Effects.HasPendingExpansionError)
+                await BindAllocatedDescriptorAsync(scope, redirection.VariableName,
+                    targetDescriptor, _descriptorTable.Resolve(targetDescriptor), previouslyTouched, persistAllocations).ConfigureAwait(false);
         }
 
         static LogicalDescriptor GetTargetDescriptor(Redirection redirection) => new(redirection.Kind switch
@@ -186,8 +198,10 @@ internal sealed class RedirectionEvaluation
     private async Task<RedirectionOutcome> DuplicateDescriptorAsync(
         ScopedEvaluation scope,
         Redirection redirection,
-        LogicalDescriptor targetDescriptor)
+        LogicalDescriptor targetDescriptor,
+        bool persistAllocations)
     {
+        var allocate = redirection.VariableName.Length != 0;
         var move = redirection.MovesDescriptor;
         var target = redirection.DescriptorOperand;
         if (move && target.Parts.Count == 0)
@@ -205,8 +219,16 @@ internal sealed class RedirectionEvaluation
         var sourceWord = sourceWords.Count == 0 ? string.Empty : sourceWords[0];
         if (sourceWord == "-" || move && sourceWord.Length == 0)
         {
+            if (allocate)
+                return await CloseVariableAsync(scope, redirection.VariableName).ConfigureAwait(false);
             SetDescriptor(targetDescriptor, FileDescriptor.Closed);
             return RedirectionOutcome.Success;
+        }
+
+        if (allocate && !_descriptorTable.TryFindAvailableDescriptor(out targetDescriptor))
+        {
+            await ReportFailureAsync(scope, new OperationError("Too many open files\n")).ConfigureAwait(false);
+            return RedirectionOutcome.Failure;
         }
 
         if (!LogicalDescriptor.TryParse(sourceWord.AsSpan(), out var sourceDescriptor))
@@ -246,8 +268,12 @@ internal sealed class RedirectionEvaluation
             return RedirectionOutcome.Failure;
         }
 
+        var previouslyTouched = _touchedDescriptors.Contains(targetDescriptor);
         SetDescriptor(targetDescriptor, resolvedSource);
         if (move) SetDescriptor(sourceDescriptor, FileDescriptor.Closed);
+        if (allocate)
+            await BindAllocatedDescriptorAsync(scope, redirection.VariableName,
+                targetDescriptor, resolvedSource, previouslyTouched, persistAllocations).ConfigureAwait(false);
         return RedirectionOutcome.Success;
 
     }
@@ -298,62 +324,57 @@ internal sealed class RedirectionEvaluation
         SetDescriptor(targetDescriptor, pipe.Read);
     }
 
-    /// <summary> Allocates a descriptor by opening the target and assigning it to the logical descriptor. </summary>
-    private async Task AllocateRedirectionAsync(
+    /// <summary>Publishes one selected variable output and persists the acquired alias through restoration boundaries.</summary>
+    private async Task BindAllocatedDescriptorAsync(
         ScopedEvaluation scope,
-        ScopedEvaluation descriptorAssignmentScope,
-        Redirection redirection,
-        FileOpenMode mode)
+        string variableName,
+        LogicalDescriptor number,
+        FileDescriptor descriptor,
+        bool previouslyTouched,
+        bool persistAllocations)
     {
-        var path = await ExpandRedirectionTargetAsync(scope, redirection.Target).ConfigureAwait(false);
-        if (path == null)
-            return;
-
-        if (!_descriptorTable.TryFindAvailableDescriptor(out var number))
-        {
-            await scope.Effects.ExecuteWriteAsync(_descriptorTable.StdErr, "Too many open files\n"u8.ToArray())
-                .ConfigureAwait(false);
-            scope.Effects.SetExpansionError(1);
-            return;
-        }
-
-        var open = string.Equals(path, FileDescriptor.DevNullPath.Path, StringComparison.Ordinal)
-            ? FileOpenResult.Opened(FileDescriptor.ForDevNull(mode), readSize: null)
-            : await scope.Effects.ExecuteOpenFileAsync(path, mode).ConfigureAwait(false);
-        var descriptor = open.FileDescriptor;
-        if (!descriptor.HasValue)
-        {
-            await ReportOpenFailureAsync(scope, path, mode, open.Error).ConfigureAwait(false);
-            return;
-        }
-
-        if (!descriptor.Value.IsDevNull)
-        {
-            scope.Effects.TrackOwnedDescriptor(descriptor.Value);
-            _openedDescriptors.Add(descriptor.Value);
-        }
-        var variables = descriptorAssignmentScope.Variables;
-        if (variables.IsReadonly(redirection.VariableName))
-        {
-            // Opening precedes binding validation; lexical cleanup retains ownership of a rejected handle.
-            BindingName readonlyName = redirection.VariableName;
-            if (!variables.IsReadonlyBinding(readonlyName)
-                && variables.TryResolveBinding(readonlyName, selectOwner: null, out var binding))
-                readonlyName = binding.Name;
-            using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-            diagnostic.Append(readonlyName.ToValue().Bytes).Append(": readonly variable\n"u8)
-                .Append(Utf8Text.Encode(redirection.VariableName)).Append(": cannot assign fd to variable\n"u8);
-            await ReportFailureAsync(scope, diagnostic.ToMemory())
-                .ConfigureAwait(false);
-            return;
-        }
-
-        scope.Effects.BindPersistentDescriptor(number, descriptor.Value);
         var value = ShellValue.FromBytes(NumberFormatting.FormatNumber(number.Number));
-        descriptorAssignmentScope.SetExpansionValueIgnoringReadonly(redirection.VariableName, value);
-        // Later redirections also need the allocated number in their isolated expansion bindings.
-        if (scope.Variables != descriptorAssignmentScope.Variables)
-            scope.SetExpansionValueIgnoringReadonly(redirection.VariableName, value);
+        var assignment = await scope.Effects.AssignBuiltinAsync(VariableReference.ForName(variableName), value,
+            scope, scope.SelectorBindings,
+            Evaluation.BuiltinOutputVisibility.Caller, ShellValue.FromText(variableName),
+            scope.ExpansionWriteTarget).ConfigureAwait(false);
+        if (assignment != Evaluation.BuiltinAssignmentResult.Assigned)
+        {
+            if (!scope.Effects.HasPendingExpansionError)
+                await ReportFailureAsync(scope, new OperationError($"{variableName}: cannot assign fd to variable\n")).ConfigureAwait(false);
+            return;
+        }
+        if (!persistAllocations) return;
+
+        // Applying the operator touched this new target. Only an earlier redirection
+        // establishes a restoration boundary; the allocation itself must persist.
+        if (!previouslyTouched) _touchedDescriptors.Remove(number);
+        scope.Effects.BindPersistentDescriptor(number, descriptor);
+    }
+
+    /// <summary>Closes the current value of a descriptor variable without assigning to it.</summary>
+    private async Task<RedirectionOutcome> CloseVariableAsync(
+        ScopedEvaluation scope, string variableName)
+    {
+        var reference = await WordExpansion.ResolveReadReferenceAsync(VariableReference.ForName(variableName), scope)
+            .ConfigureAwait(false);
+        if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
+        if (reference == null || !reference.TryRead(scope.Variables, out var value) || value.IsEmpty)
+        {
+            await ReportFailureAsync(scope, new OperationError($"{variableName}: ambiguous redirect\n")).ConfigureAwait(false);
+            return RedirectionOutcome.Failure;
+        }
+        // Bash converts a stored, nonempty value to signed decimal and then Int32.
+        // A failed numeric conversion supplies zero; a negative Int32 is rejected.
+        _ = Integers.TryParseNumber(value.Bytes.Span.Trim(" \t\r\n\v\f"u8), out var parsed);
+        var number = unchecked((int)parsed);
+        if (number < 0)
+        {
+            await ReportFailureAsync(scope, new OperationError($"{variableName}: ambiguous redirect\n")).ConfigureAwait(false);
+            return RedirectionOutcome.Failure;
+        }
+        SetDescriptor(new LogicalDescriptor(number), FileDescriptor.Closed);
+        return RedirectionOutcome.Success;
     }
 
     private Task ReportOpenFailureAsync(ScopedEvaluation scope, string path, FileOpenMode mode, OperationError? error) =>

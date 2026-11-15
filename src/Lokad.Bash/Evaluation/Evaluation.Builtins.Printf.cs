@@ -104,7 +104,7 @@ public sealed partial class Evaluation
                     outputMemory.Dispose();
                 }
                 var assignment = await AssignBuiltinAsync(destination, value,
-                    scope, bindings, BuiltinOutputVisibility.Caller, ShellValue.FromText("printf")).ConfigureAwait(false);
+                    scope, bindings, BuiltinOutputVisibility.Caller, ShellValue.FromText("printf"), expansionWriteTarget: null).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                     exitCode = 1;
             }
@@ -134,7 +134,7 @@ public sealed partial class Evaluation
         {
             // A rejected binding is recoverable for %n; an expansion failure stops later conversions.
             await AssignBuiltinAsync(VariableReference.ForName(assignment.Name), ShellValue.FromText(Integers.FormatNumber(assignment.Count)),
-                scope, bindings, BuiltinOutputVisibility.CommandAndCaller, ShellValue.FromText("printf")).ConfigureAwait(false);
+                scope, bindings, BuiltinOutputVisibility.CommandAndCaller, ShellValue.FromText("printf"), expansionWriteTarget: null).ConfigureAwait(false);
             return !HasPendingExpansionError && diagnostics.Result.CanAcceptMore;
         }
 

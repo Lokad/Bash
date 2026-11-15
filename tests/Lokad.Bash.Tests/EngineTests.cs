@@ -629,15 +629,17 @@ public class EngineTests
         var visitor = new TestOperationVisitor([]) { RecordAppends = true };
         visitor.EnqueueOpenFileDescriptor(900);
         visitor.EnqueueAppendResult(DescriptorWriteResult.Open);
+        visitor.EnqueueAppendResult(DescriptorWriteResult.Open);
         visitor.EnqueueCloseDescriptor();
 
         await new Engine().RunAsync(state, visitor);
 
         Assert.Equal(1, state.LastExitCode);
         Assert.Equal("old", state.Variables["fd"].ToUtf8String());
-        var diagnostic = Assert.Single(visitor.Appends);
-        Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
-        Assert.Equal("fd: readonly variable\nfd: cannot assign fd to variable\n"u8.ToArray(), diagnostic.Content);
+        Assert.Equal(2, visitor.Appends.Count);
+        Assert.All(visitor.Appends, diagnostic => Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor));
+        Assert.Equal("fd: readonly variable\n"u8.ToArray(), visitor.Appends[0].Content);
+        Assert.Equal("fd: cannot assign fd to variable\n"u8.ToArray(), visitor.Appends[1].Content);
         Assert.Equal([new FileDescriptor(900)], visitor.ClosedDescriptors);
         Assert.Empty(state.GetDescriptorsForCleanup());
     }

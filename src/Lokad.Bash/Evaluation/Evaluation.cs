@@ -492,7 +492,7 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope,
         bool negated)
     {
-        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope, scope)
+        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope, persistAllocations: true)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var result = EvaluationResult.FromExitCode(0);
@@ -761,7 +761,7 @@ public sealed partial class Evaluation : IFileTester
                     exitCode = 1;
             }
 
-            var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, scope, scope)
+            var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, scope, persistAllocations: true)
                 .ConfigureAwait(false);
             Exception? assignmentFailure = null;
             var assignmentResult = EvaluationResult.FromExitCode(exitCode);
@@ -895,7 +895,7 @@ public sealed partial class Evaluation : IFileTester
                 { Resolution: CommandResolution.Host, Completion: CommandCompletion.Continue };
         if (externalRedirections)
         {
-            // Literal targets cannot write bindings. Isolate potential expansion writes from the caller
+            // Literal targets without allocation cannot write bindings. Isolate potential writes from the caller
             // without copying its entire variable store for ordinary file/descriptor redirections.
             if (MayWriteBindings(simpleCommand.Redirections))
             {
@@ -909,15 +909,18 @@ public sealed partial class Evaluation : IFileTester
             static bool MayWriteBindings(IReadOnlyList<Redirection> redirections)
             {
                 foreach (var redirection in redirections)
-                foreach (var part in redirection.Target.Parts)
                 {
-                    // Brace ranges can generate expansion syntax. Conservatively include them and
-                    // read-only expansions; literal byte parts never expand.
-                    if (part is CommandSubstitutionWordPart
-                        || part is SourceWordPart source
-                        && (source.Kind == WordPartKind.Unquoted && source.Source.AsSpan().Contains((byte)'{')
-                            || source.Source.AsSpan().IndexOfAny((byte)'$', (byte)'`') >= 0))
-                        return true;
+                    if (redirection.VariableName.Length != 0) return true;
+                    foreach (var part in redirection.Target.Parts)
+                    {
+                        // Brace ranges can generate expansion syntax. Conservatively include them and
+                        // read-only expansions; literal byte parts never expand.
+                        if (part is CommandSubstitutionWordPart
+                            || part is SourceWordPart source
+                            && (source.Kind == WordPartKind.Unquoted && source.Source.AsSpan().Contains((byte)'{')
+                                || source.Source.AsSpan().IndexOfAny((byte)'$', (byte)'`') >= 0))
+                            return true;
+                    }
                 }
                 return false;
             }
@@ -930,7 +933,7 @@ public sealed partial class Evaluation : IFileTester
             };
         }
         var commandRedirections = await OpenRedirectionScopeAsync(
-                simpleCommand.Redirections, redirectionExpansionScope, externalRedirections ? scope : redirectionExpansionScope)
+                simpleCommand.Redirections, redirectionExpansionScope, persistAllocations: !externalRedirections)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var preparedResult = EvaluationResult.FromExitCode(0);
@@ -2341,12 +2344,12 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>
     /// Opens a lexical redirection scope and records ownership of every descriptor it creates.
-    /// Descriptor-variable assignments retain their caller scope even when expansion bindings are isolated.
+    /// External command allocations stay in their isolated expansion scope; in-process allocations persist.
     /// </summary>
     private async Task<RedirectionScope> OpenRedirectionScopeAsync(
         IReadOnlyList<Redirection> redirections,
         ScopedEvaluation scope,
-        ScopedEvaluation descriptorAssignmentScope)
+        bool persistAllocations)
     {
         if (redirections.Count == 0)
             return new RedirectionScope(this, active: false, []);
@@ -2357,7 +2360,7 @@ public sealed partial class Evaluation : IFileTester
         _state.PushRedirectionTable(evaluation.DescriptorTable, evaluation.OpenedDescriptors, evaluation.TouchedDescriptors);
         try
         {
-            await evaluation.EvaluateAsync(scope, descriptorAssignmentScope).ConfigureAwait(false);
+            await evaluation.EvaluateAsync(scope, persistAllocations).ConfigureAwait(false);
         }
         catch
         {

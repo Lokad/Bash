@@ -289,6 +289,10 @@ internal static partial class WordExpansion
         ResolveReferenceAsync(reference, ReferenceUse.CompoundAssign, scope, ExpansionPurpose.ArithmeticSource, expandedSubscript,
             targetVariables, targetVariables);
 
+    /// <summary>Reads a selected binding through ordinary nameref/array expansion rules.</summary>
+    internal static Task<ResolvedVariableReference?> ResolveReadReferenceAsync(VariableReference reference, ScopedEvaluation scope) =>
+        ResolveReferenceAsync(reference, ReferenceUse.Read, scope, ExpansionPurpose.ArithmeticSource);
+
     /// <summary>Selects a builtin destination once, while expanding its selector in the active command scope.</summary>
     internal static Task<ResolvedVariableReference?> ResolveBuiltinReferenceAsync(
         VariableReference reference, ScopedEvaluation scope, Variables destination, Variables indexVariables) =>

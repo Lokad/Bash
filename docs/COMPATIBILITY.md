@@ -8,6 +8,9 @@ The runtime supports deterministic, non-interactive shell workflows:
   word splitting, pathname expansion and quote removal.
 - Redirections, here-documents, here-strings, logical descriptor aliases and
   allocated descriptors. `exec` can preserve descriptors or replace evaluation.
+  Adjacent unquoted `{name}` supports file open modes, duplication/moves and
+  here-inputs; variable closes follow ordinary command restoration. External
+  command allocations and selector effects do not change caller bindings.
 - Control, directory, variable, input and formatting builtins, including `read`,
   `mapfile`, `printf -v`, `source`, `eval`, `command`, `type`, `getopts` and `help`.
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT

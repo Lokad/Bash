@@ -356,13 +356,14 @@ public sealed partial class Evaluation
         return BuiltinReferenceResolution.Write;
     }
 
-    private enum BuiltinOutputVisibility { Caller, CommandAndCaller }
-    private enum BuiltinAssignmentResult { Assigned, NoWrite, Failed }
+    internal enum BuiltinOutputVisibility { Caller, CommandAndCaller }
+    internal enum BuiltinAssignmentResult { Assigned, NoWrite, Failed }
 
-    /// <summary>Shares selected array/nameref writes between read and printf without replaying selectors.</summary>
-    private async Task<BuiltinAssignmentResult> AssignBuiltinAsync(
+    /// <summary>Shares selected output writes, including descriptor allocation, without replaying selectors.</summary>
+    internal async Task<BuiltinAssignmentResult> AssignBuiltinAsync(
         VariableReference reference, ShellValue value, ScopedEvaluation scope,
-        Variables.CommandBindings? persistentOutputs, BuiltinOutputVisibility visibility, ShellValue command)
+        Variables.CommandBindings? persistentOutputs, BuiltinOutputVisibility visibility, ShellValue command,
+        ScopedEvaluation.ExpansionBindings? expansionWriteTarget)
     {
         var resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, out var binding);
         if (resolution == BuiltinReferenceResolution.NoWrite)
@@ -397,7 +398,7 @@ public sealed partial class Evaluation
         var assigned = target.TryAssign(scope with
         {
             Variables = destination,
-            ExpansionWriteTarget = null,
+            ExpansionWriteTarget = expansionWriteTarget,
             SelectorBindings = null
         }, reference.Name, value, AssignmentOperator.Replace);
         if (assigned && visibility == BuiltinOutputVisibility.CommandAndCaller && !ReferenceEquals(destination, binding.Owner))

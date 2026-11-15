@@ -1047,7 +1047,7 @@ public static class Parser
             {
                 case TokenKind.Redirection:
                     sawAny = true;
-                    ReadRedirection(tokenizer, token, null, redirections);
+                    ReadRedirection(tokenizer, token, null, string.Empty, redirections);
                     continue;
                 case TokenKind.Word:
                     sawAny = true;
@@ -1059,13 +1059,13 @@ public static class Parser
 
                     if (TryGetFileDescriptor(tokenizer, wordToken, out var fileDescriptor, out var redirectionToken))
                     {
-                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, redirections);
+                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, redirections);
                         continue;
                     }
 
                     if (TryGetAllocationVariable(tokenizer, wordToken, out var variableName, out var allocationToken))
                     {
-                        ReadAllocationRedirection(tokenizer, allocationToken, variableName, redirections);
+                        ReadRedirection(tokenizer, allocationToken, null, variableName, redirections);
                         continue;
                     }
 
@@ -1204,10 +1204,13 @@ public static class Parser
             return false;
 
         var peek = tokenizer.PeekTokenCore();
-        if (peek.Kind != TokenKind.Redirection)
+        if (peek.Kind != TokenKind.Redirection || !tokenizer.AreAdjacent(token.Token, peek))
             return false;
 
-        if (peek.RedirectionKind != RedirectionKind.Output && peek.RedirectionKind != RedirectionKind.Input)
+        if (peek.RedirectionKind is not (RedirectionKind.Input or RedirectionKind.Output
+            or RedirectionKind.OutputAppend or RedirectionKind.InputOutput or RedirectionKind.ForceOutput
+            or RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput
+            or RedirectionKind.HereString or RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs))
             return false;
 
         redirectionToken = tokenizer.NextTokenCore();
@@ -1219,6 +1222,7 @@ public static class Parser
         Tokenizer tokenizer,
         Token token,
         int? fileDescriptor,
+        string variableName,
         List<Redirection> redirections)
     {
         var target = tokenizer.NextTokenCore();
@@ -1235,9 +1239,16 @@ public static class Parser
         }
 
         var kind = token.RedirectionKind.Value;
+        if (variableName.Length != 0)
+            kind = kind switch
+            {
+                RedirectionKind.Input => RedirectionKind.AllocateInput,
+                RedirectionKind.Output => RedirectionKind.AllocateOutput,
+                _ => kind
+            };
         if (kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs)
         {
-            var redirection = new Redirection(kind, fileDescriptor, targetWord.Word, string.Empty, hereDocumentDelimiter: null);
+            var redirection = new Redirection(kind, fileDescriptor, targetWord.Word, variableName, hereDocumentDelimiter: null);
             redirections.Add(redirection);
             (tokenizer.HereDocuments ??= new HereDocumentReader()).Enqueue(redirection);
             return;
@@ -1263,31 +1274,11 @@ public static class Parser
                 ? RedirectionKind.CloseOutput
                 : RedirectionKind.CloseInput;
             redirections.Add(new Redirection(kind, fileDescriptor,
-                new Word([WordPart.FromText(WordPartKind.Unquoted, "-")]), string.Empty, hereDocumentDelimiter: null));
+                new Word([WordPart.FromText(WordPartKind.Unquoted, "-")]), variableName, hereDocumentDelimiter: null));
             return;
         }
 
-        redirections.Add(new Redirection(kind, fileDescriptor, targetWord.Word, string.Empty, hereDocumentDelimiter: null));
-    }
-
-    private static void ReadAllocationRedirection(
-        Tokenizer tokenizer,
-        Token token,
-        string variableName,
-        List<Redirection> redirections)
-    {
-        var target = tokenizer.NextTokenCore();
-        if (!target.TryGetWordToken(out var targetWord))
-        {
-            tokenizer.RecordError("Expected a word after allocation redirection operator.", tokenizer.Position);
-            return;
-        }
-
-        var kind = token.RedirectionKind == RedirectionKind.Output
-            ? RedirectionKind.AllocateOutput
-            : RedirectionKind.AllocateInput;
-
-        redirections.Add(new Redirection(kind, null, targetWord.Word, variableName, hereDocumentDelimiter: null));
+        redirections.Add(new Redirection(kind, fileDescriptor, targetWord.Word, variableName, hereDocumentDelimiter: null));
     }
 
     private static IReadOnlyList<Redirection> ReadTrailingRedirections(Tokenizer tokenizer)
@@ -1301,7 +1292,7 @@ public static class Parser
             {
                 case TokenKind.Redirection:
                     tokenizer.NextTokenCore();
-                    ReadRedirection(tokenizer, peek, null, redirections);
+                    ReadRedirection(tokenizer, peek, null, string.Empty, redirections);
                     continue;
                 case TokenKind.Word:
                     var token = tokenizer.NextTokenCore();
@@ -1313,13 +1304,13 @@ public static class Parser
 
                     if (TryGetFileDescriptor(tokenizer, wordToken, out var fileDescriptor, out var redirectionToken))
                     {
-                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, redirections);
+                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, redirections);
                         continue;
                     }
 
                     if (TryGetAllocationVariable(tokenizer, wordToken, out var variableName, out var allocationToken))
                     {
-                        ReadAllocationRedirection(tokenizer, allocationToken, variableName, redirections);
+                        ReadRedirection(tokenizer, allocationToken, null, variableName, redirections);
                         continue;
                     }
 

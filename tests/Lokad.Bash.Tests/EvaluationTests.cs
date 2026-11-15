@@ -2094,7 +2094,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_AllocatesOutputDescriptor()
     {
-        var script = Parser.Parse(Utf8("cmd {fd}> out"));
+        var script = Parser.Parse(Utf8("cmd {fd}> out >&$fd"));
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -2103,14 +2103,14 @@ public partial class EvaluationTests
         open.SetResult(FileOpenResult.Opened(9, readSize: null));
 
         var run = await NextCommandAsync(state, "cmd");
-        Assert.Equal(FileDescriptor.StdOut, run.Command.StdOut);
+        Assert.Equal(new FileDescriptor(9), run.Command.StdOut);
         run.SetResult(new CommandExecutionResult.Completed(0));
 
         var close = await NextCloseDescriptorAsync(state);
         Assert.Equal(9, close.Descriptor.Id);
         close.SetResult(null);
 
-        Assert.Equal("10", Text(GetVariable(state, "fd")));
+        Assert.False(state.Variables.ContainsKey("fd"));
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
     }
@@ -2118,7 +2118,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_AllocatesInputDescriptor()
     {
-        var script = Parser.Parse(Utf8("cmd {fd}< in"));
+        var script = Parser.Parse(Utf8("cmd {fd}< in <&$fd"));
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -2127,14 +2127,14 @@ public partial class EvaluationTests
         open.SetResult(FileOpenResult.Opened(8, readSize: null));
 
         var run = await NextCommandAsync(state, "cmd");
-        Assert.Equal(FileDescriptor.StdIn, run.Command.StdIn);
+        Assert.Equal(new FileDescriptor(8), run.Command.StdIn);
         run.SetResult(new CommandExecutionResult.Completed(0));
 
         var close = await NextCloseDescriptorAsync(state);
         Assert.Equal(8, close.Descriptor.Id);
         close.SetResult(null);
 
-        Assert.Equal("10", Text(GetVariable(state, "fd")));
+        Assert.False(state.Variables.ContainsKey("fd"));
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
     }

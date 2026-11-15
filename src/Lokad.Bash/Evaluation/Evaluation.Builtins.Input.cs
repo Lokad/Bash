@@ -141,7 +141,7 @@ public sealed partial class Evaluation
                 Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(fields[index]));
                 var copy = fields[index].Bytes.ToArray();
                 var assignment = await AssignBuiltinAsync(reference, ShellValue.FromBytes(copy), scope,
-                    persistentOutputs: null, BuiltinOutputVisibility.Caller, ShellValue.FromText("read")).ConfigureAwait(false);
+                    persistentOutputs: null, BuiltinOutputVisibility.Caller, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
                     exitCode = 1;

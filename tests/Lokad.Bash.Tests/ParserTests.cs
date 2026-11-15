@@ -1033,6 +1033,53 @@ public class ParserTests
     }
 
     [Theory]
+    [InlineData(">out", RedirectionKind.AllocateOutput)]
+    [InlineData("<input", RedirectionKind.AllocateInput)]
+    [InlineData(">>out", RedirectionKind.OutputAppend)]
+    [InlineData("<>out", RedirectionKind.InputOutput)]
+    [InlineData(">|out", RedirectionKind.ForceOutput)]
+    [InlineData(">&3", RedirectionKind.DuplicateOutput)]
+    [InlineData("<&3", RedirectionKind.DuplicateInput)]
+    [InlineData(">&-", RedirectionKind.CloseOutput)]
+    [InlineData("<&-", RedirectionKind.CloseInput)]
+    [InlineData("<<<seed", RedirectionKind.HereString)]
+    [InlineData("<<END\nseed\nEND\n", RedirectionKind.HereDocument)]
+    [InlineData("<<-END\n\tseed\n\tEND\n", RedirectionKind.HereDocumentStripTabs)]
+    public void Parse_AllocatedModesRetainExistingOperatorAndVariableMetadata(string suffix, RedirectionKind kind)
+    {
+        var command = AssertSingleCommand(Parser.Parse(": {fd}" + suffix));
+        Assert.Single(command.Words);
+        var redirection = Assert.Single(command.Redirections);
+        Assert.Equal(kind, redirection.Kind);
+        Assert.Equal("fd", redirection.VariableName);
+        Assert.Null(redirection.FileDescriptor);
+    }
+
+    [Theory]
+    [InlineData("{fd} >out")]
+    [InlineData("{fd}\t>out")]
+    [InlineData("'{fd}'>out")]
+    [InlineData("\"{fd}\">out")]
+    [InlineData("\\{fd}>out")]
+    [InlineData("{fd}&>out")]
+    [InlineData("{fd}&>>out")]
+    public void Parse_AllocationRequiresAnAdjacentUnquotedNameAndSupportedOperator(string operand)
+    {
+        var command = AssertSingleCommand(Parser.Parse(": " + operand));
+        Assert.Equal(2, command.Words.Count);
+        Assert.Empty(Assert.Single(command.Redirections).VariableName);
+    }
+
+    [Fact]
+    public void Parse_TrailingGroupAllocationUsesTheSameOperatorGrammar()
+    {
+        var command = Assert.IsType<RedirectedCommand>(Assert.Single(Parser.Parse("{ :; } {fd}>>out").Commands));
+        var redirection = Assert.Single(command.Redirections);
+        Assert.Equal(RedirectionKind.OutputAppend, redirection.Kind);
+        Assert.Equal("fd", redirection.VariableName);
+    }
+
+    [Theory]
     [InlineData("cat <(find / -type f)", 4)]
     [InlineData("cat >(sed s/a/b/)", 4)]
     [InlineData("while read f; do echo \"$f\"; done < <(find / -type f)", 35)]

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Require adjacent unquoted allocated-descriptor names and support append,
+  read/write, force-output, duplicate/move and here-input operators through the
+  existing redirection paths. Resolve nameref elements once, preserve temporary
+  close/restoration rules and isolate external-command allocations from the caller.
 - Resolve descriptor filename fallback once, support expanded close operands and
   source move suffixes, and diagnose invalid descriptor words as shell failures.
   Preserve quoted/expanded filename operands, lexical close suffixes, command

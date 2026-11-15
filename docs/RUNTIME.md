@@ -77,6 +77,13 @@ Redirections share their temporary writes in order, while caller bindings remain
 unchanged. Literal targets need no temporary variable state. In-process commands
 and `exec` retain their caller-visible redirection effects.
 
+Allocated descriptor variables require adjacent unquoted `{name}` syntax and use
+the ordinary open, duplicate and here-input paths. In-process allocations persist
+up to an earlier temporary restoration boundary; external-command allocations and
+their selector effects stay in the command scope. `{name}>&-` and `{name}<&-` read
+the current binding without assignment, including readonly names and selected
+nameref elements. Their closes are temporary unless `exec` preserves them.
+
 An explicit attribute promotion of a temporary prefix can survive local
 restoration, including through nested functions. Direct unset in the owning local
 scope cancels promotion; redeclaring a local after a helper unset starts a new local

@@ -55,6 +55,45 @@ public sealed class HereInputLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task AllocatedInputsRetainTheirPayloadAcrossCommandWorkspaceReuse(bool prepared, bool document)
+    {
+        var governor = new MemoryGovernor(8 * 1024 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var input = document ? "{fd}<<END\n$p\nEND\n" : "{fd}<<<\"$p\"; ";
+        var script = "printf -v p '%70000s' x; : " + input
+            + "unset p; IFS= read -r value <&$fd; exec {fd}<&-; printf '%s' \"${#value}\"";
+        RunResult result;
+        using (var memory = governor.CreateScope())
+            result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(script)), host, memory, deadline.Token)
+                : await host.RunAsync(script, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("70000", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task RejectedAllocatedInputSettlesThePendingWriterAndBothEndpoints()
+    {
+        var governor = new MemoryGovernor(8 * 1024 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var result = await host.RunAsync("readonly fd=old; printf -v p '%70000s' x; : {fd}<<<\"$p\"; printf '%s:%s' \"$?\" \"$fd\"", deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:old", host.StandardOutput.TextContent);
+        Assert.Equal("fd: readonly variable\nfd: cannot assign fd to variable\n", host.StandardError.TextContent);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task ConsumerCanReadBeforeTheBorrowedWriteCompletes()
     {
@@ -90,8 +129,10 @@ public sealed class HereInputLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    [Fact]
-    public async Task CancellationRetainsPayloadThroughPendingWriteAndBothCloses()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationRetainsPayloadThroughPendingWriteAndBothCloses(bool allocated)
     {
         using var cancellation = new CancellationTokenSource();
         var governor = new MemoryGovernor(64 * 1024);
@@ -123,7 +164,8 @@ public sealed class HereInputLifetimeTests
         host.EnqueueAppendTask(write.Task);
         host.EnqueueCloseDescriptorTask(readerClose.Task);
         host.EnqueueCloseDescriptorTask(writerClose.Task);
-        var running = BashScript.RunAsync(host, "read -r value <<<payload", EvaluationOptions.Default, cancellation.Token);
+        var script = allocated ? ": {fd}<<<payload; read -r value <&$fd" : "read -r value <<<payload";
+        var running = BashScript.RunAsync(host, script, EvaluationOptions.Default, cancellation.Token);
         try
         {
             var content = await borrowed.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -155,8 +197,10 @@ public sealed class HereInputLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    [Fact]
-    public async Task PayloadAdmissionRefusalClosesBothEndpointsWithoutWritingThePayload()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PayloadAdmissionRefusalClosesBothEndpointsWithoutWritingThePayload(bool allocated)
     {
         var governor = new MemoryGovernor(32 * 1024);
         var host = new TestOperationVisitor([]) { MemoryBudget = governor, RecordAppends = true };
@@ -164,7 +208,7 @@ public sealed class HereInputLifetimeTests
         host.EnqueueCloseDescriptor();
         host.EnqueueCloseDescriptor();
         host.EnqueueAppendResult(DescriptorWriteResult.Open);
-        var result = await BashScript.RunAsync(host, ": <<<'" + new string('x', 70000) + "'", EvaluationOptions.Default, CancellationToken.None);
+        var result = await BashScript.RunAsync(host, ": " + (allocated ? "{fd}" : "") + "<<<'" + new string('x', 70000) + "'", EvaluationOptions.Default, CancellationToken.None);
 
         Assert.NotEqual(0, result.ExitCode);
         var diagnostic = Assert.Single(host.Appends);
