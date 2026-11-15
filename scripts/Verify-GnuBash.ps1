@@ -79,6 +79,64 @@ $referenceHash = if ($WslDistribution) {
 } else { (Get-FileHash -LiteralPath $ReferencePath -Algorithm SHA256).Hash.ToLowerInvariant() }
 if ($referenceHash -ne $reference[0].sha256) { throw 'GNU Bash hash differs from the pinned reference.' }
 
+function Get-ExpectedEntries($Sample) {
+    $entries = [System.Collections.Generic.SortedDictionary[string, object]]::new([StringComparer]::Ordinal)
+    function Read-EntryPath($Entry) {
+        $path = [string]$Entry.path
+        if ([System.IO.Path]::IsPathRooted($path) -or $path.Contains('\') -or
+            @($path.Split('/') | Where-Object { $_ -in @('', '.', '..') }).Count) { throw 'Unsafe final entry path.' }
+        return $path
+    }
+    function Add-ExpectedFile($File) {
+        $path = Read-EntryPath $File
+        $entries[$path] = [pscustomobject]@{
+            path = $path; kind = 'file'
+            contentHex = [Convert]::ToHexString([Convert]::FromHexString($File.contentHex)).ToLowerInvariant()
+        }
+        for ($separator = $path.LastIndexOf('/'); $separator -ge 0; $separator = $path.LastIndexOf('/', $separator - 1)) {
+            $parent = $path.Substring(0, $separator)
+            $entries[$parent] = [pscustomobject]@{ path = $parent; kind = 'directory'; contentHex = '' }
+        }
+    }
+    if ($null -eq $Sample.finalEntries) {
+        foreach ($file in $Sample.files) { Add-ExpectedFile $file }
+        foreach ($file in $Sample.fileEffects) { Add-ExpectedFile $file }
+    } else {
+        foreach ($entry in $Sample.finalEntries) {
+            $path = Read-EntryPath $entry
+            if ($entry.kind -notin @('file', 'directory')) { throw 'Unsupported expected entry kind.' }
+            $content = if ($entry.kind -eq 'file') {
+                [Convert]::ToHexString([Convert]::FromHexString($entry.contentHex)).ToLowerInvariant()
+            } else { '' }
+            $entries.Add($path, [pscustomobject]@{ path = $path; kind = $entry.kind; contentHex = $content })
+        }
+    }
+    return ,$entries
+}
+
+function Get-ObservedEntries([string]$Root) {
+    $entries = [System.Collections.Generic.SortedDictionary[string, object]]::new([StringComparer]::Ordinal)
+    $pending = [System.Collections.Generic.Stack[string]]::new()
+    $pending.Push($Root)
+    while ($pending.Count) {
+        foreach ($entry in [System.IO.Directory]::GetFileSystemEntries($pending.Pop())) {
+            $path = [System.IO.Path]::GetRelativePath($Root, $entry).Replace('\', '/')
+            $attributes = [System.IO.File]::GetAttributes($entry)
+            $content = ''
+            if ($attributes -band [System.IO.FileAttributes]::ReparsePoint) { $kind = 'symbolic-link' }
+            elseif ($attributes -band [System.IO.FileAttributes]::Directory) {
+                $kind = 'directory'
+                $pending.Push($entry)
+            } else {
+                $kind = 'file'
+                $content = [Convert]::ToHexString([System.IO.File]::ReadAllBytes($entry)).ToLowerInvariant()
+            }
+            $entries.Add($path, [pscustomobject]@{ path = $path; kind = $kind; contentHex = $content })
+        }
+    }
+    return ,$entries
+}
+
 $results = foreach ($sample in $catalog.cases) {
     $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($sample.script)
     $scriptHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($scriptBytes)).ToLowerInvariant()
@@ -125,6 +183,15 @@ $results = foreach ($sample in $catalog.cases) {
         $actualHex = [Convert]::ToHexString([System.IO.File]::ReadAllBytes($effectPath)).ToLowerInvariant()
         $passed = $passed -and $actualHex -eq $effect.contentHex
     }
+    $expectedEntries = Get-ExpectedEntries $sample
+    $observedEntries = Get-ObservedEntries $fixtureRoot
+    $passed = $passed -and $expectedEntries.Count -eq $observedEntries.Count
+    foreach ($entry in $expectedEntries.Values) {
+        $observed = $null
+        if (-not $observedEntries.TryGetValue($entry.path, [ref]$observed)) { $passed = $false; continue }
+        $passed = $passed -and $entry.kind -eq $observed.kind -and $entry.contentHex -eq $observed.contentHex
+    }
+    $actual | Add-Member -NotePropertyName finalEntries -NotePropertyValue @($observedEntries.Values)
     [pscustomobject]@{ id = $sample.id; classification = $sample.classification; reason = $sample.reason; passed = $passed; actual = $actual }
 }
 $destination = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path $repository $OutputPath }

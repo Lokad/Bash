@@ -154,6 +154,31 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         return file.Content.ToArray();
     }
 
+    /// <summary>Captures the complete synthetic tree after execution and descriptor cleanup have settled.</summary>
+    internal IReadOnlyDictionary<string, (FilePathKind Kind, string ContentHex)> CaptureEntries()
+    {
+        var entries = new SortedDictionary<string, (FilePathKind Kind, string ContentHex)>(StringComparer.Ordinal);
+        var pending = new Stack<(string Path, DirectoryNode Directory)>();
+        pending.Push((string.Empty, _root));
+        while (pending.TryPop(out var parent))
+        {
+            foreach (var (name, node) in parent.Directory.Children)
+            {
+                var path = parent.Path.Length == 0 ? name : parent.Path + "/" + name;
+                if (node is DirectoryNode directory)
+                {
+                    entries.Add(path, (FilePathKind.Directory, string.Empty));
+                    pending.Push((path, directory));
+                }
+                else if (node is FileNode file)
+                    entries.Add(path, (FilePathKind.File, Convert.ToHexString(file.Content)));
+                else
+                    throw new InvalidOperationException("Unknown fixture node.");
+            }
+        }
+        return entries;
+    }
+
     public void SetStandardInput(string content)
     {
         _stdinState = OpenFileState.ForRead(Encoding.UTF8.GetBytes(content), RecordConsumption);

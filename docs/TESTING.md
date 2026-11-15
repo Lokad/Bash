@@ -42,7 +42,14 @@ content is retained until the fixture is discarded, independently of runtime-val
 admission assertions. Benchmark hosts have their separate ownership controls.
 
 Native correctness controls compare exit status, exact stdout/stderr bytes and
-declared file effects. Each script and fixture has a content hash. Only the named
+the complete synthetic file tree, including entry names, kinds and file bytes.
+Without `finalEntries`, the expected tree combines initial `files` and declared
+`fileEffects`, including their implicit parent directories. Optional `finalEntries`
+instead describes the complete final tree for removals, renames or empty directories:
+each entry has a relative `path`, `kind` (`file` or `directory`) and, for files,
+`contentHex`. Declared `fileEffects` are still checked individually. Unexpected
+files and directories fail both managed and native verification. Each script and
+fixture has a content hash. Only the named
 GNU command-location diagnostic prefix may be normalized. Controls that explicitly
 discard a diagnostic in-script test status and prior effects; separate diagnostic
 tests retain responsibility for the message and active descriptor.
