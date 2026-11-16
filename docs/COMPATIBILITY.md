@@ -23,6 +23,9 @@ Here-strings expand one scalar operand without brace generation, field splitting
 or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
 dollar, backtick, backslash and LF; double quotes remain ordinary data. Quoting the
 delimiter disables body expansion.
+Unquoted body substitution structure is validated when redirection setup is
+reached; setup failure prevents target invocation. Quoted and skipped bodies
+retain their inert data semantics.
 File paths use the contained POSIX-style namespace defined by `ShellPath` and
 `FilePathLookup`, including their size, control-character and traversal constraints.
 

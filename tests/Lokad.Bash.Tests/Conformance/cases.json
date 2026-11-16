@@ -6038,6 +6038,20 @@
       "stdoutHex": "6265666f7265",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "heredoc-malformed-substitution",
+      "classification": "supported",
+      "reason": "Reached redirection effects with script-directed stderr disposal; diagnostics are asserted separately.",
+      "locale": "C",
+      "script": "exec 2>&-\nprintf before\ncat <<END\n${v\nEND\nprintf ':after:%s' \"$?\"",
+      "scriptSha256": "082be10fa12afe0a4686333062357bf68e2a86a0d2accbb631cb79ce7de180ed",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6265666f72653a61667465723a31",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

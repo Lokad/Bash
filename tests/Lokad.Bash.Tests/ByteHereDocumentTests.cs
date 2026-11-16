@@ -3,11 +3,129 @@ using Lokad.Bash.Tree;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ByteHereDocumentTests
 {
+    public static IEnumerable<object[]> MalformedSubstitutions()
+    {
+        foreach (var body in new[] { "${v", "$(printf sub", "`printf sub", "\\`printf sub`", "\\\\\\`printf sub`", "$((1+2)", "$(if)" })
+            foreach (var prepared in new[] { false, true })
+                yield return [body, prepared];
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedSubstitutions))]
+    public async Task ReachedMalformedSubstitutionsFailSetupBeforeTheTargetRuns(string body, bool prepared)
+    {
+        var source = "target(){ printf forbidden; }\nprintf before\ntarget <<END\n" + body
+            + "\nEND\nprintf ':after:%s' \"$?\"";
+        var memory = new MemoryGovernor(1024 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        RunResult result;
+        using (var owner = memory.CreateScope())
+            result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, deadline.Token)
+                : await host.RunAsync(source, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:after:1", host.StandardOutput.TextContent);
+        Assert.NotEmpty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("${v", false)]
+    [InlineData("$(if)", false)]
+    [InlineData("`printf sub", false)]
+    [InlineData("$((1+2)", false)]
+    [InlineData("${v", true)]
+    [InlineData("$(if)", true)]
+    [InlineData("`printf sub", true)]
+    [InlineData("$((1+2)", true)]
+    public async Task QuotedAndSkippedBodiesDoNotValidateSubstitutions(string body, bool quoted)
+    {
+        var source = quoted ? "cat <<'END'\n" + body + "\nEND\n"
+            : "if false; then cat <<END\n" + body + "\nEND\nfi\nprintf after";
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync(source, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(quoted ? body + "\n" : "after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("2>&-")]
+    [InlineData("2>err")]
+    public async Task SubstitutionFailureUsesTheReachedDiagnosticDescriptor(string redirect)
+    {
+        var source = "target(){ printf forbidden; }\nprintf before\ntarget " + redirect + " <<END\n${v\nEND\nprintf ':after:%s' \"$?\"";
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync(source, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:after:1", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        if (redirect == "2>err")
+            Assert.NotEmpty(host.ReadFileBytes("/err"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ExpandedValuesRemainLiteralHereDocumentData()
+    {
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync("value='${v'; cat <<END\n$value\nEND\n", deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("${v\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EarlierOperandEffectsSurviveFailedHereDocumentSetup(bool prepared)
+    {
+        const string Source = "value=old; i=0; printf before; read -r value <<END\n$((i++)) ${v\nEND\n"
+            + "printf ':after:%s:%s:%s' \"$?\" \"$value\" \"$i\"";
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = prepared
+            ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(Source)), host, deadline.Token)
+            : await host.RunAsync(Source, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:after:1:old:1", host.StandardOutput.TextContent);
+        Assert.NotEmpty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("v=set")]
+    [InlineData("unset v")]
+    public async Task NestedMalformedCommandSyntaxRejectsTheHereDocumentStructure(string initial)
+    {
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync(initial + "; cat <<END\n${v:-$(if)}\nEND\nprintf ':after:%s' \"$?\"", deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(":after:1", host.StandardOutput.TextContent);
+        Assert.NotEmpty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData(1, false, false, "5C220A")]
     [InlineData(2, false, false, "5C220A")]

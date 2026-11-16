@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Syntax;
@@ -56,14 +55,6 @@ internal static class CommandSubstitutionScanner
         payload = substitution?.Source ?? ShellSource.Empty;
         return status;
     }
-
-    /// <summary>Returns executable syntax, reusing the body parsed while locating its delimiter.</summary>
-    internal static bool TryScanParsed(
-        ShellSource text,
-        int startIndex,
-        out int endIndex,
-        [NotNullWhen(true)] out CommandSubstitutionSyntax? substitution) =>
-        ScanParsed(new ShellScanContext(), text, startIndex, out endIndex, out substitution) == ShellScanStatus.Complete;
 
     /// <summary>Transfers a lookahead parse to its consuming tokenizer, or parses it once here.</summary>
     internal static ShellScanStatus ScanParsed(

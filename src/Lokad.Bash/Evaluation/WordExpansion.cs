@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -430,10 +429,11 @@ internal static partial class WordExpansion
             if (value == (byte)'`'
                 && quoteContext is ExpansionQuoteContext.Unquoted or ExpansionQuoteContext.HereDocument)
             {
-                if (TryExtractCommandSubstitution(content, index, out var legacyScript, out var legacyEndIndex))
+                var legacyStatus = ScanCommandSubstitution(content, index, out var legacyScript, out var legacyEndIndex);
+                if (legacyStatus == ShellScanStatus.Complete)
                 {
                     await ExpandCommandSubstitutionAsync(
-                            legacyScript,
+                            legacyScript ?? throw new InvalidOperationException("A complete substitution requires executable syntax."),
                             scope,
                             output,
                             allowWordSplitting,
@@ -441,6 +441,12 @@ internal static partial class WordExpansion
                         .ConfigureAwait(false);
                     index = legacyEndIndex;
                     continue;
+                }
+                if (quoteContext == ExpansionQuoteContext.HereDocument
+                    && legacyStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid)
+                {
+                    await RejectHereDocumentAsync(scope, legacyStatus).ConfigureAwait(false);
+                    return;
                 }
             }
 
@@ -459,7 +465,9 @@ internal static partial class WordExpansion
             var prepared = syntax != null && syntax.TryGetArithmetic(index, out var captured) ? captured : (SourceWordPart.ArithmeticExpansion?)null;
             var arithmeticEnd = prepared?.End ?? -1;
             var expression = ShellSource.Empty;
-            if (prepared.HasValue || ArithmeticExpansionScanner.TryScan(content, index, out arithmeticEnd, out expression))
+            var arithmeticStatus = prepared.HasValue ? ShellScanStatus.Complete
+                : ArithmeticExpansionScanner.Scan(content, index, out arithmeticEnd, out expression, out _);
+            if (arithmeticStatus == ShellScanStatus.Complete)
             {
                 var arithmetic = prepared?.Operand;
                 long? result;
@@ -475,10 +483,11 @@ internal static partial class WordExpansion
                 continue;
             }
 
-            if (TryExtractCommandSubstitution(content, index, out var script, out var endIndex))
+            var commandStatus = ScanCommandSubstitution(content, index, out var script, out var endIndex);
+            if (commandStatus == ShellScanStatus.Complete)
             {
                 await ExpandCommandSubstitutionAsync(
-                        script,
+                        script ?? throw new InvalidOperationException("A complete substitution requires executable syntax."),
                         scope,
                         output,
                         allowWordSplitting,
@@ -486,6 +495,14 @@ internal static partial class WordExpansion
                     .ConfigureAwait(false);
                 index = endIndex;
                 continue;
+            }
+            if (quoteContext == ExpansionQuoteContext.HereDocument
+                && (commandStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid
+                    || arithmeticStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid))
+            {
+                await RejectHereDocumentAsync(scope, commandStatus == ShellScanStatus.NotFound ? arithmeticStatus : commandStatus)
+                    .ConfigureAwait(false);
+                return;
             }
 
             var next = content[index + 1];
@@ -564,8 +581,17 @@ internal static partial class WordExpansion
 
             if (BracedParameterScanner.HasPrefix(content, index))
             {
-                if (!BracedParameterScanner.TryScan(content, index, out var closingIndex, out var payload))
+                var parameterStatus = BracedParameterScanner.ScanWithPayload(new ShellScanContext(), content, index,
+                    out var closingIndex, out _, out var payload);
+                if (parameterStatus != BracedParameterScanStatus.Found)
                 {
+                    if (quoteContext == ExpansionQuoteContext.HereDocument)
+                    {
+                        await RejectHereDocumentAsync(scope, parameterStatus is BracedParameterScanStatus.Unterminated
+                            or BracedParameterScanStatus.UnterminatedCommandSubstitution
+                            ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid).ConfigureAwait(false);
+                        return;
+                    }
                     if (output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)
                     {
                         var message = ByteMemoryBuilder.CreateUnaccounted(0);
@@ -612,6 +638,14 @@ internal static partial class WordExpansion
 
             output.AppendSource(content.Slice(index, 1), globQuoted);
         }
+
+        static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status)
+        {
+            await failedScope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("here-document"),
+                ShellValue.FromText(status == ShellScanStatus.Incomplete
+                    ? "unexpected end of substitution" : "invalid substitution")).ConfigureAwait(false);
+            failedScope.Effects.SetExpansionError(1);
+        }
     }
 
     /// <summary>Expands an arithmetic operand once, preserving its writes and first failure.</summary>
@@ -640,13 +674,13 @@ internal static partial class WordExpansion
         output.AppendExpansion(result, allowWordSplitting, globQuoted);
     }
 
-    private static bool TryExtractCommandSubstitution(
+    private static ShellScanStatus ScanCommandSubstitution(
         ShellSource content,
         int startIndex,
-        [NotNullWhen(true)] out CommandSubstitutionSyntax? script,
+        out CommandSubstitutionSyntax? script,
         out int endIndex)
     {
-        return CommandSubstitutionScanner.TryScanParsed(content, startIndex, out endIndex, out script);
+        return CommandSubstitutionScanner.ScanParsed(new ShellScanContext(), content, startIndex, out endIndex, out script);
     }
 
     internal static async Task<ExpandedWord> ExpandExpressionAsync(

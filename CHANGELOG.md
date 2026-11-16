@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject incomplete and malformed here-document substitutions when redirection
+  setup is reached. Preserve prior effects, error status and cleanup while keeping
+  quoted/skipped bodies and generated values inert.
 - Recognize subshell bodies after `function name` without an empty `()` header.
   Require a compound body for both function-definition forms before executing
   their command unit, retaining prior effects and invocation-time redirections.
