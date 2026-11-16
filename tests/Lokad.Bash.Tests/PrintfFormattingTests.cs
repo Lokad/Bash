@@ -6,12 +6,46 @@ namespace Lokad.Bash.Tests;
 public sealed class PrintfFormattingTests
 {
     [Fact]
+    public void FloatingPointWorkspaceRefusalIsAShellFormattingFailure()
+    {
+        var memory = new Lokad.Bash.Memory.MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText("%a"), [ShellValue.FromText("1.25")], owner);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output.ToArray());
+        Assert.Equal("shared memory budget exhausted", Assert.Single(result.Diagnostics).ToUtf8String());
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task NumericAdmissionCancellationStopsBeforeLaterConversions()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var memory = new Lokad.Bash.Memory.MemoryGovernor(1024 * 1024);
+        var counted = new CountingMemoryBudget(memory);
+        using var owner = counted.CreateScope();
+        counted.AdmissionSucceeded += () =>
+        {
+            if (memory.ReservedBytes >= 256 * 1024) cancellation.Cancel();
+        };
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await PrintfFormatting.EvaluateAsync(ShellValue.FromText("%a%n"),
+                [ShellValue.FromText("1.25"), ShellValue.FromText("later")], DateTimeOffset.UnixEpoch, owner,
+                _ => throw new InvalidOperationException("Unreached assignment."),
+                _ => throw new InvalidOperationException("Unreached diagnostic."), cancellation.Token));
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
     public async Task EvaluateAsync_InterleavesSuspendingCountWritesAndDiagnostics()
     {
         var events = new List<string>();
         var result = await PrintfFormatting.EvaluateAsync(
             ShellValue.FromText("ab%n%d%n"), [ShellValue.FromText("first"), ShellValue.FromText("bad"), ShellValue.FromText("second")],
-            DateTimeOffset.UnixEpoch, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes), AssignAsync, DiagnoseAsync);
+            DateTimeOffset.UnixEpoch, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes), AssignAsync, DiagnoseAsync, CancellationToken.None);
 
         Assert.Equal(["first=2", "bad: invalid number", "second=3"], events);
         Assert.Equal("ab0", Text(result.Output));
@@ -36,7 +70,7 @@ public sealed class PrintfFormattingTests
     {
         var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText("before%n%Zafter"),
             [ShellValue.FromText("count")], DateTimeOffset.UnixEpoch, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes),
-            static _ => ValueTask.FromResult(false), static _ => throw new InvalidOperationException("Unreached diagnostic."));
+            static _ => ValueTask.FromResult(false), static _ => throw new InvalidOperationException("Unreached diagnostic."), CancellationToken.None);
 
         Assert.Equal("before", Text(result.Output));
         Assert.Empty(result.Diagnostics);
@@ -48,7 +82,7 @@ public sealed class PrintfFormattingTests
         var diagnostics = new List<ShellValue>();
         var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText("%b%n"),
             [ShellValue.FromText("\\x\\c"), ShellValue.FromText("count")], DateTimeOffset.UnixEpoch, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes),
-            static _ => throw new InvalidOperationException("Unreached count write."), DiagnoseAsync);
+            static _ => throw new InvalidOperationException("Unreached count write."), DiagnoseAsync, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("missing hex digit for \\x", Assert.Single(diagnostics).ToUtf8String());

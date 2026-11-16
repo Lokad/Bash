@@ -100,6 +100,7 @@ public sealed class ExecutionLifetimeTests
     [InlineData("trap $'trap - EXIT\\necho borrowed >/out\\n' EXIT; exit 7", "borrowed\n")]
     [InlineData("a=borrowed; f(){ local -n a=a; echo \"$a\" >/out; }; f 2>/dev/null", "borrowed\n")]
     [InlineData("declare -n a=a 2>/out", "declare: a: nameref variable self references not allowed\n")]
+    [InlineData("printf '%d' $'\\377' 2>/out", "printf: ÿ: invalid number\n")]
     public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle(string source, string expected)
     {
         using var cancellation = new CancellationTokenSource();
@@ -124,7 +125,8 @@ public sealed class ExecutionLifetimeTests
             cancellation.Cancel();
             Assert.False(running.IsCompleted);
             Assert.True(governor.ReservedBytes > 0);
-            Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected), borrowed.ToArray());
+            // Latin1 names each expected byte directly, including malformed UTF-8 diagnostics.
+            Assert.Equal(System.Text.Encoding.Latin1.GetBytes(expected), borrowed.ToArray());
 
             writeComplete.SetResult(DescriptorWriteResult.Open);
             await closeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));

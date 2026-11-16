@@ -33,6 +33,14 @@ parsing the child body, preserving validation timing across replay and import.
 The spelling borrows the existing syntax/source owner; execution and capture keep
 their shared path. Legacy child syntax is still parsed when each execution reaches it.
 
+Printf retains byte numeric operands through prefix validation, range classification
+and diagnostics. Integer accumulation stays bounded after overflow while validity
+scanning continues. Floating-point conversion reuses the existing bounded-significand
+parser, retaining consumed-prefix and range information for printf's diagnostic
+policy. Its coarse numeric workspace is admitted before conversion and reused only
+after the preceding conversion has finished. Conversion diagnostics retain their
+bytes through borrowed writes; cancellation still drains ordinary descriptor cleanup.
+
 Command dispatch resumes asynchronously when CLR stack space runs low, so finite
 function calls do not depend on the embedding thread's native stack size. Reached
 source/eval parsers start on a fresh continuation to keep syntax guards independent

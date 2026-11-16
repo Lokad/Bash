@@ -1,5 +1,5 @@
 using System;
-using System.Numerics;
+using System.Buffers;
 using System.Text;
 using Lokad.Bash.Helpers;
 
@@ -9,57 +9,59 @@ public static partial class PrintfFormatting
 {
     private sealed partial class Formatter
     {
-        private long ParseSigned(string argument)
+        private long ParseSigned(ShellValue argument)
         {
-            if (argument.Length == 0)
+            if (argument.IsEmpty)
                 return 0;
 
             if (TryParseCharacterConstant(argument, out var character))
                 return character;
 
             var parsed = ParseInteger(argument, out var negative, out var valid, out var overflow);
-            var signedLimit = negative ? (BigInteger)long.MaxValue + 1 : long.MaxValue;
+            var signedLimit = negative ? (ulong)long.MaxValue + 1 : (ulong)long.MaxValue;
             if (!valid)
-                AddConversionDiagnostic($"{argument}: invalid number");
+                AddNumericDiagnostic(argument, NumericErrorDetail(argument), warning: false);
             else if (overflow || parsed > signedLimit)
-                AddWarning($"warning: {argument}: Numerical result out of range");
+                AddNumericDiagnostic(argument, "Numerical result out of range", warning: true);
 
             if (negative)
             {
-                var limit = (BigInteger)long.MaxValue + 1;
+                var limit = (ulong)long.MaxValue + 1;
                 if (parsed >= limit)
-                    return parsed == limit ? long.MinValue : long.MinValue;
+                    return long.MinValue;
                 return -(long)parsed;
             }
 
-            return parsed > long.MaxValue ? long.MaxValue : (long)parsed;
+            return parsed > (ulong)long.MaxValue ? long.MaxValue : (long)parsed;
         }
 
-        private BigInteger ParseInteger(
-            string argument,
+        private ulong ParseInteger(
+            ShellValue argument,
             out bool negative,
             out bool valid,
             out bool overflow)
         {
-            var span = argument.AsSpan();
+            var span = argument.Bytes.Span;
             var index = 0;
-            while (index < span.Length && char.IsWhiteSpace(span[index]))
-                index++;
-
-            negative = false;
-            if (index < span.Length && span[index] is '+' or '-')
+            while (index < span.Length && span[index] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n' or (byte)'\v' or (byte)'\f')
             {
-                negative = span[index] == '-';
+                if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
                 index++;
             }
 
-            var numberStart = index;
+            negative = false;
+            if (index < span.Length && span[index] is (byte)'+' or (byte)'-')
+            {
+                negative = span[index] == (byte)'-';
+                index++;
+            }
+
             var numberBase = 10;
-            if (index + 2 <= span.Length && span[index] == '0')
+            if (index + 2 <= span.Length && span[index] == (byte)'0')
             {
                 if (index + 2 < span.Length
-                    && span[index + 1] is 'x' or 'X'
-                    && TryHexValue(span[index + 2], out _))
+                    && span[index + 1] is (byte)'x' or (byte)'X'
+                    && ShellEscapeDecoder.TryDigitValue((char)span[index + 2], 16, out _))
                 {
                     numberBase = 16;
                     index += 2;
@@ -70,39 +72,55 @@ public static partial class PrintfFormatting
                 }
             }
 
-            var value = BigInteger.Zero;
+            ulong value = 0;
+            overflow = false;
             var digits = 0;
-            while (index < span.Length && ShellEscapeDecoder.TryDigitValue(span[index], numberBase, out var digit))
+            while (index < span.Length && ShellEscapeDecoder.TryDigitValue((char)span[index], numberBase, out var digit))
             {
-                value = value * numberBase + digit;
+                if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                if (value > (ulong.MaxValue - (uint)digit) / (uint)numberBase)
+                {
+                    value = ulong.MaxValue;
+                    overflow = true;
+                }
+                else
+                    value = value * (uint)numberBase + (uint)digit;
                 index++;
                 digits++;
             }
 
             valid = digits > 0 && index == span.Length;
-            if (digits == 0 && numberStart < span.Length && span[numberStart] == '0')
-            {
-                digits = 1;
-                value = BigInteger.Zero;
-            }
-
-            overflow = value > (BigInteger)ulong.MaxValue;
             return value;
         }
 
-        private static bool TryParseCharacterConstant(string argument, out long value)
+        private static bool TryParseCharacterConstant(ShellValue argument, out long value)
         {
             value = 0;
-            if (argument.Length == 0 || argument[0] is not ('\'' or '"'))
+            var bytes = argument.Bytes.Span;
+            if (bytes.IsEmpty || bytes[0] is not ((byte)'\'' or (byte)'"'))
                 return false;
-            if (argument.Length == 1)
+            if (bytes.Length == 1)
                 return true;
 
-            Rune.DecodeFromUtf16(argument.AsSpan(1), out var rune, out _);
-            value = rune.Value;
+            value = Rune.DecodeFromUtf8(bytes[1..], out var rune, out _) == OperationStatus.Done
+                ? rune.Value : bytes[1];
             return true;
         }
 
-        private static bool TryHexValue(char value, out int digit) => ShellEscapeDecoder.TryDigitValue(value, 16, out digit);
+        private static string NumericErrorDetail(ShellValue argument) => argument.Bytes.Span switch
+        {
+            [(byte)'0', (byte)'x' or (byte)'X', ..] => "invalid hex number",
+            [(byte)'0', >= (byte)'0' and <= (byte)'9', ..] => "invalid octal number",
+            _ => "invalid number"
+        };
+
+        private void AddNumericDiagnostic(ShellValue argument, string detail, bool warning)
+        {
+            using var output = new ByteMemoryBuilder(0, memoryBudget);
+            if (warning) output.Append("warning: "u8);
+            output.Append(argument.Bytes).Append(": "u8).Append(Utf8Text.Encode(detail));
+            _diagnostics.Add(ShellValue.FromBytes(output.DetachSnapshot()));
+            if (!warning) _conversionError = true;
+        }
     }
 }

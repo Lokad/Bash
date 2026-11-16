@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Parse printf numeric operands as bytes, preserving conversion diagnostics and
+  character constants without CLR decoding failures. Bound integer accumulation,
+  share extended floating-point parsing and admit its workspace with cancellation.
 - Preserve directory bookkeeping failure status, eligible writes, namerefs,
   attributes and unassigned values after successful navigation. Keep partial stack
   changes and readonly-assignment EXIT timing through the shared cleanup path.

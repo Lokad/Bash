@@ -164,6 +164,16 @@ prefixes. Invalid integers, malformed expressions and a missing closing `]` repo
 a diagnostic and status 2. `-o` queries recognize `errexit` and the fixed `pipefail`
 policy; unknown option names are false. File predicates retain the UTF-8 path boundary.
 
+Printf numeric operands use byte-oriented C-locale prefix parsing. Invalid suffixes
+retain the converted prefix, report a byte-preserving diagnostic and return status 1;
+range warnings preserve their successful conversion status. Character constants
+consume one UTF-8 scalar or one malformed byte after the quote. Floating-point
+conversion uses the deterministic 64-bit-significand extended profile, including
+the pinned Linux hexadecimal spelling and NaN/subnormal behavior. Exact subnormals
+do not produce range warnings. A shell-closed stderr discards conversion diagnostics
+without suppressing stdout; host-reported diagnostic failures retain their ordinary
+stop policy. Numeric parsing observes cancellation and shared workspace admission.
+
 Implicit `for name; do ...; done` iterates a snapshot of quoted positional
 parameters, preserving empty arguments and bytes. Explicit `in` lists retain their
 usual expansion rules. `exit` accepts signed 64-bit decimal statuses modulo 256;

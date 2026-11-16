@@ -6,6 +6,9 @@ using System.Threading;
 
 namespace Lokad.Bash.Helpers;
 
+internal readonly record struct FloatingPointPrefixResult(
+    ExtendedFloatingPoint Value, int ConsumedBytes, bool HasNumber, bool RangeError);
+
 public readonly partial record struct ExtendedFloatingPoint
 {
     /// <summary>Reads a C-locale numeric prefix, retaining NaN payloads and classifying missing numbers.</summary>
@@ -15,26 +18,56 @@ public readonly partial record struct ExtendedFloatingPoint
     public static ExtendedFloatingPoint ParseGeneral(
         ReadOnlySpan<byte> content,
         Action<long> reserveWorkspace,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        ParseGeneralPrefix(content, reserveWorkspace, cancellationToken).Value;
+
+    /// <summary>Shares conversion while retaining prefix validity and range causes for language callers.</summary>
+    internal static FloatingPointPrefixResult ParseGeneralPrefix(
+        ReadOnlySpan<byte> content, Action<long> reserveWorkspace, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var prefix = DecimalPrefix.Parse(content, DecimalPrefixSyntax.GeneralNumeric);
+        var totalBytes = content.Length;
+        var prefix = DecimalPrefix.Parse(content, DecimalPrefixSyntax.GeneralNumeric, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (StartsWithIgnoreCase(prefix.Unsigned, "inf"u8))
-            return new ExtendedFloatingPoint(prefix.Negative, FloatingPointClass.Infinity, 0, 0);
+        {
+            var length = StartsWithIgnoreCase(prefix.Unsigned, "infinity"u8) ? 8 : 3;
+            return new FloatingPointPrefixResult(
+                new ExtendedFloatingPoint(prefix.Negative, FloatingPointClass.Infinity, 0, 0),
+                totalBytes - prefix.Unsigned.Length + length, true, false);
+        }
         if (StartsWithIgnoreCase(prefix.Unsigned, "nan"u8))
-            return new ExtendedFloatingPoint(prefix.Negative, FloatingPointClass.Nan, NanPayload(prefix.Unsigned[3..]), 0);
+        {
+            var length = 3;
+            if (prefix.Unsigned.Length > 3 && prefix.Unsigned[3] == (byte)'(')
+            {
+                var cursor = 4;
+                while (cursor < prefix.Unsigned.Length && (prefix.Unsigned[cursor] is >= (byte)'a' and <= (byte)'z'
+                    or >= (byte)'A' and <= (byte)'Z' or >= (byte)'0' and <= (byte)'9' or (byte)'_'))
+                {
+                    CheckCancellation(cursor);
+                    cursor++;
+                }
+                if (cursor < prefix.Unsigned.Length && prefix.Unsigned[cursor] == (byte)')')
+                    length = cursor + 1;
+            }
+            return new FloatingPointPrefixResult(
+                new ExtendedFloatingPoint(prefix.Negative, FloatingPointClass.Nan, NanPayload(prefix.Unsigned[3..]), 0),
+                totalBytes - prefix.Unsigned.Length + length, true, false);
+        }
         if (prefix.Unsigned.StartsWith("0x"u8) || prefix.Unsigned.StartsWith("0X"u8))
             return ParseHexadecimal(prefix.Unsigned[2..], prefix.Negative);
         if (!prefix.HasDigits)
-            return new ExtendedFloatingPoint(false, FloatingPointClass.NonNumber, 0, 0);
+            return new FloatingPointPrefixResult(new ExtendedFloatingPoint(false, FloatingPointClass.NonNumber, 0, 0),
+                0, false, false);
         return ParseDecimal(prefix);
 
-        ExtendedFloatingPoint ParseDecimal(DecimalPrefix decimalPrefix)
+        FloatingPointPrefixResult ParseDecimal(DecimalPrefix decimalPrefix)
         {
             var whole = decimalPrefix.Whole;
             var fraction = decimalPrefix.Fraction;
-            var exponent = ReadExponent(decimalPrefix.Remainder, (byte)'e') - fraction.Length;
+            var exponent = ReadExponent(decimalPrefix.Remainder, (byte)'e', out var exponentBytes) - fraction.Length;
+            var consumed = totalBytes - decimalPrefix.Remainder.Length + exponentBytes;
             if (fraction.IsEmpty)
             {
                 var trimmed = whole.TrimEnd((byte)'0');
@@ -45,9 +78,11 @@ public readonly partial record struct ExtendedFloatingPoint
                 fraction = fraction.TrimStart((byte)'0');
             var digits = whole.Length + fraction.Length;
             if (digits == 0 || digits + exponent < -5_000)
-                return new ExtendedFloatingPoint(decimalPrefix.Negative, FloatingPointClass.Finite, 0, 0);
+                return new FloatingPointPrefixResult(new ExtendedFloatingPoint(decimalPrefix.Negative, FloatingPointClass.Finite, 0, 0),
+                    consumed, true, digits != 0);
             if (digits + exponent > 5_000)
-                return new ExtendedFloatingPoint(decimalPrefix.Negative, FloatingPointClass.Infinity, 0, 0);
+                return new FloatingPointPrefixResult(new ExtendedFloatingPoint(decimalPrefix.Negative, FloatingPointClass.Infinity, 0, 0),
+                    consumed, true, true);
 
             // Every rounding midpoint is a <=65-bit integer times a power of two, down to 2^-16446.
             // Its terminating decimal coefficient has fewer than 16446 + 20 significant digits.
@@ -63,10 +98,10 @@ public readonly partial record struct ExtendedFloatingPoint
                 numerator *= BigInteger.Pow(10, (int)exponent);
             else
                 denominator = BigInteger.Pow(10, (int)-exponent);
-            return FromRational(numerator, denominator, decimalPrefix.Negative, out _);
+            return ConvertRational(numerator, denominator, decimalPrefix.Negative, consumed);
         }
 
-        ExtendedFloatingPoint ParseHexadecimal(ReadOnlySpan<byte> hexadecimal, bool negative)
+        FloatingPointPrefixResult ParseHexadecimal(ReadOnlySpan<byte> hexadecimal, bool negative)
         {
             var index = 0;
             while (index < hexadecimal.Length && ShellEscapeDecoder.TryDigitValue((char)hexadecimal[index], 16, out _))
@@ -87,7 +122,12 @@ public readonly partial record struct ExtendedFloatingPoint
                 fraction = hexadecimal[start..index].TrimEnd((byte)'0');
             }
 
-            var exponent = ReadExponent(hexadecimal[index..], (byte)'p') - 4L * fraction.Length;
+            var hasDigits = index != 0 && (index != 1 || hexadecimal[0] != (byte)'.');
+            if (!hasDigits)
+                return new FloatingPointPrefixResult(new ExtendedFloatingPoint(negative, FloatingPointClass.Finite, 0, 0),
+                    totalBytes - hexadecimal.Length - 1, true, false);
+            var exponent = ReadExponent(hexadecimal[index..], (byte)'p', out var exponentBytes) - 4L * fraction.Length;
+            var consumed = totalBytes - hexadecimal.Length + index + exponentBytes;
             if (fraction.IsEmpty)
             {
                 var trimmed = whole.TrimEnd((byte)'0');
@@ -98,9 +138,11 @@ public readonly partial record struct ExtendedFloatingPoint
                 fraction = fraction.TrimStart((byte)'0');
             var digits = whole.Length + fraction.Length;
             if (digits == 0 || 4L * digits + exponent < -16_500)
-                return new ExtendedFloatingPoint(negative, FloatingPointClass.Finite, 0, 0);
+                return new FloatingPointPrefixResult(new ExtendedFloatingPoint(negative, FloatingPointClass.Finite, 0, 0),
+                    consumed, true, digits != 0);
             if (4L * digits + exponent > 16_500)
-                return new ExtendedFloatingPoint(negative, FloatingPointClass.Infinity, 0, 0);
+                return new FloatingPointPrefixResult(new ExtendedFloatingPoint(negative, FloatingPointClass.Infinity, 0, 0),
+                    consumed, true, true);
 
             // 32 hexadecimal digits exceed the 65 significant bits of every rounding midpoint.
             var truncated = LimitSignificand(ref whole, ref fraction, ref exponent, maximumDigits: 32, exponentStep: 4);
@@ -115,7 +157,17 @@ public readonly partial record struct ExtendedFloatingPoint
                 numerator <<= (int)exponent;
             else
                 denominator <<= (int)-exponent;
-            return FromRational(numerator, denominator, negative, out _);
+            return ConvertRational(numerator, denominator, negative, consumed);
+        }
+
+        FloatingPointPrefixResult ConvertRational(
+            BigInteger numerator, BigInteger denominator, bool negative, int consumed)
+        {
+            var value = FromRational(numerator, denominator, negative, out var rangeError);
+            // strtold warns for an inexact subnormal, not an exactly represented one.
+            if (rangeError && value.Class == FloatingPointClass.Finite && value.Significand != 0)
+                rangeError = (numerator << (63 - value.Exponent)) != denominator * value.Significand;
+            return new FloatingPointPrefixResult(value, consumed, true, rangeError);
         }
 
         // Normalization leaves a nonzero final digit, so any discarded suffix is nonzero.
@@ -138,14 +190,16 @@ public readonly partial record struct ExtendedFloatingPoint
             return true;
         }
 
-        long ReadExponent(ReadOnlySpan<byte> suffix, byte marker)
+        long ReadExponent(ReadOnlySpan<byte> suffix, byte marker, out int consumed)
         {
+            consumed = 0;
             if (suffix.IsEmpty || AsciiByte.ToLowerAscii(suffix[0]) != marker)
                 return 0;
             var index = 1;
             var negative = index < suffix.Length && suffix[index] == (byte)'-';
             if (index < suffix.Length && suffix[index] is (byte)'+' or (byte)'-')
                 index++;
+            var digitsStart = index;
             long exponent = 0;
             while (index < suffix.Length && Integers.IsDigit(suffix[index]))
             {
@@ -154,6 +208,8 @@ public readonly partial record struct ExtendedFloatingPoint
                 exponent = Math.Min(int.MaxValue, exponent * 10 + suffix[index] - '0');
                 index++;
             }
+            if (index != digitsStart)
+                consumed = index;
             return negative ? -exponent : exponent;
         }
 

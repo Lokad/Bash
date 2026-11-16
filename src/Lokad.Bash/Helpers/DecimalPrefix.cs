@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 namespace Lokad.Bash.Helpers;
 
@@ -36,8 +37,12 @@ public readonly ref struct DecimalPrefix
     public int Sign => Whole.IsEmpty && Fraction.IsEmpty ? 0 : Negative ? -1 : 1;
     public byte Suffix => Remainder.IsEmpty ? (byte)0 : Remainder[0];
 
-    public static DecimalPrefix Parse(ReadOnlySpan<byte> value, DecimalPrefixSyntax syntax)
+    public static DecimalPrefix Parse(ReadOnlySpan<byte> value, DecimalPrefixSyntax syntax) =>
+        Parse(value, syntax, CancellationToken.None);
+
+    internal static DecimalPrefix Parse(ReadOnlySpan<byte> value, DecimalPrefixSyntax syntax, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         value = syntax == DecimalPrefixSyntax.GeneralNumeric
             ? value.TrimStart(" \t\r\n\v\f"u8)
             : AsciiByte.TrimLeadingSortBlanks(value);
@@ -47,7 +52,10 @@ public readonly ref struct DecimalPrefix
 
         var index = 0;
         while (index < value.Length && Integers.IsDigit(value[index]))
+        {
+            if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
             index++;
+        }
         var hasDigits = index > 0;
         var whole = value[..index].TrimStart((byte)'0');
         ReadOnlySpan<byte> fraction = default;
@@ -55,7 +63,10 @@ public readonly ref struct DecimalPrefix
         {
             var start = ++index;
             while (index < value.Length && Integers.IsDigit(value[index]))
+            {
+                if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
                 index++;
+            }
             hasDigits |= index > start;
             fraction = value[start..index].TrimEnd((byte)'0');
         }

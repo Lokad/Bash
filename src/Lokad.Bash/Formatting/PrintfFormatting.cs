@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -42,8 +43,8 @@ public static partial class PrintfFormatting
     internal static ValueTask<PrintfResult> EvaluateAsync(
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
-        Func<ShellValue, ValueTask<bool>> reportDiagnostic) =>
-        new Formatter(format, arguments, timestamp, allowAssignments: true, memoryBudget).RunAsync(assignCount, reportDiagnostic);
+        Func<ShellValue, ValueTask<bool>> reportDiagnostic, CancellationToken cancellationToken) =>
+        new Formatter(format, arguments, timestamp, allowAssignments: true, memoryBudget, cancellationToken).RunAsync(assignCount, reportDiagnostic);
 
     /// <summary>Formats command output, rejecting the shell-only <c>%n</c> assignment.</summary>
     /// <remarks>Like <see cref="Format"/>, uses the Unix epoch for implicit timestamps.</remarks>
@@ -54,7 +55,7 @@ public static partial class PrintfFormatting
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool allowAssignments, IMemoryBudget memoryBudget)
     {
         var assignments = new List<PrintfVariableAssignment>();
-        var pending = new Formatter(format, arguments, timestamp, allowAssignments, memoryBudget)
+        var pending = new Formatter(format, arguments, timestamp, allowAssignments, memoryBudget, CancellationToken.None)
             .RunAsync(CaptureCount, static _ => ValueTask.FromResult(true));
         // These callbacks never suspend; do not block the synchronous formatting API.
         if (!pending.IsCompleted)
@@ -72,7 +73,7 @@ public static partial class PrintfFormatting
         ShellValue formatValue,
         IReadOnlyList<ShellValue> arguments,
         DateTimeOffset timestamp,
-        bool allowAssignments, IMemoryBudget memoryBudget)
+        bool allowAssignments, IMemoryBudget memoryBudget, CancellationToken cancellationToken)
     {
         private readonly ReadOnlyMemory<byte> format = formatValue.Bytes;
 

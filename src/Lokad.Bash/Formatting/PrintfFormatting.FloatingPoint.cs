@@ -1,6 +1,6 @@
 using System;
 using System.Numerics;
-using System.Text;
+using System.Threading;
 using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Formatting;
@@ -10,7 +10,6 @@ public static partial class PrintfFormatting
     private readonly record struct FloatingPointParseResult(
         ExtendedFloatingPoint Value,
         bool Invalid,
-        bool InvalidHexadecimal,
         bool RangeError);
 
     private sealed partial class Formatter
@@ -21,15 +20,13 @@ public static partial class PrintfFormatting
 
             public bool Invalid { get; }
 
-            public bool InvalidHexadecimal { get; }
-
             public bool RangeError { get; }
 
             public FloatingPointFormatResult(
-                string argument,
+                ShellValue argument,
                 char conversion,
                 int? precision,
-                bool alternate)
+                bool alternate, Action<long> reserveWorkspace, CancellationToken cancellationToken)
             {
                 var parsed = Parse(argument);
                 var value = parsed.Value;
@@ -58,307 +55,22 @@ public static partial class PrintfFormatting
                         ? FormattedNumberPadding.ZeroAllowed
                         : FormattedNumberPadding.SpaceOnly);
                 Invalid = parsed.Invalid;
-                InvalidHexadecimal = parsed.InvalidHexadecimal;
                 RangeError = parsed.RangeError;
 
-                FloatingPointParseResult Parse(string input)
+                FloatingPointParseResult Parse(ShellValue input)
                 {
                     var zero = new ExtendedFloatingPoint(false, FloatingPointClass.Finite, 0, 0);
-                    if (input.Length == 0)
-                        return new FloatingPointParseResult(zero, false, false, false);
-
+                    if (input.IsEmpty)
+                        return new FloatingPointParseResult(zero, false, false);
                     if (TryParseCharacterConstant(input, out var character))
-                    {
                         return new FloatingPointParseResult(
                             ExtendedFloatingPoint.FromRational(character, BigInteger.One, negative: false, out _),
-                            false,
-                            false,
-                            false);
-                    }
+                            false, false);
 
-                    var text = input.AsSpan();
-                    var index = 0;
-                    while (index < text.Length && char.IsWhiteSpace(text[index]))
-                        index++;
-
-                    var negative = false;
-                    if (index < text.Length && text[index] is '+' or '-')
-                    {
-                        negative = text[index] == '-';
-                        index++;
-                    }
-
-                    if (StartsWithOrdinalIgnoreCase(text[index..], "infinity"))
-                    {
-                        index += "infinity".Length;
-                        return new FloatingPointParseResult(
-                            new ExtendedFloatingPoint(negative, FloatingPointClass.Infinity, 0, 0),
-                            index != text.Length,
-                            false,
-                            false);
-                    }
-                    if (StartsWithOrdinalIgnoreCase(text[index..], "inf"))
-                    {
-                        index += "inf".Length;
-                        return new FloatingPointParseResult(
-                            new ExtendedFloatingPoint(negative, FloatingPointClass.Infinity, 0, 0),
-                            index != text.Length,
-                            false,
-                            false);
-                    }
-                    if (StartsWithOrdinalIgnoreCase(text[index..], "nan"))
-                    {
-                        index += "nan".Length;
-                        if (index < text.Length && text[index] == '(')
-                        {
-                            var payloadEnd = index + 1;
-                            while (payloadEnd < text.Length
-                                   && (char.IsAsciiLetterOrDigit(text[payloadEnd]) || text[payloadEnd] == '_'))
-                            {
-                                payloadEnd++;
-                            }
-
-                            if (payloadEnd < text.Length && text[payloadEnd] == ')')
-                                index = payloadEnd + 1;
-                        }
-
-                        return new FloatingPointParseResult(
-                            new ExtendedFloatingPoint(negative, FloatingPointClass.Nan, 0, 0),
-                            index != text.Length,
-                            false,
-                            false);
-                    }
-
-                    if (index + 2 <= text.Length
-                        && text[index] == '0'
-                        && text[index + 1] is 'x' or 'X')
-                    {
-                        return ParseHexadecimal(text, index + 2, negative);
-                    }
-
-                    return ParseDecimal(text, index, negative);
-
-                    FloatingPointParseResult ParseHexadecimal(
-                        ReadOnlySpan<char> hexadecimal,
-                        int digitsStart,
-                        bool hexadecimalNegative)
-                    {
-                        var cursor = digitsStart;
-                        var significand = BigInteger.Zero;
-                        var digits = 0;
-                        var fractionalDigits = 0;
-                        while (cursor < hexadecimal.Length && TryHexValue(hexadecimal[cursor], out var digit))
-                        {
-                            significand = significand * 16 + digit;
-                            cursor++;
-                            digits++;
-                        }
-
-                        if (cursor < hexadecimal.Length && hexadecimal[cursor] == '.')
-                        {
-                            cursor++;
-                            while (cursor < hexadecimal.Length && TryHexValue(hexadecimal[cursor], out var digit))
-                            {
-                                significand = significand * 16 + digit;
-                                cursor++;
-                                digits++;
-                                fractionalDigits++;
-                            }
-                        }
-
-                        if (digits == 0)
-                        {
-                            return new FloatingPointParseResult(
-                                new ExtendedFloatingPoint(hexadecimalNegative, FloatingPointClass.Finite, 0, 0),
-                                true,
-                                true,
-                                false);
-                        }
-
-                        var binaryExponent = -4L * fractionalDigits;
-                        if (cursor < hexadecimal.Length && hexadecimal[cursor] is 'p' or 'P')
-                        {
-                            var exponentMarker = cursor;
-                            cursor++;
-                            var exponentNegative = false;
-                            if (cursor < hexadecimal.Length && hexadecimal[cursor] is '+' or '-')
-                            {
-                                exponentNegative = hexadecimal[cursor] == '-';
-                                cursor++;
-                            }
-
-                            var exponentDigits = cursor;
-                            var exponent = 0L;
-                            while (cursor < hexadecimal.Length
-                                   && hexadecimal[cursor] is >= '0' and <= '9')
-                            {
-                                exponent = Math.Min(100_000, exponent * 10 + hexadecimal[cursor] - '0');
-                                cursor++;
-                            }
-
-                            if (cursor == exponentDigits)
-                            {
-                                cursor = exponentMarker;
-                            }
-                            else
-                            {
-                                binaryExponent += exponentNegative ? -exponent : exponent;
-                            }
-                        }
-
-                        if (significand.IsZero)
-                        {
-                            return new FloatingPointParseResult(
-                                new ExtendedFloatingPoint(hexadecimalNegative, FloatingPointClass.Finite, 0, 0),
-                                cursor != hexadecimal.Length,
-                                cursor != hexadecimal.Length,
-                                false);
-                        }
-
-                        var approximateExponent = significand.GetBitLength() + binaryExponent;
-                        if (approximateExponent > 16_500)
-                        {
-                            return new FloatingPointParseResult(
-                                new ExtendedFloatingPoint(hexadecimalNegative, FloatingPointClass.Infinity, 0, 0),
-                                cursor != hexadecimal.Length,
-                                cursor != hexadecimal.Length,
-                                true);
-                        }
-                        if (approximateExponent < -16_500)
-                        {
-                            return new FloatingPointParseResult(
-                                new ExtendedFloatingPoint(hexadecimalNegative, FloatingPointClass.Finite, 0, 0),
-                                cursor != hexadecimal.Length,
-                                cursor != hexadecimal.Length,
-                                true);
-                        }
-
-                        var numerator = significand;
-                        var denominator = BigInteger.One;
-                        if (binaryExponent >= 0)
-                            numerator <<= (int)binaryExponent;
-                        else
-                            denominator <<= (int)-binaryExponent;
-                        var value = ExtendedFloatingPoint.FromRational(numerator, denominator, hexadecimalNegative, out var rangeError);
-                        return new FloatingPointParseResult(
-                            value,
-                            cursor != hexadecimal.Length,
-                            cursor != hexadecimal.Length,
-                            rangeError);
-                    }
-
-                    FloatingPointParseResult ParseDecimal(
-                        ReadOnlySpan<char> decimalText,
-                        int digitsStart,
-                        bool decimalNegative)
-                    {
-                        var cursor = digitsStart;
-                        var digits = new StringBuilder();
-                        while (cursor < decimalText.Length
-                               && decimalText[cursor] is >= '0' and <= '9')
-                            digits.Append(decimalText[cursor++]);
-
-                        var fractionalDigits = 0;
-                        if (cursor < decimalText.Length && decimalText[cursor] == '.')
-                        {
-                            cursor++;
-                            while (cursor < decimalText.Length
-                                   && decimalText[cursor] is >= '0' and <= '9')
-                            {
-                                digits.Append(decimalText[cursor++]);
-                                fractionalDigits++;
-                            }
-                        }
-
-                        if (digits.Length == 0)
-                        {
-                            return new FloatingPointParseResult(
-                                zero,
-                                true,
-                                false,
-                                false);
-                        }
-
-                        var decimalExponent = 0L;
-                        if (cursor < decimalText.Length && decimalText[cursor] is 'e' or 'E')
-                        {
-                            var exponentMarker = cursor;
-                            cursor++;
-                            var exponentNegative = false;
-                            if (cursor < decimalText.Length && decimalText[cursor] is '+' or '-')
-                            {
-                                exponentNegative = decimalText[cursor] == '-';
-                                cursor++;
-                            }
-
-                            var exponentDigits = cursor;
-                            while (cursor < decimalText.Length
-                                   && decimalText[cursor] is >= '0' and <= '9')
-                            {
-                                decimalExponent = Math.Min(100_000,
-                                    decimalExponent * 10 + decimalText[cursor] - '0');
-                                cursor++;
-                            }
-
-                            if (cursor == exponentDigits)
-                            {
-                                cursor = exponentMarker;
-                                decimalExponent = 0;
-                            }
-                            else if (exponentNegative)
-                            {
-                                decimalExponent = -decimalExponent;
-                            }
-                        }
-
-                        decimalExponent -= fractionalDigits;
-                        var digitText = digits.ToString();
-                        var firstNonZero = 0;
-                        while (firstNonZero < digitText.Length && digitText[firstNonZero] == '0')
-                            firstNonZero++;
-                        if (firstNonZero == digitText.Length)
-                        {
-                            return new FloatingPointParseResult(
-                                new ExtendedFloatingPoint(decimalNegative, FloatingPointClass.Finite, 0, 0),
-                                cursor != decimalText.Length,
-                                false,
-                                false);
-                        }
-
-                        var decimalOrder = digitText.Length - firstNonZero + decimalExponent;
-                        if (decimalOrder > 5_000)
-                        {
-                            return new FloatingPointParseResult(
-                                new ExtendedFloatingPoint(decimalNegative, FloatingPointClass.Infinity, 0, 0),
-                                cursor != decimalText.Length,
-                                false,
-                                true);
-                        }
-                        if (decimalOrder < -5_000)
-                        {
-                            return new FloatingPointParseResult(
-                                new ExtendedFloatingPoint(decimalNegative, FloatingPointClass.Finite, 0, 0),
-                                cursor != decimalText.Length,
-                                false,
-                                true);
-                        }
-
-                        var numerator = BigInteger.Parse(digitText.AsSpan(firstNonZero), Culture);
-                        var denominator = BigInteger.One;
-                        if (decimalExponent >= 0)
-                            numerator *= BigInteger.Pow(10, (int)decimalExponent);
-                        else
-                            denominator = BigInteger.Pow(10, (int)-decimalExponent);
-                        var value = ExtendedFloatingPoint.FromRational(numerator, denominator, decimalNegative, out var rangeError);
-                        return new FloatingPointParseResult(
-                            value,
-                            cursor != decimalText.Length,
-                            false,
-                            rangeError);
-                    }
-
-                    static bool StartsWithOrdinalIgnoreCase(ReadOnlySpan<char> value, string prefix) =>
-                        value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+                    var prefix = ExtendedFloatingPoint.ParseGeneralPrefix(input.Bytes.Span, reserveWorkspace, cancellationToken);
+                    var invalid = !prefix.HasNumber || prefix.ConsumedBytes != input.Bytes.Length;
+                    return new FloatingPointParseResult(prefix.HasNumber ? prefix.Value : zero,
+                        invalid, prefix.RangeError);
                 }
 
                 string FormatFixed(ExtendedFloatingPoint finite, int precision, bool alternate)

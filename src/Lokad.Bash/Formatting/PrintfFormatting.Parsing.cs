@@ -17,8 +17,10 @@ public static partial class PrintfFormatting
             var reportedDiagnostics = 0;
             var diagnosticOutputClosed = false;
             using var timeMemory = new MemoryCapacity(memoryBudget, 0);
+            using var numericMemory = new MemoryCapacity(memoryBudget, 0);
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (format.Length == 0)
                     return BuildResult();
 
@@ -48,6 +50,7 @@ public static partial class PrintfFormatting
             {
                 for (var index = 0; index < format.Length && !_stop && !_failed;)
                 {
+                    if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
                     var current = (char)format.Span[index];
                     if (current == '\\')
                     {
@@ -230,11 +233,10 @@ public static partial class PrintfFormatting
                     if (!TryGetArgument(out var argument))
                         return 0;
 
-                    var text = argument.ToUtf8String();
-                    var value = ParseSigned(text);
+                    var value = ParseSigned(argument);
                     if (value is < int.MinValue or > int.MaxValue)
                     {
-                        AddConversionDiagnostic($"{text}: {role} out of range");
+                        AddNumericDiagnostic(argument, role + " out of range", warning: false);
                         return overflowValue;
                     }
 
@@ -263,6 +265,7 @@ public static partial class PrintfFormatting
 
             async ValueTask ApplySpecificationAsync(FormatSpecification specification)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 switch (specification.Conversion)
                 {
                     case 'c':
@@ -308,7 +311,7 @@ public static partial class PrintfFormatting
                             var configuredFormat = specification.TimeFormat;
                             long seconds;
                             if (TryGetArgument(out var argument))
-                                seconds = ParseSigned(argument.ToUtf8String());
+                                seconds = ParseSigned(argument);
                             else
                                 seconds = -1;
 
@@ -362,7 +365,7 @@ public static partial class PrintfFormatting
                     case 'd':
                     case 'i':
                         {
-                            var value = ParseSigned(GetValueArgument().ToUtf8String());
+                            var value = ParseSigned(GetValueArgument());
                             var negative = value < 0;
                             var magnitude = negative ? unchecked((ulong)(-(value + 1)) + 1) : (ulong)value;
                             var digits = magnitude.ToString(Culture);
@@ -383,7 +386,7 @@ public static partial class PrintfFormatting
                     case 'x':
                     case 'X':
                         {
-                            var value = ParseUnsigned(GetValueArgument().ToUtf8String());
+                            var value = ParseUnsigned(GetValueArgument());
                             var digits = specification.Conversion switch
                             {
                                 'o' => ConvertUnsigned(value, 8, uppercase: false),
@@ -433,9 +436,9 @@ public static partial class PrintfFormatting
                                 return new string(buffer[index..]);
                             }
 
-                            ulong ParseUnsigned(string unsignedArgument)
+                            ulong ParseUnsigned(ShellValue unsignedArgument)
                             {
-                                if (unsignedArgument.Length == 0)
+                                if (unsignedArgument.IsEmpty)
                                     return 0;
 
                                 if (TryParseCharacterConstant(unsignedArgument, out var character))
@@ -447,15 +450,14 @@ public static partial class PrintfFormatting
                                     out var valid,
                                     out var overflow);
                                 if (!valid)
-                                    AddConversionDiagnostic($"{unsignedArgument}: invalid number");
+                                    AddNumericDiagnostic(unsignedArgument, NumericErrorDetail(unsignedArgument), warning: false);
                                 else if (overflow)
-                                    AddWarning($"warning: {unsignedArgument}: Numerical result out of range");
+                                    AddNumericDiagnostic(unsignedArgument, "Numerical result out of range", warning: true);
 
-                                if (parsed > ulong.MaxValue)
+                                if (overflow)
                                     return ulong.MaxValue;
 
-                                var unsigned = (ulong)parsed;
-                                return negative ? unchecked(0UL - unsigned) : unsigned;
+                                return negative ? unchecked(0UL - parsed) : parsed;
                             }
                         }
                     case 'a':
@@ -467,20 +469,19 @@ public static partial class PrintfFormatting
                     case 'g':
                     case 'G':
                         {
-                            var argument = GetValueArgument().ToUtf8String();
+                            var argument = GetValueArgument();
+                            numericMemory.Resize(0);
                             var result = new FloatingPointFormatResult(
                                 argument,
                                 specification.Conversion,
                                 specification.Precision,
-                                specification.Flags.HasFlag(FormatFlags.Alternate));
+                                specification.Flags.HasFlag(FormatFlags.Alternate), numericMemory.Grow, cancellationToken);
                             if (result.Invalid)
                             {
-                                AddConversionDiagnostic(result.InvalidHexadecimal
-                                    ? $"{argument}: invalid hex number"
-                                    : $"{argument}: invalid number");
+                                AddNumericDiagnostic(argument, NumericErrorDetail(argument), warning: false);
                             }
                             if (result.RangeError)
-                                AddWarning($"warning: {argument}: Numerical result out of range");
+                                AddNumericDiagnostic(argument, "Numerical result out of range", warning: true);
 
                             AppendNumber(specification, result.Number);
                             return;

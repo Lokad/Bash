@@ -90,7 +90,7 @@ public sealed partial class Evaluation
         try
         {
             var result = await PrintfFormatting.EvaluateAsync(format, arguments, Options.Timestamp,
-                outputMemory, AssignCountAsync, ReportDiagnosticAsync).ConfigureAwait(false);
+                outputMemory, AssignCountAsync, ReportDiagnosticAsync, _cancellationToken).ConfigureAwait(false);
             var exitCode = result.ExitCode;
 
             if (outputReference is { } destination && !HasPendingExpansionError && diagnostics.Result.CanAcceptMore)
@@ -140,6 +140,10 @@ public sealed partial class Evaluation
 
         async ValueTask<bool> ReportDiagnosticAsync(ShellValue diagnostic)
         {
+            // A shell-closed stderr discards conversion diagnostics without
+            // suppressing formatted stdout. Host-reported write failures still stop.
+            if (GetStdErrDescriptor().IsClosed)
+                return true;
             await ReportExpansionDiagnosticAsync(ShellValue.FromText("printf"), diagnostic).ConfigureAwait(false);
             return diagnostics.Result.CanAcceptMore;
         }
