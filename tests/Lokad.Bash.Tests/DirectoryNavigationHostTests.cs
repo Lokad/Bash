@@ -10,6 +10,62 @@ namespace Lokad.Bash.Tests;
 
 public sealed class DirectoryNavigationHostTests
 {
+    [Theory]
+    [InlineData(false, "PWD")]
+    [InlineData(true, "PWD")]
+    [InlineData(false, "OLDPWD")]
+    [InlineData(true, "OLDPWD")]
+    public async Task ReadonlyDiagnosticRetainsPublishedCwdAndOwnersThroughCancellation(bool prepared, string variable)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var entered = new TaskCompletionSource<ReadOnlyMemory<byte>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var write = new TaskCompletionSource<DescriptorWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var close = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = new TestOperationVisitor([])
+        {
+            MemoryBudget = owner,
+            BeforeAppend = (_, content) => entered.SetResult(content),
+            BeforeDescriptorClose = _ => closeEntered.SetResult()
+        };
+        host.EnqueueOpenFileDescriptor(9);
+        host.EnqueuePathInfo(FilePathInfo.FromKind(FilePathKind.Directory));
+        host.EnqueueAppendTask(write.Task);
+        host.EnqueueCloseDescriptorTask(close.Task);
+        var script = "readonly " + variable + "; set -e; cd /a 2>/out";
+        var evaluation = new Eval(Parser.Parse(script));
+        var running = prepared
+            ? new Engine().RunAsync(evaluation, host, owner, cancellation.Token)
+            : BashScript.RunAsync(host, script, EvaluationOptions.Default, cancellation.Token);
+        try
+        {
+            var borrowed = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(Encoding.UTF8.GetBytes(variable + ": readonly variable\n"), borrowed.ToArray());
+            if (prepared) Assert.Equal("/a", evaluation.CurrentDirectory.Path);
+            cancellation.Cancel();
+            Assert.False(running.IsCompleted);
+            Assert.True(memory.ReservedBytes > 0);
+            Assert.Empty(host.ClosedDescriptors);
+            write.SetResult(DescriptorWriteResult.Open);
+            await closeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(running.IsCompleted);
+            Assert.True(memory.ReservedBytes > 0);
+        }
+        finally
+        {
+            write.TrySetResult(DescriptorWriteResult.Open);
+            close.TrySetResult();
+        }
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(new FileDescriptor(9), Assert.Single(host.ClosedDescriptors));
+        Assert.Equal("/a", Assert.Single(host.PathInfoRequests).Path);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
     public static IEnumerable<object[]> Rejections()
     {
         foreach (var prepared in new[] { false, true })

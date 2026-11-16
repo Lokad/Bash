@@ -75,7 +75,7 @@ internal sealed class IndexedArray
 {
     // Dictionary capacity and resize overlap, sorted-set nodes, and collection headers.
     internal const int ElementMemoryBytes = 192;
-    private readonly Dictionary<long, ShellValue> _elements;
+    private readonly Dictionary<long, ShellValue?> _elements;
     // SortedDictionary cannot find the last key without enumeration. Keep an ordered
     // position index for sparse traversal and logarithmic maximum removal.
     private readonly SortedSet<long> _positions;
@@ -96,7 +96,7 @@ internal sealed class IndexedArray
     }
 
     private IndexedArray(
-        Dictionary<long, ShellValue> elements,
+        Dictionary<long, ShellValue?> elements,
         SortedSet<long> positions,
         long? maximumIndex,
         bool isInitialized)
@@ -117,7 +117,10 @@ internal sealed class IndexedArray
     public long? MaxIndex => _maximumIndex;
 
     /// <summary>Enumerates present values by index without copying; consume before mutating.</summary>
-    public IEnumerable<ShellValue> PresentValues => _positions.Select(position => _elements[position]);
+    public IEnumerable<ShellValue> PresentValues => _positions.Select(position => _elements[position].GetValueOrDefault());
+
+    /// <summary>Includes present but unassigned positions, which declarations print without a quoted value.</summary>
+    public IEnumerable<ShellValue?> DeclarationValues => _positions.Select(position => _elements[position]);
 
     /// <summary>Gets the number of present entries, excluding holes.</summary>
     public int Count => _elements.Count;
@@ -131,7 +134,7 @@ internal sealed class IndexedArray
         // that would enumerate its entire range before a small window can be read.
         foreach (var position in _positions.GetViewBetween(first.Value, maximum))
         {
-            yield return _elements[position];
+            yield return _elements[position].GetValueOrDefault();
             if (--count == 0)
                 yield break;
         }
@@ -142,14 +145,23 @@ internal sealed class IndexedArray
     /// <summary>Gets one present position without allocating.</summary>
     public bool TryGet(
         IndexedArrayIndex index,
-        out ShellValue value) =>
-        _elements.TryGetValue(index.Value, out value);
+        out ShellValue value)
+    {
+        if (_elements.TryGetValue(index.Value, out var assigned) && assigned is { } stored)
+        {
+            value = stored;
+            return true;
+        }
+        value = ShellValue.Empty;
+        return false;
+    }
 
     /// <summary>Adds or replaces one validated position.</summary>
-    public void Set(IndexedArrayIndex index, ShellValue value)
+    public void Set(IndexedArrayIndex index, ShellValue? value)
     {
         _elements.TryGetValue(index.Value, out var previous);
-        var valueBytes = checked(_valueBytes - Variables.EstimateValueBytes(previous) + Variables.EstimateValueBytes(value));
+        var valueBytes = checked(_valueBytes - Variables.EstimateValueBytes(previous.GetValueOrDefault())
+            + Variables.EstimateValueBytes(value.GetValueOrDefault()));
         if (_elements.TryAdd(index.Value, value))
             _positions.Add(index.Value);
         else
@@ -166,7 +178,7 @@ internal sealed class IndexedArray
     {
         if (!_elements.Remove(index.Value, out var previous))
             return;
-        _valueBytes -= Variables.EstimateValueBytes(previous);
+        _valueBytes -= Variables.EstimateValueBytes(previous.GetValueOrDefault());
         _positions.Remove(index.Value);
         if (_maximumIndex == index.Value)
             _maximumIndex = _positions.Count == 0 ? null : _positions.Max;
@@ -210,7 +222,7 @@ internal sealed class IndexedArray
             values.Add(ShellValue.Empty);
 
         foreach (var entry in _elements)
-            values[checked((int)entry.Key)] = entry.Value;
+            values[checked((int)entry.Key)] = entry.Value.GetValueOrDefault();
 
         return values;
     }
@@ -218,7 +230,7 @@ internal sealed class IndexedArray
     /// <summary>Creates an independent sparse array with the same present positions.</summary>
     public IndexedArray Clone()
     {
-        return new IndexedArray(new Dictionary<long, ShellValue>(_elements),
+        return new IndexedArray(new Dictionary<long, ShellValue?>(_elements),
             new SortedSet<long>(_positions), _maximumIndex, IsInitialized)
         {
             _valueBytes = _valueBytes,
@@ -231,18 +243,18 @@ internal sealed class IndexedArray
 /// <summary>Stores associative-array entries in deterministic byte order, not Bash hash-table order.</summary>
 internal sealed class AssociativeArray
 {
-    private readonly SortedDictionary<ShellValue, ShellValue> _elements;
+    private readonly SortedDictionary<ShellValue, ShellValue?> _elements;
     private long _valueBytes;
     internal long EstimatedMemoryBytes => (long)_elements.Count * IndexedArray.ElementMemoryBytes + _valueBytes;
 
     /// <summary>Creates an empty array, retaining whether it has received an assignment.</summary>
     public AssociativeArray(bool isInitialized)
     {
-        _elements = new SortedDictionary<ShellValue, ShellValue>(ShellValue.ByteOrder);
+        _elements = new SortedDictionary<ShellValue, ShellValue?>(ShellValue.ByteOrder);
         IsInitialized = isInitialized;
     }
 
-    private AssociativeArray(SortedDictionary<ShellValue, ShellValue> elements, bool isInitialized)
+    private AssociativeArray(SortedDictionary<ShellValue, ShellValue?> elements, bool isInitialized)
     {
         _elements = elements;
         IsInitialized = isInitialized;
@@ -257,17 +269,25 @@ internal sealed class AssociativeArray
     /// <summary>Gets one validated key without allocating.</summary>
     public bool TryGet(
         AssociativeArrayKey key,
-        out ShellValue value) =>
-        _elements.TryGetValue(key.Value, out value);
+        out ShellValue value)
+    {
+        if (_elements.TryGetValue(key.Value, out var assigned) && assigned is { } stored)
+        {
+            value = stored;
+            return true;
+        }
+        value = ShellValue.Empty;
+        return false;
+    }
 
     /// <summary>Adds or replaces one validated non-empty key.</summary>
-    public void Set(AssociativeArrayKey key, ShellValue value)
+    public void Set(AssociativeArrayKey key, ShellValue? value)
     {
         if (_elements.TryGetValue(key.Value, out var previous))
-            _valueBytes -= Variables.EstimateValueBytes(previous);
+            _valueBytes -= Variables.EstimateValueBytes(previous.GetValueOrDefault());
         else
             _valueBytes = checked(_valueBytes + Variables.EstimateValueBytes(key.Value));
-        _valueBytes = checked(_valueBytes + Variables.EstimateValueBytes(value));
+        _valueBytes = checked(_valueBytes + Variables.EstimateValueBytes(value.GetValueOrDefault()));
         _elements[key.Value] = value;
         MarkInitialized();
     }
@@ -276,11 +296,14 @@ internal sealed class AssociativeArray
     public void Remove(AssociativeArrayKey key)
     {
         if (_elements.TryGetValue(key.Value, out var previous) && _elements.Remove(key.Value))
-            _valueBytes -= Variables.EstimateValueBytes(key.Value) + Variables.EstimateValueBytes(previous);
+            _valueBytes -= Variables.EstimateValueBytes(key.Value) + Variables.EstimateValueBytes(previous.GetValueOrDefault());
     }
 
     /// <summary>Enumerates values by byte-ordered key without copying; consume before mutating.</summary>
-    public IEnumerable<ShellValue> PresentValues => _elements.Values;
+    public IEnumerable<ShellValue> PresentValues => _elements.Values.Select(value => value.GetValueOrDefault());
+
+    /// <summary>Includes present but unassigned keys without inventing an empty assigned value.</summary>
+    public IEnumerable<ShellValue?> DeclarationValues => _elements.Values;
 
     /// <summary>Gets the number of present entries.</summary>
     public int Count => _elements.Count;
@@ -289,9 +312,10 @@ internal sealed class AssociativeArray
     public IEnumerable<ShellValue> PresentKeys => _elements.Keys;
 
     /// <summary>Captures a detached dictionary whose enumeration follows byte key order.</summary>
-    public Dictionary<ShellValue, ShellValue> CaptureValues() => new(_elements);
+    public Dictionary<ShellValue, ShellValue> CaptureValues() =>
+        _elements.ToDictionary(entry => entry.Key, entry => entry.Value.GetValueOrDefault());
 
     /// <summary>Creates an independent associative array with the same entries.</summary>
     public AssociativeArray Clone() =>
-        new(new SortedDictionary<ShellValue, ShellValue>(_elements, ShellValue.ByteOrder), IsInitialized) { _valueBytes = _valueBytes };
+        new(new SortedDictionary<ShellValue, ShellValue?>(_elements, ShellValue.ByteOrder), IsInitialized) { _valueBytes = _valueBytes };
 }

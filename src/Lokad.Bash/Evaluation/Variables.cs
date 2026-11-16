@@ -757,6 +757,16 @@ public sealed partial class Variables
         return true;
     }
 
+    /// <summary>Publishes an unassigned scalar while retaining its declaration attributes and unset alias.</summary>
+    internal bool TrySetResolvedUnassigned(BindingName name)
+    {
+        if (name.IsEmpty || IsReadonly(name))
+            return false;
+        if (!NamerefTargets.ContainsKey(name))
+            ReplaceValue(name, new UnassignedSlot());
+        return true;
+    }
+
     /// <summary>Shadows a command-prefix name after its selected destination passed readonly validation.</summary>
     internal void SetTemporaryScalar(BindingName name, ShellValue value)
     {
@@ -986,7 +996,7 @@ public sealed partial class Variables
         return TryResolveWritableName(name, out var resolved) && TrySetResolvedArrayElement(resolved, index, value);
     }
 
-    internal bool TrySetResolvedArrayElement(BindingName resolved, IndexedArrayIndex index, ShellValue value)
+    internal bool TrySetResolvedArrayElement(BindingName resolved, IndexedArrayIndex index, ShellValue? value)
     {
         if (resolved.IsEmpty || AssociativeArrays.ContainsKey(resolved))
             return false;
@@ -1016,7 +1026,7 @@ public sealed partial class Variables
         return TryResolveWritableName(name, out var resolved) && TrySetResolvedArrayElement(resolved, key, value);
     }
 
-    internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue value)
+    internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue? value)
     {
         if (resolved.IsEmpty || IndexedArrays.ContainsKey(resolved))
             return false;
@@ -1092,9 +1102,9 @@ public sealed partial class Variables
                 ScalarSlot scalar => AppendValue(scalar.Value, valueStyle),
                 NamerefSlot reference when !reference.Value.IsEmpty => AppendValue(reference.Value.Value, valueStyle),
                 IndexedSlot { Value.IsInitialized: true } indexed =>
-                    AppendArray(indexed.Value.PresentKeys.Select(ShellValue.FromText), indexed.Value.PresentValues, ArrayKind.Indexed),
+                    AppendArray(indexed.Value.PresentKeys.Select(ShellValue.FromText), indexed.Value.DeclarationValues, ArrayKind.Indexed),
                 AssociativeSlot { Value.IsInitialized: true } associative =>
-                    AppendArray(associative.Value.PresentKeys, associative.Value.PresentValues, ArrayKind.Associative),
+                    AppendArray(associative.Value.PresentKeys, associative.Value.DeclarationValues, ArrayKind.Associative),
                 _ => true
             };
             if (!appended)
@@ -1105,7 +1115,7 @@ public sealed partial class Variables
         bool AppendValue(ShellValue value, ShellQuoteStyle quoteStyle) => output.TryAppend((byte)'=')
             && ShellArgumentEscaping.TryAppendQuoted(output, value.Bytes.Span, quoteStyle);
 
-        bool AppendArray(IEnumerable<ShellValue> keys, IEnumerable<ShellValue> values, ArrayKind kind)
+        bool AppendArray(IEnumerable<ShellValue> keys, IEnumerable<ShellValue?> values, ArrayKind kind)
         {
             if (!output.TryAppend("=("u8))
                 return false;
@@ -1119,7 +1129,8 @@ public sealed partial class Variables
                 if (!output.TryAppend((byte)'[')
                     || !ShellArgumentEscaping.TryAppendQuoted(output, key.Bytes.Span,
                         kind == ArrayKind.Indexed ? ShellQuoteStyle.Backslash : ShellQuoteStyle.AssociativeKey)
-                    || !output.TryAppend((byte)']') || !AppendValue(value, ShellQuoteStyle.DoubleQuoted))
+                    || !output.TryAppend((byte)']') || !output.TryAppend((byte)'=')
+                    || value is { } assigned && !ShellArgumentEscaping.TryAppendQuoted(output, assigned.Bytes.Span, ShellQuoteStyle.DoubleQuoted))
                     return false;
                 if (kind == ArrayKind.Associative && !output.TryAppend((byte)' '))
                     return false;

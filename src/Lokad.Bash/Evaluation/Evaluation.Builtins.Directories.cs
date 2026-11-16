@@ -30,6 +30,7 @@ public sealed partial class Evaluation
         IReadOnlyList<string> words,
         Variables variables,
         Variables.CommandBindings? bindings,
+        EvaluationContext context,
         bool negated)
     {
         if (words.Count < 2)
@@ -37,9 +38,9 @@ public sealed partial class Evaluation
 
         var target = words[1];
 
-        var exitCode = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.ChangeDirectory, target, variables, bindings)
+        var result = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.ChangeDirectory, target, variables, bindings, context)
             .ConfigureAwait(false);
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+        return await FinalizeResultAsync(result, negated).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -73,6 +74,7 @@ public sealed partial class Evaluation
         IReadOnlyList<string> words,
         Variables variables,
         Variables.CommandBindings? bindings,
+        EvaluationContext context,
         bool negated)
     {
         if (words.Count == 1)
@@ -83,15 +85,15 @@ public sealed partial class Evaluation
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
             }
 
-            var exitCode = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.SwapDirectories,
-                _state.DirectoryStack[1], variables, bindings).ConfigureAwait(false);
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+            var result = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.SwapDirectories,
+                _state.DirectoryStack[1], variables, bindings, context).ConfigureAwait(false);
+            return await FinalizeResultAsync(result, negated).ConfigureAwait(false);
         }
 
         var target = words[1];
 
-        var pushExitCode = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.PushDirectory, target, variables, bindings).ConfigureAwait(false);
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(pushExitCode), negated);
+        var pushResult = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.PushDirectory, target, variables, bindings, context).ConfigureAwait(false);
+        return await FinalizeResultAsync(pushResult, negated).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -99,7 +101,7 @@ public sealed partial class Evaluation
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
     private async Task<EvaluationResult> EvaluateBuiltinPopdAsync(
-        Variables variables, Variables.CommandBindings? bindings, bool negated)
+        Variables variables, Variables.CommandBindings? bindings, EvaluationContext context, bool negated)
     {
         if (_state.DirectoryStack.Count < 2)
         {
@@ -107,63 +109,67 @@ public sealed partial class Evaluation
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
         }
 
-        var exitCode = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.PopDirectory,
-            _state.DirectoryStack[1], variables, bindings).ConfigureAwait(false);
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+        var result = await ExecuteDirectoryChangeAsync(DirectoryChangeKind.PopDirectory,
+            _state.DirectoryStack[1], variables, bindings, context).ConfigureAwait(false);
+        return await FinalizeResultAsync(result, negated).ConfigureAwait(false);
     }
 
-    private Task<int> ExecuteDirectoryChangeAsync(
-        DirectoryChangeKind kind, string target, Variables variables, Variables.CommandBindings? bindings)
+    private Task<EvaluationResult> ExecuteDirectoryChangeAsync(
+        DirectoryChangeKind kind, string target, Variables variables, Variables.CommandBindings? bindings, EvaluationContext context)
     {
         return ResolvePath(target) is { } resolved
-            ? ExecuteDirectoryChangeAsync(kind, resolved, variables, bindings)
+            ? ExecuteDirectoryChangeAsync(kind, resolved, variables, bindings, context)
             : InvalidPathAsync();
 
-        async Task<int> InvalidPathAsync()
+        async Task<EvaluationResult> InvalidPathAsync()
         {
             await ReportExpansionDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)),
                 ShellValue.FromText(target + ": invalid path")).ConfigureAwait(false);
-            return 1;
+            return EvaluationResult.FromExitCode(1);
         }
     }
 
     /// <summary>Every navigation route validates through the host before publishing its destination.</summary>
-    private async Task<int> ExecuteDirectoryChangeAsync(
-        DirectoryChangeKind kind, ShellPath target, Variables variables, Variables.CommandBindings? bindings)
+    private async Task<EvaluationResult> ExecuteDirectoryChangeAsync(
+        DirectoryChangeKind kind, ShellPath target, Variables variables, Variables.CommandBindings? bindings, EvaluationContext context)
     {
         var result = await AwaitOperationAsync(PathInfosOperation.AsTask(PublishOperation,
             [new FilePathLookup(target, FileLinkFollowing.Follow)], FilePathInfoRequest.KindOnly)).ConfigureAwait(false);
         var selected = result[0];
         var succeeded = selected.Error == null && selected.Info.Kind == FilePathKind.Directory;
         var previous = _state.CurrentDirectory;
-        _state.ApplyDirectoryChange(kind, target, succeeded);
+        _state.ApplyDirectoryLookup(kind, target, succeeded);
         if (!succeeded)
         {
             var detail = selected.Error is { } error ? error.MessageWithoutTerminator
                 : selected.Info.Kind == FilePathKind.Missing ? "No such file or directory" : "Not a directory";
             await ReportExpansionDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)),
                 ShellValue.FromText(target.Path + ": " + detail)).ConfigureAwait(false);
-            return 1;
+            return EvaluationResult.FromExitCode(1);
         }
 
-        UpdateDirectoryVariables();
-        return kind == DirectoryChangeKind.ChangeDirectory ? 0
+        var scope = new ScopedEvaluation(this, variables, context);
+        ShellValue? oldPwd = variables.TryGetExpansionValue("PWD", out var pwd) ? pwd : null;
+        var oldResult = await AssignBuiltinAsync(VariableReference.ForName("OLDPWD"), oldPwd, scope,
+            bindings, BuiltinAssignmentKind.Directory, ShellValue.FromText("cd"), expansionWriteTarget: null).ConfigureAwait(false);
+        if (ExitsOnReadonly(oldResult))
+            return await RunExitTrapAsync(scope, EvaluationResult.Exit(1)).ConfigureAwait(false);
+        var pwdResult = await AssignBuiltinAsync(VariableReference.ForName("PWD"), ShellValue.FromText(_state.CurrentDirectory.Path), scope,
+            bindings, BuiltinAssignmentKind.Directory, ShellValue.FromText("cd"), expansionWriteTarget: null).ConfigureAwait(false);
+        if (ExitsOnReadonly(pwdResult))
+            return await RunExitTrapAsync(scope, EvaluationResult.Exit(1)).ConfigureAwait(false);
+        if (oldResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.DirectoryReadonly
+            || pwdResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.DirectoryReadonly)
+            return EvaluationResult.FromExitCode(1);
+        _state.CompleteDirectoryChange(kind, previous);
+        var exitCode = kind == DirectoryChangeKind.ChangeDirectory ? 0
             : (await ExecuteWriteAsync(GetStdOutDescriptor(), _state.FormatDirectoryStack()).ConfigureAwait(false)).IsError ? 1 : 0;
+        return EvaluationResult.FromExitCode(exitCode);
 
-        void UpdateDirectoryVariables()
-        {
-            var oldPwd = variables.TryGetScalar("PWD", out var pwd) ? pwd : ShellValue.FromText(previous.Path);
-            if (!variables.IsReadonly("OLDPWD"))
-            {
-                variables.SetScalarIgnoringReadonly("OLDPWD", oldPwd);
-                bindings?.Retain("OLDPWD");
-            }
-            if (!variables.IsReadonly("PWD"))
-            {
-                variables.SetScalarIgnoringReadonly("PWD", ShellValue.FromText(_state.CurrentDirectory.Path));
-                bindings?.Retain("PWD");
-            }
-        }
+        // Bash's readonly assignment exit precedes builtin/redirection restoration.
+        // It follows the enabled option even when the command's status is tested.
+        bool ExitsOnReadonly(BuiltinAssignmentResult assigned) =>
+            assigned == BuiltinAssignmentResult.DirectoryReadonly && _state.ErrexitEnabled;
     }
 
     private static string DirectoryCommandName(DirectoryChangeKind kind) => kind switch

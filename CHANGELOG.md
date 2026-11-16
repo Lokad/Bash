@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve directory bookkeeping failure status, eligible writes, namerefs,
+  attributes and unassigned values after successful navigation. Keep partial stack
+  changes and readonly-assignment EXIT timing through the shared cleanup path.
 - Revalidate saved directory-stack destinations through the host before changing
   cwd. Preserve distinct failed pop/swap transitions and report failed or empty
   navigation through the shared directory-change path.

@@ -52,6 +52,20 @@ internal static partial class WordExpansion
         public bool TryAssign(ScopedEvaluation scope, BindingName sourceName, ShellValue value, AssignmentOperator operation)
             => TryAssign(scope, sourceName, value, operation, DeclarationWrite.Ordinary);
 
+        /// <summary>Assigns absence without deleting the selected binding, key, or its attributes.</summary>
+        internal bool TryAssignUnassigned(Variables variables)
+        {
+            if (Name.IsEmpty || variables.IsReadonly(Name))
+                return false;
+            return this switch
+            {
+                Scalar => variables.TrySetResolvedUnassigned(Name),
+                Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null),
+                Associative associative => variables.TrySetResolvedArrayElement(Name, associative.Key, null),
+                _ => throw new InvalidOperationException("Unknown variable reference."),
+            };
+        }
+
         internal bool TryAssign(ScopedEvaluation scope, BindingName sourceName, ShellValue value,
             AssignmentOperator operation, DeclarationWrite declarationWrite)
         {

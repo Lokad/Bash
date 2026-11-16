@@ -12,6 +12,14 @@ a failed swap still replaces the second stack entry, while a failed pop retains
 it. Pending lookup work and descriptor cleanup keep their command owner alive.
 This validation does not make a later filesystem change atomic with navigation.
 
+Successful lookup publishes cwd and the stack head before variable bookkeeping.
+The shared assignment path retains the selected binding kind, owner and attributes;
+OLDPWD receives PWD's prior assignment state before PWD receives the new path.
+Push/pop finish only after bookkeeping succeeds. Readonly failures preserve partial
+effects; an enabled errexit option invokes the existing EXIT path before builtin
+and descriptor restoration. Ordinary tested-status suppression does not defer
+this internal readonly-assignment exit.
+
 Nameref declaration validation precedes replacement of values and attributes.
 Circular local references reuse scope ownership to select a global fallback;
 selected reads retain that store through value consumption. Declaration metadata

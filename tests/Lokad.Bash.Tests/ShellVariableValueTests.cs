@@ -53,6 +53,61 @@ public sealed class ShellVariableValueTests
     }
 
     [Fact]
+    public void IndexedNullEntriesPreservePresenceAcrossCloningAndReplacement()
+    {
+        Assert.True(IndexedArrayIndex.TryCreate(7, out var seven));
+        Assert.True(IndexedArrayIndex.TryCreate(12, out var twelve));
+        var array = new IndexedArray(isInitialized: false);
+        array.Set(seven, null);
+        array.Set(twelve, ShellValue.FromText("kept"));
+        var clone = array.Clone();
+
+        Assert.Equal(2, clone.Count);
+        Assert.Equal(12, clone.MaxIndex);
+        Assert.Equal(new[] { "7", "12" }, clone.PresentKeys);
+        Assert.Equal(new ShellValue?[] { null, ShellValue.FromText("kept") }, clone.DeclarationValues);
+        Assert.False(clone.TryGet(seven, out _));
+        Assert.Equal(ShellValue.Empty, clone.CaptureDenseValues()[7]);
+        var retained = clone.EstimatedMemoryBytes;
+        clone.Set(seven, ShellValue.Empty);
+        Assert.True(clone.TryGet(seven, out var assigned));
+        Assert.Equal(ShellValue.Empty, assigned);
+        Assert.Equal(retained, clone.EstimatedMemoryBytes);
+        Assert.False(array.TryGet(seven, out _));
+        clone.Remove(twelve);
+        Assert.Equal(7, clone.MaxIndex);
+        clone.Remove(seven);
+        Assert.Empty(clone.PresentKeys);
+        Assert.Null(clone.MaxIndex);
+        Assert.Equal(2, array.Count);
+    }
+
+    [Fact]
+    public void AssociativeNullEntriesPreservePresenceAcrossCloningAndReplacement()
+    {
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("key"), out var key));
+        var array = new AssociativeArray(isInitialized: false);
+        array.Set(key, null);
+        var clone = array.Clone();
+
+        Assert.Equal(1, clone.Count);
+        Assert.Equal(new[] { key.Value }, clone.PresentKeys);
+        Assert.Null(Assert.Single(clone.DeclarationValues));
+        Assert.False(clone.TryGet(key, out _));
+        Assert.Equal(ShellValue.Empty, clone.CaptureValues()[key.Value]);
+        var retained = clone.EstimatedMemoryBytes;
+        clone.Set(key, ShellValue.Empty);
+        Assert.True(clone.TryGet(key, out var assigned));
+        Assert.Equal(ShellValue.Empty, assigned);
+        Assert.Equal(retained, clone.EstimatedMemoryBytes);
+        Assert.False(array.TryGet(key, out _));
+        clone.Remove(key);
+        Assert.Equal(0, clone.Count);
+        Assert.Empty(clone.DeclarationValues);
+        Assert.Equal(1, array.Count);
+    }
+
+    [Fact]
     public void Clone_PreservesSparseArrayOwnership()
     {
         Assert.True(IndexedArrayIndex.TryCreate(2, out var index));

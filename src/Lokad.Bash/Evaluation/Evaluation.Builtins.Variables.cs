@@ -344,15 +344,16 @@ public sealed partial class Evaluation
         return BuiltinReferenceResolution.Write;
     }
 
-    internal enum BuiltinAssignmentKind { Value, Getopts, PrintfCount, Descriptor }
-    internal enum BuiltinAssignmentResult { Assigned, NoWrite, Failed }
+    internal enum BuiltinAssignmentKind { Value, Getopts, PrintfCount, Descriptor, Directory }
+    internal enum BuiltinAssignmentResult { Assigned, NoWrite, Failed, DirectoryReadonly }
 
-    /// <summary>Shares selected output writes, including descriptor allocation, without replaying selectors.</summary>
+    /// <summary>Shares selected output writes without replaying selectors; null publishes an unassigned value.</summary>
     internal async Task<BuiltinAssignmentResult> AssignBuiltinAsync(
-        VariableReference reference, ShellValue value, ScopedEvaluation scope,
+        VariableReference reference, ShellValue? value, ScopedEvaluation scope,
         Variables.CommandBindings? persistentOutputs, BuiltinAssignmentKind kind, ShellValue command,
         ScopedEvaluation.ExpansionBindings? expansionWriteTarget)
     {
+        var sourceName = reference.Name;
         var circular = reference.Kind == VariableReferenceKind.Name
             && !scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out _)
             && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
@@ -365,9 +366,10 @@ public sealed partial class Evaluation
                 ? BuiltinAssignmentResult.Failed : await InvalidElementTargetAsync().ConfigureAwait(false);
         var destination = binding.Owner;
         reference = binding.Reference;
-        if (ReferenceEquals(destination, scope.Variables))
+        if (kind != BuiltinAssignmentKind.Directory && ReferenceEquals(destination, scope.Variables))
             destination = persistentOutputs?.SelectOutputVariables(reference.Name) ?? destination;
-        var caller = persistentOutputs?.Contains(reference.Name) == true ? persistentOutputs.SavedVariables : destination;
+        var caller = kind != BuiltinAssignmentKind.Directory && persistentOutputs?.Contains(reference.Name) == true
+            ? persistentOutputs.SavedVariables : destination;
         if (reference.Kind == VariableReferenceKind.Name
             && !caller.TryResolveBinding(reference.Name,
                 ReferenceEquals(caller, persistentOutputs?.SavedVariables) ? SelectCallerOwner : null, out _)
@@ -399,33 +401,44 @@ public sealed partial class Evaluation
         {
             if (kind != BuiltinAssignmentKind.Getopts)
                 await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
-            return BuiltinAssignmentResult.Failed;
+            return kind == BuiltinAssignmentKind.Directory
+                ? BuiltinAssignmentResult.DirectoryReadonly : BuiltinAssignmentResult.Failed;
         }
-        var failure = destination.GetNamerefAssignmentFailure(reference.Name, target.Name, value, Memory);
+        var failure = value is { } assignedValue
+            ? destination.GetNamerefAssignmentFailure(reference.Name, target.Name, assignedValue, Memory)
+            : NamerefAssignmentFailure.None;
         if (failure != NamerefAssignmentFailure.None)
         {
             if (failure == NamerefAssignmentFailure.InvalidTarget && kind != BuiltinAssignmentKind.Getopts)
                 await ReportExpansionDiagnosticAsync(command, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                    .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(value).Bytes).Append(": not a valid identifier"u8).ToMemory())).ConfigureAwait(false);
-            return BuiltinAssignmentResult.Failed;
+                    .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(value.GetValueOrDefault()).Bytes).Append(": not a valid identifier"u8).ToMemory())).ConfigureAwait(false);
+            return kind == BuiltinAssignmentKind.Directory ? BuiltinAssignmentResult.NoWrite : BuiltinAssignmentResult.Failed;
         }
-        var assigned = target.TryAssign(scope with
+        var writeScope = scope with
         {
             Variables = destination,
             ExpansionWriteTarget = expansionWriteTarget,
             SelectorBindings = null
-        }, reference.Name, value, AssignmentOperator.Replace);
+        };
+        var assigned = value is { } written
+            ? target.TryAssign(writeScope, reference.Name, written, AssignmentOperator.Replace)
+            : target.TryAssignUnassigned(destination);
         if (assigned && kind == BuiltinAssignmentKind.PrintfCount && !ReferenceEquals(destination, binding.Owner))
         {
             // Count writes are visible to later selectors, without replaying an element selector
             // or imposing the caller's array kind on a temporary scalar prefix.
             assigned = reference.Kind == VariableReferenceKind.Name
-                ? binding.Owner.TryApplyAssignment(reference, value, Memory)
+                ? binding.Owner.TryApplyAssignment(reference, value.GetValueOrDefault(), Memory)
                 : target.TryAssign(scope with { Variables = binding.Owner, ExpansionWriteTarget = null, SelectorBindings = null },
-                    reference.Name, value, AssignmentOperator.Replace);
+                    reference.Name, value.GetValueOrDefault(), AssignmentOperator.Replace);
         }
         if (assigned)
-            persistentOutputs?.CompleteOutput(reference.Name, destination);
+        {
+            if (kind == BuiltinAssignmentKind.Directory)
+                persistentOutputs?.Retain(sourceName);
+            else
+                persistentOutputs?.CompleteOutput(reference.Name, destination);
+        }
         return assigned ? BuiltinAssignmentResult.Assigned : BuiltinAssignmentResult.Failed;
 
         Variables SelectCallerOwner(BindingName name) => persistentOutputs?.Contains(name) == true

@@ -2346,16 +2346,16 @@ public sealed partial class Evaluation : IFileTester
             case BuiltinKind.Pwd:
                 return await EvaluateBuiltinPwdAsync(negated).ConfigureAwait(false);
             case BuiltinKind.Cd:
-                return await EvaluateBuiltinCdAsync(words, commandVars, bindings, negated)
+                return await EvaluateBuiltinCdAsync(words, commandVars, bindings, scope.Context, negated)
                     .ConfigureAwait(false);
             case BuiltinKind.Dirs:
                 return await EvaluateBuiltinDirsAsync(words, negated)
                     .ConfigureAwait(false);
             case BuiltinKind.Pushd:
-                return await EvaluateBuiltinPushdAsync(words, commandVars, bindings, negated)
+                return await EvaluateBuiltinPushdAsync(words, commandVars, bindings, scope.Context, negated)
                     .ConfigureAwait(false);
             case BuiltinKind.Popd:
-                return await EvaluateBuiltinPopdAsync(commandVars, bindings, negated).ConfigureAwait(false);
+                return await EvaluateBuiltinPopdAsync(commandVars, bindings, scope.Context, negated).ConfigureAwait(false);
             case BuiltinKind.Caller:
                 return await EvaluateBuiltinCallerAsync(scope.Context, negated).ConfigureAwait(false);
             case BuiltinKind.Shift:

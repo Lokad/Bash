@@ -342,32 +342,31 @@ internal sealed class EvaluationState
     }
 
     /// <summary>Applies a settled lookup, including Bash's partial stack change after a rejected swap.</summary>
-    public void ApplyDirectoryChange(DirectoryChangeKind kind, ShellPath target, bool succeeded)
+    public void ApplyDirectoryLookup(DirectoryChangeKind kind, ShellPath target, bool succeeded)
     {
         if (kind == DirectoryChangeKind.SwapDirectories)
             _directoryStack[1] = CurrentDirectory;
         if (!succeeded)
             return;
 
+        CurrentDirectory = target;
+        EnsureDirectoryStack();
+        _directoryStack[0] = target;
+    }
+
+    /// <summary>Completes stack publication only after directory-variable bookkeeping succeeds.</summary>
+    public void CompleteDirectoryChange(DirectoryChangeKind kind, ShellPath previous)
+    {
         switch (kind)
         {
-            case DirectoryChangeKind.ChangeDirectory:
-                CurrentDirectory = target;
-                EnsureDirectoryStack();
-                _directoryStack[0] = target;
-                break;
             case DirectoryChangeKind.PushDirectory:
-                EnsureDirectoryStack();
-                _directoryStack.Insert(0, target);
-                CurrentDirectory = target;
+                _directoryStack.Insert(1, previous);
                 break;
+            case DirectoryChangeKind.ChangeDirectory:
             case DirectoryChangeKind.SwapDirectories:
-                _directoryStack[0] = target;
-                CurrentDirectory = target;
                 break;
             case DirectoryChangeKind.PopDirectory:
-                _directoryStack.RemoveAt(0);
-                CurrentDirectory = target;
+                _directoryStack.RemoveAt(1);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(kind));

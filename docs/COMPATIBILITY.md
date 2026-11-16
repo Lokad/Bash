@@ -32,6 +32,17 @@ changing cwd. A rejected pop preserves the stack; a rejected no-argument push
 replaces its second entry with the current directory, as in Bash. Failed lookup
 preserves PWD/OLDPWD, and empty-stack operations diagnose failure.
 
+After successful navigation, directory bookkeeping writes OLDPWD before PWD,
+preserving array kinds, namerefs and attributes. Readonly failures diagnose and
+return 1 after changing cwd; eligible writes still occur, while push/pop completion
+and stack output are suppressed. With errexit enabled, a readonly bookkeeping
+failure exits immediately, including tested command positions, before remaining
+writes or redirection restoration; EXIT sees the active scope and descriptors.
+An unset PWD makes OLDPWD unassigned rather than assigning the prior actual cwd.
+Present-but-unassigned array entries retain their keys/count and declaration shape;
+aggregate expansion safely emits an empty field for them. This deliberately avoids
+the native Bash crashes observed when aggregating those directory-created entries.
+
 Source and shell values preserve bytes, including invalid UTF-8 values. Text-only
 host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
