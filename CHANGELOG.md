@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Give escaped literal characters compact storage, like quoted literals. Retaining
+  an escaped character from source/eval no longer pins the complete input buffer
+  after its source reservation ends.
 - Consume condition-level break/continue at their owning while/until loop.
   Preserve condition gating, prior body status and tested-status propagation
   through outer loops. Share outward-flow handling across all loop evaluators.

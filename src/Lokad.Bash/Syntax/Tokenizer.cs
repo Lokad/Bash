@@ -882,7 +882,7 @@ internal sealed class Tokenizer
                 var length = Utf8Text.FirstCharacterLength(span[Position..]);
                 if (!TryReserveSyntax())
                     return new Word([]);
-                parts.Add(WordPart.FromValue(WordPartKind.Escaped, _input.Slice(Position, length).ToValue()));
+                parts.Add(CopyEscapedLiteral(Position, length));
                 Position += length;
                 continue;
             }
@@ -1066,7 +1066,7 @@ internal sealed class Tokenizer
                     Flush(allowEmpty: false);
                     if (!TryReserveSyntax())
                         return parts;
-                    parts.Add(WordPart.FromValue(WordPartKind.Escaped, _input.Slice(Position + 1, 1).ToValue()));
+                    parts.Add(CopyEscapedLiteral(Position + 1, 1));
                     Position += 2;
                     continue;
                 }
@@ -1125,6 +1125,11 @@ internal sealed class Tokenizer
         RecordError("Unterminated double-quoted string.", Position);
         return parts;
     }
+
+    // Like quoted literals, escaped characters can survive the dynamic source that produced them.
+    // Copy at most one source character so retained values do not pin the complete input buffer.
+    private WordPart CopyEscapedLiteral(int offset, int length) =>
+        WordPart.FromValue(WordPartKind.Escaped, ShellValue.FromBytes(_input.Bytes.Slice(offset, length).ToArray()));
 
     /// <summary>
     /// Returns true when an ASCII byte terminates a word; CR is ordinary data.

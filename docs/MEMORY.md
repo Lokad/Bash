@@ -110,6 +110,8 @@ belong to the syntax and are shared across executions. Stable operands and liter
 fields borrow its bytes; runtime-expanded operands, selectors and argument
 collections retain command workspace admission. Syntax metadata falls under the
 parser's bounded-source coverage rather than evaluation reservations.
+Quoted literals and escaped characters own compact payloads so retained scalar,
+array, nameref and positional values do not pin unrelated dynamic source bytes.
 
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
 source-size bound, not complete accounting; manual stepping does not install a host

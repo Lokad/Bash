@@ -1,7 +1,10 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
+using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 
@@ -118,6 +121,97 @@ public sealed class ByteStoredValueTests
         Assert.True(MemoryMarshal.TryGetArray(stored.Bytes, out var storage));
         Assert.NotNull(storage.Array);
         Assert.True(storage.Array.Length <= 16, $"Retained {storage.Array.Length} bytes for a truncated value.");
+    }
+
+    [Theory]
+    [InlineData(false, "5C78", "78")]
+    [InlineData(true, "5C78", "78")]
+    [InlineData(false, "5CC3A9", "C3A9")]
+    [InlineData(true, "5CC3A9", "C3A9")]
+    [InlineData(false, "5CF09F9982", "F09F9982")]
+    [InlineData(true, "5CF09F9982", "F09F9982")]
+    [InlineData(false, "5CFF", "FF")]
+    [InlineData(true, "5CFF", "FF")]
+    [InlineData(false, "5C0D", "0D")]
+    [InlineData(true, "5C0D", "0D")]
+    [InlineData(false, "225C2422", "24")]
+    [InlineData(true, "225C2422", "24")]
+    [InlineData(false, "225C6022", "60")]
+    [InlineData(true, "225C6022", "60")]
+    [InlineData(false, "225C2222", "22")]
+    [InlineData(true, "225C2222", "22")]
+    [InlineData(false, "225C5C22", "5C")]
+    [InlineData(true, "225C5C22", "5C")]
+    [InlineData(false, "225C7822", "5C78")]
+    [InlineData(true, "225C7822", "5C78")]
+    public async Task DynamicEscapedValuesRetainAdmittedStorage(bool eval, string wordHex, string expectedHex)
+    {
+        // The retained value must not pin the unrelated comment after the source owner ends.
+        var source = ByteMemoryBuilder.CreateUnaccounted(0)
+            .Append("value="u8).Append(Convert.FromHexString(wordHex))
+            .Append("\n#"u8).Append(Utf8Text.Encode(new string('a', 8192))).Append((byte)'\n')
+            .ToMemory();
+        await using var host = new TestHost();
+        host.AddFile("/unit", source.ToArray());
+        var memory = new MemoryGovernor(65536);
+        host.MemoryBudget = memory;
+        using var owner = memory.CreateScope();
+        var script = eval ? ByteMemoryBuilder.CreateUnaccounted(0)
+            .Append("eval '"u8).Append(source).Append((byte)'\'').ToMemory() : "source /unit"u8.ToArray();
+        var evaluation = new Evaluation.Evaluation(Parser.Parse(script));
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, cancel.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        var stored = evaluation.Variables["value"];
+        Assert.Equal(Convert.FromHexString(expectedHex), stored.Bytes.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(stored.Bytes, out var storage));
+        Assert.NotNull(storage.Array);
+        Assert.InRange(storage.Array.LongLength, stored.Bytes.Length, memory.ReservedBytes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DynamicEscapedValueBatchKeepsBackingWithinRetainedAdmission(bool eval)
+    {
+        const int Count = 64;
+        await using var host = new TestHost();
+        var memory = new MemoryGovernor(65536);
+        host.MemoryBudget = memory;
+        using var owner = memory.CreateScope();
+        var script = new StringBuilder();
+        for (var index = 0; index < Count; index++)
+        {
+            var source = $"v{index}=\\x\n#" + new string('a', 8192) + "\n";
+            host.AddFile($"/unit{index}", source);
+            script.Append(eval ? $"eval '{source}'; " : $"source /unit{index}; ");
+        }
+        var evaluation = new Evaluation.Evaluation(Parser.Parse(script.ToString()));
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, cancel.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        var backing = new HashSet<byte[]>(ReferenceEqualityComparer.Instance);
+        for (var index = 0; index < Count; index++)
+        {
+            var value = evaluation.Variables[$"v{index}"];
+            Assert.Equal("x"u8.ToArray(), value.Bytes.ToArray());
+            Assert.True(MemoryMarshal.TryGetArray(value.Bytes, out var storage));
+            Assert.NotNull(storage.Array);
+            backing.Add(storage.Array);
+        }
+        Assert.InRange(backing.Sum(bytes => (long)bytes.Length), Count, memory.ReservedBytes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
     }
 
     [Theory]
