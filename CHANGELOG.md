@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Consume condition-level break/continue at their owning while/until loop.
+  Preserve condition gating, prior body status and tested-status propagation
+  through outer loops. Share outward-flow handling across all loop evaluators.
 - Reject incomplete and malformed here-document substitutions when redirection
   setup is reached. Preserve prior effects, error status and cleanup while keeping
   quoted/skipped bodies and generated values inert.

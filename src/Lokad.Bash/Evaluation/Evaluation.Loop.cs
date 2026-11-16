@@ -24,58 +24,38 @@ public sealed partial class Evaluation
             var conditionResult = await EvaluateCommandAsync(condition,
                     scope with { Context = loopContext.WithErrexitIgnored() }, negated: false)
                 .ConfigureAwait(false);
-            if (conditionResult.Flow != FlowControlKind.None)
-            {
-                if (conditionResult.Flow == FlowControlKind.Break && conditionResult.Level > 1)
-                {
-                    return ApplyNegation(conditionResult.WithLevel(conditionResult.Level - 1), negated);
-                }
-
-                if (conditionResult.Flow == FlowControlKind.Continue && conditionResult.Level > 1)
-                {
-                    return ApplyNegation(conditionResult.WithLevel(conditionResult.Level - 1), negated);
-                }
-
+            if (conditionResult.Flow is FlowControlKind.Return or FlowControlKind.Exit)
                 return ApplyNegation(conditionResult, negated);
-            }
 
             var shouldRun = kind == LoopKind.While
                 ? conditionResult.ExitCode == 0
                 : conditionResult.ExitCode != 0;
+            if (conditionResult.Flow is FlowControlKind.Break or FlowControlKind.Continue)
+            {
+                // A failed gate retains the previous body status. If the gate admits
+                // the body, pending flow skips it and leaves the tested condition status.
+                var settled = shouldRun ? conditionResult.ConsumeLoopFlow().WithTestedStatus(true) : lastBodyResult;
+                var flow = conditionResult.WithExitCode(settled.ExitCode).WithTestedStatus(settled.TestedStatus);
+                if (flow.TryPropagateLoopFlow(out var outward))
+                    return ApplyNegation(outward, negated);
+                if (!shouldRun || flow.Flow == FlowControlKind.Break)
+                    return await FinalizeResultAsync(settled, negated).ConfigureAwait(false);
+
+                lastBodyResult = settled;
+                continue;
+            }
             if (!shouldRun)
             {
                 return await FinalizeResultAsync(lastBodyResult, negated);
             }
 
             var bodyResult = await EvaluateCommandAsync(body, scope with { Context = loopContext }, negated: false).ConfigureAwait(false);
-            if (bodyResult.Flow == FlowControlKind.None)
-            {
-                lastBodyResult = bodyResult;
-                continue;
-            }
+            if (bodyResult.TryPropagateLoopFlow(out var bodyOutward))
+                return ApplyNegation(bodyOutward, negated);
 
-            if (bodyResult.Flow == FlowControlKind.Continue)
-            {
-                if (bodyResult.Level > 1)
-                {
-                    return ApplyNegation(bodyResult.WithLevel(bodyResult.Level - 1), negated);
-                }
-
-                lastBodyResult = EvaluationResult.FromExitCode(bodyResult.ExitCode);
-                continue;
-            }
-
+            lastBodyResult = bodyResult.ConsumeLoopFlow();
             if (bodyResult.Flow == FlowControlKind.Break)
-            {
-                if (bodyResult.Level > 1)
-                {
-                    return ApplyNegation(bodyResult.WithLevel(bodyResult.Level - 1), negated);
-                }
-
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(bodyResult.ExitCode), negated);
-            }
-
-            return ApplyNegation(bodyResult, negated);
+                return await FinalizeResultAsync(lastBodyResult, negated).ConfigureAwait(false);
         }
     }
 }

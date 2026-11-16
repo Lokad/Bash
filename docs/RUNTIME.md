@@ -61,6 +61,12 @@ invocations expose a fresh status. Early exit follows the ordinary EXIT-trap and
 descriptor cleanup path. Command substitutions clear errexit on entry, while
 subshells and pipeline stages inherit it.
 
+Loop flow is settled at the loop that owns its remaining level. In while/until
+conditions, the condition gate precedes body suppression: a closed gate retains
+the previous body result, while an admitted but skipped body retains the tested
+condition status. Outward flow carries that status and its tested origin. Local
+body continue still advances for-in iteration or performs arithmetic-for updates.
+
 Completed foreground commands publish `PIPESTATUS` after their operands expand.
 Pipelines publish the settled stage statuses before applying negation; compound
 syntax preserves the last executed command's metadata. Publication follows binding

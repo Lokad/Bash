@@ -2,10 +2,140 @@ using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Tree;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationLoopTestsEndToEnd
 {
+    public static IEnumerable<object[]> ConditionRoutes()
+    {
+        foreach (var kind in new[] { "while", "until" })
+            foreach (var flow in new[] { "break", "continue" })
+                foreach (var route in new[] { "direct", "group", "eval", "source" })
+                    foreach (var prepared in new[] { false, true })
+                        yield return [kind, flow, route, prepared];
+    }
+
+    [Theory]
+    [MemberData(nameof(ConditionRoutes))]
+    public async Task ConditionFlowIsConsumedByItsOwningLoop(string kind, string flow, string route, bool prepared)
+    {
+        var initial = route == "source" ? "printf '%s' '" + flow + "; printf skipped' >action; " : "";
+        var action = route switch
+        {
+            "direct" => flow,
+            "group" => "{ " + flow + "; }",
+            "eval" => "eval '" + flow + "; printf skipped'",
+            "source" => "source ./action",
+            _ => throw new ArgumentOutOfRangeException(nameof(route))
+        };
+        var script = initial + "i=0; for outer in a b; do " + kind
+            + " { ((i++)); if ((i>=3)); then break; fi; " + action
+            + "; }; do printf wrong; done; printf '<%s>' \"$outer\"; done; printf ':after:%s:%s' \"$?\" \"$i\"";
+        var memory = new MemoryGovernor(1024 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        RunResult result;
+        using (var owner = memory.CreateScope())
+            result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(script)), host, owner, deadline.Token)
+                : await host.RunAsync(script, deadline.Token);
+
+        var count = kind == "while" && flow == "continue" ? 4 : 2;
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<a><b>:after:0:" + count, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("while", "break", false, false, 0, 2)]
+    [InlineData("while", "! break", false, false, 1, 2)]
+    [InlineData("while", "continue", false, false, 0, 3)]
+    [InlineData("while", "! continue", false, false, 1, 2)]
+    [InlineData("until", "break", false, false, 1, 2)]
+    [InlineData("until", "! break", false, false, 1, 2)]
+    [InlineData("until", "continue", false, false, 1, 2)]
+    [InlineData("until", "! continue", false, false, 1, 3)]
+    [InlineData("while", "! break", true, false, 0, 2)]
+    [InlineData("until", "break", true, false, 0, 2)]
+    [InlineData("until", "! break", true, false, 1, 2)]
+    [InlineData("until", "! continue", true, false, 1, 3)]
+    [InlineData("while", "break 0", true, false, 0, 2)]
+    [InlineData("until", "break 0", true, false, 1, 2)]
+    [InlineData("while", "break", false, true, 1, 2)]
+    [InlineData("until", "break", false, true, 0, 2)]
+    public async Task ConditionGatingSelectsTheCorrectLoopStatus(
+        string kind, string flow, bool successfulBody, bool negated, int status, int iterations)
+    {
+        var first = kind == "while" ? "true" : "false";
+        var stop = kind == "while" ? "false" : "true";
+        var script = "i=0; " + (negated ? "! " : "") + kind
+            + " { ((i++)); if ((i==1)); then " + first + "; elif ((i==2)); then " + flow + "; else " + stop
+            + "; fi; }; do printf B; " + (successfulBody ? "true" : "false")
+            + "; done; printf ':after:%s:%s' \"$?\" \"$i\"";
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("B:after:" + status + ":" + iterations, result.StdOut);
+        if (flow.EndsWith(" 0", StringComparison.Ordinal))
+            Assert.Contains("loop count out of range", result.StdErr);
+        else
+            Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("while", "! break", false)]
+    [InlineData("until", "break", false)]
+    [InlineData("while", "! continue", true)]
+    [InlineData("until", "continue", true)]
+    public async Task OutwardFlowRetainsTheTestedOriginOfTheLastBody(string kind, string flow, bool arithmetic)
+    {
+        var header = arithmetic ? "for ((outer=0;outer<1;outer++))" : "for outer in one";
+        var first = kind == "while" ? "true" : "false";
+        var script = "set -e; " + header + "; do i=0; " + kind
+            + " { ((i++)); if ((i==1)); then " + first + "; else " + flow
+            + " 2; fi; }; do false && :; done; printf skipped; done; printf ':after:%s' \"$?\"";
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(":after:1", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("while")]
+    [InlineData("until")]
+    public async Task AConditionBreakDoesNotEscapeItsEnclosingFunction(string kind)
+    {
+        var result = await EvaluationTestHelper.RunAsync("f(){ " + kind
+            + " break; do printf wrong; done; printf after; }; f; printf ':%s' \"$?\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("after:0", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("while", 4096)]
+    [InlineData("until", 1)]
+    public async Task RepeatedConditionFlowReusesCommandWorkspace(string kind, int expected)
+    {
+        var memory = new MemoryGovernor(64 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var script = "i=0; " + kind + " { ((i++)); if ((i>=4096)); then break; fi; continue; }; do printf wrong; done; printf '%s' \"$i\"";
+        var result = await host.RunAsync(script, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected.ToString(), host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, memory.ReservedBytes);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_WhileCommand_ExecutesSingleIteration()
     {

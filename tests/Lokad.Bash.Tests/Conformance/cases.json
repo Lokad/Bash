@@ -6052,6 +6052,48 @@
       "stdoutHex": "6265666f72653a61667465723a31",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "loop-condition-gating",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "i=0; while { ((i++)); if ((i>=3)); then break; fi; continue; }; do printf wrong; done; printf '%s:' \"$i\"; i=0; until { ((i++)); continue; }; do printf wrong; done; printf '%s' \"$i\"",
+      "scriptSha256": "d70ff45f1baa7f6d38f09eae1c5fb5fef5f7dc8e8cce74cb8491071fab9a5138",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "333a31",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "loop-condition-function-tail",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "f(){ while break; do printf wrong; done; printf after; }; f; printf ':%s' \"$?\"",
+      "scriptSha256": "ce947d61d9c6086f27e5ffc7870816e44100696db36a9480945adf97b0e57e21",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "61667465723a30",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "loop-condition-tested-outward",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e; for outer in one; do i=0; until { ((i++)); if ((i==1)); then false; else break 2; fi; }; do false && :; done; printf skipped; done; printf ':after:%s' \"$?\"",
+      "scriptSha256": "5f6dc12339ba499be0a73e51349931f6812faf11a130c82f04375a86a1b1db6c",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "3a61667465723a31",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

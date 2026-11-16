@@ -136,8 +136,11 @@ Implicit `for name; do ...; done` iterates a snapshot of quoted positional
 parameters, preserving empty arguments and bytes. Explicit `in` lists retain their
 usual expansion rules. `exit` accepts signed 64-bit decimal statuses modulo 256;
 invalid numbers and surplus arguments diagnose and stop non-interactive execution.
-Outside a loop, `break`/`continue` warn and return 0. Within loops, nonpositive counts
-abandon all active loops with status 1; malformed counts and surplus operands have
+Outside a loop, `break`/`continue` warn and return 0. Level-one condition flow is
+consumed by the current while/until loop after its condition gate is applied.
+Higher counts still select outer loops; functions retain their own loop boundary.
+Within loops, nonpositive counts abandon all active loops and the builtin reports
+status 1; malformed counts and surplus operands have
 their distinct shell-exit statuses (128 and 1).
 
 Hosts provide external commands, including any `sh`/`bash` aliases and script-file

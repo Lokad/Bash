@@ -43,32 +43,12 @@ public sealed partial class Evaluation
 
             var bodyResult = await EvaluateCommandAsync(arithmeticForCommand.Body, scope with { Context = loopContext }, negated: false)
                 .ConfigureAwait(false);
-            if (bodyResult.Flow == FlowControlKind.None)
-            {
-                lastBodyResult = bodyResult;
-            }
-            else if (bodyResult.Flow == FlowControlKind.Continue)
-            {
-                if (bodyResult.Level > 1)
-                {
-                    return ApplyNegation(bodyResult.WithLevel(bodyResult.Level - 1), negated);
-                }
+            if (bodyResult.TryPropagateLoopFlow(out var outward))
+                return ApplyNegation(outward, negated);
 
-                lastBodyResult = EvaluationResult.FromExitCode(bodyResult.ExitCode);
-            }
-            else if (bodyResult.Flow == FlowControlKind.Break)
-            {
-                if (bodyResult.Level > 1)
-                {
-                    return ApplyNegation(bodyResult.WithLevel(bodyResult.Level - 1), negated);
-                }
-
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(bodyResult.ExitCode), negated);
-            }
-            else
-            {
-                return ApplyNegation(bodyResult, negated);
-            }
+            lastBodyResult = bodyResult.ConsumeLoopFlow();
+            if (bodyResult.Flow == FlowControlKind.Break)
+                return await FinalizeResultAsync(lastBodyResult, negated).ConfigureAwait(false);
 
             if (await EvaluateOperandAsync(updateExpression).ConfigureAwait(false) == null)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);

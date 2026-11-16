@@ -41,7 +41,7 @@ public partial class Evaluation
         /// and each loop evaluation method decrements it as it exits a loop boundary
         /// (see <see cref="Evaluation.EvaluateLoopAsync"/>, <see cref="Evaluation.EvaluateForAsync"/>, and
         /// <see cref="Evaluation.EvaluateArithmeticForAsync"/>). When the level reaches 1, the current loop
-        /// consumes the flow (break exits the loop; continue skips to the next iteration). A value greater
+        /// consumes the flow according to its condition/body phase. A value greater
         /// than 1 indicates the flow must propagate outward to enclosing loops; a value of 0 is used for
         /// non-loop flow kinds (return/exit/none).
         /// </remarks>
@@ -55,6 +55,23 @@ public partial class Evaluation
         public EvaluationResult WithLevel(int level) => new(ExitCode, Flow, level, TestedStatus);
 
         public EvaluationResult WithTestedStatus(bool tested) => new(ExitCode, Flow, Level, tested);
+
+        /// <summary>Propagates return/exit or the remaining levels of loop flow past one loop owner.</summary>
+        public bool TryPropagateLoopFlow(out EvaluationResult outward)
+        {
+            outward = this;
+            if (Flow is FlowControlKind.Break or FlowControlKind.Continue)
+            {
+                if (Level <= 1)
+                    return false;
+                outward = WithLevel(Level - 1);
+                return true;
+            }
+            return Flow != FlowControlKind.None;
+        }
+
+        /// <summary>Consumes local loop flow without losing the origin of its final status.</summary>
+        public EvaluationResult ConsumeLoopFlow() => new(ExitCode, FlowControlKind.None, 0, TestedStatus);
 
         public static EvaluationResult FromExitCode(int exitCode) => new(exitCode, FlowControlKind.None, 0, false);
 
