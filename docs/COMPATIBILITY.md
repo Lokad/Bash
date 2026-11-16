@@ -19,6 +19,10 @@ The runtime supports deterministic, non-interactive shell workflows:
 Source and shell values preserve bytes, including invalid UTF-8 values. Text-only
 host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
+Here-strings expand one scalar operand without brace generation, field splitting
+or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
+dollar, backtick, backslash and LF; double quotes remain ordinary data. Quoting the
+delimiter disables body expansion.
 File paths use the contained POSIX-style namespace defined by `ShellPath` and
 `FilePathLookup`, including their size, control-character and traversal constraints.
 

@@ -5982,6 +5982,34 @@
       "stdoutHex": "76",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "here-string-literal-braces-once",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "i=0; read -r value <<<{a,b}$((i++)); printf '%s:<%s>' \"$i\" \"$value\"",
+      "scriptSha256": "b7caa921d259c942ccfff2d3ae522174a9011edb7e88b3ba6b2f97d7220593f8",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "313a3c7b612c627d303e",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "here-document-double-quote-data",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "cat <<END\n\\\"\nEND\n",
+      "scriptSha256": "94bd9059db18ec1e594ebbe30f16d399506ba90e44c7f59e3a028f6e0a29298e",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "5c220a",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

@@ -419,7 +419,7 @@ internal static partial class WordExpansion
                     continue;
                 }
 
-                if (escaped is (byte)'$' or (byte)'`' or (byte)'"' or (byte)'\\')
+                if (escaped is (byte)'$' or (byte)'`' or (byte)'\\')
                 {
                     output.AppendSource(content.Slice(index + 1, 1), globQuoted);
                     index++;

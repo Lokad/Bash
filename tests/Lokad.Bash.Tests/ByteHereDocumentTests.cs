@@ -8,6 +8,32 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteHereDocumentTests
 {
+    [Theory]
+    [InlineData(1, false, false, "5C220A")]
+    [InlineData(2, false, false, "5C220A")]
+    [InlineData(3, false, false, "5C5C220A")]
+    [InlineData(4, false, false, "5C5C220A")]
+    [InlineData(1, true, false, "5C220A")]
+    [InlineData(2, true, false, "5C5C220A")]
+    [InlineData(1, false, true, "5C220A")]
+    [InlineData(2, true, true, "5C5C220A")]
+    public async Task HereDocumentQuoteEscapesKeepTheirOwnContext(
+        int backslashes, bool quoted, bool stripTabs, string outputHex)
+    {
+        var indent = stripTabs ? "\t" : "";
+        var delimiter = quoted ? "'END'" : "END";
+        var source = "cat " + (stripTabs ? "<<-" : "<<") + delimiter + "\n"
+            + indent + new string('\\', backslashes) + "\"\n" + indent + "END\n";
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync(source, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(outputHex), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     // Bash 5.2.21/C.UTF-8: shared headers retain byte values and lexical expansion order.
     [Theory]
     [InlineData("x=$'\\377'; cat <<ONE; printf after\n$x\nONE\n", "FF0A6166746572", "")]

@@ -284,7 +284,7 @@ internal sealed class RedirectionEvaluation
         Redirection redirection,
         LogicalDescriptor targetDescriptor)
     {
-        var content = await scope.Effects.ExpandWordValueAsync(redirection.Target, scope).ConfigureAwait(false);
+        var content = await scope.Effects.ExpandHereInputValueAsync(redirection.Target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError)
             return;
 
@@ -297,7 +297,7 @@ internal sealed class RedirectionEvaluation
         Redirection redirection,
         LogicalDescriptor targetDescriptor)
     {
-        var content = await scope.Effects.ExpandWordValueAsync(redirection.Target, scope).ConfigureAwait(false);
+        var content = await scope.Effects.ExpandHereInputValueAsync(redirection.Target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError)
             return;
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Expand here-strings as one scalar input without brace generation, repeated
+  operand effects or discarded Cartesian products. Preserve backslashes before
+  double quotes in unquoted here-document data.
 - Reuse nested lookahead syntax while normalizing line continuations, avoiding
   exponential reparsing of mixed command/parameter expansions. Preserve physical
   source positions, source-slice boundaries and structural nesting guards.

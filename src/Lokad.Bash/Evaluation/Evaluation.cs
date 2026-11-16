@@ -2495,6 +2495,10 @@ public sealed partial class Evaluation : IFileTester
     internal Task<ShellValue> ExpandWordValueAsync(Word word, ScopedEvaluation scope) =>
         AwaitWordExpansionAsync(WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar));
 
+    /// <summary>Expands one here-input value without brace generation, splitting or pathname expansion.</summary>
+    internal Task<ShellValue> ExpandHereInputValueAsync(Word word, ScopedEvaluation scope) =>
+        AwaitWordExpansionAsync(WordExpansion.ExpandAssignmentValueAsync(word, scope));
+
     /// <summary>Decodes the first unsplit field for existing single-text-field consumers.</summary>
     internal Task<string> ExpandWordAsync(Word word, ScopedEvaluation scope)
     {

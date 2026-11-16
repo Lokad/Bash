@@ -8,6 +8,50 @@ namespace Lokad.Bash.Tests;
 
 public sealed class HereInputLifetimeTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HereStringsRetainBraceTextAndExpandEffectsOnceWithinTheAllowance(bool prepared)
+    {
+        var literal = string.Concat(Enumerable.Repeat("{a,b}", 10));
+        var source = "i=0; read -r value <<<" + literal + "$((i++)); printf '%s:<%s>' \"$i\" \"$value\"";
+        var governor = new MemoryGovernor(64 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        RunResult result;
+        using (var owner = governor.CreateScope())
+            result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, deadline.Token)
+                : await host.RunAsync(source, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:<" + literal + "0>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("set -- a '' b; cat <<<\"$@\"", "612020620A")]
+    [InlineData("IFS=:; set -- a '' b; cat <<<$*", "613A3A620A")]
+    [InlineData("v='*'; cat <<<$v", "2A0A")]
+    [InlineData("v='a b'; cat <<<$v", "6120620A")]
+    [InlineData("HOME=synthetic; cat <<<~", "73796E7468657469630A")]
+    [InlineData("unset v; cat <<<$v", "0A")]
+    [InlineData("v=$'\\377'; cat <<<\"$v\"", "FF0A")]
+    public async Task HereStringScalarExpansionPreservesJoiningQuotingAndBytes(string source, string expectedHex)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/match", "");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync(source, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(expectedHex), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     public static IEnumerable<object[]> BufferedInputs()
     {
         foreach (var count in new[] { 1000, 70000 })
