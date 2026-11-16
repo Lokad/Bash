@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Contain synchronous function-call execution depth without terminating the host
+  process. Keep reached source/eval parsing independent of the caller's native
+  stack headroom, preserving scopes, cancellation and descriptor cleanup.
 - Expand here-strings as one scalar input without brace generation, repeated
   operand effects or discarded Cartesian products. Preserve backslashes before
   double quotes in unquoted here-document data.

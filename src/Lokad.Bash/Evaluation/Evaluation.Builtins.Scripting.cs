@@ -92,6 +92,11 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateCommandUnitsAsync(
         ShellSource source, ScopedEvaluation scope, ScriptExecutionKind kind)
     {
+        // A reached nested parser needs its own stack headroom for syntax guards,
+        // independently of the caller's function/eval execution depth.
+        if (kind != ScriptExecutionKind.Root)
+            await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+
         var result = EvaluationResult.FromExitCode(0);
         using var commands = Parser.TryParseCommandUnits(source.Bytes).GetEnumerator();
         while (true)

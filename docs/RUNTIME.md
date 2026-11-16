@@ -5,6 +5,12 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Command dispatch resumes asynchronously when CLR stack space runs low, so finite
+function calls do not depend on the embedding thread's native stack size. Reached
+source/eval parsers start on a fresh continuation to keep syntax guards independent
+of execution depth. These continuations retain the same evaluator, bindings,
+admission and descriptor owners through completion and cleanup.
+
 Line-continuation normalization reuses the structural scan's nested syntax while
 retaining physical source positions. Reusing lookahead through a source slice
 does not cross its end or reset the structural nesting guards.

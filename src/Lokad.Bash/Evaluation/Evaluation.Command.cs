@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -16,6 +17,11 @@ public sealed partial class Evaluation
         ScopedEvaluation scope,
         bool negated)
     {
+        // Async calls can all complete synchronously. Resume on a fresh stack
+        // before nested functions/source/eval exhaust the embedding thread's stack.
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+
         while (command is NegatedCommand negatedCommand)
         {
             negated = !negated;

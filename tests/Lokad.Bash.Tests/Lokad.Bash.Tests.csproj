@@ -1,5 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><IsPackable>false</IsPackable></PropertyGroup>
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- Reuse the test assembly as an isolated host for fatal-process regressions. -->
+    <OutputType>Exe</OutputType>
+    <GenerateProgramFile>false</GenerateProgramFile>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
