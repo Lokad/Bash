@@ -113,6 +113,17 @@ parser's bounded-source coverage rather than evaluation reservations.
 Quoted literals and escaped characters own compact payloads so retained scalar,
 array, nameref and positional values do not pin unrelated dynamic source bytes.
 
+A sourced input scope stays admitted while parsing/executing the file, while a
+function namespace retains its definitions, and through active function preparation,
+execution and cleanup. Shared definitions and attribute copies share this coarse
+source owner. Replacement, unset and settled temporary namespaces release their
+references; the last user refunds the scope. Prepared root namespaces remain owned
+by the caller's evaluation scope. Copied eval and trap source do not retain an
+unrelated enclosing source-file owner; their parser accounting limits remain separate.
+Namespace keys follow the current definition's storage. Sorted function-name
+snapshots admit compact copies, and pending command queries retain their selected
+source owners through host lookup and output completion.
+
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
 source-size bound, not complete accounting; manual stepping does not install a host
 budget. Keep coverage limits explicit. Test shared allowances, refusal, immediate

@@ -137,7 +137,8 @@ public sealed partial class Evaluation
                 await ReportSyntaxErrorAsync(error).ConfigureAwait(false);
             else
             {
-                var handler = await EvaluateParsedScriptAsync(script, scope, RootFlowHandling.Preserve).ConfigureAwait(false);
+                var handler = await EvaluateParsedScriptAsync(script,
+                    scope with { Context = scope.Context.WithSourceMemory(null) }, RootFlowHandling.Preserve).ConfigureAwait(false);
                 if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return) && _state.FatalExpansion == null)
                     result = result.WithExitCode(handler.ExitCode);
             }

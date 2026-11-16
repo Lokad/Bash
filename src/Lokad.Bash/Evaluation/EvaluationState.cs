@@ -32,14 +32,16 @@ internal enum FunctionDisplayStyle { Name, Attributes, Definition, DefinitionWit
 internal sealed record FunctionBinding
 {
     public FunctionDefinition Definition { get; }
+    public SourceMemory? SourceMemory { get; }
     public FunctionAttributes Attributes { get; init; }
 
     // Attribute copies and child evaluations share this cell, including before its first publication.
     private readonly ExportCache _exportCache = new();
 
-    public FunctionBinding(FunctionDefinition definition, FunctionAttributes attributes)
+    public FunctionBinding(FunctionDefinition definition, FunctionAttributes attributes, SourceMemory? sourceMemory)
     {
         Definition = definition;
+        SourceMemory = sourceMemory;
         Attributes = attributes;
     }
 
@@ -211,7 +213,7 @@ internal sealed class EvaluationState
         clone._directoryStack.AddRange(_directoryStack);
 
         foreach (var function in _functions)
-            clone._functions[function.Key] = function.Value;
+            clone.SetFunctionBinding(function.Value);
 
         return clone;
     }
@@ -290,30 +292,46 @@ internal sealed class EvaluationState
         _pendingExpansionErrorExitCode = exitCode;
     }
 
-    internal long FunctionDefinitionVersion { get; private set; }
-
     /// <summary>Redefinition retains attributes and fails without changing a readonly function.</summary>
-    public bool TryRegisterFunction(FunctionDefinition functionDefinition)
+    public bool TryRegisterFunction(FunctionDefinition functionDefinition, SourceMemory? sourceMemory)
     {
         var attributes = _functions.TryGetValue(functionDefinition.Name.Value, out var previous)
             ? previous.Attributes : FunctionAttributes.None;
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
-        _functions[functionDefinition.Name.Value] = new FunctionBinding(functionDefinition, attributes);
-        FunctionDefinitionVersion++;
+        SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, sourceMemory));
         return true;
     }
 
-    public void SetFunctionBinding(FunctionBinding function) =>
+    public void SetFunctionBinding(FunctionBinding function)
+    {
+        _functions.TryGetValue(function.Definition.Name.Value, out var previous);
+        // Replacing a dictionary value preserves its original key. Keep source-backed
+        // name storage with the new definition's owner, rather than the retired source.
+        if (previous != null && !previous.Definition.Name.Value.Bytes.Equals(function.Definition.Name.Value.Bytes))
+            _functions.Remove(function.Definition.Name.Value);
         _functions[function.Definition.Name.Value] = function;
+        // Acquire before retiring the old binding: attribute copies can share this owner.
+        function.SourceMemory?.Retain();
+        previous?.SourceMemory?.Release();
+    }
 
     /// <summary>Removes the current binding, not a definition already being invoked.</summary>
     public bool TryUnsetFunction(ShellValue name)
     {
         if (_functions.TryGetValue(name, out var function) && function.Attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
-        _functions.Remove(name);
+        if (_functions.Remove(name, out var removed))
+            removed.SourceMemory?.Release();
         return true;
+    }
+
+    /// <summary>Retires a temporary namespace only after its execution and cleanup have settled.</summary>
+    public void ReleaseFunctions()
+    {
+        foreach (var function in _functions.Values)
+            function.SourceMemory?.Release();
+        _functions.Clear();
     }
 
     public void ResetDirectoryStack()

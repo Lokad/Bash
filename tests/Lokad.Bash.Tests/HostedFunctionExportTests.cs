@@ -67,7 +67,7 @@ public sealed class HostedFunctionExportTests
     public void CachedExportsRespectEachCallersBudgetAndSurviveAttributeCopies()
     {
         var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :; }").Commands));
-        var binding = new FunctionBinding(definition, FunctionAttributes.Exported);
+        var binding = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null);
         var readonlyCopy = binding with { Attributes = FunctionAttributes.Exported | FunctionAttributes.Readonly };
 
         const long MemoryBudgetBytes = 4096;
@@ -79,7 +79,7 @@ public sealed class HostedFunctionExportTests
         Assert.False(binding.TryGetExport(first.Source.Length - 1, memory, out _));
         Assert.True(readonlyCopy.TryGetExport(first.Source.Length, memory, out var second));
         Assert.True(first.Source.Equals(second.Source)); // Memory identity, not merely equal contents.
-        var other = new FunctionBinding(definition, FunctionAttributes.Exported);
+        var other = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null);
         Assert.Throws<MemoryBudgetExceededException>(() => other.TryGetExport(4096, memory, out _));
     }
 
@@ -91,7 +91,7 @@ public sealed class HostedFunctionExportTests
         const long MemoryBudgetBytes = 4 * ExportLimitBytes;
         var definition = Assert.IsType<FunctionDefinition>(Assert.Single(
             Parser.Parse("f(){ : '" + new string('x', FunctionBodyBytes) + "'; }").Commands));
-        var binding = new FunctionBinding(definition, FunctionAttributes.Exported);
+        var binding = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null);
         var memory = new MemoryGovernor(MemoryBudgetBytes);
         ExportedFunction published = default;
         long publishedBytes = 0;

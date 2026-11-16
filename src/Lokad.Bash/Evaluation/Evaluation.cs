@@ -140,8 +140,8 @@ public sealed partial class Evaluation : IFileTester
     {
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
-        var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution);
         var variables = outer.Memory.CloneVariables(scope.Variables);
+        var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution);
         return new Evaluation(
             state,
             variables,
@@ -301,6 +301,9 @@ public sealed partial class Evaluation : IFileTester
             MarkDescriptorCleanupCompleted(descriptor);
         }
     }
+
+    /// <summary>Releases a settled or undispatched child's namespace; prepared root state stays retained.</summary>
+    internal void ReleaseNestedFunctions() => _state.ReleaseFunctions();
 
     /// <summary>
     /// Runs the evaluation loop to completion and publishes the final null operation.
@@ -533,9 +536,9 @@ public sealed partial class Evaluation : IFileTester
         var borrowedDescriptors = new HashSet<FileDescriptor>(CollectDescriptorsAvailableToNestedEvaluation());
         // Child resets must not release the parent's saved handlers before restoration.
         Memory.Charge(RetainedTrapMemoryBytes);
-        var childState = parentState.CloneForSubshell();
         var childVars = Memory.CloneVariables(scope.Variables);
         var childContext = scope.Context.Fork(childVars);
+        var childState = parentState.CloneForSubshell();
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
@@ -566,6 +569,7 @@ public sealed partial class Evaluation : IFileTester
             }
             finally
             {
+                childState.ReleaseFunctions();
                 _state = parentState;
                 _vars = parentVars;
                 _ = _subshellBorrowedDescriptorScopes.Pop();
@@ -593,6 +597,8 @@ public sealed partial class Evaluation : IFileTester
         var operators = new List<PipelineOperator>();
         FlattenPipeline(pipelineCommand, commands, operators);
         var pipes = new List<PipeDescriptors>(Math.Max(0, commands.Count - 1));
+        var stages = new List<PipelineEvaluationStage>(commands.Count);
+        using var pipelineMemory = Memory.Budget.CreateScope();
         var ownershipTransferred = false;
         try
         {
@@ -609,8 +615,6 @@ public sealed partial class Evaluation : IFileTester
                 pipes.Add(pipe);
             }
 
-            using var pipelineMemory = Memory.Budget.CreateScope();
-            var stages = new List<PipelineEvaluationStage>(commands.Count);
             for (var index = 0; index < commands.Count; index++)
             {
                 var stdIn = index > 0 ? pipes[index - 1].Read : GetStdInDescriptor();
@@ -622,9 +626,9 @@ public sealed partial class Evaluation : IFileTester
                 var descriptors = new EvaluationDescriptorSetup(
                     CaptureDescriptorBindings().WithStandardStreams(stdIn, stdOut, stdErr), []);
                 var forkKind = commands[index] is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
-                var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind);
                 var stageVars = Memory.CloneVariables(scope.Variables);
                 var stageContext = scope.Context.Fork(stageVars);
+                var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind);
                 var stage = new Evaluation(
                     stageState,
                     stageVars,
@@ -667,8 +671,16 @@ public sealed partial class Evaluation : IFileTester
         }
         finally
         {
-            if (!ownershipTransferred)
-                await CloseCreatedPipesPreservingFailureAsync().ConfigureAwait(false);
+            try
+            {
+                if (!ownershipTransferred)
+                    await CloseCreatedPipesPreservingFailureAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                foreach (var stage in stages)
+                    stage.Evaluation.ReleaseNestedFunctions();
+            }
         }
 
         async Task CloseCreatedPipesPreservingFailureAsync()
@@ -793,6 +805,8 @@ public sealed partial class Evaluation : IFileTester
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(nameError), false).ConfigureAwait(false);
 
         var preparation = await AwaitWordExpansionAsync(PrepareCommandAsync(simpleCommand, commandValue, scope)).ConfigureAwait(false);
+        using var functionSource = new SourceMemory.Borrow(preparation is PreparedCommand.Executable
+            { Resolution: CommandResolution.Function selectedFunction } ? selectedFunction.Binding.SourceMemory : null);
         if (_state.TryConsumeExpansionError(out var preparationError))
             return await FailPreparationAsync(preparationError).ConfigureAwait(false);
 
@@ -1020,7 +1034,7 @@ public sealed partial class Evaluation : IFileTester
             if (executable.Resolution is CommandResolution.Function function)
             {
                 var functionResult = await EvaluateFunctionAsync(
-                        function.Definition,
+                        function.Binding,
                         byteOperands,
                         scope,
                         commandVars,
@@ -1061,7 +1075,12 @@ public sealed partial class Evaluation : IFileTester
                         enclosingFunction.Locals.WithTemporaryPrefixes(bindings), enclosingFunction);
                     builtinScope = builtinScope with
                     {
-                        Context = new EvaluationContext(builtinScope.Context.LoopDepth, scriptFunction, builtinScope.Context.ReturnTarget) { GlobalPrefixes = builtinScope.Context.GlobalPrefixes, ErrexitIgnored = builtinScope.Context.ErrexitIgnored }
+                        Context = new EvaluationContext(builtinScope.Context.LoopDepth, scriptFunction, builtinScope.Context.ReturnTarget)
+                        {
+                            GlobalPrefixes = builtinScope.Context.GlobalPrefixes,
+                            ErrexitIgnored = builtinScope.Context.ErrexitIgnored,
+                            SourceMemory = builtinScope.Context.SourceMemory
+                        }
                     };
                 }
 
@@ -1073,6 +1092,7 @@ public sealed partial class Evaluation : IFileTester
                         Context = new EvaluationContext(builtinScope.Context.LoopDepth, builtinScope.Context.FunctionContext, builtinScope.Context.ReturnTarget)
                         {
                             ErrexitIgnored = builtinScope.Context.ErrexitIgnored,
+                            SourceMemory = builtinScope.Context.SourceMemory,
                             GlobalPrefixes = new GlobalPrefixBindings(bindings,
                                 builtinScope.Context.FunctionContext?.Depth ?? 0, builtinScope.Context.GlobalPrefixes)
                         }
@@ -1469,7 +1489,7 @@ public sealed partial class Evaluation : IFileTester
                     ? VariableDisplayStyle.Assignment : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationName : VariableDisplayStyle.Declaration;
                 var printStatus = 0;
                 var outputClosed = false;
-                await foreach (var nameValue in GetNamesAsync(GetListedNames()).ConfigureAwait(false))
+                await foreach (var nameValue in GetNamesAsync(GetListedNames(), copyNames: false).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError)
                         break;
@@ -1561,7 +1581,7 @@ public sealed partial class Evaluation : IFileTester
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Exported)) filter |= FunctionAttributes.Exported;
                 var names = _state.Functions.Keys;
                 var functionStatus = 0;
-                await foreach (var name in GetNamesAsync(names).ConfigureAwait(false))
+                await foreach (var name in GetNamesAsync(names, copyNames: true).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError) break;
                     if (!noOperands && !options.Print && name.Bytes.Span.Contains((byte)'=')
@@ -1625,7 +1645,7 @@ public sealed partial class Evaluation : IFileTester
                 return functionStatus;
             }
 
-            async IAsyncEnumerable<ShellValue> GetNamesAsync(IEnumerable<ShellValue> listedNames)
+            async IAsyncEnumerable<ShellValue> GetNamesAsync(IEnumerable<ShellValue> listedNames, bool copyNames)
             {
                 if (declaration.Operands.Count == 0)
                 {
@@ -1635,6 +1655,12 @@ public sealed partial class Evaluation : IFileTester
                     ShellValue ChargeName(ShellValue name)
                     {
                         Memory.Charge(256);
+                        if (copyNames)
+                        {
+                            // A sorted name snapshot can outlive a source-backed binding during host writes.
+                            Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(name));
+                            return ShellValue.FromBytes(name.Bytes.ToArray());
+                        }
                         return name;
                     }
                 }
@@ -2259,7 +2285,7 @@ public sealed partial class Evaluation : IFileTester
         if (lookupMode == CommandLookupMode.Normal
             && _state.Functions.TryGetValue(commandName, out var function))
         {
-            return new CommandResolution.Function(function.Definition);
+            return new CommandResolution.Function(function);
         }
 
         if (BuiltinClassification.TryResolve(text.AsSpan(), out var builtin))
@@ -2667,7 +2693,7 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Imports a validated definition without invoking it or retaining parent-only readonly attributes.</summary>
     public void SetExportedFunction(FunctionDefinition definition) =>
-        _state.SetFunctionBinding(new FunctionBinding(definition, FunctionAttributes.Exported));
+        _state.SetFunctionBinding(new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null));
 
     /// <summary>Sets an exported variable, bypassing readonly checks for host-provided environment.</summary>
     internal void SetExportedVariable(BindingName name, ShellValue value)
@@ -3033,8 +3059,7 @@ public sealed partial class Evaluation : IFileTester
         if (!descriptor.HasValue)
             return EvaluationResult.FromExitCode(1);
 
-        var sourceMemory = Memory.Budget.CreateScope();
-        var definitionVersion = _state.FunctionDefinitionVersion;
+        var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
         OperationError? closeError = null;
         try
         {
@@ -3045,7 +3070,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 using var reader = AsyncLineReader.CreateStreaming(
                     (limit, memory, _) => new ValueTask<ReadResult>(ExecuteReadAsync(descriptor.Value, limit, memory)),
-                    _cancellationToken, batchSize: 128, sourceMemory);
+                    _cancellationToken, batchSize: 128, sourceMemory.Budget);
                 input = await reader.TryReadToEndAsync(Parser.MaximumScriptBytes).ConfigureAwait(false);
                 readFailed = input is not BoundedReadResult.Complete;
             }
@@ -3077,7 +3102,8 @@ public sealed partial class Evaluation : IFileTester
                 Context = new EvaluationContext(scope.Context.LoopDepth, scope.Context.FunctionContext, ReturnTargetKind.Source)
                 {
                     GlobalPrefixes = scope.Context.GlobalPrefixes,
-                    ErrexitIgnored = scope.Context.ErrexitIgnored
+                    ErrexitIgnored = scope.Context.ErrexitIgnored,
+                    SourceMemory = sourceMemory
                 }
             };
             return await EvaluateCommandUnitsAsync(
@@ -3086,10 +3112,7 @@ public sealed partial class Evaluation : IFileTester
         }
         finally
         {
-            // Function syntax can retain the source after return, so keep it charged until execution ends.
-            // TODO: Release this charge earlier when no function retains the source after redefinition or unset.
-            if (_state.FunctionDefinitionVersion == definitionVersion)
-                sourceMemory.Dispose();
+            sourceMemory.Release();
         }
     }
 
@@ -3362,7 +3385,7 @@ public sealed partial class Evaluation : IFileTester
 
     private abstract record CommandResolution
     {
-        public sealed record Function(FunctionDefinition Definition) : CommandResolution;
+        public sealed record Function(FunctionBinding Binding) : CommandResolution;
 
         public sealed record EvaluatorBuiltin(BuiltinKind Kind) : CommandResolution;
 
@@ -3474,19 +3497,26 @@ public sealed partial class Evaluation : IFileTester
         public ReturnTargetKind ReturnTarget { get; } = returnTarget;
         public GlobalPrefixBindings? GlobalPrefixes { get; init; }
         public bool ErrexitIgnored { get; init; }
+        public SourceMemory? SourceMemory { get; init; }
 
         public EvaluationContext WithErrexitIgnored() =>
-            new(LoopDepth, FunctionContext, ReturnTarget) { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = true };
+            new(LoopDepth, FunctionContext, ReturnTarget)
+                { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = true, SourceMemory = SourceMemory };
 
         public EvaluationContext WithLoopDepth(int loopDepth) =>
-            new(loopDepth, FunctionContext, ReturnTarget) { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = ErrexitIgnored };
+            new(loopDepth, FunctionContext, ReturnTarget)
+                { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory };
+
+        public EvaluationContext WithSourceMemory(SourceMemory? sourceMemory) =>
+            new(LoopDepth, FunctionContext, ReturnTarget)
+                { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = sourceMemory };
 
         /// <summary>Preserves local declaration identity while isolating child bindings and restoration.</summary>
         public EvaluationContext Fork(Variables variables)
         {
             var prefixes = GlobalPrefixes?.Fork(variables);
             return new(LoopDepth, FunctionContext?.Fork(variables, prefixes), ReturnTarget)
-                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored };
+                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory };
         }
 
         public Variables GetGlobalBindingOwner(BindingName name, Variables active)

@@ -83,7 +83,8 @@ public sealed partial class Evaluation
         }
 
         return ApplyNegation(await EvaluateCommandUnitsAsync(ShellSource.FromBytes(builder.ToMemory()),
-            scope with { Variables = commandVars }, ScriptExecutionKind.Eval).ConfigureAwait(false), negated);
+            scope with { Variables = commandVars, Context = scope.Context.WithSourceMemory(null) },
+            ScriptExecutionKind.Eval).ConfigureAwait(false), negated);
     }
 
     private enum ScriptExecutionKind { Root, Source, Eval }

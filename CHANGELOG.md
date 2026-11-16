@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refund sourced input reservations after their last function binding or active
+  invocation retires. Preserve shared definitions, child namespaces, attribute
+  copies and pending cleanup; copied eval/trap syntax keeps separate provenance.
 - Give escaped literal characters compact storage, like quoted literals. Retaining
   an escaped character from source/eval no longer pins the complete input buffer
   after its source reservation ends.

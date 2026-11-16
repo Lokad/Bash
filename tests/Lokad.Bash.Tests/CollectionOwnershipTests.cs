@@ -6,6 +6,21 @@ namespace Lokad.Bash.Tests;
 public sealed class CollectionOwnershipTests
 {
     [Fact]
+    public void FunctionReplacementRetiresThePreviousNamesBacking()
+    {
+        var first = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :; }\n#" + new string('a', 8192)).Commands));
+        var next = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :; }\n#" + new string('b', 16384)).Commands));
+        var state = new EvaluationState(Parser.Parse(""), ShellPath.Root, inheritedDescriptorTable: null);
+
+        Assert.True(state.TryRegisterFunction(first, sourceMemory: null));
+        Assert.True(state.TryRegisterFunction(next, sourceMemory: null));
+
+        var name = Assert.Single(state.Functions.Keys);
+        Assert.True(name.Bytes.Equals(next.Name.Value.Bytes));
+        Assert.False(name.Bytes.Equals(first.Name.Value.Bytes));
+    }
+
+    [Fact]
     public void SyntaxCollections_RetainCompletedConstructorInputs()
     {
         var wordParts = new List<WordPart> { WordPart.FromText(WordPartKind.Unquoted, "value") };

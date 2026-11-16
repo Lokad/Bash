@@ -32,8 +32,8 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
         }
         outer.TrackOwnedDescriptor(pipe.Read);
         outer.TrackOwnedDescriptor(pipe.Write);
-        var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write);
         using var outputMemory = outer.Memory.Budget.CreateScope();
+        var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write);
         CapturedEvaluationResult result;
         try
         {
@@ -49,6 +49,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
         finally
         {
             nested.TransferDescriptorCleanupTo(outer);
+            nested.ReleaseNestedFunctions();
         }
 
         switch (result.Output)

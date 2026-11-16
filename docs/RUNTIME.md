@@ -11,6 +11,13 @@ source/eval parsers start on a fresh continuation to keep syntax guards independ
 of execution depth. These continuations retain the same evaluator, bindings,
 admission and descriptor owners through completion and cleanup.
 
+Sourced function definitions share the input's admitted owner across namespaces
+and attribute copies. An invocation retains its selected definition through
+preparation and descriptor cleanup, including self-unset/replacement. Nested
+definitions inherit the executing function's source, independently of its caller.
+Retired bindings and settled child namespaces release their ownership; copied
+eval/trap source does not keep unrelated source-file buffers admitted.
+
 Line-continuation normalization reuses the structural scan's nested syntax while
 retaining physical source positions. Reusing lookahead through a source slice
 does not cross its end or reset the structural nesting guards.

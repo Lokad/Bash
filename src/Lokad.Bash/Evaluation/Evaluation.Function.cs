@@ -11,13 +11,14 @@ public sealed partial class Evaluation
     /// Evaluates a function invocation, managing positional parameters and local variables.
     /// </summary>
     private async Task<EvaluationResult> EvaluateFunctionAsync(
-        FunctionDefinition functionDefinition,
+        FunctionBinding function,
         IReadOnlyList<ShellValue> arguments,
         ScopedEvaluation scope,
         Variables commandVars,
         IReadOnlySet<BindingName>? prefixNames,
         bool negated)
     {
+        var functionDefinition = function.Definition;
         // Keep the inactive caller frame admitted and reserve the callee's owned entry array.
         Memory.Charge(checked(scope.Variables.PositionalMemoryBytes + 32L * arguments.Count));
         using var bindings = prefixNames == null
@@ -37,7 +38,12 @@ public sealed partial class Evaluation
             functionResult = await EvaluateCommandAsync(
                     functionDefinition.Body,
                     // A function can only break/continue its own loops, not the caller's loops.
-                    scope with { Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function) { GlobalPrefixes = scope.Context.GlobalPrefixes, ErrexitIgnored = scope.Context.ErrexitIgnored } },
+                    scope with { Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function)
+                    {
+                        GlobalPrefixes = scope.Context.GlobalPrefixes,
+                        ErrexitIgnored = scope.Context.ErrexitIgnored,
+                        SourceMemory = function.SourceMemory
+                    } },
                     negated: false)
                 .ConfigureAwait(false);
 
