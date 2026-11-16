@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve legacy backtick spelling when displaying or exporting functions, so
+  replay/import keeps deferred child-syntax validation, quoting and escapes.
 - Reject self-referencing nameref declaration initializers at script scope before
   replacing values or attributes. Preserve function declaration warnings, global
   fallback for circular local references, and ordinary unset-nameref assignment.

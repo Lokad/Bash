@@ -148,7 +148,8 @@ internal static class CommandSubstitutionScanner
                 var current = source[position];
                 if (current == (byte)'`')
                 {
-                    legacyPayload = new CommandSubstitutionSyntax.Deferred(ShellSource.FromBytes(builder.ToMemory()));
+                    legacyPayload = new CommandSubstitutionSyntax.Legacy(ShellSource.FromBytes(builder.ToMemory()),
+                        source.Slice(substitutionStart, position - substitutionStart + 1));
                     closingIndex = position;
                     return ShellScanStatus.Complete;
                 }

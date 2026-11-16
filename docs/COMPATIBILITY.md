@@ -22,6 +22,11 @@ and ordinary writes can select the global binding. A self-element target keeps
 its separate selector semantics. Assigning an unset nameref may create a cycle,
 and raw declaration inspection does not resolve that cycle.
 
+Function display/export preserves legacy backticks and their original escapes.
+Invalid child syntax in an unreached legacy substitution remains deferred when
+the definition is replayed or imported; validation occurs when execution reaches
+that substitution. Parenthesized substitution retains its existing parser rules.
+
 Source and shell values preserve bytes, including invalid UTF-8 values. Text-only
 host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.

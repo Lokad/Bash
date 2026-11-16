@@ -7,6 +7,9 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
     internal sealed record Parsed(ShellSource SourceText, ParsedScript Script)
         : CommandSubstitutionSyntax(SourceText);
 
-    /// <summary>Bytes still requiring execution-time parsing, including legacy backticks and unfinished here-documents.</summary>
+    /// <summary>Legacy executable bytes and their original delimiters/escapes, validated only when reached.</summary>
+    internal sealed record Legacy(ShellSource SourceText, ShellSource Spelling) : CommandSubstitutionSyntax(SourceText);
+
+    /// <summary>Bytes still requiring execution-time parsing, including unfinished here-documents.</summary>
     internal sealed record Deferred(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);
 }

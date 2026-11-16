@@ -12,6 +12,12 @@ does not follow aliases. Builtin outputs share selection and publication, with
 explicit getopts failure, printf count and descriptor policies. An allocation
 that does not publish its variable remains temporary and uses ordinary cleanup.
 
+Legacy command-substitution metadata keeps executable bytes separately from the
+original delimited spelling. Function display/export emits that spelling without
+parsing the child body, preserving validation timing across replay and import.
+The spelling borrows the existing syntax/source owner; execution and capture keep
+their shared path. Legacy child syntax is still parsed when each execution reaches it.
+
 Command dispatch resumes asynchronously when CLR stack space runs low, so finite
 function calls do not depend on the embedding thread's native stack size. Reached
 source/eval parsers start on a fresh continuation to keep syntax guards independent

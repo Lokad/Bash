@@ -101,7 +101,11 @@ public sealed class CommandSubstitutionSyntaxTests
     {
         var word = Tokenizer.ReadExpansionWord(ShellSource.FromText(source), ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
         var part = Assert.IsType<CommandSubstitutionWordPart>(Assert.Single(word.Parts));
-        var deferred = Assert.IsType<CommandSubstitutionSyntax.Deferred>(part.Substitution);
+        var deferred = part.Substitution;
+        if (deferred is CommandSubstitutionSyntax.Legacy legacy)
+            Assert.Equal(source, legacy.Spelling.ToUtf8String());
+        else
+            Assert.IsType<CommandSubstitutionSyntax.Deferred>(deferred);
         Assert.Equal(payload, deferred.Source.ToUtf8String());
         Assert.Throws<SyntaxException>(() => Parser.Parse(deferred.Source.Bytes));
     }

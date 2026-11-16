@@ -6183,6 +6183,34 @@
       "stdoutHex": "6465636c617265202d6e20613d2261220a",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "function-legacy-invalid-unreached-replay",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "f(){ true || : `if`; printf ok; }; saved=$(declare -f f); unset -f f; eval \"$saved\"; printf 'eval:%s:' \"$?\"; f",
+      "scriptSha256": "d79e0f0b4febac47782d7622775c8d1b5b161f412ede31c180435f38bd1db865",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6576616c3a303a6f6b",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "function-legacy-invalid-unreached-export",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "f(){ true || : `if`; printf ok; }; export -f f; bash -c f",
+      "scriptSha256": "868af533654dfddb9913563beb11480e10239387fc2ff99b090a17194d9a6fb6",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6f6b",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

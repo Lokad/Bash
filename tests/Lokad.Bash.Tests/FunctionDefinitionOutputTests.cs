@@ -96,8 +96,10 @@ public sealed class FunctionDefinitionOutputTests
     // Archived word kinds use valid function syntax; redundant literal-dollar quote boundaries coalesce.
     [InlineData("f(){ printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one)\"$(printf two)\"; cat <<'END'\nbody\nEND\n}", "f () \n{ \n    printf '%s\\n' plain'single'\"double\\\"\\\\\\$\\$\"$(printf one\n)\"$(printf two\n)\";\n    cat <<'END'\nbody\nEND\n\n}\n")]
     [InlineData("f(){ :;\n}", "f () \n{ \n    :\n}\n")]
-    [InlineData("f(){ printf '%s' `((n=1)); printf hi`; }", "f () \n{ \n    printf '%s' $( ((n=1)); printf hi\n)\n}\n")]
-    [InlineData("f(){ printf '%s' `\\\n(printf hi)`; }", "f () \n{ \n    printf '%s' $( \\\n(printf hi)\n)\n}\n")]
+    [InlineData("f(){ true || : `if`; printf ok; }", "f () \n{ \n    true || : `if`;\n    printf ok\n}\n")]
+    [InlineData("f(){ false && : \"`)`\"; printf ok; }", "f () \n{ \n    false && : \"`)`\";\n    printf ok\n}\n")]
+    [InlineData("f(){ printf '%s' `((n=1)); printf hi`; }", "f () \n{ \n    printf '%s' `((n=1)); printf hi`\n}\n")]
+    [InlineData("f(){ printf '%s' `\\\n(printf hi)`; }", "f () \n{ \n    printf '%s' `\\\n(printf hi)`\n}\n")]
     [InlineData("f(){ TIMEFORMAT=''; time printf x; }", "f () \n{ \n    TIMEFORMAT='';\n    time printf x\n}\n")]
     [InlineData("f(){ printf a; printf b; true && echo c || echo d;\n}", "f () \n{ \n    printf a;\n    printf b;\n    true && echo c || echo d\n}\n")]
     [InlineData("f(){ { echo x; echo y; };\n}", "f () \n{ \n    { \n        echo x;\n        echo y\n    }\n}\n")]

@@ -74,6 +74,9 @@ internal static class FunctionDefinitionFormatter
                             WordPartKind.SingleQuoted => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, content),
                             WordPartKind.DoubleQuoted => output.TryAppend(content),
                             WordPartKind.Escaped => Append("\\") && output.TryAppend(content),
+                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
+                                when part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Legacy legacy } =>
+                                output.TryAppend(legacy.Spelling.AsSpan()),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
                                 AppendCommandSubstitution(content),
                             _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
@@ -285,7 +288,7 @@ internal static class FunctionDefinitionFormatter
 
         bool AppendCommandSubstitution(ReadOnlySpan<byte> source)
         {
-            // Backtick payloads may start with a subshell or end in a comment without LF.
+            // Synthetic deferred payloads may start with a subshell or end in a comment without LF.
             var first = ShellSourceCursor.SkipLineContinuations(source, 0);
             return Append(first < source.Length && source[first] == (byte)'(' ? "$( " : "$(")
                 && output.TryAppend(source)
