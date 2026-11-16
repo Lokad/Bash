@@ -121,6 +121,7 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ cat <<END\nx\nEND\necho after;\n}", "f () \n{ \n    cat <<END\nx\nEND\n\n    echo after\n}\n")]
     [InlineData("f(){ printf '%s' 'a\r\nb';\n}", "f () \n{ \n    printf '%s' 'a\r\nb'\n}\n")]
     [InlineData("f() (echo x)", "f () \n{ \n    ( echo x )\n}\n")]
+    [InlineData("function f (printf '%s' \"$1\")", "f () \n{ \n    ( printf '%s' \"$1\" )\n}\n")]
     [InlineData("f(){ echo x; } >out", "f () \n{ \n    echo x\n} > out\n")]
     [InlineData("f(){ printf '%s\\n' \"a\\\"b\" \"a\\\\b\" \"a\\`b\" a'\"'b; }", "f () \n{ \n    printf '%s\\n' \"a\\\"b\" \"a\\\\b\" \"a\\`b\" a'\"'b\n}\n")]
     public async Task DefinitionOutput_PreservesSyntaxAndInvocation(string definition, string expected)

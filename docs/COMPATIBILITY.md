@@ -101,6 +101,10 @@ job/process-group control, OS signal handling, process substitution, `coproc`,
 other than errexit.
 The runtime does not import process environment variables or startup files.
 
+Both function-definition forms require a compound command body. In `function name`,
+the optional empty `()` header is distinguished from a subshell body beginning with
+`(`. Function-body redirections apply when the function is invoked.
+
 `getopts` currently supports separate flag arguments and advances `OPTIND` over
 the active positional window or explicit arguments. Bundled flags, required option
 arguments, `OPTARG` lifecycle and GNU diagnostic/silent modes remain unsupported.

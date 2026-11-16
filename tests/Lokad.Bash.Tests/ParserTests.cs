@@ -857,6 +857,55 @@ public class ParserTests
         Assert.IsType<GroupCommand>(function.Body);
     }
 
+    [Theory]
+    [InlineData("f() printf wrong")]
+    [InlineData("function f printf wrong")]
+    [InlineData("function f() x=wrong")]
+    [InlineData("function f () >out")]
+    [InlineData("f() g(){ :; }")]
+    [InlineData("function f function g(){ :; }")]
+    [InlineData("f() ! { :; }")]
+    [InlineData("function f time { :; }")]
+    [InlineData("function f (\n) { :; }")]
+    public void Parse_FunctionBodyRequiresACompoundCommand(string source)
+    {
+        Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+    }
+
+    [Theory]
+    [InlineData("function f (printf yes)")]
+    [InlineData("function f ( printf yes )")]
+    [InlineData("function f (\nprintf yes\n)")]
+    [InlineData("function f ( # body\nprintf yes\n)")]
+    [InlineData("function f\n(printf yes)")]
+    [InlineData("function f () (printf yes)")]
+    [InlineData("function f (printf yes) >out")]
+    public void Parse_FunctionOptionalHeaderRetainsTheSubshellBody(string source)
+    {
+        var function = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(source).Commands));
+        var body = function.Body is RedirectedCommand redirected ? redirected.Body : function.Body;
+
+        Assert.IsType<SubshellCommand>(body);
+    }
+
+    [Theory]
+    [InlineData("function f { :; }", typeof(GroupCommand))]
+    [InlineData("f() ( : )", typeof(SubshellCommand))]
+    [InlineData("function f if true; then :; fi", typeof(IfCommand))]
+    [InlineData("f() while false; do :; done", typeof(WhileCommand))]
+    [InlineData("function f until true; do :; done", typeof(UntilCommand))]
+    [InlineData("f() for x in one; do :; done", typeof(ForCommand))]
+    [InlineData("function f for ((i=0;i<1;i++)); do :; done", typeof(ArithmeticForCommand))]
+    [InlineData("f() case x in x) :;; esac", typeof(CaseCommand))]
+    [InlineData("function f ((x=3))", typeof(ArithmeticCommand))]
+    [InlineData("f() [[ x == x ]]", typeof(ConditionalCommand))]
+    public void Parse_FunctionBodiesKeepAllSupportedCompoundKinds(string source, Type expectedBody)
+    {
+        var function = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(source).Commands));
+
+        Assert.Equal(expectedBody, function.Body.GetType());
+    }
+
     [Fact]
     public void Parse_ArithmeticForCommand_Basic()
     {

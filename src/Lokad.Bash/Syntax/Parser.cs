@@ -759,8 +759,7 @@ public static class Parser
         if (!tokenizer.TryReadFunctionName(nameTokenWord, out var name))
             return null;
 
-        var next = tokenizer.PeekTokenCore();
-        if (next.Kind == TokenKind.OpenParen)
+        if (tokenizer.IsFollowedByFunctionParentheses(nameTokenWord))
         {
             tokenizer.NextTokenCore();
             var close = tokenizer.NextTokenCore();
@@ -771,14 +770,8 @@ public static class Parser
             }
         }
 
-        var body = ParseCommandAtom(tokenizer, afterPipe: false);
-        if (body == null)
-        {
-            tokenizer.RecordError("Expected function body.", tokenizer.Position);
-            return null;
-        }
-
-        return new FunctionDefinition(name, body);
+        var body = ParseFunctionBody(tokenizer);
+        return body == null ? null : new FunctionDefinition(name, body);
     }
 
     /// <summary>
@@ -885,12 +878,9 @@ public static class Parser
                 return false;
             if (!name.Syntax.HasFlag(FunctionNameSyntax.KeywordOnly))
             {
-                var body = ParseCommandAtom(tokenizer, afterPipe: false);
+                var body = ParseFunctionBody(tokenizer);
                 if (body == null)
-                {
-                    tokenizer.RecordError("Expected function body.", tokenizer.Position);
                     return false;
-                }
 
                 functionDefinition = new FunctionDefinition(name, body);
                 return true;
@@ -901,6 +891,22 @@ public static class Parser
         tokenizer.PushBack(token2);
         tokenizer.PushBack(token1);
         return false;
+    }
+
+    /// <summary>Both function headers require a compound body, including its trailing redirections.</summary>
+    private static ICommand? ParseFunctionBody(Tokenizer tokenizer)
+    {
+        var body = ParseCommandAtom(tokenizer, afterPipe: false);
+        var compound = body;
+        while (compound is RedirectedCommand redirected)
+            compound = redirected.Body;
+
+        if (compound is GroupCommand or SubshellCommand or IfCommand or WhileCommand or UntilCommand
+            or ForCommand or ArithmeticForCommand or CaseCommand or ArithmeticCommand or ConditionalCommand)
+            return body;
+
+        tokenizer.RecordError("Expected compound command as function body.", tokenizer.Position);
+        return null;
     }
 
     /// <summary>

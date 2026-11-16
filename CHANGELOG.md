@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recognize subshell bodies after `function name` without an empty `()` header.
+  Require a compound body for both function-definition forms before executing
+  their command unit, retaining prior effects and invocation-time redirections.
 - Contain synchronous function-call execution depth without terminating the host
   process. Keep reached source/eval parsing independent of the caller's native
   stack headroom, preserving scopes, cancellation and descriptor cleanup.

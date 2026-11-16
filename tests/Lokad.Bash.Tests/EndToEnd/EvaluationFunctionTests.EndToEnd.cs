@@ -7,6 +7,41 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationFunctionTestsEndToEnd
 {
     [Theory]
+    [InlineData("f() printf wrong")]
+    [InlineData("function f x=wrong")]
+    [InlineData("function f() >out")]
+    [InlineData("f() g(){ :; }")]
+    [InlineData("if false; then f() printf wrong; fi")]
+    [InlineData("outer(){ function f x=wrong; }")]
+    public async Task InvalidFunctionBodiesRejectTheUnitBeforeInvocation(string definition)
+    {
+        await using var host = new TestHost();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync("printf before\n" + definition + "\nf; printf after", deadline.Token);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.NotEmpty(host.StandardError.Content.ToArray());
+        Assert.False(host.FileExists("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("function f (x=inner; printf '%s' \"$x\"); x=outer; f; printf ':%s' \"$x\"", "inner:outer")]
+    [InlineData("function f (x=inner; printf '%s' \"$x\") >out; x=outer; [ -e out ] && printf unwanted; f; printf '%s:' \"$x\"; cat out", "outer:inner")]
+    [InlineData("printf '<%s>' \"$(function f (printf yes); f)\"", "<yes>")]
+    [InlineData("function f () ((x=3)); f; printf '%s' \"$x\"", "3")]
+    [InlineData("function f ( ) { printf yes; }; f", "yes")]
+    public async Task FunctionBodiesPreserveCompoundKindsAndInvocationEffects(string source, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("x=global; f() { x=inner eval \"unset x; export x=body\"; }; x=outer f; printf \"%s\" \"$x\"", "body")]
     [InlineData("x=global; f() { x=inner eval \"unset x; readonly x=after\"; }; x=outer f; printf \"%s\" \"$x\"", "after")]
     [InlineData("x=global; f() { local x=local; unset x; x=inner eval \"export x=body\"; }; x=outer f; printf \"%s\" \"$x\"", "body")]

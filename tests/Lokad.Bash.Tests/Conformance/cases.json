@@ -6010,6 +6010,34 @@
       "stdoutHex": "5c220a",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "function-subshell-body",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "x=outer; function f (x=inner; printf '%s' \"$x\"); f; printf ':%s' \"$x\"",
+      "scriptSha256": "b4254bef5699c3b730971f8bc2d271a3e4e5683c0533d17f39fbd9108db422d5",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "696e6e65723a6f75746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "function-invalid-body-unit",
+      "classification": "supported",
+      "reason": "Command-unit effects with script-directed stderr disposal; diagnostics are asserted separately.",
+      "locale": "C",
+      "script": "exec 2>&-\nprintf before\nf() >out\nf; printf after",
+      "scriptSha256": "a196eaf2ab93a08b2c659a545217b1015ba580d6a829d0e3000651eac7ac7cea",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 2,
+      "stdoutHex": "6265666f7265",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }
