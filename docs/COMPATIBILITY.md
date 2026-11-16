@@ -16,6 +16,12 @@ The runtime supports deterministic, non-interactive shell workflows:
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT
   handlers. Cancellation and external signals do not deliver traps.
 
+Self-referencing nameref declaration initializers fail at script scope without
+replacing the binding. Function declarations warn instead; circular local reads
+and ordinary writes can select the global binding. A self-element target keeps
+its separate selector semantics. Assigning an unset nameref may create a cycle,
+and raw declaration inspection does not resolve that cycle.
+
 Source and shell values preserve bytes, including invalid UTF-8 values. Text-only
 host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.

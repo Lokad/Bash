@@ -336,8 +336,10 @@ internal sealed class RedirectionEvaluation
         var value = ShellValue.FromBytes(NumberFormatting.FormatNumber(number.Number));
         var assignment = await scope.Effects.AssignBuiltinAsync(VariableReference.ForName(variableName), value,
             scope, scope.SelectorBindings,
-            Evaluation.BuiltinOutputVisibility.Caller, ShellValue.FromText(variableName),
+            Evaluation.BuiltinAssignmentKind.Descriptor, ShellValue.FromText(variableName),
             scope.ExpansionWriteTarget).ConfigureAwait(false);
+        if (assignment == Evaluation.BuiltinAssignmentResult.NoWrite)
+            return; // An unbound allocation remains temporary and is closed by the existing restore path.
         if (assignment != Evaluation.BuiltinAssignmentResult.Assigned)
         {
             if (!scope.Effects.HasPendingExpansionError)

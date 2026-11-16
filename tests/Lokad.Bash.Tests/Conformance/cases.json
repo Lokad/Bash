@@ -6141,6 +6141,48 @@
       "stdoutHex": "6265666f7265",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "nameref-self-declaration-preserves-binding",
+      "classification": "supported",
+      "reason": "Script-directed stderr disposal; warning stages have separate regressions.",
+      "locale": "C",
+      "script": "a=old; declare -nrx a=a 2>/dev/null; printf 'status:%s value:%s\\n' \"$?\" \"$a\"; declare -p a",
+      "scriptSha256": "86fa503751ee3381cbd36a83babcbd4bdc7778ecae39060301060cdcfb5d1f2f",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "7374617475733a312076616c75653a6f6c640a6465636c617265202d2d20613d226f6c64220a",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "nameref-local-cycle-global-fallback",
+      "classification": "supported",
+      "reason": "Script-directed stderr disposal; warning stages have separate regressions.",
+      "locale": "C",
+      "script": "a=outer; f(){ local a=middle; g(){ local -n a=a; printf '%s' \"$a\"; }; g; printf ':%s' \"$a\"; }; f 2>/dev/null; printf ':%s' \"$a\"",
+      "scriptSha256": "45d7789ce69b1b59aeb1791826f7247e425216fb7c34c9c146a46422e1ce686f",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6f757465723a6d6964646c653a6f75746572",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "nameref-unset-assignment-allows-self-cycle",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "declare -n a; a=a; declare -p a",
+      "scriptSha256": "80254332b5e6ccf1c33790926a83b21ce5f67daba832ee81d4725ce299ec4a5a",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6465636c617265202d6e20613d2261220a",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

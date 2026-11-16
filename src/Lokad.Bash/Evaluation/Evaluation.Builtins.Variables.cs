@@ -292,12 +292,21 @@ public sealed partial class Evaluation
 
         bool AssignOutput(VariableReference reference, WordExpansion.ResolvedVariableReference target, ShellValue value)
         {
+            if (target.ReadOwner is { } owner && !ReferenceEquals(owner, commandVars))
+                return target.TryAssign(new ScopedEvaluation(this, owner, context), reference.Name, value, AssignmentOperator.Replace);
             var sourceName = reference.Name;
             if (reference.Kind == VariableReferenceKind.Name
                 && commandVars.TryResolveBinding(reference.Name, selectOwner: null, out var selected))
             {
                 if (selected.Reference.Kind == VariableReferenceKind.Name)
-                    return TryAssignBuiltinOutput(reference, value, commandVars, bindings, context);
+                {
+                    var resolution = SelectBuiltinReference(reference, commandVars, context, out var binding);
+                    if (resolution != BuiltinReferenceResolution.Write)
+                        return resolution == BuiltinReferenceResolution.NoWrite;
+                    return bindings != null && ReferenceEquals(binding.Owner, commandVars)
+                        ? bindings.TryApplyOutputAssignment(binding.Reference, value, Memory)
+                        : binding.Owner.TryApplyAssignment(binding.Reference, value, Memory);
+                }
                 // Keep an intermediate alias: its prefix-owned write must not reach the caller.
                 sourceName = selected.Name;
             }
@@ -307,28 +316,6 @@ public sealed partial class Evaluation
                 && target.TryAssign(new ScopedEvaluation(this, commandVars, context) { SelectorBindings = outputBindings },
                     sourceName, value, AssignmentOperator.Replace);
         }
-    }
-
-    /// <summary>Routes builtin output operands to caller bindings, respecting dynamic nameref ownership.</summary>
-    private bool TryAssignBuiltinOutput(
-        string name, ShellValue value, Variables variables, Variables.CommandBindings? bindings,
-        EvaluationContext context)
-    {
-        if (!VariableReference.TryParse(name, out var reference))
-            return false;
-        return TryAssignBuiltinOutput(reference, value, variables, bindings, context);
-    }
-
-    private bool TryAssignBuiltinOutput(
-        VariableReference reference, ShellValue value, Variables variables, Variables.CommandBindings? bindings,
-        EvaluationContext context)
-    {
-        var resolution = SelectBuiltinReference(reference, variables, context, out var binding);
-        if (resolution != BuiltinReferenceResolution.Write)
-            return resolution == BuiltinReferenceResolution.NoWrite;
-        return bindings != null && ReferenceEquals(binding.Owner, variables)
-            ? bindings.TryApplyOutputAssignment(binding.Reference, value, Memory)
-            : binding.Owner.TryApplyAssignment(binding.Reference, value, Memory);
     }
 
     private enum BuiltinReferenceResolution { Write, NoWrite, Invalid }
@@ -341,6 +328,7 @@ public sealed partial class Evaluation
         if (context.FunctionContext?.IsLocal(reference.Name) != true || !variables.TryGetNameref(reference.Name, out _))
             return BuiltinReferenceResolution.Write;
         if (!variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
+            && !context.TryResolveCircularBinding(reference.Name, variables, out binding)
             || reference.Kind != VariableReferenceKind.Name
                 && (binding.IsUnsetNameref || binding.Reference.Kind != VariableReferenceKind.Name))
             return BuiltinReferenceResolution.Invalid;
@@ -356,15 +344,19 @@ public sealed partial class Evaluation
         return BuiltinReferenceResolution.Write;
     }
 
-    internal enum BuiltinOutputVisibility { Caller, CommandAndCaller }
+    internal enum BuiltinAssignmentKind { Value, Getopts, PrintfCount, Descriptor }
     internal enum BuiltinAssignmentResult { Assigned, NoWrite, Failed }
 
     /// <summary>Shares selected output writes, including descriptor allocation, without replaying selectors.</summary>
     internal async Task<BuiltinAssignmentResult> AssignBuiltinAsync(
         VariableReference reference, ShellValue value, ScopedEvaluation scope,
-        Variables.CommandBindings? persistentOutputs, BuiltinOutputVisibility visibility, ShellValue command,
+        Variables.CommandBindings? persistentOutputs, BuiltinAssignmentKind kind, ShellValue command,
         ScopedEvaluation.ExpansionBindings? expansionWriteTarget)
     {
+        var circular = reference.Kind == VariableReferenceKind.Name
+            && !scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out _)
+            && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
+        var activeCycle = circular;
         var resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, out var binding);
         if (resolution == BuiltinReferenceResolution.NoWrite)
             return BuiltinAssignmentResult.NoWrite;
@@ -375,6 +367,27 @@ public sealed partial class Evaluation
         reference = binding.Reference;
         if (ReferenceEquals(destination, scope.Variables))
             destination = persistentOutputs?.SelectOutputVariables(reference.Name) ?? destination;
+        var caller = persistentOutputs?.Contains(reference.Name) == true ? persistentOutputs.SavedVariables : destination;
+        if (reference.Kind == VariableReferenceKind.Name
+            && !caller.TryResolveBinding(reference.Name,
+                ReferenceEquals(caller, persistentOutputs?.SavedVariables) ? SelectCallerOwner : null, out _)
+            && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out var fallback))
+        {
+            circular = true;
+            destination = fallback.Owner;
+            reference = fallback.Reference;
+        }
+        if (circular)
+        {
+            await ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+            if (kind == BuiltinAssignmentKind.Descriptor || kind == BuiltinAssignmentKind.PrintfCount && activeCycle)
+                await ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+            if (HasPendingExpansionError || !BuiltinDiagnosticsOpen)
+                return BuiltinAssignmentResult.Failed;
+            // Bash allocates the descriptor but leaves a circular local alias untouched.
+            if (kind == BuiltinAssignmentKind.Descriptor)
+                return BuiltinAssignmentResult.NoWrite;
+        }
         if (reference.Kind != VariableReferenceKind.Name
             && destination.TryResolveBinding(reference.Name, selectOwner: null, out var selected)
             && selected.IsUnsetNameref)
@@ -384,13 +397,14 @@ public sealed partial class Evaluation
             return BuiltinAssignmentResult.Failed;
         if (destination.IsReadonly(target.Name))
         {
-            await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+            if (kind != BuiltinAssignmentKind.Getopts)
+                await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
             return BuiltinAssignmentResult.Failed;
         }
         var failure = destination.GetNamerefAssignmentFailure(reference.Name, target.Name, value, Memory);
         if (failure != NamerefAssignmentFailure.None)
         {
-            if (failure == NamerefAssignmentFailure.InvalidTarget)
+            if (failure == NamerefAssignmentFailure.InvalidTarget && kind != BuiltinAssignmentKind.Getopts)
                 await ReportExpansionDiagnosticAsync(command, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
                     .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(value).Bytes).Append(": not a valid identifier"u8).ToMemory())).ConfigureAwait(false);
             return BuiltinAssignmentResult.Failed;
@@ -401,7 +415,7 @@ public sealed partial class Evaluation
             ExpansionWriteTarget = expansionWriteTarget,
             SelectorBindings = null
         }, reference.Name, value, AssignmentOperator.Replace);
-        if (assigned && visibility == BuiltinOutputVisibility.CommandAndCaller && !ReferenceEquals(destination, binding.Owner))
+        if (assigned && kind == BuiltinAssignmentKind.PrintfCount && !ReferenceEquals(destination, binding.Owner))
         {
             // Count writes are visible to later selectors, without replaying an element selector
             // or imposing the caller's array kind on a temporary scalar prefix.
@@ -413,6 +427,9 @@ public sealed partial class Evaluation
         if (assigned)
             persistentOutputs?.CompleteOutput(reference.Name, destination);
         return assigned ? BuiltinAssignmentResult.Assigned : BuiltinAssignmentResult.Failed;
+
+        Variables SelectCallerOwner(BindingName name) => persistentOutputs?.Contains(name) == true
+            ? persistentOutputs.SavedVariables : scope.Variables;
 
         async Task<BuiltinAssignmentResult> InvalidElementTargetAsync()
         {

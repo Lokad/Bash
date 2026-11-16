@@ -94,11 +94,13 @@ public sealed class ExecutionLifetimeTests
     }
 
     [Theory]
-    [InlineData("echo borrowed >/out")]
-    [InlineData("echo borrowed >/out\n)\n")]
-    [InlineData("trap 'echo borrowed >/out' EXIT; exit 7")]
-    [InlineData("trap $'trap - EXIT\\necho borrowed >/out\\n' EXIT; exit 7")]
-    public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle(string source)
+    [InlineData("echo borrowed >/out", "borrowed\n")]
+    [InlineData("echo borrowed >/out\n)\n", "borrowed\n")]
+    [InlineData("trap 'echo borrowed >/out' EXIT; exit 7", "borrowed\n")]
+    [InlineData("trap $'trap - EXIT\\necho borrowed >/out\\n' EXIT; exit 7", "borrowed\n")]
+    [InlineData("a=borrowed; f(){ local -n a=a; echo \"$a\" >/out; }; f 2>/dev/null", "borrowed\n")]
+    [InlineData("declare -n a=a 2>/out", "declare: a: nameref variable self references not allowed\n")]
+    public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle(string source, string expected)
     {
         using var cancellation = new CancellationTokenSource();
         var governor = new MemoryGovernor(64 * 1024);
@@ -122,7 +124,7 @@ public sealed class ExecutionLifetimeTests
             cancellation.Cancel();
             Assert.False(running.IsCompleted);
             Assert.True(governor.ReservedBytes > 0);
-            Assert.Equal("borrowed\n"u8.ToArray(), borrowed.ToArray());
+            Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected), borrowed.ToArray());
 
             writeComplete.SetResult(DescriptorWriteResult.Open);
             await closeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));

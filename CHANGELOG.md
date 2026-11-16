@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reject self-referencing nameref declaration initializers at script scope before
+  replacing values or attributes. Preserve function declaration warnings, global
+  fallback for circular local references, and ordinary unset-nameref assignment.
+  Share builtin output selection while retaining count and descriptor rules.
 - Execute EXIT actions through the shared command-unit parser, preserving earlier
   effects before later syntax errors and stopping before unreached syntax after
   exit/errexit. Preserve trap-specific recovery/status rules and active scopes

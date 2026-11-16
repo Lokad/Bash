@@ -5,6 +5,13 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Nameref declaration validation precedes replacement of values and attributes.
+Circular local references reuse scope ownership to select a global fallback;
+selected reads retain that store through value consumption. Declaration metadata
+does not follow aliases. Builtin outputs share selection and publication, with
+explicit getopts failure, printf count and descriptor policies. An allocation
+that does not publish its variable remains temporary and uses ordinary cleanup.
+
 Command dispatch resumes asynchronously when CLR stack space runs low, so finite
 function calls do not depend on the embedding thread's native stack size. Reached
 source/eval parsers start on a fresh continuation to keep syntax guards independent

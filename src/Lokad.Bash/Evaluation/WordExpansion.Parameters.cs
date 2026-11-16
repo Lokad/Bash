@@ -480,20 +480,25 @@ internal static partial class WordExpansion
 
                 if (reference.IsAggregate)
                 {
-                    var resolved = scope.Variables.ResolveNamerefName(reference.Name);
+                    var selected = await ResolveReadBindingAsync(reference,
+                        modifier == ParameterModifier.Length ? ReferenceUse.Length : ReferenceUse.Read,
+                        scope, scope.Variables).ConfigureAwait(false);
+                    var variables = selected?.Owner ?? scope.Variables;
+                    var resolved = selected is { Reference.Kind: VariableReferenceKind.Name } binding
+                        ? binding.Name : BindingName.Empty;
                     IEnumerable<ShellValue> values;
                     int count;
-                    if (scope.Variables.IndexedArrays.TryGetValue(resolved, out var array))
+                    if (variables.IndexedArrays.TryGetValue(resolved, out var array))
                     {
                         values = modifier == ParameterModifier.Indirect ? array.PresentKeys.Select(EncodeName) : array.PresentValues;
                         count = array.Count;
                     }
-                    else if (scope.Variables.AssociativeArrays.TryGetValue(resolved, out var map))
+                    else if (variables.AssociativeArrays.TryGetValue(resolved, out var map))
                     {
                         values = modifier == ParameterModifier.Indirect ? map.PresentKeys : map.PresentValues;
                         count = map.Count;
                     }
-                    else if (scope.Variables.TryGetScalar(resolved, out var scalar))
+                    else if (variables.TryGetScalar(resolved, out var scalar))
                     {
                         values = modifier == ParameterModifier.Indirect ? [ShellValue.FromText("0")] : [scalar];
                         count = 1;
@@ -514,9 +519,9 @@ internal static partial class WordExpansion
                         or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll
                         && modifier == ParameterModifier.None)
                     {
-                        ParameterSource? source = scope.Variables.IndexedArrays.TryGetValue(resolved, out var indexedSource)
+                        ParameterSource? source = variables.IndexedArrays.TryGetValue(resolved, out var indexedSource)
                             ? new ParameterSource.Indexed(indexedSource)
-                            : scope.Variables.AssociativeArrays.TryGetValue(resolved, out var associativeSource)
+                            : variables.AssociativeArrays.TryGetValue(resolved, out var associativeSource)
                                 ? new ParameterSource.Associative(associativeSource) : null;
                         return new ParameterValue(reference.Kind, source == null ? values.ToArray() : [], count != 0, reference, null)
                             { RangeSource = source };

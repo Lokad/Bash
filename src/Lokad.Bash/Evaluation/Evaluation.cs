@@ -1300,6 +1300,9 @@ public sealed partial class Evaluation : IFileTester
 
                 // Select before RHS effects: unset and element namerefs are shadowed, not followed.
                 var resolvedPrefix = commandVars.TryResolveBinding(target, selectOwner: null, out var prefixBinding);
+                var circularPrefix = !resolvedPrefix;
+                if (circularPrefix)
+                    await ReportCircularNameReferenceAsync(target).ConfigureAwait(false);
                 var elementNameref = resolvedPrefix && prefixBinding.Reference.Kind != VariableReferenceKind.Name;
                 var unsetNameref = resolvedPrefix && prefixBinding.IsUnsetNameref;
                 BindingName selectedName = resolvedPrefix ? prefixBinding.Name : target;
@@ -1329,7 +1332,7 @@ public sealed partial class Evaluation : IFileTester
                     return error;
 
                 BindingName name = elementNameref || unsetNameref ? target : selectedName;
-                if (elementNameref || unsetNameref)
+                if (elementNameref || unsetNameref || circularPrefix)
                 {
                     if (assignment.Operator == AssignmentOperator.Append)
                     {
@@ -1792,9 +1795,28 @@ public sealed partial class Evaluation : IFileTester
                         targetVars.RecreateDeclarationArray(name,
                             options.ArrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                 }
+                var selfNameref = false;
                 ShellValue? namerefTarget = null;
+                VariableReference? namerefReference = null;
                 if (!operand.CompoundApplied && (options.Nameref || circularLocalReference))
                 {
+                    if (operand.Value is { } initializer
+                        && TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out var initializerReference))
+                        namerefReference = initializerReference;
+                    // Declaration initializers reject self targets at script scope, before
+                    // replacing values or attributes. Ordinary assignments may create cycles.
+                    if (options.Nameref && namerefReference is { } selfReference && selfReference.Name == name)
+                    {
+                        if (declarationScope.Context.FunctionContext == null)
+                        {
+                            await DiagnoseAsync(name.ToValue(), "nameref variable self references not allowed").ConfigureAwait(false);
+                            continue;
+                        }
+                        await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
+                            ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append("warning: "u8)
+                                .Append(name.ToValue().Bytes).Append(": circular name reference"u8).ToMemory())).ConfigureAwait(false);
+                        selfNameref = true;
+                    }
                     ShellValue? previous = null;
                     if (!local || existingLocal || prefixNames?.Contains(name) == true)
                         previous = targetVars.TryGetNameref(name, out var referenced)
@@ -1804,12 +1826,18 @@ public sealed partial class Evaluation : IFileTester
                     namerefTarget = operand.Value ?? previous;
                     if (operand.Operator == AssignmentOperator.Append && operand.Value != null)
                         namerefTarget = WordExpansion.AppendAssignmentValue(previous ?? ShellValue.Empty, operand.Value.Value, declarationScope);
-                    if (namerefTarget is { } targetValue && !TryParseDeclarationReference(ShellSource.FromBytes(targetValue.Bytes), out _))
+                    if (namerefTarget is { } targetValue)
                     {
-                        await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(targetValue), operand.Value is { IsEmpty: true }
-                                ? "not a valid identifier" : "invalid variable name for name reference")
-                            .ConfigureAwait(false);
-                        continue;
+                        if (operand.Value == null || operand.Operator == AssignmentOperator.Append)
+                            namerefReference = TryParseDeclarationReference(ShellSource.FromBytes(targetValue.Bytes), out var targetReference)
+                                ? targetReference : null;
+                        if (namerefReference == null)
+                        {
+                            await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(targetValue), operand.Value is { IsEmpty: true }
+                                    ? "not a valid identifier" : "invalid variable name for name reference")
+                                .ConfigureAwait(false);
+                            continue;
+                        }
                     }
                 }
                 if (operand.Value != null && reference.Kind != VariableReferenceKind.Name
@@ -2105,6 +2133,8 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (local && options.Nameref && operand.Value == null && prefixNames?.Contains(name) == true)
                     continue; // A valueless -n on a prefix does not create a function local.
+                if (selfNameref && namerefReference is { } assignedReference && assignedReference.Name == name)
+                    await ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
                 var attributeBinding = referentAttributes
                     ?? (local && !options.Nameref && targetVars.TryResolveBinding(name, null, out var localBinding)
                         ? localBinding : new VariableBinding(VariableReference.ForName(name), targetVars));
@@ -3587,6 +3617,14 @@ public sealed partial class Evaluation : IFileTester
 
         public bool TryResolveGlobalBinding(BindingName name, Variables active, out VariableBinding binding)
             => TryResolveGlobalBinding(name, active, active, prefixes: null, BindingResolution.Referent, out binding);
+
+        /// <summary>A circular local lookup retries the original name in the global namespace.</summary>
+        public bool TryResolveCircularBinding(BindingName name, Variables active, out VariableBinding binding)
+        {
+            binding = default;
+            return !ReferenceEquals(GetGlobalBindingOwner(name, active), active)
+                && TryResolveGlobalBinding(name, active, out binding);
+        }
 
         /// <summary>Finds the writable binding beyond an unset chain reached through a local nameref.</summary>
         public bool TryResolveLocalNamerefAssignment(BindingName name, Variables active, EvaluationMemory memory, out LocalNamerefAssignment? target)

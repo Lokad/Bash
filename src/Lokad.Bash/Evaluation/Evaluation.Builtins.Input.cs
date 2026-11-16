@@ -141,7 +141,7 @@ public sealed partial class Evaluation
                 Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(fields[index]));
                 var copy = fields[index].Bytes.ToArray();
                 var assignment = await AssignBuiltinAsync(reference, ShellValue.FromBytes(copy), scope,
-                    persistentOutputs: null, BuiltinOutputVisibility.Caller, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
+                    persistentOutputs: null, BuiltinAssignmentKind.Value, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
                     exitCode = 1;
@@ -426,13 +426,15 @@ public sealed partial class Evaluation
             arguments = explicitArguments;
         }
 
-        var exitCode = ExecuteGetopts();
+        var exitCode = await ExecuteGetoptsAsync().ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
 
-        bool TryAssignOutput(string target, ShellValue value) =>
-            TryAssignBuiltinOutput(target, value, commandVars, bindings, context);
+        async Task<bool> TryAssignOutputAsync(string target, ShellValue value) =>
+            await AssignBuiltinAsync(VariableReference.ForName(target), value, new ScopedEvaluation(this, commandVars, context),
+                bindings, BuiltinAssignmentKind.Getopts, ShellValue.FromText("getopts"), expansionWriteTarget: null).ConfigureAwait(false)
+                != BuiltinAssignmentResult.Failed;
 
-        int ExecuteGetopts()
+        async Task<int> ExecuteGetoptsAsync()
         {
             var result = 0;
             var optind = 1;
@@ -445,9 +447,9 @@ public sealed partial class Evaluation
 
             if (optind > arguments.Count || arguments.Count == 0)
             {
-                if (!TryAssignOutput(name, ShellValue.FromText("?")))
+                if (!await TryAssignOutputAsync(name, ShellValue.FromText("?")).ConfigureAwait(false))
                     result = 1;
-                if (!TryAssignOutput("OPTIND", ShellValue.FromText(FormatExitCode(optind))))
+                if (!await TryAssignOutputAsync("OPTIND", ShellValue.FromText(FormatExitCode(optind))).ConfigureAwait(false))
                     result = 1;
                 return result == 0 ? 1 : result;
             }
@@ -455,9 +457,9 @@ public sealed partial class Evaluation
             var current = arguments[optind - 1];
             if (current.Bytes.Length < 2 || current.Bytes.Span[0] != (byte)'-')
             {
-                if (!TryAssignOutput(name, ShellValue.FromText("?")))
+                if (!await TryAssignOutputAsync(name, ShellValue.FromText("?")).ConfigureAwait(false))
                     result = 1;
-                if (!TryAssignOutput("OPTIND", ShellValue.FromText(FormatExitCode(optind))))
+                if (!await TryAssignOutputAsync("OPTIND", ShellValue.FromText(FormatExitCode(optind))).ConfigureAwait(false))
                     result = 1;
                 return result == 0 ? 1 : result;
             }
@@ -465,16 +467,16 @@ public sealed partial class Evaluation
             var option = current.Bytes.Span[1];
             if (!optstring.Bytes.Span.Contains(option))
             {
-                if (!TryAssignOutput(name, ShellValue.FromText("?")))
+                if (!await TryAssignOutputAsync(name, ShellValue.FromText("?")).ConfigureAwait(false))
                     result = 1;
-                if (!TryAssignOutput("OPTIND", ShellValue.FromText(FormatExitCode(optind + 1))))
+                if (!await TryAssignOutputAsync("OPTIND", ShellValue.FromText(FormatExitCode(optind + 1))).ConfigureAwait(false))
                     result = 1;
                 return result == 0 ? 1 : result;
             }
 
-            if (!TryAssignOutput(name, ShellValue.FromBytes(new byte[] { option })))
+            if (!await TryAssignOutputAsync(name, ShellValue.FromBytes(new byte[] { option })).ConfigureAwait(false))
                 result = 1;
-            if (!TryAssignOutput("OPTIND", ShellValue.FromText(FormatExitCode(optind + 1))))
+            if (!await TryAssignOutputAsync("OPTIND", ShellValue.FromText(FormatExitCode(optind + 1))).ConfigureAwait(false))
                 result = 1;
             return result;
         }

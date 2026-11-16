@@ -166,10 +166,15 @@ internal static partial class WordExpansion
             {
                 var reference = selected.Syntax;
                 // Unlike a direct element operand, a whole-name nameref selects again for its write.
-                var elementNameref = reference.Kind == VariableReferenceKind.Name
-                    && scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var resolved)
+                var resolved = default(VariableBinding);
+                var hasBinding = reference.Kind != VariableReferenceKind.Name
+                    || scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out resolved);
+                var elementNameref = reference.Kind == VariableReferenceKind.Name && hasBinding
                     && resolved.Reference.Kind != VariableReferenceKind.Name;
-                if (binding.Fallback == null && binding.Use == ArithmeticReferenceUse.Read && (binding.Location == null || elementNameref))
+                var circularNameref = reference.Kind == VariableReferenceKind.Name
+                    && !hasBinding;
+                if (binding.Fallback == null && binding.Use == ArithmeticReferenceUse.Read
+                    && (binding.Location == null || elementNameref || circularNameref))
                     binding = await SelectAsync(selected, ArithmeticReferenceUse.Assign).ConfigureAwait(false);
                 if (!scope.CanExpand)
                 {
@@ -200,7 +205,7 @@ internal static partial class WordExpansion
                 // Builtin output selects its local fallback before checking that destination's readonly state.
                 if (assignOutput != null && assignOutput(reference, target, formatted))
                     return null;
-                var readOnly = scope.Variables.IsReadonly(reference.Name) || scope.Variables.IsReadonly(target.Name);
+                var readOnly = scope.Variables.IsReadonly(reference.Name) || (target.ReadOwner ?? scope.Variables).IsReadonly(target.Name);
                 if (assignOutput == null && !readOnly && AssignExpansion(reference, target, formatted))
                     return null;
                 var namerefFailure = scope.Variables.GetNamerefAssignmentFailure(
@@ -295,6 +300,9 @@ internal static partial class WordExpansion
 
             bool AssignExpansion(VariableReference reference, ResolvedVariableReference target, ShellValue value)
             {
+                if (target.ReadOwner is { } owner && !ReferenceEquals(owner, scope.Variables))
+                    return target.TryAssign(scope with { Variables = owner, ExpansionWriteTarget = null, SelectorBindings = null },
+                        reference.Name, value, AssignmentOperator.Replace);
                 // Whole-name writes retain scalar-prefix ownership and preserve the caller's array.
                 // Element namerefs use their already selected location, without replaying the selector.
                 if (reference.Kind == VariableReferenceKind.Name

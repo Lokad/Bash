@@ -13,12 +13,16 @@ internal static partial class WordExpansion
     /// <summary>A selected location; its typed index is not expanded again when read.</summary>
     internal abstract record ResolvedVariableReference(BindingName Name)
     {
+        // Circular local reads can select the hidden global store. Assignment selection
+        // remains separate; this owner only supplies the already selected read value.
+        internal Variables? ReadOwner { get; init; }
         internal sealed record Scalar(BindingName VariableName) : ResolvedVariableReference(VariableName);
         internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName);
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
 
         public bool TryRead(Variables variables, out ShellValue value)
         {
+            variables = ReadOwner ?? variables;
             value = ShellValue.Empty;
             switch (this)
             {
@@ -193,6 +197,12 @@ internal static partial class WordExpansion
     private static async Task<NamerefAssignmentResult> PrepareNamerefAssignmentAsync(
         BindingName name, ShellValue value, AssignmentOperator operation, ScopedEvaluation scope, ExpansionFailureKind failure)
     {
+        if (!scope.Variables.TryResolveBinding(name, selectOwner: null, out _)
+            && scope.Context.TryResolveCircularBinding(name, scope.Variables, out var circularBinding))
+        {
+            await scope.Effects.ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+            return await AssignSelectedAsync(circularBinding).ConfigureAwait(false);
+        }
         switch (scope.Variables.GetNamerefAssignmentFailure(name, name, value, scope.Effects.Memory))
         {
             case NamerefAssignmentFailure.None:
@@ -234,33 +244,40 @@ internal static partial class WordExpansion
                             scope.Effects.SetFatalExpansionError(failure);
                             return new(NamerefAssignmentAction.Fail, value);
                         }
-                        var target = await ResolveDeclarationReferenceAsync(reference, scope, binding.Owner, binding.Owner).ConfigureAwait(false);
-                        if (!scope.CanExpand)
-                            return new(NamerefAssignmentAction.Fail, value);
-                        if (target == null)
-                        {
-                            // Declaration selection already diagnosed the subscript; this is a direct/default write.
-                            scope.Effects.SetFatalExpansionError(failure);
-                            return new(NamerefAssignmentAction.Fail, value);
-                        }
-                        if (binding.Owner.IsReadonly(target.Name))
-                        {
-                            await scope.Effects.ReportFatalExpansionAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable"), failure).ConfigureAwait(false);
-                            return new(NamerefAssignmentAction.Fail, value);
-                        }
-                        if (!target.TryAssign(scope with { Variables = binding.Owner, ExpansionWriteTarget = null },
-                                reference.Name, value, operation))
-                            return new(NamerefAssignmentAction.Fail, value);
-                        // A hidden array-element default returns the array's scalar value, not its assigned slot.
-                        if (failure == ExpansionFailureKind.NamerefDefault
-                            && target is ResolvedVariableReference.Indexed or ResolvedVariableReference.Associative)
-                            binding.Owner.TryGetExpansionValue(target.Name, out value);
+                        return await AssignSelectedAsync(binding).ConfigureAwait(false);
                     }
                     return new(NamerefAssignmentAction.Handled, value);
                 }
                 return await RejectAssignmentAsync(NamerefAssignmentFailure.IndirectUnsetTarget).ConfigureAwait(false);
         }
         return new(NamerefAssignmentAction.Fail, value);
+
+        async Task<NamerefAssignmentResult> AssignSelectedAsync(VariableBinding binding)
+        {
+            var reference = binding.Reference;
+            var target = await ResolveDeclarationReferenceAsync(reference, scope, binding.Owner, binding.Owner).ConfigureAwait(false);
+            if (!scope.CanExpand)
+                return new(NamerefAssignmentAction.Fail, value);
+            if (target == null)
+            {
+                // Declaration selection already diagnosed the subscript; this is a direct/default write.
+                scope.Effects.SetFatalExpansionError(failure);
+                return new(NamerefAssignmentAction.Fail, value);
+            }
+            if (binding.Owner.IsReadonly(target.Name))
+            {
+                await scope.Effects.ReportFatalExpansionAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable"), failure).ConfigureAwait(false);
+                return new(NamerefAssignmentAction.Fail, value);
+            }
+            if (!target.TryAssign(scope with { Variables = binding.Owner, ExpansionWriteTarget = null, SelectorBindings = null },
+                    reference.Name, value, operation))
+                return new(NamerefAssignmentAction.Fail, value);
+            // A hidden array-element default returns the array's scalar value, not its assigned slot.
+            if (failure == ExpansionFailureKind.NamerefDefault
+                && target is ResolvedVariableReference.Indexed or ResolvedVariableReference.Associative)
+                binding.Owner.TryGetExpansionValue(target.Name, out value);
+            return new(NamerefAssignmentAction.Handled, value);
+        }
 
         async Task<NamerefAssignmentResult> RejectAssignmentAsync(NamerefAssignmentFailure reason)
         {
@@ -336,19 +353,42 @@ internal static partial class WordExpansion
         if (!scope.CanExpand)
             return null;
         var convertedNameref = false;
+        if (use is ReferenceUse.Read or ReferenceUse.Length && reference.Kind != VariableReferenceKind.Name
+            && !targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out _))
+        {
+            var selected = await ResolveReadBindingAsync(reference, use, scope, targetVariables).ConfigureAwait(false);
+            if (selected is { } fallback)
+            {
+                targetVariables = fallback.Owner;
+                indexVariables = fallback.Owner;
+                reference = VariableReference.ForElement(fallback.Name, reference.Subscript);
+            }
+        }
         if (reference.Kind == VariableReferenceKind.Name)
         {
             var sourceName = reference.Name;
-            if (!targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
+            VariableBinding binding;
+            if (use is ReferenceUse.Read or ReferenceUse.Length)
+            {
+                var selected = await ResolveReadBindingAsync(reference, use, scope, targetVariables).ConfigureAwait(false);
+                if (selected is not { } readBinding)
+                    return new ResolvedVariableReference.Scalar(BindingName.Empty);
+                binding = readBinding;
+                targetVariables = binding.Owner;
+            }
+            else if (!targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out binding))
             {
                 if (use is ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign)
                 {
                     await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
                     if (use == ReferenceUse.ArithmeticAssign && scope.CanExpand)
                         await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
-                    return null;
+                    if (!scope.Context.TryResolveCircularBinding(reference.Name, targetVariables, out binding))
+                        return null;
+                    targetVariables = binding.Owner;
                 }
-                return new ResolvedVariableReference.Scalar(BindingName.Empty);
+                else
+                    return new ResolvedVariableReference.Scalar(BindingName.Empty);
             }
             if (binding.Reference.Kind == VariableReferenceKind.Name)
                 return ResolveNameReference(binding.Name, targetVariables);
@@ -409,9 +449,9 @@ internal static partial class WordExpansion
         }
 
         // A declaration alone does not enable length-selector effects; even an empty assignment does.
-        if (use == ReferenceUse.Length && !scope.Variables.Scalars.ContainsKey(name)
-            && (!scope.Variables.IndexedArrays.TryGetValue(name, out var indexed) || !indexed.IsInitialized)
-            && (!scope.Variables.AssociativeArrays.TryGetValue(name, out var map) || !map.IsInitialized))
+        if (use == ReferenceUse.Length && !targetVariables.Scalars.ContainsKey(name)
+            && (!targetVariables.IndexedArrays.TryGetValue(name, out var indexed) || !indexed.IsInitialized)
+            && (!targetVariables.AssociativeArrays.TryGetValue(name, out var map) || !map.IsInitialized))
             return null;
 
         var purpose = associative ? ExpansionPurpose.Scalar : arithmeticPurpose;
@@ -427,7 +467,7 @@ internal static partial class WordExpansion
         if (associative)
         {
             if (AssociativeArrayKey.TryCreate(expanded, out var key))
-                return new ResolvedVariableReference.Associative(name, key);
+                return new ResolvedVariableReference.Associative(name, key) { ReadOwner = targetVariables };
         }
         else
         {
@@ -453,7 +493,7 @@ internal static partial class WordExpansion
                     index = last + index + 1;
             }
             if (IndexedArrayIndex.TryCreate(index, out var position))
-                return new ResolvedVariableReference.Indexed(name, position);
+                return new ResolvedVariableReference.Indexed(name, position) { ReadOwner = targetVariables };
         }
 
         if (use != ReferenceUse.Length || !associative)
@@ -488,12 +528,26 @@ internal static partial class WordExpansion
         static ResolvedVariableReference ResolveNameReference(BindingName name, Variables variables)
         {
             if (variables.IndexedArrays.ContainsKey(name))
-                return new ResolvedVariableReference.Indexed(name, default);
+                return new ResolvedVariableReference.Indexed(name, default) { ReadOwner = variables };
             if (variables.AssociativeArrays.ContainsKey(name)
                 && AssociativeArrayKey.TryCreate(ShellValue.FromText("0"), out var key))
-                return new ResolvedVariableReference.Associative(name, key);
-            return new ResolvedVariableReference.Scalar(name);
+                return new ResolvedVariableReference.Associative(name, key) { ReadOwner = variables };
+            return new ResolvedVariableReference.Scalar(name) { ReadOwner = variables };
         }
+    }
+
+    /// <summary>Warns at a reached read, then selects Bash's global fallback for a local cycle.</summary>
+    private static async ValueTask<VariableBinding?> ResolveReadBindingAsync(
+        VariableReference reference, ReferenceUse use, ScopedEvaluation scope, Variables variables)
+    {
+        if (variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
+            return binding;
+        await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+        var found = scope.Context.TryResolveCircularBinding(reference.Name, variables, out binding);
+        if (reference.Kind != VariableReferenceKind.Name && use != ReferenceUse.Length
+            || reference.Kind == VariableReferenceKind.Name && use == ReferenceUse.Length && !found)
+            await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+        return found ? binding : null;
     }
 
     private enum ReferenceUse
