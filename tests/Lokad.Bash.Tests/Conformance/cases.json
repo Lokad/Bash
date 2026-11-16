@@ -5968,6 +5968,20 @@
       "stdoutHex": "30323a37",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "mixed-expansion-continuations",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "printf %s \"$(printf %s ${x:-\\\n$(printf %s ${x:-\\\n$(printf %s ${x:-\\\n$(printf %s ${x:-\\\nv})})})})\"",
+      "scriptSha256": "3712ff0d27891e61f60b666bbde6b9a5e29f220e6231a399d30cddf6c530412f",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "76",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

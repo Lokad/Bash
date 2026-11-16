@@ -74,6 +74,16 @@ internal static class BracedParameterScanner
             out containsCommandSubstitution,
             capturePayload: false);
 
+    /// <summary>Captures normalized payload bytes while retaining the structural scan's lookahead context.</summary>
+    internal static BracedParameterScanStatus ScanWithPayload(
+        ShellScanContext context,
+        ShellSource text,
+        int startIndex,
+        out int endIndex,
+        out int errorIndex,
+        out ShellSource payload) =>
+        ScanCore(context, text, startIndex, out endIndex, out errorIndex, out payload, out _, capturePayload: true);
+
     private static BracedParameterScanStatus ScanCore(
         ShellScanContext context,
         ShellSource text,
@@ -128,7 +138,7 @@ internal static class BracedParameterScanner
                     endIndex = cursor.Position;
                     if (capturePayload)
                         payload = ShellSourceCursor.RemoveLineContinuations(
-                            text.Slice(payloadStart, cursor.Position - payloadStart));
+                            context, text.Slice(payloadStart, cursor.Position - payloadStart));
                     return BracedParameterScanStatus.Found;
                 }
 

@@ -75,7 +75,7 @@ internal static class CommandSubstitutionScanner
     {
         if (context.TryTakeCommandSubstitution(text, startIndex, out var cached))
         {
-            endIndex = cached.EndIndex;
+            endIndex = startIndex + cached.Length - 1;
             substitution = cached.Substitution;
             return ShellScanStatus.Complete;
         }
@@ -92,13 +92,13 @@ internal static class CommandSubstitutionScanner
     {
         if (context.TryGetCommandSubstitution(text, startIndex, out var cached))
         {
-            endIndex = cached.EndIndex;
+            endIndex = startIndex + cached.Length - 1;
             substitution = cached.Substitution;
             return ShellScanStatus.Complete;
         }
         var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution);
         if (substitution != null)
-            context.StoreCommandSubstitution(text, startIndex, new ShellScanContext.CachedParse(endIndex, substitution));
+            context.StoreCommandSubstitution(text, startIndex, new ShellScanContext.CachedParse(endIndex - startIndex + 1, substitution));
         return status;
     }
 

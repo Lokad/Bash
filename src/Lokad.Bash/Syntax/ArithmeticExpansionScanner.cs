@@ -178,7 +178,7 @@ internal static class ArithmeticExpansionScanner
                 endIndex = closingEnd - 1;
                 if (captureExpression)
                     expression = ShellSourceCursor.RemoveLineContinuations(
-                        text.Slice(expressionStart, cursor.Position - expressionStart));
+                        context, text.Slice(expressionStart, cursor.Position - expressionStart));
                 return ShellScanStatus.Complete;
             }
 

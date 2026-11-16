@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reuse nested lookahead syntax while normalizing line continuations, avoiding
+  exponential reparsing of mixed command/parameter expansions. Preserve physical
+  source positions, source-slice boundaries and structural nesting guards.
 - Require adjacent unquoted allocated-descriptor names and support append,
   read/write, force-output, duplicate/move and here-input operators through the
   existing redirection paths. Resolve nameref elements once, preserve temporary

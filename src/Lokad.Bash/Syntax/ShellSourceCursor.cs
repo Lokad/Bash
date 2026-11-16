@@ -143,9 +143,17 @@ internal sealed class ShellSourceCursor
     {
         if (source.AsSpan().IndexOf("\\\n"u8) < 0)
             return source;
+        return RemoveLineContinuations(new ShellScanContext(), source);
+    }
+
+    /// <summary>Normalizes a scanned payload without rebuilding its nested lookahead syntax.</summary>
+    internal static ShellSource RemoveLineContinuations(ShellScanContext context, ShellSource source)
+    {
+        if (source.AsSpan().IndexOf("\\\n"u8) < 0)
+            return source;
 
         var result = ByteMemoryBuilder.CreateUnaccounted(source.Length);
-        var cursor = new ShellSourceCursor(source, 0);
+        var cursor = new ShellSourceCursor(source, 0, context);
         while (!cursor.IsAtEnd)
         {
             var start = cursor.Position;
@@ -347,28 +355,34 @@ internal sealed class ShellScanContext
     private Dictionary<ParseCacheKey, CachedParse>? _commandSubstitutions;
 
     internal bool TryTakeCommandSubstitution(ShellSource source, int startIndex, out CachedParse parsed)
-    {
-        if (_commandSubstitutions != null)
-            return _commandSubstitutions.Remove(new ParseCacheKey(source.Bytes, startIndex, _nestedExpansionDepth, _commandDepth), out parsed);
-        parsed = default;
-        return false;
-    }
+        => TryFindCommandSubstitution(source, startIndex, take: true, out parsed);
 
     internal bool TryGetCommandSubstitution(ShellSource source, int startIndex, out CachedParse parsed)
+        => TryFindCommandSubstitution(source, startIndex, take: false, out parsed);
+
+    private bool TryFindCommandSubstitution(ShellSource source, int startIndex, bool take, out CachedParse parsed)
     {
-        if (_commandSubstitutions != null)
-            return _commandSubstitutions.TryGetValue(new ParseCacheKey(source.Bytes, startIndex, _nestedExpansionDepth, _commandDepth), out parsed);
+        if (_commandSubstitutions != null && (uint)startIndex < (uint)source.Length)
+        {
+            var key = new ParseCacheKey(source.Bytes.Slice(startIndex, 0), _nestedExpansionDepth, _commandDepth);
+            if (_commandSubstitutions.TryGetValue(key, out parsed) && parsed.Length <= source.Length - startIndex)
+            {
+                if (take) _commandSubstitutions.Remove(key);
+                return true;
+            }
+        }
         parsed = default;
         return false;
     }
 
     internal void StoreCommandSubstitution(ShellSource source, int startIndex, CachedParse parsed) =>
-        (_commandSubstitutions ??= []).Add(new ParseCacheKey(source.Bytes, startIndex, _nestedExpansionDepth, _commandDepth), parsed);
+        (_commandSubstitutions ??= []).Add(new ParseCacheKey(source.Bytes.Slice(startIndex, 0), _nestedExpansionDepth, _commandDepth), parsed);
 
-    internal readonly record struct CachedParse(int EndIndex, CommandSubstitutionSyntax Substitution);
+    internal readonly record struct CachedParse(int Length, CommandSubstitutionSyntax Substitution);
 
-    // Storage identity avoids copying/hashing bytes; both depths preserve the original nesting allowance.
-    private readonly record struct ParseCacheKey(ReadOnlyMemory<byte> Source, int StartIndex, int ExpansionDepth, int CommandDepth);
+    // A zero-length slice identifies one physical byte across source views without copying/hashing it.
+    // The stored length must fit the requesting view; both depths preserve the original nesting allowance.
+    private readonly record struct ParseCacheKey(ReadOnlyMemory<byte> Position, int ExpansionDepth, int CommandDepth);
 
     internal bool ParsingLimitExceeded { get; private set; }
 

@@ -6,6 +6,26 @@ namespace Lokad.Bash.Tests;
 public sealed class ShellSourceScannerTests
 {
     [Fact]
+    public void CommandLookaheadSurvivesSourceSlicesWithoutCrossingTheirEnd()
+    {
+        var source = ShellSource.FromText("prefix$(printf value)suffix");
+        const int Start = 6;
+        var context = new ShellScanContext();
+        Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsedForLaterReuse(
+            context, source, Start, out var end, out var captured));
+        Assert.NotNull(captured);
+
+        Assert.Equal(ShellScanStatus.Incomplete, CommandSubstitutionScanner.ScanParsed(
+            context, source.Slice(Start, end - Start), 0, out _, out var clipped));
+        Assert.Null(clipped);
+
+        Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsed(
+            context, source.Slice(Start, end - Start + 1), 0, out var slicedEnd, out var reused));
+        Assert.Equal(end - Start, slicedEnd);
+        Assert.Same(captured, reused);
+    }
+
+    [Fact]
     public void ContinuedTokensRetainPhysicalSourceRanges()
     {
         const string Source = "\\\n true &\\\n& cat >\\\n> out";

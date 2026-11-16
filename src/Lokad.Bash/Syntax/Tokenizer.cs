@@ -760,7 +760,7 @@ internal sealed class Tokenizer
                 parts.Add(subscript);
                 continue;
             }
-            if (TryReadBracedParameterExpansion(span, unquoted))
+            if (TryReadBracedParameterExpansion(unquoted))
             {
                 continue;
             }
@@ -969,7 +969,7 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a braced parameter expansion as unexpanded segment bytes.
     /// </summary>
-    private bool TryReadBracedParameterExpansion(ReadOnlySpan<byte> span, ByteMemoryBuilder content)
+    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content)
     {
         if (!BracedParameterScanner.HasPrefix(_input, Position))
         {
@@ -977,19 +977,17 @@ internal sealed class Tokenizer
         }
 
         var start = Position;
-        var status = BracedParameterScanner.ScanShape(
+        var status = BracedParameterScanner.ScanWithPayload(
             _scanContext,
             _input,
             start,
             out var endIndex,
             out var errorIndex,
-            out _);
+            out var payload);
         if (status == BracedParameterScanStatus.Found)
         {
-            _ = ShellSourceCursor.TryMatchLogicalText(span, start, "${", out var payloadStart);
             content.Append("${"u8);
-            content.Append(ShellSourceCursor.RemoveLineContinuations(
-                _input.Slice(payloadStart, endIndex - payloadStart)).Bytes);
+            content.Append(payload.Bytes);
             content.Append((byte)'}');
             Position = endIndex + 1;
             return true;
@@ -1078,7 +1076,7 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (TryReadBracedParameterExpansion(span, content))
+            if (TryReadBracedParameterExpansion(content))
             {
                 continue;
             }

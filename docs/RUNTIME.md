@@ -5,6 +5,10 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Line-continuation normalization reuses the structural scan's nested syntax while
+retaining physical source positions. Reusing lookahead through a source slice
+does not cross its end or reset the structural nesting guards.
+
 Arithmetic commands, arithmetic-for clauses and ordinary word arithmetic
 expansions retain source-owned lexical decisions for stable source. Numeric values,
 operator classifications and raw references are immutable; execution retains the
