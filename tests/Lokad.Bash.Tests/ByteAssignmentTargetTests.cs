@@ -41,7 +41,8 @@ public sealed class ByteAssignmentTargetTests
         var source = ByteMemoryBuilder.CreateUnaccounted(0);
         source.Append(Utf8Text.Encode(prefix)).Append(0xff).Append(Utf8Text.Encode(suffix));
         var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes));
-        var result = await EndToEndHarness.RunSourceAsync(source.ToMemory(), host, TimeSpan.FromSeconds(5));
+        // This asserts reached effects and bytes, with the harness's normal integration deadline.
+        var result = await EndToEndHarness.RunSourceAsync(source.ToMemory(), host, TimeSpan.FromSeconds(10));
 
         Assert.Equal(exitCode, result.ExitCode);
         Assert.Equal(Convert.FromHexString(outputHex), result.Host.StandardOutput.Content.ToArray());
