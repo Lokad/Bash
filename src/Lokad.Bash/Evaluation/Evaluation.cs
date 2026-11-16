@@ -2996,45 +2996,6 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>
-    /// Validates and applies a directory change, emitting directory-stack output when needed.
-    /// </summary>
-    private async Task<int> ExecuteDirectoryChangeAsync(
-        DirectoryChangeKind kind, string target, Variables variables, Variables.CommandBindings? bindings)
-    {
-        var resolved = ResolvePath(target);
-        if (resolved is null) return 1;
-        var result = await AwaitOperationAsync(PathInfosOperation.AsTask(PublishOperation,
-            [new FilePathLookup(resolved, FileLinkFollowing.Follow)], FilePathInfoRequest.KindOnly)).ConfigureAwait(false);
-        if (result[0].Error is not null || result[0].Info.Kind != FilePathKind.Directory)
-            return 1;
-
-        var previous = _state.CurrentDirectory;
-        _state.ApplyDirectoryChange(kind, resolved);
-        UpdateDirectoryVariables(previous, _state.CurrentDirectory, variables, bindings);
-        if (kind == DirectoryChangeKind.PushDirectory)
-            return (await ExecuteWriteAsync(GetStdOutDescriptor(), _state.FormatDirectoryStack()).ConfigureAwait(false)).IsError ? 1 : 0;
-
-        return 0;
-    }
-
-    private static void UpdateDirectoryVariables(
-        ShellPath previous, ShellPath current, Variables variables, Variables.CommandBindings? bindings)
-    {
-        var oldPwd = variables.TryGetScalar("PWD", out var pwd) ? pwd : ShellValue.FromText(previous.Path);
-        if (!variables.IsReadonly("OLDPWD"))
-        {
-            variables.SetScalarIgnoringReadonly("OLDPWD", oldPwd);
-            bindings?.Retain("OLDPWD");
-        }
-
-        if (!variables.IsReadonly("PWD"))
-        {
-            variables.SetScalarIgnoringReadonly("PWD", ShellValue.FromText(current.Path));
-            bindings?.Retain("PWD");
-        }
-    }
-
-    /// <summary>
     /// Emits a bounded line-read operation on a borrowed descriptor and returns its result.
     /// </summary>
     /// <param name="destinationBudget">Owns the copied batch, or null to retain it with the descriptor.</param>

@@ -341,20 +341,14 @@ internal sealed class EvaluationState
         _directoryStack.Add(CurrentDirectory);
     }
 
-    public bool TryPopDirectory()
+    /// <summary>Applies a settled lookup, including Bash's partial stack change after a rejected swap.</summary>
+    public void ApplyDirectoryChange(DirectoryChangeKind kind, ShellPath target, bool succeeded)
     {
-        if (_directoryStack.Count < 2)
-        {
-            return false;
-        }
+        if (kind == DirectoryChangeKind.SwapDirectories)
+            _directoryStack[1] = CurrentDirectory;
+        if (!succeeded)
+            return;
 
-        _directoryStack.RemoveAt(0);
-        CurrentDirectory = _directoryStack[0];
-        return true;
-    }
-
-    public void ApplyDirectoryChange(DirectoryChangeKind kind, ShellPath target)
-    {
         switch (kind)
         {
             case DirectoryChangeKind.ChangeDirectory:
@@ -367,6 +361,16 @@ internal sealed class EvaluationState
                 _directoryStack.Insert(0, target);
                 CurrentDirectory = target;
                 break;
+            case DirectoryChangeKind.SwapDirectories:
+                _directoryStack[0] = target;
+                CurrentDirectory = target;
+                break;
+            case DirectoryChangeKind.PopDirectory:
+                _directoryStack.RemoveAt(0);
+                CurrentDirectory = target;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind));
         }
     }
 
@@ -376,12 +380,6 @@ internal sealed class EvaluationState
         {
             _directoryStack.Add(CurrentDirectory);
         }
-    }
-
-    public void SwapDirectoryStack()
-    {
-        (_directoryStack[0], _directoryStack[1]) = (_directoryStack[1], _directoryStack[0]);
-        CurrentDirectory = _directoryStack[0];
     }
 
     public ReadOnlyMemory<byte> FormatDirectoryStack()

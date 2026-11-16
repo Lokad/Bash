@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Revalidate saved directory-stack destinations through the host before changing
+  cwd. Preserve distinct failed pop/swap transitions and report failed or empty
+  navigation through the shared directory-change path.
 - Preserve legacy backtick spelling when displaying or exporting functions, so
   replay/import keeps deferred child-syntax validation, quoting and escapes.
 - Reject self-referencing nameref declaration initializers at script scope before

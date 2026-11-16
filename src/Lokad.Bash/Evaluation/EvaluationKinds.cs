@@ -21,7 +21,8 @@ internal enum AssignmentContext
 
 internal enum DirectoryChangeKind
 {
-    None,
     ChangeDirectory,
-    PushDirectory
+    PushDirectory,
+    SwapDirectories,
+    PopDirectory
 }

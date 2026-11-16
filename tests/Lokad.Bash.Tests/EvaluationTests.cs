@@ -1334,6 +1334,11 @@ public partial class EvaluationTests
         var operation = await NextPathKindsAsync(state);
         operation.SetResult([PathKindResult(FilePathKind.Missing)]);
 
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("cd: /target: No such file or directory\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
         Assert.Equal(Text(initialDirectory), Text(state.CurrentDirectory));
@@ -3780,6 +3785,10 @@ public partial class EvaluationTests
         var pushOutput = await NextWriteAsync(state);
         pushOutput.SetResult(DescriptorWriteResult.Open);
 
+        var popTests = await NextPathKindsAsync(state);
+        Assert.Equal("/", Assert.Single(popTests.Paths).Path);
+        popTests.SetResult([PathKindResult(FilePathKind.Directory)]);
+
         var popOutput = await NextWriteAsync(state);
         Assert.Equal("/\n", Text(popOutput.Content));
         popOutput.SetResult(DescriptorWriteResult.Open);
@@ -3793,6 +3802,11 @@ public partial class EvaluationTests
     {
         var script = Parser.Parse(Utf8("popd"));
         var state = new Eval(script);
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("popd: directory stack empty\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);

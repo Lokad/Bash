@@ -5,6 +5,13 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Explicit and saved directory destinations use one host lookup and publication
+path. Each reached attempt asks for directory-kind information, even for a saved
+path or the current cwd. A failed lookup preserves cwd and directory variables;
+a failed swap still replaces the second stack entry, while a failed pop retains
+it. Pending lookup work and descriptor cleanup keep their command owner alive.
+This validation does not make a later filesystem change atomic with navigation.
+
 Nameref declaration validation precedes replacement of values and attributes.
 Circular local references reuse scope ownership to select a global fallback;
 selected reads retain that store through value consumption. Declaration metadata

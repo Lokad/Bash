@@ -6211,6 +6211,34 @@
       "stdoutHex": "6f6b",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "directory-popd-empty-diagnostic",
+      "classification": "supported",
+      "reason": "Script observes the diagnostic cause separately from native command-location wording.",
+      "locale": "C",
+      "script": "message=$(popd 2>&1); status=$?; printf '%s:' \"$status\"; case \"$message\" in *'directory stack empty'*) printf diagnostic;; *) printf missing;; esac",
+      "scriptSha256": "0ce3b4a63af347702d63ca38cf483c9f989357ca681965264b2e2f71de2d5c93",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "313a646961676e6f73746963",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "directory-pushd-empty-diagnostic",
+      "classification": "supported",
+      "reason": "Script observes the diagnostic cause separately from native command-location wording.",
+      "locale": "C",
+      "script": "message=$(pushd 2>&1); status=$?; printf '%s:' \"$status\"; case \"$message\" in *'no other directory'*) printf diagnostic;; *) printf missing;; esac",
+      "scriptSha256": "be297b97dde590893cf7283d99b3ff5edc20fbd52bf97e2fbef1819cc414d67b",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "313a646961676e6f73746963",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

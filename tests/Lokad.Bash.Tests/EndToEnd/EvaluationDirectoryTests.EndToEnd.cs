@@ -110,7 +110,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("/\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("cd: /missing: No such file or directory\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

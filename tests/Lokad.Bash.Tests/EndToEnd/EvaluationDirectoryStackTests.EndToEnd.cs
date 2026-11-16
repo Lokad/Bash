@@ -88,14 +88,12 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
     [Fact]
     public async Task Evaluation_PopdBuiltin_EmptyStackReturnsFailure()
     {
-        // This test verifies that popd fails when there is no previous directory.
-        // The script "popd" must emit no output and exit with code 1.
-        // If it succeeds incorrectly, the exit code would be 0.
+        // Missing stack entries fail with a diagnostic and no stdout.
         var script = @"popd";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("popd: directory stack empty\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 }

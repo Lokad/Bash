@@ -27,6 +27,11 @@ Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches
 that substitution. Parenthesized substitution retains its existing parser rules.
 
+Directory navigation revalidates saved stack paths through the host before
+changing cwd. A rejected pop preserves the stack; a rejected no-argument push
+replaces its second entry with the current directory, as in Bash. Failed lookup
+preserves PWD/OLDPWD, and empty-stack operations diagnose failure.
+
 Source and shell values preserve bytes, including invalid UTF-8 values. Text-only
 host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
