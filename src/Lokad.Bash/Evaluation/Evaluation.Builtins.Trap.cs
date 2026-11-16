@@ -130,18 +130,23 @@ public sealed partial class Evaluation
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
         _state.LastExitCode = result.ExitCode;
-        // Function exits run before their bindings and redirections unwind; shell completion runs afterward.
+        // Explicit exits retain their active scope; implicit shell completion runs after unwinding.
         try
         {
-            if (!Parser.TryParse(action.Bytes, out var script, out var error))
-                await ReportSyntaxErrorAsync(error).ConfigureAwait(false);
-            else
+            // EXIT runs independently of its caller's tested-status suppression. Keep
+            // lexical bindings/flow targets, while copied action bytes own their syntax.
+            var trapScope = scope with
             {
-                var handler = await EvaluateParsedScriptAsync(script,
-                    scope with { Context = scope.Context.WithSourceMemory(null) }, RootFlowHandling.Preserve).ConfigureAwait(false);
-                if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return) && _state.FatalExpansion == null)
-                    result = result.WithExitCode(handler.ExitCode);
-            }
+                Context = new EvaluationContext(scope.Context.LoopDepth, scope.Context.FunctionContext, scope.Context.ReturnTarget)
+                {
+                    GlobalPrefixes = scope.Context.GlobalPrefixes
+                }
+            };
+            var handler = await EvaluateCommandUnitsAsync(ShellSource.FromBytes(action.Bytes), trapScope, ScriptExecutionKind.Trap)
+                .ConfigureAwait(false);
+            if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
+                && (_state.FatalExpansion == null || _state.ErrexitEnabled))
+                result = result.WithExitCode(handler.ExitCode);
             return result;
         }
         finally

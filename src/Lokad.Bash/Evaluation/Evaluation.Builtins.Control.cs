@@ -139,9 +139,9 @@ public sealed partial class Evaluation
         async Task<EvaluationResult> CompleteExitAsync(int status)
         {
             var result = EvaluationResult.Exit(status);
-            // An explicit exit, including an invalid numeric operand, runs EXIT while
-            // function locals are still visible. An arity failure unwinds those locals first.
-            return scope.Context.FunctionContext != null && completion != CommandCompletion.ExitEvaluation
+            // Explicit exit, including an invalid numeric operand, runs EXIT before active
+            // bindings, loop targets and redirections unwind. Arity failure unwinds first.
+            return completion != CommandCompletion.ExitEvaluation
                 ? await RunExitTrapAsync(scope, result).ConfigureAwait(false) : result;
         }
     }

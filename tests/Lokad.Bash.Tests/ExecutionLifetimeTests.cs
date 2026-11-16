@@ -96,6 +96,8 @@ public sealed class ExecutionLifetimeTests
     [Theory]
     [InlineData("echo borrowed >/out")]
     [InlineData("echo borrowed >/out\n)\n")]
+    [InlineData("trap 'echo borrowed >/out' EXIT; exit 7")]
+    [InlineData("trap $'trap - EXIT\\necho borrowed >/out\\n' EXIT; exit 7")]
     public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle(string source)
     {
         using var cancellation = new CancellationTokenSource();

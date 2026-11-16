@@ -6094,6 +6094,53 @@
       "stdoutHex": "3a61667465723a31",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "trap-units-prior-effects",
+      "classification": "supported",
+      "reason": "EXIT command-unit effects with script-directed stderr disposal; diagnostics are asserted separately.",
+      "locale": "C",
+      "script": "exec 2>/dev/null\ntrap 'exec 3>out\nprintf before >&3\n)\n' EXIT\nexit 7",
+      "scriptSha256": "e45709d632f55e1522dde023ee7cbce386b81500b02b0c3f857540054c7519a4",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 7,
+      "stdoutHex": "",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "out",
+          "contentHex": "6265666f7265"
+        }
+      ]
+    },
+    {
+      "id": "trap-units-early-exit",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "trap 'printf before\nexit 9\n)\n' EXIT\nexit 7",
+      "scriptSha256": "f77fe389ba5dbd0a8b53e8af2830d2378e7ae443d120e93a72cdf19a8e62896c",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 9,
+      "stdoutHex": "6265666f7265",
+      "stderrHex": "",
+      "fileEffects": []
+    },
+    {
+      "id": "trap-units-tested-errexit",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -e\ntrap 'printf before\nfalse\n)\n' EXIT\nf(){ exit 7; }; f || :",
+      "scriptSha256": "3ef806e870c904a3d143aa6ec34e13dbf68b174359a386e128a9558df76bb72d",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 1,
+      "stdoutHex": "6265666f7265",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

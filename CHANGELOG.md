@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Execute EXIT actions through the shared command-unit parser, preserving earlier
+  effects before later syntax errors and stopping before unreached syntax after
+  exit/errexit. Preserve trap-specific recovery/status rules and active scopes
+  through explicit exit without adding another evaluator or public interface.
 - Refund sourced input reservations after their last function binding or active
   invocation retires. Preserve shared definitions, child namespaces, attribute
   copies and pending cleanup; copied eval/trap syntax keeps separate provenance.

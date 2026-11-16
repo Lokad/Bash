@@ -163,10 +163,14 @@ syntax failure on stderr and releases its evaluator memory scope. `Engine.RunAsy
 can instead use a caller-owned evaluation memory scope when state must be retained.
 Keep that scope alive as long as retained evaluator data is used.
 
-`BashScript.RunAsync`, `source` and `eval` parse and execute complete command units
+`BashScript.RunAsync`, `source`, `eval` and reached EXIT actions parse and execute complete command units
 through the same evaluator. A newline completes a unit only after its compound
 syntax, continuations, quoting and here-documents are complete. Later syntax errors
 retain earlier units' effects; an invalid unit executes none of its commands.
 Explicit `Parser.Parse`/`Parser.TryParse` and prepared `Evaluation` execution retain
 whole-script validation. Recoverable arithmetic/assignment expansion failures end
 their current unit; unrecoverable failures and explicit exit stop the script.
+EXIT actions retain their own flow/status policy: normal completion preserves the
+triggering status, while return/exit and errexit can replace it. They do not inherit
+tested-status suppression from the caller. Explicit exit invokes the action before
+active bindings, loop targets and redirections unwind; arity failure remains distinct.

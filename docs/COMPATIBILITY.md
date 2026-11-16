@@ -113,10 +113,15 @@ the active positional window or explicit arguments. Bundled flags, required opti
 arguments, `OPTARG` lifecycle and GNU diagnostic/silent modes remain unsupported.
 The correctness corpus records the required-argument departure explicitly.
 
-The public script runner, `source` and `eval` execute complete command units as
+The public script runner, `source`, `eval` and reached EXIT actions execute complete command units as
 they are parsed. Earlier units retain their effects before later syntax failure;
 the failing unit executes no partial command list. Explicit whole-script parsing
 remains available for callers that require validation before execution.
+EXIT actions preserve the triggering status on ordinary completion and parse failure
+without errexit. Explicit return/exit and errexit failures can replace that status.
+Arithmetic/default expansion failures end their unit; assignment-target and parameter
+failures stop an errexit-enabled action. Pending loop flow skips later execution while
+still validating remaining units. Caller tested-status suppression does not apply to EXIT.
 
 Arithmetic uses wrapping signed 64-bit values, with decimal, octal, hexadecimal and
 explicit base-2-through-64 constants. Stored variable/array values are arithmetic

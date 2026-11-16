@@ -87,9 +87,9 @@ public sealed partial class Evaluation
             ScriptExecutionKind.Eval).ConfigureAwait(false), negated);
     }
 
-    private enum ScriptExecutionKind { Root, Source, Eval }
+    private enum ScriptExecutionKind { Root, Source, Eval, Trap }
 
-    /// <summary>Shares complete-command parsing and execution across the public entry point, source and eval.</summary>
+    /// <summary>Shares complete-command parsing and execution across the public entry point, source, eval and EXIT actions.</summary>
     private async Task<EvaluationResult> EvaluateCommandUnitsAsync(
         ShellSource source, ScopedEvaluation scope, ScriptExecutionKind kind)
     {
@@ -108,6 +108,8 @@ public sealed partial class Evaluation
             if (commands.Current is CommandUnitParseResult.Failed failedUnit)
             {
                 await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
+                if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
+                    return EvaluationResult.Exit(2);
                 return result.WithExitCode(2);
             }
 
@@ -138,6 +140,11 @@ public sealed partial class Evaluation
     private EvaluationResult RecoverScriptExpansionFailure(EvaluationResult result, ScriptExecutionKind kind)
     {
         if (_state.FatalExpansion is not { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
+            return result;
+
+        // Arithmetic/default expansion failures end their unit even under errexit.
+        // A reached assignment-target failure terminates an errexit-enabled EXIT action.
+        if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && failure.Kind == ExpansionFailureKind.AssignmentTarget)
             return result;
 
         _state.FatalExpansion = null;
