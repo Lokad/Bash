@@ -227,7 +227,7 @@ internal sealed class EvaluationState
 
     internal long RetainedDescriptorMemoryBytes => _redirections.OwnedMemoryBytes;
 
-    public IReadOnlyList<FileDescriptor> CurrentRedirectionOpenedDescriptors => _redirections.OpenedDescriptors;
+    public IReadOnlyCollection<FileDescriptor> CurrentRedirectionOpenedDescriptors => _redirections.OpenedDescriptors;
 
     /// <summary>
     /// Creates an isolated shell-state copy for subshell evaluation.
@@ -276,31 +276,39 @@ internal sealed class EvaluationState
     /// <summary>Appends active redirection handles, excluding handles supplied by the caller.</summary>
     public void AddRedirectionHandlesTo(
         ref DescriptorHandleCollector handles,
-        IReadOnlyList<FileDescriptor> excludedHandles) =>
+        IReadOnlyCollection<FileDescriptor> excludedHandles) =>
         _redirections.AddHandlesTo(ref handles, excludedHandles);
 
     public void PushRedirectionTable(
         DescriptorTable table,
-        IReadOnlyList<FileDescriptor> openedDescriptors,
-        IReadOnlySet<LogicalDescriptor> changedDescriptors) =>
-        _redirections.Push(table, openedDescriptors, changedDescriptors);
+        DescriptorHandleOwner openedDescriptors,
+        IReadOnlySet<LogicalDescriptor> changedDescriptors,
+        EvaluationMemory? memory) =>
+        _redirections.Push(table, openedDescriptors, changedDescriptors, memory);
 
-    public IReadOnlyList<FileDescriptor> PopRedirectionTable() => _redirections.Pop();
+    public IReadOnlyCollection<FileDescriptor> PopRedirectionTable() => _redirections.Pop();
+
+    internal void CompleteRedirectionSetup(IReadOnlySet<LogicalDescriptor> changedDescriptors) =>
+        _redirections.CompleteSetup(changedDescriptors);
 
     /// <summary>Commits the current scope's changed bindings through their temporary restoration boundaries.</summary>
-    public IReadOnlyList<FileDescriptor> PreserveRedirectionTable(EvaluationMemory? memory) => _redirections.Preserve(memory);
+    public IReadOnlyCollection<FileDescriptor> PreserveRedirectionTable(
+        EvaluationMemory? memory, OrderedDescriptorSet? pending, Stack<HashSet<FileDescriptor>>? borrowed) =>
+        _redirections.Preserve(memory, pending, borrowed);
 
     /// <summary>Persists a binding through enclosing scopes up to its temporary restoration boundary.</summary>
-    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory) =>
-        _redirections.SetPersistentDescriptor(descriptor, handle, memory);
+    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory, bool acquired) =>
+        _redirections.SetPersistentDescriptor(descriptor, handle, memory, acquired);
 
     /// <summary>Transfers handles to their longest-lived referencing scope; returns unreferenced handles in reverse order.</summary>
-    public IReadOnlyList<FileDescriptor> TransferRedirectionDescriptors(IReadOnlyList<FileDescriptor> descriptors) =>
-        _redirections.TransferHandles(descriptors);
+    public IReadOnlyList<FileDescriptor> TransferRedirectionDescriptors(IReadOnlyCollection<FileDescriptor> descriptors, EvaluationMemory? memory) =>
+        _redirections.TransferHandles(descriptors, memory);
 
     public bool ReferencesDescriptor(FileDescriptor descriptor) => _redirections.References(descriptor);
 
-    public bool TryTakeRedirectionDescriptor(FileDescriptor descriptor) => _redirections.TryTakeHandle(descriptor);
+    public bool TryTakeRedirectionDescriptor(FileDescriptor descriptor, EvaluationMemory? memory) => _redirections.TryTakeHandle(descriptor, memory);
+
+    internal void RetireDescriptorHandles() => _redirections.RetireHandles();
 
     public FileDescriptor? GetStdInOverride() => CurrentRedirectionTable?.StdIn;
 

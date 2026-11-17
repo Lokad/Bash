@@ -194,6 +194,15 @@ handles are closed after their last alias is released; close is uncancellable an
 retires the handle even when cleanup fails. Preserve earlier failures and finish
 all users before releasing memory or returning a command's completion.
 
+Each redirection lifetime retains one ordered handle owner across setup,
+execution and restoration, keeping its setup frame installed. Persistent publication prepares every receiving map
+and its handle ownership before changing the binding. Forked state borrows the
+index until a writing owner detaches. Transfers settle new ownership in open order
+and preserve existing ownership, including handles borrowed by inline subshells.
+Cleanup transfers into prepared ownership
+and retires the index after its final close attempts; logical mapping retention
+remains independent of host-handle cleanup.
+
 Descriptor redirections prepare source move syntax on their immutable node and
 resolve its operand against current bindings. Valid filename fallback opens the
 already expanded target; it does not repeat its effects. Closing or moving a

@@ -9,6 +9,33 @@ namespace Lokad.Bash.Tests;
 public sealed partial class ComplexityRegressionTests
 {
     [Fact]
+    public void SequentialPersistentHandlesDoNotCopyGrowingOwnershipPrefixes()
+    {
+        const int Count = 1024;
+        using var owner = new MemoryGovernor(64 * 1024 * 1024).CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var root = new DescriptorTable();
+        var state = new RedirectionState(root);
+        var batch = new FileDescriptor[1];
+        // Warm generic index and transfer paths outside the measured owner.
+        var warmup = new RedirectionState(new DescriptorTable());
+        warmup.SetPersistentDescriptor(LogicalDescriptor.StdOut, new FileDescriptor(9), memory, acquired: true);
+        Assert.Empty(warmup.TransferHandles(new[] { new FileDescriptor(9) }, memory));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < Count; index++)
+        {
+            batch[0] = new FileDescriptor(1000 + index);
+            state.SetPersistentDescriptor(LogicalDescriptor.StdOut, batch[0], memory, acquired: true);
+            Assert.True(state.TransferHandles(batch, memory).Count == 0);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(Count, state.OpenedDescriptors.Count);
+        Assert.True(allocated <= 2048L * Count, $"Sequential ownership publication allocated {allocated:N0} bytes.");
+        Assert.Equal(new FileDescriptor(1000 + Count - 1), root.StdOut);
+    }
+
+    [Fact]
     public async Task LiteralRedirectionOverheadDoesNotScaleWithVisibleBindings()
     {
         var narrowOverhead = await MeasureOverhead(0);
@@ -48,17 +75,17 @@ public sealed partial class ComplexityRegressionTests
         var outer = new DescriptorTable();
         outer.Set(new LogicalDescriptor(10), descriptor);
         var outerOpened = new List<FileDescriptor>();
-        state.PushRedirectionTable(outer, outerOpened, new HashSet<LogicalDescriptor>());
+        state.PushRedirectionTable(outer, new DescriptorHandleOwner(outerOpened), new HashSet<LogicalDescriptor>(), null);
         Assert.Same(outerOpened, state.CurrentRedirectionOpenedDescriptors);
-        state.PushRedirectionTable(new DescriptorTable(), [], new HashSet<LogicalDescriptor>());
+        state.PushRedirectionTable(new DescriptorTable(), new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);
 
         IReadOnlyList<FileDescriptor> batch = [descriptor];
         for (var iteration = 0; iteration < 20_000; iteration++)
-            Assert.True(state.TransferRedirectionDescriptors(batch).Count == 0);
+            Assert.True(state.TransferRedirectionDescriptors(batch, null).Count == 0);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var iteration = 0; iteration < 10_000; iteration++)
-            Assert.True(state.TransferRedirectionDescriptors(batch).Count == 0);
+            Assert.True(state.TransferRedirectionDescriptors(batch, null).Count == 0);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.True(
@@ -78,16 +105,18 @@ public sealed partial class ComplexityRegressionTests
             table.Set(new LogicalDescriptor(10 + index), handles[index]);
         var script = Parser.Parse(":");
         var warmup = new EvaluationState(script, ShellPath.Root, table);
-        Assert.Empty(warmup.TransferRedirectionDescriptors(handles));
+        Assert.Empty(warmup.TransferRedirectionDescriptors(handles, null));
         var state = new EvaluationState(script, ShellPath.Root, table);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        var closing = state.TransferRedirectionDescriptors(handles);
+        var closing = state.TransferRedirectionDescriptors(handles, null);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Empty(closing);
         Assert.Equal(handles, state.CurrentRedirectionOpenedDescriptors);
-        Assert.True(allocated <= 64L * count + 2048,
+        // Indexed encounter order has wider entries than a packed list. Storage
+        // stays linear instead of copying an owner's prefix for each new handle.
+        Assert.True(allocated <= 128L * count + 4096,
             $"Transferring {count} handles allocated {allocated:N0} bytes; ownership lists were likely copied per handle.");
     }
 
@@ -104,19 +133,19 @@ public sealed partial class ComplexityRegressionTests
         rootTable.Set(new LogicalDescriptor(10), inherited);
         var owned = new List<FileDescriptor> { inherited };
         var parent = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
-        parent.PushRedirectionTable(rootTable, owned, new HashSet<LogicalDescriptor>());
+        parent.PushRedirectionTable(rootTable, new DescriptorHandleOwner(owned), new HashSet<LogicalDescriptor>(), null);
         using var memory = new MemoryGovernor(1024).CreateScope();
         var child = parent.CloneForSubshell(new EvaluationMemory(memory));
-        child.SetPersistentDescriptor(new LogicalDescriptor(11), rootHandle, null);
+        child.SetPersistentDescriptor(new LogicalDescriptor(11), rootHandle, null, acquired: false);
         var middleTable = new DescriptorTable();
         middleTable.Set(new LogicalDescriptor(12), middleHandle);
-        child.PushRedirectionTable(middleTable, [], new HashSet<LogicalDescriptor>());
+        child.PushRedirectionTable(middleTable, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);
         var currentTable = new DescriptorTable();
         currentTable.Set(new LogicalDescriptor(13), currentHandle);
-        child.PushRedirectionTable(currentTable, [], new HashSet<LogicalDescriptor>());
+        child.PushRedirectionTable(currentTable, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);
 
         var closing = child.TransferRedirectionDescriptors(
-            [inherited, rootHandle, middleHandle, currentHandle, firstClosed, secondClosed, rootHandle]);
+            [inherited, rootHandle, middleHandle, currentHandle, firstClosed, secondClosed, rootHandle], null);
 
         Assert.Equal(new[] { secondClosed, firstClosed }, closing);
         Assert.Equal(new[] { currentHandle }, child.PopRedirectionTable());

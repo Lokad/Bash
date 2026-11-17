@@ -172,10 +172,22 @@ refusal keeps the child owner alive while the parent's ordinary operation path
 settles every close, then fails the enclosing command. An earlier exception or
 cancellation keeps precedence. Stage stream lists already own their handles
 through cleanup and do not acquire a new tracking reservation after execution.
-This does not repair repeated dictionary copying/ownership scans or provide complete
-accounting of ownership-transfer collections and here-input registrations. Those
-containers and the field-separator index remain material coverage work; syntax/map
-and cleanup-index admission do not imply complete evaluation accounting.
+Lexical and receiving redirection lifetimes share an ordered handle owner; setup
+keeps its admitted frame installed through execution instead of allocating another.
+Persistent bindings prepare the receiving owner and writable removal storage
+before map publication; subsequent transfer/cleanup uses that prepared storage.
+Prepared publication markers settle new handles in the transferring scope's order,
+without duplicating older ownership or claiming borrowed subshell handles.
+Forks borrow the handle index and admit independent storage on the next write.
+Retained estimates include actual owned index capacity and saved frame/stack
+storage. Final cleanup drops the owned indexes only after all close attempts have
+settled, before retiring workspace. Ownership lists are no longer copied for every
+successive transferred handle.
+This does not repair repeated dictionary copying/reference scans or provide complete
+accounting of temporary closing/available-handle collectors, exclusion indexes and
+here-input registrations. Those containers and the field-separator index remain
+material coverage work; descriptor admission does not imply complete evaluation
+accounting.
 Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,
 retained results and cleanup with pending users.
 

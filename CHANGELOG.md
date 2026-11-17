@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Admit receiving descriptor ownership before persistent map publication. Share
+  one ordered owner through lexical setup/restoration, detach borrowed indexes
+  before writes and reuse prepared storage during cleanup. Remove repeated growing
+  ownership-list copies, preserve transfer/close order and retire handle indexes
+  after final close attempts. Keep the admitted setup frame through execution.
 - Index released and pending descriptors in encounter order with reusable slots.
   Admit bookkeeping growth before acquiring handles and keep pending metadata
   charged through final cleanup. Settle every child after a refused handoff while
@@ -9,7 +14,7 @@
 - Admit descriptor-map backing capacities and copy-on-write overlap. Keep borrowed
   snapshots and saved parents charged to their existing owners; retain actual map
   capacity after commands. Preserve earlier allocations on setup refusal and report
-  through reached stderr before ordinary cleanup. Remaining ownership collections,
+  through reached stderr before ordinary cleanup. Remaining temporary collectors,
   repeated copies/ownership scans and IFS indexes remain separate work.
 - Admit runtime source copies and parsed-unit metadata, including retained
   arithmetic/conditional syntax, deferred substitutions and function namespace

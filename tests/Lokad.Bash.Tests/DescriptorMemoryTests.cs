@@ -98,18 +98,19 @@ public sealed class DescriptorMemoryTests
         _ = middle.Capture();
         _ = current.Capture();
         var state = new RedirectionState(root);
-        state.Push(middle, [], new HashSet<LogicalDescriptor>());
-        state.Push(current, [], new HashSet<LogicalDescriptor>());
+        state.Push(middle, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);
+        state.Push(current, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);
         var governor = new MemoryGovernor(4096);
         using var owner = governor.CreateScope();
         var memory = new EvaluationMemory(owner);
 
-        Assert.Throws<MemoryBudgetExceededException>(() => state.SetPersistentDescriptor(number, FileDescriptor.DevNull, memory));
+        var metadata = state.OwnedMemoryBytes - root.OwnedMemoryBytes - middle.OwnedMemoryBytes - current.OwnedMemoryBytes;
+        Assert.Throws<MemoryBudgetExceededException>(() => state.SetPersistentDescriptor(number, FileDescriptor.DevNull, memory, acquired: false));
 
         Assert.Equal(FileDescriptor.StdOut, root.Resolve(number));
         Assert.Equal(FileDescriptor.StdOut, middle.Resolve(number));
         Assert.Equal(FileDescriptor.StdOut, current.Resolve(number));
-        Assert.Equal(root.OwnedMemoryBytes + middle.OwnedMemoryBytes + current.OwnedMemoryBytes, state.OwnedMemoryBytes);
+        Assert.Equal(metadata + root.OwnedMemoryBytes + middle.OwnedMemoryBytes + current.OwnedMemoryBytes, state.OwnedMemoryBytes);
     }
 
     [Fact]
@@ -121,15 +122,17 @@ public sealed class DescriptorMemoryTests
         child.Set(number, FileDescriptor.DevNull);
         var opened = new[] { new FileDescriptor(123) };
         var state = new RedirectionState(root);
-        state.Push(child, opened, new HashSet<LogicalDescriptor> { number });
+        state.Push(child, new DescriptorHandleOwner(opened), new HashSet<LogicalDescriptor> { number }, null);
         using var owner = new MemoryGovernor(0).CreateScope();
 
-        Assert.Throws<MemoryBudgetExceededException>(() => state.Preserve(new EvaluationMemory(owner)));
+        var before = state.OwnedMemoryBytes;
+        Assert.Throws<MemoryBudgetExceededException>(() => state.Preserve(new EvaluationMemory(owner), null, null));
+        Assert.Equal(before, state.OwnedMemoryBytes);
         Assert.Same(child, state.CurrentTable);
         Assert.Equal(FileDescriptor.StdOut, root.Resolve(number));
         Assert.Same(opened, state.Pop());
         Assert.Same(root, state.CurrentTable);
-        Assert.Equal(root.OwnedMemoryBytes, state.OwnedMemoryBytes);
+        Assert.True(state.OwnedMemoryBytes > root.OwnedMemoryBytes); // The retained stack buffer still belongs to this state.
     }
 
     [Fact]
@@ -142,17 +145,22 @@ public sealed class DescriptorMemoryTests
         for (var index = 0; index < numbers.Length; index++)
             child.Set(numbers[index], opened[index]);
         var state = new RedirectionState(root);
-        state.Push(child, opened, numbers.ToHashSet());
-        using var owner = new MemoryGovernor(8192).CreateScope();
+        state.Push(child, new DescriptorHandleOwner(opened), numbers.ToHashSet(), null);
+        using var owner = new MemoryGovernor(16384).CreateScope();
 
-        Assert.Throws<MemoryBudgetExceededException>(() => state.Preserve(new EvaluationMemory(owner)));
+        var metadata = state.OwnedMemoryBytes - root.OwnedMemoryBytes - child.OwnedMemoryBytes;
+        Assert.Throws<MemoryBudgetExceededException>(() => state.Preserve(new EvaluationMemory(owner), null, null));
         Assert.Same(child, state.CurrentTable);
-        Assert.Equal(root.OwnedMemoryBytes + child.OwnedMemoryBytes, state.OwnedMemoryBytes);
+        var beforePop = state.OwnedMemoryBytes;
         var retained = opened.Where((_, index) => !root.Resolve(numbers[index]).IsClosed).ToArray();
         Assert.NotEmpty(retained);
         Assert.True(retained.Length < opened.Length);
         Assert.Same(opened, state.Pop());
-        var closing = state.TransferHandles(opened);
+        var closing = state.TransferHandles(opened, null);
+        var owned = typeof(RedirectionState).GetField("_openedDescriptors",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(state);
+        var rootOwner = Assert.IsType<DescriptorHandleOwner>(owned);
+        Assert.Equal(metadata + root.OwnedMemoryBytes + child.OwnedMemoryBytes + rootOwner.OwnedMemoryBytes, beforePop);
 
         Assert.Equal(retained, state.OpenedDescriptors);
         Assert.Equal(opened.Except(retained).Reverse(), closing);

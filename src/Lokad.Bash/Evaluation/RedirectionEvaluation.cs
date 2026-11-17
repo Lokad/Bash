@@ -19,7 +19,7 @@ internal sealed class RedirectionEvaluation
     /// <summary> Stores the descriptor mappings produced while evaluating redirections. </summary>
     private readonly DescriptorTable _descriptorTable;
     /// <summary> Stores descriptors opened during redirection evaluation, in open order. </summary>
-    private readonly List<FileDescriptor> _openedDescriptors = new();
+    private readonly DescriptorHandleOwner _openedDescriptors = new();
     /// <summary> Stores resolved descriptors hidden by close or replacement redirections. </summary>
     private readonly OrderedDescriptorSet _releasedDescriptors = new();
     /// <summary> Stores logical descriptors explicitly targeted by the redirections. </summary>
@@ -43,7 +43,7 @@ internal sealed class RedirectionEvaluation
     /// <summary>
     /// Gets the descriptors opened during evaluation, in open order.
     /// </summary>
-    public IReadOnlyList<FileDescriptor> OpenedDescriptors => _openedDescriptors;
+    public DescriptorHandleOwner OpenedDescriptors => _openedDescriptors;
     /// <summary>
     /// Gets released descriptors that no logical mapping retains after all redirections have been applied.
     /// </summary>
@@ -199,7 +199,7 @@ internal sealed class RedirectionEvaluation
         }
 
         scope.Effects.TrackOwnedDescriptor(descriptor.Value);
-        _openedDescriptors.Add(descriptor.Value);
+        _openedDescriptors.AddPrepared(descriptor.Value);
         SetDescriptor(scope, targetDescriptor, descriptor.Value);
         if (secondaryTargetDescriptor.HasValue)
             SetDescriptor(scope, secondaryTargetDescriptor.Value, descriptor.Value);
@@ -327,7 +327,7 @@ internal sealed class RedirectionEvaluation
             await ReportFailureAsync(scope, creation.Error).ConfigureAwait(false);
             return;
         }
-        _openedDescriptors.Add(pipe.Read);
+        _openedDescriptors.AddPrepared(pipe.Read);
         scope.Effects.TrackOwnedDescriptor(pipe.Read);
         var error = await scope.Effects.StartPipeInputAsync(pipe, content, appendNewline).ConfigureAwait(false);
         if (error is { } failure)
@@ -428,11 +428,7 @@ internal sealed class RedirectionEvaluation
 
     private void PrepareOpenedDescriptor(ScopedEvaluation scope)
     {
-        if (_openedDescriptors.Count < _openedDescriptors.Capacity)
-            return;
-        var capacity = (int)Math.Min(int.MaxValue, Math.Max(4L, 2L * _openedDescriptors.Capacity));
-        scope.Effects.Memory.Charge(checked(32L + 4L * capacity));
-        _openedDescriptors.Capacity = capacity;
+        _openedDescriptors.PrepareAdditional(1, scope.Effects.Memory.Workspace);
     }
 
     /// <summary>Grows command-owned descriptor membership before publishing a newly touched number.</summary>
