@@ -14,7 +14,7 @@ public sealed partial class Variables
     private readonly HashSet<BindingName> _exportedIndex = new();
 
     [Flags]
-    private enum BindingAttributes { None = 0, Readonly = 1, Exported = 2 }
+    private enum BindingAttributes { None = 0, Readonly = 1, Exported = 2, Temporary = 4 }
 
     private abstract class VariableSlot
     {
@@ -112,6 +112,8 @@ public sealed partial class Variables
 
     private bool HasAttribute(BindingName name, BindingAttributes attribute) =>
         TryGetBinding(name, out var slot) && (slot.Attributes & attribute) != 0;
+
+    internal bool IsTemporaryBinding(BindingName name) => HasAttribute(name, BindingAttributes.Temporary);
 
     private void SetAttribute(BindingName name, BindingAttributes attribute, bool enabled)
     {

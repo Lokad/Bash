@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve function-prefix values in first local declarations and reveal saved
+  caller bindings after unset, including later caller writes and nested helpers.
+  Keep declaration-command prefixes, local namespaces, attribute promotions and
+  child forks distinct. Preserve structured temporary arrays in the documented
+  nested inheritance profile rather than emitting GNU's observed byte 01 scalar.
 - Admit runtime child-descriptor lists/indexes through parent command ownership,
   retain them through child cleanup and admit subshell stack capacity separately.
   Reuse completed indexes and one inheritance/substitution union; collect only

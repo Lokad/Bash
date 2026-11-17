@@ -197,6 +197,7 @@ public sealed partial class Variables
             {
                 _saved.CopyBindingFrom(owner, name);
                 owner.CopyBindingFrom(prepared, name);
+                owner.SetAttribute(name, BindingAttributes.Temporary, true);
             }
         }
 
@@ -215,13 +216,23 @@ public sealed partial class Variables
         internal IReadOnlySet<BindingName> PrefixNames => _prefixes;
         internal CommandBindings Fork(Variables owner) => new(owner, this);
 
-        /// <summary>A declaration reached the caller after unset; that binding no longer belongs to this prefix.</summary>
+        /// <summary>Exposes a selected binding and ends this prefix's restoration responsibility.</summary>
         internal void ExposeBinding(BindingName name, Variables visible)
         {
-            if (!_prefixes.Remove(name))
+            if (!_prefixes.Contains(name))
                 return;
             if (!ReferenceEquals(_owner, visible))
-                _owner.CopyBindingFrom(visible, name);
+            {
+                if (ReferenceEquals(visible, _saved))
+                {
+                    // Exposing a caller transfers its already owned container, without another array copy.
+                    if (_saved.TryGetBinding(name, out var slot)) _owner.StoreBinding(name, slot);
+                    else _owner.ClearBinding(name);
+                }
+                else
+                    _owner.CopyBindingFrom(visible, name);
+            }
+            _prefixes.Remove(name);
             _saved.ClearBinding(name);
             _retained.ClearBinding(name);
             _retainedNames.Remove(name);
@@ -308,7 +319,12 @@ public sealed partial class Variables
         public void Dispose()
         {
             foreach (var name in _prefixes)
-                _owner.CopyBindingFrom(_retainedNames.Contains(name) ? _retained : _saved, name);
+            {
+                var retained = _retainedNames.Contains(name);
+                if (retained)
+                    _retained.SetAttribute(name, BindingAttributes.Temporary, _saved.IsTemporaryBinding(name));
+                _owner.CopyBindingFrom(retained ? _retained : _saved, name);
+            }
         }
     }
 
@@ -480,7 +496,7 @@ public sealed partial class Variables
             {
                 // A helper can unset this local without ending its namespace. An explicit
                 // redeclaration starts a fresh local lifetime rather than reviving its promotion.
-                if (!command.HasBinding(name))
+                if (!command.HasBinding(name) || command.IsUnassignedScalar(name))
                     declarationOwner._promotedPrefixes.Remove(name);
                 if (unsetPrefixes != null)
                 {
@@ -497,8 +513,16 @@ public sealed partial class Variables
                     return false;
 
                 var local = new Variables();
-                if (prefixes != null && prefixes.Contains(name))
+                if (prefixes?.Contains(name) == true || command.IsTemporaryBinding(name))
+                {
+                    memory.Charge(command.EstimateBindingBytes(name));
                     local.CopyBindingFrom(command, name);
+                    // Temporary namerefs supply their raw target text to a fresh local, not a reference.
+                    if (command.IsTemporaryBinding(name) && local.NamerefTargets.TryGetValue(name, out var temporaryReference))
+                        local.SetResolvedScalar(name, temporaryReference.Value);
+                    if (prefixes?.Contains(name) == true)
+                        local.SetAttribute(name, BindingAttributes.Temporary, false);
+                }
                 else if (savedBinding.HasAttribute(name, BindingAttributes.Exported))
                     local.SetAttribute(name, BindingAttributes.Exported, true);
                 if (!TryUpdateBinding(local))

@@ -1964,7 +1964,7 @@ public sealed partial class Evaluation : IFileTester
                         selfNameref = true;
                     }
                     ShellValue? previous = null;
-                    if (!local || existingLocal || prefixNames?.Contains(name) == true)
+                    if (!local || existingLocal || prefixNames?.Contains(name) == true || targetVars.IsTemporaryBinding(name))
                         previous = targetVars.TryGetNameref(name, out var referenced)
                             ? referenced.IsEmpty ? null : referenced
                             : targetVars.Scalars.TryGetValue(name, out var scalar) ? scalar : null;

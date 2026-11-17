@@ -125,6 +125,10 @@ public sealed partial class Evaluation
 
             if (bindings?.Contains(removedName) != true)
             {
+                if (ExposeUnsetPrefix(removedName))
+                    continue;
+                if (context.FunctionContext?.IsLocal(removedName) == true)
+                    commandVars.TryDeclareName(removedName);
                 // A declared prefix keeps its current export flag, including an earlier +x/export -n.
                 if (keepExport) commandVars.SetExported(removedName, true);
                 context.FunctionContext?.Locals.RecordUnset(removedName);
@@ -138,6 +142,43 @@ public sealed partial class Evaluation
         {
             await ReportExpansionDiagnosticAsync(ShellValue.FromText("unset"), message).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated);
+        }
+
+        bool ExposeUnsetPrefix(BindingName name)
+        {
+            var prefix = context.GlobalPrefixes;
+            for (var function = context.FunctionContext; function != null; function = function.Enclosing)
+            {
+                if (function.Locals.Declares(name))
+                    return false;
+                while (prefix != null && prefix.FunctionDepth == function.Depth)
+                {
+                    if (Expose(prefix.Bindings))
+                    {
+                        function.PromotedNames.Remove(name);
+                        return true;
+                    }
+                    prefix = prefix.Enclosing;
+                }
+                if (function.PrefixBindings is { } call && Expose(call))
+                {
+                    function.PromotedNames.Remove(name);
+                    return true;
+                }
+            }
+            while (prefix != null)
+            {
+                if (Expose(prefix.Bindings)) return true;
+                prefix = prefix.Enclosing;
+            }
+            return false;
+
+            bool Expose(Variables.CommandBindings temporary)
+            {
+                if (!temporary.Contains(name)) return false;
+                temporary.ExposeBinding(name, temporary.SavedVariables);
+                return true;
+            }
         }
 
         void HideSavedPrefixExport(BindingName name)

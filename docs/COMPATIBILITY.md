@@ -16,6 +16,15 @@ The runtime supports deterministic, non-interactive shell workflows:
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT
   handlers. Cancellation and external signals do not deliver traps.
 
+Function-call prefixes such as `x=prefix f` supply the initial value of a first
+local declaration, including through unprefixed helper calls. Unsetting that
+temporary binding reveals the saved caller; subsequent assignments can survive
+the call. Unsetting a local declaration instead keeps its unassigned local
+namespace. A prefix on `local`/`declare` itself has a separate lifetime.
+If a temporary scalar is converted to an array, a helper's new local inherits the
+structured array value. This deliberately preserves its data and kind where both
+pinned GNU 5.2 references emit a scalar containing byte 01 in that nested case.
+
 Self-referencing nameref declaration initializers fail at script scope without
 replacing the binding. Function declarations warn instead; circular local reads
 and ordinary writes can select the global binding. A self-element target keeps

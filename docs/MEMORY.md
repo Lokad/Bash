@@ -99,6 +99,13 @@ state. Full child snapshots retain separate admission for their complete visible
 store. Cancellation or refusal during detachment leaves the caller binding intact;
 the surrounding command owns copied storage through operation and cleanup completion.
 
+Local declarations admit inherited temporary mutable containers before copying
+them. When unset exposes a saved command/function prefix, its already-owned slot
+moves into the visible store and leaves the saved owner, without another array
+copy at that boundary. Pending function/command workspace remains live through
+restoration and cleanup. Ordinary saved-binding restoration still has separate
+copying costs; this transfer does not imply allocation-free cleanup everywhere.
+
 Suffix pattern traversal retains admitted atom offsets on the command-local
 prepared pattern, with separate byte/scalar profiles when both are reached.
 Subjects stay borrowed during matching; retained removal slices and changed

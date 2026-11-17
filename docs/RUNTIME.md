@@ -34,6 +34,16 @@ does not follow aliases. Builtin outputs share selection and publication, with
 explicit getopts failure, printf count and descriptor policies. An allocation
 that does not publish its variable remains temporary and uses ordinary cleanup.
 
+Function-call prefixes retain temporary-binding provenance through nested calls.
+A first local declaration inherits a visible temporary value; a prefix on the
+declaration command itself retains its distinct lifetime. Unsetting a temporary
+prefix exposes its saved caller binding, and later writes use that caller owner.
+Unsetting an ordinary local retains an unassigned declaration in its own namespace.
+Readonly/export promotions and child forks use the same selection and restoration
+paths. Temporary namerefs supply raw target text to a fresh ordinary local;
+temporary arrays converted inside a function retain their structured values when
+inherited by a helper's local declaration.
+
 Legacy command-substitution metadata keeps executable bytes separately from the
 original delimited spelling. Function display/export emits that spelling without
 parsing the child body, preserving validation timing across replay and import.
