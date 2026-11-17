@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Join unquoted here-document continuations before delimiter recognition and tab
+  stripping. Preserve skipped command boundaries, quoted data, byte values and
+  physical diagnostic offsets through the existing parser and execution paths.
 - Refund cached function exports after their last namespace or active consumer
   retires. Charge first serialization to the binding creator, including pipeline
   publication, and keep borrowed definitions admitted through command cleanup.

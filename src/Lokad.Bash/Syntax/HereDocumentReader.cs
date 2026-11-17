@@ -22,7 +22,8 @@ internal sealed class HereDocumentReader
         while (_pending.TryDequeue(out var redirection))
         {
             var delimiter = GetHereDocumentDelimiter(redirection.Target, out var allowExpansion);
-            if (!tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs, out var content))
+            if (!tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
+                    joinContinuations: allowExpansion, out var content))
                 return false;
             var kind = allowExpansion ? WordPartKind.HereDocument : WordPartKind.SingleQuoted;
             _completed.Add(redirection, new Redirection(redirection.Kind, redirection.FileDescriptor,

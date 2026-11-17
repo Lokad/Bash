@@ -50,6 +50,12 @@ Here-strings expand one scalar operand without brace generation, field splitting
 or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
 dollar, backtick, backslash and LF; double quotes remain ordinary data. Quoting the
 delimiter disables body expansion.
+For unquoted delimiters, escaped LF is removed while collecting the body, before
+delimiter recognition. Continued lines can form a delimiter; a physical line that
+only resembles one inside continued data does not end the body. The `<<-` mode
+removes leading tabs from logical lines rather than from every physical fragment.
+Literal command-substitution spellings such as `$(...)` in delimiter words remain
+outside the qualified delimiter profile.
 Unquoted body substitution structure is validated when redirection setup is
 reached; setup failure prevents target invocation. Quoted and skipped bodies
 retain their inert data semantics.

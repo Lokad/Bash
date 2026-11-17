@@ -5,6 +5,29 @@ namespace Lokad.Bash.Tests;
 public sealed class ParserHereDocumentTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void JoinedDelimiterKeepsFollowingErrorsAtTheirPhysicalOffset(bool bytes)
+    {
+        const string Source = "cat <<END\nπ\nE\\\nND\n)";
+        SyntaxError? error;
+        if (bytes)
+        {
+            var source = System.Text.Encoding.UTF8.GetBytes(Source);
+            Assert.False(Parser.TryParse(source, out _, out error));
+            Assert.NotNull(error);
+            Assert.Equal(source.Length - 1, error.Offset);
+        }
+        else
+        {
+            Assert.False(Parser.TryParse(Source, out _, out error));
+            Assert.NotNull(error);
+            Assert.Equal(Source.Length - 1, error.Offset);
+        }
+        Assert.Contains("Unexpected token", error.Message);
+    }
+
+    [Theory]
     [InlineData("time cat <<END\nbody\nEND\n", false)]
     [InlineData("time -p cat <<END\nbody\nEND\n", true)]
     public void CompletingTimedBodiesRetainsTheWrapperAndProvisionalDelimiter(string source, bool portable)

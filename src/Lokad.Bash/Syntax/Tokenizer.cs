@@ -455,11 +455,13 @@ internal sealed class Tokenizer
     /// </summary>
     /// <param name="delimiter">The delimiter bytes after quote removal.</param>
     /// <param name="stripTabs">Whether to strip leading tabs from lines and delimiter.</param>
-    /// <param name="body">The raw contents when the delimiter is found.</param>
+    /// <param name="joinContinuations">Whether the unquoted delimiter permits removing escaped LF before comparison.</param>
+    /// <param name="body">The collected body with continuation/tab normalization, without value expansion.</param>
     /// <returns>Whether the delimiter was found; failure records the syntax error.</returns>
     internal bool TryReadHereDocument(
         ShellSource delimiter,
         bool stripTabs,
+        bool joinContinuations,
         out ShellSource body)
     {
         body = default;
@@ -468,39 +470,50 @@ internal sealed class Tokenizer
 
         while (Position < span.Length)
         {
-            var lineStart = Position;
+            var lineStart = content.Length;
+            var runStart = Position;
             while (Position < span.Length && span[Position] != (byte)'\n')
             {
-                Position++;
-            }
-
-            var line = span.Slice(lineStart, Position - lineStart);
-            var newlineLength = Position < span.Length ? 1 : 0;
-
-            Position += newlineLength;
-
-            var contentLine = line;
-            if (stripTabs)
-            {
-                var tabCount = 0;
-                while (tabCount < contentLine.Length && contentLine[tabCount] == (byte)'\t')
+                if (joinContinuations && span[Position] == (byte)'\\' && Position + 1 < span.Length)
                 {
-                    tabCount++;
+                    if (span[Position + 1] == (byte)'\n')
+                    {
+                        AppendRun(span[runStart..Position]);
+                        Position += 2;
+                        runStart = Position;
+                        continue;
+                    }
+                    // An escaped backslash protects a following LF from joining.
+                    Position += 2;
                 }
-
-                contentLine = contentLine[tabCount..];
+                else
+                    Position++;
             }
 
-            if (contentLine.SequenceEqual(delimiter.AsSpan()))
+            AppendRun(span[runStart..Position]);
+            var newlineLength = Position < span.Length ? 1 : 0;
+            Position += newlineLength;
+            if (content.ToMemory().Span[lineStart..].SequenceEqual(delimiter.AsSpan()))
             {
+                content.Truncate(lineStart);
                 body = ShellSource.FromBytes(content.ToMemory());
                 return true;
             }
 
-            content.Append(contentLine);
             if (newlineLength > 0)
-            {
                 content.Append((byte)'\n');
+
+            void AppendRun(ReadOnlySpan<byte> run)
+            {
+                // Strip only the logical line's leading tabs. A continued physical
+                // line can begin with a tab that belongs inside the body or delimiter.
+                if (stripTabs && content.Length == lineStart)
+                {
+                    var tabs = 0;
+                    while (tabs < run.Length && run[tabs] == (byte)'\t') tabs++;
+                    run = run[tabs..];
+                }
+                content.Append(run);
             }
         }
 

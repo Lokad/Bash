@@ -5,6 +5,13 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Here-document collection removes unquoted backslash/LF continuations before
+delimiter comparison, including for commands whose execution will be skipped.
+Tab-stripping applies at the start of each logical line, preserving tabs inside
+continued lines. Quoted delimiters retain physical body lines. This normalization
+does not expand values or validate reached substitutions; their existing execution
+and cleanup path remains late. Token and diagnostic offsets still use physical source.
+
 Explicit and saved directory destinations use one host lookup and publication
 path. Each reached attempt asks for directory-kind information, even for a saved
 path or the current cwd. A failed lookup preserves cwd and directory variables;

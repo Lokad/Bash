@@ -9,6 +9,34 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteHereDocumentTests
 {
+    [Theory]
+    [InlineData(false, "4CFF5C0A52", "4CFF520A")]
+    [InlineData(true, "4CFF5C0A52", "4CFF520A")]
+    [InlineData(false, "4C5C0D", "4C5C0D0A")]
+    [InlineData(true, "4C5C0D", "4C5C0D0A")]
+    [InlineData(false, "4C5C0A0D52", "4C0D520A")]
+    [InlineData(true, "4C5C0A0D52", "4C0D520A")]
+    public async Task ContinuationCollectionPreservesMalformedBytesAndCarriageReturns(
+        bool prepared, string bodyHex, string outputHex)
+    {
+        byte[] source = [.. "cat <<END\n"u8, .. Convert.FromHexString(bodyHex), .. "\nEND\n"u8];
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var script = prepared ? Parser.Parse(source)
+            : new ParsedScript([new ScriptCommand(ShellSource.FromBytes(source))]);
+        var evaluation = ShellEvaluationStartup.CreateForNewHost(script, Evaluation.EvaluationOptions.Default);
+        var result = await new Engine().RunAsync(evaluation, host, owner, cancellation.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(outputHex), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     public static IEnumerable<object[]> MalformedSubstitutions()
     {
         foreach (var body in new[] { "${v", "$(printf sub", "`printf sub", "\\`printf sub`", "\\\\\\`printf sub`", "$((1+2)", "$(if)" })
