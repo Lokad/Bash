@@ -226,8 +226,8 @@ public sealed partial class Evaluation
 
         return new PreparedDeclaration(command with { Words = words }, options, operands);
 
-        static PreparedDeclarationOperand PrepareVariableOperand(ShellValue input) =>
-            AssignmentWord.TrySplitOperand(ShellSource.FromBytes(input.Bytes), out var name, out var value, out var operation)
+        PreparedDeclarationOperand PrepareVariableOperand(ShellValue input) =>
+            AssignmentWord.TrySplitOperand(ShellSource.FromBytes(input.Bytes), Memory.Workspace, out var name, out var value, out var operation)
                 ? new PreparedDeclarationOperand(name.ToValue(), value.ToValue(), operation, CompoundApplied: false)
                 : new PreparedDeclarationOperand(input, null, AssignmentOperator.Replace, CompoundApplied: false);
 

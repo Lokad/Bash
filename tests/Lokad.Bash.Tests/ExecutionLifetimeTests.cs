@@ -80,7 +80,7 @@ public sealed class ExecutionLifetimeTests
 
         var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await ArithmeticEvaluation.EvaluateAsync<string>(expression, Bind,
-                (_, _, _) => throw new InvalidOperationException("Unexpected assignment"), cancellation.Token));
+                (_, _, _) => throw new InvalidOperationException("Unexpected assignment"), null, cancellation.Token));
 
         Assert.Equal(cancellation.Token, failure.CancellationToken);
         Assert.Equal(500, reads);

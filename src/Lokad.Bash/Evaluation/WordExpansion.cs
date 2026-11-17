@@ -467,7 +467,8 @@ internal static partial class WordExpansion
             var arithmeticEnd = prepared?.End ?? -1;
             var expression = ShellSource.Empty;
             var arithmeticStatus = prepared.HasValue ? ShellScanStatus.Complete
-                : ArithmeticExpansionScanner.Scan(content, index, out arithmeticEnd, out expression, out _);
+                : ArithmeticExpansionScanner.Scan(new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace },
+                    content, index, out arithmeticEnd, out expression, out _);
             if (arithmeticStatus == ShellScanStatus.Complete)
             {
                 var arithmetic = prepared?.Operand;
@@ -582,7 +583,8 @@ internal static partial class WordExpansion
 
             if (BracedParameterScanner.HasPrefix(content, index))
             {
-                var parameterStatus = BracedParameterScanner.ScanWithPayload(new ShellScanContext(), content, index,
+                var parameterStatus = BracedParameterScanner.ScanWithPayload(
+                    new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace }, content, index,
                     out var closingIndex, out _, out var payload);
                 if (parameterStatus != BracedParameterScanStatus.Found)
                 {

@@ -7,8 +7,11 @@
   containers. Retire completed units independently, reuse sliced arithmetic
   metadata and keep retained values independent of oversized temporary buffers.
   EXIT-action parsing refusal now reports a shell failure through ordinary cleanup.
-  Caller-owned prepared parsing remains separate; remaining scanner/classification,
-  descriptor-map and IFS-index admission gaps remain under review.
+  Runtime selector/classification and separator scans share the active allowance,
+  including nested syntax in unexpanded nameref targets. Classify ASCII grammar
+  from borrowed bytes and admit retained text names before decoding.
+  Caller-owned prepared parsing remains separate; descriptor-map and IFS-index
+  admission gaps remain under review.
 - Join unquoted here-document continuations before delimiter recognition and tab
   stripping. Preserve skipped command boundaries, quoted data, byte values and
   physical diagnostic offsets through the existing parser and execution paths.

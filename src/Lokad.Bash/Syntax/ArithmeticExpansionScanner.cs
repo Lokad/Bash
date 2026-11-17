@@ -37,8 +37,17 @@ internal static class ArithmeticExpansionScanner
         out int endIndex,
         out ShellSource expression,
         out bool containsCommandSubstitution) =>
+        Scan(new ShellScanContext(), text, startIndex, out endIndex, out expression, out containsCommandSubstitution);
+
+    internal static ShellScanStatus Scan(
+        ShellScanContext context,
+        ShellSource text,
+        int startIndex,
+        out int endIndex,
+        out ShellSource expression,
+        out bool containsCommandSubstitution) =>
         ScanCore(
-            new ShellScanContext(),
+            context,
             text,
             startIndex,
             out endIndex,

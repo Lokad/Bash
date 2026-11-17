@@ -272,7 +272,7 @@ internal static partial class WordExpansion
                 output.AppendExpandedWords(expanded, allowWordSplitting, globQuoted);
         }
 
-        static BracedParameterExpression ParseBracedParameterExpression(ShellSource content)
+        BracedParameterExpression ParseBracedParameterExpression(ShellSource content)
         {
             var modifier = ParameterModifier.None;
             var start = 0;
@@ -353,7 +353,8 @@ internal static partial class WordExpansion
                 {
                     while (++position < content.Length && VariableNames.IsNamePart((char)content[position])) { }
                     if (position < content.Length && content[position] == (byte)'[')
-                        return ArraySubscriptScanner.TryScan(content, position, out var closing) ? closing + 1 : start;
+                        return ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace },
+                            content, position, out var closing) ? closing + 1 : start;
                     return position;
                 }
                 if (first is >= (byte)'0' and <= (byte)'9')
@@ -389,10 +390,10 @@ internal static partial class WordExpansion
             var modifier = parsed.Modifier;
             if (modifier == ParameterModifier.Indirect
                 && (parsed.Kind != BracedParameterOperatorKind.None
-                    || !VariableReference.TryParse(name, out var aggregate) || !aggregate.IsAggregate))
+                    || !VariableReference.TryParse(name, scope.Effects.Memory, out var aggregate) || !aggregate.IsAggregate))
             {
                 // Inspection follows the chain but never evaluates the terminal selector.
-                if (VariableReference.TryParse(name, out var binding) && binding.Kind == VariableReferenceKind.Name
+                if (VariableReference.TryParse(name, scope.Effects.Memory, out var binding) && binding.Kind == VariableReferenceKind.Name
                     && scope.Variables.TryGetNameref(binding.Name, out _))
                 {
                     if (!scope.Variables.TryResolveBinding(binding.Name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
@@ -464,8 +465,7 @@ internal static partial class WordExpansion
                     return new ParameterValue(VariableReferenceKind.Name,
                         [ShellValue.FromText(Integers.FormatNumber(length))], true, null, null);
                 }
-                budget.Charge(checked(4L * name.Length));
-                if (!VariableReference.TryParse(name, out var reference))
+                if (!VariableReference.TryParse(name, budget, out var reference))
                 {
                     await ReportSubstitutionFailureAsync("unsupported special parameter", ExpansionFailureKind.Parameter)
                         .ConfigureAwait(false);
@@ -671,11 +671,12 @@ internal static partial class WordExpansion
                     result.Add(matcher == null ? value : Replace(value, matcher, template, mode));
                 return result;
 
-                static int FindReplacementSeparator(ShellSource source, ParameterReplacementMode mode)
+                int FindReplacementSeparator(ShellSource source, ParameterReplacementMode mode)
                 {
                     // After the global marker, a leading slash belongs to the pattern.
                     var start = mode == ParameterReplacementMode.All && !source.IsEmpty && source[0] == (byte)'/' ? 1 : 0;
-                    var cursor = new ShellSourceCursor(source, start);
+                    var cursor = new ShellSourceCursor(source, start,
+                        new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace });
                     while (!cursor.IsAtEnd)
                     {
                         if (cursor.TryConsumeQuoteOrEscape()
@@ -989,9 +990,10 @@ internal static partial class WordExpansion
                 ShellValue.FromText(Integers.FormatNumber(length.GetValueOrDefault())), ShellValue.FromText("substring expression < 0"),
                 ExpansionFailureKind.Arithmetic);
 
-            static int FindSeparator(ShellSource text)
+            int FindSeparator(ShellSource text)
             {
-                var cursor = new ShellSourceCursor(text, 0);
+                var cursor = new ShellSourceCursor(text, 0,
+                    new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace });
                 var parentheses = 0;
                 var conditional = 0;
                 while (!cursor.IsAtEnd)

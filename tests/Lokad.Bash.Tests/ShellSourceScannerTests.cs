@@ -1,10 +1,53 @@
 using System.Text;
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ShellSourceScannerTests
 {
+    [Theory]
+    [InlineData("subscript", false)]
+    [InlineData("subscript", true)]
+    [InlineData("reference", false)]
+    [InlineData("reference", true)]
+    [InlineData("assignment", false)]
+    [InlineData("assignment", true)]
+    public void SelectorClassificationAdmitsNestedPreparationWithoutExpandingIt(string role, bool legacy)
+    {
+        var governor = new MemoryGovernor(64);
+        using var owner = governor.CreateScope();
+        using var capacity = new MemoryCapacity(owner, 0);
+        var ordinary = Source("0");
+        Assert.True(Scan(ordinary, capacity));
+        capacity.Resize(0);
+        capacity.ReleaseUnusedCapacity();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        var nested = Source(legacy ? "`printf " + new string('0', 128) + "`" : "$(printf 0)");
+        Assert.True(Scan(nested, null)); // Standalone caller preparation does not install a budget.
+        Assert.Throws<MemoryBudgetExceededException>(() => Scan(nested, capacity));
+        capacity.Dispose();
+        Assert.Equal(0, governor.ReservedBytes); // Before disposing the supplied scope.
+
+        ShellSource Source(string selector) => ShellSource.FromText(role switch
+        {
+            "subscript" => "[" + selector + "]",
+            "reference" => "name[" + selector + "]",
+            "assignment" => "name[" + selector + "]=value",
+            _ => throw new ArgumentOutOfRangeException(nameof(role))
+        });
+
+        bool Scan(ShellSource source, MemoryCapacity? memory) => role switch
+        {
+            "subscript" => ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = memory }, source, 0, out _),
+            "reference" => VariableReference.TryParseSource(source, memory, out _),
+            "assignment" => AssignmentWord.TrySplitOperand(source, memory, out _, out _, out _),
+            _ => throw new ArgumentOutOfRangeException(nameof(role))
+        };
+    }
+
     [Fact]
     public void CommandLookaheadSurvivesSourceSlicesWithoutCrossingTheirEnd()
     {

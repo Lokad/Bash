@@ -131,7 +131,7 @@ public sealed partial class Evaluation
             // Flatten once under the same allowance; never expand or split the resulting RHS again.
             var flattened = FlattenCompoundArrayItem(selector, value, element.Operator);
             var source = ShellSource.FromBytes(flattened.Bytes);
-            if (ArraySubscriptScanner.TryScan(source, 0, out var closing))
+            if (ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = Memory.Workspace }, source, 0, out var closing))
             {
                 var equals = closing + 1;
                 var operation = AssignmentOperator.Replace;

@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -135,14 +136,15 @@ public static partial class ArithmeticEvaluation
         ArithmeticOperand expression,
         Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> bindReference,
         Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> assignTarget) =>
-        EvaluateAsync(expression, bindReference, assignTarget, CancellationToken.None);
+        EvaluateAsync(expression, bindReference, assignTarget, null, CancellationToken.None);
 
     internal static ValueTask<ArithmeticResult> EvaluateAsync<TTarget>(
         ArithmeticOperand expression,
         Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> bindReference,
         Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> assignTarget,
+        MemoryCapacity? memory,
         CancellationToken cancellationToken) =>
-        new Parser<TTarget>(expression, bindReference, assignTarget, cancellationToken).EvaluateAsync();
+        new Parser<TTarget>(expression, bindReference, assignTarget, memory, cancellationToken).EvaluateAsync();
 
     /// <summary>Parses Bash integer constants modulo 2^64, without decoding byte-valued operands.</summary>
     internal static bool TryParseIntegerLiteral<T>(ReadOnlySpan<T> text, out long value) where T : IBinaryInteger<T> =>
@@ -247,6 +249,7 @@ public static partial class ArithmeticEvaluation
         private readonly Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> _bindReference;
         private readonly Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> _assignTarget;
         private readonly CancellationToken _cancellationToken;
+        private readonly MemoryCapacity? _memory;
         private int _index;
         private int _suppressedEvaluation;
         private int _nestedParseDepth;
@@ -263,6 +266,7 @@ public static partial class ArithmeticEvaluation
             ArithmeticOperand expression,
             Func<ArithmeticReference, ArithmeticReferenceUse, ValueTask<ArithmeticBinding<TTarget>>> bindReference,
             Func<ArithmeticReference, TTarget, long, ValueTask<ArithmeticError?>> assignTarget,
+            MemoryCapacity? memory,
             CancellationToken cancellationToken)
         {
             _operand = expression;
@@ -270,6 +274,7 @@ public static partial class ArithmeticEvaluation
             _bindReference = bindReference;
             _assignTarget = assignTarget;
             _cancellationToken = cancellationToken;
+            _memory = memory;
         }
 
         public async ValueTask<ArithmeticResult> EvaluateAsync()
@@ -758,7 +763,7 @@ public static partial class ArithmeticEvaluation
             }
 
             var cached = _operand.Syntax is { } syntax && syntax.TryGetReference(_index, out var retained)
-                ? retained : ReadReferenceSyntax(ShellSource.FromBytes(_expression.Bytes), _index, PeekToken(out _).Length);
+                ? retained : ReadReferenceSyntax(ShellSource.FromBytes(_expression.Bytes), _index, PeekToken(out _).Length, _memory);
             if (cached.Bracket >= 0)
             {
                 if (_operand.Brackets == ArithmeticBracketMode.Literal)

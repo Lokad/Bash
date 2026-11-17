@@ -435,7 +435,7 @@ public sealed partial class Evaluation
         if (assigned)
         {
             if (kind == BuiltinAssignmentKind.Directory)
-                persistentOutputs?.Retain(sourceName);
+                persistentOutputs?.Retain(sourceName, Memory);
             else
                 persistentOutputs?.CompleteOutput(reference.Name, destination);
         }

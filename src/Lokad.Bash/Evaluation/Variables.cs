@@ -272,12 +272,16 @@ public sealed partial class Variables
         }
 
         /// <summary>Retains an explicit builtin write even when its target was a temporary prefix.</summary>
-        public void Retain(BindingName name)
+        public void Retain(BindingName name, EvaluationMemory memory)
         {
-            if (VariableReference.TryParse(ShellSource.FromBytes(name.ToValue().Bytes), out var reference)
-                && _owner.TryResolveWholeName(reference.Name, out var resolved)
-                && VariableReference.TryParse(ShellSource.FromBytes(resolved.ToValue().Bytes), out var target))
-                RetainBinding(target.Name);
+            memory.Charge(checked(4L * name.ByteLength));
+            if (VariableReference.TryParse(ShellSource.FromBytes(name.ToValue().Bytes), memory, out var reference)
+                && _owner.TryResolveWholeName(reference.Name, out var resolved))
+            {
+                memory.Charge(checked(4L * resolved.ByteLength));
+                if (VariableReference.TryParse(ShellSource.FromBytes(resolved.ToValue().Bytes), memory, out var target))
+                    RetainBinding(target.Name);
+            }
         }
 
         /// <summary>Captures a promoted binding before function-local restoration can replace it.</summary>

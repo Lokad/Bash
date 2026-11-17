@@ -2,6 +2,7 @@ using System;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -61,10 +62,13 @@ internal readonly record struct VariableReference
         => TryParse(text, memory: null, out reference);
 
     internal static bool TryParse(ShellSource text, EvaluationMemory? memory, out VariableReference reference)
+        => TryParseSource(text, memory?.Workspace, out reference);
+
+    internal static bool TryParseSource(ShellSource text, MemoryCapacity? memory, out VariableReference reference)
     {
         reference = default;
         var opening = text.AsSpan().IndexOf((byte)'[');
-        memory?.Charge(checked(4L * (opening < 0 ? text.Length : opening)));
+        memory?.Grow(checked(4L * (opening < 0 ? text.Length : opening)));
         if (opening < 0)
         {
             if (!VariableNames.IsValidVariableName(text.AsSpan()))
@@ -75,7 +79,7 @@ internal readonly record struct VariableReference
         }
 
         if (!VariableNames.IsValidVariableName(text.AsSpan(0, opening))
-            || !ArraySubscriptScanner.TryScan(text, opening, out var closing)
+            || !ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = memory }, text, opening, out var closing)
             || closing != text.Length - 1)
             return false;
 

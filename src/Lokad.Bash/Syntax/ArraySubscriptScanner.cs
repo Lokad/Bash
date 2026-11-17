@@ -23,6 +23,13 @@ internal static class ArraySubscriptScanner
         out int closingBracketIndex) =>
         Scan(text, openingBracketIndex, out closingBracketIndex) == ShellScanStatus.Complete;
 
+    internal static bool TryScan(
+        ShellScanContext context,
+        ShellSource text,
+        int openingBracketIndex,
+        out int closingBracketIndex) =>
+        Scan(context, text, openingBracketIndex, null, out closingBracketIndex) == ShellScanStatus.Complete;
+
     /// <summary>Distinguishes an absent bracket, complete subscript, incomplete input, and malformed syntax.</summary>
     public static ShellScanStatus Scan(
         ShellSource text,

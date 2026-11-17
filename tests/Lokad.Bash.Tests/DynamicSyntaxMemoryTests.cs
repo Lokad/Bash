@@ -9,6 +9,57 @@ namespace Lokad.Bash.Tests;
 public sealed class DynamicSyntaxMemoryTests
 {
     [Theory]
+    [InlineData("direct", false)]
+    [InlineData("direct", true)]
+    [InlineData("eval", false)]
+    [InlineData("eval", true)]
+    [InlineData("source", false)]
+    [InlineData("source", true)]
+    [InlineData("trap", false)]
+    [InlineData("trap", true)]
+    public async Task UnexpandedNamerefSelectorsShareTheActivePreparationAllowance(string route, bool prepared)
+    {
+        var denseTarget = "a[$(" + string.Concat(Enumerable.Repeat(":;", 4096)) + ": >effect; printf 0)]";
+        var sparseTarget = "a[0" + new string(' ', denseTarget.Length - 4) + "]";
+        Assert.Equal(denseTarget.Length, sparseTarget.Length);
+        foreach (var dense in new[] { false, true })
+        {
+            var target = dense ? denseTarget : sparseTarget;
+            var body = "declare -n p=original; declare -n p='" + target
+                + "'; printf '|%s|%s|tail' \"$?\" \"${!p}\"";
+            var source = route switch
+            {
+                "direct" => body,
+                "eval" => "eval " + Quote(body),
+                "source" => ". ./unit",
+                "trap" => "trap " + Quote(body) + " EXIT; :",
+                _ => throw new ArgumentOutOfRangeException(nameof(route))
+            };
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            if (route == "source")
+                host.AddFile("/unit", body);
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, cancellation.Token)
+                : await BashScript.RunAsync(host, source, EvaluationOptions.Default, cancellation.Token);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(dense ? "|1|original|tail" : "|0|" + target + "|tail", host.StandardOutput.TextContent);
+            Assert.Equal(dense, host.StandardError.TextContent.Contains("shared memory budget exhausted", StringComparison.Ordinal));
+            Assert.False(await EndToEndHarness.FileExistsAsync(host, "/effect"));
+            Assert.Equal(0, host.OpenFileCount);
+            if (!prepared)
+                Assert.Equal(0, governor.ReservedBytes); // Runtime retirement precedes caller scope disposal.
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+
+        static string Quote(string text) => "'" + text.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1024)]
     public async Task ImportedNamespacesAreAdmittedBeforeExecution(int count)

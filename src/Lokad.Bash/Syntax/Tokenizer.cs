@@ -109,7 +109,7 @@ internal sealed class Tokenizer
         name = null;
         var text = ShellSourceCursor.RemoveLineContinuations(_scanContext, _input[token.Token.Source]);
         var syntax = FunctionNameSyntax.Plain;
-        var cursor = new ShellSourceCursor(text, 0);
+        var cursor = new ShellSourceCursor(text, 0, new ShellScanContext { SyntaxMemory = _scanContext.SyntaxMemory });
         while (!cursor.IsAtEnd)
         {
             if (cursor.Current is (byte)'$' or (byte)'\'' or (byte)'"' or (byte)'\\')
@@ -121,8 +121,9 @@ internal sealed class Tokenizer
                 cursor.Advance();
         }
 
-        if (text.ToValue().TryGetUtf8Text(out var keyword) && Parser.IsSupportedKeyword(keyword.AsSpan())
-            || AssignmentWord.TrySplitOperand(text, out var target, out _, out _) && VariableReference.TryParse(target, out _))
+        if (Parser.IsSupportedKeyword(text.AsSpan())
+            || AssignmentWord.TrySplitOperand(text, _scanContext.SyntaxMemory, out var target, out _, out _)
+                && VariableReference.TryParseSource(target, _scanContext.SyntaxMemory, out _))
             syntax |= FunctionNameSyntax.KeywordOnly;
         var canonical = CanonicalName();
         if (Error != null)
@@ -136,7 +137,7 @@ internal sealed class Tokenizer
                 return text.ToValue();
 
             var output = _scanContext.CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
-            var nameCursor = new ShellSourceCursor(text, 0);
+            var nameCursor = new ShellSourceCursor(text, 0, new ShellScanContext { SyntaxMemory = _scanContext.SyntaxMemory });
             var literalIndex = 0;
             while (!nameCursor.IsAtEnd)
             {

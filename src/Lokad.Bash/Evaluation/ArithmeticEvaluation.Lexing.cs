@@ -154,15 +154,16 @@ public static partial class ArithmeticEvaluation
         _ => null
     };
 
-    private static CachedReference ReadReferenceSyntax(ShellSource source, int start, int nameLength)
+    private static CachedReference ReadReferenceSyntax(ShellSource source, int start, int nameLength, MemoryCapacity? memory)
     {
+        memory?.Grow(checked(4L * nameLength));
         var name = Utf8Text.Decode(source.Bytes.Slice(start, nameLength));
         var reference = VariableReference.ForName(name);
         var end = start + nameLength;
         if (end == source.Length || source.AsSpan()[end] != (byte)'[')
             return new CachedReference(reference, end, -1, null);
         var bracket = end;
-        if (!ArraySubscriptScanner.TryScan(source, bracket, out var closing))
+        if (!ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = memory }, source, bracket, out var closing))
             return new CachedReference(reference, end, bracket,
                 new ArithmeticError(ArithmeticErrorKind.BadArraySubscript, ShellValue.FromBytes(source.Bytes[start..])));
         reference = VariableReference.ForElement(name, source.Slice(bracket + 1, closing - bracket - 1));
@@ -211,8 +212,8 @@ public static partial class ArithmeticEvaluation
                 var end = index + shape.Length;
                 if (shape.Kind == ArithmeticTokenKind.Identifier)
                 {
-                    memory?.Grow(checked(256L + 4L * shape.Length));
-                    var reference = ReadReferenceSyntax(source, index, shape.Length);
+                    memory?.Grow(256);
+                    var reference = ReadReferenceSyntax(source, index, shape.Length, memory);
                     end = reference.End;
                     _references.Add(index, reference);
                     // No execution can pass a malformed reference. Avoid rescanning its

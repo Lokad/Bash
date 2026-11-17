@@ -119,7 +119,7 @@ internal static partial class WordExpansion
             scope = scope with { Arithmetic = context with { Depth = context.Depth + 1 } };
             var referenceFailureReported = false;
             var result = await ArithmeticEvaluation.EvaluateAsync<ArithmeticTarget>(expression, BindAsync, WriteAsync,
-                scope.Effects.CancellationToken).ConfigureAwait(false);
+                scope.Effects.Memory.Workspace, scope.Effects.CancellationToken).ConfigureAwait(false);
             if (!scope.CanExpand)
                 return null;
             if (result.Error is not { } error)

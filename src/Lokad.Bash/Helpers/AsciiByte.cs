@@ -4,6 +4,17 @@ namespace Lokad.Bash.Helpers;
 
 public static class AsciiByte
 {
+    /// <summary>Compares borrowed source bytes with fixed ASCII grammar without decoding a word.</summary>
+    internal static bool EqualsAscii(ReadOnlySpan<byte> bytes, ReadOnlySpan<char> text)
+    {
+        if (bytes.Length != text.Length)
+            return false;
+        for (var index = 0; index < bytes.Length; index++)
+            if (text[index] > 127 || bytes[index] != text[index])
+                return false;
+        return true;
+    }
+
     public static bool IsWhitespace(byte value) =>
         value is (byte)' ' or (byte)'\t' or (byte)'\n' or (byte)'\r';
 

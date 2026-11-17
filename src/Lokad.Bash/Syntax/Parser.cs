@@ -45,28 +45,29 @@ public static class Parser
     /// <summary> Shell keyword for <c>esac</c>. </summary>
     private const string KeywordEsac = "esac";
 
-    /// <summary> Returns true when a word is a reserved keyword supported by this parser. </summary>
-    internal static bool IsSupportedKeyword(ReadOnlySpan<char> word) =>
-        word.SequenceEqual(KeywordIf)
-        || word.SequenceEqual(KeywordThen)
-        || word.SequenceEqual(KeywordElif)
-        || word.SequenceEqual(KeywordElse)
-        || word.SequenceEqual(KeywordFi)
-        || word.SequenceEqual(KeywordWhile)
-        || word.SequenceEqual(KeywordUntil)
-        || word.SequenceEqual(KeywordDo)
-        || word.SequenceEqual(KeywordDone)
-        || word.SequenceEqual(KeywordFor)
-        || word.SequenceEqual(KeywordIn)
-        || word.SequenceEqual(KeywordFunction)
-        || word.SequenceEqual(KeywordCase)
-        || word.SequenceEqual(KeywordEsac)
-        || word.SequenceEqual("time")
-        || word.SequenceEqual("!")
-        || word.SequenceEqual("{")
-        || word.SequenceEqual("}")
-        || word.SequenceEqual("[[")
-        || word.SequenceEqual("]]");
+    private static readonly string[] SupportedKeywords =
+    [
+        KeywordIf, KeywordThen, KeywordElif, KeywordElse, KeywordFi,
+        KeywordWhile, KeywordUntil, KeywordDo, KeywordDone, KeywordFor,
+        KeywordIn, KeywordFunction, KeywordCase, KeywordEsac, "time", "!", "{", "}", "[[", "]]"
+    ];
+
+    /// <summary>Returns true when a word is a reserved keyword supported by this parser.</summary>
+    internal static bool IsSupportedKeyword(ReadOnlySpan<char> word)
+    {
+        foreach (var keyword in SupportedKeywords)
+            if (word.SequenceEqual(keyword))
+                return true;
+        return false;
+    }
+
+    internal static bool IsSupportedKeyword(ReadOnlySpan<byte> word)
+    {
+        foreach (var keyword in SupportedKeywords)
+            if (AsciiByte.EqualsAscii(word, keyword))
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// Parses the provided script text into a <see cref="ParsedScript"/>.
@@ -466,9 +467,9 @@ public static class Parser
                     }
 
                     if (token.TryGetWordToken(out var reservedWord)
-                        && TryGetPlainUnquotedText(reservedWord.Word, out var reservedText)
+                        && TryGetPlainUnquotedSource(reservedWord.Word, out var reservedText)
                         && IsSupportedKeyword(reservedText.AsSpan())
-                        && !(afterPipe && reservedText == "time"))
+                        && !(afterPipe && reservedText.AsSpan().SequenceEqual("time"u8)))
                     {
                         tokenizer.RecordError("Unexpected reserved word.", tokenizer.Position);
                         return null;
@@ -694,7 +695,14 @@ public static class Parser
             return null;
         }
 
-        if (!TryGetPlainUnquotedText(nameTokenWord.Word, out var name))
+        if (!TryGetPlainUnquotedSource(nameTokenWord.Word, out var nameSource))
+        {
+            tokenizer.RecordError("Expected simple name after for.", tokenizer.Position);
+            return null;
+        }
+
+        tokenizer.ScanContext.SyntaxMemory?.Grow(checked(32L + 2L * nameSource.Length));
+        if (!nameSource.ToValue().TryGetUtf8Text(out var name))
         {
             tokenizer.RecordError("Expected simple name after for.", tokenizer.Position);
             return null;
@@ -1143,7 +1151,7 @@ public static class Parser
                         continue;
                     }
 
-                    if (words.Count == 0 && TryGetPlainUnquotedText(wordToken.Word, out var commandName))
+                    if (words.Count == 0 && TryGetPlainUnquotedSource(wordToken.Word, out var commandName))
                     {
                         allowDeclarationAssignments = BuiltinClassification.TryResolve(commandName.AsSpan(), out var kind)
                             && kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local;
@@ -1183,10 +1191,10 @@ public static class Parser
         fileDescriptor = null;
         redirectionToken = Token.None();
 
-        if (!TryGetPlainUnquotedText(token.Word, out var wordText))
+        if (!TryGetPlainUnquotedSource(token.Word, out var wordText))
             return false;
 
-        if (!IsAllDigits(wordText.AsSpan()))
+        if (wordText.IsEmpty || wordText.AsSpan().IndexOfAnyExceptInRange((byte)'0', (byte)'9') >= 0)
             return false;
 
         var peek = tokenizer.PeekTokenCore();
@@ -1195,7 +1203,7 @@ public static class Parser
             return false;
 
         redirectionToken = tokenizer.NextTokenCore();
-        if (!Integers.TryParseDescriptor(wordText.AsSpan(), out var descriptor))
+        if (!Integers.TryParseExitStatus(wordText.AsSpan(), out var descriptor))
         {
             tokenizer.RecordError("File descriptor exceeds the Int32 limit.", token.Token.Source.Start.Value);
             return false;
@@ -1213,14 +1221,14 @@ public static class Parser
         variableName = string.Empty;
         redirectionToken = Token.None();
 
-        if (!TryGetPlainUnquotedText(token.Word, out var text))
+        if (!TryGetPlainUnquotedSource(token.Word, out var text))
             return false;
 
         var span = text.AsSpan();
         if (span.Length < 3 || span[0] != '{' || span[^1] != '}')
             return false;
 
-        var inner = text.Substring(1, span.Length - 2);
+        var inner = text.Slice(1, span.Length - 2);
         if (!VariableNames.IsValidVariableName(inner.AsSpan()))
             return false;
 
@@ -1235,7 +1243,8 @@ public static class Parser
             return false;
 
         redirectionToken = tokenizer.NextTokenCore();
-        variableName = inner;
+        tokenizer.ScanContext.SyntaxMemory?.Grow(checked(32L + 2L * inner.Length));
+        variableName = inner.ToUtf8String();
         return true;
     }
 
@@ -1345,38 +1354,18 @@ public static class Parser
     }
 
     /// <summary>
-    /// Extracts text when a word is a single unquoted part.
+    /// Borrows source bytes when a word is a single unquoted part.
     /// </summary>
-    private static bool TryGetPlainUnquotedText(Word word, out string text)
+    private static bool TryGetPlainUnquotedSource(Word word, out ShellSource source)
     {
         if (word.Parts is [{ Kind: WordPartKind.Unquoted }])
         {
-            return word.Parts[0].GetUnexpandedValue().TryGetUtf8Text(out text);
+            source = ShellSource.FromBytes(word.Parts[0].GetUnexpandedValue().Bytes);
+            return true;
         }
 
-        text = string.Empty;
+        source = default;
         return false;
-    }
-
-    /// <summary>
-    /// Returns true when all bytes are ASCII digits.
-    /// </summary>
-    private static bool IsAllDigits(ReadOnlySpan<char> span)
-    {
-        if (span.Length == 0)
-        {
-            return false;
-        }
-
-        foreach (var c in span)
-        {
-            if (c is < '0' or > '9')
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -1385,17 +1374,7 @@ public static class Parser
     private static bool TryConsumeNegation(Tokenizer tokenizer)
     {
         var token = tokenizer.PeekTokenCore();
-        if (token.Kind != TokenKind.Word)
-            return false;
-
-        if (!token.TryGetWordToken(out var wordToken))
-            return false;
-
-        if (!TryGetPlainUnquotedText(wordToken.Word, out var text))
-            return false;
-
-        var span = text.AsSpan();
-        if (span.Length == 1 && span[0] == '!')
+        if (IsKeyword(token, "!"))
         {
             tokenizer.NextTokenCore();
             return true;
@@ -1470,10 +1449,10 @@ public static class Parser
         if (!token.TryGetWordToken(out var wordToken))
             return false;
 
-        if (!TryGetPlainUnquotedText(wordToken.Word, out var text))
+        if (!TryGetPlainUnquotedSource(wordToken.Word, out var source))
             return false;
 
-        return text.AsSpan().SequenceEqual(keyword.AsSpan());
+        return AsciiByte.EqualsAscii(source.AsSpan(), keyword);
     }
 
 

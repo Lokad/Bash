@@ -181,9 +181,7 @@ internal static partial class WordExpansion
     internal static async Task<bool> TryAssignAsync(
         ShellSource source, ShellValue value, AssignmentOperator operation, ScopedEvaluation scope)
     {
-        var opening = source.AsSpan().IndexOf((byte)'[');
-        scope.Effects.Memory.Charge(checked(4L * (opening < 0 ? source.Length : opening)));
-        if (!VariableReference.TryParse(source, out var reference))
+        if (!VariableReference.TryParse(source, scope.Effects.Memory, out var reference))
             return false;
 
         if (reference.Kind == VariableReferenceKind.Name)

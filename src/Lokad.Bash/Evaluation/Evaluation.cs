@@ -2256,7 +2256,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (global && ReferenceEquals(variables, commandVars))
                 {
-                    bindings?.Retain(name);
+                    bindings?.Retain(name, Memory);
                     // Active fallback attributes can promote this declaration's prefix, not the enclosing call's.
                     if (bindings == null && prefixNames?.Contains(name) == true
                         && (options.ExportChange == DeclarationAttributeChange.Set || options.Readonly))
@@ -2294,9 +2294,7 @@ public sealed partial class Evaluation : IFileTester
                 return await WordExpansion.TryAssignAsync(assignment.Target, value, assignment.Operator, scope).ConfigureAwait(false);
             }
 
-            var opening = assignment.Target.AsSpan().IndexOf((byte)'[');
-            Memory.Charge(checked(4L * (opening < 0 ? assignment.Target.Length : opening)));
-            if (!VariableReference.TryParse(assignment.Target, out var compoundTarget))
+            if (!VariableReference.TryParse(assignment.Target, Memory, out var compoundTarget))
                 return false;
             var name = scope.Variables.ResolveNamerefName(compoundTarget.Name);
             if (compoundTarget.Kind != VariableReferenceKind.Name || !name.IsIdentifier)

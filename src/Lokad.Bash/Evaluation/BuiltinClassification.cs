@@ -108,6 +108,24 @@ internal static class BuiltinClassification
     public static bool TryResolve(ReadOnlySpan<char> word, out BuiltinKind kind) =>
         Kinds.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(word, out kind);
 
+    private static readonly int MaximumNameLength = Kinds.Keys.Max(static name => name.Length);
+
+    /// <summary>Classifies source bytes using the same registry without decoding arbitrary command words.</summary>
+    public static bool TryResolve(ReadOnlySpan<byte> word, out BuiltinKind kind)
+    {
+        kind = default;
+        if (word.Length > MaximumNameLength)
+            return false;
+        Span<char> name = stackalloc char[MaximumNameLength];
+        for (var index = 0; index < word.Length; index++)
+        {
+            if (word[index] > 127)
+                return false;
+            name[index] = (char)word[index];
+        }
+        return TryResolve(name[..word.Length], out kind);
+    }
+
     public static bool TryGetFixedExitCode(BuiltinKind kind, out int exitCode)
     {
         if (kind is BuiltinKind.Colon or BuiltinKind.True)

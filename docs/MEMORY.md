@@ -111,9 +111,12 @@ fields borrow its bytes; runtime-expanded operands, selectors and argument
 collections retain command workspace admission. Caller-prepared syntax remains
 caller-owned. Runtime parsing supplies coarse admission to source copies, command-unit
 tokens/parts and payload buffers, arithmetic/conditional metadata and reached deferred
-substitutions. Some pure scanner/classification helpers still need transitive budget
-plumbing; this is not complete allocation coverage. Parser structural guards remain
-independent of admission and execution duration.
+substitutions. Runtime selector classification, parameter separator lookahead and
+dynamic arithmetic reference scans carry the active workspace into nested syntax
+preparation. Keyword, builtin and descriptor classification borrow source bytes;
+stored loop/allocation names admit their text before decoding. Pure caller-owned
+preparation remains unbudgeted. This is not complete allocation coverage; parser
+structural guards remain independent of admission and execution duration.
 Literal payloads, assignment-name slices and completed expansion segments avoid
 pinning disproportionately large builder buffers after their parsing/command
 owner ends. Retained scalar, array, nameref and positional values keep the ordinary

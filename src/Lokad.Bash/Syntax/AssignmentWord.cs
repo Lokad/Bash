@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -30,13 +31,14 @@ public readonly struct AssignmentWord
 
     /// <summary>Finds assignment punctuation outside selectors without validating or expanding the target.</summary>
     internal static bool TrySplitOperand(
-        ShellSource source, out ShellSource target, out ShellSource value, out AssignmentOperator operation)
+        ShellSource source, MemoryCapacity? memory,
+        out ShellSource target, out ShellSource value, out AssignmentOperator operation)
     {
         for (var index = 0; index < source.Length; index++)
         {
             if (source[index] == (byte)'[')
             {
-                if (!ArraySubscriptScanner.TryScan(source, index, out var closing))
+                if (!ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = memory }, source, index, out var closing))
                     break;
                 index = closing;
                 continue;
