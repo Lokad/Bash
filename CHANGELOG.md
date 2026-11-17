@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Parse conditional comments and closing delimiters in their operand context,
+  preserving regex groups, physical error offsets and Bash's newline boundaries.
+  Reuse nested substitution syntax across conditional scanning and word creation,
+  removing exponential parse work. Keep function display/export reparsable and
+  retain shared syntax admission and structural guards.
 - Select complete tilde prefixes before variable lookup, preserving quotes,
   escapes and substitutions even when their value is empty. Keep quoted prefixes
   literal in words, assignments, patterns and paths; reuse source arithmetic

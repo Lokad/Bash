@@ -18,6 +18,8 @@ public sealed class SourceMemoryLifetimeTests
     {
         var cases = new (string Name, string Script, string A, string B, string[] Marks, int[] Owners)[]
         {
+            ("normalized conditional definition", "source /a; printf @loaded; f; unset -f f; printf @retired",
+                "f(){ [[ $(printf x) == x # inert ]] $( '\n ]]; }", "", ["@loaded", "@retired"], [1, 0]),
             ("shared definitions", "source /a; printf @loaded; unset -f f; printf @one; g; unset -f g; printf @retired",
                 "f(){ :; }; g(){ :; }", "", ["@loaded", "@one", "@retired"], [1, 1, 0]),
             ("active unset", "source /a; f; printf @retired",

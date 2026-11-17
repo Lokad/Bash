@@ -405,14 +405,9 @@ public static class Parser
                     break;
                 case TokenKind.Word when IsKeyword(token, "[["):
                     // Reserved words introduce syntax only at a command boundary.
-                    if (!tokenizer.TryReadConditionalExpression(tokenizer.NextTokenCore(), out var expression))
+                    if (!tokenizer.TryReadConditionalCommand(tokenizer.NextTokenCore(), out var conditionalCommand))
                         return null;
-                    if (!ConditionalParser.TryParse(expression, tokenizer.ScanContext.SyntaxMemory, out var condition, out var conditionalError))
-                    {
-                        tokenizer.RecordError(conditionalError.Message, token.Source.End.Value + conditionalError.Offset);
-                        return null;
-                    }
-                    command = new ConditionalCommand(expression, condition);
+                    command = conditionalCommand;
                     break;
                 case TokenKind.OpenParen:
                     command = ParseSubshell(tokenizer);

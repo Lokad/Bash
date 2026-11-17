@@ -119,22 +119,33 @@ public sealed class ExportLifetimeTests
     }
 
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(false, false, true)]
-    [InlineData(false, true, false)]
-    [InlineData(false, true, true)]
-    [InlineData(true, false, false)]
-    [InlineData(true, false, true)]
-    [InlineData(true, true, false)]
-    [InlineData(true, true, true)]
-    public async Task ReplacedExportsStayAdmittedUntilPendingUsersAndCleanupEnd(bool close, bool cancel, bool fail)
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, false, true)]
+    [InlineData(false, false, true, true)]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, false, false, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, true, true, true)]
+    public async Task ReplacedExportsStayAdmittedUntilPendingUsersAndCleanupEnd(bool close, bool cancel, bool fail, bool conditional)
     {
         const int BodyBytes = 16 * 1024;
         var governor = new MemoryGovernor(1024 * 1024);
         using var owner = governor.CreateScope();
         await using var host = new PendingHost(close) { MemoryBudget = owner };
-        var source = "f(){ : '" + new string('x', BodyBytes) + "'; }; export -f f; /usr/bin/true >/out";
-        var evaluation = new Eval(Parser.Parse(source));
+        var body = conditional ? "[[ '" + new string('x', BodyBytes) + "' == x # inert ]] $( '\n ]]"
+            : ": '" + new string('x', BodyBytes) + "'";
+        var source = "f(){ " + body + "; }; export -f f; /usr/bin/true >/out";
+        Assert.True(Parser.TryParse(source, out var parsed, out var error), error?.Message);
+        var evaluation = new Eval(parsed);
         var replacement = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :; }").Commands));
         byte[] expected = [];
         host.BeforeCommand = command =>

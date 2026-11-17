@@ -144,6 +144,12 @@ pieces treated literally; numeric predicates evaluate arithmetic expressions aft
 both operand words expand. Logical operators skip unreached expansions and host
 queries. Each reached file predicate observes its own host result. Invalid
 conditional structure, including an empty `[[ ]]`, is a syntax error.
+Token-start comments apply inside `[[` and end only at LF. Delimiter-looking bytes
+inside regex groups remain operand data. LF is accepted before a term or after
+a complete predicate; it cannot split an operator from its required operand, or
+follow the left word before predicate selection. Backslash/LF continuation retains
+its ordinary lexical rules. Comments do not execute expansions or terminate early
+on quotes, `]]` or CR.
 
 Extended shell patterns `?(...)`, `*(...)`, `+(...)`, `@(...)` and `!(...)` are
 unsupported in `[[`, case arms and parameter pattern operators. Case arms support

@@ -23,6 +23,15 @@ separate from its delayed write/close assertions. Native CR-source controls use
 the pinned Linux reference: MSYS strips those source bytes. Missing-variable and
 unimplemented colon/stack tilde profiles retain their separate compatibility gates.
 
+`ConditionalParserTests` owns physical offsets, quote metadata, replay spelling and
+structural limits. `ConditionalLexingTests` separates valid comment/regex contexts,
+invalid newline positions, complete effects, public/prepared syntax boundaries and
+shared admission/refunds. Its export cases reuse ExportTestHost's explicit child
+owner. SourceMemoryLifetimeTests and ExportLifetimeTests retain normalized syntax
+through definition replacement and pending users/cleanup. Synchronous parser
+allocation probes belong to the benchmark/review lane; nesting depth and sibling
+count are independent controls, and measured runs must verify target-specific DLLs.
+
 Use the pinned SDK and run `dotnet test Lokad.Bash.slnx -c Release`. CI builds,
 tests both target frameworks and packs on Windows and Linux. A focused test run
 is useful during an edit; release qualification requires the complete boundary

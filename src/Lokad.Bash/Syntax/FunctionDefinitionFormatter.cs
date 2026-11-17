@@ -255,7 +255,7 @@ internal static class FunctionDefinitionFormatter
                             Push(new Step.Text("(("), new Step.Source(arithmetic.Expression), new Step.Text("))"));
                             break;
                         case ConditionalCommand conditional:
-                            Push(new Step.Text("[[ "), new Step.Source(conditional.Expression), new Step.Text(" ]]"));
+                            Push(new Step.Text("[[ "), new Step.Source(conditional.Spelling), new Step.Text(" ]]"));
                             break;
                         case CaseCommand selection:
                             work.Push(new Step.Text("esac"));

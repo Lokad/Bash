@@ -1,4 +1,6 @@
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using static Lokad.Bash.Evaluation.ShellPredicates;
 
 namespace Lokad.Bash.Tests;
@@ -16,7 +18,7 @@ public sealed class ConditionalParserTests
     [InlineData("a &&")]
     public void InvalidStructureFailsDuringParsing(string expression)
     {
-        Assert.False(ConditionalParser.TryParse(ShellSource.FromText(expression), out _, out var error));
+        Assert.False(ConditionalParser.TryParse(ShellSource.FromText(expression), out _, out _, out var error));
         Assert.NotNull(error);
     }
 
@@ -24,7 +26,7 @@ public sealed class ConditionalParserTests
     public void StructureRetainsPrecedenceAndOperandQuoteParts()
     {
         Assert.True(ConditionalParser.TryParse(ShellSource.FromText("$x == \"$p\" || ! -n a && x++ -eq 0"),
-            out var expression, out var error));
+            out var expression, out _, out var error));
         Assert.Null(error);
         var or = Assert.IsType<ConditionalExpression.Logical>(expression);
         Assert.False(or.And);
@@ -60,5 +62,64 @@ public sealed class ConditionalParserTests
         var binary = Assert.IsType<ConditionalExpression.Binary>(command.Condition);
         Assert.Equal(BinaryPredicateKind.RegexMatch, binary.Predicate.Operator);
         Assert.Equal(pattern, Assert.IsType<SourceWordPart>(Assert.Single(binary.Right.Parts)).Source.ToUtf8String());
+    }
+
+    [Theory]
+    [InlineData("[[ ']]' =~ (]]) ]]", "(]])")]
+    [InlineData("[[ ']]' =~ (x|]]) ]]", "(x|]])")]
+    [InlineData("[[ '#' =~ (#) ]]", "(#)")]
+    [InlineData("[[ # inert ]] $( '\n'#' =~ (#) ]]", "(#)")]
+    [InlineData("[[ ']]' =~ (]\\\n]) ]]", "(]])")]
+    public void RegexContextOwnsItsGroupsCommentsAndClosingBrackets(string source, string expected)
+    {
+        Assert.True(Parser.TryParse(source, out var script, out var error), error?.Message);
+        var command = Assert.IsType<ConditionalCommand>(Assert.Single(script.Commands));
+        var expression = Assert.IsType<ConditionalExpression.Binary>(command.Condition);
+        Assert.Equal(BinaryPredicateKind.RegexMatch, expression.Predicate.Operator);
+        var part = Assert.IsType<SourceWordPart>(Assert.Single(expression.Right.Parts));
+        Assert.Equal(expected, part.Source.ToUtf8String());
+    }
+
+    [Theory]
+    [InlineData("x == x # ]] $( '\n", "x == x \n")]
+    [InlineData("x == x # comment\n&& y == y", "x == x \n&& y == y")]
+    [InlineData("x == x # trailing without LF", "x == x ")]
+    [InlineData("x\\\n\\\ny == xy", "xy == xy")]
+    [InlineData("\"x\\\n\\\ny\" == xy", "\"xy\" == xy")]
+    [InlineData("$\\\n\\\n'x' == x", "$'x' == x")]
+    [InlineData("'x\\\ny' == 'x\\\ny'", "'x\\\ny' == 'x\\\ny'")]
+    public void CallerSourceStaysPhysicalWhileReplaySpellingRemovesOnlyItsLexicalEdits(string source, string expected)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(source);
+        ConditionalCommand? command = null;
+        Assert.Null(Record.Exception(() => command = new ConditionalCommand(ShellSource.FromBytes(bytes))));
+        Assert.NotNull(command);
+        Assert.True(command.Expression.Bytes.Equals(bytes.AsMemory()));
+        Assert.Equal(source, command.Expression.ToUtf8String());
+        var definition = new FunctionDefinition(new FunctionName(ShellValue.FromText("f"), FunctionNameSyntax.Plain), command);
+        using var output = new ByteMemoryBuilder(0, new MemoryGovernor(TestMemoryBudget.FunctionFormattingBytes));
+        Assert.True(FunctionDefinitionFormatter.TryAppend(definition, output));
+        Assert.Contains("[[ " + expected + " ]]", Utf8Text.Decode(output.ToMemory()), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("[[ x == x # ignored\n&& ; ]]", ";")]
+    [InlineData("[[ x == x &\\\n& ; ]]", ";")]
+    [InlineData("[[ 'β' == 'β' # ignored\n&& ; ]]", ";")]
+    [InlineData("[[ x == x && ]\\\n]", "]")]
+    public void ConditionalErrorsUsePhysicalByteOffsets(string source, string marker)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(source);
+        Assert.False(Parser.TryParse(bytes, out _, out var error));
+        Assert.Equal(bytes.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(marker)), error.Offset);
+    }
+
+    [Fact]
+    public void NestedConditionalSubstitutionsShareTheStructuralDepthGuard()
+    {
+        var source = "printf x";
+        for (var index = 0; index < 70; index++) source = "[[ $(" + source + ") ]]";
+        Assert.False(Parser.TryParse(source, out _, out var error));
+        Assert.Contains("limit", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

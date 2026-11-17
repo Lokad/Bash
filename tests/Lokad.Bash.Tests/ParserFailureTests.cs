@@ -23,6 +23,8 @@ public sealed class ParserFailureTests
     [InlineData("printf ${value:-$(printf A &&)}")]
     [InlineData("999999999999999999999>file")]
     [InlineData("printf <(printf A)")]
+    [InlineData("[[ '#' == # ]] && : >effect")]
+    [InlineData("[[ x == x # ignored ]] $( '\n&& ; ]]")]
     public void ExpectedFailuresDoNotThrowInsideTryApis(string invalidUnit)
     {
         var source = "printf 'é'\n" + invalidUnit;

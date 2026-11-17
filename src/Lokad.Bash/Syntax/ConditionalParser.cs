@@ -1,7 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Evaluation;
-using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -9,30 +9,58 @@ namespace Lokad.Bash.Syntax;
 internal sealed class ConditionalParser
 {
     private readonly ShellSource _source;
-    private readonly MemoryCapacity? _memory;
+    private readonly ShellScanContext _context;
+    private readonly bool _command;
+    private List<(int Start, int End)>? _ignoredRanges;
     private int _position;
     private Token? _lookahead;
     private SyntaxError? _error;
 
-    private ConditionalParser(ShellSource source, MemoryCapacity? memory) => (_source, _memory) = (source, memory);
+    private ConditionalParser(ShellSource source, int position, ShellScanContext context, bool command) =>
+        (_source, _position, _context, _command) = (source, position, context, command);
 
     internal static bool TryParse(ShellSource source,
         [NotNullWhen(true)] out ConditionalExpression? expression,
-        [NotNullWhen(false)] out SyntaxError? error) => TryParse(source, null, out expression, out error);
-
-    internal static bool TryParse(ShellSource source, MemoryCapacity? memory,
-        [NotNullWhen(true)] out ConditionalExpression? expression,
+        out ShellSource spelling,
         [NotNullWhen(false)] out SyntaxError? error)
     {
-        var parser = new ConditionalParser(source, memory);
-        expression = parser.ParseOr(0);
-        if (parser.Peek().Kind != TokenKind.End)
-            parser.Fail("Unexpected conditional operator or operand.");
-        error = parser._error;
+        var parser = new ConditionalParser(source, 0, new ShellScanContext(), command: false);
+        spelling = default;
+        if (!parser.TryParse(out expression, out error))
+            return false;
+        spelling = parser.GetSpelling(0, source.Length);
+        return true;
+    }
+
+    /// <summary>The operand grammar owns closing-delimiter recognition as well as comments and regex words.</summary>
+    internal static bool TryReadCommand(ShellSource source, int start, ShellScanContext context,
+        [NotNullWhen(true)] out ConditionalCommand? command, out int end,
+        [NotNullWhen(false)] out SyntaxError? error)
+    {
+        var parser = new ConditionalParser(source, start, context, command: true);
+        command = null;
+        end = start;
+        if (!parser.TryParse(out var expression, out error))
+            return false;
+        var closing = parser.Peek();
+        command = new ConditionalCommand(parser.GetSpelling(start, closing.Offset).TrimBlanks(), expression);
+        end = parser._position;
+        return true;
+    }
+
+    private bool TryParse([NotNullWhen(true)] out ConditionalExpression? expression,
+        [NotNullWhen(false)] out SyntaxError? error)
+    {
+        expression = ParseOr(0);
+        var ending = Peek();
+        if (ending.Kind != (_command ? TokenKind.EndCommand : TokenKind.End))
+            Fail(ending.Kind == TokenKind.End ? "Unterminated conditional command."
+                : "Unexpected conditional operator or operand.", ending.Offset);
+        error = _context.LimitError ?? _error;
         if (error != null || expression == null)
         {
             expression = null;
-            error ??= new SyntaxError("Conditional operand expected.", parser._position);
+            error ??= new SyntaxError("Conditional operand expected.", _position);
             return false;
         }
         return true;
@@ -66,11 +94,14 @@ internal sealed class ConditionalParser
 
     private ConditionalExpression? ParseTerm(int depth)
     {
+        SkipNewlines();
+        Span<byte> operation = stackalloc byte[3];
         var negated = false;
-        while (Peek().Source.AsSpan().SequenceEqual("!"u8))
+        while (ReadOperator(Peek(), operation) == 1 && operation[0] == (byte)'!')
         {
             Take();
             negated = !negated;
+            SkipNewlines();
         }
         ConditionalExpression? expression;
         if (Consume(TokenKind.Open))
@@ -82,17 +113,17 @@ internal sealed class ConditionalParser
             }
             expression = ParseOr(depth + 1);
             if (!Consume(TokenKind.Close))
-                Fail("Closing conditional parenthesis expected.");
+                Fail("Closing conditional parenthesis expected.", Peek().Offset);
         }
         else
         {
             var token = Take();
             if (token.Kind != TokenKind.Word)
             {
-                Fail("Conditional operand expected.");
+                Fail("Conditional operand expected.", token.Offset);
                 return null;
             }
-            if (ShellPredicates.TryGetUnaryPredicate(token.Source.AsSpan(), out var unary))
+            if (ShellPredicates.TryGetUnaryPredicate(operation[..ReadOperator(token, operation)], out var unary))
             {
                 var operand = ReadOperand(false);
                 expression = operand == null ? null : new ConditionalExpression.Unary(unary, operand);
@@ -100,17 +131,38 @@ internal sealed class ConditionalParser
             else
             {
                 var left = ParseWord(token);
-                if (ShellPredicates.TryGetBinaryPredicate(Peek().Source.AsSpan(), out var binary))
+                if (ShellPredicates.TryGetBinaryPredicate(operation[..ReadOperator(Peek(), operation)], out var binary))
                 {
                     Take();
                     var right = ReadOperand(binary.Operator == ShellPredicates.BinaryPredicateKind.RegexMatch);
                     expression = left == null || right == null ? null : new ConditionalExpression.Binary(binary, left, right);
                 }
                 else
+                {
+                    if (Peek().Kind == TokenKind.Newline)
+                        Fail("Conditional binary operator expected.", Peek().Offset);
                     expression = left == null ? null : new ConditionalExpression.NonEmpty(left);
+                }
             }
         }
+        SkipNewlines();
         return negated && expression != null ? new ConditionalExpression.Negated(expression) : expression;
+
+        // Predicate tokens are at most three ASCII bytes; preserve physical operand slices.
+        static int ReadOperator(Token token, Span<byte> output)
+        {
+            var source = token.Source.AsSpan();
+            var count = 0;
+            for (var index = 0; ; index++)
+            {
+                index = ShellSourceCursor.SkipLineContinuations(source, index);
+                if (index == source.Length)
+                    return count;
+                if (count == output.Length)
+                    return 0;
+                output[count++] = source[index];
+            }
+        }
     }
 
     private Word? ReadOperand(bool regex)
@@ -120,7 +172,7 @@ internal sealed class ConditionalParser
         var token = _lookahead == null ? Read(regex) : Take();
         if (token.Kind != TokenKind.Word)
         {
-            Fail("Conditional operand expected.");
+            Fail("Conditional operand expected.", token.Offset);
             return null;
         }
         return ParseWord(token);
@@ -128,10 +180,10 @@ internal sealed class ConditionalParser
 
     private Word? ParseWord(Token token)
     {
-        if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, ShellQuoteKind.None, _memory,
+        if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, ShellQuoteKind.None, _context,
                 out var word, out var error))
             return word;
-        _error ??= error;
+        _error ??= new SyntaxError(error.Message, token.Offset + error.Offset);
         return null;
     }
 
@@ -150,34 +202,78 @@ internal sealed class ConditionalParser
         return true;
     }
 
+    private void SkipNewlines()
+    {
+        while (Consume(TokenKind.Newline)) { }
+    }
+
     private Token Read(bool regex)
     {
         var span = _source.AsSpan();
-        while (_position < span.Length && span[_position] is (byte)' ' or (byte)'\t' or (byte)'\n')
-            _position++;
+        while (_position < span.Length)
+        {
+            var next = ShellSourceCursor.SkipLineContinuations(span, _position);
+            if (next != _position)
+            {
+                Ignore(_position, next);
+                _position = next;
+            }
+            else if (span[_position] is (byte)' ' or (byte)'\t')
+                _position++;
+            else if (span[_position] == (byte)'#')
+            {
+                next = ShellSourceCursor.SkipComment(span, _position);
+                Ignore(_position, next);
+                _position = next;
+            }
+            else
+                break;
+        }
         if (_position == span.Length)
-            return new(TokenKind.End, default);
-        _memory?.Grow(256); // Tokens, expression nodes and operand containers share the syntax owner.
+            return new(TokenKind.End, default, _position);
         var start = _position;
+        if (span[start] == (byte)'\n')
+        {
+            _position++;
+            return new(TokenKind.Newline, _source.Slice(start, 1), start);
+        }
+        if (!_context.TryReserveSyntax())
+        {
+            Fail("Script parsing limit exceeded (too many tokens or word parts).", start);
+            _context.RecordLimitError(_error ?? throw new InvalidOperationException("A refused token requires an error."));
+            return new(TokenKind.Invalid, default, start);
+        }
+        if (_command && ShellSourceCursor.TryMatchLogicalText(span, start, "]]", out var closing))
+        {
+            var after = ShellSourceCursor.SkipLineContinuations(span, closing);
+            if (after == span.Length || span[after] is (byte)' ' or (byte)'\t' or (byte)'\n'
+                or (byte)';' or (byte)'&' or (byte)'|' or (byte)'(' or (byte)')' or (byte)'<' or (byte)'>')
+            {
+                _position = closing;
+                return new(TokenKind.EndCommand, _source.Slice(start, closing - start), start);
+            }
+        }
         if (!regex)
         {
+            var logicalEnd = start;
             var kind = span[start] switch
             {
                 (byte)'(' => TokenKind.Open,
                 (byte)')' => TokenKind.Close,
                 (byte)'<' or (byte)'>' => TokenKind.Word,
-                (byte)'&' when start + 1 < span.Length && span[start + 1] == (byte)'&' => TokenKind.And,
-                (byte)'|' when start + 1 < span.Length && span[start + 1] == (byte)'|' => TokenKind.Or,
+                (byte)'&' when ShellSourceCursor.TryMatchLogicalText(span, start, "&&", out logicalEnd) => TokenKind.And,
+                (byte)'|' when ShellSourceCursor.TryMatchLogicalText(span, start, "||", out logicalEnd) => TokenKind.Or,
                 (byte)'&' or (byte)'|' or (byte)';' => TokenKind.Invalid,
                 _ => TokenKind.End
             };
             if (kind != TokenKind.End)
             {
-                _position += kind is TokenKind.And or TokenKind.Or ? 2 : 1;
-                return new(kind, _source.Slice(start, _position - start));
+                _position = kind is TokenKind.And or TokenKind.Or ? logicalEnd : start + 1;
+                IgnoreContinuations(start, _position);
+                return new(kind, _source.Slice(start, _position - start), start);
             }
         }
-        var cursor = new ShellSourceCursor(_source, start, new ShellScanContext { SyntaxMemory = _memory });
+        var cursor = new ShellSourceCursor(_source, start, _context);
         var parentheses = 0;
         var bracket = false;
         var firstBracketMember = false;
@@ -228,27 +324,78 @@ internal sealed class ConditionalParser
                 else if (ch is (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'&' or (byte)'|' or (byte)';')
                     break;
             }
+            var quotedLiteral = cursor.IsQuoted && !cursor.IsDoubleQuoted;
+            var preceding = cursor.Position;
             if (cursor.TryConsumeQuoteOrEscape())
+            {
+                if (!quotedLiteral)
+                    IgnoreContinuations(preceding, cursor.Position);
                 continue;
+            }
             switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
             {
                 case ShellNestedExpansionScan.Complete: continue;
                 case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid:
-                    Fail("Invalid expansion in conditional operand.");
-                    return new(TokenKind.Invalid, default);
+                    Fail("Invalid expansion in conditional operand.", cursor.Position);
+                    return new(TokenKind.Invalid, default, cursor.Position);
             }
             cursor.Advance();
         }
         if (cursor.IsQuoted || cursor.Position == start)
         {
-            Fail("Invalid or unterminated conditional operand.");
-            return new(TokenKind.Invalid, default);
+            Fail("Invalid or unterminated conditional operand.", cursor.Position);
+            return new(TokenKind.Invalid, default, cursor.Position);
         }
         _position = cursor.Position;
-        return new(TokenKind.Word, _source.Slice(start, _position - start));
+        return new(TokenKind.Word, _source.Slice(start, _position - start), start);
     }
 
     private void Fail(string message) => _error ??= new(message, _position);
-    private enum TokenKind { End, Word, And, Or, Open, Close, Invalid }
-    private sealed record Token(TokenKind Kind, ShellSource Source);
+    private void Fail(string message, int offset) => _error ??= new(message, offset);
+
+    private void IgnoreContinuations(int start, int end)
+    {
+        var source = _source.AsSpan(0, end);
+        for (var index = start; index + 1 < end; index++)
+        {
+            var next = ShellSourceCursor.SkipLineContinuations(source, index);
+            if (next == index)
+                continue;
+            Ignore(index, next);
+            index = next - 1;
+        }
+    }
+
+    private void Ignore(int start, int end)
+    {
+        if (_ignoredRanges == null)
+        {
+            _context.SyntaxMemory?.Grow(128);
+            _ignoredRanges = [];
+        }
+        // Admit geometric range-array capacity before recording normalization scratch.
+        _context.SyntaxMemory?.Grow(32);
+        _ignoredRanges.Add((start, end));
+    }
+
+    /// <summary>Copies only when this lexical layer removed comments/continuations; nested source stays borrowed.</summary>
+    private ShellSource GetSpelling(int start, int end)
+    {
+        if (_ignoredRanges == null)
+            return _source.Slice(start, end - start);
+        var length = end - start;
+        foreach (var range in _ignoredRanges)
+            length -= range.End - range.Start;
+        using var output = _context.CreateByteBuilder(length);
+        foreach (var range in _ignoredRanges)
+        {
+            output.Append(_source.AsSpan(start, range.Start - start));
+            start = range.End;
+        }
+        output.Append(_source.AsSpan(start, end - start));
+        return ShellSource.FromBytes(output.ToMemory());
+    }
+
+    private enum TokenKind { End, Word, And, Or, Open, Close, EndCommand, Newline, Invalid }
+    private sealed record Token(TokenKind Kind, ShellSource Source, int Offset);
 }

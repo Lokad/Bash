@@ -351,7 +351,7 @@ internal sealed class Tokenizer
 
             if (current == '#')
             {
-                SkipComment(span);
+                Position = ShellSourceCursor.SkipComment(span, Position);
                 continue;
             }
 
@@ -530,17 +530,6 @@ internal sealed class Tokenizer
     }
 
     /// <summary>
-    /// Advances the position to the end of the current line comment.
-    /// </summary>
-    private void SkipComment(ReadOnlySpan<byte> span)
-    {
-        while (Position < span.Length && span[Position] != (byte)'\n')
-        {
-            Position++;
-        }
-    }
-
-    /// <summary>
     /// Attempts to read a redirection operator at the current position.
     /// </summary>
     private Token TryReadRedirection(ReadOnlySpan<byte> span)
@@ -655,41 +644,18 @@ internal sealed class Tokenizer
     }
 
     /// <summary>
-    /// Reads through ]] after the parser consumes an unquoted [[ at a command boundary.
+    /// Parses through the conditional grammar's closing ]] with the caller's scan context.
     /// </summary>
-    internal bool TryReadConditionalExpression(Token opening, out ShellSource expression)
+    internal bool TryReadConditionalCommand(Token opening, [NotNullWhen(true)] out ConditionalCommand? command)
     {
-        expression = default;
-        var span = _input.AsSpan();
-        var start = opening.Source.End.Value;
-        var cursor = new ShellSourceCursor(_input, start, new ShellScanContext { SyntaxMemory = _scanContext.SyntaxMemory });
-        var wordStart = true;
-        while (!cursor.IsAtEnd)
+        if (!ConditionalParser.TryReadCommand(_input, opening.Source.End.Value, _scanContext,
+                out command, out var end, out var error))
         {
-            var index = cursor.Position;
-            if (!cursor.IsQuoted && wordStart && span[index] == (byte)']'
-                && ShellSourceCursor.TryMatchLogicalText(span, index, "]]", out var end)
-                && (end == span.Length || span[end] is (byte)' ' or (byte)'\t' or (byte)'\n'
-                    or (byte)';' or (byte)'&' or (byte)'|' or (byte)'(' or (byte)')' or (byte)'<' or (byte)'>'))
-            {
-                var source = _input.Slice(start, index - start);
-                Position = end;
-                expression = ShellSourceCursor.RemoveLineContinuations(_scanContext, source).TrimBlanks();
-                return Error == null;
-            }
-
-            if (!cursor.IsQuoted)
-                wordStart = span[index] is (byte)' ' or (byte)'\t' or (byte)'\n'
-                    or (byte)'(' or (byte)')' or (byte)'&' or (byte)'|';
-            if (cursor.TryConsumeQuoteOrEscape())
-                continue;
-            if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
-                continue;
-            cursor.Advance();
+            RecordError(error);
+            return false;
         }
-
-        RecordError("Unterminated conditional command.", opening.Source.Start.Value);
-        return false;
+        Position = end;
+        return true;
     }
 
     /// <summary>
@@ -721,12 +687,17 @@ internal sealed class Tokenizer
 
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error) =>
-        TryReadExpansionWord(content, syntax, outerQuote, null, out word, out error);
+        TryReadExpansionWord(content, syntax, outerQuote, memory: null, out word, out error);
 
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         MemoryCapacity? memory, [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
+        => TryReadExpansionWord(content, syntax, outerQuote, new ShellScanContext { SyntaxMemory = memory }, out word, out error);
+
+    /// <summary>Consumes nested lookahead syntax without resetting its caller's structural allowance.</summary>
+    internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
+        ShellScanContext context, [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
     {
-        var tokenizer = new Tokenizer(content, 0, new ShellScanContext { SyntaxMemory = memory });
+        var tokenizer = new Tokenizer(content, 0, context);
         var parsed = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, outerQuote);
         error = tokenizer.Error;
         word = error == null ? parsed : null;

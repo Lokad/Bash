@@ -5,6 +5,18 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Conditional parsing selects its closing delimiter in the operand's lexical role.
+Token-start comments stop only at LF; quotes, expansions and delimiter spellings
+inside them stay inert. LF separates complete predicates and precedes terms, but
+does not separate a unary/binary operator from its required operand or a lone
+string operand from its following operator/terminator. Physical byte offsets
+remain attached to source. Nested modern substitutions share the caller's scan
+context and transfer their lookahead parse into word construction instead of
+rebuilding the child tree at every conditional nesting level. Comment/continuation
+edits are recorded during that traversal and admitted to the syntax owner before
+normalization storage grows. Display/export spelling omits those lexical edits;
+caller-constructed ConditionalCommand.Expression retains its supplied source.
+
 Leading tilde selection borrows the complete unquoted prefix across adjacent word
 parts before reading its variable. Quotes, escapes or substitutions before the
 first unquoted slash prevent that selection, including empty quoted parts. Parts

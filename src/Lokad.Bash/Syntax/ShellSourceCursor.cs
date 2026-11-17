@@ -82,6 +82,13 @@ internal sealed class ShellSourceCursor
         }
     }
 
+    /// <summary>Skips an already selected line comment; only LF ends it, including after backslash.</summary>
+    internal static int SkipComment(ReadOnlySpan<byte> source, int position)
+    {
+        var length = source[position..].IndexOf((byte)'\n');
+        return length < 0 ? source.Length : position + length;
+    }
+
     /// <summary>Reads one ordinary or ANSI-C literal, retaining its physical span even after decoded NUL.</summary>
     internal bool TryReadQuotedLiteral(out ShellValue value)
     {
