@@ -15,6 +15,9 @@ internal struct RedirectionState
 {
     private readonly Stack<RedirectionFrame> _frames;
     private IReadOnlySet<LogicalDescriptor> _changedDescriptors;
+    private long _savedAdditionalBytes;
+
+    internal readonly long OwnedMemoryBytes => checked(_savedAdditionalBytes + (CurrentTable?.OwnedMemoryBytes ?? 0));
 
     public DescriptorTable? CurrentTable { get; private set; }
     public IReadOnlyList<FileDescriptor> OpenedDescriptors { get; private set; }
@@ -28,6 +31,7 @@ internal struct RedirectionState
     {
         _frames = new();
         _changedDescriptors = new HashSet<LogicalDescriptor>();
+        _savedAdditionalBytes = 0;
         CurrentTable = table;
         OpenedDescriptors = openedDescriptors;
     }
@@ -72,6 +76,7 @@ internal struct RedirectionState
         IReadOnlyList<FileDescriptor> openedDescriptors,
         IReadOnlySet<LogicalDescriptor> changedDescriptors)
     {
+        _savedAdditionalBytes = checked(_savedAdditionalBytes + (CurrentTable?.OwnedMemoryBytes ?? 0));
         _frames.Push(new RedirectionFrame(
             CurrentTable,
             OpenedDescriptors,
@@ -93,6 +98,7 @@ internal struct RedirectionState
         }
 
         var previous = _frames.Pop();
+        _savedAdditionalBytes -= previous.Table?.OwnedMemoryBytes ?? 0;
         CurrentTable = previous.Table;
         OpenedDescriptors = previous.Opened;
         _changedDescriptors = previous.Changed;
@@ -103,31 +109,60 @@ internal struct RedirectionState
     /// Commits the current scope through enclosing scopes until each logical descriptor reaches
     /// the scope that temporarily owns it, then removes the committed scope.
     /// </summary>
-    public IReadOnlyList<FileDescriptor> Preserve()
+    public IReadOnlyList<FileDescriptor> Preserve(EvaluationMemory? memory)
     {
         var committedTable = CurrentTable
             ?? throw new InvalidOperationException("A redirection table is required for preservation.");
         var changedDescriptors = _changedDescriptors;
-        var openedDescriptors = Pop();
-
         foreach (var logicalDescriptor in changedDescriptors)
-            SetPersistentDescriptor(logicalDescriptor, committedTable.Resolve(logicalDescriptor));
+            SetPersistentDescriptor(logicalDescriptor, committedTable.Resolve(logicalDescriptor), memory, includeCurrent: false);
 
-        return openedDescriptors;
+        // Admission can refuse while committing a later binding. Keep this scope
+        // active until then, so its ordinary close/transfer path handles earlier commits.
+        return Pop();
     }
 
     /// <summary>Persists a binding through enclosing scopes up to its temporary restoration boundary.</summary>
-    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle)
-    {
-        CurrentTable?.Set(descriptor, handle);
-        if (_changedDescriptors.Contains(descriptor))
-            return;
+    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory) =>
+        SetPersistentDescriptor(descriptor, handle, memory, includeCurrent: true);
 
-        foreach (var frame in _frames)
+    private void SetPersistentDescriptor(
+        LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory, bool includeCurrent)
+    {
+        var current = CurrentTable;
+        var frames = _frames;
+        var currentChanged = _changedDescriptors;
+        foreach (var table in Targets())
         {
-            frame.Table?.Set(descriptor, handle);
-            if (frame.Changed.Contains(descriptor))
-                break;
+            var before = table.OwnedMemoryBytes;
+            try { table.PrepareSet(descriptor, handle, memory?.Workspace); }
+            finally
+            {
+                if (!ReferenceEquals(table, current))
+                    _savedAdditionalBytes = checked(_savedAdditionalBytes + table.OwnedMemoryBytes - before);
+            }
+        }
+        // Prepare every receiving table before publishing the binding anywhere.
+        // Refusal after acquiring a handle must not leave a partially published alias.
+        foreach (var table in Targets())
+            table.Set(descriptor, handle);
+
+        IEnumerable<DescriptorTable> Targets()
+        {
+            if (includeCurrent)
+            {
+                if (current != null)
+                    yield return current;
+                if (currentChanged.Contains(descriptor))
+                    yield break;
+            }
+            foreach (var frame in frames)
+            {
+                if (frame.Table != null)
+                    yield return frame.Table;
+                if (frame.Changed.Contains(descriptor))
+                    yield break;
+            }
         }
     }
 

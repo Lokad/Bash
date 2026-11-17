@@ -225,6 +225,8 @@ internal sealed class EvaluationState
 
     public DescriptorTable? CurrentRedirectionTable => _redirections.CurrentTable;
 
+    internal long RetainedDescriptorMemoryBytes => _redirections.OwnedMemoryBytes;
+
     public IReadOnlyList<FileDescriptor> CurrentRedirectionOpenedDescriptors => _redirections.OpenedDescriptors;
 
     /// <summary>
@@ -286,11 +288,11 @@ internal sealed class EvaluationState
     public IReadOnlyList<FileDescriptor> PopRedirectionTable() => _redirections.Pop();
 
     /// <summary>Commits the current scope's changed bindings through their temporary restoration boundaries.</summary>
-    public IReadOnlyList<FileDescriptor> PreserveRedirectionTable() => _redirections.Preserve();
+    public IReadOnlyList<FileDescriptor> PreserveRedirectionTable(EvaluationMemory? memory) => _redirections.Preserve(memory);
 
     /// <summary>Persists a binding through enclosing scopes up to its temporary restoration boundary.</summary>
-    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle) =>
-        _redirections.SetPersistentDescriptor(descriptor, handle);
+    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory) =>
+        _redirections.SetPersistentDescriptor(descriptor, handle, memory);
 
     /// <summary>Transfers handles to their longest-lived referencing scope; returns unreferenced handles in reverse order.</summary>
     public IReadOnlyList<FileDescriptor> TransferRedirectionDescriptors(IReadOnlyList<FileDescriptor> descriptors) =>

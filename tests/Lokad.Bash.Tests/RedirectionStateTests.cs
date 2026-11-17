@@ -59,7 +59,7 @@ public sealed class RedirectionStateTests
         Assert.Equal(FileDescriptor.StdOut, redirected.StdOut);
         Assert.Same(opened, child.OpenedDescriptors);
 
-        child.SetPersistentDescriptor(number, replacement);
+        child.SetPersistentDescriptor(number, replacement, null);
         Assert.Equal(replacement, childTable.Resolve(number));
         Assert.Equal(temporary, redirected.Resolve(number));
         Assert.Equal(inherited, root.Resolve(number));

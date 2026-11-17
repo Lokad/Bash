@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Admit descriptor-map backing capacities and copy-on-write overlap. Keep borrowed
+  snapshots and saved parents charged to their existing owners; retain actual map
+  capacity after commands. Preserve earlier allocations on setup refusal and report
+  through reached stderr before ordinary cleanup. Descriptor bookkeeping containers,
+  repeated copies/ownership scans and IFS indexes remain separate work.
 - Admit runtime source copies and parsed-unit metadata, including retained
   arithmetic/conditional syntax, deferred substitutions and function namespace
   containers. Retire completed units independently, reuse sliced arithmetic

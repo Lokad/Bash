@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash;
 
@@ -11,6 +13,10 @@ public partial struct DescriptorBindings
 {
     private Dictionary<LogicalDescriptor, FileDescriptor>? _additional;
     private bool _additionalShared;
+
+    // Dictionary header, bucket/entry arrays and capacity rather than just live keys.
+    internal readonly long AdditionalMemoryBytes => _additional == null ? 0
+        : checked(128L + 32L * _additional.EnsureCapacity(0));
 
     public FileDescriptor StdIn { get; private set; }
     public FileDescriptor StdOut { get; private set; }
@@ -53,17 +59,47 @@ public partial struct DescriptorBindings
                 return true;
         }
 
-        if (_additional != null && _additional.TryGetValue(descriptor, out var previous) && previous == handle)
+        if (!PrepareSet(descriptor, handle, null))
             return false;
-
-        if (_additional is null)
-            _additional = new Dictionary<LogicalDescriptor, FileDescriptor>();
-        else if (_additionalShared)
-            _additional = new Dictionary<LogicalDescriptor, FileDescriptor>(_additional);
-
-        _additionalShared = false;
-        _additional[descriptor] = handle;
+        var additional = _additional ?? throw new InvalidOperationException("A changed descriptor requires writable storage.");
+        additional[descriptor] = handle;
         return true;
+    }
+
+    /// <summary>Admits and prepares writable capacity without publishing a changed binding.</summary>
+    internal bool PrepareSet(LogicalDescriptor descriptor, FileDescriptor handle, MemoryCapacity? memory)
+    {
+        if (descriptor.Number <= 2)
+            return Resolve(descriptor) != handle;
+        var previous = FileDescriptor.Closed;
+        var present = _additional != null && _additional.TryGetValue(descriptor, out previous);
+        if (present && previous == handle)
+            return false;
+        PrepareAdditionalCapacity(checked((_additional?.Count ?? 0) + (present ? 0 : 1)), memory);
+        return true;
+    }
+
+    private void PrepareAdditionalCapacity(int required, MemoryCapacity? memory)
+    {
+        var capacity = _additional?.EnsureCapacity(0) ?? 0;
+        if (_additional != null && !_additionalShared && required <= capacity)
+            return;
+        // New dictionary capacities round to primes; a twofold bound covers that
+        // rounding. Replacements are charged while their old arrays are still live.
+        var requested = _additionalShared ? required : (int)Math.Min(int.MaxValue, Math.Max(required, 2L * capacity));
+        memory?.Grow(checked(128L + 32L * (2L * requested + 1)));
+        if (_additional == null)
+            _additional = new Dictionary<LogicalDescriptor, FileDescriptor>(requested);
+        else if (_additionalShared)
+        {
+            var replacement = new Dictionary<LogicalDescriptor, FileDescriptor>(requested);
+            foreach (var binding in _additional)
+                replacement.Add(binding.Key, binding.Value);
+            _additional = replacement;
+        }
+        else
+            _additional.EnsureCapacity(requested);
+        _additionalShared = false;
     }
 
     /// <summary>Removes an additional binding, or marks a standard stream closed, without closing its handle.</summary>
@@ -74,9 +110,7 @@ public partial struct DescriptorBindings
         if (_additional == null || !_additional.ContainsKey(descriptor))
             return false;
 
-        if (_additionalShared)
-            _additional = new Dictionary<LogicalDescriptor, FileDescriptor>(_additional);
-        _additionalShared = false;
+        PrepareAdditionalCapacity(_additional.Count, null);
         return _additional.Remove(descriptor);
     }
 

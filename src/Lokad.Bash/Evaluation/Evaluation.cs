@@ -27,6 +27,10 @@ public sealed partial class Evaluation : IFileTester
 {
     /// <summary> Holds the active mutable evaluation state; temporarily replaced while evaluating subshells. </summary>
     private EvaluationState _state;
+    // In-process subshells borrow parent maps while their state is installed.
+    private long _savedDescriptorMemoryBytes;
+
+    internal long RetainedDescriptorMemoryBytes => checked(_savedDescriptorMemoryBytes + _state.RetainedDescriptorMemoryBytes);
     /// <summary> Holds the active variable state; temporarily replaced while evaluating subshells. </summary>
     private Variables _vars;
     /// <summary> Stores the base STDIN descriptor for command invocations. </summary>
@@ -543,6 +547,8 @@ public sealed partial class Evaluation : IFileTester
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
+        var savedDescriptorBytes = parentState.RetainedDescriptorMemoryBytes;
+        _savedDescriptorMemoryBytes = checked(_savedDescriptorMemoryBytes + savedDescriptorBytes);
         _state = childState;
         _vars = childVars;
         _subshellBorrowedDescriptorScopes.Push(borrowedDescriptors);
@@ -572,6 +578,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 childState.ReleaseFunctions();
                 _state = parentState;
+                _savedDescriptorMemoryBytes -= savedDescriptorBytes;
                 _vars = parentVars;
                 _ = _subshellBorrowedDescriptorScopes.Pop();
             }
@@ -2439,18 +2446,39 @@ public sealed partial class Evaluation : IFileTester
         // Expose the table as setup advances, so later target expansions and their substitutions
         // inherit earlier redirections. Descriptor ownership is finalized after setup succeeds.
         _state.PushRedirectionTable(evaluation.DescriptorTable, evaluation.OpenedDescriptors, evaluation.TouchedDescriptors);
+        var setupFailed = false;
         try
         {
             await evaluation.EvaluateAsync(scope, persistAllocations).ConfigureAwait(false);
         }
-        catch
+        catch (Exception error)
         {
-            await CloseDescriptorsAsync(ReverseDescriptorsForClose(evaluation.OpenedDescriptors), operationFailed: true).ConfigureAwait(false);
+            setupFailed = true;
+            try
+            {
+                if (error is MemoryBudgetExceededException)
+                {
+                    Memory.ReleaseUnusedCapacity();
+                    await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
+                    _state.SetExpansionError(1);
+                }
+            }
+            finally
+            {
+                _state.PopRedirectionTable();
+                // Earlier allocations may already be persistent. Retain their
+                // handles in the surviving owner while closing only unused opens.
+                await CloseDescriptorsAsync(_state.TransferRedirectionDescriptors(evaluation.OpenedDescriptors),
+                    operationFailed: true).ConfigureAwait(false);
+            }
+            if (error is MemoryBudgetExceededException)
+                return new RedirectionScope(this, active: false, []);
             throw;
         }
         finally
         {
-            _state.PopRedirectionTable();
+            if (!setupFailed)
+                _state.PopRedirectionTable();
         }
 
         // Allocation may persist bindings during setup. Compare against the enclosing owner's current bindings.
@@ -2472,17 +2500,6 @@ public sealed partial class Evaluation : IFileTester
             changedDescriptors);
         return new RedirectionScope(this, active: true, evaluation.DescriptorsToReleaseWhenPreserved);
 
-        static IReadOnlyList<FileDescriptor> ReverseDescriptorsForClose(IReadOnlyList<FileDescriptor> openedDescriptors)
-        {
-            if (openedDescriptors.Count == 0)
-                return [];
-
-            var reversed = new FileDescriptor[openedDescriptors.Count];
-            for (var index = 0; index < openedDescriptors.Count; index++)
-                reversed[index] = openedDescriptors[openedDescriptors.Count - 1 - index];
-
-            return reversed;
-        }
     }
 
     internal IReadOnlyList<FileDescriptor> CollectDescriptorsAvailableToNestedEvaluation()
@@ -2768,7 +2785,7 @@ public sealed partial class Evaluation : IFileTester
     /// Persists an allocated script binding through its enclosing restoration boundary.
     /// </summary>
     internal void BindPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle) =>
-        _state.SetPersistentDescriptor(descriptor, handle);
+        _state.SetPersistentDescriptor(descriptor, handle, Memory);
 
     /// <summary>
     /// Tracks an evaluator-owned descriptor until close completes, across redirection ownership transfers.
@@ -3360,7 +3377,7 @@ public sealed partial class Evaluation : IFileTester
             if (!_active)
                 return null;
 
-            var openedDescriptors = owner._state.PreserveRedirectionTable();
+            var openedDescriptors = owner._state.PreserveRedirectionTable(owner.Memory);
             _active = false;
             var handles = new DescriptorHandleCollector(new List<FileDescriptor>(owner._state.TransferRedirectionDescriptors(openedDescriptors)));
             foreach (var descriptor in descriptorsToReleaseWhenPreserved)

@@ -1,3 +1,5 @@
+using Lokad.Bash.Memory;
+
 namespace Lokad.Bash.Evaluation;
 
 /// <summary>Owns mutable logical bindings; redirection scopes separately own host-handle lifetimes.</summary>
@@ -11,6 +13,9 @@ internal sealed partial class DescriptorTable
     private const int FirstAllocatedDescriptorNumber = 10;
     private DescriptorBindings _bindings;
     private int _nextAllocationNumber;
+    private bool _ownsAdditional;
+
+    internal long OwnedMemoryBytes => _ownsAdditional ? _bindings.AdditionalMemoryBytes : 0;
 
     public FileDescriptor StdIn => _bindings.StdIn;
     public FileDescriptor StdOut => _bindings.StdOut;
@@ -45,10 +50,25 @@ internal sealed partial class DescriptorTable
     {
         if (!_bindings.Set(descriptor, handle))
             return;
+        if (descriptor.Number > 2)
+            _ownsAdditional = true;
         if (handle.IsClosed && descriptor.Number >= FirstAllocatedDescriptorNumber && descriptor.Number < _nextAllocationNumber)
             _nextAllocationNumber = descriptor.Number;
         else if (descriptor.Number == _nextAllocationNumber)
             TryFindAvailableDescriptor(out _);
+    }
+
+    /// <summary>Prepares major backing storage before a mapping or persistent batch is published.</summary>
+    internal void PrepareSet(LogicalDescriptor descriptor, FileDescriptor handle, MemoryCapacity? memory)
+    {
+        if (_bindings.PrepareSet(descriptor, handle, memory) && descriptor.Number > 2)
+            _ownsAdditional = true;
+    }
+
+    internal void Set(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory memory)
+    {
+        PrepareSet(descriptor, handle, memory.Workspace);
+        Set(descriptor, handle);
     }
 
     /// <summary>Finds the first free script descriptor from 10; host handle numbers do not participate.</summary>

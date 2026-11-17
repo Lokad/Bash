@@ -153,8 +153,20 @@ Hosts must admit independent copies of exported bytes retained after command com
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Syntax estimates
 are coarse and do not account every small object. Public Parser calls, host-side
 preparation/mutation and manual stepping do not install a runtime parsing budget.
-Descriptor-map and field-separator index admission still have separate material
-coverage gaps; syntax admission does not imply complete evaluation accounting.
+Descriptor tables admit dictionary construction, growth and copy-on-write overlap
+before publishing mappings. Borrowed snapshots retain their existing parent charge;
+only a writing child acquires independent map storage. Saved redirection frames and
+in-process subshell parents stay admitted through execution and cleanup. Retained
+map estimates follow actual backing capacity, including explicit closed mappings;
+saved-frame totals are maintained at mutation boundaries instead of rescanning on
+every command retirement. Persistent publication prepares every receiving table
+before changing that binding, and failed preservation leaves its scope active for
+ordinary restoration/handle transfer. Earlier persistent allocations survive a
+later setup refusal; its diagnostic uses the reached stderr before handles close.
+This does not repair repeated dictionary copying/ownership scans or provide complete
+accounting of descriptor bookkeeping lists/indexes. Those containers and the field-
+separator index remain material coverage work; syntax/map admission does not imply
+complete evaluation accounting.
 Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,
 retained results and cleanup with pending users.
 
