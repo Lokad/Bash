@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Admit here-input registration capacity before creating pipes. Reuse its charged
+  high-water storage across bounded inputs and retain it through final awaited
+  cleanup, independently of each producer's payload and completion channels.
 - Admit receiving descriptor ownership before persistent map publication. Share
   one ordered owner through lexical setup/restoration, detach borrowed indexes
   before writes and reuse prepared storage during cleanup. Remove repeated growing

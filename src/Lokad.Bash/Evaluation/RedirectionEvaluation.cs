@@ -321,6 +321,7 @@ internal sealed class RedirectionEvaluation
     {
         PrepareOpenedDescriptor(scope);
         scope.Effects.PrepareOwnedDescriptors(1);
+        scope.Effects.PreparePipeInput();
         var creation = await scope.Effects.ExecuteCreatePipeAsync().ConfigureAwait(false);
         if (creation.Descriptors is not { } pipe)
         {

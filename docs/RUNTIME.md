@@ -187,6 +187,9 @@ copies have separate admitted ownership, surviving command workspace reuse when
 an `exec` descriptor persists. The reader's last owner retires the input, stops an
 unused writer and awaits borrowed writes and both endpoint closes. Producer failure
 also retires the reader so a consumer cannot remain stranded waiting for EOF.
+Registration storage is admitted before pipe creation, reuses its high-water
+capacity and stays charged through the final awaited close. The execution cleanup
+owner retires this storage after all registered producers and readers settle.
 
 Logical descriptor numbers are evaluator state. Host handles are capabilities and
 can have multiple aliases. Borrowed handles stay owned by their caller. Owned

@@ -301,6 +301,7 @@ public sealed partial class Evaluation : IFileTester
     internal void ReleaseDescriptorCleanupMemory()
     {
         _pendingDescriptorCleanup.ReleaseStorage();
+        _pipeInputs = null;
         _descriptorCleanupMemory?.Capacity.Dispose();
         _descriptorCleanupMemory = null;
     }
@@ -310,21 +311,41 @@ public sealed partial class Evaluation : IFileTester
     {
         if (additional == 0)
             return;
+        var capacity = GetDescriptorCleanupCapacity();
+        _pendingDescriptorCleanup.PrepareAdditional(additional, capacity);
+        capacity.Resize(checked(_pendingDescriptorCleanup.EstimatedMemoryBytes + PipeInputMemoryBytes));
+        capacity.TrimExcess();
+    }
+
+    private long PipeInputMemoryBytes => _pipeInputs is { } inputs && inputs.EnsureCapacity(0) > 0
+        ? checked(128L + 48L * inputs.EnsureCapacity(0)) : 0;
+
+    private MemoryCapacity GetDescriptorCleanupCapacity()
+    {
         var budget = Memory.Budget;
-        if (_descriptorCleanupMemory is not { } current || !ReferenceEquals(current.Budget, budget))
-        {
-            var capacity = new MemoryCapacity(budget, 0);
-            try { capacity.Grow(_pendingDescriptorCleanup.EstimatedMemoryBytes); }
-            catch { capacity.Dispose(); throw; }
-            _descriptorCleanupMemory?.Capacity.Dispose();
-            _descriptorCleanupMemory = (budget, capacity);
-        }
-        if (_descriptorCleanupMemory is { } owner)
-        {
-            _pendingDescriptorCleanup.PrepareAdditional(additional, owner.Capacity);
-            owner.Capacity.Resize(_pendingDescriptorCleanup.EstimatedMemoryBytes);
-            owner.Capacity.TrimExcess();
-        }
+        if (_descriptorCleanupMemory is { } current && ReferenceEquals(current.Budget, budget))
+            return current.Capacity;
+        var capacity = new MemoryCapacity(budget, 0);
+        try { capacity.Grow(checked(_pendingDescriptorCleanup.EstimatedMemoryBytes + PipeInputMemoryBytes)); }
+        catch { capacity.Dispose(); throw; }
+        _descriptorCleanupMemory?.Capacity.Dispose();
+        _descriptorCleanupMemory = (budget, capacity);
+        return capacity;
+    }
+
+    /// <summary>Admits registration growth before acquiring a here-input's endpoints.</summary>
+    internal void PreparePipeInput()
+    {
+        var memory = GetDescriptorCleanupCapacity();
+        var inputs = _pipeInputs ??= new Dictionary<FileDescriptor, PipeInputWriter>();
+        var capacity = inputs.EnsureCapacity(0);
+        if (inputs.Count < capacity)
+            return;
+        var target = (int)Math.Min(int.MaxValue, Math.Max(4L, 2L * capacity));
+        memory.Grow(checked(128L + 48L * (2L * target + 1)));
+        inputs.EnsureCapacity(target);
+        memory.Resize(checked(_pendingDescriptorCleanup.EstimatedMemoryBytes + PipeInputMemoryBytes));
+        memory.TrimExcess();
     }
 
     /// <summary> Records that final host-side cleanup completed for a descriptor. </summary>
@@ -3234,6 +3255,7 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Transfers a here-input's writer/payload to an independent owner registered on its reader.</summary>
     internal async Task<OperationError?> StartPipeInputAsync(PipeDescriptors pipe, ReadOnlyMemory<byte> content, bool appendNewline)
     {
+        var inputs = _pipeInputs ?? throw new InvalidOperationException("Here-input registration was not prepared.");
         PipeInputWriter writer;
         try { writer = new PipeInputWriter(pipe, content, appendNewline, Memory.Budget); }
         catch
@@ -3241,7 +3263,7 @@ public sealed partial class Evaluation : IFileTester
             await CloseDescriptorsAsync([pipe.Write], operationFailed: true).ConfigureAwait(false);
             throw;
         }
-        (_pipeInputs ??= new()).Add(pipe.Read, writer);
+        inputs.Add(pipe.Read, writer);
         var completion = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);
         PublishOperation(new StartPipeInputOperation(completion, writer));
         // Keep the registration/payload until dispatch settles, even if the caller cancels startup.
@@ -3279,7 +3301,6 @@ public sealed partial class Evaluation : IFileTester
     {
         var source = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var input = owner._pipeInputs != null && owner._pipeInputs.Remove(descriptor, out var writer) ? writer : null;
-        if (owner._pipeInputs?.Count == 0) owner._pipeInputs = null;
         try
         {
             PublishOperation(new CloseDescriptorOperation(source, descriptor) { PipeInput = input });

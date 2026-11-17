@@ -29,7 +29,7 @@ internal sealed class PipeInputWriter
         _memory = budget.CreateScope();
         try
         {
-            _memory.Reserve(512); // Pump, completion channels and retained descriptor registration.
+            _memory.Reserve(512); // Pump and completion channels; the evaluator owns registration capacity.
             _content = new ByteMemoryBuilder(checked(content.Length + (appendNewline ? 1 : 0)), _memory);
             _content.Append(content);
             if (appendNewline) _content.Append((byte)'\n');

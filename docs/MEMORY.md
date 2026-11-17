@@ -183,9 +183,14 @@ Retained estimates include actual owned index capacity and saved frame/stack
 storage. Final cleanup drops the owned indexes only after all close attempts have
 settled, before retiring workspace. Ownership lists are no longer copied for every
 successive transferred handle.
+Here-input registration dictionaries prepare capacity before pipe acquisition,
+including replacement overlap. Their actual high-water capacity belongs to the
+execution cleanup owner, separately from producer payload/channel estimates.
+Bounded inputs reuse this charged capacity; it survives final pending closes and
+retires with execution cleanup after every user has settled.
 This does not repair repeated dictionary copying/reference scans or provide complete
-accounting of temporary closing/available-handle collectors, exclusion indexes and
-here-input registrations. Those containers and the field-separator index remain
+accounting of temporary closing/available-handle collectors and exclusion indexes.
+Those containers and the field-separator index remain
 material coverage work; descriptor admission does not imply complete evaluation
 accounting.
 Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,
