@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Admit runtime child-descriptor lists/indexes through parent command ownership,
+  retain them through child cleanup and admit subshell stack capacity separately.
+  Reuse completed indexes and one inheritance/substitution union; collect only
+  the nearest complete ancestor entry instead of rescanning every older scope.
 - Prepare one execution-owned closing batch before acquiring descriptors. Reuse
   it for transfer, preservation and final cleanup without late container growth
   or exclusion-index copies; clear consumed batches in work proportional to live

@@ -194,6 +194,12 @@ Closing batches prepare capacity before acquiring handles. Redirection transfer,
 preservation and final cleanup share the serialized execution batch, preserving
 scope order, reverse-open transfer order and once-only closure without late
 admission during unwind. Existing borrow indexes protect parent subshell handles.
+Runtime child-descriptor collections borrow their parent command's admitted
+workspace through all child consumers and cleanup. Inline subshells share the
+completed collection's index; its nearest entry covers every older borrowed scope.
+Command substitution and host invocation build one union while selecting command
+ownership before adding nested-only borrows. Public context preparation remains
+caller-owned and carries no implicit interpreter budget.
 
 Logical descriptor numbers are evaluator state. Host handles are capabilities and
 can have multiple aliases. Borrowed handles stay owned by their caller. Owned

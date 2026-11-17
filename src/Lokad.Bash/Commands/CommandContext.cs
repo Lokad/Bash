@@ -25,6 +25,8 @@ public class CommandContext
         IReadOnlyList<FileDescriptor> borrowedDescriptors) =>
         new(BuildDescriptorsToClose(stdIn, stdOut, stdErr, borrowedDescriptors), borrowedDescriptors);
 
+    /// <summary>Creates caller-owned child metadata; the caller supplies admission for retained copies.</summary>
+    /// <remarks>This preparation helper does not install an interpreter execution budget.</remarks>
     public CommandContext CreateChild(
         CommandInvocation parent, FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr)
     {

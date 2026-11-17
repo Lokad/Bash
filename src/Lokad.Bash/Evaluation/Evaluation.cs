@@ -157,7 +157,7 @@ public sealed partial class Evaluation : IFileTester
             descriptors,
             outer.Options with { CurrentDirectory = state.CurrentDirectory },
             scope.Context.Fork(variables),
-            outer.CollectDescriptorsAvailableToNestedEvaluation(),
+            [], // Descriptor setup already contains the complete, admitted parent/output union.
             RootFlowHandling.Preserve,
             publishNextStep: null,
             onComplete: null,
@@ -304,6 +304,8 @@ public sealed partial class Evaluation : IFileTester
     {
         _pendingDescriptorCleanup.ReleaseStorage();
         _descriptorCloseBuffer.ReleaseStorage();
+        _subshellBorrowedDescriptorScopes.Clear();
+        _subshellBorrowedDescriptorScopes.TrimExcess();
         _pipeInputs = null;
         _descriptorCleanupMemory?.Capacity.Dispose();
         _descriptorCleanupMemory = null;
@@ -324,8 +326,15 @@ public sealed partial class Evaluation : IFileTester
     private long PipeInputMemoryBytes => _pipeInputs is { } inputs && inputs.EnsureCapacity(0) > 0
         ? checked(128L + 48L * inputs.EnsureCapacity(0)) : 0;
 
-    private long DescriptorCleanupMemoryBytes => checked(_pendingDescriptorCleanup.EstimatedMemoryBytes
-        + _descriptorCloseBuffer.EstimatedMemoryBytes + PipeInputMemoryBytes);
+    private long DescriptorCleanupMemoryBytes
+    {
+        get
+        {
+            var scopeCapacity = _subshellBorrowedDescriptorScopes.EnsureCapacity(0);
+            return checked(_pendingDescriptorCleanup.EstimatedMemoryBytes + _descriptorCloseBuffer.EstimatedMemoryBytes
+                + PipeInputMemoryBytes + (scopeCapacity == 0 ? 0 : 32L + 8L * scopeCapacity));
+        }
+    }
 
     private MemoryCapacity GetDescriptorCleanupCapacity()
     {
@@ -618,7 +627,18 @@ public sealed partial class Evaluation : IFileTester
     {
         var parentState = _state;
         var parentVars = _vars;
-        var borrowedDescriptors = new HashSet<FileDescriptor>(CollectDescriptorsAvailableToNestedEvaluation());
+        var available = CollectDescriptorsAvailable();
+        var borrowedDescriptors = available.GetIndex();
+        var scopeCapacity = _subshellBorrowedDescriptorScopes.EnsureCapacity(0);
+        if (_subshellBorrowedDescriptorScopes.Count == scopeCapacity)
+        {
+            var target = (int)Math.Min(int.MaxValue, Math.Max(4L, 2L * scopeCapacity));
+            var memory = GetDescriptorCleanupCapacity();
+            memory.Grow(checked(32L + 8L * target));
+            _subshellBorrowedDescriptorScopes.EnsureCapacity(target);
+            memory.Resize(DescriptorCleanupMemoryBytes);
+            memory.TrimExcess();
+        }
         // Child resets must not release the parent's saved handlers before restoration.
         Memory.Charge(RetainedTrapMemoryBytes);
         var childVars = Memory.CloneVariables(scope.Variables);
@@ -1265,6 +1285,7 @@ public sealed partial class Evaluation : IFileTester
                     .ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false);
             }
+            var inheritedDescriptors = CollectDescriptorsAvailable();
             var commandInvocation = BashCommandInheritance.CreateInheritedCommand(
                 commandName,
                 argumentZero,
@@ -1275,7 +1296,7 @@ public sealed partial class Evaluation : IFileTester
                 GetStdInDescriptor(),
                 GetStdOutDescriptor(),
                 GetStdErrDescriptor(),
-                CollectDescriptorsAvailableToNestedEvaluation(),
+                ref inheritedDescriptors,
                 CaptureDescriptorBindings().Bindings,
                 functions);
             var execution = await ExecuteRunCommandAsync(commandInvocation).ConfigureAwait(false);
@@ -2582,9 +2603,12 @@ public sealed partial class Evaluation : IFileTester
 
     }
 
-    internal IReadOnlyList<FileDescriptor> CollectDescriptorsAvailableToNestedEvaluation()
+    internal IReadOnlyList<FileDescriptor> CollectDescriptorsAvailableToNestedEvaluation() =>
+        CollectDescriptorsAvailable().Descriptors;
+
+    private DescriptorHandleCollector CollectDescriptorsAvailable()
     {
-        var descriptors = new DescriptorHandleCollector(new List<FileDescriptor>());
+        var descriptors = new DescriptorHandleCollector(new List<FileDescriptor>(), Memory.Workspace);
         descriptors.Add(_stdIn);
         descriptors.Add(_stdOut);
         descriptors.Add(_stdErr);
@@ -2592,7 +2616,8 @@ public sealed partial class Evaluation : IFileTester
         descriptors.Add(GetStdOutDescriptor());
         descriptors.Add(GetStdErrDescriptor());
         descriptors.AddRange(_borrowedDescriptors);
-        foreach (var borrowedScope in _subshellBorrowedDescriptorScopes)
+        // Each entry captures the complete ancestor union. Older entries add no new handles.
+        if (_subshellBorrowedDescriptorScopes.TryPeek(out var borrowedScope))
         {
             foreach (var descriptor in borrowedScope)
                 descriptors.Add(descriptor);
@@ -2600,7 +2625,7 @@ public sealed partial class Evaluation : IFileTester
 
         foreach (var descriptor in _state.EnumerateRedirectionHandles())
             descriptors.Add(descriptor);
-        return descriptors.Descriptors;
+        return descriptors;
     }
 
     private DescriptorTable.Snapshot CaptureDescriptorBindings() =>
@@ -2619,8 +2644,7 @@ public sealed partial class Evaluation : IFileTester
     {
         var bindings = CaptureDescriptorBindings().WithStandardStreams(GetStdInDescriptor(), stdOut, GetStdErrDescriptor());
 
-        var borrowedDescriptors = new DescriptorHandleCollector(new List<FileDescriptor>());
-        borrowedDescriptors.AddRange(_borrowedDescriptors);
+        var borrowedDescriptors = CollectDescriptorsAvailable();
         bindings.AddReferencedHandlesTo(ref borrowedDescriptors);
         return new EvaluationDescriptorSetup(bindings, borrowedDescriptors.Descriptors);
     }

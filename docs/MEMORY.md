@@ -195,11 +195,20 @@ major containers during unwind. Pending ownership and existing subshell borrow
 indexes select closes; cleanup no longer builds temporary exclusion indexes.
 Completed batches clear only live entries, retaining charged capacity until final
 execution cleanup. All close attempts settle before this storage retires.
-This does not repair repeated dictionary copying/reference scans or provide complete
-accounting of available/borrowed collections built while creating nested evaluations.
-Those containers and the field-separator index remain
-material coverage work; descriptor admission does not imply complete evaluation
-accounting.
+Runtime available/borrowed collectors admit list/index growth and replacement
+overlap through the parent command workspace. Parent commands retain this storage
+through child execution, pipeline joins, host calls and cleanup; child workspace
+retirement does not release it. Inline subshells reuse the completed collector's
+membership index. Their stack capacity stays charged to the execution cleanup
+owner through final users, then retires. The nearest entry already contains the
+complete ancestor union, so collection does not revisit older entry sets.
+Command substitutions and Bash command inheritance extend one admitted union
+instead of copying and merging multiple lists. Caller-owned constructor inputs
+stay borrowed. Public host-side CommandContext preparation remains caller-owned;
+hosts admit independent copies they create or retain.
+Repeated descriptor-map copying/reference scans and field-separator indexes remain
+material work. Descriptor admission does not imply complete evaluation accounting;
+keep separate pipeline-preparation and other coarse-owner audits explicit.
 Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,
 retained results and cleanup with pending users.
 
