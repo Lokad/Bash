@@ -106,7 +106,7 @@ internal static class CommandSubstitutionScanner
             return ShellScanStatus.NotFound;
 
         if (text[startIndex] == (byte)'`')
-            return ScanLegacyBackticks(text, startIndex, out endIndex, out substitution);
+            return ScanLegacyBackticks(context, text, startIndex, out endIndex, out substitution);
         if (!context.TryEnter())
             return ShellScanStatus.Invalid;
 
@@ -134,6 +134,7 @@ internal static class CommandSubstitutionScanner
         }
 
         static ShellScanStatus ScanLegacyBackticks(
+            ShellScanContext context,
             ShellSource source,
             int substitutionStart,
             out int closingIndex,
@@ -141,7 +142,7 @@ internal static class CommandSubstitutionScanner
         {
             legacyPayload = null;
             closingIndex = substitutionStart;
-            var builder = ByteMemoryBuilder.CreateUnaccounted(0);
+            var builder = context.CreateByteBuilder(0);
             var position = substitutionStart + 1;
             while (position < source.Length)
             {

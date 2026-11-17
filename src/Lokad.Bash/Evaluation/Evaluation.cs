@@ -104,7 +104,7 @@ public sealed partial class Evaluation : IFileTester
             onComplete,
             options ?? EvaluationOptions.Default,
             [],
-            new MemoryGovernor(long.MaxValue))
+            new MemoryGovernor(long.MaxValue), sourceMemory: null)
     {
     }
 
@@ -115,13 +115,14 @@ public sealed partial class Evaluation : IFileTester
         Action? onComplete,
         EvaluationOptions options,
         IReadOnlyList<FileDescriptor> borrowedDescriptors,
-        IMemoryBudget memoryBudget)
+        IMemoryBudget memoryBudget,
+        SourceMemory? sourceMemory)
         : this(
             new EvaluationState(script, options.CurrentDirectory, descriptorSetup.Bindings.Fork()),
             global::Lokad.Bash.Evaluation.Variables.CreateEmpty(),
             descriptorSetup,
             options,
-            new EvaluationContext(0, null, ReturnTargetKind.None),
+            new EvaluationContext(0, null, ReturnTargetKind.None) { SourceMemory = sourceMemory },
             borrowedDescriptors,
             RootFlowHandling.Normalize,
             publishNextStep,
@@ -141,7 +142,7 @@ public sealed partial class Evaluation : IFileTester
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
         var variables = outer.Memory.CloneVariables(scope.Variables);
-        var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution);
+        var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution, outer.Memory);
         return new Evaluation(
             state,
             variables,
@@ -302,8 +303,8 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    /// <summary>Releases a settled or undispatched child's namespace; prepared root state stays retained.</summary>
-    internal void ReleaseNestedFunctions() => _state.ReleaseFunctions();
+    /// <summary>Releases a private or child namespace; caller-owned prepared root state stays retained.</summary>
+    internal void ReleaseFunctions() => _state.ReleaseFunctions();
 
     /// <summary>
     /// Runs the evaluation loop to completion and publishes the final null operation.
@@ -538,7 +539,7 @@ public sealed partial class Evaluation : IFileTester
         Memory.Charge(RetainedTrapMemoryBytes);
         var childVars = Memory.CloneVariables(scope.Variables);
         var childContext = scope.Context.Fork(childVars);
-        var childState = parentState.CloneForSubshell();
+        var childState = parentState.CloneForSubshell(Memory);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
@@ -628,7 +629,7 @@ public sealed partial class Evaluation : IFileTester
                 var forkKind = commands[index] is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
                 var stageVars = Memory.CloneVariables(scope.Variables);
                 var stageContext = scope.Context.Fork(stageVars);
-                var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind);
+                var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory);
                 var stage = new Evaluation(
                     stageState,
                     stageVars,
@@ -679,7 +680,7 @@ public sealed partial class Evaluation : IFileTester
             finally
             {
                 foreach (var stage in stages)
-                    stage.Evaluation.ReleaseNestedFunctions();
+                    stage.Evaluation.ReleaseFunctions();
             }
         }
 
@@ -2748,8 +2749,15 @@ public sealed partial class Evaluation : IFileTester
         _vars.SetScalarIgnoringReadonly(name, value);
 
     /// <summary>Imports a validated definition without invoking it or retaining parent-only readonly attributes.</summary>
-    public void SetExportedFunction(FunctionDefinition definition) =>
+    public void SetExportedFunction(FunctionDefinition definition)
+    {
+        // Host initialization is admitted at Engine startup; callbacks during execution
+        // share the active namespace's prepublication admission.
+        if (Memory.HasCommand) Memory.Charge(256);
         _state.SetFunctionBinding(new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null, Memory));
+    }
+
+    internal long RetainedFunctionMemoryBytes => _state.EstimatedFunctionMemoryBytes;
 
     /// <summary>Sets an exported variable, bypassing readonly checks for host-provided environment.</summary>
     internal void SetExportedVariable(BindingName name, ShellValue value)

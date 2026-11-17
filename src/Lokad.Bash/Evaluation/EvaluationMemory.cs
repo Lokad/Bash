@@ -18,6 +18,9 @@ internal sealed class EvaluationMemory
     private long _retainedBytes;
     private bool _refused;
 
+    internal bool HasCommand => _command != null;
+    internal MemoryCapacity Workspace => _memory;
+
     public EvaluationMemory(IMemoryBudget budget)
     {
         _budget = budget;
@@ -76,7 +79,8 @@ internal sealed class EvaluationMemory
 
     private static long RetainedBytes(ScopedEvaluation scope)
     {
-        var bytes = checked(scope.Variables.EstimatedMemoryBytes + scope.Effects.RetainedTrapMemoryBytes);
+        var bytes = checked(scope.Variables.EstimatedMemoryBytes + scope.Effects.RetainedTrapMemoryBytes
+            + scope.Effects.RetainedFunctionMemoryBytes);
         for (var function = scope.Context.FunctionContext; function != null; function = function.Enclosing)
             bytes = checked(bytes + function.Locals.SavedMemoryBytes);
         return bytes;

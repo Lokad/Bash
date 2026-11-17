@@ -31,6 +31,8 @@ command units, errexit/EXIT, cancellation, memory refunds and matcher migration.
 The isolated consumer also checks that a long accepted pipeline reaches host pipe
 refusal without a process-fatal stack overflow. It supplements the source suite's
 broader ownership and streaming controls.
+The same pipeline has a separate smaller-allowance probe that must refuse syntax
+admission before requesting a host pipe; both paths assert immediate refunds.
 
 `EndToEndHarness.RunScriptAsync` prepares the complete script before execution.
 Use `TestHost.RunAsync` for public command-unit behavior and its earlier effects

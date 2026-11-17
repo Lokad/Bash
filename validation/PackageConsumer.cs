@@ -60,16 +60,26 @@ internal static class PackageConsumer
             Check(governor.ReservedBytes == ConsumerHost.OutputEstimate, "Evaluation retained memory after cleanup.");
             VerifyPublicMatcher();
 
-            // This consumer runs in its own process. Accepted flat syntax used to
-            // abort that process before the host could refuse the first pipe.
+            // Hold the syntax fixed while separating parser admission from host pipe refusal.
             host.Reset();
             var pipeline = string.Join(" | ", Enumerable.Repeat(":", 20000));
             var stages = ShellCommandParser.TryParsePipeline(pipeline);
             Check(stages?.Count == 20000, "Long pipeline display traversal failed.");
             run = await BashScript.RunAsync(host, pipeline, EvaluationOptions.Default, deadline.Token);
-            Check(run.ExitCode == 1 && host.PipeRequests == 1, "Long pipeline did not reach the host's pipe refusal.");
-            host.Expect([], "shell: probe pipe refusal\n"u8);
+            Check(run.ExitCode == 1 && host.PipeRequests == 0, "Long pipeline bypassed source-memory admission.");
+            host.Expect([], "shell: shared memory budget exhausted\n"u8);
             Check(governor.ReservedBytes == ConsumerHost.OutputEstimate, "Pipeline setup retained memory after refusal.");
+
+            // Accepted flat syntax used to abort this process before the first pipe request.
+            var pipelineGovernor = new MemoryGovernor(64 * 1024 * 1024);
+            using (var pipelineHost = new ConsumerHost(pipelineGovernor))
+            {
+                run = await BashScript.RunAsync(pipelineHost, pipeline, EvaluationOptions.Default, deadline.Token);
+                Check(run.ExitCode == 1 && pipelineHost.PipeRequests == 1, "Long pipeline did not reach the host's pipe refusal.");
+                pipelineHost.Expect([], "shell: probe pipe refusal\n"u8);
+                Check(pipelineGovernor.ReservedBytes == ConsumerHost.OutputEstimate, "Pipeline setup retained memory after host refusal.");
+            }
+            Check(pipelineGovernor.ReservedBytes == 0, "Pipeline host output ownership was not released.");
         }
         Check(governor.ReservedBytes == 0, "Host output ownership was not released.");
         Console.WriteLine(JsonSerializer.Serialize(new
@@ -80,7 +90,7 @@ internal static class PackageConsumer
             assembly = typeof(BashScript).Assembly.GetName().Version?.ToString(),
             checks = new[] { "public-invocation", "host-byte-arguments", "prepared-reuse", "byte-output",
                 "lazy-command-units", "errexit-exit-trap", "cancellation", "memory-refund", "public-utf8-matcher",
-                "long-pipeline-containment" },
+                "source-memory-admission", "long-pipeline-containment" },
             estimatedPeakBytes = governor.PeakBytes
         }));
     }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -89,8 +90,13 @@ internal sealed class ShellSourceCursor
             return false;
         // Literal arguments may survive source execution (for example, set -- 'value').
         // Keep their storage independent of the complete input buffer.
-        value = kind == ShellQuoteKind.AnsiC ? ShellEscapeDecoder.DecodeAnsiCValue(payload.AsSpan())
-            : ShellValue.FromBytes(payload.Bytes.ToArray());
+        if (kind == ShellQuoteKind.AnsiC)
+            value = ShellEscapeDecoder.DecodeAnsiCValue(payload.AsSpan(), _context.SyntaxMemory);
+        else
+        {
+            _context.SyntaxMemory?.Grow(checked(64L + payload.Length));
+            value = ShellValue.FromBytes(payload.Bytes.ToArray());
+        }
         return true;
     }
 
@@ -152,7 +158,7 @@ internal sealed class ShellSourceCursor
         if (source.AsSpan().IndexOf("\\\n"u8) < 0)
             return source;
 
-        var result = ByteMemoryBuilder.CreateUnaccounted(source.Length);
+        var result = context.CreateByteBuilder(source.Length);
         var cursor = new ShellSourceCursor(source, 0, context);
         while (!cursor.IsAtEnd)
         {
@@ -354,6 +360,19 @@ internal sealed class ShellScanContext
     private int _nestedExpansionDepth;
     private Dictionary<ParseCacheKey, CachedParse>? _commandSubstitutions;
 
+    /// <summary>One reached command unit's coarse syntax and payload allowance; null denotes caller-owned parsing.</summary>
+    internal MemoryCapacity? SyntaxMemory { get; set; }
+
+    internal ByteMemoryBuilder CreateByteBuilder(int capacity) => SyntaxMemory is { } memory
+        ? new ByteMemoryBuilder(capacity, memory) : ByteMemoryBuilder.CreateUnaccounted(capacity);
+
+    internal BoundedByteMemoryBuilder CreateBoundedByteBuilder(int capacity, int maximumLength) => SyntaxMemory is { } memory
+        ? new BoundedByteMemoryBuilder(capacity, maximumLength, memory)
+        : BoundedByteMemoryBuilder.CreateUnaccounted(capacity, maximumLength);
+
+    // No completed unit can need a later lookup of its consumed source positions.
+    internal void ClearCommandUnitLookahead() => _commandSubstitutions = null;
+
     internal bool TryTakeCommandSubstitution(ShellSource source, int startIndex, out CachedParse parsed)
         => TryFindCommandSubstitution(source, startIndex, take: true, out parsed);
 
@@ -398,6 +417,7 @@ internal sealed class ShellScanContext
             ParsingLimitExceeded = true;
             return false;
         }
+        SyntaxMemory?.Grow(256); // Tokens/parts, command nodes, collections and prepared navigation.
         _remainingSyntaxUnits--;
         return true;
     }

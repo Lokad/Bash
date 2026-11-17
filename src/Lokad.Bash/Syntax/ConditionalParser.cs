@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -8,17 +9,22 @@ namespace Lokad.Bash.Syntax;
 internal sealed class ConditionalParser
 {
     private readonly ShellSource _source;
+    private readonly MemoryCapacity? _memory;
     private int _position;
     private Token? _lookahead;
     private SyntaxError? _error;
 
-    private ConditionalParser(ShellSource source) => _source = source;
+    private ConditionalParser(ShellSource source, MemoryCapacity? memory) => (_source, _memory) = (source, memory);
 
     internal static bool TryParse(ShellSource source,
         [NotNullWhen(true)] out ConditionalExpression? expression,
+        [NotNullWhen(false)] out SyntaxError? error) => TryParse(source, null, out expression, out error);
+
+    internal static bool TryParse(ShellSource source, MemoryCapacity? memory,
+        [NotNullWhen(true)] out ConditionalExpression? expression,
         [NotNullWhen(false)] out SyntaxError? error)
     {
-        var parser = new ConditionalParser(source);
+        var parser = new ConditionalParser(source, memory);
         expression = parser.ParseOr(0);
         if (parser.Peek().Kind != TokenKind.End)
             parser.Fail("Unexpected conditional operator or operand.");
@@ -122,7 +128,7 @@ internal sealed class ConditionalParser
 
     private Word? ParseWord(Token token)
     {
-        if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, ShellQuoteKind.None,
+        if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, ShellQuoteKind.None, _memory,
                 out var word, out var error))
             return word;
         _error ??= error;
@@ -151,6 +157,7 @@ internal sealed class ConditionalParser
             _position++;
         if (_position == span.Length)
             return new(TokenKind.End, default);
+        _memory?.Grow(256); // Tokens, expression nodes and operand containers share the syntax owner.
         var start = _position;
         if (!regex)
         {
@@ -170,7 +177,7 @@ internal sealed class ConditionalParser
                 return new(kind, _source.Slice(start, _position - start));
             }
         }
-        var cursor = new ShellSourceCursor(_source, start);
+        var cursor = new ShellSourceCursor(_source, start, new ShellScanContext { SyntaxMemory = _memory });
         var parentheses = 0;
         var bracket = false;
         var firstBracketMember = false;

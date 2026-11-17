@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 
@@ -104,7 +105,8 @@ public sealed partial class ComplexityRegressionTests
         var owned = new List<FileDescriptor> { inherited };
         var parent = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
         parent.PushRedirectionTable(rootTable, owned, new HashSet<LogicalDescriptor>());
-        var child = parent.CloneForSubshell();
+        using var memory = new MemoryGovernor(1024).CreateScope();
+        var child = parent.CloneForSubshell(new EvaluationMemory(memory));
         child.SetPersistentDescriptor(new LogicalDescriptor(11), rootHandle);
         var middleTable = new DescriptorTable();
         middleTable.Set(new LogicalDescriptor(12), middleHandle);

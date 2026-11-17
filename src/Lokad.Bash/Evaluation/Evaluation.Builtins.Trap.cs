@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -142,11 +143,18 @@ public sealed partial class Evaluation
                     GlobalPrefixes = scope.Context.GlobalPrefixes
                 }
             };
-            var handler = await EvaluateCommandUnitsAsync(ShellSource.FromBytes(action.Bytes), trapScope, ScriptExecutionKind.Trap)
+            var handler = await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap)
                 .ConfigureAwait(false);
             if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
                 && (_state.FatalExpansion == null || _state.ErrexitEnabled))
                 result = result.WithExitCode(handler.ExitCode);
+            return result;
+        }
+        catch (MemoryBudgetExceededException)
+        {
+            Memory.ReleaseUnusedCapacity();
+            await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
+            result = result.WithExitCode(1);
             return result;
         }
         finally

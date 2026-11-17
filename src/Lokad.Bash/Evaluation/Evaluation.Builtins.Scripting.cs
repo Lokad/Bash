@@ -70,24 +70,32 @@ public sealed partial class Evaluation
         if (words.Count == 1)
             return ApplyNegation(EvaluationResult.FromExitCode(0), negated);
 
-        // Source copies and separators were reserved before prefix assignments and redirections.
-        var builder = ByteMemoryBuilder.CreateUnaccounted(0);
-        for (var index = 1; index < words.Count; index++)
-        {
-            var word = words[index];
-
-            if (index > 1)
-                builder.Append((byte)' ');
-
-            builder.Append(word.Bytes);
-        }
-
-        return ApplyNegation(await EvaluateCommandUnitsAsync(ShellSource.FromBytes(builder.ToMemory()),
-            scope with { Variables = commandVars, Context = scope.Context.WithSourceMemory(null) },
-            ScriptExecutionKind.Eval).ConfigureAwait(false), negated);
+        return ApplyNegation(await EvaluateCopiedCommandUnitsAsync(words, 1,
+            scope with { Variables = commandVars }, ScriptExecutionKind.Eval).ConfigureAwait(false), negated);
     }
 
     private enum ScriptExecutionKind { Root, Source, Eval, Trap }
+
+    /// <summary>Copies eval/trap input into an owner retained by any syntax that survives execution.</summary>
+    private async Task<EvaluationResult> EvaluateCopiedCommandUnitsAsync(
+        IReadOnlyList<ShellValue> words, int start, ScopedEvaluation scope, ScriptExecutionKind kind)
+    {
+        var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
+        try
+        {
+            using var builder = new ByteMemoryBuilder(0, sourceMemory.Budget);
+            for (var index = start; index < words.Count; index++)
+            {
+                CheckCancellation();
+                if (index > start) builder.Append((byte)' ');
+                builder.Append(words[index].Bytes);
+            }
+            var source = ShellSource.FromBytes(builder.DetachSnapshot());
+            return await EvaluateCommandUnitsAsync(source,
+                scope with { Context = scope.Context.WithSourceMemory(sourceMemory) }, kind).ConfigureAwait(false);
+        }
+        finally { sourceMemory.Release(); }
+    }
 
     /// <summary>Shares complete-command parsing and execution across the public entry point, source, eval and EXIT actions.</summary>
     private async Task<EvaluationResult> EvaluateCommandUnitsAsync(
@@ -99,39 +107,52 @@ public sealed partial class Evaluation
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
 
         var result = EvaluationResult.FromExitCode(0);
-        using var commands = Parser.TryParseCommandUnits(source.Bytes).GetEnumerator();
+        var scanContext = new ShellScanContext();
+        using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
         while (true)
         {
             CheckCancellation();
-            if (!commands.MoveNext())
-                break;
-            if (commands.Current is CommandUnitParseResult.Failed failedUnit)
+            var parent = scope.Context.SourceMemory;
+            var unitMemory = new SourceMemory((parent?.Budget ?? Memory.Budget).CreateScope(), parent);
+            scanContext.SyntaxMemory = unitMemory.SyntaxMemory;
+            try
             {
-                await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
-                if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
-                    return EvaluationResult.Exit(2);
-                return result.WithExitCode(2);
-            }
+                if (!commands.MoveNext())
+                    break;
+                if (commands.Current is CommandUnitParseResult.Failed failedUnit)
+                {
+                    await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
+                    if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
+                        return EvaluationResult.Exit(2);
+                    return result.WithExitCode(2);
+                }
 
-            // Loop flow skips execution but still checks the remaining source/eval syntax.
-            if (result.Flow is FlowControlKind.Break or FlowControlKind.Continue)
-                continue;
+                // Loop flow skips execution but still checks the remaining source/eval syntax.
+                if (result.Flow is FlowControlKind.Break or FlowControlKind.Continue)
+                    continue;
 
-            result = await EvaluateCommandAsync(((CommandUnitParseResult.Parsed)commands.Current).Command, scope, negated: false)
-                .ConfigureAwait(false);
-            if (result.Flow == FlowControlKind.Return)
-                return kind == ScriptExecutionKind.Source ? EvaluationResult.FromExitCode(result.ExitCode) : result;
-            if (result.Flow == FlowControlKind.Exit)
-            {
-                // Recover only the expansion failures that end the current command unit.
-                // Explicit exit, errexit and unrecoverable expansion failures still terminate.
-                result = await FinalizeResultAsync(RecoverScriptExpansionFailure(result, kind), negated: false).ConfigureAwait(false);
+                result = await EvaluateCommandAsync(((CommandUnitParseResult.Parsed)commands.Current).Command,
+                    scope with { Context = scope.Context.WithSourceMemory(unitMemory) }, negated: false)
+                    .ConfigureAwait(false);
+                if (result.Flow == FlowControlKind.Return)
+                    return kind == ScriptExecutionKind.Source ? EvaluationResult.FromExitCode(result.ExitCode) : result;
                 if (result.Flow == FlowControlKind.Exit)
-                    return result;
-            }
+                {
+                    // Recover only the expansion failures that end the current command unit.
+                    // Explicit exit, errexit and unrecoverable expansion failures still terminate.
+                    result = await FinalizeResultAsync(RecoverScriptExpansionFailure(result, kind), negated: false).ConfigureAwait(false);
+                    if (result.Flow == FlowControlKind.Exit)
+                        return result;
+                }
 
-            if (result.Flow == FlowControlKind.None && _state.TryGetStickyExitCode(out var sticky))
-                result = result.WithExitCode(sticky);
+                if (result.Flow == FlowControlKind.None && _state.TryGetStickyExitCode(out var sticky))
+                    result = result.WithExitCode(sticky);
+            }
+            finally
+            {
+                scanContext.SyntaxMemory = null;
+                unitMemory.Release();
+            }
         }
         return RecoverScriptExpansionFailure(result, kind);
     }

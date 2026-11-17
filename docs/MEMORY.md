@@ -108,10 +108,16 @@ copy or global pattern cache.
 Immutable arithmetic metadata, literal word fields and prepared list navigation
 belong to the syntax and are shared across executions. Stable operands and literal
 fields borrow its bytes; runtime-expanded operands, selectors and argument
-collections retain command workspace admission. Syntax metadata falls under the
-parser's bounded-source coverage rather than evaluation reservations.
-Quoted literals and escaped characters own compact payloads so retained scalar,
-array, nameref and positional values do not pin unrelated dynamic source bytes.
+collections retain command workspace admission. Caller-prepared syntax remains
+caller-owned. Runtime parsing supplies coarse admission to source copies, command-unit
+tokens/parts and payload buffers, arithmetic/conditional metadata and reached deferred
+substitutions. Some pure scanner/classification helpers still need transitive budget
+plumbing; this is not complete allocation coverage. Parser structural guards remain
+independent of admission and execution duration.
+Literal payloads, assignment-name slices and completed expansion segments avoid
+pinning disproportionately large builder buffers after their parsing/command
+owner ends. Retained scalar, array, nameref and positional values keep the ordinary
+value estimate; syntax slices share immutable arithmetic metadata without reparsing.
 
 A sourced input scope stays admitted while parsing/executing the file, while a
 function namespace retains its definitions, and through active function preparation,
@@ -119,7 +125,12 @@ execution and cleanup. Shared definitions and attribute copies share this coarse
 source owner. Replacement, unset and settled temporary namespaces release their
 references; the last user refunds the scope. Prepared root namespaces remain owned
 by the caller's evaluation scope. Copied eval and trap source do not retain an
-unrelated enclosing source-file owner; their parser accounting limits remain separate.
+unrelated enclosing source-file owner. Each command unit has a coarse syntax owner
+retaining its input owner. Completed units refund their metadata unless surviving
+definitions or active users retain it; one early definition does not keep every
+later unit's scratch alive. Deferred legacy parsing has an owner through nested
+execution and cleanup. Function namespace growth/copies are admitted separately
+from shared definitions and serialized exports.
 Namespace keys follow the current definition's storage. Sorted function-name
 snapshots admit compact copies, and pending command queries retain their selected
 source owners through host lookup and output completion.
@@ -136,10 +147,13 @@ through all consumers and descriptor cleanup; only the final owner refunds a cac
 Retained root namespaces keep the caller-owned evaluation budget alive as before.
 Hosts must admit independent copies of exported bytes retained after command completion.
 
-`MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
-source-size bound, not complete accounting; manual stepping does not install a host
-budget. Keep coverage limits explicit. Test shared allowances, refusal, immediate
-refunds, retained results and cleanup with pending users.
+`MemoryCapacity` amortizes admission with charged prepaid capacity. Syntax estimates
+are coarse and do not account every small object. Public Parser calls, host-side
+preparation/mutation and manual stepping do not install a runtime parsing budget.
+Descriptor-map and field-separator index admission still have separate material
+coverage gaps; syntax admission does not imply complete evaluation accounting.
+Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,
+retained results and cleanup with pending users.
 
 Printf time conversion admits its temporary byte/character projection before
 allocating it and reuses the conversion's rendering workspace. Literal bytes remain

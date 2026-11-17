@@ -1,5 +1,6 @@
 using System;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -13,7 +14,12 @@ public sealed record ArithmeticCommand : ICommand
     internal ArithmeticSource Syntax => _syntax;
 
     /// <summary>Retains source and prepares immutable lexical structure without executing it.</summary>
-    public ArithmeticCommand(ShellSource Expression) => _syntax = new ArithmeticSource(Expression);
+    public ArithmeticCommand(ShellSource Expression) : this(Expression, null)
+    {
+    }
+
+    internal ArithmeticCommand(ShellSource expression, MemoryCapacity? memory) =>
+        _syntax = new ArithmeticSource(expression, memory);
 
     public void Deconstruct(out ShellSource Expression) => Expression = this.Expression;
     public bool Equals(ArithmeticCommand? other) => other != null && Expression.Bytes.Equals(other.Expression.Bytes);

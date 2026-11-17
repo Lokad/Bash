@@ -20,7 +20,7 @@ public sealed partial class Evaluation
         ShellValue argumentZero,
         IReadOnlyList<ShellValue> positionalParameters)
         : this(script, descriptors, publishNextStep: null, onComplete: null,
-            options, borrowedDescriptors: [], new MemoryGovernor(long.MaxValue))
+            options, borrowedDescriptors: [], new MemoryGovernor(long.MaxValue), sourceMemory: null)
     {
         foreach (var variable in environment)
             SetExportedVariable(variable.Name, variable.Value);

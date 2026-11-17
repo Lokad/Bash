@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -33,12 +34,14 @@ public abstract class WordPart
         FromSource(kind, ShellSource.FromText(text));
 
     /// <summary>Retains source bytes, applying only the part's literal/source distinction.</summary>
-    internal static WordPart FromSource(WordPartKind kind, ShellSource source) => kind switch
+    internal static WordPart FromSource(WordPartKind kind, ShellSource source) => FromSource(kind, source, null);
+
+    internal static WordPart FromSource(WordPartKind kind, ShellSource source, MemoryCapacity? memory) => kind switch
     {
         WordPartKind.SingleQuoted or WordPartKind.Escaped => FromValue(kind, source.ToValue()),
         WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
             new CommandSubstitutionWordPart(kind, new CommandSubstitutionSyntax.Deferred(source)),
-        _ => new SourceWordPart(kind, source),
+        _ => new SourceWordPart(kind, source, memory),
     };
 
     /// <summary>Creates a non-expanding literal segment without decoding its bytes.</summary>
@@ -54,18 +57,49 @@ public abstract class WordPart
 public sealed class SourceWordPart : WordPart
 {
     private readonly IReadOnlyDictionary<int, ArithmeticExpansion> _arithmetic;
+    private readonly int _arithmeticOffset;
     private static readonly IReadOnlyDictionary<int, ArithmeticExpansion> NoArithmetic = new Dictionary<int, ArithmeticExpansion>();
 
     internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource Operand);
-    internal SourceWordPart(WordPartKind kind, ShellSource source) : base(kind)
+    internal SourceWordPart(WordPartKind kind, ShellSource source, MemoryCapacity? memory) : base(kind)
     {
         Source = source;
-        _arithmetic = PrepareArithmetic(source);
+        _arithmetic = PrepareArithmetic(source, memory);
     }
 
-    internal bool TryGetArithmetic(int start, out ArithmeticExpansion expansion) => _arithmetic.TryGetValue(start, out expansion);
+    private SourceWordPart(WordPartKind kind, ShellSource source,
+        IReadOnlyDictionary<int, ArithmeticExpansion> arithmetic, int offset) : base(kind)
+    {
+        Source = source;
+        _arithmetic = arithmetic;
+        _arithmeticOffset = offset;
+    }
 
-    private static IReadOnlyDictionary<int, ArithmeticExpansion> PrepareArithmetic(ShellSource source)
+    /// <summary>Assignment and descriptor punctuation borrow the same immutable lexical metadata.</summary>
+    internal SourceWordPart Slice(int start, int length, MemoryCapacity? memory)
+    {
+        var source = Source.Slice(start, length);
+        if (length != 0 && Source.Length > 2L * length)
+        {
+            memory?.Grow(checked(32L + length));
+            source = ShellSource.FromBytes(source.Bytes.ToArray());
+        }
+        return new(Kind, source, _arithmetic, checked(_arithmeticOffset + start));
+    }
+
+    internal bool TryGetArithmetic(int start, out ArithmeticExpansion expansion)
+    {
+        if (_arithmetic.TryGetValue(checked(start + _arithmeticOffset), out var cached)
+            && cached.End < (long)_arithmeticOffset + Source.Length)
+        {
+            expansion = new ArithmeticExpansion(cached.End - _arithmeticOffset, cached.Operand);
+            return true;
+        }
+        expansion = default;
+        return false;
+    }
+
+    private static IReadOnlyDictionary<int, ArithmeticExpansion> PrepareArithmetic(ShellSource source, MemoryCapacity? memory)
     {
         var first = source.AsSpan().IndexOf("$(("u8);
         if (first < 0)
@@ -73,9 +107,13 @@ public sealed class SourceWordPart : WordPart
         var result = new Dictionary<int, ArithmeticExpansion>();
         for (var index = first; index < source.Length; index++)
         {
-            if (!ArithmeticExpansionScanner.TryScan(source, index, out var end, out var expression))
+            if (source[index] != (byte)'$')
                 continue;
-            result.Add(index, new ArithmeticExpansion(end, new ArithmeticSource(expression)));
+            var context = new ShellScanContext { SyntaxMemory = memory };
+            if (!ArithmeticExpansionScanner.TryScan(context, source, index, out var end, out var expression))
+                continue;
+            memory?.Grow(256);
+            result.Add(index, new ArithmeticExpansion(end, new ArithmeticSource(expression, memory)));
             index = end;
         }
         return result;

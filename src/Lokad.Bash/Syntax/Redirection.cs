@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -16,6 +17,12 @@ public sealed class Redirection
     /// <param name="variableName">The optional variable name for descriptor allocation.</param>
     /// <param name="hereDocumentDelimiter">The delimiter of a completed here-document; null otherwise.</param>
     public Redirection(RedirectionKind kind, int? fileDescriptor, Word target, string variableName, Word? hereDocumentDelimiter)
+        : this(kind, fileDescriptor, target, variableName, hereDocumentDelimiter, null)
+    {
+    }
+
+    internal Redirection(RedirectionKind kind, int? fileDescriptor, Word target, string variableName,
+        Word? hereDocumentDelimiter, MemoryCapacity? memory)
     {
         Kind = kind;
         FileDescriptor = fileDescriptor;
@@ -25,11 +32,11 @@ public sealed class Redirection
         DescriptorOperand = target;
         if (kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput)
         {
-            MovesDescriptor = TryTakeMoveSuffix(target, out var operand);
+            MovesDescriptor = TryTakeMoveSuffix(target, memory, out var operand);
             DescriptorOperand = operand;
         }
 
-        static bool TryTakeMoveSuffix(Word word, out Word operand)
+        static bool TryTakeMoveSuffix(Word word, MemoryCapacity? memory, out Word operand)
         {
             operand = word;
             if (word.Parts.Count == 0) return false;
@@ -39,11 +46,12 @@ public sealed class Redirection
             if (value.Bytes.IsEmpty || value.Bytes.Span[^1] != (byte)'-') return false;
             if (word.Parts.Count == 1 && value.Bytes.Length == 1 && last.Kind == WordPartKind.Unquoted)
                 return false;
+            memory?.Grow(checked(128L + 32L * word.Parts.Count));
             var parts = new List<WordPart>(word.Parts.Count);
             for (var index = 0; index < word.Parts.Count - 1; index++) parts.Add(word.Parts[index]);
             if (value.Bytes.Length > 1)
                 parts.Add(last is SourceWordPart source
-                    ? WordPart.FromSource(last.Kind, source.Source.Slice(0, source.Source.Length - 1))
+                    ? source.Slice(0, source.Source.Length - 1, memory)
                     : WordPart.FromValue(last.Kind, ShellValue.FromBytes(value.Bytes[..^1])));
             operand = new Word(parts);
             return true;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -21,22 +22,25 @@ internal sealed class HereDocumentReader
     {
         while (_pending.TryDequeue(out var redirection))
         {
-            var delimiter = GetHereDocumentDelimiter(redirection.Target, out var allowExpansion);
+            var delimiter = GetHereDocumentDelimiter(redirection.Target, tokenizer.ScanContext.SyntaxMemory, out var allowExpansion);
             if (!tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
                     joinContinuations: allowExpansion, out var content))
                 return false;
             var kind = allowExpansion ? WordPartKind.HereDocument : WordPartKind.SingleQuoted;
             _completed.Add(redirection, new Redirection(redirection.Kind, redirection.FileDescriptor,
-                new Word([WordPart.FromSource(kind, content)]), redirection.VariableName, redirection.Target));
+                new Word([WordPart.FromSource(kind, content, tokenizer.ScanContext.SyntaxMemory)]), redirection.VariableName, redirection.Target));
         }
         return true;
     }
 
     /// <summary>Shares literal delimiter bytes and expansion policy with definition output.</summary>
-    internal static ShellSource GetHereDocumentDelimiter(Word word, out bool allowExpansion)
+    internal static ShellSource GetHereDocumentDelimiter(Word word, out bool allowExpansion) =>
+        GetHereDocumentDelimiter(word, null, out allowExpansion);
+
+    private static ShellSource GetHereDocumentDelimiter(Word word, MemoryCapacity? memory, out bool allowExpansion)
     {
         allowExpansion = true;
-        var builder = ByteMemoryBuilder.CreateUnaccounted(0);
+        var builder = memory is null ? ByteMemoryBuilder.CreateUnaccounted(0) : new ByteMemoryBuilder(0, memory);
         foreach (var part in word.Parts)
         {
             if (part.Kind != WordPartKind.Unquoted)

@@ -172,6 +172,15 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
         ? ReadOnlyMemory<byte>.Empty
         : new ReadOnlyMemory<byte>(_buffer, 0, _length);
 
+    /// <summary>Keeps short values independent of a much larger parser or command buffer.</summary>
+    internal ReadOnlyMemory<byte> ToCompactMemory(MemoryCapacity? memory)
+    {
+        if (_length == 0 || _buffer.Length <= 2L * _length)
+            return ToMemory();
+        memory?.Grow(checked(32L + _length));
+        return _buffer.AsSpan(0, _length).ToArray();
+    }
+
     /// <summary>
     /// Ensures the backing buffer can hold the requested capacity.
     /// </summary>

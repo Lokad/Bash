@@ -12,6 +12,57 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteStoredValueTests
 {
+    [Theory]
+    [InlineData("plain", false)]
+    [InlineData("plain", true)]
+    [InlineData("quoted", false)]
+    [InlineData("quoted", true)]
+    [InlineData("ansi", false)]
+    [InlineData("ansi", true)]
+    [InlineData("escaped", false)]
+    [InlineData("escaped", true)]
+    [InlineData("joined", false)]
+    [InlineData("joined", true)]
+    [InlineData("parameter", false)]
+    [InlineData("parameter", true)]
+    [InlineData("long-name", false)]
+    [InlineData("long-name", true)]
+    public async Task StoredValuesDoNotRetainOversizedParserOrExpansionBuffers(string kind, bool eval)
+    {
+        var name = kind == "long-name" ? "v" + new string('a', 512) : "value";
+        var operand = kind switch
+        {
+            "quoted" => "\"x\"",
+            "ansi" => "$'\\170'",
+            "escaped" => "\\x",
+            "joined" => "\\x\\y",
+            "parameter" => "\"${missing:-x}\"",
+            _ => "x"
+        };
+        var body = name + "=" + operand;
+        var source = eval ? "eval \"" + body.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal).Replace("$", "\\$", StringComparison.Ordinal) + "\"" : "source /unit";
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        host.AddFile("/unit", body);
+        var evaluation = new Evaluation.Evaluation(Parser.Parse(source));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, cancellation.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        var value = evaluation.Variables[name];
+        Assert.Equal(kind == "joined" ? "xy" : "x", value.ToUtf8String());
+        Assert.True(MemoryMarshal.TryGetArray(value.Bytes, out var storage));
+        var array = Assert.IsType<byte[]>(storage.Array);
+        Assert.InRange(array.Length, value.Bytes.Length, 32 + 2 * value.Bytes.Length);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     // Bash 5.2.21, LC_ALL=C.UTF-8; compare bytes without a text-decoding test adapter.
     [Theory]
     [InlineData("x=$'\\377'; printf '<%s>' \"$x\"\n", "3CFF3E")]

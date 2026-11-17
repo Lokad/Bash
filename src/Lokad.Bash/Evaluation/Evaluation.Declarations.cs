@@ -195,7 +195,7 @@ public sealed partial class Evaluation
                     // Shell target expansion precedes the RHS; builtin subscript interpretation happens on application.
                     var name = assignment.Target.AsSpan().IndexOf((byte)'[') >= 0
                         ? await AwaitWordExpansionAsync(WordExpansion.ExpandAssignmentValueAsync(
-                            Tokenizer.ReadExpansionWord(assignment.Target, ExpansionWordSyntax.Parameter, ShellQuoteKind.None), scope))
+                            Tokenizer.ReadExpansionWord(assignment.Target, ExpansionWordSyntax.Parameter, ShellQuoteKind.None, Memory.Workspace), scope))
                             .ConfigureAwait(false)
                         : assignment.Target.ToValue();
                     if (HasPendingExpansionError)

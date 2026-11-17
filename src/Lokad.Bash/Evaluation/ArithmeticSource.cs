@@ -1,4 +1,5 @@
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -9,7 +10,11 @@ internal sealed class ArithmeticSource
     public ArithmeticEvaluation.LexicalSyntax? Syntax { get; }
     public ArithmeticOperand? DirectOperand { get; }
 
-    public ArithmeticSource(ShellSource source)
+    public ArithmeticSource(ShellSource source) : this(source, null)
+    {
+    }
+
+    internal ArithmeticSource(ShellSource source, MemoryCapacity? memory)
     {
         Source = source;
         var bytes = source.AsSpan();
@@ -17,7 +22,7 @@ internal sealed class ArithmeticSource
         // only when expansion cannot change these bytes; selectors still prepare at runtime.
         if (bytes.IndexOfAny("$'\"\\`"u8) >= 0)
             return;
-        Syntax = new ArithmeticEvaluation.LexicalSyntax(source);
+        Syntax = new ArithmeticEvaluation.LexicalSyntax(source, memory);
         if (!bytes.Contains((byte)'['))
             DirectOperand = ArithmeticOperand.FromSyntax(source, Syntax);
     }
@@ -31,17 +36,22 @@ internal sealed class ArithmeticForSyntax
     public ArithmeticSource Condition { get; }
     public ArithmeticSource Update { get; }
 
-    public ArithmeticForSyntax(ShellSource source)
+    public ArithmeticForSyntax(ShellSource source) : this(source, null)
+    {
+    }
+
+    internal ArithmeticForSyntax(ShellSource source, MemoryCapacity? memory)
     {
         Source = source;
-        Split(source, out var init, out var condition, out var update);
-        Initialization = new ArithmeticSource(init);
-        Condition = new ArithmeticSource(condition);
-        Update = new ArithmeticSource(update);
+        Split(source, memory, out var init, out var condition, out var update);
+        Initialization = new ArithmeticSource(init, memory);
+        Condition = new ArithmeticSource(condition, memory);
+        Update = new ArithmeticSource(update, memory);
 
-        static void Split(ShellSource expression, out ShellSource init, out ShellSource condition, out ShellSource update)
+        static void Split(ShellSource expression, MemoryCapacity? memory,
+            out ShellSource init, out ShellSource condition, out ShellSource update)
         {
-            var cursor = new ShellSourceCursor(expression, 0);
+            var cursor = new ShellSourceCursor(expression, 0, new ShellScanContext { SyntaxMemory = memory });
             var firstSeparator = ReadSeparator();
             if (firstSeparator < 0)
             {

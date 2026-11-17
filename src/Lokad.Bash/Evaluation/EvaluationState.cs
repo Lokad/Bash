@@ -172,6 +172,10 @@ internal sealed class EvaluationState
 
     /// <summary>One function namespace for invocation, attributes and inspection; independent of variables.</summary>
     private readonly Dictionary<ShellValue, FunctionBinding> _functions = [];
+    private int _functionCapacity;
+
+    // Capacity covers dictionary growth/overlap; live entries cover binding/cache-cell metadata.
+    internal long EstimatedFunctionMemoryBytes => 128L * _functionCapacity + 128L * _functions.Count;
 
     public EvaluationState(
         ParsedScript script,
@@ -226,8 +230,9 @@ internal sealed class EvaluationState
     /// <summary>
     /// Creates an isolated shell-state copy for subshell evaluation.
     /// </summary>
-    public EvaluationState CloneForSubshell()
+    public EvaluationState CloneForSubshell(EvaluationMemory memory)
     {
+        memory.Charge(EstimatedFunctionMemoryBytes);
         var clone = CloneShellState(Script, _redirections.ForkForSubshell(), ShellForkKind.Subshell);
         clone._pendingExpansionErrorExitCode = _pendingExpansionErrorExitCode;
         clone.FatalExpansion = FatalExpansion;
@@ -241,8 +246,12 @@ internal sealed class EvaluationState
     public EvaluationState CloneForNestedEvaluation(
         ParsedScript script,
         EvaluationDescriptorSetup descriptors,
-        ShellForkKind kind) =>
-        CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings), kind);
+        ShellForkKind kind,
+        EvaluationMemory memory)
+    {
+        memory.Charge(EstimatedFunctionMemoryBytes);
+        return CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings), kind);
+    }
 
     private EvaluationState CloneShellState(ParsedScript script, RedirectionState redirections, ShellForkKind kind)
     {
@@ -343,6 +352,7 @@ internal sealed class EvaluationState
             ? previous.Attributes : FunctionAttributes.None;
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
+        memory.Charge(256);
         SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, sourceMemory, memory));
         return true;
     }
@@ -355,6 +365,7 @@ internal sealed class EvaluationState
         if (previous != null && !previous.Definition.Name.Value.Bytes.Equals(function.Definition.Name.Value.Bytes))
             _functions.Remove(function.Definition.Name.Value);
         _functions[function.Definition.Name.Value] = function;
+        _functionCapacity = Math.Max(_functionCapacity, _functions.Count);
         // Acquire before retiring the old binding: attribute copies can share this owner.
         function.Retain();
         previous?.Release();

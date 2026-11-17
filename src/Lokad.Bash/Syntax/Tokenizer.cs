@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -19,6 +20,12 @@ internal sealed class Tokenizer
     private ArraySubscriptScanner.Lookahead? _arraySubscripts;
 
     internal ShellScanContext ScanContext => _scanContext;
+
+    internal void BeginCommandUnit()
+    {
+        _arraySubscripts = null;
+        _scanContext.ClearCommandUnitLookahead();
+    }
 
     private SyntaxError? _error;
 
@@ -100,7 +107,7 @@ internal sealed class Tokenizer
     internal bool TryReadFunctionName(WordToken token, [NotNullWhen(true)] out FunctionName? name)
     {
         name = null;
-        var text = ShellSourceCursor.RemoveLineContinuations(_input[token.Token.Source]);
+        var text = ShellSourceCursor.RemoveLineContinuations(_scanContext, _input[token.Token.Source]);
         var syntax = FunctionNameSyntax.Plain;
         var cursor = new ShellSourceCursor(text, 0);
         while (!cursor.IsAtEnd)
@@ -128,7 +135,7 @@ internal sealed class Tokenizer
             if (text.AsSpan().IndexOf("$'"u8) < 0)
                 return text.ToValue();
 
-            var output = BoundedByteMemoryBuilder.CreateUnaccounted(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
+            var output = _scanContext.CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
             var nameCursor = new ShellSourceCursor(text, 0);
             var literalIndex = 0;
             while (!nameCursor.IsAtEnd)
@@ -183,7 +190,7 @@ internal sealed class Tokenizer
         if (position >= source.Length || !VariableNames.IsNameStart((char)source[position]))
             return false;
 
-        var name = ByteMemoryBuilder.CreateUnaccounted(0);
+        var name = _scanContext.CreateByteBuilder(0);
         while (position < source.Length && VariableNames.IsNamePart((char)source[position]))
         {
             name.Append(source[position]);
@@ -198,7 +205,7 @@ internal sealed class Tokenizer
             return false;
 
         name.Append(source.Slice(position, closing - position + 1));
-        assignment = new AssignmentWord(ShellSource.FromBytes(name.ToMemory()), element.Value, element.Operator);
+        assignment = new AssignmentWord(ShellSource.FromBytes(name.ToCompactMemory(_scanContext.SyntaxMemory)), element.Value, element.Operator);
         return true;
     }
 
@@ -465,7 +472,7 @@ internal sealed class Tokenizer
         out ShellSource body)
     {
         body = default;
-        var content = ByteMemoryBuilder.CreateUnaccounted(0);
+        var content = _scanContext.CreateByteBuilder(0);
         var span = _input.AsSpan();
 
         while (Position < span.Length)
@@ -654,7 +661,7 @@ internal sealed class Tokenizer
         expression = default;
         var span = _input.AsSpan();
         var start = opening.Source.End.Value;
-        var cursor = new ShellSourceCursor(_input, start);
+        var cursor = new ShellSourceCursor(_input, start, new ShellScanContext { SyntaxMemory = _scanContext.SyntaxMemory });
         var wordStart = true;
         while (!cursor.IsAtEnd)
         {
@@ -666,7 +673,7 @@ internal sealed class Tokenizer
             {
                 var source = _input.Slice(start, index - start);
                 Position = end;
-                expression = ShellSourceCursor.RemoveLineContinuations(source).TrimBlanks();
+                expression = ShellSourceCursor.RemoveLineContinuations(_scanContext, source).TrimBlanks();
                 return Error == null;
             }
 
@@ -705,12 +712,20 @@ internal sealed class Tokenizer
 
     /// <summary>Reads an expansion operand under its surrounding quote context, without adding source quotes.</summary>
     internal static Word ReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote) =>
-        TryReadExpansionWord(content, syntax, outerQuote, out var word, out var error) ? word : throw error.ToException();
+        ReadExpansionWord(content, syntax, outerQuote, null);
+
+    internal static Word ReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
+        MemoryCapacity? memory) =>
+        TryReadExpansionWord(content, syntax, outerQuote, memory, out var word, out var error) ? word : throw error.ToException();
 
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
-        [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
+        [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error) =>
+        TryReadExpansionWord(content, syntax, outerQuote, null, out word, out error);
+
+    internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
+        MemoryCapacity? memory, [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
     {
-        var tokenizer = new Tokenizer(content);
+        var tokenizer = new Tokenizer(content, 0, new ShellScanContext { SyntaxMemory = memory });
         var parsed = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, outerQuote);
         error = tokenizer.Error;
         word = error == null ? parsed : null;
@@ -718,9 +733,9 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Retains direct selectors for the arithmetic consumer to prepare separately.</summary>
-    internal static Word ReadArithmeticWord(ShellSource content, ExpansionWordSyntax syntax)
+    internal static Word ReadArithmeticWord(ShellSource content, ExpansionWordSyntax syntax, MemoryCapacity? memory)
     {
-        var tokenizer = new Tokenizer(content) { _retainArithmeticSubscripts = true };
+        var tokenizer = new Tokenizer(content, 0, new ShellScanContext { SyntaxMemory = memory }) { _retainArithmeticSubscripts = true };
         var word = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, ShellQuoteKind.None);
         return tokenizer.Error is { } error ? throw error.ToException() : word;
     }
@@ -737,7 +752,7 @@ internal sealed class Tokenizer
             return false;
         if (!TryReserveSyntax())
             return false;
-        part = WordPart.FromSource(WordPartKind.ArithmeticSubscript, _input.Slice(Position, closing - Position + 1));
+        part = WordPart.FromSource(WordPartKind.ArithmeticSubscript, _input.Slice(Position, closing - Position + 1), _scanContext.SyntaxMemory);
         Position = closing + 1;
         return true;
     }
@@ -746,7 +761,7 @@ internal sealed class Tokenizer
     private Word ReadWord(ReadOnlySpan<byte> span, int delimiterStart, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote)
     {
         var parts = new List<WordPart>();
-        var unquoted = ByteMemoryBuilder.CreateUnaccounted(0);
+        var unquoted = _scanContext.CreateByteBuilder(0);
         var quotedOperand = outerQuote == ShellQuoteKind.Double;
         var arithmetic = syntax != ExpansionWordSyntax.Parameter;
 
@@ -760,8 +775,9 @@ internal sealed class Tokenizer
             if (!TryReserveSyntax())
                 return;
             parts.Add(WordPart.FromSource(
-                quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, ShellSource.FromBytes(unquoted.ToMemory())));
-            unquoted = ByteMemoryBuilder.CreateUnaccounted(0);
+                quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, ShellSource.FromBytes(unquoted.ToCompactMemory(_scanContext.SyntaxMemory)),
+                _scanContext.SyntaxMemory));
+            unquoted = _scanContext.CreateByteBuilder(0);
         }
 
         while (Position < span.Length && Error == null)
@@ -827,7 +843,7 @@ internal sealed class Tokenizer
                 if (syntax == ExpansionWordSyntax.ArithmeticSource && !quotedOperand)
                 {
                     // ((...)) and $((...)) retain the decoded quotes before expanding their contents.
-                    var quoted = BoundedByteMemoryBuilder.CreateUnaccounted(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
+                    var quoted = _scanContext.CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
                     if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(quoted, content.Bytes.Span))
                     {
                         RecordError("Arithmetic quoted value exceeds the byte-buffer limit.", Position);
@@ -1021,7 +1037,7 @@ internal sealed class Tokenizer
     private List<WordPart> ReadDoubleQuotedParts(ReadOnlySpan<byte> span, ExpansionWordSyntax syntax)
     {
         var parts = new List<WordPart>();
-        var content = ByteMemoryBuilder.CreateUnaccounted(0);
+        var content = _scanContext.CreateByteBuilder(0);
 
         void Flush(bool allowEmpty)
         {
@@ -1039,8 +1055,8 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
-            parts.Add(WordPart.FromSource(WordPartKind.DoubleQuoted, ShellSource.FromBytes(content.ToMemory())));
-            content = ByteMemoryBuilder.CreateUnaccounted(0);
+            parts.Add(WordPart.FromSource(WordPartKind.DoubleQuoted, ShellSource.FromBytes(content.ToCompactMemory(_scanContext.SyntaxMemory)), _scanContext.SyntaxMemory));
+            content = _scanContext.CreateByteBuilder(0);
         }
 
         while (Position < span.Length && Error == null)

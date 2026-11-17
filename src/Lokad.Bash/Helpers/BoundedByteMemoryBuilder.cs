@@ -28,6 +28,13 @@ public sealed class BoundedByteMemoryBuilder : IDisposable, IByteMemoryWriter
         _maximumLength = maximumLength;
     }
 
+    internal BoundedByteMemoryBuilder(int initialCapacity, int maximumLength, MemoryCapacity memory)
+    {
+        ValidateLengths(initialCapacity, maximumLength);
+        _builder = new ByteMemoryBuilder(Math.Min(initialCapacity, maximumLength), memory);
+        _maximumLength = maximumLength;
+    }
+
     private static void ValidateLengths(int initialCapacity, int maximumLength)
     {
         if (initialCapacity < 0)

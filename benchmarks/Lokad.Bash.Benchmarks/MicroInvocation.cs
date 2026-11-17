@@ -60,7 +60,7 @@ internal sealed class MicroInvocation : IDisposable
             ? new ArithmeticSource(source).DirectOperand ?? throw new InvalidDataException("Arithmetic metadata is missing.")
             : ArithmeticOperand.FromValue(source.ToValue());
         _evaluation = new BashEvaluation(Parser.Parse(""), EvaluationDescriptorSetup.Standard, null, null,
-            EvaluationOptions.Default, [], _owner);
+            EvaluationOptions.Default, [], _owner, sourceMemory: null);
         _scope = new ScopedEvaluation(_evaluation, _variables, new BashEvaluation.EvaluationContext(0, null, BashEvaluation.ReturnTargetKind.None));
     }
 

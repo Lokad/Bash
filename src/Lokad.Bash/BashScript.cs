@@ -13,16 +13,30 @@ public static class BashScript
     public static async Task<RunResult> RunAsync(
         IBashHost host, string source, EvaluationOptions options, CancellationToken cancel)
     {
-        if (source.Length > Parser.MaximumScriptBytes || Encoding.UTF8.GetByteCount(source) > Parser.MaximumScriptBytes)
+        // An already oversized UTF-16 count proves the byte bound without scanning it.
+        var byteCount = source.Length > Parser.MaximumScriptBytes ? source.Length : Encoding.UTF8.GetByteCount(source);
+        if (byteCount > Parser.MaximumScriptBytes)
         {
             var error = new SyntaxError(Parser.ScriptSizeLimitMessage, 0);
             await host.WriteLineAsync(FileDescriptor.StdErr, error.ToDiagnosticMessage(), cancel).ConfigureAwait(false);
             return new RunResult(2, options.CurrentDirectory);
         }
 
-        var script = new ParsedScript([new ScriptCommand(ShellSource.FromText(source))]);
-        var evaluation = ShellEvaluationStartup.CreateForNewHost(script, options);
+        cancel.ThrowIfCancellationRequested();
         using var memory = host.MemoryBudget.CreateScope();
-        return await new Engine().RunAsync(evaluation, host, memory, cancel).ConfigureAwait(false);
+        var sourceMemory = new SourceMemory(memory.CreateScope());
+        try
+        {
+            if (!sourceMemory.Budget.TryReserve(byteCount, out _))
+            {
+                await host.WriteLineAsync(FileDescriptor.StdErr, "shell: shared memory budget exhausted", cancel).ConfigureAwait(false);
+                return new RunResult(1, options.CurrentDirectory);
+            }
+            var script = new ParsedScript([new ScriptCommand(ShellSource.FromText(source))]);
+            var evaluation = ShellEvaluationStartup.CreateForNewHost(script, options, sourceMemory);
+            try { return await new Engine().RunAsync(evaluation, host, memory, cancel).ConfigureAwait(false); }
+            finally { evaluation.ReleaseFunctions(); }
+        }
+        finally { sourceMemory.Release(); }
     }
 }

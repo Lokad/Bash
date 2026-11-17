@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 
@@ -6,6 +7,27 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ArithmeticSyntaxReuseTests
 {
+    [Fact]
+    public void SourceSlicesReuseArithmeticMetadataWithinTheirPhysicalBounds()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var memory = new MemoryCapacity(governor, 0);
+        var original = Assert.IsType<SourceWordPart>(WordPart.FromSource(WordPartKind.Unquoted,
+            ShellSource.FromText("name=$((value+1))tail"), memory));
+        Assert.True(original.TryGetArithmetic(5, out var cached));
+        var admitted = memory.Bytes;
+        var suffix = original.Slice(5, original.Source.Length - 5, memory);
+        var arithmetic = suffix.Slice(0, suffix.Source.Length - 4, memory);
+
+        Assert.True(arithmetic.TryGetArithmetic(0, out var selected));
+        Assert.Same(cached.Operand, selected.Operand);
+        Assert.Equal(cached.End - 5, selected.End);
+        Assert.Equal(admitted, memory.Bytes);
+        Assert.False(arithmetic.Slice(0, arithmetic.Source.Length - 1, memory).TryGetArithmetic(0, out _));
+        memory.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("  64#_ \n")]
@@ -35,7 +57,7 @@ public sealed class ArithmeticSyntaxReuseTests
     {
         var source = ShellSource.FromText(expression);
         var dynamic = await TraceAsync(ArithmeticOperand.FromValue(source.ToValue()));
-        var prepared = await TraceAsync(ArithmeticOperand.FromSyntax(source, new ArithmeticEvaluation.LexicalSyntax(source)));
+        var prepared = await TraceAsync(ArithmeticOperand.FromSyntax(source, new ArithmeticEvaluation.LexicalSyntax(source, null)));
         Assert.Equal(dynamic.Result, prepared.Result);
         Assert.Equal(dynamic.Trace, prepared.Trace);
 

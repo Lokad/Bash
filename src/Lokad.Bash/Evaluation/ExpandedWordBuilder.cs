@@ -491,7 +491,7 @@ internal sealed class ExpandedWordBuilder
         public ShellValue ToValue()
         {
             FlushText();
-            return ShellValue.FromBytes(_bytes.ToMemory());
+            return ShellValue.FromBytes(_bytes.ToCompactMemory(_memory.Workspace));
         }
 
         private void AppendBytes(ReadOnlySpan<byte> bytes)

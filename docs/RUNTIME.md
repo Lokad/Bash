@@ -235,6 +235,11 @@ retain earlier units' effects; an invalid unit executes none of its commands.
 Explicit `Parser.Parse`/`Parser.TryParse` and prepared `Evaluation` execution retain
 whole-script validation. Recoverable arithmetic/assignment expansion failures end
 their current unit; unrecoverable failures and explicit exit stop the script.
+Runtime source copies and parsed units retain coarse admitted ownership through
+surviving definitions and active users. Completed unrelated units release their
+metadata; deferred substitutions use the same parser with a reached syntax owner.
+Memory refusal while preparing an EXIT action reports through its active stderr
+mapping and returns status 1 through ordinary cleanup.
 EXIT actions retain their own flow/status policy: normal completion preserves the
 triggering status, while return/exit and errexit can replace it. They do not inherit
 tested-status suppression from the caller. Explicit exit invokes the action before

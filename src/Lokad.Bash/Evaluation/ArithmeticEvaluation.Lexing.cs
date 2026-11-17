@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -176,7 +177,7 @@ public static partial class ArithmeticEvaluation
         private readonly Dictionary<int, int> _blanks = new();
         public long? LiteralValue { get; }
 
-        public LexicalSyntax(ShellSource source)
+        public LexicalSyntax(ShellSource source, MemoryCapacity? memory)
         {
             var bytes = source.AsSpan();
             var ordinaryTokens = 0;
@@ -187,6 +188,7 @@ public static partial class ArithmeticEvaluation
                 {
                     var start = index++;
                     while (index < bytes.Length && bytes[index] is (byte)' ' or (byte)'\t' or (byte)'\n') index++;
+                    memory?.Grow(128); // Coarse dictionary capacity, including growth overlap.
                     _blanks.Add(start, index);
                     continue;
                 }
@@ -194,6 +196,7 @@ public static partial class ArithmeticEvaluation
                 var token = bytes.Slice(index, shape.Length);
                 long value = 0;
                 var valid = shape.Kind == ArithmeticTokenKind.Number && TryParseIntegerLiteral(token, out value);
+                memory?.Grow(256);
                 _tokens.Add(index, new CachedToken(shape, valid, value, GetBinaryToken(token, shape.Kind), GetAssignment(token)));
                 ordinaryTokens++;
                 literal = ordinaryTokens == 1 && valid ? value : null;
@@ -202,11 +205,13 @@ public static partial class ArithmeticEvaluation
                 {
                     var tail = ReadTokenShape(bytes[(index + 1)..], CancellationToken.None);
                     var tailText = bytes.Slice(index + 1, tail.Length);
+                    memory?.Grow(256);
                     _tokens.Add(index + 1, new CachedToken(tail, false, 0, GetBinaryToken(tailText, tail.Kind), GetAssignment(tailText)));
                 }
                 var end = index + shape.Length;
                 if (shape.Kind == ArithmeticTokenKind.Identifier)
                 {
+                    memory?.Grow(checked(256L + 4L * shape.Length));
                     var reference = ReadReferenceSyntax(source, index, shape.Length);
                     end = reference.End;
                     _references.Add(index, reference);

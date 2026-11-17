@@ -252,12 +252,41 @@ public sealed class HereInputLifetimeTests
         host.EnqueueCloseDescriptor();
         host.EnqueueCloseDescriptor();
         host.EnqueueAppendResult(DescriptorWriteResult.Open);
-        var result = await BashScript.RunAsync(host, ": " + (allocated ? "{fd}" : "") + "<<<'" + new string('x', 70000) + "'", EvaluationOptions.Default, CancellationToken.None);
+        // Caller-owned prepared syntax keeps this refusal at the payload handoff,
+        // after pipe creation, rather than at the public runner's source admission.
+        var script = Parser.Parse(": " + (allocated ? "{fd}" : "") + "<<<'" + new string('x', 70000) + "'");
+        using var owner = governor.CreateScope();
+        var result = await new Engine().RunAsync(new Evaluation.Evaluation(script), host, owner, CancellationToken.None);
 
         Assert.NotEqual(0, result.ExitCode);
         var diagnostic = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
         Assert.Equal(new[] { new FileDescriptor(11), new FileDescriptor(10) }, host.ClosedDescriptors);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SourceAdmissionRefusalDoesNotCreateTheHereInputPipe(bool allocated)
+    {
+        var governor = new MemoryGovernor(32 * 1024);
+        var host = new TestOperationVisitor([]) { MemoryBudget = governor, RecordAppends = true };
+        var descriptors = new PipeDescriptors(10, 11);
+        host.EnqueuePipeDescriptors(descriptors);
+        host.EnqueueCloseDescriptor();
+        host.EnqueueCloseDescriptor();
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        var result = await BashScript.RunAsync(host,
+            ": " + (allocated ? "{fd}" : "") + "<<<'" + new string('x', 70000) + "'",
+            EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
+        Assert.Empty(host.ClosedDescriptors);
+        // The mock's acquisition remains queued: source refusal never requested it.
+        Assert.Equal(descriptors, (await host.CreatePipeAsync(CancellationToken.None, CancellationToken.None)).Descriptors);
         Assert.Equal(0, governor.ReservedBytes);
     }
 

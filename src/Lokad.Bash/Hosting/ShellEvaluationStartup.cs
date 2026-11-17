@@ -30,7 +30,12 @@ public static class ShellEvaluationStartup
     public static ShellEvaluation CreateForNewHost(
         ParsedScript script,
         EvaluationOptions options) =>
+        CreateForNewHost(script, options, sourceMemory: null);
+
+    /// <summary>Installs the public runner's admitted source owner before command-unit parsing.</summary>
+    internal static ShellEvaluation CreateForNewHost(
+        ParsedScript script, EvaluationOptions options, SourceMemory? sourceMemory) =>
         new(script, EvaluationDescriptorSetup.Standard, publishNextStep: null, onComplete: null,
             options, borrowedDescriptors: [],
-            new MemoryGovernor(long.MaxValue));
+            new MemoryGovernor(long.MaxValue), sourceMemory);
 }

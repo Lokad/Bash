@@ -23,7 +23,7 @@ public partial class EvaluationTests
         var descriptors = new EvaluationDescriptorSetup(DescriptorTable.Snapshot.Standard, second);
         var state = new Eval(
             Parser.Parse(":"), descriptors, publishNextStep: null, onComplete: null,
-            EvaluationOptions.Default, first, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
+            EvaluationOptions.Default, first, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         Assert.Equal(
             new[] { 0, 1, 2 }.Concat(expectedIds),
@@ -1865,7 +1865,7 @@ public partial class EvaluationTests
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(3), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(900, run.Command.StdIn.Id);
@@ -1896,7 +1896,7 @@ public partial class EvaluationTests
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(9), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var first = await NextCommandAsync(state, "first");
         Assert.Equal(new FileDescriptor(900), first.Command.StdOut);

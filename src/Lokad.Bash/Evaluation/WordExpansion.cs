@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -24,7 +25,7 @@ internal static partial class WordExpansion
     internal static Task<ShellValue> ExpandSubscriptAsync(
         ShellSource source, ScopedEvaluation scope, ExpansionPurpose purpose, bool allowLeadingTilde) =>
         ExpandUnsplitValueAsync(
-            Tokenizer.ReadExpansionWord(source, GetOperandSyntax(purpose), ShellQuoteKind.None),
+            Tokenizer.ReadExpansionWord(source, GetOperandSyntax(purpose), ShellQuoteKind.None, scope.Effects.Memory.Workspace),
             scope, purpose, allowLeadingTilde);
 
     private static async Task<ShellValue> ExpandUnsplitValueAsync(
@@ -160,7 +161,7 @@ internal static partial class WordExpansion
                     scope.Effects.CancellationToken.ThrowIfCancellationRequested();
                     var newParts = new List<WordPart>(baseParts.Count + 1);
                     newParts.AddRange(baseParts);
-                    newParts.Add(WordPart.FromSource(WordPartKind.Unquoted, variant));
+                    newParts.Add(WordPart.FromSource(WordPartKind.Unquoted, variant, budget.Workspace));
                     nextExpanded.Add(newParts);
                 }
             }
@@ -429,7 +430,7 @@ internal static partial class WordExpansion
             if (value == (byte)'`'
                 && quoteContext is ExpansionQuoteContext.Unquoted or ExpansionQuoteContext.HereDocument)
             {
-                var legacyStatus = ScanCommandSubstitution(content, index, out var legacyScript, out var legacyEndIndex);
+                var legacyStatus = ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace, out var legacyScript, out var legacyEndIndex);
                 if (legacyStatus == ShellScanStatus.Complete)
                 {
                     await ExpandCommandSubstitutionAsync(
@@ -483,7 +484,7 @@ internal static partial class WordExpansion
                 continue;
             }
 
-            var commandStatus = ScanCommandSubstitution(content, index, out var script, out var endIndex);
+            var commandStatus = ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace, out var script, out var endIndex);
             if (commandStatus == ShellScanStatus.Complete)
             {
                 await ExpandCommandSubstitutionAsync(
@@ -677,10 +678,11 @@ internal static partial class WordExpansion
     private static ShellScanStatus ScanCommandSubstitution(
         ShellSource content,
         int startIndex,
+        MemoryCapacity memory,
         out CommandSubstitutionSyntax? script,
         out int endIndex)
     {
-        return CommandSubstitutionScanner.ScanParsed(new ShellScanContext(), content, startIndex, out endIndex, out script);
+        return CommandSubstitutionScanner.ScanParsed(new ShellScanContext { SyntaxMemory = memory }, content, startIndex, out endIndex, out script);
     }
 
     internal static async Task<ExpandedWord> ExpandExpressionAsync(
@@ -693,7 +695,7 @@ internal static partial class WordExpansion
             return new ExpandedWord([]);
 
         var words = await ExpandWithoutBraceAsync(
-                Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose), ShellQuoteKind.None),
+                Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose), ShellQuoteKind.None, scope.Effects.Memory.Workspace),
                 scope, allowWordSplitting, purpose, allowLeadingTilde: purpose is not (ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource))
             .ConfigureAwait(false);
         if (words.Count == 0 || !scope.CanExpand)
@@ -714,7 +716,8 @@ internal static partial class WordExpansion
 
         var word = Tokenizer.ReadExpansionWord(expression,
             GetOperandSyntax(purpose),
-            quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double);
+            quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double,
+            scope.Effects.Memory.Workspace);
         var builder = new ExpandedWordBuilder(
             scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken);
         await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, allowLeadingTilde: purpose is not (ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource))

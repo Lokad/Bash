@@ -15,7 +15,7 @@ public sealed class ArithmeticBindingTests
         var selected = new TaskCompletionSource<ArithmeticBinding<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var source = ShellSource.FromText(expression);
-        var operand = prepared ? ArithmeticOperand.FromSyntax(source, new ArithmeticEvaluation.LexicalSyntax(source))
+        var operand = prepared ? ArithmeticOperand.FromSyntax(source, new ArithmeticEvaluation.LexicalSyntax(source, null))
             : ArithmeticOperand.FromValue(source.ToValue());
         var pending = ArithmeticEvaluation.EvaluateAsync<string>(
             operand, Bind,

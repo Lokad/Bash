@@ -1,4 +1,5 @@
 using System;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Helpers;
 
@@ -16,9 +17,14 @@ public static class ShellEscapeDecoder
     public const int MaximumEscapeBytes = 6;
 
     /// <summary>Decodes an ANSI-C value to bytes, preserving unknown escapes and truncating at decoded NUL.</summary>
-    public static ShellValue DecodeAnsiCValue(ReadOnlySpan<byte> source)
+    public static ShellValue DecodeAnsiCValue(ReadOnlySpan<byte> source) => DecodeAnsiCValue(source, memory: null);
+
+    /// <summary>Retains decoded backing capacities in the parser's command-unit owner.</summary>
+    internal static ShellValue DecodeAnsiCValue(ReadOnlySpan<byte> source, MemoryCapacity? memory)
     {
-        var output = ByteMemoryBuilder.CreateUnaccounted(Math.Min(source.Length, 256));
+        var capacity = Math.Min(source.Length, 256);
+        var output = memory is null ? ByteMemoryBuilder.CreateUnaccounted(capacity)
+            : new ByteMemoryBuilder(capacity, memory);
         Span<byte> encoded = stackalloc byte[MaximumEscapeBytes];
         for (var index = 0; index < source.Length;)
         {
@@ -46,7 +52,7 @@ public static class ShellEscapeDecoder
             if (nul >= 0)
                 break;
         }
-        return ShellValue.FromBytes(output.ToMemory());
+        return ShellValue.FromBytes(output.ToCompactMemory(memory));
     }
 
     /// <summary>Requires nonempty source after a backslash and space for MaximumEscapeBytes.</summary>

@@ -104,9 +104,16 @@ public static class Parser
     public static ParsedScript Parse(ReadOnlyMemory<byte> input) =>
         TryParse(input, out var script, out var error) ? script : throw error.ToException();
 
+    internal static ParsedScript Parse(ReadOnlyMemory<byte> input, ShellScanContext context) =>
+        TryParse(input, context, out var script, out var error) ? script : throw error.ToException();
+
     /// <summary>Parses borrowed source bytes without throwing for invalid syntax or parsing limits.</summary>
     /// <remarks>Retains input storage; do not mutate it while the parsed syntax is in use.</remarks>
     public static bool TryParse(ReadOnlyMemory<byte> input,
+        [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error) =>
+        TryParse(input, new ShellScanContext(), out script, out error);
+
+    private static bool TryParse(ReadOnlyMemory<byte> input, ShellScanContext context,
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error)
     {
         script = null;
@@ -115,7 +122,7 @@ public static class Parser
             error = new SyntaxError(ScriptSizeLimitMessage, 0);
             return false;
         }
-        var tokenizer = new Tokenizer(ShellSource.FromBytes(input));
+        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context);
         SkipNewlines(tokenizer);
         var command = ParseList(tokenizer);
         SkipNewlines(tokenizer);
@@ -134,7 +141,12 @@ public static class Parser
     /// Lazily returns complete top-level command units or a terminal syntax failure.
     /// Later syntax is checked only when requested; failures retain absolute byte offsets.
     /// </summary>
-    internal static IEnumerable<CommandUnitParseResult> TryParseCommandUnits(ReadOnlyMemory<byte> input)
+    internal static IEnumerable<CommandUnitParseResult> TryParseCommandUnits(ReadOnlyMemory<byte> input) =>
+        TryParseCommandUnits(input, new ShellScanContext());
+
+    /// <summary>Shares one structural context while the execution owner supplies each unit's allowance.</summary>
+    internal static IEnumerable<CommandUnitParseResult> TryParseCommandUnits(
+        ReadOnlyMemory<byte> input, ShellScanContext scanContext)
     {
         if (input.Length > MaximumScriptBytes)
         {
@@ -142,9 +154,10 @@ public static class Parser
             yield break;
         }
 
-        var tokenizer = new Tokenizer(ShellSource.FromBytes(input));
+        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, scanContext);
         while (true)
         {
+            tokenizer.BeginCommandUnit();
             SkipNewlines(tokenizer);
             var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], TokenKind.Newline);
             var trailing = tokenizer.PeekTokenCore();
@@ -387,13 +400,13 @@ public static class Parser
             {
                 case TokenKind.ArithmeticCommand:
                     tokenizer.NextTokenCore();
-                    command = new ArithmeticCommand(token.CommandExpression);
+                    command = new ArithmeticCommand(token.CommandExpression, tokenizer.ScanContext.SyntaxMemory);
                     break;
                 case TokenKind.Word when IsKeyword(token, "[["):
                     // Reserved words introduce syntax only at a command boundary.
                     if (!tokenizer.TryReadConditionalExpression(tokenizer.NextTokenCore(), out var expression))
                         return null;
-                    if (!ConditionalParser.TryParse(expression, out var condition, out var conditionalError))
+                    if (!ConditionalParser.TryParse(expression, tokenizer.ScanContext.SyntaxMemory, out var condition, out var conditionalError))
                     {
                         tokenizer.RecordError(conditionalError.Message, token.Source.End.Value + conditionalError.Offset);
                         return null;
@@ -671,7 +684,7 @@ public static class Parser
                 return null;
             if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
                 return null;
-            return new ArithmeticForCommand(next.CommandExpression, arithmeticBody);
+            return new ArithmeticForCommand(next.CommandExpression, arithmeticBody, tokenizer.ScanContext.SyntaxMemory);
         }
 
         var nameToken = tokenizer.NextTokenCore();
@@ -914,11 +927,11 @@ public static class Parser
     /// </summary>
     private static SimpleCommand? ParseSimpleCommand(Tokenizer tokenizer)
     {
-        static bool TrySplitScalarAssignment(Word word, out AssignmentWord assignment)
+        bool TrySplitScalarAssignment(Word word, out AssignmentWord assignment)
         {
             assignment = default;
 
-            var nameBuilder = ByteMemoryBuilder.CreateUnaccounted(0);
+            var nameBuilder = tokenizer.ScanContext.CreateByteBuilder(0);
             for (var partIndex = 0; partIndex < word.Parts.Count; partIndex++)
             {
                 var part = word.Parts[partIndex];
@@ -946,11 +959,13 @@ public static class Parser
 
                 var valueParts = new List<WordPart>();
                 if (equals + 1 < source.Length)
-                    valueParts.Add(WordPart.FromSource(WordPartKind.Unquoted, source.Slice(equals + 1)));
+                    valueParts.Add(part is SourceWordPart prepared
+                        ? prepared.Slice(equals + 1, source.Length - equals - 1, tokenizer.ScanContext.SyntaxMemory)
+                        : WordPart.FromSource(WordPartKind.Unquoted, source.Slice(equals + 1), tokenizer.ScanContext.SyntaxMemory));
                 for (var j = partIndex + 1; j < word.Parts.Count; j++)
                     valueParts.Add(word.Parts[j]);
 
-                assignment = new AssignmentWord(ShellSource.FromBytes(nameBuilder.ToMemory()), new Word(valueParts), operation);
+                assignment = new AssignmentWord(ShellSource.FromBytes(nameBuilder.ToCompactMemory(tokenizer.ScanContext.SyntaxMemory)), new Word(valueParts), operation);
                 return true;
             }
 
@@ -1268,7 +1283,7 @@ public static class Parser
             // argument, even without whitespace (>&-3). Quoted/expanded '-' stays a word.
             var remaining = new List<WordPart>();
             if (first.Source.Length > 1)
-                remaining.Add(WordPart.FromSource(WordPartKind.Unquoted, first.Source.Slice(1)));
+                remaining.Add(first.Slice(1, first.Source.Length - 1, tokenizer.ScanContext.SyntaxMemory));
             for (var index = 1; index < targetWord.Word.Parts.Count; index++)
                 remaining.Add(targetWord.Word.Parts[index]);
             if (remaining.Count > 0)
@@ -1284,7 +1299,8 @@ public static class Parser
             return;
         }
 
-        redirections.Add(new Redirection(kind, fileDescriptor, targetWord.Word, variableName, hereDocumentDelimiter: null));
+        redirections.Add(new Redirection(kind, fileDescriptor, targetWord.Word, variableName,
+            hereDocumentDelimiter: null, tokenizer.ScanContext.SyntaxMemory));
     }
 
     private static IReadOnlyList<Redirection> ReadTrailingRedirections(Tokenizer tokenizer)
