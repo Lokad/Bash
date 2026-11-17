@@ -207,19 +207,6 @@ public static partial class PrintfFormatting
                     conversion = 'T';
                 }
 
-                if (width > MaximumFieldSize)
-                {
-                    AddFatalDiagnostic($"field width exceeds {MaximumFieldSize}");
-                    specification = default;
-                    return false;
-                }
-                if (precision > MaximumFieldSize)
-                {
-                    AddFatalDiagnostic($"precision exceeds {MaximumFieldSize}");
-                    specification = default;
-                    return false;
-                }
-
                 specification = new FormatSpecification(
                     flags,
                     width,
@@ -368,8 +355,7 @@ public static partial class PrintfFormatting
                             var value = ParseSigned(GetValueArgument());
                             var negative = value < 0;
                             var magnitude = negative ? unchecked((ulong)(-(value + 1)) + 1) : (ulong)value;
-                            var digits = magnitude.ToString(Culture);
-                            digits = ApplyIntegerPrecision(digits, magnitude == 0, specification.Precision);
+                            var digits = ApplyIntegerPrecision(magnitude.ToString(Culture), magnitude == 0, specification.Precision);
                             AppendNumber(
                                 specification,
                                 new FormattedNumber(
@@ -387,19 +373,20 @@ public static partial class PrintfFormatting
                     case 'X':
                         {
                             var value = ParseUnsigned(GetValueArgument());
-                            var digits = specification.Conversion switch
+                            var digitText = specification.Conversion switch
                             {
                                 'o' => ConvertUnsigned(value, 8, uppercase: false),
                                 'x' => ConvertUnsigned(value, 16, uppercase: false),
                                 'X' => ConvertUnsigned(value, 16, uppercase: true),
                                 _ => value.ToString(Culture)
                             };
-                            digits = ApplyIntegerPrecision(digits, value == 0, specification.Precision);
+                            var digits = ApplyIntegerPrecision(digitText, value == 0, specification.Precision);
 
                             var prefix = string.Empty;
                             if (specification.Flags.HasFlag(FormatFlags.Alternate))
                             {
-                                if (specification.Conversion == 'o' && !digits.StartsWith('0'))
+                                if (specification.Conversion == 'o' && (digits.Length == 0
+                                    || digits.Zeros == 0 && !digitText.StartsWith('0')))
                                     prefix = "0";
                                 else if (value != 0 && specification.Conversion == 'x')
                                     prefix = "0x";
@@ -566,11 +553,12 @@ public static partial class PrintfFormatting
                 ShellValue GetValueArgument() =>
                     TryGetArgument(out var argument) ? argument : ShellValue.Empty;
 
-                static string ApplyIntegerPrecision(string digits, bool isZero, int? precision)
+                static NumberText ApplyIntegerPrecision(string digits, bool isZero, int? precision)
                 {
                     if (precision == 0 && isZero)
-                        return string.Empty;
-                    return precision is { } minimum ? digits.PadLeft(minimum, '0') : digits;
+                        return new NumberText(string.Empty, 0, string.Empty);
+                    return new NumberText(string.Empty,
+                        precision is { } minimum ? Math.Max(0, minimum - digits.Length) : 0, digits);
                 }
 
                 void ApplyUtf8Text(
@@ -641,7 +629,13 @@ public static partial class PrintfFormatting
                         _ => string.Empty
                     };
                     var length = sign.Length + number.Prefix.Length + number.Text.Length;
-                    var padding = Math.Max(0, numberSpecification.Width - length);
+                    var paddingLength = Math.Max(0L, numberSpecification.Width - length);
+                    if (length + paddingLength > _output.RemainingLength)
+                    {
+                        FailOutputLimit();
+                        return;
+                    }
+                    var padding = (int)paddingLength;
                     var left = numberSpecification.Flags.HasFlag(FormatFlags.LeftJustify);
                     var zero = number.Padding == FormattedNumberPadding.ZeroAllowed
                         && numberSpecification.Flags.HasFlag(FormatFlags.ZeroPad)
@@ -654,7 +648,9 @@ public static partial class PrintfFormatting
                     AppendText(number.Prefix);
                     if (zero)
                         AppendPadding(padding, (byte)'0');
-                    AppendText(number.Text);
+                    AppendText(number.Text.BeforeZeros);
+                    AppendPadding(number.Text.Zeros, (byte)'0');
+                    AppendText(number.Text.AfterZeros);
 
                     if (left)
                         AppendPadding(padding, (byte)' ');

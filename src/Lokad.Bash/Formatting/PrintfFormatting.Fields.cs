@@ -17,8 +17,14 @@ public static partial class PrintfFormatting
             ZeroAllowed
         }
 
+        /// <summary>Separates exact digits from arbitrarily long, budgeted runs of zero padding.</summary>
+        private readonly record struct NumberText(string BeforeZeros, int Zeros, string AfterZeros)
+        {
+            public long Length => (long)BeforeZeros.Length + Zeros + AfterZeros.Length;
+        }
+
         private readonly record struct FormattedNumber(
-            string Text,
+            NumberText Text,
             string Prefix,
             FormattedNumberSign Sign,
             FormattedNumberPadding Padding);

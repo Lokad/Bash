@@ -35,8 +35,8 @@ public static partial class PrintfFormatting
                     && char.ToLowerInvariant(conversion) == 'a';
                 var text = value.Class switch
                 {
-                    FloatingPointClass.Nan => uppercase ? "NAN" : "nan",
-                    FloatingPointClass.Infinity => uppercase ? "INF" : "inf",
+                    FloatingPointClass.Nan => new NumberText(uppercase ? "NAN" : "nan", 0, string.Empty),
+                    FloatingPointClass.Infinity => new NumberText(uppercase ? "INF" : "inf", 0, string.Empty),
                     _ => char.ToLowerInvariant(conversion) switch
                     {
                         'f' => FormatFixed(value, precision ?? 6, alternate),
@@ -73,23 +73,22 @@ public static partial class PrintfFormatting
                         invalid, prefix.RangeError);
                 }
 
-                string FormatFixed(ExtendedFloatingPoint finite, int precision, bool alternate)
+                NumberText FormatFixed(ExtendedFloatingPoint finite, int precision, bool alternate)
                 {
-                    var rounded = RoundAtDecimalScale(finite, precision);
-                    var digits = rounded.ToString(Culture).PadLeft(precision + 1, '0');
-                    if (precision == 0)
-                        return alternate ? digits + "." : digits;
-                    return digits[..^precision] + "." + digits[^precision..];
+                    var exactPrecision = Math.Min(precision, MaximumFractionDigits(finite));
+                    var rounded = RoundAtDecimalScale(finite, exactPrecision);
+                    return FormatDecimalDigits(rounded, exactPrecision, precision > 0 || alternate, precision - exactPrecision);
                 }
 
-                string FormatScientific(
+                NumberText FormatScientific(
                     ExtendedFloatingPoint finite,
                     int precision,
                     bool uppercase,
                     bool alternate)
                 {
-                    var significantDigits = precision + 1;
                     var exponent = GetDecimalExponent(finite);
+                    var exactPrecision = Math.Min(precision, Math.Max(0, exponent + MaximumFractionDigits(finite)));
+                    var significantDigits = exactPrecision + 1;
                     var rounded = RoundAtDecimalScale(finite, significantDigits - 1 - exponent);
                     var threshold = BigInteger.Pow(10, significantDigits);
                     if (rounded >= threshold)
@@ -99,12 +98,13 @@ public static partial class PrintfFormatting
                     }
 
                     var digits = rounded.ToString(Culture).PadLeft(significantDigits, '0');
-                    var fraction = precision == 0 ? string.Empty : digits[1..];
+                    var fraction = exactPrecision == 0 ? string.Empty : digits[1..];
                     var point = precision > 0 || alternate ? "." : string.Empty;
-                    return digits[0] + point + fraction + FormatExponent(exponent, uppercase ? 'E' : 'e');
+                    return new NumberText(digits[0] + point + fraction, precision - exactPrecision,
+                        FormatExponent(exponent, uppercase ? 'E' : 'e'));
                 }
 
-                string FormatGeneral(
+                NumberText FormatGeneral(
                     ExtendedFloatingPoint finite,
                     int precision,
                     bool uppercase,
@@ -114,57 +114,64 @@ public static partial class PrintfFormatting
                         precision = 1;
 
                     var exponent = GetDecimalExponent(finite);
-                    var rounded = RoundAtDecimalScale(finite, precision - 1 - exponent);
-                    var threshold = BigInteger.Pow(10, precision);
+                    var exactPrecision = Math.Min(precision, Math.Max(1, exponent + MaximumFractionDigits(finite) + 1));
+                    var rounded = RoundAtDecimalScale(finite, exactPrecision - 1 - exponent);
+                    var threshold = BigInteger.Pow(10, exactPrecision);
+                    var carriedToScientific = false;
                     if (rounded >= threshold)
                     {
                         rounded /= 10;
                         exponent++;
+                        carriedToScientific = exponent == precision;
                     }
 
                     if (exponent < -4 || exponent >= precision)
                     {
-                        var digits = rounded.ToString(Culture).PadLeft(precision, '0');
+                        var digits = rounded.ToString(Culture).PadLeft(exactPrecision, '0');
                         var fraction = digits.Length > 1 ? digits[1..] : string.Empty;
-                        if (!alternate)
+                        // The pinned GNU profile drops fractional zeros when a carry changes notation.
+                        if (!alternate || carriedToScientific)
                             fraction = fraction.TrimEnd('0');
                         var point = fraction.Length > 0 || alternate ? "." : string.Empty;
-                        var text = digits[0] + point + fraction
-                            + FormatExponent(exponent, uppercase ? 'E' : 'e');
-                        return uppercase ? text.ToUpperInvariant() : text;
+                        return new NumberText(digits[0] + point + fraction,
+                            alternate && !carriedToScientific ? precision - exactPrecision : 0,
+                            FormatExponent(exponent, uppercase ? 'E' : 'e'));
                     }
 
-                    var fractionalDigits = Math.Max(0, precision - exponent - 1);
-                    var fixedText = FormatFixed(finite, fractionalDigits, alternate);
-                    if (!alternate && fixedText.Contains('.'))
-                        fixedText = fixedText.TrimEnd('0').TrimEnd('.');
-                    return uppercase ? fixedText.ToUpperInvariant() : fixedText;
+                    var fractionalDigits = Math.Max(0, exactPrecision - exponent - 1);
+                    var fixedText = FormatDecimalDigits(rounded, fractionalDigits, alternate,
+                        alternate ? precision - exactPrecision : 0);
+                    if (!alternate && fixedText.BeforeZeros.Contains('.'))
+                        fixedText = fixedText with { BeforeZeros = fixedText.BeforeZeros.TrimEnd('0').TrimEnd('.') };
+                    return fixedText;
                 }
 
-                string FormatHexadecimal(
+                NumberText FormatHexadecimal(
                     ExtendedFloatingPoint finite,
                     int? requestedPrecision,
                     bool uppercase,
                     bool alternate)
                 {
                     var marker = uppercase ? 'P' : 'p';
+                    var precision = requestedPrecision is { } requested ? Math.Min(requested, 15) : (int?)null;
+                    var zeroPadding = requestedPrecision is { } padded ? Math.Max(0, padded - 15) : 0;
                     if (finite.Significand == 0)
                     {
-                        var zeroFraction = requestedPrecision is { } zeroPrecision
+                        var zeroFraction = precision is { } zeroPrecision
                             ? zeroPrecision > 0 || alternate
                                 ? "." + new string('0', zeroPrecision)
                                 : string.Empty
-                            : string.Empty;
-                        return $"0{zeroFraction}{marker}+0";
+                            : alternate ? "." : string.Empty;
+                        return new NumberText("0" + zeroFraction, zeroPadding, $"{marker}+0");
                     }
 
                     var exponent = finite.Exponent - 3;
                     string hexadecimal;
-                    if (requestedPrecision is { } precision && precision < 15)
+                    if (precision is { } roundedPrecision && roundedPrecision < 15)
                     {
-                        var shift = 4 * (15 - precision);
+                        var shift = 4 * (15 - roundedPrecision);
                         var rounded = ExtendedFloatingPoint.RoundQuotient(finite.Significand, BigInteger.One << shift);
-                        var expectedDigits = precision + 1;
+                        var expectedDigits = roundedPrecision + 1;
                         hexadecimal = rounded.ToString(uppercase ? "X" : "x", Culture);
                         if (hexadecimal.Length > expectedDigits && hexadecimal[0] == '0')
                             hexadecimal = hexadecimal[1..];
@@ -181,8 +188,6 @@ public static partial class PrintfFormatting
                     else
                     {
                         hexadecimal = finite.Significand.ToString(uppercase ? "X16" : "x16", Culture);
-                        if (requestedPrecision is { } paddedPrecision)
-                            hexadecimal += new string('0', paddedPrecision - 15);
                     }
 
                     var leading = hexadecimal[0];
@@ -191,7 +196,19 @@ public static partial class PrintfFormatting
                         fraction = fraction.TrimEnd('0');
                     var point = fraction.Length > 0 || alternate ? "." : string.Empty;
                     var exponentSign = exponent >= 0 ? "+" : string.Empty;
-                    return $"{leading}{point}{fraction}{marker}{exponentSign}{exponent.ToString(Culture)}";
+                    return new NumberText($"{leading}{point}{fraction}", zeroPadding,
+                        $"{marker}{exponentSign}{exponent.ToString(Culture)}");
+                }
+
+                static int MaximumFractionDigits(ExtendedFloatingPoint finite) => finite.Significand == 0 ? 0
+                    : Math.Max(0, 63 - finite.Exponent - BitOperations.TrailingZeroCount(finite.Significand));
+
+                static NumberText FormatDecimalDigits(BigInteger rounded, int fractionDigits, bool point, int zeros)
+                {
+                    var digits = rounded.ToString(Culture).PadLeft(fractionDigits + 1, '0');
+                    var text = fractionDigits == 0 ? point ? digits + "." : digits
+                        : digits[..^fractionDigits] + "." + digits[^fractionDigits..];
+                    return new NumberText(text, zeros, string.Empty);
                 }
 
                 BigInteger RoundAtDecimalScale(ExtendedFloatingPoint finite, int decimalScale)

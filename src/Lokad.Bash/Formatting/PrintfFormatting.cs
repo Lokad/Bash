@@ -78,7 +78,6 @@ public static partial class PrintfFormatting
         private readonly ReadOnlyMemory<byte> format = formatValue.Bytes;
 
         private const int MaximumOutputBytes = ByteMemoryBuilder.MaxMemoryBuilderBytes - 1;
-        private const int MaximumFieldSize = 1 << 20;
 
         private readonly BoundedByteMemoryBuilder _output = new(
             0, MaximumOutputBytes, memoryBudget);
@@ -127,8 +126,22 @@ public static partial class PrintfFormatting
             if (_failed)
                 return;
 
-            if (!_output.TryAppend(count, value))
+            if (count > _output.RemainingLength)
+            {
                 FailOutputLimit();
+                return;
+            }
+            while (count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var length = Math.Min(count, 64 * 1024);
+                if (!_output.TryAppend(length, value))
+                {
+                    FailOutputLimit();
+                    return;
+                }
+                count -= length;
+            }
         }
 
         private bool TryAppendByte(BoundedByteMemoryBuilder output, byte value)

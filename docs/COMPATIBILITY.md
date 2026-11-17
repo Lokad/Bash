@@ -174,6 +174,14 @@ do not produce range warnings. A shell-closed stderr discards conversion diagnos
 without suppressing stdout; host-reported diagnostic failures retain their ordinary
 stop policy. Numeric parsing observes cancellation and shared workspace admission.
 
+Printf width and precision have no independent 1 MiB quota. A large precision that
+only truncates a short string or leaves a short general-format result does not
+require proportionally large workspace. Actual output, replacement overlap and
+numeric material must fit the supplied live-memory allowance and CLR representation
+limits. The deterministic Linux profile includes the alternate-form decimal point
+for hexadecimal zero and discarded fractional zeros when a general-format carry
+changes fixed notation to scientific notation.
+
 Implicit `for name; do ...; done` iterates a snapshot of quoted positional
 parameters, preserving empty arguments and bytes. Explicit `in` lists retain their
 usual expansion rules. `exit` accepts signed 64-bit decimal statuses modulo 256;

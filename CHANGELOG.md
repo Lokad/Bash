@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Govern printf field widths and precision by actual output and admitted numeric
+  workspace, removing the arbitrary 1 MiB cap. Bound exact numeric material and
+  pad through the shared output builder with cancellation. Preserve alternate
+  hexadecimal zero and the qualified GNU general-format carry forms.
 - Parse printf numeric operands as bytes, preserving conversion diagnostics and
   character constants without CLR decoding failures. Bound integer accumulation,
   share extended floating-point parsing and admit its workspace with cancellation.

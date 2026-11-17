@@ -172,6 +172,28 @@ public sealed class PrintfFormattingTests
         Assert.Equal("1e+01|1e+06|1.e+01", Text(output));
     }
 
+    [Theory]
+    [InlineData("%#a", "0", "0x0.p+0")]
+    [InlineData("%#a", "-0", "-0x0.p+0")]
+    [InlineData("%#.0a", "0", "0x0.p+0")]
+    [InlineData("%#.0a", "-0", "-0x0.p+0")]
+    [InlineData("%#.2g", "99.95", "1.e+02")]
+    [InlineData("%#.2g", "-99.95", "-1.e+02")]
+    [InlineData("%#.3g", "999.95", "1.e+03")]
+    [InlineData("%#.4g", "9999.95", "1.e+04")]
+    [InlineData("%#.6g", "999999.95", "1.e+06")]
+    [InlineData("%#.2g", "100", "1.0e+02")]
+    [InlineData("%#.3g", "1000", "1.00e+03")]
+    [InlineData("%#.2g", "1.25", "1.2")]
+    public void Evaluate_AlternateFloatingPointPreservesZeroAndCarryForms(string format, string argument, string expected)
+    {
+        // The qualified Linux profile drops zeros only when rounding changes fixed output to scientific.
+        var result = EvaluateText(format, [argument], DateTimeOffset.UnixEpoch);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, Text(result.Output));
+        Assert.Empty(result.Diagnostics);
+    }
+
     [Fact]
     public void Format_SupportsCharacterStringAndIgnoredNumericLengthModifiers()
     {
@@ -525,15 +547,19 @@ public sealed class PrintfFormattingTests
     }
 
     [Theory]
-    [InlineData("%1048577s", "field width exceeds 1048576")]
-    [InlineData("%.1048577d", "precision exceeds 1048576")]
-    public void Evaluate_RejectsFieldsThatWouldRequireUnboundedMemory(string format, string diagnostic)
+    [InlineData("%1048577s")]
+    [InlineData("%.1048577d")]
+    public void Evaluate_RejectsOutputThatExceedsTheSuppliedMemory(string format)
     {
-        var result = EvaluateText(format, ["1"], DateTimeOffset.UnixEpoch);
+        var memory = new Lokad.Bash.Memory.MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText(format), [ShellValue.FromText("1")], owner);
 
         Assert.Empty(result.Output.ToArray());
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal([diagnostic], result.Diagnostics.Select(value => value.ToUtf8String()));
+        Assert.Equal(new[] { "shared memory budget exhausted" }, result.Diagnostics.Select(value => value.ToUtf8String()));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
     }
 
     [Fact]

@@ -41,6 +41,13 @@ policy. Its coarse numeric workspace is admitted before conversion and reused on
 after the preceding conversion has finished. Conversion diagnostics retain their
 bytes through borrowed writes; cancellation still drains ordinary descriptor cleanup.
 
+Printf field widths and precision retain integer representation checks while actual
+output and numeric workspace use shared admission. Exact finite digits stay bounded
+by the extended numeric profile; trailing zeros are emitted through the ordinary
+output builder with cancellation checks. General formatting reuses its rounded
+coefficient. Refusal retains earlier count assignments and skips later conversions;
+returned output remains admitted through its consumer's ownership scope.
+
 Command dispatch resumes asynchronously when CLR stack space runs low, so finite
 function calls do not depend on the embedding thread's native stack size. Reached
 source/eval parsers start on a fresh continuation to keep syntax guards independent
