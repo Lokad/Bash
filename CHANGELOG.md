@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Share immutable descriptor lookup and ordered slot trees across snapshots.
+  Copy changed paths instead of entire additional-descriptor maps, preserve
+  encounter order and sparse-slot reuse, and prepare admission for every receiving
+  owner before publication. Keep reference scans and host-handle cleanup separate.
 - Admit IFS membership capacity before growth and retain completed indexes through
   their variable owner. Publish immutable snapshots in the active scope so child
   construction cannot grow a parent's cache. Keep byte membership in fixed inline

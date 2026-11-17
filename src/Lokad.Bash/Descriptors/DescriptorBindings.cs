@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash;
@@ -7,16 +5,17 @@ namespace Lokad.Bash;
 /// <summary>Maps interpreter-local descriptor numbers to host handles without owning their lifetimes.</summary>
 /// <remarks>
 /// Keep one mutable value per owner; share additional mappings through captured snapshots, not value copies.
-/// Standard streams stay inline. Additional bindings are allocated on demand and copied only after capture.
+/// Standard streams stay inline. Additional bindings share immutable indexed slots across captures.
 /// </remarks>
 public partial struct DescriptorBindings
 {
-    private Dictionary<LogicalDescriptor, FileDescriptor>? _additional;
-    private bool _additionalShared;
+    private DescriptorMap? _additional;
+    private DescriptorMap.Builder? _writer;
 
-    // Dictionary header, bucket/entry arrays and capacity rather than just live keys.
-    internal readonly long AdditionalMemoryBytes => _additional == null ? 0
-        : checked(128L + 32L * _additional.EnsureCapacity(0));
+    internal readonly long AdditionalMemoryBytes => _writer != null ? DescriptorMap.EstimateMemoryBytes(_writer.SlotCount)
+        : _additional == null ? 0 : DescriptorMap.EstimateMemoryBytes(_additional.SlotCount);
+
+    internal readonly long OwnedMemoryBytes => _writer != null ? AdditionalMemoryBytes : 0;
 
     public FileDescriptor StdIn { get; private set; }
     public FileDescriptor StdOut { get; private set; }
@@ -28,17 +27,18 @@ public partial struct DescriptorBindings
     }
 
     private DescriptorBindings(FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr,
-        Dictionary<LogicalDescriptor, FileDescriptor>? additional)
+        DescriptorMap? additional)
     {
         _additional = additional;
-        _additionalShared = additional != null;
+        _writer = null;
         StdIn = stdIn;
         StdOut = stdOut;
         StdErr = stdErr;
     }
 
-    public readonly FileDescriptor Resolve(LogicalDescriptor descriptor) =>
-        Resolve(descriptor, StdIn, StdOut, StdErr, _additional);
+    public readonly FileDescriptor Resolve(LogicalDescriptor descriptor) => descriptor.Number <= 2
+        ? Resolve(descriptor, StdIn, StdOut, StdErr, null)
+        : TryGetAdditionalValue(descriptor, out var handle) ? handle : FileDescriptor.Closed;
 
     /// <summary>Updates a binding without closing handles; returns whether its value changed.</summary>
     public bool Set(LogicalDescriptor descriptor, FileDescriptor handle)
@@ -61,8 +61,10 @@ public partial struct DescriptorBindings
 
         if (!PrepareSet(descriptor, handle, null))
             return false;
-        var additional = _additional ?? throw new InvalidOperationException("A changed descriptor requires writable storage.");
-        additional[descriptor] = handle;
+        var writer = _writer ?? new DescriptorMap.Builder(_additional ?? DescriptorMap.Empty);
+        writer.Set(descriptor, handle);
+        _writer = writer;
+        _additional = null;
         return true;
     }
 
@@ -71,35 +73,17 @@ public partial struct DescriptorBindings
     {
         if (descriptor.Number <= 2)
             return Resolve(descriptor) != handle;
-        var previous = FileDescriptor.Closed;
-        var present = _additional != null && _additional.TryGetValue(descriptor, out previous);
+        var present = TryGetAdditionalValue(descriptor, out var previous);
         if (present && previous == handle)
             return false;
-        PrepareAdditionalCapacity(checked((_additional?.Count ?? 0) + (present ? 0 : 1)), memory);
+        var requiredSlots = _writer?.RequiredSlots(descriptor) ?? _additional?.RequiredSlots(descriptor) ?? 1;
+        var required = DescriptorMap.EstimateMemoryBytes(requiredSlots);
+        var owned = OwnedMemoryBytes;
+        if (required > owned)
+            memory?.Grow(required - owned);
+        // No tree is changed here. Every receiving owner admits its complete
+        // transitive backing and replacement headroom before any binding is set.
         return true;
-    }
-
-    private void PrepareAdditionalCapacity(int required, MemoryCapacity? memory)
-    {
-        var capacity = _additional?.EnsureCapacity(0) ?? 0;
-        if (_additional != null && !_additionalShared && required <= capacity)
-            return;
-        // New dictionary capacities round to primes; a twofold bound covers that
-        // rounding. Replacements are charged while their old arrays are still live.
-        var requested = _additionalShared ? required : (int)Math.Min(int.MaxValue, Math.Max(required, 2L * capacity));
-        memory?.Grow(checked(128L + 32L * (2L * requested + 1)));
-        if (_additional == null)
-            _additional = new Dictionary<LogicalDescriptor, FileDescriptor>(requested);
-        else if (_additionalShared)
-        {
-            var replacement = new Dictionary<LogicalDescriptor, FileDescriptor>(requested);
-            foreach (var binding in _additional)
-                replacement.Add(binding.Key, binding.Value);
-            _additional = replacement;
-        }
-        else
-            _additional.EnsureCapacity(requested);
-        _additionalShared = false;
     }
 
     /// <summary>Removes an additional binding, or marks a standard stream closed, without closing its handle.</summary>
@@ -107,32 +91,45 @@ public partial struct DescriptorBindings
     {
         if (descriptor.Number <= 2)
             return Set(descriptor, FileDescriptor.Closed);
-        if (_additional == null || !_additional.ContainsKey(descriptor))
+        if (!HasMapping(descriptor))
             return false;
 
-        PrepareAdditionalCapacity(_additional.Count, null);
-        return _additional.Remove(descriptor);
+        var writer = _writer ?? new DescriptorMap.Builder(_additional ?? DescriptorMap.Empty);
+        writer.Remove(descriptor);
+        _writer = writer;
+        _additional = null;
+        return true;
     }
 
-    public readonly bool HasMapping(LogicalDescriptor descriptor) => HasMapping(descriptor, _additional);
+    private readonly bool TryGetAdditionalValue(LogicalDescriptor descriptor, out FileDescriptor handle)
+    {
+        if (_writer != null) return _writer.TryGetValue(descriptor, out handle);
+        if (_additional != null) return _additional.TryGetValue(descriptor, out handle);
+        handle = FileDescriptor.Closed;
+        return false;
+    }
+
+    public readonly bool HasMapping(LogicalDescriptor descriptor) => descriptor.Number <= 2
+        || (_writer?.ContainsKey(descriptor) ?? _additional?.ContainsKey(descriptor) ?? false);
 
     public readonly bool References(FileDescriptor handle) =>
-        StdIn == handle || StdOut == handle || StdErr == handle || _additional?.ContainsValue(handle) == true;
+        StdIn == handle || StdOut == handle || StdErr == handle
+            || (_writer?.ContainsValue(handle) ?? _additional?.ContainsValue(handle) ?? false);
 
     /// <summary>Freezes standard streams and additional mappings without copying or acquiring handle ownership.</summary>
     public Snapshot Capture() => new(ref this);
 
     private static bool HasMapping(LogicalDescriptor descriptor,
-        Dictionary<LogicalDescriptor, FileDescriptor>? additional) =>
+        DescriptorMap? additional) =>
         descriptor.Number <= 2 || additional?.ContainsKey(descriptor) == true;
 
     private static FileDescriptor Resolve(LogicalDescriptor descriptor,
         FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr,
-        Dictionary<LogicalDescriptor, FileDescriptor>? additional) => descriptor.Number switch
+        DescriptorMap? additional) => descriptor.Number switch
     {
         0 => stdIn,
         1 => stdOut,
         2 => stdErr,
-        _ => additional?.GetValueOrDefault(descriptor, FileDescriptor.Closed) ?? FileDescriptor.Closed
+        _ => additional != null && additional.TryGetValue(descriptor, out var handle) ? handle : FileDescriptor.Closed
     };
 }

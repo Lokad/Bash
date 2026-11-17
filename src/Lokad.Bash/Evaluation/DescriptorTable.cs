@@ -4,7 +4,7 @@ namespace Lokad.Bash.Evaluation;
 
 /// <summary>Owns mutable logical bindings; redirection scopes separately own host-handle lifetimes.</summary>
 /// <remarks>
-/// Shared bindings keep standard streams inline and copy additional mappings only after capture.
+/// Shared bindings keep standard streams inline and copy only changed paths in additional mappings.
 /// This table adds Bash's allocation cursor; redirection scopes retain closing responsibility.
 /// A table has one evaluator owner; captured snapshots may be read concurrently by child evaluations.
 /// </remarks>
@@ -13,9 +13,8 @@ internal sealed partial class DescriptorTable
     private const int FirstAllocatedDescriptorNumber = 10;
     private DescriptorBindings _bindings;
     private int _nextAllocationNumber;
-    private bool _ownsAdditional;
 
-    internal long OwnedMemoryBytes => _ownsAdditional ? _bindings.AdditionalMemoryBytes : 0;
+    internal long OwnedMemoryBytes => _bindings.OwnedMemoryBytes;
 
     public FileDescriptor StdIn => _bindings.StdIn;
     public FileDescriptor StdOut => _bindings.StdOut;
@@ -50,8 +49,6 @@ internal sealed partial class DescriptorTable
     {
         if (!_bindings.Set(descriptor, handle))
             return;
-        if (descriptor.Number > 2)
-            _ownsAdditional = true;
         if (handle.IsClosed && descriptor.Number >= FirstAllocatedDescriptorNumber && descriptor.Number < _nextAllocationNumber)
             _nextAllocationNumber = descriptor.Number;
         else if (descriptor.Number == _nextAllocationNumber)
@@ -61,8 +58,7 @@ internal sealed partial class DescriptorTable
     /// <summary>Prepares major backing storage before a mapping or persistent batch is published.</summary>
     internal void PrepareSet(LogicalDescriptor descriptor, FileDescriptor handle, MemoryCapacity? memory)
     {
-        if (_bindings.PrepareSet(descriptor, handle, memory) && descriptor.Number > 2)
-            _ownsAdditional = true;
+        _bindings.PrepareSet(descriptor, handle, memory);
     }
 
     internal void Set(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory memory)

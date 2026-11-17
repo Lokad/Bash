@@ -9,6 +9,86 @@ namespace Lokad.Bash.Tests;
 
 public sealed class DescriptorMemoryTests
 {
+    [Fact]
+    public void SparseBorrowedMapsAdmitCompactedBackingBeforeTheWrite()
+    {
+        var bindings = Bindings(256);
+        for (var number = 10; number < 266; number++)
+            Assert.True(bindings.Remove(new LogicalDescriptor(number)));
+        var inherited = bindings.Capture();
+        var child = DescriptorTable.Snapshot.FromInheritedBindings(inherited).Fork();
+        var governor = new MemoryGovernor(1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        child.Set(new LogicalDescriptor(300), FileDescriptor.DevNull, memory);
+        Assert.Equal(FileDescriptor.DevNull, child.Resolve(new LogicalDescriptor(300)));
+        Assert.False(inherited.HasMapping(new LogicalDescriptor(300)));
+        Assert.True(child.OwnedMemoryBytes <= governor.ReservedBytes);
+        Assert.InRange(child.OwnedMemoryBytes, 1, 1024);
+    }
+
+    [Fact]
+    public void AdmissionPreparationDoesNotAcquireOrPublishBorrowedBacking()
+    {
+        var inherited = Bindings(128).Capture();
+        var table = DescriptorTable.Snapshot.FromInheritedBindings(inherited).Fork();
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var number = new LogicalDescriptor(10);
+
+        table.PrepareSet(number, FileDescriptor.DevNull, memory.Workspace);
+        Assert.True(governor.ReservedBytes > 0);
+        Assert.Equal(0, table.OwnedMemoryBytes);
+        Assert.Equal(FileDescriptor.StdOut, table.Resolve(number));
+        Assert.Equal(FileDescriptor.StdOut, inherited.Resolve(number));
+
+        // Refusal at a later receiver leaves no newly allocated tree to retain.
+        memory.Workspace.Resize(0);
+        memory.ReleaseUnusedCapacity();
+        Assert.Equal(0, governor.ReservedBytes);
+        using var blocker = owner.Reserve(governor.LimitBytes);
+        Assert.Throws<MemoryBudgetExceededException>(() =>
+            table.PrepareSet(number, FileDescriptor.DevNull, memory.Workspace));
+        Assert.Equal(0, table.OwnedMemoryBytes);
+        Assert.Equal(FileDescriptor.StdOut, table.Resolve(number));
+    }
+
+    [Fact]
+    public void AdmittedChangedPathsReuseTheirOwnersReplacementHeadroom()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var parent = new DescriptorTable();
+        for (var index = 0; index < 128; index++)
+            parent.Set(new LogicalDescriptor(10 + index), new FileDescriptor(1000 + index), memory);
+        var inherited = parent.Capture();
+        var child = inherited.Fork();
+        var number = new LogicalDescriptor(10);
+        child.Set(number, new FileDescriptor(2000), memory);
+        var retained = parent.OwnedMemoryBytes + child.OwnedMemoryBytes;
+        memory.Workspace.Resize(retained);
+        Assert.True(governor.ReservedBytes >= retained);
+        using var blocker = owner.Reserve(governor.LimitBytes - governor.ReservedBytes);
+
+        var failure = Record.Exception(() =>
+        {
+            for (var index = 0; index < 1024; index++)
+            {
+                // Only this operation's old/new paths overlap; discarded snapshots
+                // have no pending user. Parent backing has its separate live owner.
+                _ = child.Capture();
+                child.Set(number, new FileDescriptor(3000 + index), memory);
+            }
+        });
+        Assert.Null(failure);
+        Assert.Equal(retained, parent.OwnedMemoryBytes + child.OwnedMemoryBytes);
+        Assert.Equal(new FileDescriptor(1000), inherited.Resolve(number));
+        Assert.Equal(new FileDescriptor(4023), child.Resolve(number));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -141,13 +221,13 @@ public sealed class DescriptorMemoryTests
     {
         var root = DescriptorTable.Snapshot.FromInheritedBindings(Bindings(100).Capture()).Fork();
         var child = new DescriptorTable();
-        var numbers = Enumerable.Range(1000, 32).Select(number => new LogicalDescriptor(number)).ToArray();
+        var numbers = Enumerable.Range(1000, 256).Select(number => new LogicalDescriptor(number)).ToArray();
         var opened = numbers.Select(number => new FileDescriptor(number.Number)).ToArray();
         for (var index = 0; index < numbers.Length; index++)
             child.Set(numbers[index], opened[index]);
         var state = new RedirectionState(root);
         state.Push(child, new DescriptorHandleOwner(opened), numbers.ToHashSet(), null);
-        using var owner = new MemoryGovernor(16384).CreateScope();
+        using var owner = new MemoryGovernor(64 * 1024).CreateScope();
 
         var metadata = state.OwnedMemoryBytes - root.OwnedMemoryBytes - child.OwnedMemoryBytes;
         Assert.Throws<MemoryBudgetExceededException>(() => state.Preserve(new EvaluationMemory(owner), null, null));
@@ -157,13 +237,13 @@ public sealed class DescriptorMemoryTests
         Assert.NotEmpty(retained);
         Assert.True(retained.Length < opened.Length);
         Assert.Same(opened, state.Pop());
-        var batch = new OrderedDescriptorSet();
-        batch.PrepareAdditional(opened.Length, null);
-        var closing = state.TransferHandles(opened, null, batch);
         var owned = typeof(RedirectionState).GetField("_openedDescriptors",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(state);
         var rootOwner = Assert.IsType<DescriptorHandleOwner>(owned);
         Assert.Equal(metadata + root.OwnedMemoryBytes + child.OwnedMemoryBytes + rootOwner.OwnedMemoryBytes, beforePop);
+        var batch = new OrderedDescriptorSet();
+        batch.PrepareAdditional(opened.Length, null);
+        var closing = state.TransferHandles(opened, null, batch);
 
         Assert.Equal(retained, state.OpenedDescriptors);
         Assert.Equal(opened.Except(retained).Reverse(), closing);
@@ -258,12 +338,12 @@ public sealed class DescriptorMemoryTests
     public async Task RefusalAfterAPersistentAllocationKeepsItsHandleThroughPendingCleanup()
     {
         const string Script = ": 2>error {first}>one {second}>$(printf two); printf '|%s|' \"$?\"; printf kept >&$first; printf tail";
-        var governor = new MemoryGovernor(1024 * 1024);
+        var governor = new MemoryGovernor(8 * 1024 * 1024);
         using var owner = governor.CreateScope();
-        await using var host = new RefusingOpenHost(governor) { MemoryBudget = owner };
         var evaluation = new Eval(Parser.Parse(Script),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(Bindings(4096).Capture()), []),
             null, null, EvaluationOptions.Default, [], owner, null);
+        await using var host = new RefusingOpenHost(governor, evaluation.Memory) { MemoryBudget = owner };
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var running = new Engine().RunAsync(evaluation, host, owner, deadline.Token);
         try
@@ -273,7 +353,11 @@ public sealed class DescriptorMemoryTests
             Assert.True(evaluation.RetainedDescriptorMemoryBytes > 0);
             Assert.True(governor.ReservedBytes >= evaluation.RetainedDescriptorMemoryBytes);
         }
-        finally { host.Release.TrySetResult(); }
+        finally
+        {
+            host.Release.TrySetResult();
+            await running;
+        }
 
         Assert.Equal(0, (await running).ExitCode);
         Assert.Equal("|1|tail", host.StandardOutput.TextContent);
@@ -292,12 +376,15 @@ public sealed class DescriptorMemoryTests
         public TaskCompletionSource Closing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public RefusingOpenHost(MemoryGovernor governor)
+        public RefusingOpenHost(MemoryGovernor governor, EvaluationMemory memory)
         {
             BeforeWritableOpen = path =>
             {
                 if (path.Path == "/two")
+                {
+                    memory.ReleaseUnusedCapacity();
                     _blocking = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
+                }
             };
         }
 

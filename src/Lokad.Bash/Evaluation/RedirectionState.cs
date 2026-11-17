@@ -163,7 +163,12 @@ internal struct RedirectionState
         // Prepare every receiving table before publishing the binding anywhere.
         // Refusal after acquiring a handle must not leave a partially published alias.
         foreach (var target in Targets())
+        {
+            var before = target.Table.OwnedMemoryBytes;
             target.Table.Set(descriptor, handle);
+            if (!ReferenceEquals(target.Table, current))
+                _savedAdditionalBytes = checked(_savedAdditionalBytes + target.Table.OwnedMemoryBytes - before);
+        }
         if (publishOwnership && longestOwner != null)
             longestOwner.PublishPrepared(handle);
 

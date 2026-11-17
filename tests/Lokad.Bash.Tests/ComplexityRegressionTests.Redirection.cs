@@ -9,6 +9,59 @@ namespace Lokad.Bash.Tests;
 [Collection(ComplexityRegressionCollection.Name)]
 public sealed partial class ComplexityRegressionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DescriptorWritesReusePathsUntilAnotherCapture(bool capture)
+    {
+        var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+        for (var index = 0; index < 1024; index++)
+            bindings.Set(new LogicalDescriptor(10 + index), new FileDescriptor(1000 + index));
+        var snapshot = capture ? bindings.Capture() : DescriptorBindings.Snapshot.Standard;
+        var number = new LogicalDescriptor(10);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 1024; index++)
+            bindings.Set(number, new FileDescriptor(10000 + index));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated <= 8192,
+            $"Writes after {(capture ? "one capture" : "no capture")} allocated {allocated:N0} bytes; writable paths were not reused.");
+        Assert.Equal(new FileDescriptor(11023), bindings.Resolve(number));
+        if (capture) Assert.Equal(new FileDescriptor(1000), snapshot.Resolve(number));
+    }
+
+    [Fact]
+    public void CapturedDescriptorWritesCopyChangedPathsInsteadOfWholeMaps()
+    {
+        const int Writes = 1024;
+        _ = Measure(64, 16);
+        var narrow = Measure(64, Writes);
+        var wide = Measure(1024, Writes);
+        Assert.True(wide < 2 * 1024 * 1024,
+            $"1,024 captured writes allocated {wide:N0} bytes; descriptor maps were likely copied in full.");
+        Assert.True(wide <= 3 * narrow,
+            $"Captured writes allocated {narrow:N0} at width 64 and {wide:N0} at width 1,024.");
+
+        static long Measure(int width, int writes)
+        {
+            var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+            for (var index = 0; index < width; index++)
+                bindings.Set(new LogicalDescriptor(10 + index), new FileDescriptor(1000 + index));
+            var snapshots = new DescriptorBindings.Snapshot[writes];
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < writes; index++)
+            {
+                snapshots[index] = bindings.Capture();
+                bindings.Set(new LogicalDescriptor(10), new FileDescriptor(10000 + index));
+            }
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            for (var index = 0; index < writes; index++)
+                Assert.Equal(new FileDescriptor(index == 0 ? 1000 : 9999 + index),
+                    snapshots[index].Resolve(new LogicalDescriptor(10)));
+            GC.KeepAlive(snapshots);
+            return allocated;
+        }
+    }
+
     [Fact]
     public void SequentialPersistentHandlesDoNotCopyGrowingOwnershipPrefixes()
     {

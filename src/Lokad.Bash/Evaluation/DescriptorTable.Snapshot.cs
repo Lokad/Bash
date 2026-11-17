@@ -5,7 +5,7 @@ namespace Lokad.Bash.Evaluation;
 internal sealed partial class DescriptorTable
 {
     /// <summary>Stable logical bindings that borrow their referenced host handles.</summary>
-    /// <remarks>Additional mappings are never mutated after capture; each writing table makes its own copy.</remarks>
+    /// <remarks>Additional mappings are immutable; writing tables share untouched paths.</remarks>
     internal readonly struct Snapshot
     {
         public DescriptorBindings.Snapshot Bindings { get; }

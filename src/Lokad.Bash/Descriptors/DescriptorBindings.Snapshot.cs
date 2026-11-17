@@ -9,7 +9,7 @@ public partial struct DescriptorBindings
     /// <remarks>Interpreter allocation policy remains outside this snapshot.</remarks>
     public readonly struct Snapshot
     {
-        private readonly Dictionary<LogicalDescriptor, FileDescriptor>? _additional;
+        private readonly DescriptorMap? _additional;
 
         public FileDescriptor StdIn { get; }
         public FileDescriptor StdOut { get; }
@@ -19,13 +19,12 @@ public partial struct DescriptorBindings
             new(FileDescriptor.StdIn, FileDescriptor.StdOut, FileDescriptor.StdErr, additional: null);
 
         public Snapshot(ref DescriptorBindings bindings)
-            : this(bindings.StdIn, bindings.StdOut, bindings.StdErr, bindings._additional)
+            : this(bindings.StdIn, bindings.StdOut, bindings.StdErr, bindings._writer?.Capture() ?? bindings._additional)
         {
-            bindings._additionalShared = _additional != null;
         }
 
         private Snapshot(FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr,
-            Dictionary<LogicalDescriptor, FileDescriptor>? additional)
+            DescriptorMap? additional)
         {
             StdIn = stdIn;
             StdOut = stdOut;
@@ -36,7 +35,7 @@ public partial struct DescriptorBindings
         public Snapshot WithStandardStreams(FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr) =>
             new(stdIn, stdOut, stdErr, _additional);
 
-        /// <summary>Creates independent mutable bindings, copying additional mappings only on write.</summary>
+        /// <summary>Creates independent mutable bindings sharing immutable additional mappings.</summary>
         public DescriptorBindings Fork() => new(StdIn, StdOut, StdErr, _additional);
 
         public FileDescriptor Resolve(LogicalDescriptor descriptor) =>
@@ -60,8 +59,7 @@ public partial struct DescriptorBindings
             handles.Add(StdErr);
             if (_additional != null)
             {
-                foreach (var binding in _additional)
-                    handles.Add(binding.Value);
+                _additional.AddReferencedHandlesTo(ref handles);
             }
         }
     }

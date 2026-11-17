@@ -138,4 +138,133 @@ public sealed class DescriptorBindingsTests
         Assert.Equal(alias, rebound.Resolve(new LogicalDescriptor(10)));
         Assert.Equal(new[] { alias, FileDescriptor.DevNull, FileDescriptor.Closed }, handles);
     }
+
+    [Fact]
+    public void VacantSlotsAndCaptureCompactionPreserveHandleEncounterOrder()
+    {
+        var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+        bindings.Set(new LogicalDescriptor(30), new FileDescriptor(300));
+        bindings.Set(new LogicalDescriptor(10), new FileDescriptor(100));
+        bindings.Set(new LogicalDescriptor(20), new FileDescriptor(200));
+        Assert.True(bindings.Remove(new LogicalDescriptor(10)));
+        bindings.Set(new LogicalDescriptor(40), new FileDescriptor(400));
+        var captured = bindings.Capture();
+        AssertOrder(captured, 300, 400, 200);
+
+        // A changed write after capture used to compact Dictionary's vacant
+        // slots. Parent and sibling writes must retain that observable order.
+        bindings.Remove(new LogicalDescriptor(30));
+        bindings.Remove(new LogicalDescriptor(20));
+        var sparse = bindings.Capture();
+        var sibling = sparse.Fork();
+        bindings.Set(new LogicalDescriptor(50), new FileDescriptor(500));
+        sibling.Set(new LogicalDescriptor(60), new FileDescriptor(600));
+        AssertOrder(captured, 300, 400, 200);
+        AssertOrder(sparse, 400);
+        AssertOrder(bindings.Capture(), 400, 500);
+        AssertOrder(sibling.Capture(), 400, 600);
+
+        static void AssertOrder(DescriptorBindings.Snapshot snapshot, params int[] expected)
+        {
+            var handles = new List<FileDescriptor>();
+            snapshot.AddReferencedHandlesTo(handles);
+            Assert.Equal(new[] { 0, 1, 2 }.Concat(expected), handles.Select(handle => handle.Id));
+        }
+    }
+
+    [Fact]
+    public void CapturedSparseMapsBoundAbandonedSlotsAcrossRepeatedRemovalAndInsertion()
+    {
+        var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+        for (var index = 0; index < 16; index++)
+            bindings.Set(new LogicalDescriptor(10 + index), new FileDescriptor(100 + index));
+        var original = bindings.Capture();
+        for (var index = 0; index < 1024; index++)
+        {
+            var descriptor = new LogicalDescriptor(10 + index % 16);
+            Assert.True(bindings.Remove(descriptor));
+            _ = bindings.Capture();
+            bindings.Set(descriptor, new FileDescriptor(1000 + index));
+            // The estimate follows live slot backing, not the number of updates.
+            Assert.True(bindings.AdditionalMemoryBytes <= DescriptorMap.EstimateMemoryBytes(33));
+        }
+        for (var index = 0; index < 16; index++)
+            Assert.Equal(new FileDescriptor(100 + index), original.Resolve(new LogicalDescriptor(10 + index)));
+    }
+
+    [Fact]
+    public async Task CapturedBindingsAllowConcurrentIndependentReadersAndWriters()
+    {
+        var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+        for (var index = 0; index < 128; index++)
+            bindings.Set(new LogicalDescriptor(10 + index), new FileDescriptor(1000 + index));
+        var snapshot = bindings.Capture();
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(worker => Task.Run(() =>
+        {
+            var local = snapshot.Fork();
+            for (var index = 0; index < 128; index++)
+            {
+                var number = new LogicalDescriptor(10 + index);
+                Assert.Equal(new FileDescriptor(1000 + index), snapshot.Resolve(number));
+                local.Set(number, new FileDescriptor(10000 + worker * 128 + index));
+                Assert.Equal(new FileDescriptor(10000 + worker * 128 + index), local.Resolve(number));
+            }
+        })));
+        for (var index = 0; index < 128; index++)
+            Assert.Equal(new FileDescriptor(1000 + index), snapshot.Resolve(new LogicalDescriptor(10 + index)));
+    }
+
+    [Theory]
+    [InlineData(11)]
+    [InlineData(97)]
+    public void MixedMutationsPreserveDictionaryEncounterOrderAcrossCaptureBoundaries(int seed)
+    {
+        var random = new Random(seed);
+        var actual = DescriptorBindings.Snapshot.Standard.Fork();
+        var expected = new Dictionary<LogicalDescriptor, FileDescriptor>();
+        var captured = false;
+        for (var batch = 0; batch < 128; batch++)
+        {
+            for (var operation = 0; operation < 8; operation++)
+            {
+                var descriptor = new LogicalDescriptor(10 + random.Next(16));
+                if (random.Next(3) == 0)
+                {
+                    var present = expected.ContainsKey(descriptor);
+                    if (present && captured) Detach();
+                    Assert.Equal(expected.Remove(descriptor), actual.Remove(descriptor));
+                }
+                else
+                {
+                    var handle = random.Next(5) == 0 ? FileDescriptor.Closed : new FileDescriptor(100 + random.Next(32));
+                    var changed = !expected.TryGetValue(descriptor, out var old) || old != handle;
+                    if (changed && captured) Detach();
+                    expected[descriptor] = handle;
+                    Assert.Equal(changed, actual.Set(descriptor, handle));
+                }
+            }
+            var snapshot = actual.Capture();
+            captured = true;
+            var handles = new List<FileDescriptor>();
+            snapshot.AddReferencedHandlesTo(handles);
+            Assert.Equal(new[] { FileDescriptor.StdIn, FileDescriptor.StdOut, FileDescriptor.StdErr }
+                .Concat(expected.Values).Distinct(), handles);
+            for (var index = 0; index < 16; index++)
+            {
+                var descriptor = new LogicalDescriptor(10 + index);
+                Assert.Equal(expected.ContainsKey(descriptor), snapshot.HasMapping(descriptor));
+                Assert.Equal(expected.GetValueOrDefault(descriptor, FileDescriptor.Closed), snapshot.Resolve(descriptor));
+            }
+        }
+
+        void Detach()
+        {
+            // An independent Dictionary model pins the previous observable slot
+            // order, including free-slot reuse and compaction after a capture.
+            var copy = new Dictionary<LogicalDescriptor, FileDescriptor>();
+            foreach (var entry in expected) copy.Add(entry.Key, entry.Value);
+            expected = copy;
+            captured = false;
+        }
+    }
 }

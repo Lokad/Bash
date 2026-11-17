@@ -259,6 +259,14 @@ Cleanup transfers into prepared ownership
 and retires the index after its final close attempts; logical mapping retention
 remains independent of host-handle cleanup.
 
+Captured additional bindings share immutable lookup and ordered-slot trees;
+changed mappings copy only affected paths. Standard streams stay inline, explicit
+closed mappings remain present, and free-slot reuse/encounter order retain their
+previous capture boundaries. Sparse compaction is amortized across deletions.
+Preparing all receiving estimates changes no binding or ownership; only successful
+publication acquires a writing table's retained storage. Snapshot sharing does not
+transfer handle-closing responsibility or add another execution/cleanup path.
+
 Descriptor redirections prepare source move syntax on their immutable node and
 resolve its operand against current bindings. Valid filename fallback opens the
 already expanded target; it does not repeat its effects. Closing or moving a
