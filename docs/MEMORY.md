@@ -118,6 +118,11 @@ Subjects stay borrowed during matching; retained removal slices and changed
 replacement output own their result bytes. Matching creates no reversed subject
 copy or global pattern cache.
 
+Bracket terminal lookahead is stack-only state for the current match or atom
+preparation pass. Class membership and single-unit symbols add no retained
+containers; suffix offsets retain the same admitted command owner and cancellation
+checks. No failed admission switches to a different matcher or an unowned cache.
+
 Immutable arithmetic metadata, literal word fields and prepared list navigation
 belong to the syntax and are shared across executions. Stable operands and literal
 fields borrow its bytes; runtime-expanded operands, selectors and argument

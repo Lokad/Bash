@@ -32,6 +32,15 @@ through definition replacement and pending users/cleanup. Synchronous parser
 allocation probes belong to the benchmark/review lane; nesting depth and sibling
 count are independent controls, and measured runs must verify target-specific DLLs.
 
+`NamedBracketAtomTests` pins class membership and malformed/quoted atoms without
+using the matcher as its oracle. `PatternTraversalTests` separately pins physical
+atom offsets, direction and owner admission/refunds; its exhaustive matcher-derived
+checks establish traversal equivalence. `ShellBracketTests` checks native-qualified
+conditional/case/parameter/path roles and complete effects, using ExportTestHost's
+child owner for exported function routes. Scalar class membership, UTF-16 utility
+units and pathname width are separate profiles. Malformed literal bracket scans
+and valid-member scans on wildcard retries are independent work dimensions.
+
 Use the pinned SDK and run `dotnet test Lokad.Bash.slnx -c Release`. CI builds,
 tests both target frameworks and packs on Windows and Linux. A focused test run
 is useful during an edit; release qualification requires the complete boundary

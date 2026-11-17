@@ -149,6 +149,13 @@ or copy the subject. Replacement searches track the leftmost start and longest
 match in one shared search. Literal searches use byte spans. Prepared offsets belong
 to the current command and are admitted once per reached character profile.
 
+Named bracket atoms share their decoder with suffix atom preparation. Character
+class names and ASCII membership share internal vocabulary with regex translation,
+while their grammars retain distinct supported profiles. Per-match value state
+reuses terminal lookahead across overlapping literal fallbacks; it adds no global
+cache or subject copy. Repeated valid bracket scans on wildcard retries remain
+separate from this malformed-pattern work.
+
 Regex matching publishes independently owned capture bytes to global
 `BASH_REMATCH`, after admitting the replacement array and byte storage. Nonmatches
 publish an empty array; errors leave the previous binding intact. Function-local

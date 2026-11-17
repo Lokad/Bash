@@ -88,6 +88,18 @@ UTF-8 locale. Removal slices the selected bytes directly and can therefore produ
 malformed byte values without passing through a text encoder. Pathname operations
 retain their separate text-only host boundary and path component policies.
 
+Shell bracket expressions recognize `alnum`, `alpha`, `ascii`, `blank`, `cntrl`,
+`digit`, `graph`, `lower`, `print`, `punct`, `space`, `upper`, `word` and `xdigit`.
+Membership is fixed ASCII/C, including when matching UTF-8 scalars: non-ASCII
+letters do not become members of `alpha`. Negation, unions and ranges retain
+their ordinary bracket roles. Complete unknown classes have no members.
+Collating symbols `[[.c.]]` and equivalence elements `[[=c=]]` select one unquoted
+matching unit with exact identity, without locale weights or multi-unit symbols.
+Malformed/quoted atom spellings retain their distinct literal-fallback rules.
+The byte APIs use the operand's scalar/byte profile. Public text matcher overloads
+and current pathname matching use UTF-16 code units; supplementary characters can
+therefore differ from shell-word matching in pathname patterns.
+
 Replacement chooses the leftmost, longest match. A global replacement applies
 the character profile to each remaining operand: after consuming malformed bytes
 it can resume scalar matching, while a remainder beginning inside a multibyte

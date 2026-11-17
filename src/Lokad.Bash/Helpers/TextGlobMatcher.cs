@@ -63,34 +63,29 @@ public static class TextGlobMatcher
         if (pattern.Length >= Array.MaxLength)
             throw new ByteMemoryBuilder.LimitExceededException();
         var input = new GlobInput(pattern, byteCharacters, reverse: false);
-        var lastClosingBracket = -1;
-        for (var index = 0; index < pattern.Length; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (pattern[index] == (byte)']' && mask[index] == GlobMask.Active)
-                lastClosingBracket = index;
-        }
         var count = 0;
+        var scan = default(BracketScan);
         for (var position = 0; position < input.Length; count++)
-            position = NextAtom(input, in mask, position, lastClosingBracket, cancellationToken);
+            position = NextAtom(input, in mask, position, ref scan, cancellationToken);
         memory.Charge(checked(32L + 4L * count));
         cancellationToken.ThrowIfCancellationRequested();
         var offsets = new int[count];
         count = 0;
+        scan = default;
         for (var position = 0; position < input.Length;)
         {
             offsets[count++] = position;
-            position = NextAtom(input, in mask, position, lastClosingBracket, cancellationToken);
+            position = NextAtom(input, in mask, position, ref scan, cancellationToken);
         }
         return offsets;
 
-        static int NextAtom(GlobInput input, in GlobMaskSpan mask, int position, int lastClosingBracket,
-            CancellationToken cancellationToken)
+        static int NextAtom(GlobInput input, in GlobMaskSpan mask, int position,
+            ref BracketScan scan, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var end = position;
-            if (position < lastClosingBracket && mask[position] == GlobMask.Active && input[position] == '[')
-                _ = TryMatchBracket(input, in mask, ref end, -1, cancellationToken);
+            if (mask[position] == GlobMask.Active && input[position] == '[')
+                _ = TryMatchBracket(input, in mask, ref end, -1, ref scan, cancellationToken);
             return end == position ? position + input.Width(position) : end;
         }
     }
@@ -191,8 +186,11 @@ public static class TextGlobMatcher
     }
 
     // A valid but nonmatching class must not fall back to matching its opening bracket literally.
-    static bool TryMatchBracket(GlobInput pattern, in GlobMaskSpan mask, ref int position, int value, CancellationToken cancellationToken)
+    static bool TryMatchBracket(GlobInput pattern, in GlobMaskSpan mask, ref int position, int value,
+        ref BracketScan scan, CancellationToken cancellationToken)
     {
+        if (!scan.HasFollowingClose(pattern, in mask, position, cancellationToken))
+            return false;
         var start = position;
         position++;
         if (position >= pattern.Length)
@@ -215,26 +213,31 @@ public static class TextGlobMatcher
                && (pattern[position] != ']' || mask[position] != GlobMask.Active || position == firstMember);)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var current = pattern[position];
-            var next = position + pattern.Width(position);
-            if (next + 1 < pattern.Length && pattern[next] == '-' && mask[next] == GlobMask.Active
+            if (!ReadMember(pattern, in mask, position, ref scan, cancellationToken, out var member))
+            {
+                position = start;
+                return false;
+            }
+            var next = member.End;
+            if (!member.IsSet && next + 1 < pattern.Length && pattern[next] == '-' && mask[next] == GlobMask.Active
                 && (pattern[next + 1] != ']' || mask[next + 1] != GlobMask.Active))
             {
-                var startRange = current;
-                var endRange = pattern[next + 1];
-                if (value >= startRange && value <= endRange)
+                var endpoint = next + 1;
+                var last = new BracketMember(endpoint + pattern.Width(endpoint), pattern[endpoint], default, IsSet: false);
+                // Only a collating symbol is a range endpoint. A class/equivalence prefix
+                // retains '[' as the ordinary endpoint, as in the existing bracket grammar.
+                if (pattern[endpoint] == '[' && mask[endpoint] == GlobMask.Active && endpoint + 1 < pattern.Length
+                    && pattern[endpoint + 1] == '.' && mask[endpoint + 1] == GlobMask.Active
+                    && !ReadMember(pattern, in mask, endpoint, ref scan, cancellationToken, out last))
                 {
-                    matched = true;
+                    position = start;
+                    return false;
                 }
-
-                position = next + 1 + pattern.Width(next + 1);
+                matched |= member.Value >= 0 && last.Value >= 0 && value >= member.Value && value <= last.Value;
+                position = last.End;
                 continue;
             }
-
-            if (current == value)
-            {
-                matched = true;
-            }
+            matched |= member.Value >= 0 ? member.Value == value : ShellCharacterClass.Matches(member.Class, value);
             position = next;
         }
 
@@ -246,17 +249,139 @@ public static class TextGlobMatcher
 
         position++;
         return negate ? !matched : matched;
+
+        static bool ReadMember(GlobInput pattern, in GlobMaskSpan mask, int start, ref BracketScan scan,
+            CancellationToken cancellationToken, out BracketMember member)
+        {
+            member = new(start + pattern.Width(start), pattern[start], default, IsSet: false);
+            if (pattern[start] != '[' || mask[start] != GlobMask.Active || start + 1 >= pattern.Length
+                || mask[start + 1] != GlobMask.Active)
+                return true;
+            var marker = pattern[start + 1];
+            if (marker == '=')
+            {
+                // Equivalence elements have one unquoted character in the fixed profile.
+                // Other spellings fall back to ordinary bracket members, not a locale lookup.
+                var value = start + 2;
+                if (value >= pattern.Length) return true;
+                var closing = value + pattern.Width(value);
+                if (closing + 1 < pattern.Length && Unquoted(in mask, value, closing)
+                    && pattern[closing] == '=' && mask[closing] == GlobMask.Active
+                    && pattern[closing + 1] == ']' && mask[closing + 1] == GlobMask.Active)
+                    member = new(closing + 2, pattern[value], default, IsSet: true);
+                return true;
+            }
+            if (marker is not (':' or '.'))
+                return true;
+            var close = scan.FindTerminator(pattern, in mask, start + 2, marker, cancellationToken);
+            // A malformed class prefix retains ':' and its following name as ordinary
+            // members, excluding the inner '['. An unfinished collating element makes
+            // the enclosing bracket incomplete, retaining its literal fallback.
+            if (close < 0)
+            {
+                if (marker != ':') return false;
+                member = new(start + 2, ':', default, IsSet: false);
+                return true;
+            }
+            if (marker == '.')
+            {
+                var value = start + 2;
+                var single = value < close && value + pattern.Width(value) == close
+                    && Unquoted(in mask, value, close) && mask[close] == GlobMask.Active;
+                member = new(close + 2, single ? pattern[value] : -1, default, IsSet: false);
+                return true;
+            }
+
+            var kind = ShellCharacterClass.Kind.None;
+            var length = close - start - 2;
+            if (length <= 6)
+            {
+                Span<byte> name = stackalloc byte[6];
+                var count = 0;
+                for (; count < length; count++)
+                {
+                    var character = pattern[start + 2 + count];
+                    if (character > 127) break;
+                    name[count] = (byte)character;
+                }
+                if (count == length)
+                    _ = ShellCharacterClass.TryParse(name[..length], out kind);
+            }
+            // Quoting ordinary name letters does not change the class. The opening
+            // markers and terminating ']' still retain their own structural masks.
+            member = new(close + 2, -1, kind, IsSet: true);
+            return true;
+
+            static bool Unquoted(in GlobMaskSpan mask, int start, int end)
+            {
+                for (var index = start; index < end; index++)
+                    if (mask[index] != GlobMask.Active) return false;
+                return true;
+            }
+        }
+    }
+
+    private readonly record struct BracketMember(int End, int Value, ShellCharacterClass.Kind Class, bool IsSet);
+
+    /// <summary>Reuses terminal lookahead while literal fallback advances through overlapping candidates.</summary>
+    private struct BracketScan
+    {
+        private int _lastClosingBracket;
+        private int _classStart;
+        private int _classEnd;
+        private int _symbolStart;
+        private int _symbolEnd;
+
+        public bool HasFollowingClose(GlobInput pattern, in GlobMaskSpan mask, int start, CancellationToken cancellationToken)
+        {
+            // Zero is unscanned, -1 is absent, and a positive value is offset plus one.
+            // Literal fallback can reach many '[' positions; scan their shared suffix once.
+            if (_lastClosingBracket == 0)
+            {
+                _lastClosingBracket = -1;
+                for (var index = 0; index < pattern.Length; index += pattern.Width(index))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (pattern[index] == ']' && mask[index] == GlobMask.Active)
+                        _lastClosingBracket = index + 1;
+                }
+            }
+            return _lastClosingBracket > start + 1;
+        }
+
+        public int FindTerminator(GlobInput pattern, in GlobMaskSpan mask, int start, int marker, CancellationToken cancellationToken)
+        {
+            ref var from = ref (marker == ':' ? ref _classStart : ref _symbolStart);
+            ref var end = ref (marker == ':' ? ref _classEnd : ref _symbolEnd);
+            // Zero is unscanned, -1 is an absent suffix terminator; a positive end
+            // stores its physical offset plus one. Earlier candidates still rescan.
+            if (end != 0 && from <= start && (end < 0 || start < end))
+                return end < 0 ? -1 : end - 1;
+            from = start;
+            end = -1;
+            for (var index = start; index + 1 < pattern.Length; index += pattern.Width(index))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (pattern[index] == marker && pattern[index + 1] == ']' && mask[index + 1] == GlobMask.Active)
+                {
+                    end = index + 1;
+                    return index;
+                }
+            }
+            return -1;
+        }
     }
 
     private enum PatternTraversal { Forward, Reverse, Search }
 
     /// <summary>Maps traversal positions to original pattern atoms and their quoting metadata.</summary>
-    private readonly ref struct PatternInput
+    private ref struct PatternInput
     {
         private readonly GlobInput _source;
         private readonly GlobMaskSpan _mask;
         private readonly ReadOnlySpan<int> _atoms;
         private readonly PatternTraversal _traversal;
+        private BracketScan _bracketScan;
         private bool Reverse => _traversal == PatternTraversal.Reverse;
         private bool Search => _traversal == PatternTraversal.Search;
 
@@ -266,6 +391,7 @@ public static class TextGlobMatcher
             _mask = mask;
             _atoms = atoms;
             _traversal = traversal;
+            _bracketScan = default;
         }
         public int Length => (Reverse ? _atoms.Length : _source.Length) + (Search ? 1 : 0);
         public bool IsSearchStar(int position) => Search && position == 0;
@@ -279,8 +405,15 @@ public static class TextGlobMatcher
         public bool MatchBracket(ref int position, int value, CancellationToken cancellationToken)
         {
             var original = Original(position);
+            if (Reverse)
+            {
+                var following = _atoms.Length - position;
+                var endOfAtom = following == _atoms.Length ? _source.Length : _atoms[following];
+                if (endOfAtom == original + 1)
+                    return false; // Atom preparation already established a literal '['.
+            }
             var end = original;
-            var matched = TryMatchBracket(_source, in _mask, ref end, value, cancellationToken);
+            var matched = TryMatchBracket(_source, in _mask, ref end, value, ref _bracketScan, cancellationToken);
             if (end != original)
                 position = Reverse ? position + 1 : end + (Search ? 1 : 0);
             return matched;

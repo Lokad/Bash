@@ -47,6 +47,8 @@ public sealed class RegexCaptureTests
 
     [Theory]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:unknown:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
+    [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:ascii:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
+    [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:word:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[.x.]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ '😀' =~ . ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     public async Task UnsupportedOrInvalidMatchingPreservesPriorCaptures(string script)

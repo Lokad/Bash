@@ -224,7 +224,8 @@ public sealed partial class Evaluation
                             var end = source[(index + 2)..].IndexOf(":]"u8);
                             if (end < 0)
                                 return false;
-                            var members = ClassMembers(source.Slice(index + 2, end));
+                            var members = ShellCharacterClass.TryParse(source.Slice(index + 2, end), out var kind)
+                                ? ShellCharacterClass.RegexMembers(kind) : default;
                             if (members.IsEmpty)
                                 return false;
                             output.Append(members);
@@ -243,23 +244,6 @@ public sealed partial class Evaluation
                     output.Append(ch);
                 }
                 return true;
-            }
-
-            static ReadOnlySpan<byte> ClassMembers(ReadOnlySpan<byte> name)
-            {
-                if (name.SequenceEqual("alnum"u8)) return "A-Za-z0-9"u8;
-                if (name.SequenceEqual("alpha"u8)) return "A-Za-z"u8;
-                if (name.SequenceEqual("blank"u8)) return " \\t"u8;
-                if (name.SequenceEqual("cntrl"u8)) return "\\x00-\\x1F\\x7F"u8;
-                if (name.SequenceEqual("digit"u8)) return "0-9"u8;
-                if (name.SequenceEqual("graph"u8)) return "\\x21-\\x7E"u8;
-                if (name.SequenceEqual("lower"u8)) return "a-z"u8;
-                if (name.SequenceEqual("print"u8)) return "\\x20-\\x7E"u8;
-                if (name.SequenceEqual("punct"u8)) return "\\x21-\\x2F\\x3A-\\x40\\x5B-\\x60\\x7B-\\x7E"u8;
-                if (name.SequenceEqual("space"u8)) return "\\x09-\\x0D\\x20"u8;
-                if (name.SequenceEqual("upper"u8)) return "A-Z"u8;
-                if (name.SequenceEqual("xdigit"u8)) return "A-Fa-f0-9"u8;
-                return default;
             }
         }
 

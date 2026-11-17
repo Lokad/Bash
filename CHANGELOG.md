@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Share named bracket atoms across shell pattern roles, including character
+  classes, single-unit collating symbols/equivalence elements and suffix atom
+  preparation. Preserve quotation, invalid-bracket literal fallback and the fixed
+  byte/scalar profiles; keep regex classes distinct. Reuse closing/terminator
+  lookahead instead of rescanning overlapping malformed bracket candidates.
 - Parse conditional comments and closing delimiters in their operand context,
   preserving regex groups, physical error offsets and Bash's newline boundaries.
   Reuse nested substitution syntax across conditional scanning and word creation,
