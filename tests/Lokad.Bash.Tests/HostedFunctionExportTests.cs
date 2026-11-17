@@ -67,20 +67,23 @@ public sealed class HostedFunctionExportTests
     public void CachedExportsRespectEachCallersBudgetAndSurviveAttributeCopies()
     {
         var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :; }").Commands));
-        var binding = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null);
-        var readonlyCopy = binding with { Attributes = FunctionAttributes.Exported | FunctionAttributes.Readonly };
-
         const long MemoryBudgetBytes = 4096;
         var memory = new MemoryGovernor(MemoryBudgetBytes);
-        Assert.False(binding.TryGetExport(1, memory, out _));
-        Assert.True(binding.TryGetExport(4096, memory, out var first));
+        var exportMemory = new EvaluationMemory(memory);
+        var binding = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null, exportMemory);
+        var readonlyCopy = binding with { Attributes = FunctionAttributes.Exported | FunctionAttributes.Readonly };
+        using var lifetime = new FunctionBinding.Borrow(binding);
+        Assert.False(binding.TryGetExport(1, out _));
+        Assert.Equal(0, memory.ReservedBytes);
+        Assert.True(binding.TryGetExport(4096, out var first));
         Assert.InRange(memory.ReservedBytes, first.Source.Length, memory.LimitBytes);
         using var pressure = memory.Reserve(memory.LimitBytes - memory.ReservedBytes);
-        Assert.False(binding.TryGetExport(first.Source.Length - 1, memory, out _));
-        Assert.True(readonlyCopy.TryGetExport(first.Source.Length, memory, out var second));
+        Assert.False(binding.TryGetExport(first.Source.Length - 1, out _));
+        Assert.True(readonlyCopy.TryGetExport(first.Source.Length, out var second));
         Assert.True(first.Source.Equals(second.Source)); // Memory identity, not merely equal contents.
-        var other = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null);
-        Assert.Throws<MemoryBudgetExceededException>(() => other.TryGetExport(4096, memory, out _));
+        var other = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null, exportMemory);
+        using var otherLifetime = new FunctionBinding.Borrow(other);
+        Assert.Throws<MemoryBudgetExceededException>(() => other.TryGetExport(4096, out _));
     }
 
     [Fact]
@@ -91,22 +94,58 @@ public sealed class HostedFunctionExportTests
         const long MemoryBudgetBytes = 4 * ExportLimitBytes;
         var definition = Assert.IsType<FunctionDefinition>(Assert.Single(
             Parser.Parse("f(){ : '" + new string('x', FunctionBodyBytes) + "'; }").Commands));
-        var binding = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null);
         var memory = new MemoryGovernor(MemoryBudgetBytes);
+        var exportMemory = new EvaluationMemory(memory);
+        var binding = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null, exportMemory);
+        using var lifetime = new FunctionBinding.Borrow(binding);
         ExportedFunction published = default;
         long publishedBytes = 0;
         var competingReader = new ReservationCallbackBudget(memory, () =>
         {
             // Publish after the first reader misses the cache, before it finishes rendering.
-            Assert.True(binding.TryGetExport(ExportLimitBytes, memory, out published));
+            Assert.True(binding.TryGetExport(ExportLimitBytes, out published));
             publishedBytes = memory.ReservedBytes;
         });
 
-        Assert.True(binding.TryGetExport(ExportLimitBytes, competingReader, out var result));
+        exportMemory.Budget = competingReader;
+        Assert.True(binding.TryGetExport(ExportLimitBytes, out var result));
 
         Assert.True(result.Source.Equals(published.Source));
         Assert.InRange(publishedBytes, published.Source.Length, memory.LimitBytes);
         Assert.Equal(publishedBytes, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public void RefusedCompetingExportRefundsItsCandidateWithoutFallingBackToTheWinner()
+    {
+        const int BodyBytes = 64 * 1024;
+        const int ExportLimit = 1024 * 1024;
+        var definition = Assert.IsType<FunctionDefinition>(Assert.Single(
+            Parser.Parse("f(){ : '" + new string('x', BodyBytes) + "'; }").Commands));
+        var governor = new MemoryGovernor(4 * ExportLimit);
+        var memory = new EvaluationMemory(governor);
+        var binding = new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null, memory);
+        using var pressure = governor.Reserve(0);
+        using (new FunctionBinding.Borrow(binding))
+        {
+            ExportedFunction winner = default;
+            long winnerBytes = 0;
+            memory.Budget = new ReservationCallbackBudget(governor, () =>
+            {
+                Assert.True(binding.TryGetExport(ExportLimit, out winner));
+                winnerBytes = governor.ReservedBytes;
+                // Admit a partial losing candidate, then refuse its material buffer growth.
+                pressure.Resize(governor.LimitBytes - governor.ReservedBytes - 1024);
+            });
+
+            Assert.Throws<MemoryBudgetExceededException>(() => binding.TryGetExport(ExportLimit, out _));
+            Assert.Equal(winnerBytes + pressure.Bytes, governor.ReservedBytes);
+            pressure.Resize(0);
+            Assert.True(binding.TryGetExport(ExportLimit, out var retained));
+            Assert.True(winner.Source.Equals(retained.Source));
+            Assert.Equal(winnerBytes, governor.ReservedBytes);
+        }
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]
@@ -168,16 +207,30 @@ public sealed class HostedFunctionExportTests
     {
         private bool _called;
 
-        public IMemoryScope CreateScope() => budget.CreateScope();
+        public IMemoryScope CreateScope() => new CallbackScope(budget.CreateScope(), this);
 
         public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation)
         {
-            if (!_called)
-            {
-                _called = true;
-                beforeFirstReservation();
-            }
+            BeforeReservation();
             return budget.TryReserve(bytes, out reservation);
+        }
+
+        private void BeforeReservation()
+        {
+            if (_called) return;
+            _called = true;
+            beforeFirstReservation();
+        }
+
+        private sealed class CallbackScope(IMemoryScope inner, ReservationCallbackBudget owner) : IMemoryScope
+        {
+            public IMemoryScope CreateScope() => new CallbackScope(inner.CreateScope(), owner);
+            public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation)
+            {
+                owner.BeforeReservation();
+                return inner.TryReserve(bytes, out reservation);
+            }
+            public void Dispose() => inner.Dispose();
         }
     }
 }

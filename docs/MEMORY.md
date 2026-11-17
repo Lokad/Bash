@@ -124,6 +124,18 @@ Namespace keys follow the current definition's storage. Sorted function-name
 snapshots admit compact copies, and pending command queries retain their selected
 source owners through host lookup and output completion.
 
+Serialized function exports share one admitted cache owner across namespaces and
+attribute copies. Its scope belongs to the binding's creator, even when a pipeline
+child performs the first serialization. Resolve that creator's installed budget
+when publishing, because hosts can import definitions before Engine starts.
+Concurrent first readers may render independently without waiting; unpublished or
+refused candidates refund their own storage, and refusal does not retry a winner.
+Replacement, unset and settled temporary namespaces retire their references.
+Function calls, queries and host command payloads retain their selected bindings
+through all consumers and descriptor cleanup; only the final owner refunds a cache.
+Retained root namespaces keep the caller-owned evaluation budget alive as before.
+Hosts must admit independent copies of exported bytes retained after command completion.
+
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Parsing has a
 source-size bound, not complete accounting; manual stepping does not install a host
 budget. Keep coverage limits explicit. Test shared allowances, refusal, immediate

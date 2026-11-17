@@ -107,7 +107,7 @@ public sealed partial class Evaluation
                             .ConfigureAwait(false);
                         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
                     }
-                    if (!_state.TryRegisterFunction(functionDefinition, scope.Context.SourceMemory))
+                    if (!_state.TryRegisterFunction(functionDefinition, scope.Context.SourceMemory, Memory))
                     {
                         await ReportExpansionDiagnosticAsync(functionDefinition.Name.Value, ShellValue.FromText("readonly function")).ConfigureAwait(false);
                         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);

@@ -36,45 +36,89 @@ internal sealed record FunctionBinding
     public FunctionAttributes Attributes { get; init; }
 
     // Attribute copies and child evaluations share this cell, including before its first publication.
-    private readonly ExportCache _exportCache = new();
+    private readonly ExportCache _exportCache;
 
-    public FunctionBinding(FunctionDefinition definition, FunctionAttributes attributes, SourceMemory? sourceMemory)
+    public FunctionBinding(FunctionDefinition definition, FunctionAttributes attributes, SourceMemory? sourceMemory,
+        EvaluationMemory memory)
     {
         Definition = definition;
         SourceMemory = sourceMemory;
         Attributes = attributes;
+        _exportCache = new ExportCache(memory);
     }
 
-    /// <summary>Retains one bounded serialization until redefinition creates a new binding.</summary>
-    public bool TryGetExport(int maximumBytes, IMemoryBudget memoryBudget, out ExportedFunction export)
+    /// <summary>Acquires namespace or command ownership while another owner is live, or for a new binding.</summary>
+    public void Retain()
+    {
+        SourceMemory?.Retain();
+        _exportCache.Retain();
+    }
+
+    public void Release()
+    {
+        _exportCache.Release();
+        SourceMemory?.Release();
+    }
+
+    /// <summary>Retains the selected binding through preparation, execution and cleanup.</summary>
+    public readonly struct Borrow : IDisposable
+    {
+        private readonly FunctionBinding? _binding;
+        public Borrow(FunctionBinding? binding)
+        {
+            _binding = binding;
+            binding?.Retain();
+        }
+        public void Dispose() => _binding?.Release();
+    }
+
+    /// <summary>Retains a bounded serialization under its creator's owner, shared by attribute copies.</summary>
+    /// <remarks>The caller holds namespace or borrow ownership through consumption of the returned bytes.</remarks>
+    public bool TryGetExport(int maximumBytes, out ExportedFunction export)
     {
         export = default;
         var cached = Volatile.Read(ref _exportCache.Value);
         if (cached == null)
         {
-            using var output = new BoundedByteMemoryBuilder(0, Math.Min(maximumBytes, Parser.MaximumScriptBytes), memoryBudget);
-            if (!FunctionDefinitionFormatter.TryAppendExport(Definition, output)) return false;
-            var rendered = new CachedExport(new ExportedFunction(output.ToMemory()));
-            // Concurrent first readers may render independently; no evaluator waits for another one.
-            cached = Interlocked.CompareExchange(ref _exportCache.Value, rendered, null);
-            if (cached == null)
+            var memory = _exportCache.Memory.Budget.CreateScope();
+            var published = false;
+            try
             {
-                // Only the published buffer outlives this builder; a losing candidate is refunded.
-                _ = output.DetachSnapshot();
-                cached = rendered;
+                _ = memory.Reserve(192); // Cache/scope/result metadata and backing-array headers.
+                using var output = new BoundedByteMemoryBuilder(0, Math.Min(maximumBytes, Parser.MaximumScriptBytes), memory);
+                if (!FunctionDefinitionFormatter.TryAppendExport(Definition, output)) return false;
+                var rendered = new CachedExport(new ExportedFunction(output.ToMemory()), memory);
+                // Concurrent first readers may render independently; no evaluator waits for another one.
+                cached = Interlocked.CompareExchange(ref _exportCache.Value, rendered, null);
+                if (cached == null)
+                {
+                    _ = output.DetachSnapshot();
+                    cached = rendered;
+                    published = true;
+                }
             }
+            finally { if (!published) memory.Dispose(); }
         }
         if (cached.Export.Source.Length > maximumBytes) return false;
         export = cached.Export;
         return true;
     }
 
-    private sealed class ExportCache
+    private sealed class ExportCache(EvaluationMemory memory)
     {
+        // Resolve Budget at publication: Engine installs it after host-provided definitions are imported.
+        public EvaluationMemory Memory => memory;
         public CachedExport? Value;
+        private int _references;
+        public void Retain() => Interlocked.Increment(ref _references);
+        public void Release()
+        {
+            if (Interlocked.Decrement(ref _references) == 0)
+                Interlocked.Exchange(ref Value, null)?.Memory.Dispose();
+        }
     }
 
-    private sealed record CachedExport(ExportedFunction Export);
+    private sealed record CachedExport(ExportedFunction Export, IMemoryScope Memory);
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public bool TryAppend(ByteMemoryBuilder output, FunctionDisplayStyle style)
@@ -293,13 +337,13 @@ internal sealed class EvaluationState
     }
 
     /// <summary>Redefinition retains attributes and fails without changing a readonly function.</summary>
-    public bool TryRegisterFunction(FunctionDefinition functionDefinition, SourceMemory? sourceMemory)
+    public bool TryRegisterFunction(FunctionDefinition functionDefinition, SourceMemory? sourceMemory, EvaluationMemory memory)
     {
         var attributes = _functions.TryGetValue(functionDefinition.Name.Value, out var previous)
             ? previous.Attributes : FunctionAttributes.None;
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
-        SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, sourceMemory));
+        SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, sourceMemory, memory));
         return true;
     }
 
@@ -312,8 +356,8 @@ internal sealed class EvaluationState
             _functions.Remove(function.Definition.Name.Value);
         _functions[function.Definition.Name.Value] = function;
         // Acquire before retiring the old binding: attribute copies can share this owner.
-        function.SourceMemory?.Retain();
-        previous?.SourceMemory?.Release();
+        function.Retain();
+        previous?.Release();
     }
 
     /// <summary>Removes the current binding, not a definition already being invoked.</summary>
@@ -322,7 +366,7 @@ internal sealed class EvaluationState
         if (_functions.TryGetValue(name, out var function) && function.Attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
         if (_functions.Remove(name, out var removed))
-            removed.SourceMemory?.Release();
+            removed.Release();
         return true;
     }
 
@@ -330,7 +374,7 @@ internal sealed class EvaluationState
     public void ReleaseFunctions()
     {
         foreach (var function in _functions.Values)
-            function.SourceMemory?.Release();
+            function.Release();
         _functions.Clear();
     }
 

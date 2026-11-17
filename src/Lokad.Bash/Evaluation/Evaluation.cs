@@ -805,8 +805,8 @@ public sealed partial class Evaluation : IFileTester
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(nameError), false).ConfigureAwait(false);
 
         var preparation = await AwaitWordExpansionAsync(PrepareCommandAsync(simpleCommand, commandValue, scope)).ConfigureAwait(false);
-        using var functionSource = new SourceMemory.Borrow(preparation is PreparedCommand.Executable
-            { Resolution: CommandResolution.Function selectedFunction } ? selectedFunction.Binding.SourceMemory : null);
+        using var functionBorrow = new FunctionBinding.Borrow(preparation is PreparedCommand.Executable
+            { Resolution: CommandResolution.Function selectedFunction } ? selectedFunction.Binding : null);
         if (_state.TryConsumeExpansionError(out var preparationError))
             return await FailPreparationAsync(preparationError).ConfigureAwait(false);
 
@@ -950,6 +950,7 @@ public sealed partial class Evaluation : IFileTester
                 simpleCommand.Redirections, redirectionExpansionScope, persistAllocations: !externalRedirections)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
+        List<FunctionBinding>? exportOwners = null;
         var preparedResult = EvaluationResult.FromExitCode(0);
         OperationError? commandCloseError = null;
         try
@@ -969,8 +970,17 @@ public sealed partial class Evaluation : IFileTester
         }
         finally
         {
-            commandCloseError = await commandRedirections.CloseAsync(
-                scopeFailure != null || preparedResult.ExitCode != 0).ConfigureAwait(false);
+            try
+            {
+                commandCloseError = await commandRedirections.CloseAsync(
+                    scopeFailure != null || preparedResult.ExitCode != 0).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (exportOwners != null)
+                    foreach (var owner in exportOwners)
+                        owner.Release();
+            }
         }
         return await ApplyCloseErrorAsync(preparedResult, commandCloseError).ConfigureAwait(false);
 
@@ -1263,7 +1273,23 @@ public sealed partial class Evaluation : IFileTester
             foreach (var function in _state.Functions.Values)
             {
                 if (!function.Attributes.HasFlag(FunctionAttributes.Exported)) continue;
-                if (!function.TryGetExport(remaining, Memory.Budget, out var export)) return false;
+                if (exportOwners == null)
+                {
+                    Memory.Charge(256); // The two command-local lists and their initial storage.
+                    exportOwners = [];
+                }
+                function.Retain();
+                try
+                {
+                    Memory.Charge(64); // Both list capacities and replacement overlap.
+                    exportOwners.Add(function);
+                }
+                catch
+                {
+                    function.Release();
+                    throw;
+                }
+                if (!function.TryGetExport(remaining, out var export)) return false;
                 remaining -= export.Source.Length;
                 result.Add(export);
             }
@@ -2723,7 +2749,7 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Imports a validated definition without invoking it or retaining parent-only readonly attributes.</summary>
     public void SetExportedFunction(FunctionDefinition definition) =>
-        _state.SetFunctionBinding(new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null));
+        _state.SetFunctionBinding(new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null, Memory));
 
     /// <summary>Sets an exported variable, bypassing readonly checks for host-provided environment.</summary>
     internal void SetExportedVariable(BindingName name, ShellValue value)

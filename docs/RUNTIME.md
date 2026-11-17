@@ -68,6 +68,14 @@ definitions inherit the executing function's source, independently of its caller
 Retired bindings and settled child namespaces release their ownership; copied
 eval/trap source does not keep unrelated source-file buffers admitted.
 
+Each immutable function binding shares its serialized export across attribute
+copies and child namespaces. First serialization charges the creator's installed
+evaluation owner. Unset/redefinition releases retired storage after the last
+namespace, invocation, query or host-command borrow finishes, including descriptor
+cleanup. Concurrent publication never waits on another evaluator; unused candidates
+are refunded, while admission refusal remains a failure. Hosted consumers that
+retain export bytes after command completion own and admit their copies.
+
 Line-continuation normalization reuses the structural scan's nested syntax while
 retaining physical source positions. Reusing lookahead through a source slice
 does not cross its end or reset the structural nesting guards.

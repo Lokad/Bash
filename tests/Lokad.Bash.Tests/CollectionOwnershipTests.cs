@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
@@ -12,8 +13,9 @@ public sealed class CollectionOwnershipTests
         var next = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :; }\n#" + new string('b', 16384)).Commands));
         var state = new EvaluationState(Parser.Parse(""), ShellPath.Root, inheritedDescriptorTable: null);
 
-        Assert.True(state.TryRegisterFunction(first, sourceMemory: null));
-        Assert.True(state.TryRegisterFunction(next, sourceMemory: null));
+        var memory = new EvaluationMemory(new MemoryGovernor(1024 * 1024));
+        Assert.True(state.TryRegisterFunction(first, sourceMemory: null, memory));
+        Assert.True(state.TryRegisterFunction(next, sourceMemory: null, memory));
 
         var name = Assert.Single(state.Functions.Keys);
         Assert.True(name.Bytes.Equals(next.Name.Value.Bytes));

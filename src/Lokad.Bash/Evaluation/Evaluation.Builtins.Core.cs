@@ -136,7 +136,7 @@ public sealed partial class Evaluation
         if (names.Count == 0)
             return 0;
 
-        List<SourceMemory>? sourceOwners = null;
+        List<FunctionBinding>? functionOwners = null;
         try
         {
             var resolutions = await ResolveCommandQueriesAsync().ConfigureAwait(false);
@@ -291,11 +291,8 @@ public sealed partial class Evaluation
                     var resolution = ResolveCommandName(names[index], name, CommandLookupMode.Normal);
                     if (resolution is CommandResolution.Function function)
                     {
-                        if (function.Binding.SourceMemory is { } owner)
-                        {
-                            (sourceOwners ??= []).Add(owner);
-                            owner.Retain();
-                        }
+                        (functionOwners ??= []).Add(function.Binding);
+                        function.Binding.Retain();
                         resolutions[index] = new CommandQueryResolution.Function(function.Binding.Definition);
                         continue;
                     }
@@ -357,8 +354,8 @@ public sealed partial class Evaluation
         }
         finally
         {
-            if (sourceOwners != null)
-                foreach (var owner in sourceOwners)
+            if (functionOwners != null)
+                foreach (var owner in functionOwners)
                     owner.Release();
         }
     }

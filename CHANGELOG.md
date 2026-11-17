@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refund cached function exports after their last namespace or active consumer
+  retires. Charge first serialization to the binding creator, including pipeline
+  publication, and keep borrowed definitions admitted through command cleanup.
 - Preserve byte-valued printf time formats through the existing date renderer.
   Use ASCII width grammar and GNU's bounded strftime result before outer field
   formatting, retaining shared admission, cancellation and count-write ordering.

@@ -88,7 +88,7 @@ public static class EndToEndHarness
         await host.GetPathKindAsync(new FilePathLookup(new ShellPath(path), FileLinkFollowing.Follow), CancellationToken.None).ConfigureAwait(false) == FilePathKind.Directory;
 }
 
-public sealed class TestHost : MockFileSystem
+public class TestHost : MockFileSystem
 {
     private readonly ConcurrentDictionary<FileDescriptor, Endpoint> _pipes = new();
     private int _nextPipe = 1_000_000;
