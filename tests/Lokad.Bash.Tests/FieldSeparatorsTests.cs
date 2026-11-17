@@ -1,11 +1,30 @@
 using System.Text;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
 
-public sealed class FieldSeparatorsTests
+public sealed class FieldSeparatorsTests : IDisposable
 {
+    private readonly MemoryGovernor _governor = new(TestMemoryBudget.EvaluationBytes);
+    private readonly EvaluationMemory _memory;
+
+    public FieldSeparatorsTests() => _memory = new EvaluationMemory(_governor);
+
+    public void Dispose()
+    {
+        _memory.Finish(retainVariables: false);
+        Assert.Equal(0, _governor.ReservedBytes);
+    }
+
+    private FieldSeparators Prepare(Variables variables)
+    {
+        var selected = FieldSeparators.FromVariables(variables);
+        return selected.PrepareCharacters(variables, _memory, CancellationToken.None)
+            .PrepareBytes(variables, _memory, CancellationToken.None);
+    }
+
     [Fact]
     public void UnsplitWordsAndJoinsDoNotBuildMembershipIndexes()
     {
@@ -34,19 +53,26 @@ public sealed class FieldSeparatorsTests
         var clone = variables.Clone();
         var shared = FieldSeparators.FromVariables(clone);
         Assert.Same(separators, shared);
-        Assert.True(shared.Contains(new Rune('é')));
-        var characterIndex = characters.GetValue(separators);
+        var prepared = shared.PrepareCharacters(clone, _memory, CancellationToken.None);
+        Assert.NotSame(shared, prepared);
+        Assert.True(prepared.Contains(new Rune('é')));
+        var characterIndex = characters.GetValue(prepared);
         Assert.NotNull(characterIndex);
-        Assert.Null(bytes.GetValue(separators));
-        Assert.True(separators.Contains(new Rune(':')));
-        Assert.Same(characterIndex, characters.GetValue(separators));
+        Assert.Null(characters.GetValue(separators));
+        Assert.Null(bytes.GetValue(prepared));
+        Assert.Same(separators, FieldSeparators.FromVariables(variables));
+        Assert.Same(prepared, FieldSeparators.FromVariables(clone));
 
-        Assert.True(shared.Contains((byte)0xA9));
-        var byteIndex = bytes.GetValue(separators);
-        Assert.NotNull(byteIndex);
-        Assert.True(separators.Contains((byte)':'));
-        Assert.Same(byteIndex, bytes.GetValue(separators));
-        Assert.Same(characterIndex, characters.GetValue(separators));
+        var completedClone = clone.Clone();
+        Assert.Same(prepared, FieldSeparators.FromVariables(completedClone));
+        var both = prepared.PrepareBytes(completedClone, _memory, CancellationToken.None);
+        Assert.NotSame(prepared, both);
+        Assert.True(both.Contains((byte)0xA9));
+        Assert.True(both.Contains((byte)':'));
+        Assert.NotNull(bytes.GetValue(both));
+        Assert.Null(bytes.GetValue(prepared));
+        Assert.Same(characterIndex, characters.GetValue(both));
+        Assert.Same(prepared, FieldSeparators.FromVariables(clone));
     }
 
     [Fact]
@@ -59,14 +85,25 @@ public sealed class FieldSeparatorsTests
 
         await Task.WhenAll(clones.Select(clone => Task.Run(() =>
         {
-            var shared = FieldSeparators.FromVariables(clone);
-            Assert.Same(separators, shared);
-            Assert.True(shared.Contains(new Rune('é')));
-            Assert.False(shared.Contains(Rune.ReplacementChar));
-            Assert.True(shared.Contains((byte)0xFF));
-            Assert.True(shared.Contains((byte)0xA9));
-            Assert.False(shared.Contains((byte)':'));
+            var memory = new EvaluationMemory(_governor);
+            try
+            {
+                var shared = FieldSeparators.FromVariables(clone);
+                Assert.Same(separators, shared);
+                var prepared = shared.PrepareCharacters(clone, memory, CancellationToken.None)
+                    .PrepareBytes(clone, memory, CancellationToken.None);
+                Assert.NotSame(shared, prepared);
+                Assert.Same(prepared, FieldSeparators.FromVariables(clone));
+                Assert.True(prepared.Contains(new Rune('é')));
+                Assert.False(prepared.Contains(Rune.ReplacementChar));
+                Assert.True(prepared.Contains((byte)0xFF));
+                Assert.True(prepared.Contains((byte)0xA9));
+                Assert.False(prepared.Contains((byte)':'));
+            }
+            finally { memory.Finish(retainVariables: false); }
         })));
+        Assert.Same(separators, FieldSeparators.FromVariables(variables));
+        Assert.Equal(0, _governor.ReservedBytes);
     }
 
     [Theory]
@@ -89,25 +126,25 @@ public sealed class FieldSeparatorsTests
     public void CacheTracksEmptyUnsetAndArrayBindings()
     {
         var variables = Variables.CreateEmpty();
-        var defaults = FieldSeparators.FromVariables(variables);
+        var defaults = Prepare(variables);
         Assert.True(defaults.Contains(new Rune(' ')));
 
         Assert.True(variables.TrySetScalar("IFS", ShellValue.Empty));
-        var empty = FieldSeparators.FromVariables(variables);
+        var empty = Prepare(variables);
         Assert.True(empty.IsEmpty);
-        Assert.Same(empty, FieldSeparators.FromVariables(variables));
+        Assert.Same(empty, Prepare(variables));
         Assert.False(empty.Contains(new Rune(' ')));
 
         Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(":")));
-        var colon = FieldSeparators.FromVariables(variables);
+        var colon = Prepare(variables);
         Assert.True(colon.Contains(new Rune(':')));
         Assert.False(colon.Contains(new Rune(' ')));
         Assert.True(variables.TryUnset("IFS", UnsetFlags.None));
-        Assert.Same(defaults, FieldSeparators.FromVariables(variables));
+        Assert.Same(defaults, Prepare(variables));
 
         Assert.True(variables.TryAssignArray("IFS", [ShellValue.FromText(",")], ArrayKind.Indexed));
         // The existing scalar-only IFS contract uses defaults for array bindings.
-        Assert.Same(defaults, FieldSeparators.FromVariables(variables));
+        Assert.Same(defaults, Prepare(variables));
         Assert.True(colon.Contains(new Rune(':')));
     }
 
@@ -115,25 +152,25 @@ public sealed class FieldSeparatorsTests
     public void CacheTracksNamerefTargetChangesAndCycles()
     {
         var variables = Variables.CreateEmpty();
-        var defaults = FieldSeparators.FromVariables(variables);
+        var defaults = Prepare(variables);
         Assert.True(variables.TrySetScalar("separator", ShellValue.FromText(",")));
         Assert.True(variables.TrySetNameref("IFS", ShellValue.FromText("separator")));
-        var comma = FieldSeparators.FromVariables(variables);
+        var comma = Prepare(variables);
         Assert.True(comma.Contains(new Rune(',')));
 
         Assert.True(variables.TrySetScalar("separator", ShellValue.FromText(":")));
-        var colon = FieldSeparators.FromVariables(variables);
+        var colon = Prepare(variables);
         Assert.NotSame(comma, colon);
         Assert.True(colon.Contains(new Rune(':')));
         Assert.False(colon.Contains(new Rune(',')));
 
         Assert.True(variables.TrySetNameref("IFS", ShellValue.FromText("other")));
-        Assert.Same(defaults, FieldSeparators.FromVariables(variables));
+        Assert.Same(defaults, Prepare(variables));
         Assert.True(variables.TrySetScalar("other", ShellValue.Empty));
-        Assert.True(FieldSeparators.FromVariables(variables).IsEmpty);
+        Assert.True(Prepare(variables).IsEmpty);
         Assert.True(variables.TryUnset("other", UnsetFlags.None));
         Assert.True(variables.TrySetNameref("other", ShellValue.FromText("IFS")));
-        Assert.Same(defaults, FieldSeparators.FromVariables(variables));
+        Assert.Same(defaults, Prepare(variables));
     }
 
     [Fact]
@@ -141,18 +178,18 @@ public sealed class FieldSeparatorsTests
     {
         var variables = Variables.CreateEmpty();
         Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(":")));
-        var colon = FieldSeparators.FromVariables(variables);
+        var colon = Prepare(variables);
         var clone = variables.Clone();
-        Assert.Same(colon, FieldSeparators.FromVariables(clone));
+        Assert.Same(colon, Prepare(clone));
 
         Assert.True(clone.TrySetScalar("IFS", ShellValue.FromText(",")));
-        var comma = FieldSeparators.FromVariables(clone);
+        var comma = Prepare(clone);
         Assert.NotSame(colon, comma);
         Assert.True(comma.Contains(new Rune(',')));
-        Assert.Same(colon, FieldSeparators.FromVariables(variables));
+        Assert.Same(colon, Prepare(variables));
 
         variables.CopyBindingFrom(clone, "IFS");
-        var copied = FieldSeparators.FromVariables(variables);
+        var copied = Prepare(variables);
         Assert.True(copied.Contains(new Rune(',')));
         Assert.True(copied.Bytes.Equals(comma.Bytes));
         Assert.False(copied.Contains(new Rune(':')));
@@ -166,19 +203,19 @@ public sealed class FieldSeparatorsTests
         var variables = Variables.CreateEmpty();
         var commaValue = ShellValue.FromBytes(bytes.AsMemory(0, 1));
         Assert.True(variables.TrySetScalar("IFS", commaValue));
-        var comma = FieldSeparators.FromVariables(variables);
+        var comma = Prepare(variables);
         Assert.True(variables.TrySetScalar("unrelated", ShellValue.FromText("changed")));
-        Assert.Same(comma, FieldSeparators.FromVariables(variables));
+        Assert.Same(comma, Prepare(variables));
         Assert.True(variables.TrySetScalar("IFS", commaValue));
-        Assert.Same(comma, FieldSeparators.FromVariables(variables));
+        Assert.Same(comma, Prepare(variables));
 
         Assert.True(variables.TrySetScalar("IFS", ShellValue.FromBytes(bytes.AsMemory(1, 1))));
-        var colon = FieldSeparators.FromVariables(variables);
+        var colon = Prepare(variables);
         Assert.NotSame(comma, colon);
         Assert.True(colon.Contains(new Rune(':')));
         Assert.False(colon.Contains(new Rune(',')));
         Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(":")));
-        Assert.NotSame(colon, FieldSeparators.FromVariables(variables));
+        Assert.NotSame(colon, Prepare(variables));
     }
 
     [Theory]
@@ -197,11 +234,11 @@ public sealed class FieldSeparatorsTests
         var variables = Variables.CreateEmpty();
         var value = ShellValue.FromBytes(Convert.FromHexString(hex));
         Assert.True(variables.TrySetScalar("IFS", value));
-        var separators = FieldSeparators.FromVariables(variables);
+        var separators = Prepare(variables);
 
         Assert.Equal(hasScalar, separators.Contains(new Rune(scalar)));
         Assert.Equal(hasByte, separators.Contains(rawByte));
         Assert.True(value.Bytes.Equals(separators.Bytes));
-        Assert.Same(separators, FieldSeparators.FromVariables(variables));
+        Assert.Same(separators, Prepare(variables));
     }
 }

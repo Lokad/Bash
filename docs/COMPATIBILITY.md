@@ -80,6 +80,14 @@ retain their inert data semantics.
 File paths use the contained POSIX-style namespace defined by `ShellPath` and
 `FilePathLookup`, including their size, control-character and traversal constraints.
 
+IFS lookup follows the current scalar value through namerefs, including mutations
+of their targets. Cached membership follows that value's byte-slice identity.
+This deliberately retains consistent target lookup where the two pinned GNU 5.2
+builds give different stale-cache results for IFS nameref-target changes.
+Valid input characters use scalar membership; malformed input bytes test every
+configured IFS byte, including bytes inside otherwise valid UTF-8 separators.
+Only space, tab and LF have IFS whitespace semantics.
+
 The deterministic character profile is UTF-8 with invariant character operations.
 Length and substring operations count Unicode scalar values and individual malformed
 bytes. Shell-word patterns preserve quoting and match scalars when both operands

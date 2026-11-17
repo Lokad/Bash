@@ -14,21 +14,28 @@ internal sealed class FieldSeparators
     private const string DefaultValue = " \t\n";
 
     /// <summary>The shared separators used when <c>IFS</c> is unset.</summary>
-    internal static readonly FieldSeparators Default = new(ShellValue.FromText(DefaultValue));
+    internal static readonly FieldSeparators Default = new(ShellValue.FromText(DefaultValue), null, null);
 
     /// <summary>The separator bytes, including any malformed UTF-8.</summary>
     private readonly ShellValue _value;
 
-    // Queries of IsEmpty/First need no indexes. Cloned scopes share completed indexes;
-    // concurrent first readers may build independently without waiting on another evaluator.
-    private HashSet<Rune>? _characters;
-    private SearchValues<byte>? _byteMembership;
+    // A published snapshot never grows. A child can share completed indexes, but
+    // new backing belongs to a replacement snapshot in that child's variable scope.
+    private readonly HashSet<Rune>? _characters;
+    private readonly ByteMembership? _byteMembership;
 
     /// <summary>Initializes separators from an <c>IFS</c> value.</summary>
-    private FieldSeparators(ShellValue value)
+    private FieldSeparators(ShellValue value, HashSet<Rune>? characters, ByteMembership? byteMembership)
     {
         _value = value;
+        _characters = characters;
+        _byteMembership = byteMembership;
     }
+
+    /// <summary>Retains value bytes and actual membership capacity through the variable owner.</summary>
+    internal long EstimatedMemoryBytes => checked(Variables.EstimateValueBytes(_value)
+        + (_characters != null || _byteMembership.HasValue ? 256L : 0)
+        + 16L * (_characters?.EnsureCapacity(0) ?? 0));
 
     /// <summary>Gets whether no separator characters are configured.</summary>
     public bool IsEmpty => _value.IsEmpty;
@@ -56,40 +63,102 @@ internal sealed class FieldSeparators
         // Resolve aliases every time; immutable memory identity detects changes without value scans.
         var cached = variables.CachedFieldSeparators;
         if (!cached.Bytes.Equals(value.Bytes))
-            variables.CachedFieldSeparators = cached = new FieldSeparators(value);
+            variables.CachedFieldSeparators = cached = new FieldSeparators(value, null, null);
         return cached;
     }
 
-    /// <summary>Returns whether the configured separators contain a character.</summary>
-    public bool Contains(Rune value)
+    /// <summary>Admits and prepares scalar membership in the active variable owner, preserving shared snapshots.</summary>
+    internal FieldSeparators PrepareCharacters(Variables variables, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var characters = Volatile.Read(ref _characters);
-        if (characters == null)
+        if (_characters != null || ReferenceEquals(this, Default) || IsEmpty)
+            return this;
+        cancellationToken.ThrowIfCancellationRequested();
+        var baseline = memory.Workspace.Bytes;
+        var completed = false;
+        try
         {
-            var built = new HashSet<Rune>();
+            memory.Charge(256);
+            cancellationToken.ThrowIfCancellationRequested();
+            var characters = new HashSet<Rune>();
+            var capacity = 0;
             var remaining = Bytes.Span;
             while (!remaining.IsEmpty)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var status = Rune.DecodeFromUtf8(remaining, out var character, out var length);
                 if (status == OperationStatus.Done)
-                    built.Add(character);
+                {
+                    if (characters.Count == capacity && !characters.Contains(character))
+                    {
+                        var requested = capacity == 0 ? 3 : checked(2 * capacity);
+                        // Cover buckets, entries, prime rounding and both generations.
+                        memory.Charge(checked(128L + 32L * requested));
+                        cancellationToken.ThrowIfCancellationRequested();
+                        capacity = characters.EnsureCapacity(requested);
+                        // EnsureCapacity has finished using its previous arrays.
+                        memory.Workspace.Resize(checked(baseline + 256L + 16L * capacity));
+                    }
+                    characters.Add(character);
+                }
                 remaining = remaining[(status == OperationStatus.Done ? length : 1)..];
             }
-            characters = Interlocked.CompareExchange(ref _characters, built, null) ?? built;
+            cancellationToken.ThrowIfCancellationRequested();
+            var prepared = Publish(variables, characters, _byteMembership);
+            completed = true;
+            return prepared;
         }
-        return characters.Contains(value);
+        finally
+        {
+            // The synchronous builder has no outstanding users after failure.
+            // Relinquish partial backing before the command reports its refusal.
+            if (!completed) memory.Workspace.Resize(baseline);
+        }
     }
 
-    /// <summary>Tests a malformed input byte against all configured bytes, including UTF-8 continuation bytes.</summary>
-    public bool Contains(byte value)
+    /// <summary>Prepares fixed byte membership, including bytes inside valid UTF-8 separators.</summary>
+    internal FieldSeparators PrepareBytes(Variables variables, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var membership = Volatile.Read(ref _byteMembership);
-        if (membership == null)
+        if (_byteMembership.HasValue || ReferenceEquals(this, Default) || IsEmpty)
+            return this;
+        cancellationToken.ThrowIfCancellationRequested();
+        memory.Charge(256);
+        cancellationToken.ThrowIfCancellationRequested();
+        Span<ulong> bits = stackalloc ulong[4];
+        bits.Clear();
+        foreach (var value in Bytes.Span)
         {
-            var built = SearchValues.Create(Bytes.Span);
-            membership = Interlocked.CompareExchange(ref _byteMembership, built, null) ?? built;
+            cancellationToken.ThrowIfCancellationRequested();
+            bits[value >> 6] |= 1UL << (value & 63);
         }
-        return membership.Contains(value);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Publish(variables, _characters, new ByteMembership(bits[0], bits[1], bits[2], bits[3]));
+    }
+
+    private FieldSeparators Publish(Variables variables, HashSet<Rune>? characters, ByteMembership? byteMembership)
+    {
+        var prepared = new FieldSeparators(_value, characters, byteMembership);
+        if (ReferenceEquals(variables.CachedFieldSeparators, this))
+            variables.CachedFieldSeparators = prepared;
+        return prepared;
+    }
+
+    /// <summary>Queries prepared scalar membership; default and empty separators need no index.</summary>
+    public bool Contains(Rune value) => ReferenceEquals(this, Default) ? HasWhitespaceSemantics(value)
+        : !IsEmpty && (_characters ?? throw new InvalidOperationException("Scalar membership was not prepared.")).Contains(value);
+
+    /// <summary>Queries prepared byte membership, including UTF-8 continuation bytes.</summary>
+    public bool Contains(byte value) => ReferenceEquals(this, Default) ? value is (byte)' ' or (byte)'\t' or (byte)'\n'
+        : !IsEmpty && (_byteMembership ?? throw new InvalidOperationException("Byte membership was not prepared.")).Contains(value);
+
+    private readonly record struct ByteMembership(ulong First, ulong Second, ulong Third, ulong Fourth)
+    {
+        public bool Contains(byte value) => ((value >> 6) switch
+        {
+            0 => First,
+            1 => Second,
+            2 => Third,
+            _ => Fourth
+        } & (1UL << (value & 63))) != 0;
     }
 
     /// <summary>

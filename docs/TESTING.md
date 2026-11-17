@@ -41,6 +41,15 @@ child owner for exported function routes. Scalar class membership, UTF-16 utilit
 units and pathname width are separate profiles. Malformed literal bracket scans
 and valid-member scans on wildcard retries are independent work dimensions.
 
+`FieldSeparatorsTests` separates unresolved descriptors, completed immutable
+snapshots, scope publication and character/byte membership. `FieldSeparatorMemoryTests`
+checks actual scalar backing capacity, equal-length/different-diversity admission,
+refusal/cancellation before publication, child-first preparation, fixed byte storage,
+pending-host lifetime, target preservation and the next unread record. Retain the
+original tight-allowance witness separately from controls requiring room for
+coarse prepaid capacity growth. Native IFS nameref results differ by reference
+version; do not present the managed target-lookup profile as agreement with either.
+
 Use the pinned SDK and run `dotnet test Lokad.Bash.slnx -c Release`. CI builds,
 tests both target frameworks and packs on Windows and Linux. A focused test run
 is useful during an edit; release qualification requires the complete boundary

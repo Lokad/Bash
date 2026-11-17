@@ -56,9 +56,11 @@ public sealed partial class Variables
             // The command source already owns borrowed positional/name/IFS bytes. Include it
             // for full child-snapshot admission, without charging that borrowed frame twice.
             var inherited = _commandSource?.Variables.EstimatedMemoryBytes
-                ?? checked(PositionalMemoryBytes + EstimateValueBytes(_argumentZero)
-                    + EstimateValueBytes(ShellValue.FromBytes(CachedFieldSeparators.Bytes)));
-            return checked(_bindingBytes + inherited
+                ?? checked(PositionalMemoryBytes + EstimateValueBytes(_argumentZero));
+            var separators = _commandSource is { } source
+                && ReferenceEquals(CachedFieldSeparators, source.Variables.CachedFieldSeparators)
+                    ? 0 : CachedFieldSeparators.EstimatedMemoryBytes;
+            return checked(_bindingBytes + inherited + separators
                 + (long)BindingOverheadBytes * (_bindingCapacity - _bindings.Count));
         }
     }
@@ -127,7 +129,7 @@ public sealed partial class Variables
     internal IReadOnlyCollection<BindingName> ReadonlyNames { get; }
     internal ShellValue ArgumentZero { get => _argumentZero; set => _argumentZero = value; }
 
-    /// <summary>Immutable membership for the last resolved IFS; lookups validate its value identity.</summary>
+    /// <summary>Immutable snapshot of the last resolved IFS; completed membership belongs to this variable owner.</summary>
     internal FieldSeparators CachedFieldSeparators { get; set; } = FieldSeparators.Default;
 
     private Variables()

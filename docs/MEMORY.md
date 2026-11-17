@@ -224,8 +224,19 @@ Command substitutions and Bash command inheritance extend one admitted union
 instead of copying and merging multiple lists. Caller-owned constructor inputs
 stay borrowed. Public host-side CommandContext preparation remains caller-owned;
 hosts admit independent copies they create or retain.
-Repeated descriptor-map copying/reference scans and field-separator indexes remain
-material work. Descriptor admission does not imply complete evaluation accounting;
+IFS membership snapshots belong to the variable scope that prepares them. Scalar
+bucket/entry capacity and replacement overlap are admitted before growth; completed
+capacity joins the variable owner's retained estimate. Child scopes can share
+completed immutable indexes, but publish newly built indexes only in their own
+cache slot. Borrowed command scopes account a replacement separately from their
+parent's cache. Byte membership uses four inline words, independent of IFS length.
+Default/empty membership, first-character lookup and unsplit joins need no index.
+Refusal/cancellation publishes no partial index and follows ordinary cleanup;
+there is no alternate matcher, smaller-reservation retry or recovery scan.
+Coarse prepaid growth can reject even a small new index near an allowance boundary.
+
+Repeated descriptor-map copying/reference scans remain material work.
+Descriptor/IFS admission does not imply complete evaluation accounting;
 keep separate pipeline-preparation and other coarse-owner audits explicit.
 Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,
 retained results and cleanup with pending users.

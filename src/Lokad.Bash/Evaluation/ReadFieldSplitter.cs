@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
@@ -12,8 +13,10 @@ namespace Lokad.Bash.Evaluation;
 internal static class ReadFieldSplitter
 {
     internal static List<ShellValue> Split(ReadOnlyMemory<byte> content, int fieldCount, ReadBuiltinOptions options,
-        MemoryCapacity listMemory, MemoryCapacity decodedMemory)
+        MemoryCapacity listMemory, MemoryCapacity decodedMemory,
+        Variables variables, EvaluationMemory memory, CancellationToken cancellationToken)
     {
+        var fieldSeparators = options.FieldSeparators;
         const int FieldSlotBytes = 2 * sizeof(long);
         const int FieldListOverheadBytes = 64;
         var capacity = options.FieldMode == ReadFieldMode.PreserveInput ? 1 : fieldCount;
@@ -113,6 +116,7 @@ internal static class ReadFieldSplitter
 
             bool TryReadCharacter(int index, out ReadCharacter character, out int next)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 character = default;
                 next = index;
                 if (index >= contentEnd)
@@ -145,9 +149,15 @@ internal static class ReadFieldSplitter
             bool IsIfsNonWhitespace(ReadCharacter character) =>
                 IsIfsDelimiter(character) && !(character.Scalar is { } scalar && FieldSeparators.HasWhitespaceSemantics(scalar));
 
-            bool IsSeparator(ReadCharacter character) => character.Scalar is { } scalar
-                ? options.FieldSeparators.Contains(scalar)
-                : options.FieldSeparators.Contains(character.Bytes.Span[0]);
+            bool IsSeparator(ReadCharacter character)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                fieldSeparators = character.Scalar.HasValue
+                    ? fieldSeparators.PrepareCharacters(variables, memory, cancellationToken)
+                    : fieldSeparators.PrepareBytes(variables, memory, cancellationToken);
+                return character.Scalar is { } scalar ? fieldSeparators.Contains(scalar)
+                    : fieldSeparators.Contains(character.Bytes.Span[0]);
+            }
 
             ShellValue BuildValue(int start, int valueEnd)
             {

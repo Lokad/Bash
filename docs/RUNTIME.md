@@ -156,6 +156,13 @@ reuses terminal lookahead across overlapping literal fallbacks; it adds no globa
 cache or subject copy. Repeated valid bracket scans on wildcard retries remain
 separate from this malformed-pattern work.
 
+Field-separator lookup retains byte-slice identity and resolves current nameref
+targets. First-character joins stay independent of membership preparation. Reached
+splitting prepares only its scalar/byte profile through the active command's
+allowance, then publishes an immutable snapshot in that variable scope. Clones
+share completed indexes; a child never grows its parent's snapshot. Read splitting
+uses the same membership preparation, with its own escape/record policy.
+
 Regex matching publishes independently owned capture bytes to global
 `BASH_REMATCH`, after admitting the replacement array and byte storage. Nonmatches
 publish an empty array; errors leave the previous binding intact. Function-local

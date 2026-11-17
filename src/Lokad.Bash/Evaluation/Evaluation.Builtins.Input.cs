@@ -129,7 +129,8 @@ public sealed partial class Evaluation
             exitCode = input.ExitCode;
             var fields = ReadFieldSplitter.Split(input.Content, fieldCount, new ReadBuiltinOptions(
                 FieldSeparators.FromVariables(scope.Variables), backslashMode,
-                implicitReply ? ReadFieldMode.PreserveInput : ReadFieldMode.Split), memory.FieldListMemory, memory.DecodedFieldMemory);
+                implicitReply ? ReadFieldMode.PreserveInput : ReadFieldMode.Split), memory.FieldListMemory, memory.DecodedFieldMemory,
+                scope.Variables, Memory, _cancellationToken);
             for (var index = 0; index < fieldCount; index++)
             {
                 var name = implicitReply ? firstName : words[argumentIndex + index];

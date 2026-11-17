@@ -355,8 +355,10 @@ internal sealed class ExpandedWordBuilder
                     var isCharacter = status == OperationStatus.Done;
                     if (!isCharacter)
                         length = 1;
-                    var isDelimiter = isCharacter
-                        ? fieldSeparators.Contains(character)
+                    fieldSeparators = isCharacter
+                        ? fieldSeparators.PrepareCharacters(_variables, _memory, _cancellationToken)
+                        : fieldSeparators.PrepareBytes(_variables, _memory, _cancellationToken);
+                    var isDelimiter = isCharacter ? fieldSeparators.Contains(character)
                         : fieldSeparators.Contains(bytes.Span[position]);
                     if (!isDelimiter)
                     {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Admit IFS membership capacity before growth and retain completed indexes through
+  their variable owner. Publish immutable snapshots in the active scope so child
+  construction cannot grow a parent's cache. Keep byte membership in fixed inline
+  storage, share completed scalar indexes, and preserve lazy joins and cancellation.
 - Share named bracket atoms across shell pattern roles, including character
   classes, single-unit collating symbols/equivalence elements and suffix atom
   preparation. Preserve quotation, invalid-bracket literal fallback and the fixed
