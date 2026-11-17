@@ -190,6 +190,10 @@ also retires the reader so a consumer cannot remain stranded waiting for EOF.
 Registration storage is admitted before pipe creation, reuses its high-water
 capacity and stays charged through the final awaited close. The execution cleanup
 owner retires this storage after all registered producers and readers settle.
+Closing batches prepare capacity before acquiring handles. Redirection transfer,
+preservation and final cleanup share the serialized execution batch, preserving
+scope order, reverse-open transfer order and once-only closure without late
+admission during unwind. Existing borrow indexes protect parent subshell handles.
 
 Logical descriptor numbers are evaluator state. Host handles are capabilities and
 can have multiple aliases. Borrowed handles stay owned by their caller. Owned

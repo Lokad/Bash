@@ -273,11 +273,8 @@ internal sealed class EvaluationState
         return clone;
     }
 
-    /// <summary>Appends active redirection handles, excluding handles supplied by the caller.</summary>
-    public void AddRedirectionHandlesTo(
-        ref DescriptorHandleCollector handles,
-        IReadOnlyCollection<FileDescriptor> excludedHandles) =>
-        _redirections.AddHandlesTo(ref handles, excludedHandles);
+    /// <summary>Borrows redirection handles in scope order; the consumer selects ownership and deduplication.</summary>
+    public IEnumerable<FileDescriptor> EnumerateRedirectionHandles() => _redirections.EnumerateHandles();
 
     public void PushRedirectionTable(
         DescriptorTable table,
@@ -301,8 +298,9 @@ internal sealed class EvaluationState
         _redirections.SetPersistentDescriptor(descriptor, handle, memory, acquired);
 
     /// <summary>Transfers handles to their longest-lived referencing scope; returns unreferenced handles in reverse order.</summary>
-    public IReadOnlyList<FileDescriptor> TransferRedirectionDescriptors(IReadOnlyCollection<FileDescriptor> descriptors, EvaluationMemory? memory) =>
-        _redirections.TransferHandles(descriptors, memory);
+    public IReadOnlyCollection<FileDescriptor> TransferRedirectionDescriptors(
+        IReadOnlyCollection<FileDescriptor> descriptors, EvaluationMemory? memory, OrderedDescriptorSet closing) =>
+        _redirections.TransferHandles(descriptors, memory, closing);
 
     public bool ReferencesDescriptor(FileDescriptor descriptor) => _redirections.References(descriptor);
 

@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
@@ -17,16 +18,17 @@ public sealed partial class ComplexityRegressionTests
         var root = new DescriptorTable();
         var state = new RedirectionState(root);
         var batch = new FileDescriptor[1];
+        var closing = new OrderedDescriptorSet();
         // Warm generic index and transfer paths outside the measured owner.
         var warmup = new RedirectionState(new DescriptorTable());
         warmup.SetPersistentDescriptor(LogicalDescriptor.StdOut, new FileDescriptor(9), memory, acquired: true);
-        Assert.Empty(warmup.TransferHandles(new[] { new FileDescriptor(9) }, memory));
+        Assert.Empty(warmup.TransferHandles(new[] { new FileDescriptor(9) }, memory, closing));
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var index = 0; index < Count; index++)
         {
             batch[0] = new FileDescriptor(1000 + index);
             state.SetPersistentDescriptor(LogicalDescriptor.StdOut, batch[0], memory, acquired: true);
-            Assert.True(state.TransferHandles(batch, memory).Count == 0);
+            Assert.True(state.TransferHandles(batch, memory, closing).Count == 0);
         }
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
@@ -80,12 +82,13 @@ public sealed partial class ComplexityRegressionTests
         state.PushRedirectionTable(new DescriptorTable(), new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);
 
         IReadOnlyList<FileDescriptor> batch = [descriptor];
+        var closing = new OrderedDescriptorSet();
         for (var iteration = 0; iteration < 20_000; iteration++)
-            Assert.True(state.TransferRedirectionDescriptors(batch, null).Count == 0);
+            Assert.True(state.TransferRedirectionDescriptors(batch, null, closing).Count == 0);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var iteration = 0; iteration < 10_000; iteration++)
-            Assert.True(state.TransferRedirectionDescriptors(batch, null).Count == 0);
+            Assert.True(state.TransferRedirectionDescriptors(batch, null, closing).Count == 0);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.True(
@@ -105,11 +108,12 @@ public sealed partial class ComplexityRegressionTests
             table.Set(new LogicalDescriptor(10 + index), handles[index]);
         var script = Parser.Parse(":");
         var warmup = new EvaluationState(script, ShellPath.Root, table);
-        Assert.Empty(warmup.TransferRedirectionDescriptors(handles, null));
+        var batch = new OrderedDescriptorSet();
+        Assert.Empty(warmup.TransferRedirectionDescriptors(handles, null, batch));
         var state = new EvaluationState(script, ShellPath.Root, table);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        var closing = state.TransferRedirectionDescriptors(handles, null);
+        var closing = state.TransferRedirectionDescriptors(handles, null, batch);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Empty(closing);
@@ -144,8 +148,10 @@ public sealed partial class ComplexityRegressionTests
         currentTable.Set(new LogicalDescriptor(13), currentHandle);
         child.PushRedirectionTable(currentTable, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);
 
+        var batch = new OrderedDescriptorSet();
+        batch.PrepareAdditional(2, null);
         var closing = child.TransferRedirectionDescriptors(
-            [inherited, rootHandle, middleHandle, currentHandle, firstClosed, secondClosed, rootHandle], null);
+            [inherited, rootHandle, middleHandle, currentHandle, firstClosed, secondClosed, rootHandle], null, batch);
 
         Assert.Equal(new[] { secondClosed, firstClosed }, closing);
         Assert.Equal(new[] { currentHandle }, child.PopRedirectionTable());

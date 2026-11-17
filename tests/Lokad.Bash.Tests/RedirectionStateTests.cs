@@ -29,7 +29,9 @@ public sealed class RedirectionStateTests
         Assert.Equal(acquired, child.StdOut);
         Assert.Same(handles, state.Pop());
         var calls = counted.AdmissionCalls;
-        Assert.Equal(handles, state.TransferHandles(handles, memory));
+        var batch = new OrderedDescriptorSet();
+        batch.PrepareAdditional(handles.Length, null); // Caller-owned manual cleanup storage.
+        Assert.Equal(handles, state.TransferHandles(handles, memory, batch));
         Assert.Equal(calls, counted.AdmissionCalls); // Failed setup cleanup acquires no receiving storage.
         Assert.Empty(state.OpenedDescriptors);
     }
@@ -65,10 +67,8 @@ public sealed class RedirectionStateTests
         Assert.True(governor.ReservedBytes > 0);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void HandleCollectionPreservesExistingHandlesAndScopeOrder(bool excludeInherited)
+    [Fact]
+    public void HandleTraversalPreservesScopeOrderAndRepeatedAliases()
     {
         var state = new RedirectionState(inheritedTable: null);
         var borrowed = new FileDescriptor(7);
@@ -81,14 +81,9 @@ public sealed class RedirectionStateTests
             new HashSet<LogicalDescriptor>(), null);
         state.Push(new DescriptorTable(), new DescriptorHandleOwner([inner, shared, excluded]),
             new HashSet<LogicalDescriptor>(), null);
-        var handles = new List<FileDescriptor> { FileDescriptor.StdOut, borrowed, outer };
-        var collector = new DescriptorHandleCollector(handles);
+        var handles = state.EnumerateHandles().ToArray();
 
-        state.AddHandlesTo(ref collector, excludeInherited ? [borrowed, excluded] : []);
-
-        Assert.Equal(excludeInherited
-            ? new[] { FileDescriptor.StdOut, borrowed, outer, inner, shared, last }
-            : new[] { FileDescriptor.StdOut, borrowed, outer, inner, shared, excluded, last }, handles);
+        Assert.Equal(new[] { inner, shared, excluded, outer, shared, borrowed, excluded, last }, handles);
     }
 
     [Theory]

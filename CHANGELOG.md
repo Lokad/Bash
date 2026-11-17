@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prepare one execution-owned closing batch before acquiring descriptors. Reuse
+  it for transfer, preservation and final cleanup without late container growth
+  or exclusion-index copies; clear consumed batches in work proportional to live
+  entries while keeping their backing capacity admitted through cleanup.
 - Admit here-input registration capacity before creating pipes. Reuse its charged
   high-water storage across bounded inputs and retain it through final awaited
   cleanup, independently of each producer's payload and completion channels.

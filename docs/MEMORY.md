@@ -188,8 +188,15 @@ including replacement overlap. Their actual high-water capacity belongs to the
 execution cleanup owner, separately from producer payload/channel estimates.
 Bounded inputs reuse this charged capacity; it survives final pending closes and
 retires with execution cleanup after every user has settled.
+The same execution owner prepares one ordered closing batch alongside pending
+tracking, before handle acquisition or child cleanup handoff. Transfers, preserved
+redirections and final evaluation/subshell cleanup reuse it without allocating
+major containers during unwind. Pending ownership and existing subshell borrow
+indexes select closes; cleanup no longer builds temporary exclusion indexes.
+Completed batches clear only live entries, retaining charged capacity until final
+execution cleanup. All close attempts settle before this storage retires.
 This does not repair repeated dictionary copying/reference scans or provide complete
-accounting of temporary closing/available-handle collectors and exclusion indexes.
+accounting of available/borrowed collections built while creating nested evaluations.
 Those containers and the field-separator index remain
 material coverage work; descriptor admission does not imply complete evaluation
 accounting.

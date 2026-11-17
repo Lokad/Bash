@@ -75,6 +75,8 @@ public sealed partial class Evaluation : IFileTester
     private readonly Stack<HashSet<FileDescriptor>> _subshellBorrowedDescriptorScopes = new();
     /// <summary> Retains owned descriptors until their terminal close completes. </summary>
     private readonly OrderedDescriptorSet _pendingDescriptorCleanup = new();
+    // One serialized cleanup batch; capacity is prepared alongside pending ownership before acquisition.
+    private readonly OrderedDescriptorSet _descriptorCloseBuffer = new();
     // This execution owner survives workspace retirement through Engine's final closes.
     private (IMemoryBudget Budget, MemoryCapacity Capacity)? _descriptorCleanupMemory;
     private Dictionary<FileDescriptor, PipeInputWriter>? _pipeInputs;
@@ -301,6 +303,7 @@ public sealed partial class Evaluation : IFileTester
     internal void ReleaseDescriptorCleanupMemory()
     {
         _pendingDescriptorCleanup.ReleaseStorage();
+        _descriptorCloseBuffer.ReleaseStorage();
         _pipeInputs = null;
         _descriptorCleanupMemory?.Capacity.Dispose();
         _descriptorCleanupMemory = null;
@@ -313,12 +316,16 @@ public sealed partial class Evaluation : IFileTester
             return;
         var capacity = GetDescriptorCleanupCapacity();
         _pendingDescriptorCleanup.PrepareAdditional(additional, capacity);
-        capacity.Resize(checked(_pendingDescriptorCleanup.EstimatedMemoryBytes + PipeInputMemoryBytes));
+        _descriptorCloseBuffer.PrepareAdditional(checked(_pendingDescriptorCleanup.Count + additional), capacity);
+        capacity.Resize(DescriptorCleanupMemoryBytes);
         capacity.TrimExcess();
     }
 
     private long PipeInputMemoryBytes => _pipeInputs is { } inputs && inputs.EnsureCapacity(0) > 0
         ? checked(128L + 48L * inputs.EnsureCapacity(0)) : 0;
+
+    private long DescriptorCleanupMemoryBytes => checked(_pendingDescriptorCleanup.EstimatedMemoryBytes
+        + _descriptorCloseBuffer.EstimatedMemoryBytes + PipeInputMemoryBytes);
 
     private MemoryCapacity GetDescriptorCleanupCapacity()
     {
@@ -326,7 +333,7 @@ public sealed partial class Evaluation : IFileTester
         if (_descriptorCleanupMemory is { } current && ReferenceEquals(current.Budget, budget))
             return current.Capacity;
         var capacity = new MemoryCapacity(budget, 0);
-        try { capacity.Grow(checked(_pendingDescriptorCleanup.EstimatedMemoryBytes + PipeInputMemoryBytes)); }
+        try { capacity.Grow(DescriptorCleanupMemoryBytes); }
         catch { capacity.Dispose(); throw; }
         _descriptorCleanupMemory?.Capacity.Dispose();
         _descriptorCleanupMemory = (budget, capacity);
@@ -344,7 +351,7 @@ public sealed partial class Evaluation : IFileTester
         var target = (int)Math.Min(int.MaxValue, Math.Max(4L, 2L * capacity));
         memory.Grow(checked(128L + 48L * (2L * target + 1)));
         inputs.EnsureCapacity(target);
-        memory.Resize(checked(_pendingDescriptorCleanup.EstimatedMemoryBytes + PipeInputMemoryBytes));
+        memory.Resize(DescriptorCleanupMemoryBytes);
         memory.TrimExcess();
     }
 
@@ -445,9 +452,8 @@ public sealed partial class Evaluation : IFileTester
 
         async Task<OperationError?> CloseEvaluationDescriptorsAsync(bool operationFailed)
         {
-            var descriptors = new DescriptorHandleCollector(new List<FileDescriptor>());
-            _state.AddRedirectionHandlesTo(ref descriptors, _borrowedDescriptors);
-            try { return await CloseDescriptorsAsync(descriptors.Descriptors, operationFailed).ConfigureAwait(false); }
+            var descriptors = CollectRedirectionDescriptorsToClose(excluded: null);
+            try { return await CloseDescriptorsAsync(descriptors, operationFailed).ConfigureAwait(false); }
             finally { _state.RetireDescriptorHandles(); }
         }
     }
@@ -612,7 +618,6 @@ public sealed partial class Evaluation : IFileTester
     {
         var parentState = _state;
         var parentVars = _vars;
-        var inheritedRedirectionDescriptors = parentState.CurrentRedirectionOpenedDescriptors;
         var borrowedDescriptors = new HashSet<FileDescriptor>(CollectDescriptorsAvailableToNestedEvaluation());
         // Child resets must not release the parent's saved handlers before restoration.
         Memory.Charge(RetainedTrapMemoryBytes);
@@ -641,12 +646,11 @@ public sealed partial class Evaluation : IFileTester
         }
         finally
         {
-            var descriptorsToClose = new DescriptorHandleCollector(new List<FileDescriptor>());
-            _state.AddRedirectionHandlesTo(ref descriptorsToClose, inheritedRedirectionDescriptors);
+            var descriptorsToClose = CollectRedirectionDescriptorsToClose(borrowedDescriptors);
 
             try
             {
-                closeError = await CloseDescriptorsAsync(descriptorsToClose.Descriptors,
+                closeError = await CloseDescriptorsAsync(descriptorsToClose,
                     operationFailed: failure != null || result.ExitCode != 0).ConfigureAwait(false);
             }
             finally
@@ -2567,7 +2571,7 @@ public sealed partial class Evaluation : IFileTester
                 _state.PopRedirectionTable();
                 // Earlier allocations may already be persistent. Retain their
                 // handles in the surviving owner while closing only unused opens.
-                await CloseDescriptorsAsync(_state.TransferRedirectionDescriptors(evaluation.OpenedDescriptors.Handles, Memory),
+                await CloseDescriptorsAsync(_state.TransferRedirectionDescriptors(evaluation.OpenedDescriptors.Handles, Memory, _descriptorCloseBuffer),
                     operationFailed: true).ConfigureAwait(false);
             }
             if (error is MemoryBudgetExceededException)
@@ -2594,7 +2598,8 @@ public sealed partial class Evaluation : IFileTester
                 descriptors.Add(descriptor);
         }
 
-        _state.AddRedirectionHandlesTo(ref descriptors, []);
+        foreach (var descriptor in _state.EnumerateRedirectionHandles())
+            descriptors.Add(descriptor);
         return descriptors.Descriptors;
     }
 
@@ -2633,25 +2638,42 @@ public sealed partial class Evaluation : IFileTester
     internal async Task<OperationError?> CloseDescriptorsAsync(IReadOnlyCollection<FileDescriptor> descriptors, bool operationFailed)
     {
         var failure = new DescriptorCloseResult(true, null, null);
-        foreach (var descriptor in descriptors)
+        try
         {
-            DescriptorCloseResult close;
-            try
+            foreach (var descriptor in descriptors)
             {
-                var error = await CloseOwnedDescriptorAsync(descriptor).ConfigureAwait(false);
-                close = new DescriptorCloseResult(error == null, error, null);
+                DescriptorCloseResult close;
+                try
+                {
+                    var error = await CloseOwnedDescriptorAsync(descriptor).ConfigureAwait(false);
+                    close = new DescriptorCloseResult(error == null, error, null);
+                }
+                catch (Exception ex)
+                {
+                    close = new DescriptorCloseResult(false, null, ExceptionDispatchInfo.Capture(ex));
+                }
+                failure = DescriptorCloseResult.FirstFailure(failure, close);
             }
-            catch (Exception ex)
-            {
-                close = new DescriptorCloseResult(false, null, ExceptionDispatchInfo.Capture(ex));
-            }
-            failure = DescriptorCloseResult.FirstFailure(failure, close);
+        }
+        finally
+        {
+            if (ReferenceEquals(descriptors, _descriptorCloseBuffer))
+                _descriptorCloseBuffer.Clear();
         }
 
         if (operationFailed)
             return null;
         failure.Exception?.Throw();
         return failure.Error;
+    }
+
+    private IReadOnlyCollection<FileDescriptor> CollectRedirectionDescriptorsToClose(IReadOnlySet<FileDescriptor>? excluded)
+    {
+        _descriptorCloseBuffer.Clear();
+        foreach (var descriptor in _state.EnumerateRedirectionHandles())
+            if (_pendingDescriptorCleanup.Contains(descriptor) && excluded?.Contains(descriptor) != true)
+                _descriptorCloseBuffer.AddPrepared(descriptor);
+        return _descriptorCloseBuffer;
     }
 
     /// <summary>Reports an expected host failure without unwinding shell control flow.</summary>
@@ -3466,14 +3488,15 @@ public sealed partial class Evaluation : IFileTester
             var openedDescriptors = owner._state.PreserveRedirectionTable(
                 owner.Memory, owner._pendingDescriptorCleanup, owner._subshellBorrowedDescriptorScopes);
             _active = false;
-            var handles = new DescriptorHandleCollector(new List<FileDescriptor>(owner._state.TransferRedirectionDescriptors(openedDescriptors, owner.Memory)));
+            var handles = owner._descriptorCloseBuffer;
+            owner._state.TransferRedirectionDescriptors(openedDescriptors, owner.Memory, handles);
             foreach (var descriptor in descriptorsToReleaseWhenPreserved)
             {
                 if (TryTakeOwnedDescriptor(descriptor))
-                    handles.Add(descriptor);
+                    handles.AddPrepared(descriptor);
             }
 
-            return await owner.CloseDescriptorsAsync(handles.Descriptors, operationFailed: false).ConfigureAwait(false);
+            return await owner.CloseDescriptorsAsync(handles, operationFailed: false).ConfigureAwait(false);
 
             // Take only handles whose lifetime belongs to this evaluator and whose aliases have all been released.
             bool TryTakeOwnedDescriptor(FileDescriptor descriptor)
@@ -3496,7 +3519,8 @@ public sealed partial class Evaluation : IFileTester
 
             _active = false;
             var openedDescriptors = owner._state.PopRedirectionTable();
-            return await owner.CloseDescriptorsAsync(owner._state.TransferRedirectionDescriptors(openedDescriptors, owner.Memory), operationFailed).ConfigureAwait(false);
+            return await owner.CloseDescriptorsAsync(owner._state.TransferRedirectionDescriptors(
+                openedDescriptors, owner.Memory, owner._descriptorCloseBuffer), operationFailed).ConfigureAwait(false);
         }
 
     }

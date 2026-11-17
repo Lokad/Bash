@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
@@ -156,7 +157,9 @@ public sealed class DescriptorMemoryTests
         Assert.NotEmpty(retained);
         Assert.True(retained.Length < opened.Length);
         Assert.Same(opened, state.Pop());
-        var closing = state.TransferHandles(opened, null);
+        var batch = new OrderedDescriptorSet();
+        batch.PrepareAdditional(opened.Length, null);
+        var closing = state.TransferHandles(opened, null, batch);
         var owned = typeof(RedirectionState).GetField("_openedDescriptors",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(state);
         var rootOwner = Assert.IsType<DescriptorHandleOwner>(owned);

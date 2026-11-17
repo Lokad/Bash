@@ -110,6 +110,29 @@ internal sealed class OrderedDescriptorSet : IReadOnlyCollection<FileDescriptor>
         return _first >= 0;
     }
 
+    /// <summary>Reverses encounter order in place, retaining reusable slots and membership.</summary>
+    public void Reverse()
+    {
+        for (var index = _first; index >= 0;)
+        {
+            var entry = _entries[index];
+            var next = entry.Next;
+            (entry.Previous, entry.Next) = (entry.Next, entry.Previous);
+            _entries[index] = entry;
+            index = next;
+        }
+        (_first, _last) = (_last, _first);
+    }
+
+    /// <summary>Ends a consumed batch while retaining its admitted backing storage.</summary>
+    public void Clear()
+    {
+        // Dictionary.Clear touches every bucket at the retained high-water width.
+        // Bounded batches must visit only their live entries after an earlier wide batch.
+        while (TryPeekFirst(out var descriptor))
+            Remove(descriptor);
+    }
+
     /// <summary>Discards empty backing storage only after its final consumer has settled.</summary>
     public void ReleaseStorage()
     {

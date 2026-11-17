@@ -6,6 +6,54 @@ namespace Lokad.Bash.Tests;
 public sealed class OrderedDescriptorSetTests
 {
     [Fact]
+    public void ReversalPreservesReusedSlotsAndSubsequentEncounterOrder()
+    {
+        var descriptors = new OrderedDescriptorSet();
+        descriptors.PrepareAdditional(4, null);
+        for (var id = 10; id < 14; id++) descriptors.AddPrepared(new FileDescriptor(id));
+        descriptors.Remove(new FileDescriptor(11));
+
+        descriptors.Reverse();
+        descriptors.AddPrepared(new FileDescriptor(14));
+
+        Assert.Equal(new[] { 13, 12, 10, 14 }, descriptors.Select(d => d.Id));
+        descriptors.Remove(new FileDescriptor(10));
+        descriptors.Reverse();
+        Assert.Equal(new[] { 14, 12, 13 }, descriptors.Select(d => d.Id));
+        Assert.True(descriptors.TryPeekFirst(out var first));
+        Assert.Equal(new FileDescriptor(14), first);
+    }
+
+    [Fact]
+    public void ConsumedBatchesClearAndReverseWithoutFurtherAllocationOrAdmission()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        var counted = new CountingMemoryBudget(governor);
+        using var owner = counted.CreateScope();
+        using var memory = new MemoryCapacity(owner, 0);
+        var descriptors = new OrderedDescriptorSet();
+        descriptors.PrepareAdditional(128, memory);
+        var calls = counted.AdmissionCalls;
+        var retained = descriptors.EstimatedMemoryBytes;
+        Cycle();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < 1000; iteration++) Cycle();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(allocated <= 1024, $"Batch reuse allocated {allocated} bytes.");
+        Assert.Equal(calls, counted.AdmissionCalls);
+        Assert.Equal(retained, descriptors.EstimatedMemoryBytes);
+        Assert.Empty(descriptors);
+
+        void Cycle()
+        {
+            for (var id = 10; id < 138; id++) descriptors.AddPrepared(new FileDescriptor(id));
+            descriptors.Reverse();
+            descriptors.Clear();
+        }
+    }
+
+    [Fact]
     public void ReactivationAndRemovalMatchAnIndependentEncounterOrderModel()
     {
         var descriptors = new OrderedDescriptorSet();

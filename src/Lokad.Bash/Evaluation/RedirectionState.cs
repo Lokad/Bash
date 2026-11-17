@@ -47,31 +47,15 @@ internal struct RedirectionState
         new(bindings.Fork(), _openedDescriptors.Capture());
 
     /// <summary>
-    /// Appends active redirection handles, excluding handles supplied by the caller.
+    /// Borrows active redirection handles in scope order, including repeated aliases.
     /// </summary>
-    public readonly void AddHandlesTo(
-        ref DescriptorHandleCollector handles,
-        IReadOnlyCollection<FileDescriptor> excludedHandles)
+    public readonly IEnumerable<FileDescriptor> EnumerateHandles()
     {
-        var excluded = excludedHandles.Count == 0 ? null : new HashSet<FileDescriptor>(excludedHandles);
-
-        AddHandles(OpenedDescriptors, excluded, ref handles);
+        foreach (var descriptor in OpenedDescriptors)
+            yield return descriptor;
         foreach (var entry in _frames)
-            AddHandles(entry.Opened.Handles, excluded, ref handles);
-
-        static void AddHandles(
-            IReadOnlyCollection<FileDescriptor> source,
-            HashSet<FileDescriptor>? excludedIndex,
-            ref DescriptorHandleCollector target)
-        {
-            foreach (var descriptor in source)
-            {
-                if (excludedIndex?.Contains(descriptor) == true)
-                    continue;
-
-                target.Add(descriptor);
-            }
-        }
+            foreach (var descriptor in entry.Opened.Handles)
+                yield return descriptor;
     }
 
     public void Push(
@@ -204,24 +188,26 @@ internal struct RedirectionState
 
     /// <summary>
     /// Transfers handles to their already prepared longest-lived owner.
-    /// Returns unreferenced handles in reverse open order.
+    /// Returns the borrowed, preadmitted closing batch in reverse open order.
+    /// The caller consumes it before another batch or ownership mutation.
     /// </summary>
-    public IReadOnlyList<FileDescriptor> TransferHandles(IReadOnlyCollection<FileDescriptor> descriptors, EvaluationMemory? memory)
+    public IReadOnlyCollection<FileDescriptor> TransferHandles(
+        IReadOnlyCollection<FileDescriptor> descriptors, EvaluationMemory? memory, OrderedDescriptorSet closing)
     {
-        List<FileDescriptor>? closing = null;
+        closing.Clear();
         if (descriptors is IReadOnlyList<FileDescriptor> indexed)
         {
             for (var index = 0; index < indexed.Count; index++)
-                TransferHandle(indexed[index], memory, ref closing);
+                TransferHandle(indexed[index], memory, closing);
         }
         else
             foreach (var descriptor in descriptors)
-                TransferHandle(descriptor, memory, ref closing);
-        closing?.Reverse();
-        return closing ?? (IReadOnlyList<FileDescriptor>)[];
+                TransferHandle(descriptor, memory, closing);
+        closing.Reverse();
+        return closing;
     }
 
-    private void TransferHandle(FileDescriptor descriptor, EvaluationMemory? memory, ref List<FileDescriptor>? closing)
+    private void TransferHandle(FileDescriptor descriptor, EvaluationMemory? memory, OrderedDescriptorSet closing)
     {
         DescriptorHandleOwner? owner = null;
         // Stack enumeration runs from newest to oldest: the last match lives longest.
@@ -246,7 +232,7 @@ internal struct RedirectionState
             SettleHandle(_openedDescriptors, descriptor, discard: true);
             foreach (var frame in _frames)
                 SettleHandle(frame.Opened, descriptor, discard: true);
-            (closing ??= new List<FileDescriptor>()).Add(descriptor);
+            closing.AddPrepared(descriptor);
         }
     }
 
