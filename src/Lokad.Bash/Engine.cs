@@ -149,7 +149,7 @@ public sealed class Engine
         async Task<DescriptorCloseResult> TryCleanupDescriptorsAsync()
         {
             var failure = new DescriptorCloseResult(true, null, null);
-            foreach (var descriptor in state.GetDescriptorsForCleanup())
+            while (state.TryGetDescriptorForCleanup(out var descriptor))
             {
                 var result = await ShellDescriptorCleanup.CloseAsync(actualVisitor, descriptor, earlierException: null)
                     .ConfigureAwait(false);
@@ -157,6 +157,7 @@ public sealed class Engine
                 failure = DescriptorCloseResult.FirstFailure(failure, result);
             }
 
+            state.ReleaseDescriptorCleanupMemory();
             return failure;
         }
     }

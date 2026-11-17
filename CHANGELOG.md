@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+- Index released and pending descriptors in encounter order with reusable slots.
+  Admit bookkeeping growth before acquiring handles and keep pending metadata
+  charged through final cleanup. Settle every child after a refused handoff while
+  preserving earlier cancellation and exceptions through ordinary cleanup.
 - Admit descriptor-map backing capacities and copy-on-write overlap. Keep borrowed
   snapshots and saved parents charged to their existing owners; retain actual map
   capacity after commands. Preserve earlier allocations on setup refusal and report
-  through reached stderr before ordinary cleanup. Descriptor bookkeeping containers,
+  through reached stderr before ordinary cleanup. Remaining ownership collections,
   repeated copies/ownership scans and IFS indexes remain separate work.
 - Admit runtime source copies and parsed-unit metadata, including retained
   arithmetic/conditional syntax, deferred substitutions and function namespace
@@ -15,8 +19,8 @@
   Runtime selector/classification and separator scans share the active allowance,
   including nested syntax in unexpanded nameref targets. Classify ASCII grammar
   from borrowed bytes and admit retained text names before decoding.
-  Caller-owned prepared parsing remains separate; descriptor-map and IFS-index
-  admission gaps remain under review.
+  Caller-owned prepared parsing remains separate; IFS-index admission remains
+  under review.
 - Join unquoted here-document continuations before delimiter recognition and tab
   stripping. Preserve skipped command boundaries, quoted data, byte values and
   physical diagnostic offsets through the existing parser and execution paths.

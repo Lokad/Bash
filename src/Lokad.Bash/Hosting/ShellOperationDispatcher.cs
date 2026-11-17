@@ -221,7 +221,8 @@ internal static class ShellOperationDispatcher
         {
             foreach (var descriptor in stage.DescriptorsToClose)
             {
-                stage.Evaluation.TrackOwnedDescriptor(descriptor);
+                // The request owns these streams through this awaited close;
+                // cleanup must not acquire new tracking storage after execution.
                 var result = await ShellDescriptorCleanup.TryCloseOwnedAsync(host, descriptor).ConfigureAwait(false);
                 stage.Evaluation.MarkDescriptorCleanupCompleted(descriptor);
                 closeFailure = DescriptorCloseResult.FirstFailure(closeFailure, result);

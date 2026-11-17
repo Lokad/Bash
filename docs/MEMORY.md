@@ -163,10 +163,19 @@ every command retirement. Persistent publication prepares every receiving table
 before changing that binding, and failed preservation leaves its scope active for
 ordinary restoration/handle transfer. Earlier persistent allocations survive a
 later setup refusal; its diagnostic uses the reached stderr before handles close.
+Released and pending handle indexes preserve encounter order while reusing vacant
+slots. Opened-handle and logical-descriptor bookkeeping prepares backing capacity
+before growth, and cleanup tracking admits capacity before host acquisition.
+Pending cleanup metadata has a coarse execution owner through Engine's final
+awaited closes. Child handoff prepares the receiving index before publication;
+refusal keeps the child owner alive while the parent's ordinary operation path
+settles every close, then fails the enclosing command. An earlier exception or
+cancellation keeps precedence. Stage stream lists already own their handles
+through cleanup and do not acquire a new tracking reservation after execution.
 This does not repair repeated dictionary copying/ownership scans or provide complete
-accounting of descriptor bookkeeping lists/indexes. Those containers and the field-
-separator index remain material coverage work; syntax/map admission does not imply
-complete evaluation accounting.
+accounting of ownership-transfer collections and here-input registrations. Those
+containers and the field-separator index remain material coverage work; syntax/map
+and cleanup-index admission do not imply complete evaluation accounting.
 Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,
 retained results and cleanup with pending users.
 

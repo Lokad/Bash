@@ -322,7 +322,9 @@ public sealed class DynamicSyntaxMemoryTests
         var governor = new MemoryGovernor(256 * 1024);
         using var owner = governor.CreateScope();
         await using var host = new TestHost { MemoryBudget = owner };
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        // Keep the non-cumulative 8,193-iteration boundary. This verifies live ownership;
+        // a generous stall guard leaves throughput independent of concurrent CI work.
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var result = prepared
             ? await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, cancellation.Token)
             : await BashScript.RunAsync(host, source, EvaluationOptions.Default, cancellation.Token);

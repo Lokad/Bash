@@ -74,7 +74,9 @@ public sealed partial class Evaluation : IFileTester
     /// </summary>
     private readonly Stack<HashSet<FileDescriptor>> _subshellBorrowedDescriptorScopes = new();
     /// <summary> Retains owned descriptors until their terminal close completes. </summary>
-    private readonly List<FileDescriptor> _pendingDescriptorCleanup = new();
+    private readonly OrderedDescriptorSet _pendingDescriptorCleanup = new();
+    // This execution owner survives workspace retirement through Engine's final closes.
+    private (IMemoryBudget Budget, MemoryCapacity Capacity)? _descriptorCleanupMemory;
     private Dictionary<FileDescriptor, PipeInputWriter>? _pipeInputs;
 
     /// <summary>
@@ -293,18 +295,69 @@ public sealed partial class Evaluation : IFileTester
     /// </summary>
     internal IReadOnlyList<FileDescriptor> GetDescriptorsForCleanup() => _pendingDescriptorCleanup.ToArray();
 
+    internal bool TryGetDescriptorForCleanup(out FileDescriptor descriptor) =>
+        _pendingDescriptorCleanup.TryPeekFirst(out descriptor);
+
+    internal void ReleaseDescriptorCleanupMemory()
+    {
+        _pendingDescriptorCleanup.ReleaseStorage();
+        _descriptorCleanupMemory?.Capacity.Dispose();
+        _descriptorCleanupMemory = null;
+    }
+
+    /// <summary>Prepares cleanup metadata before acquiring handles; callers remain serialized across acquisition.</summary>
+    internal void PrepareOwnedDescriptors(int additional)
+    {
+        if (additional == 0)
+            return;
+        var budget = Memory.Budget;
+        if (_descriptorCleanupMemory is not { } current || !ReferenceEquals(current.Budget, budget))
+        {
+            var capacity = new MemoryCapacity(budget, 0);
+            try { capacity.Grow(_pendingDescriptorCleanup.EstimatedMemoryBytes); }
+            catch { capacity.Dispose(); throw; }
+            _descriptorCleanupMemory?.Capacity.Dispose();
+            _descriptorCleanupMemory = (budget, capacity);
+        }
+        if (_descriptorCleanupMemory is { } owner)
+        {
+            _pendingDescriptorCleanup.PrepareAdditional(additional, owner.Capacity);
+            owner.Capacity.Resize(_pendingDescriptorCleanup.EstimatedMemoryBytes);
+            owner.Capacity.TrimExcess();
+        }
+    }
+
     /// <summary> Records that final host-side cleanup completed for a descriptor. </summary>
     internal void MarkDescriptorCleanupCompleted(FileDescriptor descriptor) =>
         MarkDescriptorClosed(descriptor);
 
     /// <summary>Transfers unfinished child cleanup to its parent after the child has settled.</summary>
-    internal void TransferDescriptorCleanupTo(Evaluation parent)
+    internal async ValueTask<MemoryBudgetExceededException?> TransferDescriptorCleanupToAsync(Evaluation parent)
     {
-        foreach (var descriptor in GetDescriptorsForCleanup())
+        var missing = 0;
+        foreach (var descriptor in _pendingDescriptorCleanup)
+            if (!parent._pendingDescriptorCleanup.Contains(descriptor))
+                missing++;
+        try { parent.PrepareOwnedDescriptors(missing); }
+        catch (MemoryBudgetExceededException refusal)
         {
-            parent.TrackOwnedDescriptor(descriptor);
-            MarkDescriptorCleanupCompleted(descriptor);
+            // Refusal fails the enclosing command. The settled child keeps ownership
+            // until the parent's ordinary operation path has attempted every close.
+            while (TryGetDescriptorForCleanup(out var descriptor))
+            {
+                try { await parent.CloseOwnedDescriptorAsync(descriptor, this).ConfigureAwait(false); }
+                catch { /* Preserve admission refusal after completing cleanup. */ }
+            }
+            ReleaseDescriptorCleanupMemory();
+            return refusal;
         }
+        while (TryGetDescriptorForCleanup(out var pending))
+        {
+            parent._pendingDescriptorCleanup.AddPrepared(pending);
+            MarkDescriptorCleanupCompleted(pending);
+        }
+        ReleaseDescriptorCleanupMemory();
+        return null;
     }
 
     /// <summary>Releases a private or child namespace; caller-owned prepared root state stays retained.</summary>
@@ -661,6 +714,7 @@ public sealed partial class Evaluation : IFileTester
 
             var pipelineTask = RunPipelineEvaluations.AsTask(PublishOperation, stages);
             ownershipTransferred = true;
+            Exception? pipelineFailure = null;
             try
             {
                 // The host propagates cancellation to the stages. Await their cleanup before taking ownership.
@@ -671,10 +725,21 @@ public sealed partial class Evaluation : IFileTester
                 var result = EvaluationResult.FromExitCode(EvaluationRules.ApplyNegation(exitCode, pipelineNegated));
                 return await FinalizeResultAsync(result, negated: false).ConfigureAwait(false);
             }
+            catch (Exception error)
+            {
+                pipelineFailure = error;
+                throw;
+            }
             finally
             {
+                MemoryBudgetExceededException? transferRefusal = null;
                 foreach (var stage in stages)
-                    stage.Evaluation.TransferDescriptorCleanupTo(this);
+                {
+                    var refusal = await stage.Evaluation.TransferDescriptorCleanupToAsync(this).ConfigureAwait(false);
+                    transferRefusal ??= refusal;
+                }
+                if (pipelineFailure == null && transferRefusal != null)
+                    ExceptionDispatchInfo.Capture(transferRefusal).Throw();
             }
         }
         finally
@@ -2442,7 +2507,11 @@ public sealed partial class Evaluation : IFileTester
         if (redirections.Count == 0)
             return new RedirectionScope(this, active: false, []);
 
+        var restoredTable = _state.CurrentRedirectionTable
+            ?? throw new InvalidOperationException("Redirection setup requires an enclosing descriptor table.");
         var evaluation = new RedirectionEvaluation(redirections, CaptureDescriptorBindings().Fork());
+        var changedDescriptors = new HashSet<LogicalDescriptor>();
+        IReadOnlyList<FileDescriptor> releasedDescriptors = [];
         // Expose the table as setup advances, so later target expansions and their substitutions
         // inherit earlier redirections. Descriptor ownership is finalized after setup succeeds.
         _state.PushRedirectionTable(evaluation.DescriptorTable, evaluation.OpenedDescriptors, evaluation.TouchedDescriptors);
@@ -2450,6 +2519,15 @@ public sealed partial class Evaluation : IFileTester
         try
         {
             await evaluation.EvaluateAsync(scope, persistAllocations).ConfigureAwait(false);
+            // Allocations can update the enclosing table during setup. Its stable
+            // owner now contains the bindings against which restoration is selected.
+            foreach (var logicalDescriptor in evaluation.TouchedDescriptors)
+            {
+                if (evaluation.DescriptorTable.Resolve(logicalDescriptor) != restoredTable.Resolve(logicalDescriptor)
+                    || evaluation.DescriptorTable.HasMapping(logicalDescriptor) != restoredTable.HasMapping(logicalDescriptor))
+                    RedirectionEvaluation.AddDescriptorToSet(changedDescriptors, logicalDescriptor, Memory);
+            }
+            releasedDescriptors = evaluation.GetDescriptorsToReleaseWhenPreserved(Memory);
         }
         catch (Exception error)
         {
@@ -2481,24 +2559,11 @@ public sealed partial class Evaluation : IFileTester
                 _state.PopRedirectionTable();
         }
 
-        // Allocation may persist bindings during setup. Compare against the enclosing owner's current bindings.
-        var restoredTable = _state.CurrentRedirectionTable
-            ?? throw new InvalidOperationException("Redirection setup requires an enclosing descriptor table.");
-        var changedDescriptors = new HashSet<LogicalDescriptor>();
-        foreach (var logicalDescriptor in evaluation.TouchedDescriptors)
-        {
-            if (evaluation.DescriptorTable.Resolve(logicalDescriptor) != restoredTable.Resolve(logicalDescriptor)
-                || evaluation.DescriptorTable.HasMapping(logicalDescriptor) != restoredTable.HasMapping(logicalDescriptor))
-            {
-                changedDescriptors.Add(logicalDescriptor);
-            }
-        }
-
         _state.PushRedirectionTable(
             evaluation.DescriptorTable,
             evaluation.OpenedDescriptors,
             changedDescriptors);
-        return new RedirectionScope(this, active: true, evaluation.DescriptorsToReleaseWhenPreserved);
+        return new RedirectionScope(this, active: true, releasedDescriptors);
 
     }
 
@@ -3209,20 +3274,22 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>Transfers an owned descriptor to the host and awaits cleanup without cancellation.</summary>
-    private async Task<OperationError?> CloseOwnedDescriptorAsync(FileDescriptor descriptor)
+    private Task<OperationError?> CloseOwnedDescriptorAsync(FileDescriptor descriptor) =>
+        CloseOwnedDescriptorAsync(descriptor, this);
+
+    private async Task<OperationError?> CloseOwnedDescriptorAsync(FileDescriptor descriptor, Evaluation owner)
     {
         var source = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var input = _pipeInputs != null && _pipeInputs.Remove(descriptor, out var writer) ? writer : null;
-        if (_pipeInputs?.Count == 0) _pipeInputs = null;
-        PublishOperation(new CloseDescriptorOperation(source, descriptor) { PipeInput = input });
-        var completion = source.Task;
+        var input = owner._pipeInputs != null && owner._pipeInputs.Remove(descriptor, out var writer) ? writer : null;
+        if (owner._pipeInputs?.Count == 0) owner._pipeInputs = null;
         try
         {
-            return await completion.ConfigureAwait(false);
+            PublishOperation(new CloseDescriptorOperation(source, descriptor) { PipeInput = input });
+            return await source.Task.ConfigureAwait(false);
         }
         finally
         {
-            MarkDescriptorClosed(descriptor);
+            owner.MarkDescriptorClosed(descriptor);
         }
     }
 
@@ -3419,8 +3486,10 @@ public sealed partial class Evaluation : IFileTester
 
     private void ScheduleDescriptorCleanup(FileDescriptor descriptor)
     {
-        if (!_pendingDescriptorCleanup.Contains(descriptor))
-            _pendingDescriptorCleanup.Add(descriptor);
+        if (_pendingDescriptorCleanup.Contains(descriptor))
+            return;
+        PrepareOwnedDescriptors(1);
+        _pendingDescriptorCleanup.AddPrepared(descriptor);
     }
 
     private abstract record CommandResolution

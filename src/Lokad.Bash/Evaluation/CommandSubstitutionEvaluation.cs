@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
@@ -34,6 +35,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                 return new CommandSubstitutionResult(ShellValue.Empty, 2);
             }
 
+            outer.PrepareOwnedDescriptors(2);
             var creation = await outer.ExecuteCreatePipeAsync().ConfigureAwait(false);
             if (creation.Descriptors is not { } pipe)
             {
@@ -45,6 +47,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             using var outputMemory = outer.Memory.Budget.CreateScope();
             var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write);
             CapturedEvaluationResult result;
+            Exception? captureFailure = null;
             try
             {
                 // Hosting drives the nested evaluator and drains its output concurrently. Await both
@@ -56,10 +59,17 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                 outer.MarkDescriptorCleanupCompleted(pipe.Write);
                 result = await capture.ConfigureAwait(false);
             }
+            catch (Exception error)
+            {
+                captureFailure = error;
+                throw;
+            }
             finally
             {
-                nested.TransferDescriptorCleanupTo(outer);
+                var refusal = await nested.TransferDescriptorCleanupToAsync(outer).ConfigureAwait(false);
                 nested.ReleaseFunctions();
+                if (captureFailure == null && refusal != null)
+                    ExceptionDispatchInfo.Capture(refusal).Throw();
             }
 
             switch (result.Output)

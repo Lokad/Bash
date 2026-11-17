@@ -21,7 +21,7 @@ internal sealed class RedirectionEvaluation
     /// <summary> Stores descriptors opened during redirection evaluation, in open order. </summary>
     private readonly List<FileDescriptor> _openedDescriptors = new();
     /// <summary> Stores resolved descriptors hidden by close or replacement redirections. </summary>
-    private readonly List<FileDescriptor> _releasedDescriptors = new();
+    private readonly OrderedDescriptorSet _releasedDescriptors = new();
     /// <summary> Stores logical descriptors explicitly targeted by the redirections. </summary>
     private readonly HashSet<LogicalDescriptor> _touchedDescriptors = new();
 
@@ -47,8 +47,17 @@ internal sealed class RedirectionEvaluation
     /// <summary>
     /// Gets released descriptors that no logical mapping retains after all redirections have been applied.
     /// </summary>
-    public IReadOnlyList<FileDescriptor> DescriptorsToReleaseWhenPreserved =>
-        _releasedDescriptors.Where(descriptor => !_descriptorTable.References(descriptor)).Distinct().ToArray();
+    public IReadOnlyList<FileDescriptor> GetDescriptorsToReleaseWhenPreserved(EvaluationMemory memory)
+    {
+        if (_releasedDescriptors.Count == 0)
+            return [];
+        memory.Charge(checked(64L + 4L * _releasedDescriptors.Count));
+        var result = new List<FileDescriptor>(_releasedDescriptors.Count);
+        foreach (var descriptor in _releasedDescriptors)
+            if (!_descriptorTable.References(descriptor))
+                result.Add(descriptor);
+        return result;
+    }
     /// <summary>
     /// Gets logical descriptors explicitly targeted while evaluating the redirections.
     /// </summary>
@@ -179,6 +188,8 @@ internal sealed class RedirectionEvaluation
             return;
         }
 
+        PrepareOpenedDescriptor(scope);
+        scope.Effects.PrepareOwnedDescriptors(1);
         var open = await scope.Effects.ExecuteOpenFileAsync(path, mode).ConfigureAwait(false);
         var descriptor = open.FileDescriptor;
         if (!descriptor.HasValue)
@@ -308,6 +319,8 @@ internal sealed class RedirectionEvaluation
     private async Task WritePipeInputAsync(
         ScopedEvaluation scope, LogicalDescriptor targetDescriptor, ReadOnlyMemory<byte> content, bool appendNewline)
     {
+        PrepareOpenedDescriptor(scope);
+        scope.Effects.PrepareOwnedDescriptors(1);
         var creation = await scope.Effects.ExecuteCreatePipeAsync().ConfigureAwait(false);
         if (creation.Descriptors is not { } pipe)
         {
@@ -315,6 +328,7 @@ internal sealed class RedirectionEvaluation
             return;
         }
         _openedDescriptors.Add(pipe.Read);
+        scope.Effects.TrackOwnedDescriptor(pipe.Read);
         var error = await scope.Effects.StartPipeInputAsync(pipe, content, appendNewline).ConfigureAwait(false);
         if (error is { } failure)
         {
@@ -398,6 +412,7 @@ internal sealed class RedirectionEvaluation
 
     private void SetDescriptor(ScopedEvaluation scope, LogicalDescriptor logicalDescriptor, FileDescriptor resolvedDescriptor)
     {
+        AddDescriptorToSet(_touchedDescriptors, logicalDescriptor, scope.Effects.Memory);
         var previousDescriptor = _descriptorTable.Resolve(logicalDescriptor);
         _descriptorTable.Set(logicalDescriptor, resolvedDescriptor, scope.Effects.Memory);
         _releasedDescriptors.Remove(resolvedDescriptor);
@@ -406,10 +421,33 @@ internal sealed class RedirectionEvaluation
             && !_descriptorTable.References(previousDescriptor)
             && !_releasedDescriptors.Contains(previousDescriptor))
         {
-            _releasedDescriptors.Add(previousDescriptor);
+            _releasedDescriptors.PrepareAdditional(1, scope.Effects.Memory.Workspace);
+            _releasedDescriptors.AddPrepared(previousDescriptor);
         }
+    }
 
-        _touchedDescriptors.Add(logicalDescriptor);
+    private void PrepareOpenedDescriptor(ScopedEvaluation scope)
+    {
+        if (_openedDescriptors.Count < _openedDescriptors.Capacity)
+            return;
+        var capacity = (int)Math.Min(int.MaxValue, Math.Max(4L, 2L * _openedDescriptors.Capacity));
+        scope.Effects.Memory.Charge(checked(32L + 4L * capacity));
+        _openedDescriptors.Capacity = capacity;
+    }
+
+    /// <summary>Grows command-owned descriptor membership before publishing a newly touched number.</summary>
+    internal static void AddDescriptorToSet(HashSet<LogicalDescriptor> descriptors, LogicalDescriptor descriptor, EvaluationMemory memory)
+    {
+        if (descriptors.Contains(descriptor))
+            return;
+        var capacity = descriptors.EnsureCapacity(0);
+        if (descriptors.Count == capacity)
+        {
+            var requested = Math.Min(int.MaxValue, Math.Max(4L, 2L * capacity));
+            memory.Charge(checked(128L + 32L * (2L * requested + 1)));
+            descriptors.EnsureCapacity((int)requested);
+        }
+        descriptors.Add(descriptor);
     }
 
     /// <summary> Expands the redirection target word into a single path or returns null on failure. </summary>
