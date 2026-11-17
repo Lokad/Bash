@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Index descriptor handle references with frozen alias counts and reusable writer
+  deltas. Merge only live changes, preserving snapshots, closed mappings and alias
+  cleanup without scanning every logical descriptor or retained vacant bucket.
+  Admit index backing and capture/replacement overlap before publication.
 - Share immutable descriptor lookup and ordered slot trees across snapshots.
   Copy changed paths instead of entire additional-descriptor maps, preserve
   encounter order and sparse-slot reuse, and prepare admission for every receiving

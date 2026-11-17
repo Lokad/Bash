@@ -17,7 +17,7 @@ public sealed class DescriptorMemoryTests
             Assert.True(bindings.Remove(new LogicalDescriptor(number)));
         var inherited = bindings.Capture();
         var child = DescriptorTable.Snapshot.FromInheritedBindings(inherited).Fork();
-        var governor = new MemoryGovernor(1024);
+        var governor = new MemoryGovernor(2048);
         using var owner = governor.CreateScope();
         var memory = new EvaluationMemory(owner);
 
@@ -25,7 +25,7 @@ public sealed class DescriptorMemoryTests
         Assert.Equal(FileDescriptor.DevNull, child.Resolve(new LogicalDescriptor(300)));
         Assert.False(inherited.HasMapping(new LogicalDescriptor(300)));
         Assert.True(child.OwnedMemoryBytes <= governor.ReservedBytes);
-        Assert.InRange(child.OwnedMemoryBytes, 1, 1024);
+        Assert.InRange(child.OwnedMemoryBytes, 1, 2048);
     }
 
     [Fact]

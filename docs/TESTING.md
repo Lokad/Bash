@@ -15,6 +15,7 @@ quota-only assertions and allocation counters attached to a caller thread.
 | Scope ownership and memory admission | `PrefixPreparationTests.cs`, `PrefixScopeOwnershipTests.cs`, controlled memory-budget assertions in `EngineTests.cs` |
 | Descriptor aliases, delayed users and cleanup | `DescriptorTableTests.cs`, `DescriptorBindingsTests.cs`, stepped `EvaluationTests.cs` and `EngineTests.cs` |
 | Descriptor snapshot sharing, encounter order and admission | `DescriptorBindingsTests.cs`, `DescriptorMemoryTests.cs`, synchronous `ComplexityRegressionTests.Redirection.cs` |
+| Descriptor reference counts, pending deltas and retained backing | `DescriptorReferenceTests.cs`, independent dictionary models in `DescriptorBindingsTests.cs`, shared `CollectionBacking.cs` array measurements |
 | Here-input backpressure, producer lifetime and payload admission | `HereInputLifetimeTests.cs`, byte here-document tests and integrated redirection tests |
 | Integrated bytes, effects and pipelines | `EndToEnd/`, including `EvaluationPipelineTests.EndToEnd.cs` |
 | Pinned native expectations and explicit departures | `ConformanceTests.cs`, `Conformance/cases.json`, `scripts/Verify-GnuBash.ps1` |

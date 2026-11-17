@@ -208,6 +208,9 @@ public sealed class DescriptorBindingsTests
                 Assert.Equal(new FileDescriptor(1000 + index), snapshot.Resolve(number));
                 local.Set(number, new FileDescriptor(10000 + worker * 128 + index));
                 Assert.Equal(new FileDescriptor(10000 + worker * 128 + index), local.Resolve(number));
+                Assert.True(local.References(new FileDescriptor(10000 + worker * 128 + index)));
+                Assert.False(local.References(new FileDescriptor(1000 + index)));
+                Assert.True(snapshot.Fork().References(new FileDescriptor(1000 + index)));
             }
         })));
         for (var index = 0; index < 128; index++)
@@ -254,6 +257,13 @@ public sealed class DescriptorBindingsTests
                 var descriptor = new LogicalDescriptor(10 + index);
                 Assert.Equal(expected.ContainsKey(descriptor), snapshot.HasMapping(descriptor));
                 Assert.Equal(expected.GetValueOrDefault(descriptor, FileDescriptor.Closed), snapshot.Resolve(descriptor));
+            }
+            var capturedBindings = snapshot.Fork();
+            foreach (var handle in Enumerable.Range(100, 33).Select(id => new FileDescriptor(id)).Append(FileDescriptor.Closed))
+            {
+                var present = expected.Values.Contains(handle);
+                Assert.Equal(present, actual.References(handle));
+                Assert.Equal(present, capturedBindings.References(handle));
             }
         }
 

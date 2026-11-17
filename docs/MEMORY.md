@@ -171,13 +171,14 @@ Hosts must admit independent copies of exported bytes retained after command com
 `MemoryCapacity` amortizes admission with charged prepaid capacity. Syntax estimates
 are coarse and do not account every small object. Public Parser calls, host-side
 preparation/mutation and manual stepping do not install a runtime parsing budget.
-Descriptor tables share immutable descriptor-to-slot and ordered-slot trees.
+Descriptor tables share immutable descriptor-to-slot, ordered-slot and handle-count trees.
 Changed bindings copy frozen tree paths rather than whole maps. The active writer
 reuses mutable builder nodes until capture freezes them; repeated
 captures without a changed mapping reuse the completed snapshot. Before publication,
-each receiving owner admits a coarse transitive slot estimate that covers both
-trees, metadata and a complete replacement generation; existing owned headroom
-covers subsequent path replacement. Borrowed snapshots retain their parent charge;
+each receiving owner admits a coarse transitive slot estimate that covers all three
+trees, reusable reference deltas/live-key backing, metadata and replacement
+generations; existing owned headroom covers subsequent path replacement.
+Borrowed snapshots retain their parent charge;
 only a writing child acquires its own retained estimate. Preparation alone changes
 no binding or ownership, so a later receiver's refusal leaves no unused tree to
 retain. Saved redirection frames and in-process subshell parents stay admitted
@@ -187,6 +188,14 @@ Captured sparse maps discard vacant-slot reuse at the former detachment boundary
 and compact only when vacant slots outnumber live mappings, bounding abandoned
 storage without traversing a live map on every capture/write. Compaction is selected
 before admission; there is no smaller-reservation retry after refusal.
+Reference counts are built alongside new bindings. Structural additions merge
+pending changes before updating that basis. Replacements/removals accumulate bounded
+overrides; capture merges them using already admitted headroom. Their keys are a subset of the base/current handle
+union, bounded by twice the slot count. A dense live-key list permits removal and
+merging without scanning retained dictionary buckets or vacant entries. Sparse
+slot compaction also retires the old delta arrays. Snapshots share frozen counts;
+writers retain their own deltas. Queries and cleanup neither build an index nor
+request new admission. Inline stream references still use direct comparisons.
 Saved-frame totals are maintained at mutation boundaries instead of rescanning on
 every command retirement. Persistent publication prepares every receiving table
 before changing that binding, and failed preservation leaves its scope active for
@@ -246,8 +255,8 @@ Refusal/cancellation publishes no partial index and follows ordinary cleanup;
 there is no alternate matcher, smaller-reservation retry or recovery scan.
 Coarse prepaid growth can reject even a small new index near an allowance boundary.
 
-Descriptor reference queries still scan ordered slots; reverse-handle indexing
-has separate storage, alias-count and ownership costs and remains review work.
+Descriptor reference queries use the writer's pending count overrides and frozen
+count index, preserving aliases and explicit closed mappings without slot scans.
 Descriptor/IFS admission does not imply complete evaluation accounting;
 keep separate pipeline-preparation and other coarse-owner audits explicit.
 Keep coverage limits explicit. Test shared allowances, refusal, immediate refunds,

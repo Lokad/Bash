@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Memory;
@@ -79,7 +78,7 @@ public sealed class FieldSeparatorMemoryTests
         var cache = variables.CachedFieldSeparators;
         var characters = Assert.IsType<HashSet<Rune>>(CharacterIndex(cache));
         Assert.Equal(4096, characters.Count);
-        var payload = IndexPayload(characters);
+        var payload = CollectionBacking.ArrayPayloadBytes(characters);
         Assert.True(payload > bytes.Length);
         Assert.True(variables.EstimatedMemoryBytes >= payload);
         Assert.True(governor.ReservedBytes >= payload);
@@ -240,7 +239,7 @@ public sealed class FieldSeparatorMemoryTests
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var characters = Assert.IsType<HashSet<Rune>>(CharacterIndex(variables.CachedFieldSeparators));
             Assert.Equal(4096, characters.Count);
-            var payload = IndexPayload(characters);
+            var payload = CollectionBacking.ArrayPayloadBytes(characters);
             Assert.True(governor.ReservedBytes >= payload);
             if (cancel) deadline.Cancel();
             Assert.False(running.IsCompleted);
@@ -303,18 +302,4 @@ public sealed class FieldSeparatorMemoryTests
         (typeof(FieldSeparators).GetField("_characters", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException()).GetValue(separators);
 
-    private static long IndexPayload(HashSet<Rune> characters)
-    {
-        var entries = Assert.IsAssignableFrom<Array>(
-            typeof(HashSet<Rune>).GetField("_entries", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(characters));
-        var buckets = Assert.IsType<int[]>(
-            typeof(HashSet<Rune>).GetField("_buckets", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(characters));
-        var entryType = entries.GetType().GetElementType() ?? throw new InvalidOperationException();
-        var entrySize = Assert.IsType<int>((typeof(FieldSeparatorMemoryTests)
-            .GetMethod(nameof(ElementSize), BindingFlags.Static | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException()).MakeGenericMethod(entryType).Invoke(null, null));
-        return (long)entries.Length * entrySize + sizeof(int) * (long)buckets.Length;
-    }
-
-    private static int ElementSize<T>() => Unsafe.SizeOf<T>();
 }

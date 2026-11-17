@@ -7,25 +7,28 @@ namespace Lokad.Bash;
 internal sealed class DescriptorMap
 {
     internal static readonly DescriptorMap Empty = new(
-        ImmutableDictionary<LogicalDescriptor, int>.Empty, ImmutableList<Binding>.Empty, -1);
+        ImmutableDictionary<LogicalDescriptor, int>.Empty, ImmutableList<Binding>.Empty,
+        ImmutableDictionary<FileDescriptor, int>.Empty, -1);
 
     private readonly ImmutableDictionary<LogicalDescriptor, int> _positions;
     private readonly ImmutableList<Binding> _slots;
+    private readonly ImmutableDictionary<FileDescriptor, int> _references;
     private readonly int _firstFree;
 
     private DescriptorMap(ImmutableDictionary<LogicalDescriptor, int> positions,
-        ImmutableList<Binding> slots, int firstFree)
+        ImmutableList<Binding> slots, ImmutableDictionary<FileDescriptor, int> references, int firstFree)
     {
         _positions = positions;
         _slots = slots;
+        _references = references;
         _firstFree = firstFree;
     }
 
     internal int SlotCount => _slots.Count;
 
-    // Include both trees, builder/header metadata and a complete replacement
-    // generation. One coarse owner covers path copying without node reservations.
-    internal static long EstimateMemoryBytes(int slots) => checked(512L + 256L * slots);
+    // Include all three trees, bounded reference deltas/live keys, metadata
+    // and replacement generations. Capture consumes already admitted headroom.
+    internal static long EstimateMemoryBytes(int slots) => checked(1024L + 512L * slots);
 
     internal int RequiredSlots(LogicalDescriptor descriptor) =>
         RequiredSlots(_positions, SlotCount, _firstFree, descriptor, captured: true);
@@ -35,7 +38,7 @@ internal sealed class DescriptorMap
 
     internal bool ContainsKey(LogicalDescriptor descriptor) => _positions.ContainsKey(descriptor);
 
-    internal bool ContainsValue(FileDescriptor handle) => ContainsValue(_slots.GetEnumerator(), handle);
+    internal bool ContainsValue(FileDescriptor handle) => _references.ContainsKey(handle);
 
     private static int RequiredSlots(IReadOnlyDictionary<LogicalDescriptor, int> positions, int slotCount,
         int firstFree, LogicalDescriptor descriptor, bool captured)
@@ -56,15 +59,6 @@ internal sealed class DescriptorMap
         return false;
     }
 
-    private static bool ContainsValue(ImmutableList<Binding>.Enumerator iterator, FileDescriptor handle)
-    {
-        using (iterator)
-            while (iterator.MoveNext())
-                if (iterator.Current is { IsPresent: true } binding && binding.Handle == handle)
-                    return true;
-        return false;
-    }
-
     internal void AddReferencedHandlesTo(ref Helpers.DescriptorHandleCollector handles)
     {
         foreach (var binding in _slots)
@@ -77,6 +71,9 @@ internal sealed class DescriptorMap
     {
         private ImmutableDictionary<LogicalDescriptor, int>.Builder _positions;
         private ImmutableList<Binding>.Builder _slots;
+        private readonly ImmutableDictionary<FileDescriptor, int>.Builder _references;
+        private Dictionary<FileDescriptor, (int Count, int Position)> _referenceChanges = new(3);
+        private List<FileDescriptor> _changedHandles = new(3);
         private int _firstFree;
         private bool _captured = true;
         private DescriptorMap? _snapshot;
@@ -85,6 +82,7 @@ internal sealed class DescriptorMap
         {
             _positions = source._positions.ToBuilder();
             _slots = source._slots.ToBuilder();
+            _references = source._references.ToBuilder();
             _firstFree = source._firstFree;
             _snapshot = source;
         }
@@ -99,7 +97,36 @@ internal sealed class DescriptorMap
 
         internal bool ContainsKey(LogicalDescriptor descriptor) => _positions.ContainsKey(descriptor);
 
-        internal bool ContainsValue(FileDescriptor handle) => DescriptorMap.ContainsValue(_slots.GetEnumerator(), handle);
+        internal bool ContainsValue(FileDescriptor handle) => ReferenceCount(handle) != 0;
+
+        private int ReferenceCount(FileDescriptor handle) =>
+            _referenceChanges.TryGetValue(handle, out var changed) ? changed.Count
+                : _references.TryGetValue(handle, out var count) ? count : 0;
+
+        private void ChangeReferences(FileDescriptor handle, int difference)
+        {
+            var count = checked(ReferenceCount(handle) + difference);
+            _references.TryGetValue(handle, out var baseline);
+            if (count == baseline)
+                RemoveReferenceChange(handle);
+            else if (_referenceChanges.TryGetValue(handle, out var previous))
+                _referenceChanges[handle] = (count, previous.Position);
+            else
+            {
+                _referenceChanges.Add(handle, (count, _changedHandles.Count));
+                _changedHandles.Add(handle);
+            }
+        }
+
+        private void RemoveReferenceChange(FileDescriptor handle)
+        {
+            if (!_referenceChanges.Remove(handle, out var removed)) return;
+            var last = _changedHandles[^1];
+            _changedHandles.RemoveAt(_changedHandles.Count - 1);
+            if (removed.Position == _changedHandles.Count) return;
+            _changedHandles[removed.Position] = last;
+            _referenceChanges[last] = (_referenceChanges[last].Count, removed.Position);
+        }
 
         internal void Set(LogicalDescriptor descriptor, FileDescriptor handle)
         {
@@ -107,9 +134,17 @@ internal sealed class DescriptorMap
             var binding = new Binding(descriptor, handle, -1);
             if (_positions.TryGetValue(descriptor, out var position))
             {
+                ChangeReferences(_slots[position].Handle, -1);
+                ChangeReferences(handle, 1);
                 _slots[position] = binding;
                 return;
             }
+            // Build reference nodes alongside new logical bindings. Replacing
+            // existing bindings instead accumulates reusable deltas, avoiding
+            // a new immutable key node for every uncaptured value change.
+            MergeReferenceChanges();
+            _references.TryGetValue(handle, out var references);
+            _references[handle] = checked(references + 1);
             if (_firstFree >= 0)
             {
                 position = _firstFree;
@@ -128,6 +163,7 @@ internal sealed class DescriptorMap
         {
             PrepareWrite();
             var position = _positions[descriptor];
+            ChangeReferences(_slots[position].Handle, -1);
             _positions.Remove(descriptor);
             _slots[position] = new Binding(default, FileDescriptor.Closed, _firstFree);
             _firstFree = position;
@@ -152,12 +188,37 @@ internal sealed class DescriptorMap
             }
             _positions = positions;
             _slots = slots;
+            // Capture has already merged every change. A compacted slot tree
+            // must not keep the preceding wide dictionary's vacant arrays.
+            if (_referenceChanges.EnsureCapacity(0) > 3)
+            {
+                _referenceChanges = new Dictionary<FileDescriptor, (int Count, int Position)>(3);
+                _changedHandles = new List<FileDescriptor>(3);
+            }
+        }
+
+        private void MergeReferenceChanges()
+        {
+            // Clear must follow live keys. Dictionary.Clear and dictionary
+            // enumeration would revisit retained buckets/vacant entries after
+            // an earlier wide batch, making later bounded captures quadratic.
+            while (_changedHandles.Count != 0)
+            {
+                var handle = _changedHandles[^1];
+                var change = _referenceChanges[handle];
+                if (change.Count == 0) _references.Remove(handle);
+                else _references[handle] = change.Count;
+                RemoveReferenceChange(handle);
+            }
         }
 
         internal DescriptorMap Capture()
         {
             _captured = true;
-            return _snapshot ??= new DescriptorMap(_positions.ToImmutable(), _slots.ToImmutable(), _firstFree);
+            if (_snapshot != null) return _snapshot;
+            MergeReferenceChanges();
+            return _snapshot = new DescriptorMap(_positions.ToImmutable(), _slots.ToImmutable(),
+                _references.ToImmutable(), _firstFree);
         }
     }
 

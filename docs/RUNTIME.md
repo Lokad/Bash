@@ -266,6 +266,11 @@ previous capture boundaries. Sparse compaction is amortized across deletions.
 Preparing all receiving estimates changes no binding or ownership; only successful
 publication acquires a writing table's retained storage. Snapshot sharing does not
 transfer handle-closing responsibility or add another execution/cleanup path.
+Reference membership uses handle counts and the active writer's pending changes;
+snapshots retain frozen counts. Remaining aliases survive when one binding closes or moves.
+Counts merge at capture through preadmitted storage. A live-key list makes the
+merge proportional to pending changes after an earlier wide batch; cleanup performs
+only lookups and retains the existing once-only handle closure path.
 
 Descriptor redirections prepare source move syntax on their immutable node and
 resolve its operand against current bindings. Valid filename fallback opens the
