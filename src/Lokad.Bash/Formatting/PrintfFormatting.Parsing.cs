@@ -179,7 +179,7 @@ public static partial class PrintfFormatting
                 }
 
                 var conversion = (char)format.Span[index++];
-                string? timeFormat = null;
+                ShellValue? timeFormat = null;
                 if (conversion == '(')
                 {
                     var timeStart = index;
@@ -202,7 +202,7 @@ public static partial class PrintfFormatting
                         return false;
                     }
 
-                    timeFormat = Utf8Text.Decode(format[timeStart..index]);
+                    timeFormat = ShellValue.FromBytes(format[timeStart..index]);
                     index += 2;
                     conversion = 'T';
                 }
@@ -293,9 +293,8 @@ public static partial class PrintfFormatting
                                 _stop = true;
                             return;
                         }
-                    case 'T' when specification.TimeFormat != null:
+                    case 'T' when specification.TimeFormat is { } configuredFormat:
                         {
-                            var configuredFormat = specification.TimeFormat;
                             long seconds;
                             if (TryGetArgument(out var argument))
                                 seconds = ParseSigned(argument);
@@ -312,23 +311,31 @@ public static partial class PrintfFormatting
                             try
                             {
                                 timeMemory.Resize(0);
-                                var timeFormat = configuredFormat.Length == 0 ? "%X" : configuredFormat;
+                                // Strftime has ASCII directives and byte-valued literals. A reversible
+                                // byte/character projection lets both APIs share the existing renderer.
+                                timeMemory.Grow(32L + 2L * configuredFormat.Bytes.Length);
+                                cancellationToken.ThrowIfCancellationRequested();
+                                var timeFormat = configuredFormat.IsEmpty ? "%X"
+                                    : Encoding.Latin1.GetString(configuredFormat.Bytes.Span);
+                                const int MaximumTimeBytes = 127; // GNU's 128-byte strftime buffer includes its terminator.
                                 if (!GnuDateFormatting.TryFormat(
                                         value,
                                         timeFormat,
                                         GnuDateFormatDialect.Strftime,
-                                        _output.RemainingLength,
-                                        out var text, count => timeMemory.Grow(GnuDateFormatting.EstimatedBytesPerCharacter * count)))
+                                        MaximumTimeBytes,
+                                        out var text, count =>
+                                        {
+                                            timeMemory.Grow(GnuDateFormatting.EstimatedBytesPerCharacter * count);
+                                            cancellationToken.ThrowIfCancellationRequested();
+                                        }))
                                 {
-                                    FailOutputLimit();
-                                    return;
+                                    // A full strftime buffer produces an empty value before outer field formatting.
+                                    text = string.Empty;
                                 }
 
-                                ApplyUtf8Text(
-                                    specification,
-                                    text.AsSpan(),
-                                    ignorePrecision: false,
-                                    maximumBytes: int.MaxValue);
+                                cancellationToken.ThrowIfCancellationRequested();
+                                // Invariant directive results are ASCII; projected literals map back exactly.
+                                ApplyText(specification, Encoding.Latin1.GetBytes(text), ignorePrecision: false);
                             }
                             catch (GnuDateFormatException error)
                             {
@@ -561,25 +568,6 @@ public static partial class PrintfFormatting
                         precision is { } minimum ? Math.Max(0, minimum - digits.Length) : 0, digits);
                 }
 
-                void ApplyUtf8Text(
-                    FormatSpecification textSpecification,
-                    ReadOnlySpan<char> text,
-                    bool ignorePrecision,
-                    int maximumBytes)
-                {
-                    var byteCount = Math.Min(Utf8.GetByteCount(text), maximumBytes);
-                    if (!ignorePrecision
-                        && textSpecification.Precision is { } precision
-                        && precision < byteCount)
-                    {
-                        byteCount = precision;
-                    }
-
-                    AppendLeadingTextPadding(textSpecification, byteCount);
-                    TryAppendUtf8Prefix(_output, text, byteCount);
-                    AppendTrailingTextPadding(textSpecification, byteCount);
-                }
-
                 void ApplyText(
                     FormatSpecification textSpecification,
                     ReadOnlyMemory<byte> bytes,
@@ -693,5 +681,5 @@ public static partial class PrintfFormatting
         int Width,
         int? Precision,
         char Conversion,
-        string? TimeFormat);
+        ShellValue? TimeFormat);
 }

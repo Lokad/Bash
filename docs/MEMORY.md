@@ -128,3 +128,9 @@ source owners through host lookup and output completion.
 source-size bound, not complete accounting; manual stepping does not install a host
 budget. Keep coverage limits explicit. Test shared allowances, refusal, immediate
 refunds, retained results and cleanup with pending users.
+
+Printf time conversion admits its temporary byte/character projection before
+allocating it and reuses the conversion's rendering workspace. Literal bytes remain
+borrowed from the original format until that conversion finishes. Result bytes are
+copied into the ordinary admitted output builder and survive through its consumer;
+the bounded strftime result rule does not turn an admission refusal into success.

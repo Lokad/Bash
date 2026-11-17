@@ -132,10 +132,10 @@ public static class GnuDateFormatting
 
             var width = 0;
             var widthOverflow = false;
-            while (index < format.Length && char.IsDigit(format[index]))
+            while (index < format.Length && format[index] is >= '0' and <= '9')
             {
                 var digit = format[index] - '0';
-                if (digit is < 0 or > 9 || width > (int.MaxValue - digit) / 10)
+                if (width > (int.MaxValue - digit) / 10)
                 {
                     widthOverflow = true;
                 }

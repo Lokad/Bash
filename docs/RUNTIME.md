@@ -48,6 +48,13 @@ output builder with cancellation checks. General formatting reuses its rounded
 coefficient. Refusal retains earlier count assignments and skips later conversions;
 returned output remains admitted through its consumer's ownership scope.
 
+Printf time formats borrow their original bytes until conversion. An admitted,
+reversible byte/character projection shares the date renderer's ASCII directive
+grammar, and invariant directive results map back beside unchanged literal bytes.
+GNU's bounded strftime result is selected before ordinary outer width/precision.
+Projection and rendering workspace share the current conversion owner; copied
+output keeps the ordinary result and descriptor-write lifetime.
+
 Command dispatch resumes asynchronously when CLR stack space runs low, so finite
 function calls do not depend on the embedding thread's native stack size. Reached
 source/eval parsers start on a fresh continuation to keep syntax guards independent

@@ -182,6 +182,13 @@ limits. The deterministic Linux profile includes the alternate-form decimal poin
 for hexadecimal zero and discarded fractional zeros when a general-format carry
 changes fixed notation to scientific notation.
 
+Printf time-format literals preserve bytes, including malformed UTF-8. Directives
+and widths use ASCII grammar with invariant date text; unknown directives follow
+the pinned Linux strftime spelling. Each `%(...)T` conversion uses GNU's 128-byte
+buffer profile: a result requiring 128 or more bytes becomes an empty value with
+successful status. Outer field width and precision apply afterward. This conversion
+rule is distinct from shared-memory refusal, which remains a reported failure.
+
 Implicit `for name; do ...; done` iterates a snapshot of quoted positional
 parameters, preserving empty arguments and bytes. Explicit `in` lists retain their
 usual expansion rules. `exit` accepts signed 64-bit decimal statuses modulo 256;

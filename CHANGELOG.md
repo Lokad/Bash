@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve byte-valued printf time formats through the existing date renderer.
+  Use ASCII width grammar and GNU's bounded strftime result before outer field
+  formatting, retaining shared admission, cancellation and count-write ordering.
 - Govern printf field widths and precision by actual output and admitted numeric
   workspace, removing the arbitrary 1 MiB cap. Bound exact numeric material and
   pad through the shared output builder with cancellation. Preserve alternate

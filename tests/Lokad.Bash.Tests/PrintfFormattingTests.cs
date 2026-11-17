@@ -524,7 +524,7 @@ public sealed class PrintfFormattingTests
     }
 
     [Fact]
-    public void Evaluate_BoundsStrftimeFieldConstruction()
+    public void Evaluate_StrftimeBufferOverflowProducesAnEmptySuccessfulValue()
     {
         var result = EvaluateText(
             "%(%1000000000Y)T",
@@ -532,8 +532,8 @@ public sealed class PrintfFormattingTests
             DateTimeOffset.UnixEpoch);
 
         Assert.Empty(result.Output.ToArray());
-        Assert.Equal(1, result.ExitCode);
-        Assert.Equal(["shared memory budget exhausted"], result.Diagnostics.Select(value => value.ToUtf8String()));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]
