@@ -8,7 +8,7 @@ quota-only assertions and allocation counters attached to a caller thread.
 
 | Invariant | Primary owners in `tests/Lokad.Bash.Tests/` |
 | --- | --- |
-| Syntax and quote provenance | `ParserTests.cs`, `ParserCommandUnitTests.cs`, `ParserHereDocumentTests.cs`, `AnsiCQuotedWordTests.cs` |
+| Syntax and quote provenance | `ParserTests.cs`, `ParserCommandUnitTests.cs`, `ParserHereDocumentTests.cs`, `AnsiCQuotedWordTests.cs`, `TildePrefixTests.cs` |
 | Byte values and expansion | `ByteValuedWordTests.cs`, `ConditionalExpansionTests.cs`, `ArithmeticValueTests.cs`, `ArithmeticSyntaxReuseTests.cs` |
 | Arithmetic binding and mutation order | `ArithmeticBindingTests.cs`, `ArithmeticOperandTests.cs`, `ReadTargetBindingTests.cs`, `PrintfTargetBindingTests.cs` |
 | Execution, flow and status | `ErrexitTests.cs`, `ExecutionLifetimeTests.cs`, `ListTraversalReuseTests.cs`, `EvaluationTests.PipelineStatus.cs` |
@@ -17,6 +17,11 @@ quota-only assertions and allocation counters attached to a caller thread.
 | Here-input backpressure, producer lifetime and payload admission | `HereInputLifetimeTests.cs`, byte here-document tests and integrated redirection tests |
 | Integrated bytes, effects and pipelines | `EndToEnd/`, including `EvaluationPipelineTests.EndToEnd.cs` |
 | Pinned native expectations and explicit departures | `ConformanceTests.cs`, `Conformance/cases.json`, `scripts/Verify-GnuBash.ps1` |
+
+`TildePrefixTests` keeps lexical part boundaries, field bytes and complete trees
+separate from its delayed write/close assertions. Native CR-source controls use
+the pinned Linux reference: MSYS strips those source bytes. Missing-variable and
+unimplemented colon/stack tilde profiles retain their separate compatibility gates.
 
 Use the pinned SDK and run `dotnet test Lokad.Bash.slnx -c Release`. CI builds,
 tests both target frameworks and packs on Windows and Linux. A focused test run

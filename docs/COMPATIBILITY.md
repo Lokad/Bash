@@ -16,6 +16,15 @@ The runtime supports deterministic, non-interactive shell workflows:
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT
   handlers. Cancellation and external signals do not deliver traps.
 
+Leading `~`, `~+` and `~-` use HOME, PWD and OLDPWD. Their complete prefix must be
+unquoted up to the first unquoted slash; even an empty quote, escaped slash or
+command substitution inside it prevents tilde expansion. Quoting after that slash
+does not prevent it. Expanded bytes never become new tilde syntax. Missing HOME
+or OLDPWD leaves the spelling literal; missing PWD uses the actual current directory
+for `~+`, an intentional departure from GNU. No account lookup is performed.
+Numeric directory-stack forms and colon-separated assignment tilde expansion
+remain unimplemented; they do not introduce implicit host or environment access.
+
 Function-call prefixes such as `x=prefix f` supply the initial value of a first
 local declaration, including through unprefixed helper calls. Unsetting that
 temporary binding reveals the saved caller; subsequent assignments can survive

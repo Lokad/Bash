@@ -5,6 +5,13 @@ state and emits typed operations; `Engine` executes those operations through
 `IBashHost`. Nested evaluations and pipelines share this same execution path.
 The host owns all external effects and must authorize the capabilities it exposes.
 
+Leading tilde selection borrows the complete unquoted prefix across adjacent word
+parts before reading its variable. Quotes, escapes or substitutions before the
+first unquoted slash prevent that selection, including empty quoted parts. Parts
+after the delimiter expand once through the ordinary word path. Suffix views share
+their source-owned arithmetic metadata rather than preparing it again at runtime;
+the existing source/command owners retain syntax and values through consumption.
+
 Here-document collection removes unquoted backslash/LF continuations before
 delimiter comparison, including for commands whose execution will be skipped.
 Tab-stripping applies at the start of each logical line, preserving tabs inside

@@ -309,54 +309,61 @@ internal static partial class WordExpansion
         ExpandedWordBuilder output,
         bool allowWordSplitting)
     {
-        if (word.Parts.Count == 0)
+        if (!TrySelectPrefix(out var remainingPart, out var remainingOffset, out var expanded))
             return false;
 
-        var firstPart = word.Parts[0];
-        if (firstPart.Kind != WordPartKind.Unquoted)
-            return false;
-
-        var source = ((SourceWordPart)firstPart).Source;
-        var span = source.AsSpan();
-        if (span.IsEmpty || span[0] != '~')
-            return false;
-
-        var slashIndex = -1;
-        for (var index = 0; index < span.Length; index++)
-        {
-            if (span[index] == (byte)'/')
-            {
-                slashIndex = index;
-                break;
-            }
-        }
-
-        var prefix = slashIndex >= 0 ? span[..slashIndex] : span;
-        if (!TryExpandTildePrefix(prefix, scope, out var expanded))
-            return false;
         output.AppendValue(expanded, globQuoted: true);
-        if (slashIndex >= 0)
-        {
-            await ExpandSegmentAsync(
-                    source.Slice(slashIndex),
-                    scope,
-                    output,
-                    allowWordSplitting,
-                    globQuoted: false,
-                    quoteContext: ExpansionQuoteContext.Unquoted)
-                .ConfigureAwait(false);
-        }
-
-        for (var index = 1; index < word.Parts.Count; index++)
+        for (var index = remainingPart; index < word.Parts.Count; index++)
         {
             if (!scope.CanExpand)
                 break;
 
-            await ExpandPartAsync(word.Parts[index], scope, output, allowWordSplitting)
+            var part = word.Parts[index];
+            if (index == remainingPart && remainingOffset != 0)
+            {
+                var source = (SourceWordPart)part;
+                part = source.Slice(remainingOffset, source.Source.Length - remainingOffset,
+                    scope.Effects.Memory.Workspace);
+            }
+            await ExpandPartAsync(part, scope, output, allowWordSplitting)
                 .ConfigureAwait(false);
         }
 
         return true;
+
+        bool TrySelectPrefix(out int remainingPart, out int remainingOffset, out ShellValue value)
+        {
+            remainingPart = word.Parts.Count;
+            remainingOffset = 0;
+            value = ShellValue.Empty;
+            // Supported prefixes are ~, ~+ and ~-. Read their complete source spelling
+            // before lookup: even an empty quote or substitution can invalidate it.
+            Span<byte> prefix = stackalloc byte[2];
+            var length = 0;
+            for (var partIndex = 0; partIndex < word.Parts.Count; partIndex++)
+            {
+                scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                if (word.Parts[partIndex] is not SourceWordPart { Kind: WordPartKind.Unquoted } source)
+                    return false;
+                var bytes = source.Source.AsSpan();
+                for (var offset = 0; offset < bytes.Length; offset++)
+                {
+                    scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                    var current = bytes[offset];
+                    if (current == (byte)'/' && length != 0)
+                    {
+                        remainingPart = partIndex;
+                        remainingOffset = offset;
+                        return TryExpandTildePrefix(prefix[..length], scope, out value);
+                    }
+                    if (length == 0 ? current != (byte)'~'
+                        : length == prefix.Length || current is not ((byte)'+' or (byte)'-'))
+                        return false;
+                    prefix[length++] = current;
+                }
+            }
+            return TryExpandTildePrefix(prefix[..length], scope, out value);
+        }
     }
 
     private static bool TryExpandTildePrefix(

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Select complete tilde prefixes before variable lookup, preserving quotes,
+  escapes and substitutions even when their value is empty. Keep quoted prefixes
+  literal in words, assignments, patterns and paths; reuse source arithmetic
+  metadata for reached suffixes through the existing expansion path.
 - Preserve function-prefix values in first local declarations and reveal saved
   caller bindings after unset, including later caller writes and nested helpers.
   Keep declaration-command prefixes, local namespaces, attribute promotions and
