@@ -1,5 +1,6 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Tree;
 using Lokad.Bash.Files;
 
@@ -27,10 +28,9 @@ public sealed class GlobPatternTests
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
 
         Assert.True(pattern.IsMatch("dir/é/a"));
-        var segments = pattern.SplitPathSegments(budget);
-        Assert.Equal(["dir", "?", "[a]"], segments.Select(segment => segment.Pattern));
-        Assert.Equal([false, true, true], segments.Select(segment =>
-            GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), segment.MetaMask.AsSpan())));
+        var components = PathComponents(pattern).ToArray();
+        Assert.Equal(["dir", "?", "[a]"], components.Select(component => pattern.Pattern[component]));
+        Assert.Equal([false, true, true], components.Select(component => IsActive(pattern, component)));
     }
 
     [Fact]
@@ -40,8 +40,8 @@ public sealed class GlobPatternTests
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("*"), isGlobQuoted: false)]);
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
-        var glob = new GlobEvaluation(parsed, "/", budget, cancellation.Token);
-        var listing = new GlobListing(() =>
+        var glob = new GlobEvaluation(parsed, ShellPath.Root, budget, cancellation.Token);
+        var listing = new GlobListing(_ =>
         {
             cancellation.Cancel();
             return [new DirectoryEntry("match", FilePathKind.File)];
@@ -50,9 +50,53 @@ public sealed class GlobPatternTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => glob.EvaluateAsync(listing));
     }
 
-    private sealed class GlobListing(Func<IReadOnlyList<DirectoryEntry>> list) : IFileTester
+    [Fact]
+    public async Task LongLiteralPrefixUsesOneLookupWithinLinearAllowance()
     {
-        public Task<IReadOnlyList<DirectoryEntry>> ListDirectoryAsync(string path) => Task.FromResult(list());
+        const int Count = 1024;
+        var prefix = string.Concat(Enumerable.Repeat("a//", Count));
+        var expectedLookup = string.Concat(Enumerable.Repeat("/a", Count));
+        var governor = new MemoryGovernor(128 * 1024);
+        using var scope = governor.CreateScope();
+        var budget = new EvaluationMemory(scope);
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(prefix + "*"), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
+        var glob = new GlobEvaluation(pattern, ShellPath.Root, budget, CancellationToken.None);
+        var listed = new List<string>();
+        var listing = new GlobListing(path =>
+        {
+            listed.Add(path);
+            return [new DirectoryEntry("hit", FilePathKind.File)];
+        });
+
+        Assert.Equal(prefix + "hit", Assert.Single(await glob.EvaluateAsync(listing)));
+        Assert.Equal(expectedLookup, Assert.Single(listed));
+        budget.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task LiteralPrefixAdmissionRefusalPrecedesListing()
+    {
+        var governor = new MemoryGovernor(32 * 1024);
+        using var scope = governor.CreateScope();
+        var budget = new EvaluationMemory(scope);
+        var prefix = string.Concat(Enumerable.Repeat("a/", 128));
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(prefix + "*"), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
+        var glob = new GlobEvaluation(pattern, ShellPath.Root, budget, CancellationToken.None);
+        budget.ReleaseUnusedCapacity();
+        var listing = new GlobListing(_ => throw new InvalidOperationException("No listing expected."));
+        using (governor.Reserve(governor.LimitBytes - governor.ReservedBytes))
+            await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => glob.EvaluateAsync(listing));
+
+        budget.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class GlobListing(Func<string, IReadOnlyList<DirectoryEntry>> list) : IFileTester
+    {
+        public Task<IReadOnlyList<DirectoryEntry>> ListDirectoryAsync(string path) => Task.FromResult(list(path));
 
         public Task<bool> IsDirectoryAsync(string path) => throw new InvalidOperationException("No link targets expected.");
     }
@@ -74,8 +118,7 @@ public sealed class GlobPatternTests
         Assert.Equal(expected, GlobPattern.RequiresExpansion(word));
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
-        Assert.Equal(expected, parsed.SplitPathSegments(budget).Any(static segment =>
-            GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), segment.MetaMask.AsSpan())));
+        Assert.Equal(expected, PathComponents(parsed).Any(component => IsActive(parsed, component)));
     }
 
     [Theory]
@@ -103,8 +146,7 @@ public sealed class GlobPatternTests
         Assert.False(GlobPattern.RequiresExpansion(word));
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
-        Assert.DoesNotContain(parsed.SplitPathSegments(budget), static segment =>
-            GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), segment.MetaMask.AsSpan()));
+        Assert.DoesNotContain(PathComponents(parsed), component => IsActive(parsed, component));
     }
 
     [Theory]
@@ -125,8 +167,7 @@ public sealed class GlobPatternTests
         Assert.Equal(expected, GlobPattern.RequiresExpansion(word));
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
-        Assert.Equal(expected, parsed.SplitPathSegments(budget).Any(static segment =>
-            GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), segment.MetaMask.AsSpan())));
+        Assert.Equal(expected, PathComponents(parsed).Any(component => IsActive(parsed, component)));
     }
 
     [Theory]
@@ -144,4 +185,14 @@ public sealed class GlobPatternTests
 
         Assert.Equal(expected, GlobPattern.RequiresExpansion(word));
     }
+
+    private static IEnumerable<Range> PathComponents(GlobPattern pattern)
+    {
+        var cursor = 0;
+        while (pattern.TryReadPathComponent(ref cursor, out var component))
+            yield return component;
+    }
+
+    private static bool IsActive(GlobPattern pattern, Range component) =>
+        GlobPattern.RequiresExpansion(pattern.Pattern.AsSpan(component), pattern.GetMask(component));
 }

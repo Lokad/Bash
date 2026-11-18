@@ -10,6 +10,7 @@ public partial class EvaluationTests
 {
     [Theory]
     [InlineData("*")]
+    [InlineData("*//")]
     [InlineData("*/child")]
     [InlineData("*/.")]
     public async Task GlobsResolveListedLinkTargetsOnlyForDirectoryTraversal(string pattern)
@@ -44,7 +45,7 @@ public partial class EvaluationTests
 
         var command = await NextCommandAsync(state, "cmd");
         var expected = pattern == "*" ? names.Order(StringComparer.Ordinal).Select(name => prefix + name).ToArray()
-            : new[] { prefix + "directory-link/" + (pattern == "*/." ? "." : "child") };
+            : new[] { prefix + "directory-link/" + (pattern == "*/." ? "." : pattern == "*/child" ? "child" : "") };
         Assert.Equal(expected, command.Command.Arguments.Select(value => value.ToUtf8String()));
         command.SetResult(new CommandExecutionResult.Completed(0));
         Assert.Null(await NextStepAsync(state));

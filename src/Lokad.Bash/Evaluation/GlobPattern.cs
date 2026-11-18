@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using Lokad.Bash.Commands;
@@ -139,39 +138,25 @@ internal sealed class GlobPattern
         return true;
     }
 
-    /// <summary>Builds pathname components only for directory expansion, charging their copies and entries.</summary>
-    public IReadOnlyList<PatternSegment> SplitPathSegments(EvaluationMemory memory)
+    /// <summary>Finds the next nonempty component in the original pattern and mask coordinates.</summary>
+    public bool TryReadPathComponent(ref int cursor, out Range component)
     {
-        memory.Charge(checked(4L * Pattern.Length));
         var span = Pattern.AsSpan();
-        var maskMemory = MetaMask.Memory;
-        var start = IsAbsolute ? 1 : 0;
-        var result = new List<PatternSegment>();
-
-        for (var index = start; index <= span.Length; index++)
+        while (cursor < span.Length && span[cursor] == '/')
+            cursor++;
+        if (cursor == span.Length)
         {
-            if (index == span.Length || span[index] == '/')
-            {
-                var length = index - start;
-                if (length > 0)
-                {
-                    memory.Charge(256);
-                    result.Add(new PatternSegment(
-                        Pattern.Substring(start, length),
-                        new GlobMask(maskMemory.IsEmpty ? ReadOnlyMemory<byte>.Empty : maskMemory.Slice(start, length))));
-                }
-
-                start = index + 1;
-            }
+            component = default;
+            return false;
         }
 
-        return result.Count == 0
-            ? [new PatternSegment(string.Empty, new GlobMask(ReadOnlyMemory<byte>.Empty))]
-            : result;
+        var separator = span[cursor..].IndexOf('/');
+        var end = separator < 0 ? span.Length : cursor + separator;
+        component = cursor..end;
+        cursor = end;
+        return true;
     }
 
-    /// <summary>
-    /// Represents a single pattern segment and its metadata mask.
-    /// </summary>
-    public readonly record struct PatternSegment(string Pattern, GlobMask MetaMask);
+    public GlobMaskSpan GetMask(Range component) =>
+        MetaMask.Memory.IsEmpty ? default : new GlobMaskSpan(MetaMask.Memory.Span[component]);
 }

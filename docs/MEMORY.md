@@ -125,6 +125,10 @@ preparation pass. Class membership and single-unit symbols add no retained
 containers; suffix offsets retain the same admitted command owner and cancellation
 checks. No failed admission switches to a different matcher or an unowned cache.
 
+Pathname component ranges borrow the admitted pattern and quote mask. The command
+admits the lookup and output forms of the literal prefix before creating them.
+Reached matches retain their existing candidate and string allowance.
+
 Immutable arithmetic metadata, literal word fields and prepared list navigation
 belong to the syntax and are shared across executions. Stable operands and literal
 fields borrow its bytes; runtime-expanded operands, selectors and argument

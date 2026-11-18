@@ -2866,7 +2866,7 @@ public sealed partial class Evaluation : IFileTester
                     .ConfigureAwait(false);
                 return [];
             }
-            var glob = new GlobEvaluation(pattern, _state.CurrentDirectory.Path,
+            var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
                 Memory, _cancellationToken);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
             foreach (var match in matches)

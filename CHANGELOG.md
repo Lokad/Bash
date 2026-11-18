@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve literal pathname prefix separators and restrict glob patterns ending
+  in a slash to directories. Prepare each literal prefix once for traversal.
+
 - Sort each word's pathname matches by UTF-8 byte order, including paths with
   both BMP and supplementary characters.
 

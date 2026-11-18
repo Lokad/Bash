@@ -46,248 +46,147 @@ internal sealed class GlobEvaluation
             Rune.DecodeFromUtf16(suffix, out var rune, out _) == OperationStatus.Done ? rune.Value : suffix[0];
     });
 
-    /// <summary> Stores the original pattern used for fallback results. </summary>
-    private readonly string _pattern;
-    /// <summary> Owns the pathname segments prepared for this expansion. </summary>
-    private readonly IReadOnlyList<GlobPattern.PatternSegment> _segments;
+    private readonly GlobPattern _pattern;
+    private readonly ShellPath _directory;
     private readonly EvaluationMemory _memory;
     private readonly CancellationToken _cancellationToken;
-    /// <summary> Holds the active candidate list for the current segment; rebuilt as segments advance. </summary>
-    private readonly List<Candidate> _candidates = [];
-    /// <summary> Holds the queue of directories to list for the current glob segment; null until listing begins. </summary>
-    private Queue<Candidate>? _pendingDirectories;
-    /// <summary> Collects candidates for the next segment while listing directories. </summary>
-    private List<Candidate>? _nextCandidates;
-    /// <summary> Tracks the current segment index as expansion proceeds. </summary>
-    private int _segmentIndex;
-    // Leading literal paths need no listing; suffixes after a wildcard must actually exist.
-    private bool _hasExpandedWildcard;
-    /// <summary> Stores the segment currently being matched against directory entries. </summary>
-    private string _currentSegment = string.Empty;
-    /// <summary> Stores the mask for the current segment. </summary>
-    private GlobMask _currentMask = new(ReadOnlyMemory<byte>.Empty);
-    /// <summary> Indicates whether the current segment is the final segment in the pattern. </summary>
-    private bool _currentSegmentIsFinal;
-    /// <summary> Indicates that a directory listing is in progress for the current candidate. </summary>
-    private bool _listingActive;
-    /// <summary> Stores the candidate whose directory listing is being applied. </summary>
-    private Candidate _listingCandidate;
-    /// <summary> Stores the final expanded results once the evaluation completes. </summary>
-    private IReadOnlyList<string>? _results;
-    /// <summary> Tracks whether the expansion has completed and results are stable. </summary>
-    private bool _completed;
-    /// <summary> Stores the absolute root path used when patterns start with '/'. </summary>
-    private const string RootPath = "/";
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="GlobEvaluation"/> class.
-    /// </summary>
-    /// <param name="pattern">The glob pattern with quote metadata.</param>
-    /// <param name="directory">The directory path.</param>
-    /// <param name="memory">Shared memory for pathname components, intermediate candidates and copied path characters.</param>
-    /// <param name="cancellationToken">Cancels directory traversal and candidate construction.</param>
-    public GlobEvaluation(
-        GlobPattern pattern,
-        string directory,
-        EvaluationMemory memory,
+    public GlobEvaluation(GlobPattern pattern, ShellPath directory, EvaluationMemory memory,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         memory.Charge(256);
-        _pattern = pattern.Pattern;
-        _segments = pattern.SplitPathSegments(memory);
+        _pattern = pattern;
+        _directory = directory;
         _memory = memory;
         _cancellationToken = cancellationToken;
-
-        var listBase = pattern.IsAbsolute ? RootPath : (string.IsNullOrEmpty(directory) ? "." : directory);
-        var outputBase = pattern.IsAbsolute ? RootPath : string.Empty;
-        _candidates.Add(new Candidate(listBase, outputBase));
     }
 
-    /// <summary>
-    /// Executes the glob expansion by requesting directory listings as needed.
-    /// </summary>
-    /// <returns>The expanded glob matches.</returns>
+    /// <summary>Expands matching components in order, preserving the original word for literal fallback.</summary>
     public async Task<IReadOnlyList<string>> EvaluateAsync(IFileTester tester)
     {
-        while (!_completed)
+        var cursor = 0;
+        var text = _pattern.Pattern;
+        Range component;
+        while (true)
         {
-            Advance();
-
-            if (_completed || _pendingDirectories == null || _pendingDirectories.Count == 0)
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (!_pattern.TryReadPathComponent(ref cursor, out component))
+                return [text];
+            if (GlobPattern.RequiresExpansion(text.AsSpan(component), _pattern.GetMask(component)))
                 break;
-
-            var candidate = _pendingDirectories.Dequeue();
-            _listingCandidate = candidate;
-            _listingActive = true;
-            var entries = await tester.ListDirectoryAsync(candidate.ListPath).ConfigureAwait(false);
-            await ApplyDirectoryEntriesAsync(entries, tester).ConfigureAwait(false);
         }
 
-        return _results ?? [_pattern];
-    }
-
-    /// <summary>
-    /// Advances the glob state machine to the next directory listing or completion.
-    /// </summary>
-    private void Advance()
-    {
-        while (!_completed)
+        List<Candidate> candidates = [PreparePrefix(component.Start.Value)];
+        List<Candidate> matches = [];
+        var trailingSlash = text.EndsWith('/');
+        while (true)
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            if (_pendingDirectories != null)
-            {
-                if (_pendingDirectories.Count > 0)
-                    return;
+            var hasNext = _pattern.TryReadPathComponent(ref cursor, out var next);
+            var markDirectory = !hasNext && trailingSlash;
 
-                if (_nextCandidates == null || _nextCandidates.Count == 0)
+            // Reaching dot components already required directory selection on the previous step.
+            var name = text.AsMemory(component);
+            if (name.Span is "." or "..")
+            {
+                var literal = name.Length == 1 ? "." : "..";
+                for (var index = 0; index < candidates.Count; index++)
+                    candidates[index] = AppendComponent(candidates[index], literal, markDirectory);
+            }
+            else
+            {
+                var requireDirectory = hasNext || markDirectory;
+                foreach (var parent in candidates)
                 {
-                    _results = [_pattern];
-                    _completed = true;
-                    _pendingDirectories = null;
-                    _nextCandidates = null;
-                    return;
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    var entries = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    var matchDot = name.Span[0] == '.';
+                    foreach (var entry in entries)
+                    {
+                        _cancellationToken.ThrowIfCancellationRequested();
+                        var entryName = entry.Name.AsSpan();
+                        if (entryName.IsEmpty || !matchDot && entryName[0] == '.')
+                            continue;
+                        if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
+                            continue;
+                        if (!TextGlobMatcher.MatchesPathComponent(name.Span, _pattern.GetMask(component), entryName,
+                                _cancellationToken))
+                            continue;
+
+                        var match = AppendComponent(parent, entry.Name, markDirectory);
+                        if (requireDirectory && entry.Kind == FilePathKind.SymbolicLink
+                            && !await tester.IsDirectoryAsync(match.ListPath).ConfigureAwait(false))
+                            continue;
+                        matches.Add(match);
+                    }
                 }
 
-                _candidates.Clear();
-                _candidates.AddRange(_nextCandidates);
-                _pendingDirectories = null;
-                _nextCandidates = null;
-                _segmentIndex++;
-                continue;
+                if (matches.Count == 0)
+                    return [text];
+                (candidates, matches) = (matches, candidates);
+                matches.Clear();
             }
 
-            if (_segmentIndex >= _segments.Count)
-            {
-                _results = BuildResults();
-                _completed = true;
-                return;
-            }
+            if (!hasNext)
+                return candidates.Select(static candidate => candidate.OutputPath).Order(OutputPathOrder).ToArray();
+            component = next;
+        }
+    }
 
-            var segment = _segments[_segmentIndex];
-            var mask = segment.MetaMask.AsSpan();
-            // Listings omit dot entries; existing directory candidates can traverse them directly.
-            if (GlobPattern.RequiresExpansion(segment.Pattern.AsSpan(), in mask)
-                || _hasExpandedWildcard && segment.Pattern is not "." and not "..")
+    /// <summary>Builds the literal prefix once per spelling, before any directory lookup.</summary>
+    private Candidate PreparePrefix(int end)
+    {
+        var text = _pattern.Pattern;
+        var root = _pattern.IsAbsolute ? "/" : _directory.Path;
+        var trimmed = text.AsSpan(0, end).Trim('/');
+        var lookupLength = trimmed.Length;
+        for (var index = 1; index < trimmed.Length; index++)
+            if (trimmed[index] == '/' && trimmed[index - 1] == '/')
+                lookupLength--;
+
+        var separator = root == "/" ? string.Empty : "/";
+        var hasPrefix = lookupLength != 0;
+        var totalLength = hasPrefix ? checked(root.Length + separator.Length + lookupLength) : 0;
+        _cancellationToken.ThrowIfCancellationRequested();
+        _memory.Charge(checked(4L * (end + (long)totalLength)));
+        var outputPath = text[..end];
+        if (!hasPrefix)
+            return new Candidate(root, outputPath);
+
+        var start = end - text.AsSpan(0, end).TrimStart('/').Length;
+        var lookupPath = string.Create(totalLength, (root, separator, text.AsMemory(start, trimmed.Length)),
+            static (destination, state) =>
             {
-                BeginGlobSegment(segment);
-                if (_pendingDirectories == null || _pendingDirectories.Count == 0)
+                var (root, separator, prefix) = state;
+                root.CopyTo(destination);
+                separator.CopyTo(destination[root.Length..]);
+                var position = root.Length + separator.Length;
+                var previous = '\0';
+                foreach (var character in prefix.Span)
                 {
-                    _results = [_pattern];
-                    _completed = true;
+                    if (character != '/' || previous != '/')
+                        destination[position++] = character;
+                    previous = character;
                 }
-
-                return;
-            }
-
-            ApplyFixedSegment(segment.Pattern);
-            _segmentIndex++;
-        }
-
-        IReadOnlyList<string> BuildResults() =>
-            _candidates.Count == 0
-                ? [_pattern]
-                : _candidates
-                    .OrderBy(static candidate => candidate.OutputPath, OutputPathOrder)
-                    .Select(static candidate => candidate.OutputPath)
-                    .ToArray();
+            });
+        return new Candidate(lookupPath, outputPath);
     }
 
-    /// <summary>
-    /// Applies a directory listing to the current glob segment and accumulates next candidates.
-    /// </summary>
-    private async Task ApplyDirectoryEntriesAsync(IReadOnlyList<DirectoryEntry> entries, IFileTester tester)
-    {
-        if (_pendingDirectories == null || !_listingActive)
-            throw new InvalidOperationException("Directory listings are not pending for this glob expansion.");
-
-        _listingActive = false;
-        if (_nextCandidates == null)
-            throw new InvalidOperationException("Next candidates were not initialized.");
-
-        var matchDot = _currentSegment.Length > 0 && _currentSegment[0] == '.';
-
-        foreach (var entry in entries)
-        {
-            _cancellationToken.ThrowIfCancellationRequested();
-            var nameSpan = entry.Name.AsSpan();
-            if (nameSpan.Length == 0)
-                continue;
-
-            if (!matchDot && nameSpan[0] == '.')
-                continue;
-
-            if (TextGlobMatcher.MatchesPathComponent(_currentSegment.AsSpan(), _currentMask.AsSpan(), nameSpan,
-                    _cancellationToken))
-            {
-                if (!_currentSegmentIsFinal && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
-                    continue;
-
-                var candidate = AppendSegment(_listingCandidate, entry.Name);
-                // A final match includes dangling links; only further traversal needs the target kind.
-                if (!_currentSegmentIsFinal && entry.Kind == FilePathKind.SymbolicLink
-                    && !await tester.IsDirectoryAsync(candidate.ListPath).ConfigureAwait(false))
-                    continue;
-                _nextCandidates.Add(candidate);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Initializes state for a glob segment that requires directory listings.
-    /// </summary>
-    private void BeginGlobSegment(GlobPattern.PatternSegment segment)
-    {
-        _hasExpandedWildcard = true;
-        _currentSegment = segment.Pattern;
-        _currentMask = segment.MetaMask;
-        _currentSegmentIsFinal = _segmentIndex == _segments.Count - 1;
-        _pendingDirectories = new Queue<Candidate>(_candidates);
-        _nextCandidates = [];
-    }
-
-    /// <summary>
-    /// Appends a fixed, non-glob segment to all current candidates.
-    /// </summary>
-    private void ApplyFixedSegment(string segment)
-    {
-        for (var index = 0; index < _candidates.Count; index++)
-        {
-            _candidates[index] = AppendSegment(_candidates[index], segment);
-        }
-    }
-
-    /// <summary>Charges intermediate candidates even when a later segment leaves no matches.</summary>
-    private Candidate AppendSegment(Candidate candidate, string segment)
+    private Candidate AppendComponent(Candidate parent, string name, bool markDirectory)
     {
         _cancellationToken.ThrowIfCancellationRequested();
         _memory.Charge(256);
-        return new Candidate(
-            CombinePath(candidate.ListPath, segment, collapseDot: true),
-            CombinePath(candidate.OutputPath, segment, collapseDot: false));
+        return new Candidate(Join(parent.ListPath, string.Empty), Join(parent.OutputPath, markDirectory ? "/" : ""));
 
-        string CombinePath(string prefix, string suffix, bool collapseDot)
+        string Join(string prefix, string suffix)
         {
-            if (string.IsNullOrEmpty(suffix))
-                return prefix;
-
-            if (string.IsNullOrEmpty(prefix))
-                return suffix;
-
-            if (collapseDot && prefix is ['.'])
-                return suffix;
-
-            if (prefix is ['/'])
-            {
-                _memory.Charge(checked(4L * (1L + suffix.Length)));
-                return "/" + suffix;
-            }
-
-            _memory.Charge(checked(4L * ((long)prefix.Length + 1 + suffix.Length)));
-            return prefix + "/" + suffix;
+            var separator = prefix.Length == 0 || prefix.EndsWith('/') ? string.Empty : "/";
+            _memory.Charge(checked(4L * (prefix.Length + (long)separator.Length + name.Length + suffix.Length)));
+            return string.Concat(prefix, separator, name, suffix);
         }
     }
 
-    /// <summary> Represents a pair of list and output paths for glob expansion. </summary>
     private readonly record struct Candidate(string ListPath, string OutputPath);
 }

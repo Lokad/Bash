@@ -138,7 +138,9 @@ fresh operands, and syntax failures remain at their reached execution point.
 Literal-only single-part words retain their expanded fields and quote flags on
 the immutable word, borrowing its byte storage. Expansion still observes pending
 failure and cancellation; tilde, brace, parameter and other dynamic syntax stay
-late-bound. Pathname lookup retains the ordinary active quote mask and host path.
+late-bound. Pathname expansion scans components in the existing pattern and
+quote mask. It prepares the literal prefix once with separate spelling for
+output and lookup. Lookup preserves dot and dot-dot components for host traversal.
 
 Command lists prepare immutable navigation once per reached syntax root. Each
 execution keeps its cursor, status and scope locally and dispatches leaves through

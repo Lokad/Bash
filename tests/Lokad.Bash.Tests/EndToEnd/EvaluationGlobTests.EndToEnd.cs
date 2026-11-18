@@ -78,6 +78,45 @@ public sealed class EvaluationGlobTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("*/", "<dir/><empty/>")]
+    [InlineData("*//", "<dir/><empty/>")]
+    [InlineData("dir'//'*", "<dir//file><dir//sub>")]
+    [InlineData("dir///sub//l*", "<dir///sub//leaf>")]
+    [InlineData("dir//*/", "<dir//sub/>")]
+    [InlineData("dir/*//leaf", "<dir/sub/leaf>")]
+    [InlineData("plain*/", "<plain*/>")]
+    [InlineData("dir//*//missing", "<dir//*//missing>")]
+    public async Task Evaluation_GlobExpansion_PreservesPathSpellingAndDirectorySelection(
+        string pattern, string expected)
+    {
+        var host = EndToEndHarness.BuildTree(
+            ["/dir", "/dir/sub", "/empty"],
+            [("/dir/file", ""), ("/dir/sub/leaf", ""), ("/plain", "")]);
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' " + pattern, tree: host);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task Evaluation_GlobExpansion_UsesDirectoryMatchesInRedirectedPaths()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/dir", "/empty"], [("/plain", "")]);
+        var result = await host.RunAsync(
+            "for item in */; do printf %s \"$item\" >\"${item}chosen\"; done; printf tail",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("dir/", host.ReadFile("/dir/chosen"));
+        Assert.Equal("empty/", host.ReadFile("/empty/chosen"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/plainchosen"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_GlobExpansion_ExpandsUnquotedNamerefArrayElementsIndependently()
     {

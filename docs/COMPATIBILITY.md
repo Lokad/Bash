@@ -133,6 +133,11 @@ valid UTF-16 surrogate pair as one character within each component. Emitted path
 for each expanded word are sorted by unsigned UTF-8 byte order, independent of
 locale. Public text matcher overloads count UTF-16 code units.
 
+Pathname expansion preserves separators in the literal prefix before the first
+wildcard component. It joins subsequent components with a single slash. Trailing
+slashes restrict matches to directories, including links to directories, and emit
+one final slash. A pattern with no match retains its original spelling.
+
 Replacement chooses the leftmost, longest match. A global replacement applies
 the character profile to each remaining operand: after consuming malformed bytes
 it can resume scalar matching, while a remainder beginning inside a multibyte

@@ -276,6 +276,12 @@ public sealed class ByteValuedWordTests
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
         Assert.Equal("é*", pattern.Pattern);
-        Assert.Equal(new byte[] { 0, GlobMask.Active }, Assert.Single(pattern.SplitPathSegments(budget)).MetaMask.Memory.ToArray());
+        var cursor = 0;
+        Assert.True(pattern.TryReadPathComponent(ref cursor, out var component));
+        Assert.Equal(0..2, component);
+        var mask = pattern.GetMask(component);
+        Assert.Equal(0, mask[0]);
+        Assert.Equal(GlobMask.Active, mask[1]);
+        Assert.False(pattern.TryReadPathComponent(ref cursor, out _));
     }
 }
