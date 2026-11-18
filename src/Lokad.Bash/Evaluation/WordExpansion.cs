@@ -630,7 +630,11 @@ internal static partial class WordExpansion
                 continue;
             }
 
-            var commandStatus = ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace, out var script, out var endIndex);
+            CommandSubstitutionSyntax? script = null;
+            var endIndex = index;
+            var commandStatus = arithmeticStatus == ShellScanStatus.NotFound
+                ? ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace, out script, out endIndex)
+                : ShellScanStatus.NotFound;
             if (commandStatus == ShellScanStatus.Complete)
             {
                 await ExpandCommandSubstitutionAsync(

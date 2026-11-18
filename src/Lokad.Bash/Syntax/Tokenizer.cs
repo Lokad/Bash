@@ -766,11 +766,9 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position))
-            {
-                ReadArithmeticExpansion(unquoted);
+            if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
+                && TryReadArithmeticExpansion(unquoted))
                 continue;
-            }
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position))
             {
@@ -927,24 +925,26 @@ internal sealed class Tokenizer
     /// <summary>
     /// Captures canonical arithmetic-expansion syntax while retaining physical cursor offsets.
     /// </summary>
-    private void ReadArithmeticExpansion(ByteMemoryBuilder unquoted)
+    private bool TryReadArithmeticExpansion(ByteMemoryBuilder unquoted)
     {
         var start = Position;
-        if (!ArithmeticExpansionScanner.TryScan(
-                _scanContext,
-                _input,
-                start,
-                out var endIndex,
-                out var expression))
+        if (_scanContext.TryGetCommandSubstitution(_input, start, out _))
+            return false;
+        var status = ArithmeticExpansionScanner.Scan(
+            _scanContext, _input, start, out var endIndex, out var expression, out _);
+        if (status == ShellScanStatus.NotFound)
+            return false;
+        if (status != ShellScanStatus.Complete)
         {
             RecordError("Unterminated arithmetic expansion.", start);
-            return;
+            return true;
         }
 
         Position = endIndex + 1;
         unquoted.Append("$(("u8);
         unquoted.Append(expression.Bytes);
         unquoted.Append("))"u8);
+        return true;
     }
 
     /// <summary>
@@ -1085,11 +1085,9 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position))
-            {
-                ReadArithmeticExpansion(content);
+            if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
+                && TryReadArithmeticExpansion(content))
                 continue;
-            }
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position))
             {

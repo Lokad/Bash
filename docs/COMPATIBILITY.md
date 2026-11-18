@@ -84,6 +84,10 @@ host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
 Locale-quoted words `$"…"` use their original text under the invariant profile.
 They follow the same expansion and quoting rules as ordinary double-quoted words.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
+An adjacent subshell opener can begin a command substitution, as in
+`$((printf value);)`. A complete `$((…))` arithmetic shape selects arithmetic
+even when its expression is invalid. The existing command grammar handles the
+subshell form and consumes completed here-documents as part of its body.
 Here-strings expand one scalar operand without brace generation, field splitting
 or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
 dollar, backtick, backslash and LF; double quotes remain ordinary data. Quoting the

@@ -231,6 +231,7 @@ public sealed class ShellSourceScannerTests
     [Theory]
     [InlineData("plain", (int)ShellScanStatus.NotFound)]
     [InlineData("$((1 + 2))", (int)ShellScanStatus.Complete)]
+    [InlineData("$((printf left);) $((2 + 3))", (int)ShellScanStatus.NotFound)]
     [InlineData("$((1 + 2)", (int)ShellScanStatus.Incomplete)]
     [InlineData("$((1 + $(printf ok &&) + 2))", (int)ShellScanStatus.Invalid)]
     public void ArithmeticExpansionScanner_ReportsStructuredStatus(

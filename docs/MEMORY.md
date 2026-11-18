@@ -137,6 +137,9 @@ preparation. Keyword, builtin and descriptor classification borrow source bytes;
 stored loop/allocation names admit their text before decoding. Pure caller-owned
 preparation remains unbudgeted. This is not complete allocation coverage; parser
 structural guards remain independent of admission and execution duration.
+Retained command lookahead includes the depth required by its tree. A nested
+subshell can use an already prepared tree within the same syntax owner when the
+receiving command and expansion depths have enough headroom.
 Literal payloads, assignment-name slices and completed expansion segments avoid
 pinning disproportionately large builder buffers after their parsing/command
 owner ends. Retained scalar, array, nameref and positional values keep the ordinary

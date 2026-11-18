@@ -122,6 +122,12 @@ Line-continuation normalization reuses the structural scan's nested syntax while
 retaining physical source positions. Reusing lookahead through a source slice
 does not cross its end or reset the structural nesting guards.
 
+The first top-level closer in a `$((` candidate selects arithmetic when it starts
+a pair of logical closing parentheses. A single closer with following input
+hands delimiter selection to the command parser. Command lookahead records its
+required expansion and command depth, including reused descendants. The
+tokenizer can transfer a cached tree to a different depth within both budgets.
+
 Arithmetic commands, arithmetic-for clauses and ordinary word arithmetic
 expansions retain source-owned lexical decisions for stable source. Numeric values,
 operator classifications and raw references are immutable; execution retains the

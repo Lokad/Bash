@@ -6,7 +6,7 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Scans command substitution payloads, honoring the delimiter rules of each form.</summary>
 internal static class CommandSubstitutionScanner
 {
-    /// <summary>Gets whether a position begins <c>$(...)</c> or legacy backticks.</summary>
+    /// <summary>Gets whether a position can begin a command substitution after arithmetic selection.</summary>
     public static bool HasPrefix(ShellSource text, int startIndex)
     {
         if (startIndex < 0 || startIndex >= text.Length)
@@ -15,11 +15,7 @@ internal static class CommandSubstitutionScanner
         if (text[startIndex] == (byte)'`')
             return true;
 
-        if (!ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), startIndex, "$(", out var payloadStart))
-            return false;
-
-        var next = ShellSourceCursor.SkipLineContinuations(text.AsSpan(), payloadStart);
-        return next >= text.Length || text[next] != (byte)'(';
+        return ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), startIndex, "$(", out _);
     }
 
     /// <summary>
@@ -41,16 +37,17 @@ internal static class CommandSubstitutionScanner
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out ShellSource payload) =>
-        Scan(new ShellScanContext(), text, startIndex, out endIndex, out payload);
-
-    internal static ShellScanStatus Scan(
-        ShellScanContext context,
-        ShellSource text,
-        int startIndex,
-        out int endIndex,
         out ShellSource payload)
     {
+        var context = new ShellScanContext();
+        var arithmetic = ArithmeticExpansionScanner.ScanShape(context, text, startIndex, out _, out _);
+        if (arithmetic != ShellScanStatus.NotFound)
+        {
+            endIndex = startIndex;
+            payload = ShellSource.Empty;
+            return ShellScanStatus.NotFound;
+        }
+
         var status = ScanParsedForLaterReuse(context, text, startIndex, out endIndex, out var substitution);
         payload = substitution?.Source ?? ShellSource.Empty;
         return status;
@@ -87,10 +84,15 @@ internal static class CommandSubstitutionScanner
             substitution = cached.Substitution;
             return ShellScanStatus.Complete;
         }
-        var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution);
-        if (substitution != null)
-            context.StoreCommandSubstitution(text, startIndex, new ShellScanContext.CachedParse(endIndex - startIndex + 1, substitution));
-        return status;
+        var previousPeak = context.BeginLookahead();
+        try
+        {
+            var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution);
+            if (substitution != null)
+                context.StoreCommandSubstitution(text, startIndex, endIndex - startIndex + 1, substitution);
+            return status;
+        }
+        finally { context.EndLookahead(previousPeak); }
     }
 
     private static ShellScanStatus ScanParsedCore(

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recognize command substitutions that begin with an adjacent subshell opener.
+  Complete arithmetic expansions retain their usual precedence and diagnostics.
+
 - Recognize locale-quoted `$"…"` words as double-quoted text in the invariant profile.
 
 - Honor the leading `--` delimiter in `eval`, `source` and `.`. Validate options

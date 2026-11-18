@@ -277,7 +277,7 @@ internal sealed class ShellSourceCursor
             return ShellNestedExpansionScan.NotFound.Instance;
 
         var start = Position;
-        if (ArithmeticExpansionScanner.HasPrefix(_text, start))
+        if (ArithmeticExpansionScanner.HasPrefix(_text, start) && !_context.TryGetCommandSubstitution(_text, start, out _))
         {
             var status = ArithmeticExpansionScanner.ScanShape(
                 _context,
@@ -285,13 +285,15 @@ internal sealed class ShellSourceCursor
                 start,
                 out var endIndex,
                 out var containsCommandSubstitution);
-            if (status != ShellScanStatus.Complete)
+            if (status == ShellScanStatus.Complete)
+            {
+                Position = endIndex + 1;
+                return new ShellNestedExpansionScan.Complete(
+                    ShellNestedExpansionKind.Arithmetic,
+                    containsCommandSubstitution);
+            }
+            if (status != ShellScanStatus.NotFound)
                 return ToFailure(status, ShellNestedExpansionKind.Arithmetic);
-
-            Position = endIndex + 1;
-            return new ShellNestedExpansionScan.Complete(
-                ShellNestedExpansionKind.Arithmetic,
-                containsCommandSubstitution);
         }
 
         if ((parameters == BracedParameterRecognition.All || IsDoubleQuoted)
@@ -320,7 +322,7 @@ internal sealed class ShellSourceCursor
 
         if (CommandSubstitutionScanner.HasPrefix(_text, start))
         {
-            var status = CommandSubstitutionScanner.Scan(
+            var status = CommandSubstitutionScanner.ScanParsedForLaterReuse(
                 _context,
                 _text,
                 start,
@@ -365,7 +367,8 @@ internal sealed class ShellScanContext
     private int _remainingSyntaxUnits = MaximumSyntaxUnits;
     private int _commandDepth;
     private int _nestedExpansionDepth;
-    private Dictionary<ParseCacheKey, CachedParse>? _commandSubstitutions;
+    private ScanDepth _lookaheadPeak;
+    private Dictionary<ReadOnlyMemory<byte>, CachedParse>? _commandSubstitutions;
 
     /// <summary>One reached command unit's coarse syntax and payload allowance; null denotes caller-owned parsing.</summary>
     internal MemoryCapacity? SyntaxMemory { get; set; }
@@ -390,9 +393,12 @@ internal sealed class ShellScanContext
     {
         if (_commandSubstitutions != null && (uint)startIndex < (uint)source.Length)
         {
-            var key = new ParseCacheKey(source.Bytes.Slice(startIndex, 0), _nestedExpansionDepth, _commandDepth);
-            if (_commandSubstitutions.TryGetValue(key, out parsed) && parsed.Length <= source.Length - startIndex)
+            var key = source.Bytes.Slice(startIndex, 0);
+            if (_commandSubstitutions.TryGetValue(key, out parsed) && parsed.Length <= source.Length - startIndex
+                && _nestedExpansionDepth + parsed.RequiredDepth.Expansion <= ShellSourceCursor.MaximumNestedExpansionDepth
+                && _commandDepth + parsed.RequiredDepth.Command <= MaximumCommandDepth)
             {
+                RecordLookaheadDepth(_nestedExpansionDepth + parsed.RequiredDepth.Expansion, _commandDepth + parsed.RequiredDepth.Command);
                 if (take) _commandSubstitutions.Remove(key);
                 return true;
             }
@@ -401,14 +407,31 @@ internal sealed class ShellScanContext
         return false;
     }
 
-    internal void StoreCommandSubstitution(ShellSource source, int startIndex, CachedParse parsed) =>
-        (_commandSubstitutions ??= []).Add(new ParseCacheKey(source.Bytes.Slice(startIndex, 0), _nestedExpansionDepth, _commandDepth), parsed);
+    internal void StoreCommandSubstitution(
+        ShellSource source, int startIndex, int length, CommandSubstitutionSyntax substitution)
+    {
+        // A zero-length slice identifies a physical byte across source views.
+        var required = new ScanDepth(_lookaheadPeak.Expansion - _nestedExpansionDepth, _lookaheadPeak.Command - _commandDepth);
+        (_commandSubstitutions ??= [])[source.Bytes.Slice(startIndex, 0)] = new CachedParse(length, substitution, required);
+    }
 
-    internal readonly record struct CachedParse(int Length, CommandSubstitutionSyntax Substitution);
+    internal readonly record struct CachedParse(int Length, CommandSubstitutionSyntax Substitution, ScanDepth RequiredDepth);
 
-    // A zero-length slice identifies one physical byte across source views without copying/hashing it.
-    // The stored length must fit the requesting view; both depths preserve the original nesting allowance.
-    private readonly record struct ParseCacheKey(ReadOnlyMemory<byte> Position, int ExpansionDepth, int CommandDepth);
+    internal readonly record struct ScanDepth(int Expansion, int Command);
+
+    // Track the actual depths a tree needs, including any cached descendants.
+    // An arithmetic lookahead can prepare a child at a different command depth.
+    internal ScanDepth BeginLookahead()
+    {
+        var previous = _lookaheadPeak;
+        _lookaheadPeak = new ScanDepth(_nestedExpansionDepth, _commandDepth);
+        return previous;
+    }
+
+    internal void EndLookahead(ScanDepth previous) => RecordLookaheadDepth(previous.Expansion, previous.Command);
+
+    private void RecordLookaheadDepth(int expansion, int command) => _lookaheadPeak =
+        new ScanDepth(Math.Max(_lookaheadPeak.Expansion, expansion), Math.Max(_lookaheadPeak.Command, command));
 
     internal bool ParsingLimitExceeded { get; private set; }
 
@@ -437,6 +460,7 @@ internal sealed class ShellScanContext
             return false;
         }
         _commandDepth++;
+        RecordLookaheadDepth(_nestedExpansionDepth, _commandDepth);
         return true;
     }
 
@@ -450,6 +474,7 @@ internal sealed class ShellScanContext
             return false;
 
         _nestedExpansionDepth++;
+        RecordLookaheadDepth(_nestedExpansionDepth, _commandDepth);
         return true;
     }
 

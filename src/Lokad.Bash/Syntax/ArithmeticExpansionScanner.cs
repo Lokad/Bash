@@ -180,8 +180,11 @@ internal static class ArithmeticExpansionScanner
                             : ShellScanStatus.NotFound;
                     }
 
-                    cursor.Advance();
-                    continue;
+                    // This closes the subshell opener in a command substitution.
+                    // A later pair belongs to another lexical boundary.
+                    return ShellSourceCursor.SkipLineContinuations(text.AsSpan(), cursor.Position + 1) == text.Length
+                        ? ShellScanStatus.Incomplete
+                        : ShellScanStatus.NotFound;
                 }
 
                 endIndex = closingEnd - 1;

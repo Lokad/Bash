@@ -41,6 +41,76 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Fact]
+    public void AdjacentSubshellLookaheadCanTransferToADeeperCommand()
+    {
+        var source = ShellSource.FromText("$((printf retained);)");
+        var context = new ShellScanContext();
+        var cursor = new ShellSourceCursor(source, 0, context);
+        var selected = Assert.IsType<ShellNestedExpansionScan.Complete>(
+            cursor.SkipNestedExpansion(BracedParameterRecognition.All));
+        Assert.Equal(ShellNestedExpansionKind.Command, selected.Kind);
+        Assert.True(context.TryGetCommandSubstitution(source, 0, out var cached));
+        Assert.True(context.TryEnterCommand());
+        try
+        {
+            var tokenizer = new Tokenizer(source, 0, context);
+            Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+            var part = Assert.IsType<CommandSubstitutionWordPart>(Assert.Single(token.Word.Parts));
+            Assert.Same(cached.Substitution, part.Substitution);
+            Assert.Equal(source.Length, tokenizer.Position);
+            Assert.False(context.TryGetCommandSubstitution(source, 0, out _));
+        }
+        finally { context.ExitCommand(); }
+    }
+
+    [Fact]
+    public void TransferredLookaheadStillRequiresHeadroomForDescendantCommands()
+    {
+        var source = ShellSource.FromText("$( (printf retained) )");
+        var context = new ShellScanContext();
+        Assert.Equal(ShellScanStatus.Complete,
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out _));
+        var depth = ShellScanContext.MaximumCommandDepth - 1;
+        for (var level = 0; level < depth; level++)
+            Assert.True(context.TryEnterCommand());
+        try
+        {
+            Assert.False(context.TryGetCommandSubstitution(source, 0, out _));
+            Assert.Equal(ShellScanStatus.Invalid,
+                CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out _));
+            Assert.Contains("Command nesting", Assert.IsType<SyntaxError>(context.LimitError).Message);
+        }
+        finally
+        {
+            for (var level = 0; level < depth; level++)
+                context.ExitCommand();
+        }
+    }
+
+    [Fact]
+    public void NestedAdjacentSubshellsReuseLookaheadWithBoundedAllocation()
+    {
+        _ = Measure(2);
+        var small = Measure(8);
+        var large = Measure(24);
+        Assert.True(large < 4 * small + 64 * 1024,
+            $"Tripling the source depth allocated {small:N0} then {large:N0} bytes.");
+
+        static long Measure(int depth)
+        {
+            var script = "leaf";
+            for (var level = 0; level < depth; level++)
+                script = "$((printf '%s' \"" + script + "\");)";
+            var source = ShellSource.FromText("printf '%s' \"" + script + "\"");
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var parsed = Parser.Parse(source.Bytes);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Single(parsed.Commands);
+            return allocated;
+        }
+    }
+
+    [Fact]
     public void CachedBodiesDoNotBypassAnExhaustedNestingBudget()
     {
         var source = ShellSource.FromText("$(printf retained)");
