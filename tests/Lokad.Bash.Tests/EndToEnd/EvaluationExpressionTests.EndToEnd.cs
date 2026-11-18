@@ -106,6 +106,35 @@ public sealed class EvaluationExpressionTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("let")]
+    [InlineData("unset operand; let $operand")]
+    [InlineData("set --; builtin let \"$@\"")]
+    public async Task Evaluation_LetBuiltin_DiagnosesMissingExpandedExpressions(string script)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("let: expression expected\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task Evaluation_LetBuiltin_DiagnosesAfterOperandEffectsInActiveStderr()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "set -e; if let $(printf once >fact) 2>err; then printf unexpected; else printf '<%s>' \"$?\"; fi",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("once", host.ReadFile("/fact"));
+        Assert.Equal("let: expression expected\n", host.ReadFile("/err"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_LetBuiltin_UsesLastArgumentResult()
     {

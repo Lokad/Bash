@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report `let: expression expected` when no expression fields reach `let`.
+
 - Accept signed decimal counts and a leading `--` in `shift`. Preserve
   positional parameters on count and arity failures.
 

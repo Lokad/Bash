@@ -325,6 +325,10 @@ public sealed partial class Evaluation
         EvaluationContext context,
         bool negated)
     {
+        if (words.Count == 1)
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText("let"), ShellValue.FromText("expression expected"))
+                .ConfigureAwait(false);
+
         long? lastResult = 0;
         for (var index = 1; index < words.Count; index++)
         {
@@ -339,7 +343,7 @@ public sealed partial class Evaluation
         }
 
         var exitCode = lastResult is null or 0 ? 1 : 0;
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
 
         bool AssignOutput(VariableReference reference, WordExpansion.ResolvedVariableReference target, ShellValue value)
         {
