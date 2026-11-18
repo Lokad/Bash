@@ -4,8 +4,7 @@ namespace Lokad.Bash.Syntax;
 /// Indicates the quoting context of a word segment.
 /// </summary>
 /// <remarks>
-/// Quote context must be preserved for later expansion and quote removal
-/// decisions, per BASH.md.
+/// The quoting context determines expansion and quote removal.
 /// </remarks>
 public enum WordPartKind
 {

@@ -12,8 +12,7 @@ namespace Lokad.Bash.Evaluation;
 /// Expands brace expressions in unquoted source before other expansions.
 /// </summary>
 /// <remarks>
-/// This implementation follows the brace expansion rules from BASH.md,
-/// including comma lists and simple sequence expressions.
+/// Supports comma lists and sequence expressions.
 /// </remarks>
 internal static class BraceExpansion
 {

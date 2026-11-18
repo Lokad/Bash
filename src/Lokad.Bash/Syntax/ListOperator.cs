@@ -3,9 +3,6 @@ namespace Lokad.Bash.Syntax;
 /// <summary>
 /// Represents control operators that connect list elements.
 /// </summary>
-/// <remarks>
-/// Sequence maps to semicolons and newlines per the list grammar in BASH.md.
-/// </remarks>
 public enum ListOperator
 {
     /// <summary>

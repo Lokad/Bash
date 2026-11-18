@@ -8,8 +8,7 @@ namespace Lokad.Bash.Syntax;
 /// Represents a shell word with preserved quoting context.
 /// </summary>
 /// <remarks>
-/// Words are stored as parts so later expansion can respect quoting
-/// and escape behavior per BASH.md.
+/// Word parts retain quoting and escapes for expansion.
 /// </remarks>
 public sealed class Word
 {

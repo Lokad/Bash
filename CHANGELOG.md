@@ -209,7 +209,9 @@
   lanes, startup-amortized variants, strict evidence gates, lifecycle previews and
   isolated all-thread allocation/GC observations. Add 36 direct core cases,
   Unicode/malformed-byte macro controls with reference-specific exclusions, and a
-  separate Linux GNU-time RSS collector. Dedicated-VM measurements are pending.
+  separate Linux GNU-time RSS collector. The dedicated-VM campaign measured
+  commit `c3139d7`.
+  [Benchmark report](https://github.com/Lokad/Bash/blob/master/BENCHMARKS.md).
 - Prepare 0.2.0 under the pre-1.0 minor-version API policy. Add isolated installed
   NuGet consumer qualification on Windows/Linux and .NET 10/.NET 11, with exact
   assembly checks and exported package/source/runtime evidence. No publication is

@@ -4,8 +4,7 @@ namespace Lokad.Bash.Syntax;
 /// Represents a pipeline of commands connected by pipe operators.
 /// </summary>
 /// <remarks>
-/// Pipelines are left-associative and may be negated with the ! reserved word,
-/// per BASH.md.
+/// Pipelines are left-associative and may be negated with the ! reserved word.
 /// </remarks>
 /// <param name="Left">The left pipeline segment.</param>
 /// <param name="Operator">The pipeline operator connecting the segments.</param>

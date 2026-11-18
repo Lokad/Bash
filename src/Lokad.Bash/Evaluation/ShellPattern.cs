@@ -48,7 +48,7 @@ internal sealed class ShellPattern
         return new ShellPattern(value, mask, literal, memory);
     }
 
-    /// <summary>Selects one character policy for a complete operand, including all later replacement slices.</summary>
+    /// <summary>Selects byte or Unicode-scalar matching for the supplied operand.</summary>
     public bool UsesByteCharacters(ReadOnlySpan<byte> text) => !_validUtf8 || !System.Text.Unicode.Utf8.IsValid(text);
 
     public bool IsMatch(ReadOnlySpan<byte> text, CancellationToken cancellationToken)

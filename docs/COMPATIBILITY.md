@@ -276,6 +276,11 @@ cancellation. Completed arithmetic work consumes no execution allowance.
 no expressions. A quoted empty expression evaluates to zero and returns
 status 1 without a diagnostic.
 
+Associative arrays enumerate keys in ascending lexicographic order of unsigned
+bytes. Key and value aggregates follow that order, and value slices select
+entries in the same order. GNU Bash can enumerate the same keys in a different
+order.
+
 `test`/`[` preserve bytes in string equality, ordering and length predicates. Their
 zero-to-four argument rules precede the `!`, parenthesis, `-a` and `-o` expression
 grammar. Numeric operands must be signed 64-bit decimal integers, with optional

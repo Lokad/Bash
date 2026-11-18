@@ -5,7 +5,7 @@ namespace Lokad.Bash.Syntax;
 /// </summary>
 /// <remarks>
 /// Group commands execute lists in the current environment and require
-/// a terminating semicolon or newline before the closing brace, per BASH.md.
+/// a terminating semicolon or newline before the closing brace.
 /// </remarks>
 /// <param name="Body">The list body executed in the group.</param>
 public sealed record GroupCommand(ICommand Body) : ICommand;

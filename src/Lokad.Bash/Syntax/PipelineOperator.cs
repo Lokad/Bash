@@ -3,9 +3,6 @@ namespace Lokad.Bash.Syntax;
 /// <summary>
 /// Represents pipeline operators that connect pipeline segments.
 /// </summary>
-/// <remarks>
-/// The PipeAndError operator corresponds to |&amp; as described in BASH.md.
-/// </remarks>
 public enum PipelineOperator
 {
     /// <summary>

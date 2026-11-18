@@ -6,11 +6,10 @@ namespace Lokad.Bash.Evaluation;
 public static class Strings
 {
     /// <summary>
-    /// Trims ASCII whitespace from a UTF-8 memory slice.
+    /// Trims space, tab, CR and LF from the ends of a character span.
     /// </summary>
-    /// <param name="input">The UTF-8 input.</param>
+    /// <param name="input">The input characters.</param>
     /// <returns>The trimmed slice.</returns>
-    /// <summary> Trims white-space from the beginning and end of a span. </summary>
     public static ReadOnlySpan<char> TrimWhitespace(ReadOnlySpan<char> input)
     {
         var start = 0;

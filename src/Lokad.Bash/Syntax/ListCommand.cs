@@ -6,9 +6,6 @@ namespace Lokad.Bash.Syntax;
 /// <summary>
 /// Represents a left-associative list of commands connected by a control operator.
 /// </summary>
-/// <remarks>
-/// Lists follow the operator rules described in BASH.md.
-/// </remarks>
 public sealed record ListCommand : ICommand
 {
     private ICommand _left;

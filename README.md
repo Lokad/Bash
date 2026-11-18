@@ -44,8 +44,9 @@ not an OS isolation boundary.
 
 ## Build
 
-Install the SDK in `global.json` and the .NET 10 runtime. The pinned .NET 11 SDK
-is a release candidate; both target frameworks are built and tested explicitly.
+Install the SDK in `global.json` and the .NET 10 runtime. The SDK configuration
+allows prereleases and uses `latestPatch` roll-forward for the .NET 11 release
+candidate. The build and tests target both runtimes.
 
 ```powershell
 dotnet restore Lokad.Bash.slnx --locked-mode

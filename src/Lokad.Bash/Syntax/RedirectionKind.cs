@@ -3,10 +3,6 @@ namespace Lokad.Bash.Syntax;
 /// <summary>
 /// Identifies the redirection operator used in a redirection node.
 /// </summary>
-/// <remarks>
-/// The full set of redirections is described in ; this initial
-/// set will be expanded as support grows.
-/// </remarks>
 public enum RedirectionKind
 {
     /// <summary>
