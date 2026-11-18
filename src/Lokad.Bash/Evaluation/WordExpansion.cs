@@ -235,6 +235,20 @@ internal static partial class WordExpansion
                     continue;
                 }
             }
+            else if (part.IsDoubleQuoted)
+            {
+                builder.BeginDoubleQuote();
+                do
+                {
+                    await ExpandPartAsync(word.Parts[position.Part], scope, builder, allowWordSplitting)
+                        .ConfigureAwait(false);
+                    position = new WordPosition(position.Part + 1, 0);
+                } while (scope.CanExpand && position.Part < word.Parts.Count
+                    && word.Parts[position.Part].DoubleQuote == DoubleQuoteBoundary.Continuation);
+                if (scope.CanExpand)
+                    builder.EndDoubleQuote();
+                continue;
+            }
             else
                 await ExpandPartAsync(part, scope, builder, allowWordSplitting).ConfigureAwait(false);
             position = new WordPosition(position.Part + 1, 0);
@@ -535,8 +549,6 @@ internal static partial class WordExpansion
     {
         var content = syntax.Source;
         var length = content.Length;
-        var emptyQuotedAggregates = output.EmptyQuotedAggregateCount;
-        var missingQuotedPosition = false;
         for (var index = start.Offset; index < length; index++)
         {
             if (!scope.CanExpand)
@@ -734,7 +746,7 @@ internal static partial class WordExpansion
                 else if (position <= arguments.Count)
                     output.AppendExpansion(arguments[position - 1], allowWordSplitting, globQuoted);
                 else if (quoteContext == ExpansionQuoteContext.DoubleQuoted)
-                    missingQuotedPosition = true;
+                    output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
 
                 index++;
                 continue;
@@ -801,9 +813,6 @@ internal static partial class WordExpansion
 
             output.AppendSource(content.Slice(index, 1), globQuoted);
         }
-        // An empty aggregate in the same quoted source suppresses the missing scalar's empty field.
-        if (missingQuotedPosition && scope.CanExpand && output.EmptyQuotedAggregateCount == emptyQuotedAggregates)
-            output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
         return null;
 
         static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status)

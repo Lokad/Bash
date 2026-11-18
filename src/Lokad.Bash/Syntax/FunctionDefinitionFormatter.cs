@@ -53,15 +53,11 @@ internal static class FunctionDefinitionFormatter
                     break;
                 case Step.Word(var word):
                     var doubleQuoted = false;
-                    var previousKind = WordPartKind.Unquoted;
                     foreach (var part in word.Parts)
                     {
                         var content = part.GetUnexpandedValue().Bytes.Span;
-                        var quotedPart = part.Kind is WordPartKind.DoubleQuoted or WordPartKind.CommandSubstitutionQuoted
-                            || doubleQuoted && part.Kind == WordPartKind.Escaped && content is [(byte)'$' or (byte)'`' or (byte)'"' or (byte)'\\'];
-                        // Joining source parts can extend $name or turn a literal dollar into expansion syntax.
-                        if (doubleQuoted && previousKind == WordPartKind.DoubleQuoted
-                            && part.Kind is WordPartKind.DoubleQuoted or WordPartKind.CommandSubstitutionQuoted
+                        var quotedPart = part.IsDoubleQuoted;
+                        if (doubleQuoted && quotedPart && part.DoubleQuote != DoubleQuoteBoundary.Continuation
                             && !Append("\"\"")) return false;
                         if (quotedPart != doubleQuoted && !Append("\"")) return false;
                         doubleQuoted = quotedPart;
@@ -82,7 +78,6 @@ internal static class FunctionDefinitionFormatter
                             _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
                         };
                         if (!success) return false;
-                        previousKind = part.Kind;
                     }
                     if (doubleQuoted && !Append("\"")) return false;
                     break;

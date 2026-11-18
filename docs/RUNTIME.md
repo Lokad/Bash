@@ -217,8 +217,11 @@ copies callee entries once while sharing immutable value bytes. Functions always
 restore their caller; source restores unless an explicit positional replacement
 survives. Saved frames remain admitted through their surrounding command scope.
 An unset positional scalar such as `"$1"` emits one empty field on its own in
-double quotes. An empty `$@` emits zero fields and can suppress that empty field
-when it appears inside the same double quotes.
+double quotes. An aggregate that emits zero fields suppresses empty expansions
+inside the same double quotes. Supplied empty aggregate elements and separate
+quoted literals keep their fields. The tokenizer retains quote boundaries across
+substitutions and escapes. Function display and export preserve those boundaries
+when the definition is evaluated again.
 
 Prefix assignment preparation borrows caller state for the surrounding command.
 It admits and copies each reached binding once, retaining independent array

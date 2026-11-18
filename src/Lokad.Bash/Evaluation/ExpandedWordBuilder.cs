@@ -46,6 +46,9 @@ internal sealed class ExpandedWordBuilder
     private readonly ImplicitEmptyPolicy _implicitEmptyPolicy;
     private readonly List<InputWord> _words = [];
     private InputWord _current;
+    private DoubleQuoteState _doubleQuote;
+
+    private enum DoubleQuoteState : byte { Outside, Open, EmptyExpansion, EmptyAggregate }
 
     public ExpandedWordBuilder(
         Variables variables,
@@ -79,8 +82,14 @@ internal sealed class ExpandedWordBuilder
     /// <summary>Whether substitutions contributed data, even if their output was empty.</summary>
     internal bool HasExpansion { get; private set; }
 
-    /// <summary>Counts quoted aggregate expansions that produced no fields.</summary>
-    internal int EmptyQuotedAggregateCount { get; private set; }
+    internal void BeginDoubleQuote() => _doubleQuote = DoubleQuoteState.Open;
+
+    internal void EndDoubleQuote()
+    {
+        if (_doubleQuote == DoubleQuoteState.EmptyExpansion)
+            MarkCurrentWordForEmission();
+        _doubleQuote = DoubleQuoteState.Outside;
+    }
 
     /// <summary>Retains literal-source provenance before field splitting.</summary>
     public void AppendSource(ShellSource source, bool globQuoted) =>
@@ -99,7 +108,7 @@ internal sealed class ExpandedWordBuilder
         if (!text.IsEmpty)
             GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendText(text);
         else if (!allowWordSplitting && (globQuoted || _implicitEmptyPolicy == ImplicitEmptyPolicy.Preserve))
-            GetPart(PartOrigin.Protected, globQuoted);
+            AppendEmptyExpansion(globQuoted);
     }
 
     public void AppendExpansion(ShellValue value, bool allowWordSplitting, bool globQuoted)
@@ -109,6 +118,19 @@ internal sealed class ExpandedWordBuilder
         if (!value.IsEmpty)
             GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendValue(value);
         else if (!allowWordSplitting && (globQuoted || _implicitEmptyPolicy == ImplicitEmptyPolicy.Preserve))
+            AppendEmptyExpansion(globQuoted);
+    }
+
+    private void AppendEmptyExpansion(bool globQuoted)
+    {
+        // An empty scalar or substitution in these quotes emits a field only if the
+        // same quotes contain no fieldless aggregate. Literal empty fields are explicit.
+        if (globQuoted && _doubleQuote != DoubleQuoteState.Outside)
+        {
+            if (_doubleQuote == DoubleQuoteState.Open)
+                _doubleQuote = DoubleQuoteState.EmptyExpansion;
+        }
+        else
             GetPart(PartOrigin.Protected, globQuoted);
     }
 
@@ -149,7 +171,7 @@ internal sealed class ExpandedWordBuilder
             if (protectFields)
             {
                 if (value.IsEmpty)
-                    MarkCurrentWordForEmission();
+                    AppendEmptyAggregateField();
                 else
                     AppendValue(value, globQuoted: true);
             }
@@ -158,8 +180,8 @@ internal sealed class ExpandedWordBuilder
                 AppendExpansion(value, allowWordSplitting, globQuoted);
             }
         }
-        if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted)
-            EmptyQuotedAggregateCount++;
+        if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted && _doubleQuote != DoubleQuoteState.Outside)
+            _doubleQuote = DoubleQuoteState.EmptyAggregate;
     }
 
     /// <summary>Splices operand fields into the enclosing word without flattening their quote metadata.</summary>
@@ -180,6 +202,11 @@ internal sealed class ExpandedWordBuilder
             if (index > 0)
                 StartNewWord();
             var word = words[index];
+            if (word.IsEmptyAggregateField)
+            {
+                AppendEmptyAggregateField();
+                continue;
+            }
             if (word.Segments.Count == 0)
                 MarkCurrentWordForEmission();
             foreach (var segment in word.Segments)
@@ -228,11 +255,18 @@ internal sealed class ExpandedWordBuilder
             AppendExpansion(value, allowWordSplitting, globQuoted);
         }
         if (first && !allowWordSplitting)
-            MarkCurrentWordForEmission();
+            AppendEmptyExpansion(globQuoted: true);
     }
 
     public void MarkCurrentWordForEmission() =>
         GetPart(PartOrigin.Protected, globQuoted: true);
+
+    private void AppendEmptyAggregateField()
+    {
+        HasExpansion = true;
+        _current.HasEmptyAggregateField = true;
+        MarkCurrentWordForEmission();
+    }
 
     public IReadOnlyList<ExpandedWord> Build()
     {
@@ -248,9 +282,9 @@ internal sealed class ExpandedWordBuilder
                 // No boundary processing is needed: retain completed segment buffers.
                 var segments = word.Parts.Select(part =>
                     new ExpandedSegment(part.Segment.ToValue(), part.Segment.IsGlobQuoted)).ToArray();
-                if (segments.Any(segment => !segment.Content.IsEmpty)
-                    || word.Parts.Any(part => part.Origin == PartOrigin.Protected))
-                    results.Add(new ExpandedWord(segments));
+                var hasBytes = segments.Any(segment => !segment.Content.IsEmpty);
+                if (hasBytes || word.Parts.Any(part => part.Origin == PartOrigin.Protected))
+                    results.Add(new ExpandedWord(segments, !hasBytes && word.HasEmptyAggregateField));
                 continue;
             }
 
@@ -458,6 +492,7 @@ internal sealed class ExpandedWordBuilder
     {
         public List<InputPart> Parts { get; } = [];
         public bool NeedsSplitting { get; set; }
+        public bool HasEmptyAggregateField { get; set; }
     }
 
     private readonly record struct InputPart(PartOrigin Origin, SegmentBuilder Segment);

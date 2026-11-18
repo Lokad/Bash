@@ -91,10 +91,26 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Empty(result.StdErr);
     }
 
+    [Fact]
+    public async Task DefinitionRoundTripsPreserveQuoteGroupsAndReachedEffects()
+    {
+        const string script = "count(){ printf '<%s>' \"$#\"; }; "
+            + "f(){ count \"$@$(printf x >>fact)$1\" \"$@\"\"$(true)\"; }; "
+            + "f; export -f f count; bash -c 'f'; saved=$(declare -f f); unset -f f; eval \"$saved\"; f";
+
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1><1><1>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("xxx", result.Host.ReadFile("/fact"));
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
     // Git Bash 5.2.37 output, except retained CR, equivalent quoting/substitution delimiters and flat elif chains.
     [Theory]
-    // Archived word kinds use valid function syntax; redundant literal-dollar quote boundaries coalesce.
-    [InlineData("f(){ printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one)\"$(printf two)\"; cat <<'END'\nbody\nEND\n}", "f () \n{ \n    printf '%s\\n' plain'single'\"double\\\"\\\\\\$\\$\"$(printf one\n)\"$(printf two\n)\";\n    cat <<'END'\nbody\nEND\n\n}\n")]
+    // The escaped dollar outside the quotes remains separate from the next quoted group.
+    [InlineData("f(){ printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one)\"$(printf two)\"; cat <<'END'\nbody\nEND\n}", "f () \n{ \n    printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one\n)\"$(printf two\n)\";\n    cat <<'END'\nbody\nEND\n\n}\n")]
     [InlineData("f(){ :;\n}", "f () \n{ \n    :\n}\n")]
     [InlineData("f(){ true || : `if`; printf ok; }", "f () \n{ \n    true || : `if`;\n    printf ok\n}\n")]
     [InlineData("f(){ false && : \"`)`\"; printf ok; }", "f () \n{ \n    false && : \"`)`\";\n    printf ok\n}\n")]

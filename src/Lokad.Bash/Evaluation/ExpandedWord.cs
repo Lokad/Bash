@@ -10,12 +10,17 @@ namespace Lokad.Bash.Evaluation;
 /// Represents expanded byte-valued segments with preserved glob-quoting context.
 /// </summary>
 /// <remarks>Callers must not mutate retained segments.</remarks>
-internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments)
+internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool isEmptyAggregateField)
 {
+    public ExpandedWord(IReadOnlyList<ExpandedSegment> segments) : this(segments, false) { }
+
     /// <summary>
     /// Gets the expanded segments.
     /// </summary>
     public IReadOnlyList<ExpandedSegment> Segments { get; } = segments;
+
+    /// <summary>An empty element that was present in a quoted aggregate before operand splicing.</summary>
+    internal bool IsEmptyAggregateField { get; } = isEmptyAggregateField;
 
     /// <summary>Joins scalar or pattern operand fields without losing quote metadata.</summary>
     public static ExpandedWord JoinWithSpaces(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory)

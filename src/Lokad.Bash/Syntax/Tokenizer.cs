@@ -756,6 +756,17 @@ internal sealed class Tokenizer
         var unquoted = _scanContext.CreateByteBuilder(0);
         var quotedOperand = outerQuote == ShellQuoteKind.Double;
         var arithmetic = syntax != ExpansionWordSyntax.Parameter;
+        var continuesQuote = false;
+
+        void AddPart(WordPart part)
+        {
+            if (quotedOperand)
+            {
+                part.DoubleQuote = continuesQuote ? DoubleQuoteBoundary.Continuation : DoubleQuoteBoundary.Start;
+                continuesQuote = true;
+            }
+            parts.Add(part);
+        }
 
         void FlushUnquoted()
         {
@@ -766,7 +777,7 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
-            parts.Add(WordPart.FromSource(
+            AddPart(WordPart.FromSource(
                 quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, ShellSource.FromBytes(unquoted.ToCompactMemory(_scanContext.SyntaxMemory)),
                 _scanContext.SyntaxMemory));
             unquoted = _scanContext.CreateByteBuilder(0);
@@ -778,7 +789,7 @@ internal sealed class Tokenizer
             if (TryReadArithmeticSubscript(out var subscript))
             {
                 FlushUnquoted();
-                parts.Add(subscript);
+                AddPart(subscript);
                 continue;
             }
             if (TryReadBracedParameterExpansion(unquoted))
@@ -797,7 +808,7 @@ internal sealed class Tokenizer
                     return new Word([]);
                 if (!TryReadCommandSubstitution(out var content))
                     return new Word([]);
-                parts.Add(new CommandSubstitutionWordPart(
+                AddPart(new CommandSubstitutionWordPart(
                     quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution, content));
                 continue;
             }
@@ -809,7 +820,7 @@ internal sealed class Tokenizer
                     return new Word([]);
                 if (!TryReadCommandSubstitution(out var content))
                     return new Word([]);
-                parts.Add(new CommandSubstitutionWordPart(
+                AddPart(new CommandSubstitutionWordPart(
                     quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution, content));
                 continue;
             }
@@ -852,7 +863,7 @@ internal sealed class Tokenizer
                     parts.AddRange(operand.Parts);
                 }
                 else
-                    parts.Add(WordPart.FromValue(WordPartKind.SingleQuoted, content));
+                    AddPart(WordPart.FromValue(WordPartKind.SingleQuoted, content));
                 continue;
             }
 
@@ -865,6 +876,7 @@ internal sealed class Tokenizer
                 Position = quoteContentStart;
                 var quotedParts = ReadDoubleQuotedParts(span, syntax);
                 parts.AddRange(quotedParts);
+                continuesQuote = false;
                 continue;
             }
 
@@ -904,7 +916,7 @@ internal sealed class Tokenizer
                 var length = Utf8Text.FirstCharacterLength(span[Position..]);
                 if (!TryReserveSyntax())
                     return new Word([]);
-                parts.Add(CopyEscapedLiteral(Position, length));
+                AddPart(CopyEscapedLiteral(Position, length));
                 Position += length;
                 continue;
             }
@@ -926,7 +938,7 @@ internal sealed class Tokenizer
             }
             if (!TryReserveSyntax())
                 return new Word([]);
-            parts.Add(WordPart.FromText(WordPartKind.DoubleQuoted, string.Empty));
+            AddPart(WordPart.FromText(WordPartKind.DoubleQuoted, string.Empty));
         }
 
         return new Word(parts);
@@ -1034,6 +1046,12 @@ internal sealed class Tokenizer
         var parts = new List<WordPart>();
         var content = _scanContext.CreateByteBuilder(0);
 
+        void AddPart(WordPart part)
+        {
+            part.DoubleQuote = parts.Count == 0 ? DoubleQuoteBoundary.Start : DoubleQuoteBoundary.Continuation;
+            parts.Add(part);
+        }
+
         void Flush(bool allowEmpty)
         {
             if (content.Length == 0)
@@ -1042,7 +1060,7 @@ internal sealed class Tokenizer
                 {
                     if (!TryReserveSyntax())
                         return;
-                    parts.Add(WordPart.FromText(WordPartKind.DoubleQuoted, string.Empty));
+                    AddPart(WordPart.FromText(WordPartKind.DoubleQuoted, string.Empty));
                 }
 
                 return;
@@ -1050,7 +1068,7 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
-            parts.Add(WordPart.FromSource(WordPartKind.DoubleQuoted, ShellSource.FromBytes(content.ToCompactMemory(_scanContext.SyntaxMemory)), _scanContext.SyntaxMemory));
+            AddPart(WordPart.FromSource(WordPartKind.DoubleQuoted, ShellSource.FromBytes(content.ToCompactMemory(_scanContext.SyntaxMemory)), _scanContext.SyntaxMemory));
             content = _scanContext.CreateByteBuilder(0);
         }
 
@@ -1060,7 +1078,7 @@ internal sealed class Tokenizer
             if (TryReadArithmeticSubscript(out var subscript))
             {
                 Flush(allowEmpty: false);
-                parts.Add(subscript);
+                AddPart(subscript);
                 continue;
             }
             if (current == (byte)'"')
@@ -1090,7 +1108,7 @@ internal sealed class Tokenizer
                     Flush(allowEmpty: false);
                     if (!TryReserveSyntax())
                         return parts;
-                    parts.Add(CopyEscapedLiteral(Position + 1, 1));
+                    AddPart(CopyEscapedLiteral(Position + 1, 1));
                     Position += 2;
                     continue;
                 }
@@ -1116,7 +1134,7 @@ internal sealed class Tokenizer
                     return parts;
                 if (!TryReadCommandSubstitution(out var payload))
                     return parts;
-                parts.Add(new CommandSubstitutionWordPart(WordPartKind.CommandSubstitutionQuoted, payload));
+                AddPart(new CommandSubstitutionWordPart(WordPartKind.CommandSubstitutionQuoted, payload));
                 continue;
             }
 
@@ -1127,7 +1145,7 @@ internal sealed class Tokenizer
                     return parts;
                 if (!TryReadCommandSubstitution(out var payload))
                     return parts;
-                parts.Add(new CommandSubstitutionWordPart(WordPartKind.CommandSubstitutionQuoted, payload));
+                AddPart(new CommandSubstitutionWordPart(WordPartKind.CommandSubstitutionQuoted, payload));
                 continue;
             }
 

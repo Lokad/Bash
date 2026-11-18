@@ -20,6 +20,12 @@ public abstract class WordPart
     /// </summary>
     public WordPartKind Kind { get; }
 
+    /// <summary>Set by tokenization before a word is published.</summary>
+    internal DoubleQuoteBoundary DoubleQuote { get; set; }
+
+    internal bool IsDoubleQuoted => DoubleQuote != DoubleQuoteBoundary.None
+        || Kind is WordPartKind.DoubleQuoted or WordPartKind.CommandSubstitutionQuoted;
+
     /// <summary>
     /// Decodes source or literal bytes at a text-only consumer boundary.
     /// Implementations must reject invalid UTF-8 rather than replace its bytes.
@@ -85,7 +91,7 @@ public sealed class SourceWordPart : WordPart
             memory?.Grow(checked(32L + length));
             source = ShellSource.FromBytes(source.Bytes.ToArray());
         }
-        return new(Kind, source, _arithmetic, checked(_arithmeticOffset + start));
+        return new(Kind, source, _arithmetic, checked(_arithmeticOffset + start)) { DoubleQuote = DoubleQuote };
     }
 
     internal bool TryGetArithmetic(int start, out ArithmeticExpansion expansion)
@@ -138,6 +144,8 @@ public sealed class SourceWordPart : WordPart
 
     public override ShellValue GetUnexpandedValue() => Source.ToValue();
 }
+
+internal enum DoubleQuoteBoundary : byte { None, Start, Continuation }
 
 /// <summary>Quoted or unquoted substitution syntax shared by tokenization and execution.</summary>
 internal sealed class CommandSubstitutionWordPart : WordPart

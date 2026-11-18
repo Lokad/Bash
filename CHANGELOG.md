@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Honor double-quote boundaries when an empty aggregate shares a word with
+  other expansions. Preserve those boundaries in function display and export.
+
 - Preserve an empty argument when a positional parameter such as `"$1"` is
   double quoted and unset.
 
