@@ -59,6 +59,11 @@ does not follow aliases. Builtin outputs share selection and publication, with
 explicit getopts failure, printf count and descriptor policies. An allocation
 that does not publish its variable remains temporary and uses ordinary cleanup.
 
+`getopts` keeps its argument index and bundle offset in the variable owner.
+Explicit writes to `OPTIND` update the scan even when the visible value is
+unchanged. Function-local bindings restore the saved cursor, and child evaluations
+advance their own cursor. The scanner retains only indexes and an offset.
+
 `mapfile` and `readarray` validate the target before reading. They collect
 bounded batches from the current stdin descriptor. A positive count caps both
 the total records and the final batch. The target is published after that count

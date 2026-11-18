@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support bundled flags, required option arguments, and silent error handling in
+  `getopts`. Track `OPTIND` across calls and set or unset `OPTARG` for each result.
+
 - Support `read -a array` to replace an indexed array with all fields from
   one logical record.
 

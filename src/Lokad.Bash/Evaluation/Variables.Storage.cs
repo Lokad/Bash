@@ -73,6 +73,7 @@ public sealed partial class Variables
         if (TryGetBinding(name, out var previous))
             replacement.Attributes = previous.Attributes;
         StoreBinding(name, replacement);
+        ResetGetoptsPosition(name);
     }
 
     private void StoreBinding(BindingName name, VariableSlot slot)
@@ -94,6 +95,7 @@ public sealed partial class Variables
     private void ClearBinding(BindingName name)
     {
         using var memory = TrackBindingMemory(name);
+        ResetGetoptsPosition(name);
         if (_commandSource == null)
             _bindings.Remove(name);
         else
@@ -132,6 +134,7 @@ public sealed partial class Variables
         if (!TryGetBinding(name, out var slot) || slot is not TSlot)
             return false;
         StoreBinding(name, new AttributeSlot { Attributes = slot.Attributes });
+        ResetGetoptsPosition(name);
         return true;
     }
 

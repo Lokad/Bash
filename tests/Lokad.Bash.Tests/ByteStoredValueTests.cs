@@ -117,6 +117,8 @@ public sealed class ByteStoredValueTests
     [InlineData("set -- -é; getopts é opt; printf '%s:<%s>' \"$?\" \"$opt\"", "303A3CC33E")]
     [InlineData("getopts $'\\200' opt $'-\\200'; printf '%s:<%s>' \"$?\" \"$opt\"", "303A3C803E")]
     [InlineData("set -- $'-\\200'; getopts $'\\200' opt; printf '%s:<%s>' \"$?\" \"$opt\"", "303A3C803E")]
+    [InlineData("getopts a: opt $'-a\\377\\376'; printf '<%s:%s>' \"$opt\" \"$OPTARG\"", "3C613AFFFE3E")]
+    [InlineData("getopts :a opt $'-\\377a'; printf '<%s:%s>' \"$opt\" \"$OPTARG\"", "3C3F3AFF3E")]
     [InlineData("p=18446744073709551617; ((p)); printf '%s' \"$?\"; let p; printf '%s' \"$?\"; "
         + "printf '%s' \"$((p))\"; for ((i=p;i<2;i++)); do printf '%s' \"$i\"; done", "30303131")]
     [InlineData("x=$'\\376'; f(){ y=$x; x=$'\\375'; }; x=$'\\377' f; printf '<%s>' \"$x\" \"$y\"", "3CFE3E3CFF3E")]

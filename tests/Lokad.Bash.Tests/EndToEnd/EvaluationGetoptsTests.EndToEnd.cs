@@ -21,6 +21,82 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("set -- -abVALUE -c; getopts ab:c opt; printf '<%s:%s:%s>' \"$opt\" \"$OPTIND\" \"${OPTARG-unset}\"; getopts ab:c opt; printf '<%s:%s:%s>' \"$opt\" \"$OPTIND\" \"$OPTARG\"; getopts ab:c opt; printf '<%s:%s:%s>' \"$opt\" \"$OPTIND\" \"${OPTARG-unset}\"",
+        "<a:1:unset><b:2:VALUE><c:3:unset>")]
+    [InlineData("getopts a: opt -a ''; printf '<%s:%s:%s>' \"$opt\" \"$OPTIND\" \"${OPTARG-unset}\"",
+        "<a:3:>")]
+    [InlineData("getopts a: opt -a --; printf '<%s:%s:%s>' \"$opt\" \"$OPTIND\" \"$OPTARG\"",
+        "<a:3:-->")]
+    [InlineData("spec='ab opt -ab'; getopts $spec; printf '<%s:%s>' \"$opt\" \"$OPTIND\"",
+        "<a:1>")]
+    [InlineData("getopts -- ab opt -ab; printf '<%s:%s>' \"$opt\" \"$OPTIND\"",
+        "<a:1>")]
+    [InlineData("OPTARG=old; getopts a opt -- -a; printf '<%s:%s:%s:%s>' \"$?\" \"$opt\" \"$OPTIND\" \"${OPTARG-unset}\"; getopts a opt -- -a; printf '<%s:%s:%s>' \"$?\" \"$opt\" \"$OPTIND\"",
+        "<1:?:2:unset><0:a:3>")]
+    [InlineData("OPTARG=old; getopts a opt data -a; printf '<%s:%s:%s:%s>' \"$?\" \"$opt\" \"$OPTIND\" \"${OPTARG-unset}\"",
+        "<1:?:1:unset>")]
+    public async Task Getopts_ScansBundlesArgumentsAndTerminators(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("OPTIND=1", "<a:1>")]
+    [InlineData("printf -v OPTIND '%s' 1", "<a:1>")]
+    [InlineData("export OPTIND", "<b:2>")]
+    [InlineData("OPTIND=2", "<b:3>")]
+    [InlineData("OPTIND=1 :", "<a:1>")]
+    [InlineData("OPTIND=1 getopts abc opt", "<a:1>")]
+    [InlineData("f(){ local OPTIND=1; getopts cd inner -cd; }; f", "<b:2>")]
+    [InlineData("(getopts abc opt)", "<b:2>")]
+    [InlineData("captured=$(getopts abc opt)", "<b:2>")]
+    public async Task Getopts_ResumesOrResetsTheSavedBundle(string interveningCommand, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "set -- -ab -c; getopts abc opt; " + interveningCommand
+            + "; getopts abc opt; printf '<%s:%s>' \"$opt\" \"$OPTIND\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task Getopts_TemporarySeekKeepsTheBundleConsumedByTheCommand()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "set -- -ab -c -d; getopts abcd opt; OPTIND=2 getopts abcd opt; "
+            + "printf '<%s:%s>' \"$opt\" \"$OPTIND\"; getopts abcd opt; printf '<%s:%s>' \"$opt\" \"$OPTIND\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<b:3><d:4>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("", "a", "-x", "<0:?:2:unset>", "getopts: illegal option -- x\n")]
+    [InlineData("", ":a", "-x", "<0:?:2:x>", "")]
+    [InlineData("", "a:", "-a", "<0:?:2:unset>", "getopts: option requires an argument -- a\n")]
+    [InlineData("", ":a:", "-a", "<0:::2:a>", "")]
+    [InlineData("OPTERR=0; ", "a:", "-a", "<0:?:2:unset>", "")]
+    [InlineData("readonly OPTARG=old; ", "a", "data", "<1:?:1:unset>", "")]
+    public async Task Getopts_PublishesTheDocumentedErrorResult(
+        string setup, string options, string operand, string expected, string diagnostics)
+    {
+        var result = await EvaluationTestHelper.RunAsync("OPTARG=old; " + setup
+            + "getopts " + options + " opt " + operand
+            + "; printf '<%s:%s:%s:%s>' \"$?\" \"$opt\" \"$OPTIND\" \"${OPTARG-unset}\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Equal(diagnostics, result.StdErr);
+    }
+
     [Fact]
     public async Task Evaluation_GetoptsBuiltin_PromotesPrefixedOutputVariables()
     {
@@ -60,18 +136,16 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
     }
 
-    [Fact]
-    public async Task Evaluation_GetoptsBuiltin_MissingArgumentsReturnsFailure()
+    [Theory]
+    [InlineData("getopts")]
+    [InlineData("getopts a")]
+    public async Task Evaluation_GetoptsBuiltin_MissingArgumentsReportsUsage(string script)
     {
-        // This test verifies that getopts fails when required arguments are missing.
-        // The script "getopts" must emit no output and return exit code 1.
-        // If missing arguments are not validated, the exit code would be 0.
-        var script = @"getopts";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("getopts: usage: getopts optstring name [arg ...]\n", result.StdErr);
+        Assert.Equal(2, result.ExitCode);
     }
 
     [Fact]

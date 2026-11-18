@@ -143,6 +143,9 @@ public sealed partial class Evaluation : IFileTester
     {
         _vars.TrySetScalar("PWD", ShellValue.FromText(_state.CurrentDirectory.Path));
         _vars.SetExported("PWD", true);
+        var one = ShellValue.FromText("1");
+        _vars.TrySetScalar("OPTIND", one);
+        _vars.TrySetScalar("OPTERR", one);
     }
 
     /// <summary>Forks bindings and shell state; descriptors stay borrowed and live memory shares the caller's allowance.</summary>
@@ -1024,8 +1027,7 @@ public sealed partial class Evaluation : IFileTester
                     operands.Add(ShellValue.FromText(command.CommandName));
                 for (var index = 1; (declaration == null || kind is not (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)) && index < command.SimpleCommand.Words.Count; index++)
                 {
-                    if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
-                        || kind == BuiltinKind.Getopts && index <= 2)
+                    if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)
                         operands.Add(await ExpandWordValueAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false));
                     else
                     {
@@ -1326,7 +1328,8 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Return => await AwaitWordExpansionAsync(
                         EvaluateBuiltinReturnAsync(byteOperands, builtinScope, false)).ConfigureAwait(false),
                     BuiltinKind.Let => await EvaluateBuiltinLetAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
-                    BuiltinKind.Getopts => await EvaluateBuiltinGetoptsAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
+                    BuiltinKind.Getopts => await AwaitWordExpansionAsync(EvaluateBuiltinGetoptsAsync(
+                        byteOperands, builtinScope with { Variables = commandVars }, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
                     BuiltinKind.Shift => await AwaitWordExpansionAsync(EvaluateBuiltinShiftAsync(

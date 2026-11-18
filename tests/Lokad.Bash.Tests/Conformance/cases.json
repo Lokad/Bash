@@ -4728,8 +4728,8 @@
     },
     {
       "id": "positional-getopts-after-shift",
-      "classification": "deviation",
-      "reason": "getopts currently supports separate flag arguments; required option arguments are unsupported.",
+      "classification": "supported",
+      "reason": "",
       "locale": "C",
       "script": "set -- drop -a -b value tail; shift; while getopts ab: option; do printf '<%s:%s>' \"$option\" \"$OPTARG\"; done; shift \"$((OPTIND-1))\"; printf ':<%s>' \"$*\"",
       "scriptSha256": "2e6f7e03994a86289aa43d64518d75258c477f1d89d062342b564ea0b20de065",
@@ -4738,13 +4738,7 @@
       "exitCode": 0,
       "stdoutHex": "3c613a3e3c623a76616c75653e3a3c7461696c3e",
       "stderrHex": "",
-      "fileEffects": [],
-      "managedExpectation": {
-        "exitCode": 0,
-        "stdoutHex": "3c613a3e3c623a3e3a3c76616c7565207461696c3e",
-        "stderrHex": "",
-        "fileEffects": []
-      }
+      "fileEffects": []
     },
     {
       "id": "positional-getopts-flags-after-shift",

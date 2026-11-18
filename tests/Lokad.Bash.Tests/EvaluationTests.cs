@@ -1111,27 +1111,6 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_GetoptsBuiltin_DoesNotDecodeStoredOptindOnEveryCall()
-    {
-        // Readonly keeps the large decimal in place instead of replacing it with a small index.
-        var script = Parser.Parse("printf -v OPTIND '%0262144d' 1; readonly OPTIND; "
-            + string.Concat(Enumerable.Repeat("getopts a opt -a; ", 32)));
-        var state = new Eval(script);
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var completion = state.GetNextStep();
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.True(completion.IsCompletedSuccessfully);
-        Assert.Null(await completion);
-        Assert.Equal(1, state.LastExitCode);
-        Assert.Equal("a", Text(GetVariable(state, "opt")));
-        Assert.Equal(256 * 1024, state.Variables["OPTIND"].Bytes.Length);
-        Assert.True(allocated < 4 * 1024 * 1024,
-            $"Repeated getopts calls allocated {allocated:N0} bytes for an unchanged OPTIND.");
-    }
-
-    [Fact]
     public async Task Evaluation_GetoptsBuiltin_NoOptionsReturnsFailure()
     {
         var script = Parser.Parse(Utf8("getopts ab opt"));
@@ -1144,13 +1123,17 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_GetoptsBuiltin_MissingArgumentsReturnsFailure()
+    public async Task Evaluation_GetoptsBuiltin_MissingArgumentsReportsUsage()
     {
         var script = Parser.Parse(Utf8("getopts"));
         var state = new Eval(script);
 
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("getopts: usage: getopts optstring name [arg ...]\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(2, state.LastExitCode);
     }
 
     [Fact]

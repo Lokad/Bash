@@ -208,8 +208,8 @@ public sealed partial class Evaluation
             return await RunExitTrapAsync(scope, EvaluationResult.Exit(1)).ConfigureAwait(false);
         if (announced.IsError)
             await ReportBuiltinWriteFailureAsync(ShellValue.FromText("cd"), announced).ConfigureAwait(false);
-        if (oldResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.DirectoryReadonly
-            || pwdResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.DirectoryReadonly)
+        if (oldResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly
+            || pwdResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly)
             return EvaluationResult.FromExitCode(1);
         _state.CompleteDirectoryChange(kind, previous);
         if (kind != DirectoryChangeKind.ChangeDirectory)
@@ -220,7 +220,7 @@ public sealed partial class Evaluation
         // Bash's readonly assignment exit precedes builtin/redirection restoration.
         // It follows the enabled option even when the command's status is tested.
         bool ExitsOnReadonly(BuiltinAssignmentResult assigned) =>
-            assigned == BuiltinAssignmentResult.DirectoryReadonly && _state.ErrexitEnabled;
+            assigned == BuiltinAssignmentResult.Readonly && _state.ErrexitEnabled;
     }
 
     private static string DirectoryCommandName(DirectoryChangeKind kind) => kind switch

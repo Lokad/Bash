@@ -405,7 +405,7 @@ public sealed partial class Evaluation
     }
 
     internal enum BuiltinAssignmentKind { Value, Read, Getopts, PrintfCount, Descriptor, Directory }
-    internal enum BuiltinAssignmentResult { Assigned, NoWrite, Failed, DirectoryReadonly }
+    internal enum BuiltinAssignmentResult { Assigned, NoWrite, Failed, Readonly }
 
     /// <summary>Shares selected output writes without replaying selectors; null publishes an unassigned value.</summary>
     internal async Task<BuiltinAssignmentResult> AssignBuiltinAsync(
@@ -468,10 +468,9 @@ public sealed partial class Evaluation
             return BuiltinAssignmentResult.Failed;
         if (destination.IsReadonly(target.Name))
         {
-            if (kind != BuiltinAssignmentKind.Getopts)
-                await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
-            return kind == BuiltinAssignmentKind.Directory
-                ? BuiltinAssignmentResult.DirectoryReadonly : BuiltinAssignmentResult.Failed;
+            await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+            return kind is BuiltinAssignmentKind.Directory or BuiltinAssignmentKind.Getopts
+                ? BuiltinAssignmentResult.Readonly : BuiltinAssignmentResult.Failed;
         }
         var failure = value is { } assignedValue
             ? destination.GetNamerefAssignmentFailure(reference.Name, target.Name, assignedValue, Memory)

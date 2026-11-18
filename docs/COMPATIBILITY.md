@@ -286,10 +286,15 @@ Both function-definition forms require a compound command body. In `function nam
 the optional empty `()` header is distinguished from a subshell body beginning with
 `(`. Function-body redirections apply when the function is invoked.
 
-`getopts` currently supports separate flag arguments and advances `OPTIND` over
-the active positional window or explicit arguments. Bundled flags, required option
-arguments, `OPTARG` lifecycle and GNU diagnostic/silent modes remain unsupported.
-The correctness corpus records the required-argument departure explicitly.
+`getopts` scans explicit arguments or the current positional parameters one option
+byte at a time, including bundled flags. A colon after an option byte requires an
+argument. The attached remainder or the next argument is assigned to `OPTARG`,
+including an empty argument. A leading colon selects silent errors. `OPTERR=0`
+suppresses diagnostics while retaining the normal error results.
+An explicit `OPTIND=1` restarts the scan. A visible `OPTIND` can stay unchanged
+between bytes of a bundle. The scanner stops at `--` or the first non-option and
+reports status 1. `OPTIND` uses the existing variable types. Bash's integer
+declaration attribute is outside the supported declaration surface.
 
 The public script runner, `source`, `eval` and reached EXIT actions execute complete command units as
 they are parsed. Earlier units retain their effects before later syntax failure;

@@ -3,12 +3,44 @@ using System;
 using System.Linq;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Syntax;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed partial class ComplexityRegressionTests
 {
+    [Fact]
+    public async Task GetoptsDoesNotDecodeStoredOptindOnEveryCall()
+    {
+        const int calls = 32;
+        // A readonly binding leaves this large decimal visible while the scan advances.
+        var script = Parser.Parse("printf -v OPTIND '%0262144d' 1; readonly OPTIND; "
+            + string.Concat(Enumerable.Repeat("getopts a opt -a; ", calls)));
+        var state = new Eval(script);
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        for (var index = 0; index < calls; index++)
+            host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        var before = GC.GetTotalAllocatedBytes(precise: true);
+        await new Engine().RunAsync(state, host);
+        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal("?", state.Variables["opt"].ToUtf8String());
+        Assert.Equal(256 * 1024, state.Variables["OPTIND"].Bytes.Length);
+        Assert.Equal(calls, host.Appends.Count);
+        Assert.All(host.Appends, diagnostic =>
+        {
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
+            Assert.Equal("OPTIND: readonly variable\n", Utf8Text.Decode(diagnostic.Content));
+        });
+        Assert.True(allocated < 4 * 1024 * 1024,
+            $"Repeated getopts calls allocated {allocated:N0} bytes for an unchanged OPTIND.");
+    }
+
     [Fact]
     public void NamedLookupAfterRepeatedClonesDoesNotAllocate()
     {

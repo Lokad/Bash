@@ -173,6 +173,7 @@ public sealed partial class Variables
             clone.StoreBinding(entry.Key, entry.Value.Clone());
         clone.ReplacePositionalParameters(PositionalParameters);
         clone._argumentZero = _argumentZero;
+        clone._getoptsCursor = _getoptsCursor;
 
         return clone;
     }
@@ -326,7 +327,11 @@ public sealed partial class Variables
                 var retained = _retainedNames.Contains(name);
                 if (retained)
                     _retained.SetAttribute(name, BindingAttributes.Temporary, _saved.IsTemporaryBinding(name));
+                var cursor = _owner._getoptsCursor;
                 _owner.CopyBindingFrom(retained ? _retained : _saved, name);
+                // A temporary OPTIND changes the visible index. The current bundle belongs to the scan.
+                if (name.CachedText == "OPTIND")
+                    _owner._getoptsCursor = cursor with { ArgumentIndex = 0 };
             }
         }
     }
@@ -813,6 +818,7 @@ public sealed partial class Variables
         {
             using var memory = TrackBindingMemory(resolved);
             scalar.Value = value;
+            ResetGetoptsPosition(resolved);
         }
         else
             ReplaceValue(resolved, new ScalarSlot(value));
@@ -1047,6 +1053,8 @@ public sealed partial class Variables
         var array = GetOrCreateIndexedArray(resolved);
         using var memory = TrackBindingMemory(resolved);
         array.Set(index, value);
+        if (index.Value == 0)
+            ResetGetoptsPosition(resolved);
         return true;
     }
 
@@ -1082,6 +1090,8 @@ public sealed partial class Variables
 
         using var memory = TrackBindingMemory(resolved);
         associative.Set(key, value);
+        if (resolved.CachedText == "OPTIND" && key.Value.Bytes.Span.SequenceEqual("0"u8))
+            ResetGetoptsPosition(resolved);
         return true;
     }
 
@@ -1189,6 +1199,8 @@ public sealed partial class Variables
             StoreBinding(name, slot.Clone());
         else
             ClearBinding(name);
+        if (name.CachedText == "OPTIND")
+            _getoptsCursor = source._getoptsCursor;
     }
 
     /// <summary>

@@ -34,6 +34,7 @@ public sealed partial class Variables
             _commandSource = new CommandSource(caller, memory, cancellationToken),
             _positional = caller._positional,
             _argumentZero = caller._argumentZero,
+            _getoptsCursor = caller._getoptsCursor,
             CachedFieldSeparators = caller.CachedFieldSeparators
         };
     }
