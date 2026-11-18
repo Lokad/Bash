@@ -11,6 +11,7 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Whether a kind-only local declaration discards an existing scalar value.</summary>
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
+internal enum ForAssignmentFailure { None, InvalidBinding, InvalidTarget, Readonly }
 internal enum BindingResolution { Referent, LastNameref }
 internal readonly record struct VariableBinding(VariableReference Reference, Variables Owner)
 {
@@ -1193,22 +1194,52 @@ public sealed partial class Variables
             return false;
 
         VariableReference? reference = null;
-        BindingName? literalName = null;
         if (!target.IsEmpty)
         {
             if (!VariableReference.TryParse(ShellSource.FromBytes(target.Bytes), memory, out var parsed))
                 return false;
             reference = parsed;
-            if (parsed.Kind != VariableReferenceKind.Name)
-            {
-                // Local declarations can create a binding whose literal name includes the selector.
-                memory?.Charge(checked(4L * target.Bytes.Length));
-                literalName = BindingName.FromValue(target);
-            }
+        }
+
+        SetNamerefTarget(name, target, reference, memory);
+        return true;
+    }
+
+    internal ForAssignmentFailure AssignForIteration(BindingName name, ShellValue item, EvaluationMemory memory)
+    {
+        if (!name.IsIdentifier)
+            return ForAssignmentFailure.InvalidBinding;
+
+        if (NamerefTargets.ContainsKey(name))
+        {
+            // A loop selects a new referent. Validate it before checking the reference's readonly attribute.
+            if (item.IsEmpty || !VariableReference.TryParse(ShellSource.FromBytes(item.Bytes), memory, out var target))
+                return ForAssignmentFailure.InvalidTarget;
+            if (IsReadonlyBinding(name))
+                return ForAssignmentFailure.Readonly;
+            SetNamerefTarget(name, item, target, memory);
+        }
+        else
+        {
+            if (IsReadonlyBinding(name))
+                return ForAssignmentFailure.Readonly;
+            SetResolvedValuePreservingArray(name, item);
+        }
+
+        return ForAssignmentFailure.None;
+    }
+
+    private void SetNamerefTarget(BindingName name, ShellValue target, VariableReference? reference, EvaluationMemory? memory)
+    {
+        BindingName? literalName = null;
+        if (reference is { Kind: not VariableReferenceKind.Name })
+        {
+            // Local declarations can create a binding whose literal name includes the selector.
+            memory?.Charge(checked(4L * target.Bytes.Length));
+            literalName = BindingName.FromValue(target);
         }
 
         ReplaceValue(name, new NamerefSlot(new NamerefTarget(target, reference, literalName)));
-        return true;
     }
 
     internal bool TryRemoveNamerefAttribute(BindingName name) =>

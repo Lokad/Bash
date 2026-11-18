@@ -56,6 +56,91 @@ public sealed class EvaluationForTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("readonly x=old", "$x", "<old>:1")]
+    [InlineData("declare -ar x=(old keep)", "${x[1]}", "<keep>:1")]
+    [InlineData("declare -nr x=old; old=original", "$x", "<original>:1")]
+    public async Task ReadonlyLoopVariableSkipsBodyAndReportsFailure(string setup, string value, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            setup + "; for x in new later; do printf body; done; printf '<%s>:%s' \"" + value + "\" \"$?\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Equal("x: readonly variable\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("''", "`': not a valid identifier\n")]
+    [InlineData("'arr[1'", "`arr[1': not a valid identifier\n")]
+    [InlineData("$'bad\\377name'", "`bad\u00ffname': not a valid identifier\n")]
+    public async Task InvalidNamerefLoopItemPreservesBindingAndDiagnosticBytes(string item, string expectedError)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "old=original; declare -n ref=old; for ref in " + item +
+            "; do printf body; done; printf '%s:<%s>' \"$?\" \"$ref\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:<original>", host.StandardOutput.TextContent);
+        Assert.Equal(expectedError, System.Text.Encoding.Latin1.GetString(host.StandardError.Content.Span));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task InvalidNamerefLoopItemUsesLoopRedirectionAfterSuccessfulIteration()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "old=old; next=next; declare -n ref=old; " +
+            "for ref in next bad-name old; do printf '<%s>' \"$ref\"; ref=changed; done 2>err; " +
+            "printf '<%s>:<%s>:<%s>:<%s>' \"$?\" \"$ref\" \"$old\" \"$next\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<next><1>:<changed>:<old>:<changed>", host.StandardOutput.TextContent);
+        Assert.Equal("`bad-name': not a valid identifier\n", host.ReadFile("/err"));
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("readonly x=old", "x: readonly variable\n", 1, "")]
+    [InlineData("declare -nr x=old", "`bad-name': not a valid identifier\n", 0, "fallback:1")]
+    public async Task TestedLoopAssignmentFailureDistinguishesReadonlyFromInvalidTarget(
+        string setup, string expectedError, int exitCode, string expectedOutput)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "set -e; " + setup + "; for x in bad-name; do printf body; done || printf 'fallback:%s' \"$?\"");
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+    }
+
+    [Fact]
+    public async Task InvalidNamerefLoopItemDoesNotTriggerErrexit()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "set -e; declare -n ref=old; for ref in bad-name; do printf body; done; printf 'after:%s' \"$?\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("after:1", result.StdOut);
+        Assert.Equal("`bad-name': not a valid identifier\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("declare -a x=([2]=keep)", "${x[2]}")]
+    [InlineData("declare -A x=([key]=keep)", "${x[key]}")]
+    public async Task LoopAssignmentUpdatesElementZeroAndKeepsOtherEntries(string setup, string otherElement)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            setup + "; for x in new; do printf '<%s>' \"$x\"; done; printf '<%s>:<%s>' \"$x\" \"" + otherElement + "\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<new><new>:<keep>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task Evaluation_ForCommand_ExecutesBodyForEachItem()
     {

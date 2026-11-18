@@ -203,6 +203,11 @@ conditions, the condition gate precedes body suppression: a closed gate retains
 the previous body result, while an admitted but skipped body retains the tested
 condition status. Outward flow carries that status and its tested origin. Local
 body continue still advances for-in iteration or performs arithmetic-for updates.
+For-in assignments preserve array kind and update element zero. A nameref
+selects a new target for each item. An invalid target stops the loop with a
+diagnostic and failure status exempt from errexit at the loop boundary. A
+readonly loop binding exits its shell when errexit is enabled, including in a
+tested position.
 
 Completed foreground commands publish `PIPESTATUS` after their operands expand.
 Pipelines publish the settled stage statuses before applying negation; compound

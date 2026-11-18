@@ -3434,9 +3434,6 @@ public sealed partial class Evaluation : IFileTester
     internal FileDescriptor GetStdErrDescriptor() =>
         _state.GetStdErrOverride() ?? _stdErr;
 
-    private bool TrySetVariable(BindingName name, ShellValue value, Variables vars) =>
-        vars.TrySetScalar(name, value);
-
     /// <summary>
     /// Removes a trailing array subscript from a variable name when present.
     /// </summary>

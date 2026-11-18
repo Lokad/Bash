@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -28,17 +29,30 @@ public sealed partial class Evaluation
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated);
         }
 
+        BindingName name = forCommand.Name;
         var lastBodyResult = EvaluationResult.FromExitCode(0);
         foreach (var item in items)
         {
             CheckCancellation();
-            // A nameref loop variable selects a new referent for each item, rather than writing through it.
-            var assigned = scope.Variables.TryGetNameref(forCommand.Name, out _)
-                ? scope.Variables.TrySetNameref(forCommand.Name, item, Memory)
-                : TrySetVariable(forCommand.Name, item, scope.Variables);
-            if (!assigned)
+            var failure = scope.Variables.AssignForIteration(name, item, Memory);
+            if (failure != ForAssignmentFailure.None)
             {
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
+                if (failure == ForAssignmentFailure.InvalidTarget)
+                {
+                    await ReportExpansionDiagnosticAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(item),
+                        ShellValue.FromText("not a valid identifier")).ConfigureAwait(false);
+                    // This assignment failure ends the loop without triggering errexit at the loop boundary.
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(1).WithTestedStatus(true), negated)
+                        .ConfigureAwait(false);
+                }
+                if (failure == ForAssignmentFailure.Readonly)
+                {
+                    await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                    // A readonly loop assignment exits with errexit enabled, even in a tested position.
+                    if (_state.ErrexitEnabled)
+                        return EvaluationResult.Exit(1);
+                }
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
             }
 
             var bodyResult = await EvaluateCommandAsync(forCommand.Body, scope with { Context = loopContext }, negated: false)

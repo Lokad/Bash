@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Diagnose readonly loop variables and invalid nameref targets in `for` loops.
+  Preserve array elements when assigning the next item to element zero.
+
 - Report `let: expression expected` when no expression fields reach `let`.
 
 - Accept signed decimal counts and a leading `--` in `shift`. Preserve
