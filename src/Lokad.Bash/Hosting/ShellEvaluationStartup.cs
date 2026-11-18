@@ -11,6 +11,7 @@ namespace Lokad.Bash;
 public static class ShellEvaluationStartup
 {
     /// <summary>Starts on the same host with captured bindings, borrowed handles and environment.</summary>
+    /// <remarks>The caller owns preparation. The engine installs its runtime budget when evaluation starts.</remarks>
     public static ShellEvaluation CreateInherited(
         CommandInvocation command,
         ParsedScript script,

@@ -2917,10 +2917,12 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    private static IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
+    private IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
         Variables variables, EvaluationContext context)
     {
-        return global::Lokad.Bash.Evaluation.Variables.BuildExportedEnvironment(ExportBindings());
+        using var selectionMemory = new MemoryCapacity(Memory.Budget, 0);
+        return global::Lokad.Bash.Evaluation.Variables.BuildExportedEnvironment(
+            ExportBindings(), Memory, selectionMemory, _cancellationToken);
 
         IEnumerable<VariableBinding> ExportBindings()
         {
@@ -2931,7 +2933,16 @@ public sealed partial class Evaluation : IFileTester
 
             var functionPrefixes = new HashSet<BindingName>();
             for (var function = context.FunctionContext; function != null; function = function.Enclosing)
-                functionPrefixes.UnionWith(function.PrefixNames);
+            {
+                foreach (var name in function.PrefixNames)
+                {
+                    CheckCancellation();
+                    if (functionPrefixes.Contains(name))
+                        continue;
+                    selectionMemory.Grow(global::Lokad.Bash.Evaluation.Variables.ExportSelectionNameBytes);
+                    functionPrefixes.Add(name);
+                }
+            }
             var visibleOwners = new Dictionary<BindingName, Variables>();
             var prefix = context.GlobalPrefixes;
             for (var function = context.FunctionContext; function != null; function = function.Enclosing)
@@ -2960,14 +2971,22 @@ public sealed partial class Evaluation : IFileTester
             {
                 foreach (var binding in saved.ExportedBindings)
                 {
+                    CheckCancellation();
                     // Removing a local export also hides its saved function-call prefix, but not outer exports.
                     if (callPrefixes?.Contains(binding.Name) != true
                         || visibleOwners.GetValueOrDefault(binding.Name, variables).IsExported(binding.Name))
                         yield return binding;
                 }
                 foreach (var name in functionPrefixes)
+                {
+                    CheckCancellation();
                     if (names.Contains(name))
+                    {
+                        if (!visibleOwners.ContainsKey(name))
+                            selectionMemory.Grow(192); // Dictionary slots also hold a reference to the owner.
                         visibleOwners[name] = saved;
+                    }
+                }
             }
         }
     }

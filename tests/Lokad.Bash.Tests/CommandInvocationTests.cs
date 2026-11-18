@@ -1,6 +1,11 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using ShellEvaluation = Lokad.Bash.Evaluation.Evaluation;
 using static Lokad.Bash.Tests.EndToEnd.EvaluationTestHelper;
@@ -323,6 +328,78 @@ public sealed class CommandInvocationTests
         Assert.Equal(0, evaluation.LastExitCode);
         Assert.Equal(new[] { argumentZero, arguments[0], arguments[1], ShellValue.FromText("2") },
             Assert.Single(host.CommandInvocations).Arguments);
+    }
+
+    [Theory]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, false)]
+    public async Task RuntimeEnvironmentAdmitsTheSelectedExportSnapshot(bool query, bool exported, bool limited)
+    {
+        const int BindingCount = 4096;
+        var state = new ShellEvaluation(Parser.Parse(query ? "type -t inspect" : "inspect"));
+        var variables = Assert.IsType<Variables>(typeof(ShellEvaluation)
+            .GetField("_vars", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(state));
+        var value = ShellValue.FromBytes(new byte[] { 0xff });
+        for (var index = 0; index < BindingCount; index++)
+        {
+            BindingName name = $"synthetic_{index:D4}";
+            Assert.True(variables.TrySetScalar(name, value));
+            if (exported)
+                variables.SetExported(name, true);
+        }
+
+        var budget = new MemoryGovernor(8 * 1024 * 1024);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
+        // Admit the namespace itself and leave space for command overhead.
+        var namespaceBytes = variables.EstimatedMemoryBytes;
+        using var hold = budget.Reserve(limited ? budget.LimitBytes - namespaceBytes - 96 * 1024 : 0);
+        var step = await state.GetNextStep();
+        var workspace = state.Memory.Workspace.Bytes - namespaceBytes;
+        IReadOnlyList<EnvironmentVariable> environment = [];
+        var diagnostic = step as WriteOperation;
+        if (diagnostic != null)
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+        else if (step is RunCommand run)
+        {
+            environment = run.Command.Environment;
+            run.SetResult(new CommandExecutionResult.Completed(0));
+        }
+        else if (step is ResolveCommandsOperation lookup)
+        {
+            environment = lookup.Environment;
+            lookup.SetResult([new CommandLookupResult.Found("/inspect")]);
+            var output = Assert.IsType<WriteOperation>(await state.GetNextStep());
+            Assert.Equal("file\n", Encoding.UTF8.GetString(output.Content.Span));
+            output.SetResult(DescriptorWriteResult.Open);
+        }
+        else
+            Assert.Fail($"Unexpected operation {step}.");
+        Assert.Null(await state.GetNextStep());
+
+        if (exported && limited)
+        {
+            Assert.True(environment.Count == 0, $"Published {environment.Count} exports with {workspace} B of command workspace.");
+            Assert.Equal(1, state.LastExitCode);
+            Assert.NotNull(diagnostic);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Contains("shared memory budget exhausted", Encoding.UTF8.GetString(diagnostic.Content.Span), StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(diagnostic);
+            Assert.Equal(exported ? BindingCount + 1 : 1, environment.Count);
+            if (exported)
+            {
+                var snapshot = Assert.IsType<List<EnvironmentVariable>>(environment);
+                var payloadBytes = (long)snapshot.Capacity * Unsafe.SizeOf<EnvironmentVariable>();
+                Assert.True(workspace >= payloadBytes, $"Snapshot holds {payloadBytes} B with {workspace} B of command workspace.");
+                Assert.True(value.Bytes.Equals(Assert.Single(environment, entry => entry.Name == "synthetic_0000").Value.Bytes));
+            }
+            Assert.Equal(0, state.LastExitCode);
+        }
     }
 
     [Fact]

@@ -34,6 +34,8 @@ public sealed partial class Variables
     private const int ValueCapacityMultiplier = 2;
     private const int BindingOverheadBytes = 128;
     private const int BindingNameSetEntryBytes = 40;
+    // Four backing positions per selected name cover hash-table growth and replacement overlap.
+    internal const int ExportSelectionNameBytes = 4 * BindingNameSetEntryBytes;
     private const int PositionalEntryBytes = 32;
 
     /// <summary>Retains bytes and parsed selectors; a null reference denotes an unset nameref.</summary>
@@ -1585,16 +1587,21 @@ public sealed partial class Variables
     /// <summary>
     /// Builds the exported environment list.
     /// </summary>
-    public IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment() => BuildExportedEnvironment(ExportedBindings);
+    public IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment() =>
+        BuildExportedEnvironment(ExportedBindings, memory: null, selectionMemory: null, CancellationToken.None);
 
     /// <summary>Selects the first assigned export of each name, from innermost to outermost scope.</summary>
     internal static IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
-        IEnumerable<VariableBinding> bindings)
+        IEnumerable<VariableBinding> bindings, EvaluationMemory? memory, MemoryCapacity? selectionMemory,
+        CancellationToken cancellationToken)
     {
+        const long EnvironmentEntryBytes = 40;
+        const long ArrayHeaderBytes = 32;
         var results = new List<EnvironmentVariable>();
         var selected = new HashSet<BindingName>();
         foreach (var binding in bindings)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = binding.Name;
             var scope = binding.Owner;
             if (selected.Contains(name) || !scope.TryGetBinding(name, out var slot)) continue;
@@ -1609,16 +1616,31 @@ public sealed partial class Variables
                     break;
                 case IndexedSlot or AssociativeSlot:
                     // Assigned arrays shadow outer exports, but cannot themselves enter the environment.
-                    if (IsAssigned(slot)) selected.Add(name);
+                    if (IsAssigned(slot)) Select(name);
                     continue;
                 default:
                     continue;
             }
-            selected.Add(name);
+            Select(name);
+            if (memory != null && results.Count == results.Capacity)
+            {
+                var previous = results.Capacity;
+                var capacity = previous == 0 ? 4 : checked(2 * previous);
+                memory.Charge(ArrayHeaderBytes + EnvironmentEntryBytes * capacity);
+                results.Capacity = capacity;
+                if (previous != 0)
+                    memory.Workspace.Resize(memory.Workspace.Bytes - (ArrayHeaderBytes + EnvironmentEntryBytes * previous));
+            }
             results.Add(new EnvironmentVariable(name, value));
         }
 
         return results;
+
+        void Select(BindingName name)
+        {
+            selectionMemory?.Grow(ExportSelectionNameBytes);
+            selected.Add(name);
+        }
     }
 
     /// <summary>

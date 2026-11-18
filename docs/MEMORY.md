@@ -205,6 +205,11 @@ refused candidates refund their own storage, and refusal does not retry a winner
 Replacement, unset and settled temporary namespaces retire their references.
 Function calls, queries and host command payloads retain their selected bindings
 through all consumers and descriptor cleanup; only the final owner refunds a cache.
+Runtime environment snapshots admit selected-name scratch and result backing
+before growth. Scratch retires before host dispatch, and the result stays
+admitted through completion while borrowing the original name and value bytes.
+Preparing a hosted child with `CreateInherited` builds a caller-owned namespace
+and positional frame. The engine installs the evaluation budget when it runs.
 Retained root namespaces keep the caller-owned evaluation budget alive as before.
 Hosts must admit independent copies of exported bytes retained after command completion.
 
