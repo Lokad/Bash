@@ -79,6 +79,9 @@ internal sealed class ExpandedWordBuilder
     /// <summary>Whether substitutions contributed data, even if their output was empty.</summary>
     internal bool HasExpansion { get; private set; }
 
+    /// <summary>Counts quoted aggregate expansions that produced no fields.</summary>
+    internal int EmptyQuotedAggregateCount { get; private set; }
+
     /// <summary>Retains literal-source provenance before field splitting.</summary>
     public void AppendSource(ShellSource source, bool globQuoted) =>
         GetPart(globQuoted ? PartOrigin.Protected : PartOrigin.Source, globQuoted).AppendValue(source.ToValue());
@@ -155,6 +158,8 @@ internal sealed class ExpandedWordBuilder
                 AppendExpansion(value, allowWordSplitting, globQuoted);
             }
         }
+        if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted)
+            EmptyQuotedAggregateCount++;
     }
 
     /// <summary>Splices operand fields into the enclosing word without flattening their quote metadata.</summary>

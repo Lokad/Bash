@@ -7,6 +7,12 @@ public sealed class SpecialParameterTests
     // Git Bash 5.2.37 script files in an empty environment; only location prefixes are removed.
     [Theory]
     [InlineData("set -- a b c d e f g h i j; printf '<%s>\\n' \"$1\" \"${1}\" \"$10\" \"${10}\" \"${01}\" \"${#1}\" \"${#10}\"\n", "<a>\n<a>\n<a0>\n<j>\n<a>\n<1>\n<1>\n", "", 0)]
+    [InlineData("set --; [ \"$1\" = '' ] && test \"$1\" = ''", "", "", 0)]
+    [InlineData("set --; f(){ printf '<%s:%s>' \"$#\" \"${1-absent}\"; }; f \"$1\"; f $1; f \"$@\"", "<1:><0:absent><0:absent>", "", 0)]
+    [InlineData("set --; f(){ printf '<%s>' \"$#\"; }; f \"$@$1\"; f \"$1${@}\"; f \"$@\"\"$1\"", "<0><0><1>", "", 0)]
+    [InlineData("set -- first; f(){ printf '<%s:%s>' \"$#\" \"${1-absent}\"; }; f \"$9\"; shift; f \"$10\"", "<1:><1:0>", "", 0)]
+    [InlineData("set --; values=(\"$1\"); printf '<%s:%s>' \"${#values[@]}\" \"${values[0]+set}\"", "<1:set>", "", 0)]
+    [InlineData("set --; \"$1\" true", "", ": command not found\n", 127)]
     [InlineData("set --; printf '<%s>\\n' \"${#}\" \"${##}\" \"${#@}\" \"${#*}\" \"${#1}\" \"${1:-fallback}\"\n", "<0>\n<1>\n<0>\n<0>\n<0>\n<fallback>\n", "", 0)]
     [InlineData("false; printf '<%s>\\n' \"${?}\" \"$?\" \"${#?}\"\n", "<1>\n<1>\n<1>\n", "", 0)]
     [InlineData("set -- keep; printf '<%s>\\n' \"${1:-$(printf bad >&2)}\" \"${1:+yes}\" \"${2:-fallback}\"\n", "<keep>\n<yes>\n<fallback>\n", "", 0)]

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve an empty argument when a positional parameter such as `"$1"` is
+  double quoted and unset.
+
 - Reuse prepared literal command words when their fields need no pathname
   expansion.
 
