@@ -16,6 +16,11 @@ The runtime supports deterministic, non-interactive shell workflows:
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT
   handlers. Cancellation and external signals do not deliver traps.
 
+`mapfile` and `readarray` split standard input on LF by default. `-d delim`
+uses the first byte of `delim`, with an empty operand selecting NUL. `-t`
+removes a record's final delimiter when present. Array values end at the first
+NUL byte, including when NUL is the delimiter.
+
 Leading `~`, `~+` and `~-` use HOME, PWD and OLDPWD. The prefix must be unquoted.
 An empty quote or escape inside it makes it ineligible. Quoting after a delimiting
 slash leaves the prefix eligible. Expanded bytes never become new tilde syntax. Missing HOME

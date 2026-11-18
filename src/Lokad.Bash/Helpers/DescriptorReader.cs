@@ -6,7 +6,7 @@ using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Helpers;
 
-/// <summary>Shared copying and LF framing over bounded descriptor borrows.</summary>
+/// <summary>Shared copying and record framing over bounded descriptor borrows.</summary>
 public static class DescriptorReader
 {
     public const int BufferSize = 64 * 1024;
@@ -49,17 +49,27 @@ public static class DescriptorReader
     public static ValueTask<ReadResult> ReadLinesAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         int limit, IMemoryBudget? destinationBudget, CancellationToken cancellationToken)
-        => ReadLinesCoreAsync(source, read, limit, destinationBudget, reusableLine: null, cancellationToken);
+        => ReadRecordsCoreAsync(source, read, (byte)'\n', limit, destinationBudget, reusableLine: null,
+            static batch => batch.AsLines(), cancellationToken);
 
     /// <summary>Copies one LF record into caller-owned storage, valid until the next read.</summary>
     public static ValueTask<ReadResult> ReadReusableLineAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         ByteMemoryBuilder output, CancellationToken cancellationToken) =>
-        ReadLinesCoreAsync(source, read, 1, destinationBudget: null, output, cancellationToken);
+        ReadRecordsCoreAsync(source, read, (byte)'\n', 1, destinationBudget: null, output,
+            static batch => batch.AsLines(), cancellationToken);
 
-    private static async ValueTask<ReadResult> ReadLinesCoreAsync<T>(T source,
+    /// <summary>Retains records and offsets in the supplied destination budget.</summary>
+    internal static ValueTask<DescriptorRecordBatch> ReadRecordBatchAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
-        int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine, CancellationToken cancellationToken)
+        byte delimiter, int limit, IMemoryBudget destinationBudget, CancellationToken cancellationToken) =>
+        ReadRecordsCoreAsync(source, read, delimiter, limit, destinationBudget, reusableLine: null,
+            static batch => batch, cancellationToken);
+
+    private static async ValueTask<TBatch> ReadRecordsCoreAsync<T, TBatch>(T source,
+        Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
+        byte delimiter, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine,
+        Func<DescriptorRecordBatch, TBatch> project, CancellationToken cancellationToken)
     {
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit));
@@ -70,7 +80,7 @@ public static class DescriptorReader
         {
             // One extra byte distinguishes a final record at the limit from an oversized one.
             // A copied batch should not materialize an entire contiguous source. Long records
-            // can still grow through lookahead; BufferSize is a transfer window, not a line cap.
+            // can still grow through lookahead; BufferSize is a transfer window, not a record cap.
             // Keep that window when continuing a short prefix left by BOM detection or a byte read.
             var maximum = ByteMemoryBuilder.MaxMemoryBuilderBytes + 1;
             if ((destinationBudget != null || reusableLine != null) && minimum <= BufferSize)
@@ -80,14 +90,15 @@ public static class DescriptorReader
             using var buffer = await read(source, new DescriptorReadRequest(minimum, maximum, position), cancellationToken).ConfigureAwait(false);
             var result = buffer.Result;
             if (result.Error is { } error)
-                return ReadResult.Failure(error);
+                return project(new DescriptorRecordBatch(default, Array.Empty<int>(),
+                    ByteReadResult.Failure(0, error, reachedEoF: false)));
             var bytes = buffer.Content;
             if (bytes.IsEmpty)
-                return ReadResult.EndOfFile;
+                return project(new DescriptorRecordBatch(default, Array.Empty<int>(), ByteReadResult.EndOfFile));
             // Lookahead preserves the prefix. Scan it once unless another alias advanced the cursor.
             if (position != buffer.Position)
                 examined = 0;
-            var found = ByteLines.FindCompleteLines(bytes.Span[examined..], examined == 0 ? limit : 1,
+            var found = ByteLines.FindCompleteRecords(bytes.Span[examined..], delimiter, examined == 0 ? limit : 1,
                 destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
             var length = found == 0 ? 0 : examined + found;
             if (examined > 0 && (length == 0 ? bytes.Length : length) > ByteMemoryBuilder.MaxMemoryBuilderBytes)
@@ -112,7 +123,8 @@ public static class DescriptorReader
                 }
                 catch { offsetsMemory?.Dispose(); throw; }
                 buffer.Consume(length);
-                return ReadResult.FromValidatedLines(content, offsets, result.ReachedEoF && length == bytes.Length);
+                return project(new DescriptorRecordBatch(content, offsets,
+                    ByteReadResult.Success(length, result.ReachedEoF && length == bytes.Length)));
             }
             if (bytes.Length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
@@ -121,4 +133,13 @@ public static class DescriptorReader
             position = buffer.Position;
         }
     }
+}
+
+/// <summary>A framed byte batch with starts after the first record, or a terminal read outcome.</summary>
+internal readonly record struct DescriptorRecordBatch(ReadOnlyMemory<byte> Content, int[] RecordStartOffsets, ByteReadResult Result)
+{
+    /// <summary>Projects a batch scanned with LF to the public line result.</summary>
+    internal ReadResult AsLines() => Result.Error is { } error ? ReadResult.Failure(error)
+        : Content.IsEmpty ? ReadResult.EndOfFile
+        : ReadResult.FromValidatedLines(Content, RecordStartOffsets, Result.ReachedEoF);
 }

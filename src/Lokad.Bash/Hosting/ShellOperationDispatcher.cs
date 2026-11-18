@@ -42,7 +42,18 @@ internal static class ShellOperationDispatcher
                 request.Mode == FileOpenMode.Read
                     ? state.Host.OpenFileAsync(request.Path, state.CancellationToken)
                     : state.Host.OpenWritableFileAsync(request.Path, request.Mode.ToWritable(), FileCreationMode.OpenOrCreate, FileWriteRetention.AllowInMemory, state.CancellationToken)),
-            ReadLineOperation read => ReadAsync(read, host, cancellationToken),
+            ReadLineOperation read => HandleReadLimitAsync(read.UseResult(state, static (request, state) =>
+                request.ReusableLine is { } reusableLine
+                    ? DescriptorReader.ReadReusableLineAsync((state.Host, request.FileDescriptor),
+                        static (source, read, token) => source.Host.ReadAsync(source.FileDescriptor, read, token),
+                        reusableLine, state.CancellationToken)
+                    : request.DestinationBudget is { } budget
+                    ? state.Host.ReadLinesAsync(request.FileDescriptor, request.Limit, budget, state.CancellationToken)
+                    : state.Host.ReadLinesAsync(request.FileDescriptor, request.Limit, state.CancellationToken))),
+            ReadRecordBatchOperation batch => HandleReadLimitAsync(batch.UseResult(state, static (request, state) =>
+                DescriptorReader.ReadRecordBatchAsync((state.Host, request.Descriptor),
+                    static (source, read, token) => source.Host.ReadAsync(source.Descriptor, read, token),
+                    request.Delimiter, request.Limit, request.DestinationBudget, state.CancellationToken))),
             ReadRecordOperation record => record.UseResult(state, static (request, state) =>
                 ReadRecordAsync(request, state.Host, state.CancellationToken)),
             ResolveCommandsOperation resolve => resolve.UseResult(state, static (request, state) =>
@@ -165,19 +176,11 @@ internal static class ShellOperationDispatcher
             return new ReadRecordResult(record, reader.ReadFailure);
         }
 
-        static async Task ReadAsync(ReadLineOperation operation, IBashHost host, CancellationToken cancellationToken)
+        static async Task HandleReadLimitAsync(Task pending)
         {
             try
             {
-                await operation.UseResult((Host: host, CancellationToken: cancellationToken), static (request, state) =>
-                    request.ReusableLine is { } reusableLine
-                        ? DescriptorReader.ReadReusableLineAsync((state.Host, request.FileDescriptor),
-                            static (source, read, token) => source.Host.ReadAsync(source.FileDescriptor, read, token),
-                            reusableLine, state.CancellationToken)
-                        : request.DestinationBudget is { } budget
-                        ? state.Host.ReadLinesAsync(request.FileDescriptor, request.Limit, budget, state.CancellationToken)
-                        : state.Host.ReadLinesAsync(request.FileDescriptor, request.Limit, state.CancellationToken))
-                    .ConfigureAwait(false);
+                await pending.ConfigureAwait(false);
             }
             catch (ByteMemoryBuilder.LimitExceededException)
             {

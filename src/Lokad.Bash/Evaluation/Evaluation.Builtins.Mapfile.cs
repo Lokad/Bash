@@ -15,11 +15,12 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateBuiltinMapfileAsync(
         IReadOnlyList<ShellValue> arguments, Variables variables, bool negated)
     {
-        const int ReadBatchLines = 128;
+        const int ReadBatchRecords = 128;
         const int RecordListEntryBytes = 64; // Includes list capacity and resize overlap.
         using var diagnostics = new BuiltinDiagnosticScope(this);
         var targetValue = ShellValue.FromText("MAPFILE");
-        var delimiterPolicy = MapfileDelimiterPolicy.Keep;
+        var delimiter = (byte)'\n';
+        var trimDelimiter = false;
         var targetSeen = false;
         var parseOptions = true;
         for (var argumentIndex = 1; argumentIndex < arguments.Count; argumentIndex++)
@@ -37,12 +38,27 @@ public sealed partial class Evaluation
                 for (var optionIndex = 1; optionIndex < bytes.Length; optionIndex++)
                 {
                     if (bytes[optionIndex] == (byte)'t')
+                    {
+                        trimDelimiter = true;
                         continue;
+                    }
+                    if (bytes[optionIndex] == (byte)'d')
+                    {
+                        var operand = bytes[(optionIndex + 1)..];
+                        if (operand.IsEmpty)
+                        {
+                            if (++argumentIndex == arguments.Count)
+                                return await InvalidArgumentsAsync(ShellValue.FromText("-d: option requires an argument"))
+                                    .ConfigureAwait(false);
+                            operand = arguments[argumentIndex].Bytes.Span;
+                        }
+                        delimiter = operand.IsEmpty ? (byte)0 : operand[0];
+                        break;
+                    }
                     return await InvalidArgumentsAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
                         .Append((byte)'-').Append(bytes[optionIndex]).Append(": invalid option"u8).ToMemory())).ConfigureAwait(false);
                 }
 
-                delimiterPolicy = MapfileDelimiterPolicy.TrimNewline;
                 continue;
             }
 
@@ -89,17 +105,8 @@ public sealed partial class Evaluation
         }
 
         var descriptor = GetStdInDescriptor();
-        using var valuesMemory = Memory.Budget.CreateScope();
         // Keep one owned copy per batch; array entries borrow slices for the same lifetime.
-        using var reader = new AsyncLineReader(
-            (limit, memory, cancellation) =>
-            {
-                cancellation.ThrowIfCancellationRequested();
-                return new ValueTask<ReadResult>(AwaitOperationAsync(
-                    ReadLineOperation.AsTask(PublishOperation, descriptor, limit, memory, reusableLine: null)));
-            },
-            _cancellationToken,
-            batchSize: ReadBatchLines, valuesMemory);
+        using var valuesMemory = Memory.Budget.CreateScope();
         var values = new List<ShellValue>();
         long backingBytes = 0;
         using var inputMemory = Memory.Budget.Reserve(0);
@@ -107,23 +114,27 @@ public sealed partial class Evaluation
         try
         {
             // Bash treats an explicitly closed stdin as empty input; actual host read failures remain failures.
-            while (!descriptor.IsClosed && !await reader.ReachedEof().ConfigureAwait(false))
+            var reachedEof = descriptor.IsClosed;
+            while (!reachedEof)
             {
-                var line = reader.ReadLine();
-                // Even a short/NUL-truncated record pins its batch. Keep that backing charged
-                // until the array is replaced, without tracking individual slices or aliases.
-                backingBytes = checked(backingBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(
-                    ShellValue.FromBytes(line.Raw)));
-                // Admit geometric list growth, including replacement overlap, before allocation.
-                if (values.Count == values.Capacity)
+                _cancellationToken.ThrowIfCancellationRequested();
+                if (delimiter == (byte)'\n')
                 {
-                    var capacity = values.Capacity == 0 ? 4 : checked(2 * values.Capacity);
-                    inputMemory.Resize((long)RecordListEntryBytes * capacity);
-                    values.Capacity = capacity;
+                    var batch = await AwaitOperationAsync(ReadLineOperation.AsTask(
+                        PublishOperation, descriptor, ReadBatchRecords, valuesMemory, reusableLine: null)).ConfigureAwait(false);
+                    batch.ThrowIfError();
+                    AddBatch(batch.Content, batch.LineStartOffsets);
+                    reachedEof = batch.ReachedEoF;
                 }
-                var record = delimiterPolicy == MapfileDelimiterPolicy.TrimNewline ? line.Content : line.Raw;
-                record = ShellValue.FromBytes(record).BeforeFirstNul().Bytes;
-                values.Add(ShellValue.FromBytes(record));
+                else
+                {
+                    var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    PublishOperation(new ReadRecordBatchOperation(completion, descriptor, delimiter, ReadBatchRecords, valuesMemory));
+                    var batch = await AwaitOperationAsync(completion.Task).ConfigureAwait(false);
+                    batch.Result.ThrowIfError();
+                    AddBatch(batch.Content, batch.RecordStartOffsets);
+                    reachedEof = batch.Result.ReachedEoF;
+                }
             }
             // Admit both collection representations while building the persistent array.
             long valueBytes = 0;
@@ -150,11 +161,34 @@ public sealed partial class Evaluation
         {
             // Refuse before committing any collected records to the target variable.
             values.Clear();
-            reader.Dispose();
             valuesMemory.Dispose();
             return await RejectInputAsync().ConfigureAwait(false);
         }
         return await FinishAsync(assigned ? 0 : 1).ConfigureAwait(false);
+
+        void AddBatch(ReadOnlyMemory<byte> content, IReadOnlyList<int> recordStarts)
+        {
+            var start = 0;
+            for (var index = 0; start < content.Length; index++)
+            {
+                var end = index < recordStarts.Count ? recordStarts[index] : content.Length;
+                var record = content[start..end];
+                start = end;
+                // Even a short/NUL-truncated record pins its batch after the staging scope ends.
+                backingBytes = checked(backingBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(
+                    ShellValue.FromBytes(record)));
+                // Admit geometric list growth, including replacement overlap, before allocation.
+                if (values.Count == values.Capacity)
+                {
+                    var capacity = values.Capacity == 0 ? 4 : checked(2 * values.Capacity);
+                    inputMemory.Resize((long)RecordListEntryBytes * capacity);
+                    values.Capacity = capacity;
+                }
+                if (trimDelimiter && record.Span[^1] == delimiter)
+                    record = record[..^1];
+                values.Add(ShellValue.FromBytes(record).BeforeFirstNul());
+            }
+        }
 
         Task<EvaluationResult> FinishAsync(int status) => FinalizeResultAsync(
             EvaluationResult.FromExitCode(diagnostics.Result.IsError ? 1 : status), negated);
@@ -183,11 +217,5 @@ public sealed partial class Evaluation
                 .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(name).Bytes).Append(": not a valid identifier"u8).ToMemory())).ConfigureAwait(false);
             return await FinishAsync(1).ConfigureAwait(false);
         }
-    }
-
-    private enum MapfileDelimiterPolicy
-    {
-        Keep,
-        TrimNewline
     }
 }

@@ -17,39 +17,48 @@ public static class ByteLines
         int limit,
         IMemoryBudget memoryBudget,
         out int[] lineStartOffsets,
+        out IMemoryReservation? reservation) =>
+        FindCompleteRecords(content, (byte)'\n', limit, memoryBudget, out lineStartOffsets, out reservation);
+
+    internal static int FindCompleteRecords(
+        ReadOnlySpan<byte> content,
+        byte delimiter,
+        int limit,
+        IMemoryBudget memoryBudget,
+        out int[] recordStartOffsets,
         out IMemoryReservation? reservation)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
         reservation = null;
 
-        var lineCount = 0;
+        var recordCount = 0;
         var consumed = 0;
-        while (lineCount < limit)
+        while (recordCount < limit)
         {
-            var newlineOffset = content[consumed..].IndexOf((byte)'\n');
-            if (newlineOffset < 0)
+            var delimiterOffset = content[consumed..].IndexOf(delimiter);
+            if (delimiterOffset < 0)
                 break;
-            lineCount++;
-            consumed += newlineOffset + 1;
+            recordCount++;
+            consumed += delimiterOffset + 1;
         }
-        if (lineCount <= 1)
+        if (recordCount <= 1)
         {
-            lineStartOffsets = Array.Empty<int>();
+            recordStartOffsets = Array.Empty<int>();
             return consumed;
         }
 
         // Count first so admission covers one exact array, with no growing scratch collection.
         // The returned offsets can outlive this read just like its retained byte snapshot.
         const int ArrayOverheadBytes = 32;
-        reservation = memoryBudget.Reserve(ArrayOverheadBytes + sizeof(int) * (long)(lineCount - 1));
+        reservation = memoryBudget.Reserve(ArrayOverheadBytes + sizeof(int) * (long)(recordCount - 1));
         try
         {
-            lineStartOffsets = new int[lineCount - 1];
+            recordStartOffsets = new int[recordCount - 1];
             var position = 0;
-            for (var index = 0; index < lineStartOffsets.Length; index++)
+            for (var index = 0; index < recordStartOffsets.Length; index++)
             {
-                position += content[position..].IndexOf((byte)'\n') + 1;
-                lineStartOffsets[index] = position;
+                position += content[position..].IndexOf(delimiter) + 1;
+                recordStartOffsets[index] = position;
             }
             // The enclosing scope owns the returned offsets.
             return consumed;

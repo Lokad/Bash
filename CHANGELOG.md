@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `mapfile -d delim` and `readarray -d delim`, including NUL delimiters
+  and `-t` trimming of the selected delimiter.
+
 - Support `local -` to save and restore the function's shell options.
 
 - Apply quote and substitution rules across word fragments after a brace

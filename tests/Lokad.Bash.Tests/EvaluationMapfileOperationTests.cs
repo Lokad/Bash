@@ -1,5 +1,7 @@
 using Eval = Lokad.Bash.Evaluation.Evaluation;
+using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
@@ -100,6 +102,27 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task Evaluation_MapfileBuiltin_ReadsCustomRecordBatchesBeforePublishing()
+    {
+        var state = new Eval(Parser.Parse(Utf8("arr=(old); mapfile -td: arr")));
+
+        var first = Assert.IsType<ReadRecordBatchOperation>(await NextStepAsync(state));
+        Assert.Equal(FileDescriptor.StdIn, first.Descriptor);
+        Assert.Equal((byte)':', first.Delimiter);
+        Assert.Equal(128, first.Limit);
+        var content = Utf8Bytes("a::");
+        first.SetResult(new DescriptorRecordBatch(content, [2], ByteReadResult.Success(content.Length, reachedEoF: false)));
+
+        var second = Assert.IsType<ReadRecordBatchOperation>(await NextStepAsync(state));
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+        second.SetResult(new DescriptorRecordBatch(default, [], ByteReadResult.EndOfFile));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(new[] { ShellValue.FromText("a"), ShellValue.Empty }, state.IndexedArrays["arr"]);
+    }
+
+    [Fact]
     public async Task Evaluation_MapfileBuiltin_EmptyInputClearsArrayAndSucceeds()
     {
         var script = Parser.Parse(Utf8("arr=(old); mapfile arr"));
@@ -130,7 +153,6 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("mapfile -d : arr")]
     [InlineData("mapfile -n 1 arr")]
     [InlineData("mapfile -s 1 arr")]
     [InlineData("mapfile -O 1 arr")]
@@ -146,7 +168,7 @@ public partial class EvaluationTests
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
         var reason = command.Split(' ')[1] + ": invalid option";
-        Assert.Equal("mapfile: " + reason + "\nmapfile: usage: mapfile [-t] [--] [array]\n",
+        Assert.Equal("mapfile: " + reason + "\nmapfile: usage: mapfile [-t] [-d delim] [--] [array]\n",
             Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
@@ -154,5 +176,22 @@ public partial class EvaluationTests
 
         Assert.Equal(2, state.LastExitCode);
         Assert.Equal(ShellValue.FromText("old"), state.IndexedArrays["arr"][0]);
+    }
+
+    [Theory]
+    [InlineData("mapfile -d : -d", "mapfile")]
+    [InlineData("readarray -td", "readarray")]
+    public async Task Evaluation_MapfileBuiltin_RejectsMissingDelimiterBeforeReading(string command, string builtin)
+    {
+        var state = new Eval(Parser.Parse(Utf8($"arr=(old); {command}")));
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal($"{builtin}: -d: option requires an argument\n{builtin}: usage: {builtin} [-t] [-d delim] [--] [array]\n",
+            Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(2, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
     }
 }

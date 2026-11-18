@@ -59,6 +59,12 @@ does not follow aliases. Builtin outputs share selection and publication, with
 explicit getopts failure, printf count and descriptor policies. An allocation
 that does not publish its variable remains temporary and uses ordinary cleanup.
 
+`mapfile` and `readarray` validate the target before reading. They collect
+bounded batches from the current stdin descriptor and publish the replacement
+array after successful EOF. Delimiter scans preserve record bytes and the
+staging owner retains the batches through publication. A failed or canceled
+read leaves the prior array intact.
+
 Function-call prefixes retain temporary-binding provenance through nested calls.
 A first local declaration inherits a visible temporary value; a prefix on the
 declaration command itself retains its distinct lifetime. Unsetting a temporary

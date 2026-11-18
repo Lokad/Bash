@@ -12,13 +12,15 @@ namespace Lokad.Bash.Tests;
 public sealed class EvaluationMapfileByteTests
 {
 
-    [Fact]
-    public async Task RetainedArrayStoragePreventsAnotherMapfileFromReusingItsAllowance()
+    [Theory]
+    [InlineData('\n', "")]
+    [InlineData(':', " -d :")]
+    public async Task RetainedArrayStoragePreventsAnotherMapfileFromReusingItsAllowance(char delimiter, string option)
     {
         const long MemoryBudgetBytes = 384 * 1024;
         var governor = new MemoryGovernor(MemoryBudgetBytes);
-        var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.ConfigureHost(host => { host.AddFile("/input", new string('\n', 1024)); }), governor);
-        var state = new Eval(Parser.Parse("mapfile -t first </input; second=(old); mapfile -t second </input; status=$?"));
+        var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.ConfigureHost(host => { host.AddFile("/input", new string(delimiter, 1024)); }), governor);
+        var state = new Eval(Parser.Parse($"mapfile -t{option} first </input; second=(old); mapfile -t{option} second </input; status=$?"));
 
         await new Engine().RunAsync(state, host);
 
@@ -80,6 +82,12 @@ public sealed class EvaluationMapfileByteTests
     [InlineData("mapfile -tt -t -- arr", "FF0D0A", "FF0D", "FE")]
     [InlineData("mapfile arr", "FF00410A", "FF", "FE")]
     [InlineData("mapfile -t arr", "00410A", "", "FE")]
+    [InlineData("mapfile -d : arr", "FF003A", "FF", "FE")]
+    [InlineData("readarray -td: arr", "FF0D0A3A", "FF0D0A", "FE")]
+    [InlineData("mapfile -t -d '' arr", "FF00", "FF", "FE")]
+    [InlineData("mapfile -d '' arr", "FF00", "FF", "FE")]
+    [InlineData("mapfile -td $'\\377' arr", "FCFF", "FC", "FE")]
+    [InlineData("mapfile -t -d : -d $'\\n' arr", "FF0D0A", "FF0D", "FE")]
     public async Task RecordsRetainBytesAndTruncateOnlyAtFirstNul(
         string command, string firstRecordHex, string firstValueHex, string secondValueHex)
     {
@@ -98,19 +106,21 @@ public sealed class EvaluationMapfileByteTests
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    [InlineData(127)]
-    [InlineData(128)]
-    [InlineData(129)]
-    [InlineData(257)]
-    [InlineData(10000)]
-    public async Task AllRecordsReachStorageIndependentlyOfParameterExpansion(int count)
+    [InlineData(0, '\n', "")]
+    [InlineData(1, '\n', "")]
+    [InlineData(127, '\n', "")]
+    [InlineData(128, '\n', "")]
+    [InlineData(129, '\n', "")]
+    [InlineData(257, '\n', "")]
+    [InlineData(10000, '\n', "")]
+    [InlineData(128, ':', " -d :")]
+    [InlineData(257, '\0', " -d ''")]
+    public async Task AllRecordsReachStorageIndependentlyOfParameterExpansion(int count, char delimiter, string option)
     {
-        var input = string.Concat(Enumerable.Range(0, count).Select(index => $"line{index}\n"));
+        var input = string.Concat(Enumerable.Range(0, count).Select(index => $"line{index}{delimiter}"));
         var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes));
         host.SetStandardInputBytes(System.Text.Encoding.UTF8.GetBytes(input));
-        var state = new Eval(Parser.Parse("mapfile -t arr"));
+        var state = new Eval(Parser.Parse("mapfile -t" + option + " arr"));
 
         await new Engine().RunAsync(state, host);
 
@@ -121,14 +131,64 @@ public sealed class EvaluationMapfileByteTests
             Assert.Equal(ShellValue.FromText($"line{index}"), values[index]);
     }
 
+    [Fact]
+    public async Task CustomDelimiterLookaheadPreservesThePrefixAndFollowingRecords()
+    {
+        var prefix = new string('x', DescriptorReader.BufferSize + 1);
+        var host = EndToEndHarness.BuildTree([]);
+        host.SetStandardInputBytes(System.Text.Encoding.ASCII.GetBytes(prefix + "::tail"));
+        var state = new Eval(Parser.Parse("mapfile -td : arr"));
+
+        await new Engine().RunAsync(state, host);
+
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(new[] { ShellValue.FromText(prefix), ShellValue.Empty, ShellValue.FromText("tail") },
+            state.IndexedArrays["arr"]);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task PartialReadDoesNotPublishBytesOnFailureOrCancellation(bool cancel)
+    public async Task IncompleteCustomRecordFailurePreservesThePriorArray(bool limit)
     {
-        var state = new Eval(Parser.Parse("arr=($'\\377'); mapfile arr"));
+        var state = new Eval(Parser.Parse("arr=(old); mapfile -td : arr 2>&1; status=$?"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueByteReadResult("ok:partial"u8.ToArray(), ByteReadResult.Success(10, reachedEoF: false));
+        if (limit)
+        {
+            host.EnqueueReadTask(Task.FromException<ReadResult>(new ByteMemoryBuilder.LimitExceededException()));
+            host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        }
+        else
+        {
+            host.EnqueueByteReadResult(ReadOnlyMemory<byte>.Empty, ByteReadResult.ReadFailure);
+        }
+
+        await new Engine().RunAsync(state, host);
+
+        Assert.Equal(ShellValue.FromText(limit ? "2" : "1"), state.Variables["status"]);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+        if (limit)
+        {
+            var diagnostic = Assert.Single(host.Appends);
+            Assert.Equal(FileDescriptor.StdOut, diagnostic.Descriptor);
+            Assert.Equal("mapfile: shared memory budget exhausted\n", System.Text.Encoding.UTF8.GetString(diagnostic.Content));
+        }
+        else
+        {
+            Assert.Empty(host.Appends);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "", (byte)'\n')]
+    [InlineData(true, "", (byte)'\n')]
+    [InlineData(true, " -d :", (byte)':')]
+    public async Task PartialReadDoesNotPublishBytesOnFailureOrCancellation(bool cancel, string option, byte delimiter)
+    {
+        var state = new Eval(Parser.Parse($"arr=($'\\377'); mapfile{option} arr"));
         var host = new TestOperationVisitor([]);
-        host.EnqueueReadResult(ReadResult.Success(new byte[] { 0xFE, 10 }, [], reachedEoF: false));
+        host.EnqueueReadResult(ReadResult.Success(new byte[] { 0xFE, delimiter }, [], reachedEoF: false));
         using var cancellation = new CancellationTokenSource();
         if (cancel)
         {
