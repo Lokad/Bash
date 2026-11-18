@@ -48,11 +48,11 @@ public sealed partial class Variables
         new(this, values, start, restorePolicy);
 
     /// <summary>Drops leading entries without moving surviving values or changing frame identity.</summary>
-    internal bool TryShiftPositionalParameters(int count)
+    internal bool TryShiftPositionalParameters(long count)
     {
         if (count < 0 || count > _positional.Count)
             return false;
-        _positional.Shift(count);
+        _positional.Shift((int)count);
         return true;
     }
 

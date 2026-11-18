@@ -156,6 +156,7 @@ public sealed partial class Evaluation
             BuiltinKind.Break => "break",
             BuiltinKind.Continue => "continue",
             BuiltinKind.Exit => "exit",
+            BuiltinKind.Shift => "shift",
             _ => throw new ArgumentOutOfRangeException(nameof(builtin))
         };
         var documentation = BuiltinDocumentation.For(builtin);

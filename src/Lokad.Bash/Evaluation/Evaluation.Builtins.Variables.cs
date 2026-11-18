@@ -207,29 +207,39 @@ public sealed partial class Evaluation
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
     private async Task<EvaluationResult> EvaluateBuiltinShiftAsync(
-        IReadOnlyList<string> words,
-        Variables commandVars,
+        IReadOnlyList<ShellValue> words,
+        ScopedEvaluation scope,
         bool negated)
     {
-        var exitCode = 0;
-        var count = 1;
-        if (words.Count > 1)
-        {
-            var word = words[1];
+        if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
+            return await WriteControlHelpAsync(BuiltinKind.Shift, negated).ConfigureAwait(false);
 
-            if (!Integers.TryParseExitStatus(word.AsSpan(), out count))
+        var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
+        var count = 1L;
+        if (first < words.Count)
+        {
+            if (!TryParseControlNumber(words[first], out count))
+                return await ReportCountErrorAsync(words[first], ": numeric argument required").ConfigureAwait(false);
+            if (words.Count - first > 1)
             {
-                exitCode = 2;
+                await ReportExpansionDiagnosticAsync(ShellValue.FromText("shift"), ShellValue.FromText("too many arguments"))
+                    .ConfigureAwait(false);
+                return EvaluationResult.Exit(1);
             }
+            // Bash reports the original first operand for a negative count, including a leading --.
+            if (count < 0)
+                return await ReportCountErrorAsync(words[1], ": shift count out of range").ConfigureAwait(false);
         }
 
-        if (exitCode == 0 && count > 0)
+        var exitCode = scope.Variables.TryShiftPositionalParameters(count) ? 0 : 1;
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
+
+        async Task<EvaluationResult> ReportCountErrorAsync(ShellValue operand, string message)
         {
-            if (!commandVars.TryShiftPositionalParameters(count))
-                exitCode = 1;
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText("shift"),
+                WordExpansion.AppendAssignmentValue(operand, ShellValue.FromText(message), scope)).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
-
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
     }
 
     /// <summary>

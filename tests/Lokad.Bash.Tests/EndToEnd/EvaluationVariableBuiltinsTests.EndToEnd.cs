@@ -92,17 +92,75 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_ShiftBuiltin_InvalidArgumentReturnsUsageError()
+    public async Task Evaluation_ShiftBuiltin_InvalidCountReturnsFailure()
     {
-        // This test verifies that shift rejects invalid arguments with a usage error.
-        // The script "shift nope" must emit no output and exit with code 2.
-        // If validation is missing, the exit code would be 0 or 1.
-        var script = @"shift nope";
-        var result = await EvaluationTestHelper.RunAsync(script);
+        var result = await EvaluationTestHelper.RunAsync("shift nope");
 
         Assert.Equal(string.Empty, result.StdOut);
+        Assert.Equal("shift: nope: numeric argument required\n", result.StdErr);
+        Assert.Equal(1, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("shift --", "<0:2><b c><>", "")]
+    [InlineData("shift -- +1", "<0:2><b c><>", "")]
+    [InlineData("shift $'\\t\\r\\n\\v\\f+1 \\t'", "<0:2><b c><>", "")]
+    [InlineData("shift -0", "<0:3><a><b c><>", "")]
+    [InlineData("shift 4294967296", "<1:3><a><b c><>", "")]
+    [InlineData("shift 9223372036854775807", "<1:3><a><b c><>", "")]
+    [InlineData("shift 9223372036854775808", "<1:3><a><b c><>", "shift: 9223372036854775808: numeric argument required\n")]
+    [InlineData("shift -9223372036854775808", "<1:3><a><b c><>", "shift: -9223372036854775808: shift count out of range\n")]
+    [InlineData("shift -- -1", "<1:3><a><b c><>", "shift: --: shift count out of range\n")]
+    [InlineData("shift nope extra", "<1:3><a><b c><>", "shift: nope: numeric argument required\n")]
+    [InlineData("unset count; shift $count", "<0:2><b c><>", "")]
+    [InlineData("count=; shift \"$count\"", "<1:3><a><b c><>", "shift: : numeric argument required\n")]
+    public async Task Evaluation_ShiftBuiltin_ValidatesExpandedCountBeforeChangingFrame(
+        string command, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync("set -- a 'b c' ''; " + command
+            + "; printf '<%s:%s>' \"$?\" \"$#\"; for arg; do printf '<%s>' \"$arg\"; done");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Fact]
+    public async Task Evaluation_ShiftBuiltin_SurplusFieldsExitThroughActiveRedirection()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "set -- a b; shift 1 \"$(printf once >fact)\" 2>err; printf unexpected", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("once", host.ReadFile("/fact"));
+        Assert.Equal("shift: too many arguments\n", host.ReadFile("/err"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task Evaluation_ShiftBuiltin_PreservesInvalidOperandBytes()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("shift $'\\377'", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("73686966743A20FF3A206E756D6572696320617267756D656E742072657175697265640A",
+            Convert.ToHexString(host.StandardError.Content.Span));
+    }
+
+    [Fact]
+    public async Task Evaluation_ShiftBuiltin_HelpPreservesPositionals()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "set -- a b; shift --help; printf '<%s:%s>' \"$?\" \"$#\"");
+
+        Assert.Equal(0, result.ExitCode);
         Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(2, result.ExitCode);
+        Assert.StartsWith("shift: shift [--] [n]\n", result.StdOut);
+        Assert.EndsWith("<2:2>", result.StdOut);
     }
 
     [Fact]

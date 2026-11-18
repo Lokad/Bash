@@ -48,7 +48,6 @@ public sealed class ByteValuedWordTests
     [InlineData("readarray names \"$(printf '\\377')\" </dev/null; printf after", "after", 0)]
     [InlineData("dirs -c $'\\377' >/dev/null; printf after", "after", 0)]
     [InlineData("pushd /tmp $'\\377' >/dev/null; pwd", "/tmp\n", 0)]
-    [InlineData("set -- a b; shift 1 $'\\377'; printf '%s' \"$1\"", "b", 0)]
     public async Task IgnoredTrailingOperands_DoNotRequireText(string script, string expected, int expectedExitCode)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree(["/tmp"], []));
@@ -56,6 +55,16 @@ public sealed class ByteValuedWordTests
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(expectedExitCode, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ShiftCountsByteValuedSurplusOperand()
+    {
+        var result = await EvaluationTestHelper.RunAsync("set -- a b; shift 1 $'\\377'; printf '%s' \"$1\"");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("shift: too many arguments\n", result.StdErr);
     }
 
     [Fact]

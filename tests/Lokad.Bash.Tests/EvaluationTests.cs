@@ -3229,13 +3229,20 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_ShiftBuiltin_InvalidArgumentReturnsUsageError()
+    public async Task Evaluation_ShiftBuiltin_InvalidCountReportsErrorAndPreservesPositionals()
     {
         var script = Parser.Parse(Utf8("shift nope"));
         var state = new Eval(script);
+        state.ReplacePositionalParameters([ShellValue.FromText("kept")]);
 
+        var diagnostic = Assert.IsType<WriteOperation>(await NextStepAsync(state));
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("shift: nope: numeric argument required\n", Text(diagnostic.Content));
+        Assert.Equal("kept", Assert.Single(state.PositionalParameters).ToUtf8String());
+        diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal(2, state.LastExitCode);
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal("kept", Assert.Single(state.PositionalParameters).ToUtf8String());
     }
 
     [Fact]

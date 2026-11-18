@@ -174,6 +174,13 @@ Command substitution clears errexit by default; parenthesized subshells inherit 
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
 
+`shift` uses expanded fields and accepts a leading `--`. Its count defaults to
+one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII
+whitespace and trailing space or tab. A count larger than the remaining
+positional window returns 1 silently. Negative or invalid counts return 1 with
+a diagnostic. A valid count followed by any surplus field diagnoses the arity
+error and exits the current shell evaluation with status 1.
+
 `echo` consumes leading arguments made of a dash followed by one or more `n`
 bytes and omits the final LF if any such argument is consumed. The first other
 argument, including `--` or an empty argument, ends option recognition. Arguments

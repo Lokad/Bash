@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept signed decimal counts and a leading `--` in `shift`. Preserve
+  positional parameters on count and arity failures.
+
 - Honor double-quote boundaries when an empty aggregate shares a word with
   other expansions. Preserve those boundaries in function display and export.
 

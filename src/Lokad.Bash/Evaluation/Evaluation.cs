@@ -978,7 +978,7 @@ public sealed partial class Evaluation : IFileTester
                         or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
                         or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
                         or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
-                        or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd
+                        or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd or BuiltinKind.Shift
                 })
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
@@ -993,7 +993,7 @@ public sealed partial class Evaluation : IFileTester
                     else
                     {
                         var expanded = await ExpandToWordsAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false);
-                        if (kind is BuiltinKind.Cd or BuiltinKind.Source)
+                        if (kind is BuiltinKind.Cd or BuiltinKind.Source or BuiltinKind.Shift)
                             Memory.Charge(checked(64L * expanded.Count)); // Operand capacity and resize overlap.
                         operands.AddRange(expanded);
                     }
@@ -1289,6 +1289,8 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Getopts => await EvaluateBuiltinGetoptsAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
+                    BuiltinKind.Shift => await AwaitWordExpansionAsync(EvaluateBuiltinShiftAsync(
+                        byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
                     // hash only distinguishes no operands from some; their values need no decoding.
                     BuiltinKind.Hash => await FinalizeResultAsync(
                         EvaluationResult.FromExitCode(byteOperands.Count == 0 ? 0 : 1), false).ConfigureAwait(false),
@@ -1613,8 +1615,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 BuiltinKind.Colon or BuiltinKind.True or BuiltinKind.False
                     or BuiltinKind.Pwd or BuiltinKind.Popd or BuiltinKind.Caller => 0,
-                BuiltinKind.Dirs or BuiltinKind.Pushd
-                    or BuiltinKind.Shift => 1,
+                BuiltinKind.Dirs or BuiltinKind.Pushd => 1,
                 _ => words.Count - 1
             };
 
@@ -2531,9 +2532,6 @@ public sealed partial class Evaluation : IFileTester
                 return await EvaluateBuiltinPopdAsync(commandVars, bindings, scope.Context, negated).ConfigureAwait(false);
             case BuiltinKind.Caller:
                 return await EvaluateBuiltinCallerAsync(scope.Context, negated).ConfigureAwait(false);
-            case BuiltinKind.Shift:
-                return await EvaluateBuiltinShiftAsync(words, commandVars, negated)
-                    .ConfigureAwait(false);
             case BuiltinKind.Colon:
             case BuiltinKind.True:
             case BuiltinKind.False:
