@@ -251,6 +251,9 @@ The public script runner, `source`, `eval` and reached EXIT actions execute comp
 they are parsed. Earlier units retain their effects before later syntax failure;
 the failing unit executes no partial command list. Explicit whole-script parsing
 remains available for callers that require validation before execution.
+An invalid variable name in a complete for-in loop reports status 1 when the
+loop is reached, before expanding its items. Prepared scripts use the same
+execution rule. Missing loop syntax still fails during parsing.
 
 `eval`, `source` and `.` consume one leading `--` from their expanded fields.
 Other multi-byte dash options report status 2. A leading `--help` prints the

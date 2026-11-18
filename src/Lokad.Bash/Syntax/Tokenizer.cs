@@ -125,55 +125,67 @@ internal sealed class Tokenizer
             || AssignmentWord.TrySplitOperand(text, _scanContext.SyntaxMemory, out var target, out _, out _)
                 && VariableReference.TryParseSource(target, _scanContext.SyntaxMemory, out _))
             syntax |= FunctionNameSyntax.KeywordOnly;
-        var canonical = CanonicalName();
+        var canonical = ReadNameSpelling(token, text, translateLocaleQuotes: false);
         if (Error != null)
             return false;
         name = new FunctionName(canonical, syntax);
         return true;
+    }
 
-        ShellValue CanonicalName()
+    /// <summary>Retains a loop name as a word spelling without expanding it.</summary>
+    internal ShellValue ReadForNameSpelling(WordToken token) =>
+        ReadNameSpelling(token, ShellSourceCursor.RemoveLineContinuations(_scanContext, _input[token.Token.Source]),
+            translateLocaleQuotes: true);
+
+    private ShellValue ReadNameSpelling(WordToken token, ShellSource text, bool translateLocaleQuotes)
+    {
+        if (text.AsSpan().IndexOf("$'"u8) < 0 && (!translateLocaleQuotes || text.AsSpan().IndexOf("$\""u8) < 0))
+            return text.ToValue();
+
+        var output = _scanContext.CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
+        var nameCursor = new ShellSourceCursor(text, 0, new ShellScanContext { SyntaxMemory = _scanContext.SyntaxMemory });
+        var literalIndex = 0;
+        while (!nameCursor.IsAtEnd)
         {
-            if (text.AsSpan().IndexOf("$'"u8) < 0)
-                return text.ToValue();
-
-            var output = _scanContext.CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
-            var nameCursor = new ShellSourceCursor(text, 0, new ShellScanContext { SyntaxMemory = _scanContext.SyntaxMemory });
-            var literalIndex = 0;
-            while (!nameCursor.IsAtEnd)
+            var start = nameCursor.Position;
+            bool appended;
+            if (!nameCursor.IsQuoted && (nameCursor.Current == (byte)'\''
+                || text.AsSpan()[start..].StartsWith("$'"u8)))
             {
-                var start = nameCursor.Position;
-                bool appended;
-                if (!nameCursor.IsQuoted && (nameCursor.Current == (byte)'\''
-                    || text.AsSpan()[start..].StartsWith("$'"u8)))
+                if (!nameCursor.TryReadQuotedLiteralSource(out _, out var kind))
                 {
-                    if (!nameCursor.TryReadQuotedLiteralSource(out _, out var kind))
-                    {
-                        RecordError("Unterminated single-quoted string.", nameCursor.Position);
-                        return default;
-                    }
-                    while (literalIndex < token.Word.Parts.Count && token.Word.Parts[literalIndex].Kind != WordPartKind.SingleQuoted)
-                        literalIndex++;
-                    var literal = token.Word.Parts[literalIndex++].GetUnexpandedValue();
-                    // Names keep lexical quoting; arithmetic canonicalization treats ordinary apostrophes as data.
-                    appended = kind == ShellQuoteKind.AnsiC
-                        ? ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, literal.Bytes.Span)
-                        : output.TryAppend(text.AsSpan(start, nameCursor.Position - start));
-                }
-                else
-                {
-                    if (!nameCursor.TryConsumeQuoteOrEscape()
-                        && nameCursor.SkipNestedExpansion(BracedParameterRecognition.All) is not ShellNestedExpansionScan.Complete)
-                        nameCursor.Advance();
-                    appended = output.TryAppend(text.AsSpan(start, nameCursor.Position - start));
-                }
-                if (!appended)
-                {
-                    RecordError("Function name exceeds the output limit.", token.Token.Source.Start.Value);
+                    RecordError("Unterminated single-quoted string.", nameCursor.Position);
                     return default;
                 }
+                while (literalIndex < token.Word.Parts.Count && token.Word.Parts[literalIndex].Kind != WordPartKind.SingleQuoted)
+                    literalIndex++;
+                var literal = token.Word.Parts[literalIndex++].GetUnexpandedValue();
+                // Names keep lexical quoting; arithmetic canonicalization treats ordinary apostrophes as data.
+                appended = kind == ShellQuoteKind.AnsiC
+                    ? ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, literal.Bytes.Span)
+                    : output.TryAppend(text.AsSpan(start, nameCursor.Position - start));
             }
-            return ShellValue.FromBytes(output.ToMemory());
+            else
+            {
+                if (translateLocaleQuotes && !nameCursor.IsQuoted && text.AsSpan()[start..].StartsWith("$\""u8))
+                {
+                    // The invariant locale retains the double-quoted word without its translation marker.
+                    nameCursor.Advance();
+                    start = nameCursor.Position;
+                }
+                if (!nameCursor.TryConsumeQuoteOrEscape()
+                    && nameCursor.SkipNestedExpansion(BracedParameterRecognition.All) is not ShellNestedExpansionScan.Complete)
+                    nameCursor.Advance();
+                appended = output.TryAppend(text.AsSpan(start, nameCursor.Position - start));
+            }
+            if (!appended)
+            {
+                RecordError(translateLocaleQuotes ? "For loop name exceeds the output limit." : "Function name exceeds the output limit.",
+                    token.Token.Source.Start.Value);
+                return default;
+            }
         }
+        return ShellValue.FromBytes(output.ToMemory());
     }
 
     /// <summary>

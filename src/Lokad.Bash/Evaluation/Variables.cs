@@ -11,7 +11,7 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Whether a kind-only local declaration discards an existing scalar value.</summary>
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
-internal enum ForAssignmentFailure { None, InvalidBinding, InvalidTarget, Readonly }
+internal enum ForAssignmentFailure { None, InvalidTarget, Readonly }
 internal enum BindingResolution { Referent, LastNameref }
 internal readonly record struct VariableBinding(VariableReference Reference, Variables Owner)
 {
@@ -1207,9 +1207,6 @@ public sealed partial class Variables
 
     internal ForAssignmentFailure AssignForIteration(BindingName name, ShellValue item, EvaluationMemory memory)
     {
-        if (!name.IsIdentifier)
-            return ForAssignmentFailure.InvalidBinding;
-
         if (NamerefTargets.ContainsKey(name))
         {
             // A loop selects a new referent. Validate it before checking the reference's readonly attribute.

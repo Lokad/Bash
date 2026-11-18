@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Report invalid for-loop variable names when the loop is reached and skip
+  expanding its items. Incomplete loop syntax still fails during parsing.
+
 - Diagnose readonly loop variables and invalid nameref targets in `for` loops.
   Preserve array elements when assigning the next item to element zero.
 

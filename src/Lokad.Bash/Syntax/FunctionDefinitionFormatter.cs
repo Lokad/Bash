@@ -237,7 +237,9 @@ internal static class FunctionDefinitionFormatter
                                 work.Push(new Step.Word(loop.Items[index]));
                                 if (index != 0) work.Push(new Step.Text(" "));
                             }
-                            if (!Append("for ") || !Append(loop.Name) || !Append(" in ")) return false;
+                            if (!Append("for ")
+                                || !(loop.InvalidName.IsEmpty ? Append(loop.Name) : output.TryAppend(loop.InvalidName.Bytes.Span))
+                                || !Append(" in ")) return false;
                             break;
                         case ArithmeticForCommand loop:
                             loop.Split(out var init, out var loopCondition, out var update);

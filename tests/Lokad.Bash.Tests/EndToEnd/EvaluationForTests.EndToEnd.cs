@@ -141,6 +141,83 @@ public sealed class EvaluationForTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvalidLoopNamePreservesEarlierEffectsAndSkipsItemExpansion(bool prepared)
+    {
+        await using var host = new TestHost();
+        const string script = "set -e; printf prior >prior; " +
+            "for bad-name in \"$(printf value >expanded)\"; do printf body >body; done; printf 'loop:%s' \"$?\"";
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, status);
+        Assert.Equal("loop:1", host.StandardOutput.TextContent);
+        Assert.Equal("`bad-name': not a valid identifier\n", host.StandardError.TextContent);
+        Assert.Equal("prior", host.ReadFile("/prior"));
+        Assert.False(host.FileExists("/expanded"));
+        Assert.False(host.FileExists("/body"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("1name", "1name")]
+    [InlineData("na\\me", "na\\me")]
+    [InlineData("bad-\\\nname", "bad-name")]
+    [InlineData("$'n\\141me'", "'name'")]
+    [InlineData("$\"name\"", "\"name\"")]
+    [InlineData("{", "{")]
+    public async Task InvalidLoopNamesReportUnexpandedSpelling(string token, string spelling)
+    {
+        var result = await EvaluationTestHelper.RunAsync("for " + token + " in; do printf body; done");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("`" + spelling + "': not a valid identifier\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task DisplayedFunctionRetainsItsInvalidLoopNameUntilInvocation()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "f(){ for \"name\" in one; do printf body; done; }; " +
+            "declare -f f >display; eval \"$(declare -f f)\"; printf ready; f; printf ':%s' \"$?\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("ready:1", host.StandardOutput.TextContent);
+        Assert.Equal("`\"name\"': not a valid identifier\n", host.StandardError.TextContent);
+        Assert.Contains("for \"name\" in one;", host.ReadFile("/display"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task RuntimeSourcePreservesInvalidLoopNameBytes()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("eval $'for bad\\377name in one; do :; done'", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("`bad\u00ffname': not a valid identifier\n",
+            System.Text.Encoding.Latin1.GetString(host.StandardError.Content.Span));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task InvalidLoopNameInsideSubstitutionIsAReachedFailure()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "if false; then for \"never\"; do printf body; done; fi; " +
+            "value=$(for bad-name in one; do printf body; done); printf 'status:%s value:<%s>' \"$?\" \"$value\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("status:1 value:<>", result.StdOut);
+        Assert.Equal("`bad-name': not a valid identifier\n", result.StdErr);
+    }
+
     [Fact]
     public async Task Evaluation_ForCommand_ExecutesBodyForEachItem()
     {

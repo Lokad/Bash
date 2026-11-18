@@ -14,7 +14,7 @@ public sealed class ParserFailureTests
     [InlineData("\"unterminated")]
     [InlineData("cat <<EOF\nbody")]
     [InlineData("if true; then\nprintf wrong\n")]
-    [InlineData("for 1 in value; do :; done")]
+    [InlineData("for 1 in value; do :")]
     [InlineData("case x in x) :")]
     [InlineData("f(){ :")]
     [InlineData("value=( [unterminated )")]

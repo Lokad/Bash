@@ -681,30 +681,19 @@ public static class Parser
         }
 
         var nameToken = tokenizer.NextTokenCore();
-        if (!nameToken.TryGetWordToken(out var nameTokenWord))
+        if (!tokenizer.TryGetOperandWord(nameToken, out var nameTokenWord))
         {
             tokenizer.RecordError("Expected name after for.", tokenizer.Position);
             return null;
         }
 
-        if (!TryGetPlainUnquotedSource(nameTokenWord.Word, out var nameSource))
-        {
-            tokenizer.RecordError("Expected simple name after for.", tokenizer.Position);
+        var validName = TryGetPlainUnquotedSource(nameTokenWord.Word, out var nameSource)
+            && VariableNames.IsValidVariableName(nameSource.AsSpan());
+        var nameValue = validName ? nameSource.ToValue() : tokenizer.ReadForNameSpelling(nameTokenWord);
+        if (tokenizer.Error != null)
             return null;
-        }
-
-        tokenizer.ScanContext.SyntaxMemory?.Grow(checked(32L + 2L * nameSource.Length));
-        if (!nameSource.ToValue().TryGetUtf8Text(out var name))
-        {
-            tokenizer.RecordError("Expected simple name after for.", tokenizer.Position);
-            return null;
-        }
-
-        if (!VariableNames.IsValidVariableName(name.AsSpan()))
-        {
-            tokenizer.RecordError("Invalid for loop variable name.", tokenizer.Position);
-            return null;
-        }
+        tokenizer.ScanContext.SyntaxMemory?.Grow(checked(32L + 2L * nameValue.Bytes.Length));
+        nameValue.TryGetUtf8Text(out var name);
 
         var items = new List<Word>();
         var canUseBraceBody = tokenizer.PeekTokenCore().Kind == TokenKind.Newline;
@@ -747,7 +736,10 @@ public static class Parser
         }
 
         var body = ParseBody(canUseBraceBody);
-        return body == null ? null : new ForCommand(name, items, body);
+        return body == null ? null : new ForCommand(name, items, body)
+        {
+            InvalidName = validName ? ShellValue.Empty : nameValue
+        };
 
         ICommand? ParseBody(bool acceptsBraces)
         {

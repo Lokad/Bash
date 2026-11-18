@@ -43,7 +43,7 @@ public sealed class ParserCommandUnitTests
     [Theory]
     [InlineData("cat <<EOF\nbody")]
     [InlineData("if true; then\nprintf wrong\n")]
-    [InlineData("for 1 in value; do :; done")]
+    [InlineData("for 1 in value; do :")]
     [InlineData("printf A &&")]
     public void SharedGrammarFailuresAreReturnedOnceAfterEarlierCompleteUnits(string invalidUnit)
     {
