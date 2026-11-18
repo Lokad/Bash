@@ -6,6 +6,21 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationEchoExpansionTestsEndToEnd
 {
+    [Fact]
+    public async Task EchoOptionsFromExpandedArgumentsAffectCapturedOutput()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "set -- -nn -n value; [[ $(echo \"$@\") == value ]] && printf selected >effect; printf tail",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("selected", host.ReadFile("/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("unset HOME; printf '<%s>\\n' ~", "<~>\n")]
     [InlineData("HOME=; printf '<%s>\\n' ~", "<>\n")]

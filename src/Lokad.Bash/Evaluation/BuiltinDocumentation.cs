@@ -32,7 +32,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Test => new("expression", "Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax."),
         BuiltinKind.Pwd => new("", "Print the current working directory."),
         BuiltinKind.Cd => new("dir", "Change the working directory to dir; '-' selects the previous directory."),
-        BuiltinKind.Echo => new("[-n] [arg ...]", "Print arguments separated by spaces; -n omits the final newline."),
+        BuiltinKind.Echo => new("[-n ...] [arg ...]", "Print arguments separated by spaces. Leading -n options and bundles such as -nn omit the final newline."),
         BuiltinKind.Printf => new("[-v var] format [arguments]", "Format and print arguments, or assign the result to var with -v."),
         BuiltinKind.Read => new("[-r] [-d delim] [-u fd] [name ...]",
             "Read one record and split it into fields using IFS; without names, assign REPLY.\n    -d uses the first byte of delim instead of newline; an empty delim selects NUL.\n    -r preserves backslashes; -u fd reads from an open descriptor. Return failure at EOF."),

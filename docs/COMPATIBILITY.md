@@ -135,6 +135,11 @@ Command substitution clears errexit by default; parenthesized subshells inherit 
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
 
+`echo` consumes leading arguments made of a dash followed by one or more `n`
+bytes and omits the final LF if any such argument is consumed. The first other
+argument, including `--` or an empty argument, ends option recognition. Arguments
+are joined with one space and backslashes remain literal.
+
 Regular expression conditions use .NET regular expressions with quote-aware pattern
 escaping and dot matching LF. They require valid UTF-8. Named bracket classes
 `alnum`, `alpha`, `blank`, `cntrl`, `digit`, `graph`, `lower`, `print`, `punct`,

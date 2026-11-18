@@ -27,6 +27,7 @@ public sealed class QueryWriteFailureTests
     [Theory]
     [InlineData("printf '' 1>&-")]
     [InlineData("echo -n 1>&-")]
+    [InlineData("echo -nn -n 1>&-")]
     [InlineData("printf -v value x 1>&-")]
     public async Task FormattingWithoutOutputDoesNotTouchAClosedOutputDescriptor(string script)
     {

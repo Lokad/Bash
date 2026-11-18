@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Honor repeated and bundled leading `echo -n` options. Preserve literal
+  operands from the first non-option onward and skip writes for empty output.
+
 - Index descriptor handle references with frozen alias counts and reusable writer
   deltas. Merge only live changes, preserving snapshots, closed mappings and alias
   cleanup without scanning every logical descriptor or retained vacant bucket.

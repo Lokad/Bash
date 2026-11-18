@@ -11,8 +11,17 @@ public static class EchoFormatting
     /// <summary>Resolves option handling and calculates the bytes to reserve before formatting.</summary>
     public static OutputFormat GetOutputFormat(IReadOnlyList<ShellValue> arguments)
     {
-        var suppressNewline = arguments.Count > 0 && arguments[0].Bytes.Span.SequenceEqual("-n"u8);
-        var firstArgument = suppressNewline ? 1 : 0;
+        var firstArgument = 0;
+        while (firstArgument < arguments.Count)
+        {
+            var option = arguments[firstArgument].Bytes.Span;
+            if (option.Length < 2 || option[0] != (byte)'-' || option[1..].IndexOfAnyExcept((byte)'n') >= 0)
+                break;
+
+            firstArgument++;
+        }
+
+        var suppressNewline = firstArgument != 0;
         long outputLength = Math.Max(0, arguments.Count - firstArgument - 1) + (suppressNewline ? 0 : 1);
         for (var index = firstArgument; index < arguments.Count; index++)
             outputLength += arguments[index].Bytes.Length;
