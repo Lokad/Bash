@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
@@ -57,6 +58,12 @@ internal sealed class EvaluationMemory
     public void Charge(long bytes)
     {
         try { _memory.Grow(bytes); }
+        catch (MemoryBudgetExceededException) { _refused = true; throw; }
+    }
+
+    internal void PrepareListCapacity<T>(List<T> list, int additional)
+    {
+        try { _memory.PrepareListCapacity(list, additional); }
         catch (MemoryBudgetExceededException) { _refused = true; throw; }
     }
 

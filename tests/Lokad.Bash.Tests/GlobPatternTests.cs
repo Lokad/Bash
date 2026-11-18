@@ -1,3 +1,4 @@
+using System.Collections;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -40,7 +41,8 @@ public sealed class GlobPatternTests
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("*"), isGlobQuoted: false)]);
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var parsed));
-        var glob = new GlobEvaluation(parsed, ShellPath.Root, budget, cancellation.Token);
+        using var globMemory = new MemoryCapacity(budget.Budget, 0);
+        var glob = new GlobEvaluation(parsed, ShellPath.Root, globMemory, cancellation.Token);
         var listing = new GlobListing(_ =>
         {
             cancellation.Cancel();
@@ -61,7 +63,8 @@ public sealed class GlobPatternTests
         var budget = new EvaluationMemory(scope);
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(prefix + "*"), false)]);
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
-        var glob = new GlobEvaluation(pattern, ShellPath.Root, budget, CancellationToken.None);
+        using var globMemory = new MemoryCapacity(scope, 0);
+        var glob = new GlobEvaluation(pattern, ShellPath.Root, globMemory, CancellationToken.None);
         var listed = new List<string>();
         var listing = new GlobListing(path =>
         {
@@ -71,6 +74,7 @@ public sealed class GlobPatternTests
 
         Assert.Equal(prefix + "hit", Assert.Single(await glob.EvaluateAsync(listing)));
         Assert.Equal(expectedLookup, Assert.Single(listed));
+        globMemory.Dispose();
         budget.Finish(retainVariables: false);
         Assert.Equal(0, governor.ReservedBytes);
     }
@@ -84,14 +88,55 @@ public sealed class GlobPatternTests
         var prefix = string.Concat(Enumerable.Repeat("a/", 128));
         var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(prefix + "*"), false)]);
         Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
-        var glob = new GlobEvaluation(pattern, ShellPath.Root, budget, CancellationToken.None);
+        using var globMemory = new MemoryCapacity(scope, 0);
+        var glob = new GlobEvaluation(pattern, ShellPath.Root, globMemory, CancellationToken.None);
         budget.ReleaseUnusedCapacity();
         var listing = new GlobListing(_ => throw new InvalidOperationException("No listing expected."));
         using (governor.Reserve(governor.LimitBytes - governor.ReservedBytes))
             await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => glob.EvaluateAsync(listing));
 
+        globMemory.Dispose();
         budget.Finish(retainVariables: false);
         Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task GlobSortReservesScratchAfterAllCandidatesAreAdmitted()
+    {
+        var governor = new MemoryGovernor(4 * 1024 * 1024);
+        using var scope = governor.CreateScope();
+        var budget = new EvaluationMemory(scope);
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("*"), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
+        using var globMemory = new MemoryCapacity(scope, 0);
+        var glob = new GlobEvaluation(pattern, ShellPath.Root, globMemory, CancellationToken.None);
+        var entries = Enumerable.Range(0, 4096)
+            .Reverse().Select(index => new DirectoryEntry($"entry_{index:D4}", FilePathKind.File)).ToArray();
+        using var held = governor.Reserve(0);
+        var observed = new CompletedListing(entries, () =>
+            held.Resize(governor.LimitBytes - governor.ReservedBytes - 4096));
+
+        await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => glob.EvaluateAsync(new GlobListing(_ => observed)));
+        Assert.True(held.Bytes > 0);
+        globMemory.Dispose();
+        budget.Finish(retainVariables: false);
+        held.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class CompletedListing(DirectoryEntry[] entries, Action onCompleted) : IReadOnlyList<DirectoryEntry>
+    {
+        public int Count => entries.Length;
+        public DirectoryEntry this[int index] => entries[index];
+
+        public IEnumerator<DirectoryEntry> GetEnumerator()
+        {
+            foreach (var entry in entries)
+                yield return entry;
+            onCompleted();
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private sealed class GlobListing(Func<string, IReadOnlyList<DirectoryEntry>> list) : IFileTester

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -48,14 +49,14 @@ internal sealed class GlobEvaluation
 
     private readonly GlobPattern _pattern;
     private readonly ShellPath _directory;
-    private readonly EvaluationMemory _memory;
+    private readonly MemoryCapacity _memory;
     private readonly CancellationToken _cancellationToken;
 
-    public GlobEvaluation(GlobPattern pattern, ShellPath directory, EvaluationMemory memory,
+    public GlobEvaluation(GlobPattern pattern, ShellPath directory, MemoryCapacity memory,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        memory.Charge(256);
+        memory.Grow(256);
         _pattern = pattern;
         _directory = directory;
         _memory = memory;
@@ -65,6 +66,7 @@ internal sealed class GlobEvaluation
     /// <summary>Expands matching components in order, preserving the original word for literal fallback.</summary>
     public async Task<IReadOnlyList<string>> EvaluateAsync(IFileTester tester)
     {
+        var baseline = _memory.Bytes;
         var cursor = 0;
         var text = _pattern.Pattern;
         Range component;
@@ -72,13 +74,16 @@ internal sealed class GlobEvaluation
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (!_pattern.TryReadPathComponent(ref cursor, out component))
-                return [text];
+                return LiteralResult();
             if (GlobPattern.RequiresExpansion(text.AsSpan(component), _pattern.GetMask(component)))
                 break;
         }
 
-        List<Candidate> candidates = [PreparePrefix(component.Start.Value)];
+        List<Candidate> candidates = [];
         List<Candidate> matches = [];
+        var prefix = PreparePrefix(component.Start.Value, out var candidatePathBytes);
+        _memory.PrepareListCapacity(candidates, 1);
+        candidates.Add(prefix);
         var trailingSlash = text.EndsWith('/');
         while (true)
         {
@@ -92,11 +97,19 @@ internal sealed class GlobEvaluation
             {
                 var literal = name.Length == 1 ? "." : "..";
                 for (var index = 0; index < candidates.Count; index++)
-                    candidates[index] = AppendComponent(candidates[index], literal, markDirectory);
+                {
+                    var previous = candidates[index];
+                    var replacement = AppendComponent(previous, literal, markDirectory);
+                    candidates[index] = replacement;
+                    _memory.Resize(_memory.Bytes - previous.PathBytes);
+                    candidatePathBytes = checked(candidatePathBytes - previous.PathBytes + replacement.PathBytes);
+                }
+                _memory.TrimExcess();
             }
             else
             {
                 var requireDirectory = hasNext || markDirectory;
+                long matchPathBytes = 0;
                 foreach (var parent in candidates)
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
@@ -118,25 +131,63 @@ internal sealed class GlobEvaluation
                         var match = AppendComponent(parent, entry.Name, markDirectory);
                         if (requireDirectory && entry.Kind == FilePathKind.SymbolicLink
                             && !await tester.IsDirectoryAsync(match.ListPath).ConfigureAwait(false))
+                        {
+                            _memory.Resize(_memory.Bytes - match.PathBytes);
                             continue;
+                        }
+                        _memory.PrepareListCapacity(matches, 1);
                         matches.Add(match);
+                        matchPathBytes = checked(matchPathBytes + match.PathBytes);
                     }
                 }
 
                 if (matches.Count == 0)
-                    return [text];
+                {
+                    ReleaseCandidateLists();
+                    return LiteralResult();
+                }
                 (candidates, matches) = (matches, candidates);
                 matches.Clear();
+                _memory.Resize(_memory.Bytes - candidatePathBytes);
+                candidatePathBytes = matchPathBytes;
+                _memory.TrimExcess();
             }
 
             if (!hasNext)
-                return candidates.Select(static candidate => candidate.OutputPath).Order(OutputPathOrder).ToArray();
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                // Admit the projected paths, stable-order indexes and result array during the sort.
+                _memory.Grow(128L + 48L * candidates.Count);
+                var result = candidates.Select(static candidate => candidate.OutputPath).Order(OutputPathOrder).ToArray();
+                _cancellationToken.ThrowIfCancellationRequested();
+                long outputPathBytes = 0;
+                foreach (var path in result)
+                    outputPathBytes = checked(outputPathBytes + TextBytes(path.Length));
+                ReleaseCandidateLists();
+                _memory.Resize(checked(baseline + outputPathBytes + MemoryCapacity.ArrayBackingBytes<string>(result.Length)));
+                _memory.ReleaseUnusedCapacity();
+                return result;
+            }
             component = next;
+        }
+
+        IReadOnlyList<string> LiteralResult()
+        {
+            _memory.Resize(checked(baseline + MemoryCapacity.ArrayBackingBytes<string>(1)));
+            _memory.ReleaseUnusedCapacity();
+            return [text];
+        }
+
+        void ReleaseCandidateLists()
+        {
+            candidates.Clear();
+            candidates.Capacity = 0;
+            matches.Capacity = 0;
         }
     }
 
     /// <summary>Builds the literal prefix once per spelling, before any directory lookup.</summary>
-    private Candidate PreparePrefix(int end)
+    private Candidate PreparePrefix(int end, out long pathBytes)
     {
         var text = _pattern.Pattern;
         var root = _pattern.IsAbsolute ? "/" : _directory.Path;
@@ -150,7 +201,8 @@ internal sealed class GlobEvaluation
         var hasPrefix = lookupLength != 0;
         var totalLength = hasPrefix ? checked(root.Length + separator.Length + lookupLength) : 0;
         _cancellationToken.ThrowIfCancellationRequested();
-        _memory.Charge(checked(4L * (end + (long)totalLength)));
+        pathBytes = checked(TextBytes(end) + TextBytes(totalLength));
+        _memory.Grow(pathBytes);
         var outputPath = text[..end];
         if (!hasPrefix)
             return new Candidate(root, outputPath);
@@ -177,16 +229,24 @@ internal sealed class GlobEvaluation
     private Candidate AppendComponent(Candidate parent, string name, bool markDirectory)
     {
         _cancellationToken.ThrowIfCancellationRequested();
-        _memory.Charge(256);
-        return new Candidate(Join(parent.ListPath, string.Empty), Join(parent.OutputPath, markDirectory ? "/" : ""));
+        var lookupSeparator = Separator(parent.ListPath);
+        var outputSeparator = Separator(parent.OutputPath);
+        var suffix = markDirectory ? "/" : string.Empty;
+        var lookupLength = checked(parent.ListPath.Length + lookupSeparator.Length + name.Length);
+        var outputLength = checked(parent.OutputPath.Length + outputSeparator.Length + name.Length + suffix.Length);
+        _memory.Grow(checked(TextBytes(lookupLength) + TextBytes(outputLength)));
+        return new Candidate(
+            string.Concat(parent.ListPath, lookupSeparator, name),
+            string.Concat(parent.OutputPath, outputSeparator, name, suffix));
 
-        string Join(string prefix, string suffix)
-        {
-            var separator = prefix.Length == 0 || prefix.EndsWith('/') ? string.Empty : "/";
-            _memory.Charge(checked(4L * (prefix.Length + (long)separator.Length + name.Length + suffix.Length)));
-            return string.Concat(prefix, separator, name, suffix);
-        }
+        static string Separator(string prefix) => prefix.Length == 0 || prefix.EndsWith('/') ? string.Empty : "/";
     }
 
-    private readonly record struct Candidate(string ListPath, string OutputPath);
+    private static long TextBytes(int length) => length == 0 ? 0 : 32L + 2L * length;
+
+    private readonly record struct Candidate(string ListPath, string OutputPath)
+    {
+        // A prefix can borrow the current directory. Its charge is tracked separately.
+        public long PathBytes => checked(TextBytes(ListPath.Length) + TextBytes(OutputPath.Length));
+    }
 }

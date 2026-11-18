@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
@@ -268,9 +267,17 @@ public sealed partial class Evaluation : IFileTester
     Task<IReadOnlyList<DirectoryEntry>> IFileTester.ListDirectoryAsync(string path) =>
         ExecuteListDirectoryAsync(path);
 
-    async Task<bool> IFileTester.IsDirectoryAsync(string path) =>
-        await ExecuteFileTestsForEvaluationAsync([new UnresolvedFileTest(FilePredicateKind.Directory, path, null)],
-            static results => results[0]).ConfigureAwait(false) == 0;
+    async Task<bool> IFileTester.IsDirectoryAsync(string path)
+    {
+        CheckCancellation();
+        if (!TryResolveFileOperand(path, FileLinkFollowing.Follow, out var lookup) || lookup is null)
+            return false;
+        // The candidate owns the pathname while the host resolves it.
+        var results = await PathInfosOperation.AsTask(PublishOperation, [lookup], FilePathInfoRequest.KindOnly)
+            .ConfigureAwait(false);
+        CheckCancellation();
+        return results[0].Error == null && results[0].Info.Kind == FilePathKind.Directory;
+    }
 
     /// <summary>
     ///     Advance internal evaluation until it reaches the next host operation to execute,
@@ -1416,7 +1423,7 @@ public sealed partial class Evaluation : IFileTester
                     break;
                 if (fields.Count == 0)
                     continue;
-                PrepareOperandCapacity(words, checked(fields.Count + source.Words.Count - index - 1), Memory);
+                Memory.PrepareListCapacity(words, checked(fields.Count + source.Words.Count - index - 1));
                 foreach (var field in fields)
                     words.Add(new Word([WordPart.FromValue(WordPartKind.SingleQuoted, field)]));
                 for (var remaining = index + 1; remaining < source.Words.Count; remaining++)
@@ -1703,7 +1710,7 @@ public sealed partial class Evaluation : IFileTester
                 else
                 {
                     var values = await ExpandTextWordsAsync(words[index], scope).ConfigureAwait(false);
-                    PrepareOperandCapacity(expanded, values.Count, Memory);
+                    Memory.PrepareListCapacity(expanded, values.Count);
                     expanded.AddRange(values);
                 }
 
@@ -2875,27 +2882,8 @@ public sealed partial class Evaluation : IFileTester
 
     private void AddOperand<T>(List<T> operands, T value)
     {
-        PrepareOperandCapacity(operands, 1, Memory);
+        Memory.PrepareListCapacity(operands, 1);
         operands.Add(value);
-    }
-
-    private static void PrepareOperandCapacity<T>(List<T> operands, int additional, EvaluationMemory? memory)
-    {
-        if (memory == null)
-            return;
-
-        var previous = operands.Capacity;
-        var required = checked(operands.Count + additional);
-        if (required <= previous)
-            return;
-
-        const long ArrayHeaderBytes = 32;
-        var entryBytes = (long)Unsafe.SizeOf<T>();
-        var capacity = (int)Math.Max(required, Math.Min(Array.MaxLength, Math.Max(4L, 2L * previous)));
-        memory.Charge(ArrayHeaderBytes + entryBytes * capacity);
-        operands.Capacity = capacity;
-        if (previous != 0)
-            memory.Workspace.Resize(memory.Workspace.Bytes - (ArrayHeaderBytes + entryBytes * previous));
     }
 
     /// <summary>Expands byte fields and preflights decoding at text-only consumers.</summary>
@@ -3045,7 +3033,7 @@ public sealed partial class Evaluation : IFileTester
             CheckCancellation();
             if (!GlobPattern.RequiresExpansion(expandedWord))
             {
-                PrepareOperandCapacity(results, 1, backingOwner);
+                backingOwner?.PrepareListCapacity(results, 1);
                 results.Add(expandedWord.ToValue(Memory));
                 continue;
             }
@@ -3057,10 +3045,11 @@ public sealed partial class Evaluation : IFileTester
                     .ConfigureAwait(false);
                 return false;
             }
+            using var globMemory = new MemoryCapacity(Memory.Budget, 0);
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
-                Memory, _cancellationToken);
+                globMemory, _cancellationToken);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
-            PrepareOperandCapacity(results, matches.Count, backingOwner);
+            backingOwner?.PrepareListCapacity(results, matches.Count);
             foreach (var match in matches)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
@@ -3342,19 +3331,6 @@ public sealed partial class Evaluation : IFileTester
             return infos;
         }
 
-        bool TryResolveFileOperand(string operand, FileLinkFollowing following, out FilePathLookup? path)
-        {
-            // An empty operand denotes a missing path, including in time comparisons.
-            path = null;
-            if (operand.Length == 0)
-                return true;
-            var prefix = operand.StartsWith('/') ? "" : _state.CurrentDirectory.Path;
-            if (!PathResolution.FitsPathLimits(prefix, operand) || !RawShellPath.TryParse(operand, out var raw))
-                return false;
-            path = new FilePathLookup(raw, _state.CurrentDirectory, following);
-            return true;
-        }
-
         static bool CompareTimes(FileTimeComparison comparison, FilePathResolutionResult left, FilePathResolutionResult right)
         {
             // Time comparisons treat a non-directory traversal as a missing operand.
@@ -3522,11 +3498,27 @@ public sealed partial class Evaluation : IFileTester
     /// </summary>
     private async Task<IReadOnlyList<DirectoryEntry>> ExecuteListDirectoryAsync(string path)
     {
+        CheckCancellation();
         if (!RawShellPath.TryParse(path, out var raw)) return [];
-        var result = await AwaitOperationAsync(ListDirectoryOperation.AsTask(PublishOperation,
-            new FilePathLookup(raw, _state.CurrentDirectory, FileLinkFollowing.Follow))).ConfigureAwait(false);
+        // Keep the candidate generation admitted until the host settles its borrowed path.
+        var result = await ListDirectoryOperation.AsTask(PublishOperation,
+            new FilePathLookup(raw, _state.CurrentDirectory, FileLinkFollowing.Follow)).ConfigureAwait(false);
+        CheckCancellation();
         // Globs treat expected listing failures as no matches. Other failures still propagate.
         return result.Error is null ? result.Entries : [];
+    }
+
+    private bool TryResolveFileOperand(string operand, FileLinkFollowing following, out FilePathLookup? path)
+    {
+        // An empty operand denotes a missing path, including in time comparisons.
+        path = null;
+        if (operand.Length == 0)
+            return true;
+        var prefix = operand.StartsWith('/') ? "" : _state.CurrentDirectory.Path;
+        if (!PathResolution.FitsPathLimits(prefix, operand) || !RawShellPath.TryParse(operand, out var raw))
+            return false;
+        path = new FilePathLookup(raw, _state.CurrentDirectory, following);
+        return true;
     }
 
     /// <summary>

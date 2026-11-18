@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 
 namespace Lokad.Bash.Memory;
 
@@ -108,6 +110,23 @@ public sealed class MemoryCapacity : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         if (bytes != 0)
             Resize(checked(Bytes + bytes));
+    }
+
+    internal static long ArrayBackingBytes<T>(int capacity) =>
+        capacity == 0 ? 0 : 32L + (long)Unsafe.SizeOf<T>() * capacity;
+
+    /// <summary>Admits a list's replacement array and releases the previous array after growth.</summary>
+    internal void PrepareListCapacity<T>(List<T> list, int additional)
+    {
+        var previous = list.Capacity;
+        var required = checked(list.Count + additional);
+        if (required <= previous)
+            return;
+
+        var capacity = (int)Math.Max(required, Math.Min(Array.MaxLength, Math.Max(4L, 2L * previous)));
+        Grow(ArrayBackingBytes<T>(capacity));
+        list.Capacity = capacity;
+        Resize(Bytes - ArrayBackingBytes<T>(previous));
     }
 
     /// <summary>Returns large amounts of unused credit after a batch has relinquished its storage.</summary>

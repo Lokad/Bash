@@ -233,8 +233,8 @@ public sealed partial class Evaluation
         SimpleCommand RemainingCommand(ShellValue? first)
         {
             var words = new List<Word>();
-            PrepareOperandCapacity(words, checked((first.HasValue ? 1 : 0)
-                + fields.Count - fieldIndex + simpleCommand.Words.Count - wordIndex), Memory);
+            Memory.PrepareListCapacity(words, checked((first.HasValue ? 1 : 0)
+                + fields.Count - fieldIndex + simpleCommand.Words.Count - wordIndex));
             if (first is { } value)
                 words.Add(new Word([WordPart.FromValue(WordPartKind.SingleQuoted, value)]));
             for (var index = fieldIndex; index < fields.Count; index++)

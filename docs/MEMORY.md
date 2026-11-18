@@ -153,7 +153,10 @@ checks. No failed admission switches to a different matcher or an unowned cache.
 
 Pathname component ranges borrow the admitted pattern and quote mask. The command
 admits the lookup and output forms of the literal prefix before creating them.
-Reached matches retain their existing candidate and string allowance.
+Pathname expansion admits both candidate lists and their path strings, releases
+rejected candidates after lookup, and reuses list backing across components.
+Sorting admits its temporary arrays and the sorted paths retain their allowance
+until the caller finishes encoding them.
 
 Immutable arithmetic metadata, literal word fields and prepared list navigation
 belong to the syntax and are shared across executions. Stable operands and literal
