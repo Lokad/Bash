@@ -270,9 +270,10 @@ public sealed partial class Evaluation : IFileTester
     async Task<bool> IFileTester.IsDirectoryAsync(string path)
     {
         CheckCancellation();
-        if (!TryResolveFileOperand(path, FileLinkFollowing.Follow, out var lookup) || lookup is null)
+        if (!TryReadFileOperand(path, _state.CurrentDirectory, out var raw) || raw is null)
             return false;
         // The candidate owns the pathname while the host resolves it.
+        var lookup = new FilePathLookup(raw, _state.CurrentDirectory, FileLinkFollowing.Follow);
         var results = await PathInfosOperation.AsTask(PublishOperation, [lookup], FilePathInfoRequest.KindOnly)
             .ConfigureAwait(false);
         CheckCancellation();
@@ -3202,6 +3203,9 @@ public sealed partial class Evaluation : IFileTester
         Func<IReadOnlyList<bool>, bool> evaluator)
     {
         CheckCancellation();
+        using var lookupMemory = new MemoryCapacity(Memory.Budget,
+            MemoryCapacity.ArrayBackingBytes<int>(tests.Count) + MemoryCapacity.ArrayBackingBytes<bool>(tests.Count));
+        var currentDirectory = _state.CurrentDirectory;
         var terminalDescriptors = new List<FileDescriptor>();
         var terminalResultIndices = new List<int>();
         var kindPaths = new PathLookupBatch<FilePathLookup>();
@@ -3214,11 +3218,14 @@ public sealed partial class Evaluation : IFileTester
         var results = new bool[tests.Count];
         for (var index = 0; index < tests.Count; index++)
         {
+            CheckCancellation();
             var test = tests[index];
             if (test.Kind.IsTerminal)
             {
                 if (LogicalDescriptor.TryParse(test.Operand.AsSpan(), out var descriptor))
                 {
+                    lookupMemory.PrepareListCapacity(terminalDescriptors, 1);
+                    lookupMemory.PrepareListCapacity(terminalResultIndices, 1);
                     terminalDescriptors.Add(_state.CurrentRedirectionTable?.Resolve(descriptor) ?? FileDescriptor.Closed);
                     terminalResultIndices.Add(index);
                 }
@@ -3226,29 +3233,44 @@ public sealed partial class Evaluation : IFileTester
             else if (test.Kind.ComparesIdentity)
             {
                 if (test.SecondaryOperand is { } secondary
-                    && TryResolveFileOperand(test.Operand, FileLinkFollowing.Follow, out var left) && left is not null
-                    && TryResolveFileOperand(secondary, FileLinkFollowing.Follow, out var right) && right is not null)
-                    identityTests.Add((index, metadataPaths.Add(left), metadataPaths.Add(right)));
+                    && TryReadFileOperand(test.Operand, currentDirectory, out var left) && left is not null
+                    && TryReadFileOperand(secondary, currentDirectory, out var right) && right is not null)
+                {
+                    lookupMemory.PrepareListCapacity(identityTests, 1);
+                    identityTests.Add((index, AddPath(metadataPaths, left, FileLinkFollowing.Follow),
+                        AddPath(metadataPaths, right, FileLinkFollowing.Follow)));
+                }
             }
             else if (test.Kind.TimeComparison is { } comparison)
             {
                 if (test.SecondaryOperand is { } secondary
-                    && TryResolveFileOperand(test.Operand, FileLinkFollowing.Follow, out var left)
-                    && TryResolveFileOperand(secondary, FileLinkFollowing.Follow, out var right))
-                    comparisons.Add((index, comparison, left is null ? -1 : metadataPaths.Add(left),
-                        right is null ? -1 : metadataPaths.Add(right)));
+                    && TryReadFileOperand(test.Operand, currentDirectory, out var left)
+                    && TryReadFileOperand(secondary, currentDirectory, out var right))
+                {
+                    lookupMemory.PrepareListCapacity(comparisons, 1);
+                    comparisons.Add((index, comparison,
+                        left is null ? -1 : AddPath(metadataPaths, left, FileLinkFollowing.Follow),
+                        right is null ? -1 : AddPath(metadataPaths, right, FileLinkFollowing.Follow)));
+                }
             }
             else
             {
                 var following = test.Kind.RequiredKind == FilePathKind.SymbolicLink
                     ? FileLinkFollowing.NoFollow : FileLinkFollowing.Follow;
-                if (!TryResolveFileOperand(test.Operand, following, out var path) || path is null)
+                if (!TryReadFileOperand(test.Operand, currentDirectory, out var path) || path is null)
                     continue;
                 var batch = test.Kind.MetadataPredicate is not null ? metadataPaths
                     : test.Kind.IsNonEmpty ? sizePaths : kindPaths;
-                pathResultIndices[index] = batch.Add(path);
+                pathResultIndices[index] = AddPath(batch, path, following);
             }
         }
+
+        // The evaluator retains one ordered response slot per request through result mapping.
+        // Referenced payloads and provider scratch remain under their original owners.
+        lookupMemory.Grow(MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(kindPaths.Paths.Count)
+            + MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(metadataPaths.Paths.Count)
+            + MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(sizePaths.Paths.Count)
+            + MemoryCapacity.ArrayBackingBytes<bool>(terminalDescriptors.Count));
 
         // Kind, metadata and exact-size failures remain independent. Hosts validate traversal
         // before fetching content; lexical normalization here would erase symbolic-link semantics.
@@ -3257,6 +3279,7 @@ public sealed partial class Evaluation : IFileTester
         var sizes = await ReadPathsAsync(sizePaths, FilePathInfoRequest.MetadataWithExactSize).ConfigureAwait(false);
         for (var index = 0; index < tests.Count; index++)
         {
+            CheckCancellation();
             var pathIndex = pathResultIndices[index];
             if (pathIndex < 0)
                 continue;
@@ -3312,20 +3335,41 @@ public sealed partial class Evaluation : IFileTester
         }
         if (terminalDescriptors.Count > 0)
         {
-            var terminalStatuses = await AwaitOperationAsync(TerminalStatusesOperation.AsTask(PublishOperation, terminalDescriptors))
+            CheckCancellation();
+            var terminalStatuses = await TerminalStatusesOperation.AsTask(PublishOperation, terminalDescriptors)
                 .ConfigureAwait(false);
+            CheckCancellation();
             for (var index = 0; index < terminalDescriptors.Count; index++)
                 results[terminalResultIndices[index]] = terminalStatuses[index];
         }
         CheckCancellation();
         return evaluator(results) ? 0 : 1;
 
+        int AddPath(PathLookupBatch<FilePathLookup> batch, RawShellPath operand, FileLinkFollowing following)
+        {
+            var bytes = 40L;
+            if (operand.Raw[0] != '/')
+            {
+                var prefixLength = currentDirectory.IsRoot ? 1 : currentDirectory.Path.Length + 1;
+                bytes += 32L + 2L * (prefixLength + operand.Raw.Length);
+            }
+
+            lookupMemory.Grow(bytes);
+            var count = batch.Paths.Count;
+            var index = batch.Add(new FilePathLookup(operand, currentDirectory, following), lookupMemory);
+            if (batch.Paths.Count == count)
+                lookupMemory.Resize(lookupMemory.Bytes - bytes);
+            return index;
+        }
+
         async Task<IReadOnlyList<FilePathResolutionResult>> ReadPathsAsync(
             PathLookupBatch<FilePathLookup> paths, FilePathInfoRequest request)
         {
+            CheckCancellation();
             if (paths.Paths.Count == 0)
                 return Array.Empty<FilePathResolutionResult>();
-            var infos = await AwaitOperationAsync(PathInfosOperation.AsTask(PublishOperation, paths.Paths, request))
+            // A cancelled wait cannot release the borrowed paths before the host has settled.
+            var infos = await PathInfosOperation.AsTask(PublishOperation, paths.Paths, request)
                 .ConfigureAwait(false);
             CheckCancellation();
             return infos;
@@ -3508,17 +3552,14 @@ public sealed partial class Evaluation : IFileTester
         return result.Error is null ? result.Entries : [];
     }
 
-    private bool TryResolveFileOperand(string operand, FileLinkFollowing following, out FilePathLookup? path)
+    private static bool TryReadFileOperand(string operand, ShellPath currentDirectory, out RawShellPath? path)
     {
         // An empty operand denotes a missing path, including in time comparisons.
         path = null;
         if (operand.Length == 0)
             return true;
-        var prefix = operand.StartsWith('/') ? "" : _state.CurrentDirectory.Path;
-        if (!PathResolution.FitsPathLimits(prefix, operand) || !RawShellPath.TryParse(operand, out var raw))
-            return false;
-        path = new FilePathLookup(raw, _state.CurrentDirectory, following);
-        return true;
+        var prefix = operand.StartsWith('/') ? "" : currentDirectory.Path;
+        return PathResolution.FitsPathLimits(prefix, operand) && RawShellPath.TryParse(operand, out path);
     }
 
     /// <summary>

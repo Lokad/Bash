@@ -2,6 +2,7 @@ using Lokad.Bash.Evaluation;
 using Lokad.Bash.Syntax;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
@@ -24,21 +25,6 @@ public partial class EvaluationTests
             Assert.Single(basic.TerminalStatusBatches));
         Assert.Empty(basic.PathInfoBatches);
         Assert.Empty(basic.ClosedDescriptors);
-    }
-
-    [Fact]
-    public async Task TerminalStatuses_CancellationStopsWaitingForHostResults()
-    {
-        var state = new Eval(Parser.Parse("test -t 0; after=1"));
-        using var cancellation = new CancellationTokenSource();
-        var completion = state.EnsureRunning(cancellation.Token);
-        var operation = Assert.IsType<TerminalStatusesOperation>(await state.GetNextStep(CancellationToken.None));
-
-        cancellation.Cancel();
-        operation.SetResult([true]);
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
-        Assert.False(state.Variables.ContainsKey("after"));
     }
 
     [Theory]
@@ -113,21 +99,93 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
     }
 
-    [Fact]
-    public async Task FileTests_CancellationStopsWaitingForHostResults()
+    [Theory]
+    [InlineData("test -t 0", true)]
+    [InlineData("test ! -t invalid -a -e path", false)]
+    public async Task FileTests_RetainTheirAllowanceUntilTheHostSettles(string command, bool terminal)
     {
-        var state = new Eval(Parser.Parse("test ! -t invalid -a -e path; after=1"));
+        var state = new Eval(Parser.Parse(command + "; after=1"));
+        var budget = new MemoryGovernor(128 * 1024);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
         using var cancellation = new CancellationTokenSource();
         var completion = state.EnsureRunning(cancellation.Token);
-        var operation = Assert.IsType<PathInfosOperation>(await state.GetNextStep(CancellationToken.None));
-        Assert.Equal(FilePathInfoRequest.KindOnly, operation.Request);
+        var operation = await state.GetNextStep(CancellationToken.None);
 
+        var reserved = budget.ReservedBytes;
         cancellation.Cancel();
-        operation.SetResult([PathKindResult(FilePathKind.Directory)]);
+        var completedEarly = await Task.WhenAny(completion, Task.Delay(TimeSpan.FromMilliseconds(100))) == completion;
+        var pending = budget.ReservedBytes;
+        if (terminal)
+            Assert.IsType<TerminalStatusesOperation>(operation).SetResult([true]);
+        else
+            Assert.IsType<PathInfosOperation>(operation).SetResult([PathKindResult(FilePathKind.Directory)]);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+        Assert.False(completedEarly);
+        Assert.Equal(reserved, pending);
+        Assert.True(budget.ReservedBytes < reserved);
         Assert.False(state.Variables.ContainsKey("after"));
     }
+
+    [Theory]
+    [InlineData("-e", "relative", 512, true)]
+    [InlineData("-r", "relative", 512, true)]
+    [InlineData("-s", "relative", 512, true)]
+    [InlineData("-e", "relative", 2048, false)]
+    [InlineData("-r", "relative", 2048, false)]
+    [InlineData("-s", "relative", 2048, false)]
+    [InlineData("-e", "absolute", 512, false)]
+    [InlineData("-r", "absolute", 512, false)]
+    [InlineData("-s", "absolute", 512, false)]
+    [InlineData("-e", "repeated", 512, false)]
+    [InlineData("-r", "repeated", 512, false)]
+    [InlineData("-s", "repeated", 512, false)]
+    public async Task FileTests_AdmitDistinctQualifiedPathsBeforeAnyLookup(
+        string predicate, string spelling, int limitKiB, bool refused)
+    {
+        const int Count = 512;
+        var directory = "/" + string.Join('/', Enumerable.Repeat(new string('d', 128), 8));
+        var operands = Enumerable.Range(0, Count).Select(index => spelling switch
+        {
+            "absolute" => $"/entry{index:D4}",
+            "repeated" => "entry0000",
+            _ => $"entry{index:D4}"
+        }).ToArray();
+        var script = "test -e /guard -a " + string.Join(" -a ", operands.Select(path => predicate + " " + path));
+        var state = new Eval(Parser.Parse(script), options:
+            EvaluationOptions.Default with { CurrentDirectory = new ShellPath(directory) });
+        var budget = new MemoryGovernor(limitKiB * 1024);
+        using var owner = budget.CreateScope();
+        var host = new TestOperationVisitor([]) { MemoryBudget = owner, RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueuePathInfo(FilePathInfo.FromKind(FilePathKind.File));
+        var info = new FilePathInfo(FilePathKind.File, new FileMetadata(1, DateTimeOffset.UnixEpoch,
+            FileAccessRights.Read, null, null, null, null, null));
+        var paths = operands.Distinct().Select(path => path[0] == '/' ? path : directory + "/" + path).ToArray();
+        foreach (var _ in paths)
+            host.EnqueuePathInfo(info);
+
+        await new Engine().RunAsync(state, host, CancellationToken.None);
+
+        if (refused)
+        {
+            Assert.Empty(host.PathInfoBatches);
+            var diagnostic = Assert.Single(host.Appends);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
+            Assert.Equal("test: shared memory budget exhausted\n", Text(diagnostic.Content));
+        }
+        else
+        {
+            Assert.Equal(new[] { "/guard" }.Concat(paths), host.PathInfoRequests.Select(path => path.Path));
+            Assert.Equal(predicate == "-e" ? 1 : 2, host.PathInfoBatches.Count);
+            Assert.Empty(host.Appends);
+        }
+        Assert.Equal(refused ? 1 : 0, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("test -e same -a -t 0 -a -f same -a ! -d same -a -d dir -a ! -e missing")]
     public async Task FileTests_BatchDistinctPathsAndKeepHostPredicatePositions(string script)
