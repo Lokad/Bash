@@ -126,6 +126,8 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ for x in; do :; done;\n}", "f () \n{ \n    for x in ;\n    do\n        :;\n    done\n}\n")]
     [InlineData("f(){ for ((i=0;i<2;i++)); do ((n+=i)); done;\n}", "f () \n{ \n    for ((i=0; i<2; i++))\n    do\n        ((n+=i));\n    done\n}\n")]
     [InlineData("f(){ echo x | cat; echo y |& cat; ! false | true;\n}", "f () \n{ \n    echo x | cat;\n    echo y 2>&1 | cat;\n    ! false | true\n}\n")]
+    [InlineData("f(){ { printf O; printf E >&2; } >out |& cat; }",
+        "f () \n{ \n    { \n        printf O;\n        printf E 1>&2\n    } > out 2>&1 | cat\n}\n")]
     [InlineData("f(){ case \"$1\" in a|'b c') echo yes;; *) :;; esac;\n}", "f () \n{ \n    case \"$1\" in \n        a | 'b c')\n            echo yes\n        ;;\n        *)\n            :\n        ;;\n    esac\n}\n")]
     [InlineData("f(){ case esac\nin (esac) printf match;; esac; }", "f () \n{ \n    case esac in \n        (esac)\n            printf match\n        ;;\n    esac\n}\n")]
     [InlineData("f(){ for x in a 'b c' \"$@\"; { printf '%s\\n' \"$x\"; }; }", "f () \n{ \n    for x in a 'b c' \"$@\";\n    do\n        printf '%s\\n' \"$x\";\n    done\n}\n")]

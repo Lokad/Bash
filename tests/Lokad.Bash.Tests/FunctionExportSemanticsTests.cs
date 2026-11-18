@@ -53,6 +53,8 @@ public sealed class FunctionExportSemanticsTests
             yield return [prepared, "f(){ printf '%s' $'L\\377R'; }; export -f f; /usr/bin/bash -c f", 0, "4CFF52", "", "{}"];
             // function-redirection
             yield return [prepared, "f(){ printf result; } >out; export -f f; /usr/bin/bash -c f; cat out", 0, "726573756C74", "", "{\"out\":\"File:726573756C74\"}"];
+            yield return [prepared, "f(){ { printf O; printf E >&2; } >out |& cat; }; export -f f; /usr/bin/bash -c f; cat out", 0,
+                "4F45", "", "{\"out\":\"File:4F45\"}"];
             // clear-environment
             yield return [prepared, "f(){ printf forbidden; }; export -f f; exec -c /usr/bin/bash -c 'declare -F f; printf \"|%s\" \"$?\"'", 0, "7C31", "", "{}"];
             // argument-frame

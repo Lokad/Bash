@@ -718,6 +718,12 @@ public sealed partial class Evaluation : IFileTester
     }
 
 
+    private static readonly Redirection[] PipeStandardErrorRedirections =
+    [
+        new(RedirectionKind.DuplicateOutput, 2, new Word([WordPart.FromText(WordPartKind.Unquoted, "1")]),
+            string.Empty, hereDocumentDelimiter: null)
+    ];
+
     /// <summary>
     /// Evaluates a pipeline by preparing pipe descriptors, running commands, and collecting exit codes.
     /// </summary>
@@ -753,13 +759,13 @@ public sealed partial class Evaluation : IFileTester
             {
                 var stdIn = index > 0 ? pipes[index - 1].Read : GetStdInDescriptor();
                 var stdOut = index < commands.Count - 1 ? pipes[index].Write : GetStdOutDescriptor();
-                var stdErr = index < commands.Count - 1 && operators[index] == PipelineOperator.PipeAndError
-                    ? pipes[index].Write
-                    : GetStdErrDescriptor();
-                var script = new ParsedScript([commands[index]]);
+                var command = commands[index];
+                if (index < operators.Count && operators[index] == PipelineOperator.PipeAndError)
+                    command = AppendPipeStandardError(command);
+                var script = new ParsedScript([command]);
                 var descriptors = new EvaluationDescriptorSetup(
-                    CaptureDescriptorBindings().WithStandardStreams(stdIn, stdOut, stdErr), []);
-                var forkKind = commands[index] is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
+                    CaptureDescriptorBindings().WithStandardStreams(stdIn, stdOut, GetStdErrDescriptor()), []);
+                var forkKind = command is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
                 var stageVars = Memory.CloneVariables(scope.Variables);
                 var stageContext = scope.Context.Fork(stageVars);
                 var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory);
@@ -827,6 +833,34 @@ public sealed partial class Evaluation : IFileTester
             {
                 foreach (var stage in stages)
                     stage.Evaluation.ReleaseFunctions();
+            }
+        }
+
+        ICommand AppendPipeStandardError(ICommand command)
+        {
+            // 2>&1 runs after the stage's explicit redirections. Keep the resulting
+            // alias in that redirection frame so inner commands can override it.
+            Memory.Charge(96);
+            return command switch
+            {
+                SimpleCommand simple => simple with { Redirections = Append(simple.Redirections) },
+                RedirectedCommand redirected => redirected with { Redirections = Append(redirected.Redirections) },
+                _ => new RedirectedCommand(command, PipeStandardErrorRedirections)
+            };
+
+            IReadOnlyList<Redirection> Append(IReadOnlyList<Redirection> redirections)
+            {
+                if (redirections.Count == 0)
+                    return PipeStandardErrorRedirections;
+                Memory.Charge(checked(32L + 8L * (redirections.Count + 1L)));
+                var appended = new Redirection[checked(redirections.Count + 1)];
+                for (var index = 0; index < redirections.Count; index++)
+                {
+                    CheckCancellation();
+                    appended[index] = redirections[index];
+                }
+                appended[^1] = PipeStandardErrorRedirections[0];
+                return appended;
             }
         }
 

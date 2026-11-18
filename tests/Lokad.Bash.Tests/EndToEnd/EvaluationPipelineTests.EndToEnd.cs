@@ -23,18 +23,83 @@ public sealed class EvaluationPipelineTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_Pipeline_PipeAndError_UsesStdErr()
+    public async Task PipeAndErrorUsesExplicitStdoutAliasBeforeDuplicatingStderr()
     {
-        // This test verifies that "|&" routes STDERR (and STDOUT) from the left command into the pipe.
-        // The script writes "left" to STDERR and pipes it to "cat"; a correct implementation emits
-        // "left\n" on STDOUT, leaves STDERR empty, and returns exit code 0.
-        // If stderr is not piped, STDOUT would be empty and STDERR would contain "left\n".
         var script = @"echo left >&2 |& cat";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("left\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("left\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(">out", "", "OE", "previous")]
+    [InlineData("2>err", "OE", null, "")]
+    [InlineData(">out 2>err", "", "OE", "")]
+    [InlineData("2>err >&2", "", null, "OE")]
+    [InlineData("2>&-", "OE", null, "previous")]
+    public async Task PipeAndErrorUsesTheFinalExplicitStdoutMapping(
+        string redirections, string stdout, string? outputFile, string errorFile)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/err", "previous");
+        var result = await host.RunAsync("{ printf O; printf E >&2; } " + redirections + " |& cat",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(stdout, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(outputFile, host.FileExists("/out") ? host.ReadFile("/out") : null);
+        Assert.Equal(errorFile, host.ReadFile("/err"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PipeAndErrorWaitsForArgumentAndRedirectionOperandEffects()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "printf '<%s>' \"$(printf argument >&2; printf O)\" " +
+            ">\"$(printf reached >>effects; printf setup >&2; printf target)\" |& cat",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.Equal("argumentsetup", host.StandardError.TextContent);
+        Assert.Equal("reached", host.ReadFile("/effects"));
+        Assert.Equal("<O>", host.ReadFile("/target"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PipeAndErrorKeepsTheReachedStderrWhenExplicitSetupFails()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(": >before 2>err >&99 >after |& cat", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal("", host.ReadFile("/before"));
+        Assert.Equal("99: Bad file descriptor\n", host.ReadFile("/err"));
+        Assert.False(host.FileExists("/after"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task FunctionBodyCanOverrideStderrAfterPipelineSetup()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("f(){ printf O; printf E >&2; } 2>body; f >call |& cat",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal("O", host.ReadFile("/call"));
+        Assert.Equal("E", host.ReadFile("/body"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Fact]

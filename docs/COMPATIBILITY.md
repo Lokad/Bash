@@ -167,6 +167,9 @@ indexed `PIPESTATUS` array exposes individual foreground statuses.
 The array records statuses before pipeline negation; a subsequent command expands
 its operands against the previous array and replaces it when it completes. Empty
 loops and function definitions preserve the previous array.
+For `|&`, the left stage applies an implicit `2>&1` after its explicit
+redirections. Setup diagnostics use the stderr mapping reached so far.
+Function-body redirections apply on invocation inside the completed stage setup.
 Scripts are limited to 4 MiB, with structural syntax/nesting guards and CLR collection-size
 checks. The source bound limits parser input; nesting guards protect recursive
 syntax handling. They are independent of execution duration. There are no lifetime

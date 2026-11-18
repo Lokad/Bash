@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Apply the implicit stderr duplication in `|&` after the left stage's
+  explicit redirections. Preserve the reached stderr during setup.
+
 - Expand braces across quoted, escaped and substitution fragments. Preserve
   literal outer braces around valid inner expansions and retain quote masks.
 
