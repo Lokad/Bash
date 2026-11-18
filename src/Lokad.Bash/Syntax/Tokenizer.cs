@@ -838,10 +838,13 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (current == (byte)'"')
+            var quoteContentStart = Position + 1;
+            // The invariant profile uses the original text of a locale-quoted word.
+            if (current == (byte)'"' || current == (byte)'$' && syntax != ExpansionWordSyntax.DecodedArithmetic
+                && ShellSourceCursor.TryMatchLogicalText(span, Position, "$\"", out quoteContentStart))
             {
                 FlushUnquoted();
-                Position++;
+                Position = quoteContentStart;
                 var quotedParts = ReadDoubleQuotedParts(span, syntax);
                 parts.AddRange(quotedParts);
                 continue;

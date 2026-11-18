@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recognize locale-quoted `$"…"` words as double-quoted text in the invariant profile.
+
 - Honor the leading `--` delimiter in `eval`, `source` and `.`. Validate options
   after field expansion and pass the selected file's remaining fields as arguments.
 

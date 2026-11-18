@@ -7,6 +7,36 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class QuotedEscapeTestsEndToEnd
 {
     [Theory]
+    [InlineData("set -- left 'right split'; printf '<%s>' $\"pre$@post\"", "<preleft><right splitpost>")]
+    [InlineData("set -- $\"\"; printf '%s:<%s>' \"$#\" \"$1\"", "1:<>")]
+    [InlineData("unset missing; v=1; printf '<%s>' \"${missing:-$\"a $v\"}\"", "<a 1>")]
+    [InlineData("case '*' in $\"*\") printf literal;; esac; [[ item == $\"*\" ]] || printf ':quoted'", "literal:quoted")]
+    [InlineData("printf '<%s>' $\\\n\"a\\\nb\" \\$\"plain\"", "<ab><$plain>")]
+    [InlineData("v=expanded; cat <<$\"END\"\n$v\nEND\ncat <<END\n$\"$v\"\nEND\n", "$v\n$\"expanded\"\n")]
+    public async Task LocaleQuotedWordsUseDoubleQuotedExpansion(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task LocaleQuotedFieldsPreserveByteValuesAndFileSelection()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("v=$'\\377'; f='text name'; printf '%s' $\"$v\" >$\"$f\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(new byte[] { 0xff }, host.ReadFileBytes("/text name"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("value=outer; printf '<%s>\\n' \"\\$value\"", "<$value>\n", "", 0)]
     [InlineData("value=outer; printf '<%s>\\n' \"\\${value}\"", "<${value}>\n", "", 0)]
     [InlineData("printf '<%s>\\n' \"\\$(printf effect >&2)\"", "<$(printf effect >&2)>\n", "", 0)]

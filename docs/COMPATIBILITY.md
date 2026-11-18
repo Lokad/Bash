@@ -81,6 +81,8 @@ the native Bash crashes observed when aggregating those directory-created entrie
 
 Source and shell values preserve bytes, including invalid UTF-8 values. Text-only
 host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
+Locale-quoted words `$"…"` use their original text under the invariant profile.
+They follow the same expansion and quoting rules as ordinary double-quoted words.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
 Here-strings expand one scalar operand without brace generation, field splitting
 or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
