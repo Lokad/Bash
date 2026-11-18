@@ -134,8 +134,10 @@ public sealed class PrefixScopeOwnershipTests
         Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(original, 512).ToArray(), ArrayKind.Indexed));
         var prepared = Variables.CreateEmpty();
         Assert.True(prepared.TrySetScalar("x", visible));
+        using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
+        var installation = new EvaluationMemory(setup);
         using var bindings = owner == "local" ? null
-            : new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" });
+            : new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, installation, CancellationToken.None);
         var locals = new Variables.LocalBindings(caller, parent: null, bindings);
         if (owner == "local")
         {
@@ -263,5 +265,148 @@ public sealed class PrefixScopeOwnershipTests
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void PrefixInstallationMovesTheOriginalAndPreparedArrays()
+    {
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromText("original");
+        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(value, 512).ToArray(), ArrayKind.Indexed));
+        var original = caller.IndexedArrays["x"];
+        var governor = new MemoryGovernor(1024 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var prepared = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
+            Assert.True(prepared.TrySetArrayElement("x", default(IndexedArrayIndex), ShellValue.FromText("temporary")));
+            var temporary = prepared.IndexedArrays["x"];
+            Assert.NotSame(original, temporary);
+            var baseBytes = memory.Workspace.Bytes;
+            using (var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None))
+            {
+                Assert.Same(original, bindings.SavedVariables.IndexedArrays["x"]);
+                Assert.Same(temporary, caller.IndexedArrays["x"]);
+                Assert.False(prepared.HasBinding("x"));
+                Assert.True(caller.IsTemporaryBinding("x"));
+                Assert.True(memory.Workspace.Bytes - baseBytes >= bindings.SavedVariables.EstimatedMemoryBytes);
+            }
+            Assert.Same(original, caller.IndexedArrays["x"]);
+            Assert.False(caller.IsTemporaryBinding("x"));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrefixInstallationAdmitsTheEntireSavedSetBeforePublishing(bool cancelAtAdmission)
+    {
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromText("original");
+        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(value, 512).ToArray(), ArrayKind.Indexed));
+        Assert.True(caller.TrySetScalar("first", value));
+        var original = caller.IndexedArrays["x"];
+        var prepared = Variables.CreateEmpty();
+        var replacement = ShellValue.FromText("replacement");
+        Assert.True(prepared.TrySetScalar("x", replacement));
+        Assert.True(prepared.TrySetScalar("first", replacement));
+        var names = new HashSet<BindingName> { "first", "x" };
+        using var cancellation = new CancellationTokenSource();
+        var governor = new MemoryGovernor(cancelAtAdmission ? 1024 * 1024 : 4096);
+        var counted = new CountingMemoryBudget(governor);
+        var memory = new EvaluationMemory(counted);
+        try
+        {
+            if (cancelAtAdmission)
+            {
+                counted.AdmissionSucceeded += cancellation.Cancel;
+                var error = Assert.ThrowsAny<OperationCanceledException>(() =>
+                    new Variables.CommandBindings(caller, prepared, names, memory, cancellation.Token));
+                Assert.Equal(cancellation.Token, error.CancellationToken);
+            }
+            else
+            {
+                Assert.Throws<MemoryBudgetExceededException>(() =>
+                    new Variables.CommandBindings(caller, prepared, names, memory, cancellation.Token));
+            }
+            Assert.Same(original, caller.IndexedArrays["x"]);
+            Assert.Equal(value, caller.Scalars["first"]);
+            Assert.Equal(replacement, prepared.Scalars["first"]);
+            Assert.Equal(replacement, prepared.Scalars["x"]);
+            Assert.False(caller.IsTemporaryBinding("first"));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("output")]
+    [InlineData("selector")]
+    [InlineData("promotion")]
+    public void RefusingAnOutputCopyKeepsTheSavedArraySelected(string route)
+    {
+        var caller = Variables.CreateEmpty();
+        var element = ShellValue.FromText("saved");
+        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(element, 512).ToArray(), ArrayKind.Indexed));
+        var array = caller.IndexedArrays["x"];
+        var prepared = Variables.CreateEmpty();
+        var replacement = ShellValue.FromText("active");
+        Assert.True(prepared.TrySetScalar("x", replacement));
+        var budget = new MemoryGovernor(1024 * 1024);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
+            memory.ReleaseUnusedCapacity();
+            using var hold = budget.Reserve(budget.LimitBytes - budget.ReservedBytes);
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+            {
+                switch (route)
+                {
+                    case "output": bindings.SelectOutputVariables("x", memory, CancellationToken.None); break;
+                    case "selector": bindings.RetainSelectorBinding("x", memory, CancellationToken.None); break;
+                    case "promotion": bindings.RetainBinding("x", memory, CancellationToken.None); break;
+                    default: throw new ArgumentOutOfRangeException(nameof(route));
+                }
+            });
+            Assert.Same(array, bindings.SavedVariables.IndexedArrays["x"]);
+            Assert.Equal(replacement, caller.Scalars["x"]);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Same(array, caller.IndexedArrays["x"]);
+        Assert.True(array.TryGet(default, out var restored));
+        Assert.Equal(element, restored);
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void RestagingAnUncommittedOutputReusesAdmission()
+    {
+        var caller = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(original, 512).ToArray(), ArrayKind.Indexed));
+        var prepared = Variables.CreateEmpty();
+        Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("temporary")));
+        var budget = new MemoryGovernor(1024 * 1024);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
+            var baseline = memory.Workspace.Bytes;
+            var selected = bindings.SelectOutputVariables("x", memory, CancellationToken.None);
+            Assert.True(memory.Workspace.Bytes - baseline >= selected.EstimatedMemoryBytes);
+            Assert.True(selected.TrySetArrayElement("x", default(IndexedArrayIndex), ShellValue.FromText("different")));
+            _ = bindings.SelectOutputVariables("x", memory, CancellationToken.None);
+            var capacity = memory.Workspace.Bytes;
+            for (var i = 0; i < 8; i++)
+                Assert.Same(selected, bindings.SelectOutputVariables("x", memory, CancellationToken.None));
+            Assert.Equal(capacity, memory.Workspace.Bytes);
+            Assert.True(selected.IndexedArrays["x"].TryGet(default, out var restored));
+            Assert.Equal(original, restored);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
     }
 }

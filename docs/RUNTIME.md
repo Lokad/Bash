@@ -281,8 +281,10 @@ It admits and copies each reached binding once, retaining independent array
 containers and attributes. Unrelated names and containers remain with the caller;
 metadata enumeration does not copy their values. The existing expansion write
 target forwards actual RHS effects, including same-value writes, with nameref and
-array-kind rules intact. In-process execution installs only prepared prefixes on
-the active owner; full child snapshots still detach all visible state.
+array-kind rules intact. In-process execution consumes only the prepared prefix
+slots and preserves the original slots in the saved store. An installation
+refusal leaves the caller's bindings at their state after operand expansion.
+Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.
 Redirections share their temporary writes in order, while caller bindings remain

@@ -1270,7 +1270,7 @@ public sealed partial class Evaluation : IFileTester
                     || (builtinScope.Context.FunctionContext != null
                         && evaluatorBuiltin.Kind is BuiltinKind.Local or BuiltinKind.Declare)
                     ? null
-                    : new Variables.CommandBindings(builtinScope.Variables, commandVars, prefixNames);
+                    : new Variables.CommandBindings(builtinScope.Variables, commandVars, prefixNames, Memory, _cancellationToken);
                 if (bindings != null)
                     commandVars = builtinScope.Variables;
 
@@ -1393,7 +1393,8 @@ public sealed partial class Evaluation : IFileTester
             if (executable.Completion == CommandCompletion.ExitEvaluation && !commandName.Contains('/')
                 && execution is CommandExecutionResult.NotFound or CommandExecutionResult.NotExecutable)
             {
-                using var bindings = prefixNames == null ? null : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames);
+                using var bindings = prefixNames == null ? null
+                    : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames, Memory, _cancellationToken);
                 commandResult = await RunExitTrapAsync(scope, EvaluationResult.Exit(commandResult.ExitCode)).ConfigureAwait(false);
             }
             return CompleteCommandResult(commandResult, executable.Completion, commandInvoked: true);
@@ -2513,7 +2514,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (global && ReferenceEquals(variables, commandVars))
                 {
-                    bindings?.Retain(name, Memory);
+                    bindings?.Retain(name, Memory, _cancellationToken);
                     // Active fallback attributes can promote this declaration's prefix, not the enclosing call's.
                     if (bindings == null && prefixNames?.Contains(name) == true
                         && (options.ExportChange == DeclarationAttributeChange.Set || options.Readonly))

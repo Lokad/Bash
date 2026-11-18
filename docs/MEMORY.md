@@ -95,7 +95,11 @@ Command-prefix preparation and isolated external redirection expansion borrow
 the caller's store and positional frame.
 Only reached bindings acquire admitted, independent containers in command
 workspace. Missing command bindings hide caller names without deleting caller
-state. Full child snapshots retain separate admission for their complete visible
+state. In-process installation admits the saved caller set before publishing any
+prefix. It moves original slots to the saved store and consumes the prepared
+prefix slots. Retained outputs admit independent copies before staging, reusing
+the surrounding command's capacity for later replacements. Full child snapshots
+retain separate admission for their complete visible
 store and saved function-local and prefix stores. Child context reconstruction admits
 copies before allocating and reconnects enclosing frames iteratively. Mutable backing
 is independent and immutable value bytes stay shared. The surrounding command owns

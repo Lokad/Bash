@@ -138,7 +138,9 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.True(caller.TryAssignArray("x", [ShellValue.FromText("zero"), ShellValue.FromText("one")], ArrayKind.Indexed));
         var prepared = Variables.CreateEmpty();
         Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
-        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" });
+        using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
+        var memory = new EvaluationMemory(setup);
+        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
         var saved = bindings.SavedVariables.IndexedArrays["x"];
 
         Assert.True(caller.TryUnset("x"));
@@ -167,8 +169,10 @@ public sealed partial class FunctionPrefixBindingTests
         caller.SetExported("x", true);
         var prepared = Variables.CreateEmpty();
         Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
-        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" });
-        var donor = retainedOutput ? bindings.SelectOutputVariables("x") : bindings.SavedVariables;
+        using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
+        var memory = new EvaluationMemory(setup);
+        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
+        var donor = retainedOutput ? bindings.SelectOutputVariables("x", memory, CancellationToken.None) : bindings.SavedVariables;
         var array = donor.IndexedArrays["x"];
         if (retainedOutput)
         {
@@ -241,7 +245,9 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.True(caller.TrySetScalar("x", ShellValue.FromText("outer")));
         var prepared = Variables.CreateEmpty();
         Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
-        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" });
+        using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
+        var installation = new EvaluationMemory(setup);
+        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, installation, CancellationToken.None);
         Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(ShellValue.FromText("value"), 256).ToArray(), ArrayKind.Indexed));
         var array = caller.IndexedArrays["x"];
         var locals = new Variables.LocalBindings(caller, parent: null, prefixes: null);

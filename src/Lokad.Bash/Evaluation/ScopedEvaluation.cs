@@ -39,7 +39,7 @@ internal readonly record struct ScopedEvaluation(
             && Variables.TryGetNameref(name, out _))
         {
             var resolved = Variables.ResolveNamerefName(name);
-            if (!resolved.IsEmpty && bindings.RetainSelectorBinding(resolved) is { } retained)
+            if (!resolved.IsEmpty && bindings.RetainSelectorBinding(resolved, Effects.Memory, Effects.CancellationToken) is { } retained)
             {
                 // Scalar writes through local namerefs reach the caller; subsequent reads still see the prefix.
                 retained.SetResolvedValuePreservingArray(resolved, value);
@@ -61,7 +61,7 @@ internal readonly record struct ScopedEvaluation(
     {
         if (SelectorBindings is not { } bindings || IsIndirectPrefixWrite(sourceName, bindings.PrefixNames))
             return null;
-        return bindings.RetainSelectorBinding(selectedName);
+        return bindings.RetainSelectorBinding(selectedName, Effects.Memory, Effects.CancellationToken);
     }
 
     /// <summary>Selects the additional bindings receiving this expansion write, if any.</summary>

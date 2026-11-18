@@ -124,7 +124,7 @@ public sealed partial class Evaluation
         {
             if (!BuiltinDiagnosticsOpen)
                 return;
-            var destination = bindings?.SelectOutputVariables("OPTARG") ?? variables;
+            var destination = bindings?.SelectOutputVariables("OPTARG", Memory, _cancellationToken) ?? variables;
             destination.ClearGetoptsArgument();
             bindings?.CompleteOutput("OPTARG", destination);
         }

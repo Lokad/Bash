@@ -364,14 +364,14 @@ public sealed partial class Evaluation
                     if (resolution != BuiltinReferenceResolution.Write)
                         return resolution == BuiltinReferenceResolution.NoWrite;
                     return bindings != null && ReferenceEquals(binding.Owner, commandVars)
-                        ? bindings.TryApplyOutputAssignment(binding.Reference, value, Memory)
+                        ? bindings.TryApplyOutputAssignment(binding.Reference, value, Memory, _cancellationToken)
                         : binding.Owner.TryApplyAssignment(binding.Reference, value, Memory);
                 }
                 // Keep an intermediate alias: its prefix-owned write must not reach the caller.
                 sourceName = selected.Name;
             }
             // A prefix hiding a caller nameref stays temporary, just like other builtin outputs.
-            var outputBindings = ReferenceEquals(bindings?.SelectOutputVariables(target.Name), commandVars) ? null : bindings;
+            var outputBindings = bindings?.CanRetainOutput(target.Name) == true ? bindings : null;
             return !commandVars.IsReadonly(reference.Name)
                 && target.TryPublishValue(new ScopedEvaluation(this, commandVars, context) { SelectorBindings = outputBindings },
                     sourceName, value);
@@ -436,7 +436,7 @@ public sealed partial class Evaluation
             persistentOutputs = null;
         }
         else if (kind != BuiltinAssignmentKind.Directory && ReferenceEquals(destination, scope.Variables))
-            destination = persistentOutputs?.SelectOutputVariables(reference.Name) ?? destination;
+            destination = persistentOutputs?.SelectOutputVariables(reference.Name, Memory, _cancellationToken) ?? destination;
         var caller = kind != BuiltinAssignmentKind.Directory && persistentOutputs?.Contains(reference.Name) == true
             ? persistentOutputs.SavedVariables : destination;
         if (reference.Kind == VariableReferenceKind.Name
@@ -505,7 +505,7 @@ public sealed partial class Evaluation
         if (assigned)
         {
             if (kind == BuiltinAssignmentKind.Directory)
-                persistentOutputs?.Retain(sourceName, Memory);
+                persistentOutputs?.Retain(sourceName, Memory, _cancellationToken);
             else
                 persistentOutputs?.CompleteOutput(reference.Name, destination);
         }
@@ -522,7 +522,7 @@ public sealed partial class Evaluation
     }
 
     /// <summary>Explicit attributes can promote a function's prefix; ordinary builtin writes cannot.</summary>
-    private static void PromoteAttributeBinding(
+    private void PromoteAttributeBinding(
         Variables variables,
         BindingName name,
         EvaluationContext context,
@@ -536,7 +536,7 @@ public sealed partial class Evaluation
         if (bindings?.Contains(storedName) == true)
         {
             // This builtin owns the named prefix; it must not promote an enclosing function's prefix too.
-            bindings.RetainBinding(storedName);
+            bindings.RetainBinding(storedName, Memory, _cancellationToken);
             return;
         }
 
@@ -544,7 +544,7 @@ public sealed partial class Evaluation
         {
             function.Locals.RecordAttributePromotion(resolved);
             function.PromotedNames.Add(resolved);
-            bindings?.RetainBinding(resolved);
+            bindings?.RetainBinding(resolved, Memory, _cancellationToken);
         }
     }
 }

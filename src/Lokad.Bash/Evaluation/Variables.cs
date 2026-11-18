@@ -196,9 +196,22 @@ public sealed partial class Variables
         private readonly Variables _saved;
         private readonly Variables _retained;
         private readonly HashSet<BindingName> _retainedNames;
+        private long _retainedCopyCapacity;
 
-        public CommandBindings(Variables owner, Variables prepared, IReadOnlySet<BindingName> prefixes)
+        public CommandBindings(Variables owner, Variables prepared, IReadOnlySet<BindingName> prefixes,
+            EvaluationMemory memory, CancellationToken cancellationToken)
         {
+            // The originals remain live when subsequent commands account only for the
+            // visible store. Admit the complete saved set before changing any binding.
+            var bytes = checked(384 + (BindingOverheadBytes + (long)BindingNameSetEntryBytes) * prefixes.Count);
+            foreach (var name in prefixes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                bytes = checked(bytes + owner.EstimateBindingBytes(name));
+            }
+            memory.Charge(bytes);
+            cancellationToken.ThrowIfCancellationRequested();
+
             _owner = owner;
             _prefixes = new HashSet<BindingName>(prefixes);
             _saved = new Variables();
@@ -206,8 +219,15 @@ public sealed partial class Variables
             _retainedNames = new HashSet<BindingName>();
             foreach (var name in prefixes)
             {
-                _saved.CopyBindingFrom(owner, name);
-                owner.CopyBindingFrom(prepared, name);
+                var savedCursor = owner._getoptsCursor;
+                var preparedCursor = prepared._getoptsCursor;
+                _saved.TransferBindingFrom(owner, name);
+                owner.TransferBindingFrom(prepared, name);
+                if (name.CachedText == "OPTIND")
+                {
+                    _saved._getoptsCursor = savedCursor;
+                    owner._getoptsCursor = preparedCursor;
+                }
                 owner.SetAttribute(name, BindingAttributes.Temporary, true);
             }
         }
@@ -249,9 +269,9 @@ public sealed partial class Variables
 
         /// <summary>Direct outputs preserve caller bindings; indirect writes use the command scope.</summary>
         public bool TryApplyOutputAssignment(
-            VariableReference reference, ShellValue value, EvaluationMemory memory)
+            VariableReference reference, ShellValue value, EvaluationMemory memory, CancellationToken cancellationToken)
         {
-            var destination = SelectOutputVariables(reference.Name);
+            var destination = SelectOutputVariables(reference.Name, memory, cancellationToken);
             if (!destination.TryApplyAssignment(reference, value, memory))
                 return false;
             if (ReferenceEquals(destination, _owner))
@@ -265,13 +285,15 @@ public sealed partial class Variables
             return true;
         }
 
+        internal bool CanRetainOutput(BindingName name) => _prefixes.Contains(name) && !_saved.NamerefTargets.ContainsKey(name);
+
         /// <summary>Direct outputs select the caller's saved kind; indirect outputs keep the active binding.</summary>
-        internal Variables SelectOutputVariables(BindingName name)
+        internal Variables SelectOutputVariables(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken)
         {
-            if (!_prefixes.Contains(name) || _saved.NamerefTargets.ContainsKey(name))
+            if (!CanRetainOutput(name))
                 return _owner;
             if (!_retainedNames.Contains(name))
-                _retained.CopyBindingFrom(_saved, name);
+                StageRetainedBinding(_saved, name, memory, cancellationToken);
             return _retained;
         }
 
@@ -282,17 +304,20 @@ public sealed partial class Variables
         }
 
         /// <summary>Selects storage for one selector write, preserving prior outputs and untouched caller elements.</summary>
-        internal Variables? RetainSelectorBinding(BindingName name)
+        internal Variables? RetainSelectorBinding(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken)
         {
             if (!_prefixes.Contains(name))
                 return null;
-            if (_retainedNames.Add(name))
-                _retained.CopyBindingFrom(_saved, name);
+            if (!_retainedNames.Contains(name))
+            {
+                StageRetainedBinding(_saved, name, memory, cancellationToken);
+                _retainedNames.Add(name);
+            }
             return _retained;
         }
 
         /// <summary>Retains an explicit builtin write even when its target was a temporary prefix.</summary>
-        public void Retain(BindingName name, EvaluationMemory memory)
+        public void Retain(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken)
         {
             memory.Charge(checked(4L * name.ByteLength));
             if (VariableReference.TryParse(ShellSource.FromBytes(name.ToValue().Bytes), memory, out var reference)
@@ -300,29 +325,45 @@ public sealed partial class Variables
             {
                 memory.Charge(checked(4L * resolved.ByteLength));
                 if (VariableReference.TryParse(ShellSource.FromBytes(resolved.ToValue().Bytes), memory, out var target))
-                    RetainBinding(target.Name);
+                    RetainBinding(target.Name, memory, cancellationToken);
             }
         }
 
         /// <summary>Captures a promoted binding before function-local restoration can replace it.</summary>
-        public void RetainBinding(BindingName name)
+        public void RetainBinding(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken)
         {
             if (!_prefixes.Contains(name))
                 return;
 
-            _retainedNames.Add(name);
             if (_owner.Scalars.TryGetValue(name, out var value))
             {
                 // A scalar promotion updates element zero of a caller array, not its whole binding.
-                _retained.CopyBindingFrom(_saved, name);
+                StageRetainedBinding(_saved, name, memory, cancellationToken);
                 _retained.SetResolvedValuePreservingArray(name, value);
                 _retained.SetAttribute(name, BindingAttributes.Readonly, _owner.IsReadonlyBinding(name));
                 _retained.SetExported(name, _owner.IsExported(name));
             }
             else
             {
-                _retained.CopyBindingFrom(_owner, name);
+                StageRetainedBinding(_owner, name, memory, cancellationToken);
             }
+            _retainedNames.Add(name);
+        }
+
+        private void StageRetainedBinding(Variables source, BindingName name,
+            EvaluationMemory memory, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // The surrounding command owns this store and the overlapping replacement.
+            // Reuse admitted capacity when a later write stages a binding of the same size.
+            var required = checked(_retained.EstimatedMemoryBytes + source.EstimateBindingBytes(name) + BindingNameSetEntryBytes);
+            if (required > _retainedCopyCapacity)
+            {
+                memory.Charge(required - _retainedCopyCapacity);
+                _retainedCopyCapacity = required;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            _retained.CopyBindingFrom(source, name);
         }
 
         public void Dispose()
@@ -1283,7 +1324,7 @@ public sealed partial class Variables
     /// <summary>Moves a private store's slot, or clears the destination if the slot is absent.</summary>
     private bool TransferBindingFrom(Variables source, BindingName name)
     {
-        if (!source._bindings.TryGetValue(name, out var slot))
+        if (!source._bindings.TryGetValue(name, out var slot) || slot is MissingSlot)
         {
             ClearBinding(name);
             return false;

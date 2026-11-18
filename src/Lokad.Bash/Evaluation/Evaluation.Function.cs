@@ -23,7 +23,7 @@ public sealed partial class Evaluation
         Memory.Charge(checked(scope.Variables.PositionalMemoryBytes + 32L * arguments.Count));
         using var bindings = prefixNames == null
             ? null
-            : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames);
+            : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames, Memory, _cancellationToken);
         var functionContext = new FunctionContext(
             functionDefinition.Name.Value, new Variables.LocalBindings(scope.Variables, parent: null, bindings), scope.Context.FunctionContext)
         {
@@ -69,7 +69,7 @@ public sealed partial class Evaluation
     }
 
     /// <summary>Retains eligible bindings before their command or function scope restores them.</summary>
-    private static void CompletePromotions(
+    private void CompletePromotions(
         FunctionContext completed,
         FunctionContext? enclosing,
         Variables variables,
@@ -88,7 +88,7 @@ public sealed partial class Evaluation
             if (isPrefix && survives && completed.Locals.ExportSnapshot != null)
                 variables.SetExported(name, true);
             if (survives)
-                bindings?.RetainBinding(name);
+                bindings?.RetainBinding(name, Memory, _cancellationToken);
             if ((isPrefix || promotedPrefix) && survives)
                 enclosing?.Locals.RecordPrefixPromotion(name);
             if (!isPrefix || survives)
