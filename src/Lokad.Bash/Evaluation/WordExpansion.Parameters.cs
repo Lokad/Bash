@@ -42,7 +42,9 @@ internal static partial class WordExpansion
             await ReportSubstitutionFailureAsync("bad substitution", ExpansionFailureKind.Parameter).ConfigureAwait(false);
             return;
         }
-        if (parsed.Kind == BracedParameterOperatorKind.Transform && !"QEUuL"u8.Contains(parsed.Word[0]))
+        var transform = parsed.Kind == BracedParameterOperatorKind.Transform ? parsed.Word[0] : (byte)0;
+        var inspection = transform is (byte)'a' or (byte)'A' or (byte)'K' or (byte)'k';
+        if (parsed.Kind == BracedParameterOperatorKind.Transform && !inspection && !"QEUuL"u8.Contains(transform))
         {
             await ReportSubstitutionFailureAsync("unsupported parameter operator", ExpansionFailureKind.Parameter)
                 .ConfigureAwait(false);
@@ -56,6 +58,11 @@ internal static partial class WordExpansion
         var parameter = await ReadParameterAsync().ConfigureAwait(false);
         if (!scope.CanExpand)
             return;
+        if (inspection)
+        {
+            ExpandInspectionTransform(transform, parameter, scope, output, allowWordSplitting, globQuoted, quoteContext);
+            return;
+        }
 
         var separators = FieldSeparators.FromVariables(scope.Variables);
         var isNonEmpty = parameter.Kind == VariableReferenceKind.Star && globQuoted
@@ -266,7 +273,7 @@ internal static partial class WordExpansion
                 ? ExpansionPurpose.IndexedCompoundOperand : output.Purpose;
             var expanded = await ExpandOperatorWordAsync(
                     parsed.Word, scope, quoteContext, purpose,
-                    purpose is ExpansionPurpose.Scalar or ExpansionPurpose.IndexedCompoundOperand
+                    purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment or ExpansionPurpose.IndexedCompoundOperand
                         or ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource
                         ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove, assignmentTildes)
                 .ConfigureAwait(false);
@@ -404,6 +411,19 @@ internal static partial class WordExpansion
                         await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
                         return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
                     }
+                    if (inspection && terminal.Owner.TryResolveBinding(terminal.Name, selectOwner: null, out var referentBinding))
+                    {
+                        if (referentBinding.Reference.Kind != VariableReferenceKind.Name
+                            || referentBinding.Owner.IndexedArrays.ContainsKey(referentBinding.Name)
+                            || referentBinding.Owner.AssociativeArrays.ContainsKey(referentBinding.Name))
+                        {
+                            // Inspection of an indirect array referent uses its selected element.
+                            return await ReadValueAsync(ShellSource.FromBytes(referent.Bytes), ParameterModifier.None)
+                                .ConfigureAwait(false);
+                        }
+                        return new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null)
+                            { InspectionBinding = referentBinding };
+                    }
                     return new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null);
                 }
 
@@ -526,7 +546,7 @@ internal static partial class WordExpansion
                             : variables.AssociativeArrays.TryGetValue(resolved, out var associativeSource)
                                 ? new ParameterSource.Associative(associativeSource) : null;
                         return new ParameterValue(reference.Kind, source == null ? values.ToArray() : [], count != 0, reference, null)
-                            { RangeSource = source };
+                            { RangeSource = source, InspectionBinding = inspection ? selected : null };
                     }
 
                     // Operand expansion can mutate the source array; retain the selected values first.

@@ -2,13 +2,100 @@ using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Tree;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ParameterTransformTests
 {
+    [Theory]
+    [InlineData("""x=; declare y; export z; show "${x@A}" "${y@A}" "${z@A}" "${missing@A}" """,
+        "<4>[x=''][][declare -x z][]\n")]
+    [InlineData("""a=([4]='two words'); readonly a; show "${a@a}" "${a[9]@a}" "${a[@]@a}"; show "${a[4]@A}" "${a[9]@A}" """,
+        "<3>[ar][ar][ar]\n<2>[declare -ar a='two words'][declare -ar a]\n")]
+    [InlineData("""a=('two words'); show "pre${a[@]@A}post"; IFS=:; show "${a[@]@A}"; show "${a[*]@A}" """,
+        "<3>[predeclare][-a][a=([0]=\"two words\")post]\n<1>[declare -a a=([0]=\"two words\")]\n<1>[declare -a a=([0]=\"two words\")]\n")]
+    [InlineData("""declare -a a; show "${a[@]@a}"; show "${a[@]@A}"; a=(); show "${a[@]@a}"; show "${a[@]@A}"; show "${a[@]@K}" """,
+        "<1>[a]\n<3>[declare][-a][a]\n<0>\n<3>[declare][-a][a=()]\n<0>\n")]
+    [InlineData("""a=([4]='two words' [12]=''); d="${a[*]@A}"; unset a; eval "$d"; show "${a[4]}" "${a[12]+present}" "${!a[@]}" """,
+        "<4>[two words][present][4][12]\n")]
+    [InlineData("""a=([4]='two words' [9]=''); show "${a[@]@K}"; show "pre${a[@]@k}post"; show pre${a[@]@k}post""",
+        "<1>[4 \"two words\" 9 \"\"]\n<4>[pre4][two words][9][post]\n<5>[pre4][two][words][9][post]\n")]
+    [InlineData("""declare -A m=(['b key']='two words' ['a key']=''); show "${m[@]@K}"; show "${m[@]@k}"; show "${m[*]@A}" """,
+        "<1>[\"a key\" \"\" \"b key\" \"two words\" ]\n<4>[a key][][b key][two words]\n<1>[declare -A m=([\"a key\"]=\"\" [\"b key\"]=\"two words\" )]\n")]
+    [InlineData("""a=([4]='two words' [9]=''); IFS=:; x="${a[@]@k}"; show "$x"; [[ ${a[@]@k} == '4 two words 9 ' ]] && show match""",
+        "<1>[4:two words:9:]\n<1>[match]\n")]
+    [InlineData("""a=(one two ''); IFS=:; x="${a[@]@a}"; show "$x"; show "${a[@]@a}"; show "${a[*]@a}" """,
+        "<1>[a:a:a]\n<3>[a][a][a]\n<1>[a:a:a]\n")]
+    [InlineData("""set -- 'first value' ''; show "${@@A}"; IFS=:; show "${*@A}"; show "${@@a}" """,
+        "<4>[set][--]['first value']['']\n<1>[set -- 'first value':'']\n<2>[][]\n")]
+    [InlineData("""a=(zero one two); declare -n r='a[i++]'; i=0; show "${r@A}" "$i"; i=0; show "${!r@A}" "$i"; i=0; p='a[i++]'; show "${!p@A}" "$i" """,
+        "<2>[][1]\n<2>[declare -a a='zero'][1]\n<2>[declare -a a='one'][2]\n")]
+    [InlineData("""export x=value; declare -n r=x; show "${r@A}" "${!r@A}" "${!r@K}" """,
+        "<3>[declare -x x='value'][declare -x x='x']['x']\n")]
+    public async Task InspectionTransformsRetainSupportedFields(string script, string expected)
+    {
+        const string Show = """show(){ printf '<%s>' "$#"; for arg; do printf '[%s]' "$arg"; done; printf '\n'; }; """;
+        var result = await EndToEndHarness.RunScriptAsync(Show + script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task InspectionTransformsUseSpaceJoinedFieldsInHereDocuments()
+    {
+        const string Script = "a=(one 'two words'); set -- 'first value' last; IFS=:; cat <<EOF\n"
+            + "${a[@]@k}\n${a[*]@k}\n${@@A}\n${*@A}\nEOF\n";
+        var result = await EndToEndHarness.RunScriptAsync(Script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0 one 1 two words\n0 one 1 two words\nset -- 'first value' 'last'\nset -- 'first value' 'last'\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task KeyValueTransformsKeepMalformedUtf8AtTheByteBoundary()
+    {
+        const string Script = """a=([4]=$'x\377y' [9]=''); printf '[%s]' "${a[@]@K}" "${a[@]@k}" """;
+        var result = await EndToEndHarness.RunScriptAsync(Script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString("5B34202427785C333737792720392022225D5B345D5B78FF795D5B395D5B5D"),
+            result.Host.StandardOutput.Content.ToArray());
+        Assert.Empty(result.Host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeclarationRenderingAdmitsExpandedBytesBeforeOpeningOutput(bool denseEscapes)
+    {
+        var governor = new MemoryGovernor(512 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        var state = new Eval(Parser.Parse("""printf before; : "${value@A}" >effect"""));
+        var bytes = new byte[32 * 1024];
+        bytes.AsSpan().Fill(denseEscapes ? (byte)0xff : (byte)'x');
+        state.SetExportedVariable("value", ShellValue.FromBytes(bytes));
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(denseEscapes ? 1 : 0, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal(denseEscapes, host.StandardError.TextContent.Contains("shared memory", StringComparison.Ordinal));
+        Assert.Equal(!denseEscapes, host.CaptureEntries().ContainsKey("effect"));
+        Assert.Equal(bytes, state.Variables["value"].Bytes.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("a=abc", "1|<>|2;0|<>|2")]
     [InlineData("a=(abc)", "1|<>|2;0|<>|2")]

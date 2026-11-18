@@ -121,8 +121,9 @@ internal sealed class IndexedArray
     /// <summary>Enumerates present values by index without copying; consume before mutating.</summary>
     public IEnumerable<ShellValue> PresentValues => _positions.Select(position => _elements[position].GetValueOrDefault());
 
-    /// <summary>Includes present but unassigned positions, which declarations print without a quoted value.</summary>
-    public IEnumerable<ShellValue?> DeclarationValues => _positions.Select(position => _elements[position]);
+    /// <summary>Enumerates sparse positions and values together, including unassigned positions.</summary>
+    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries =>
+        _positions.Select(position => KeyValuePair.Create(ShellValue.FromText(Integers.FormatNumber(position)), _elements[position]));
 
     /// <summary>Gets the number of present entries, excluding holes.</summary>
     public int Count => _elements.Count;
@@ -305,8 +306,8 @@ internal sealed class AssociativeArray
     /// <summary>Enumerates values by byte-ordered key without copying; consume before mutating.</summary>
     public IEnumerable<ShellValue> PresentValues => _elements.Values.Select(value => value.GetValueOrDefault());
 
-    /// <summary>Includes present but unassigned keys without inventing an empty assigned value.</summary>
-    public IEnumerable<ShellValue?> DeclarationValues => _elements.Values;
+    /// <summary>Enumerates keys and values together in byte order, including unassigned keys.</summary>
+    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => _elements;
 
     /// <summary>Gets the number of present entries.</summary>
     public int Count => _elements.Count;

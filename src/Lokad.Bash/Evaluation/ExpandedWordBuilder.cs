@@ -22,6 +22,7 @@ internal enum ExpansionPurpose
 {
     Normal,
     Scalar,
+    Assignment,
     IndexedCompound,
     IndexedCompoundOperand,
     CompoundPrefix,
@@ -239,12 +240,13 @@ internal sealed class ExpandedWordBuilder
         AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
     }
 
-    private void AppendSeparatedFields(
+    internal void AppendSeparatedFields(
         IEnumerable<ShellValue> fields,
         ShellValue separator,
         bool allowWordSplitting,
         bool globQuoted)
     {
+        HasExpansion = true;
         var first = true;
         foreach (var value in fields)
         {

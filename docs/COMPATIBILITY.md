@@ -333,6 +333,14 @@ bytes. Key and value aggregates follow that order, and value slices select
 entries in the same order. GNU Bash can enumerate the same keys in a different
 order.
 
+Parameter transformations include `@a` for binding attributes and `@A` for
+reusable assignments or declarations. Array `@K` produces a quoted key/value
+string, and `@k` supplies keys and values as fields. A quoted `[@]@k` preserves
+empty value fields. Quoted `[*]@k` joins pairs using the first character of `IFS`.
+Associative transformations use the same byte key order as other aggregates and
+declarations. Reusable quoting preserves bytes and renders invalid UTF-8 with
+octal escapes.
+
 `test`/`[` preserve bytes in string equality, ordering and length predicates. Their
 zero-to-four argument rules precede the `!`, parenthesis, `-a` and `-o` expression
 grammar. Numeric operands must be signed 64-bit decimal integers, with optional

@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
@@ -1128,19 +1129,11 @@ public sealed partial class Variables
             return true;
         if (style != VariableDisplayStyle.Assignment)
         {
-            if (!output.TryAppend("declare -"u8))
-                return false;
-            var flagsStart = output.Length;
-            var attributes = slot?.Attributes ?? BindingAttributes.None;
-            if (slot is IndexedSlot && !output.TryAppend((byte)'a')
-                || slot is AssociativeSlot && !output.TryAppend((byte)'A')
-                || slot is NamerefSlot && !output.TryAppend((byte)'n')
-                || (attributes & BindingAttributes.Readonly) != 0 && !output.TryAppend((byte)'r')
-                || (attributes & BindingAttributes.Exported) != 0 && !output.TryAppend((byte)'x'))
-                return false;
-            if (flagsStart == output.Length && !output.TryAppend((byte)'-'))
-                return false;
-            if (!output.TryAppend((byte)' '))
+            Span<byte> flags = stackalloc byte[3];
+            var count = WriteDeclarationAttributes(slot, flags);
+            if (!output.TryAppend("declare -"u8)
+                || !output.TryAppend(count == 0 ? "-"u8 : flags[..count])
+                || !output.TryAppend((byte)' '))
                 return false;
         }
         if (!output.CanAppend(name.ByteLength)
@@ -1154,11 +1147,7 @@ public sealed partial class Variables
             {
                 ScalarSlot scalar => AppendValue(scalar.Value, valueStyle),
                 NamerefSlot reference when !reference.Value.IsEmpty => AppendValue(reference.Value.Value, valueStyle),
-                IndexedSlot { Value.IsInitialized: true } indexed =>
-                    AppendArray(indexed.Value.PresentKeys.Select(ShellValue.FromText), indexed.Value.DeclarationValues, ArrayKind.Indexed),
-                AssociativeSlot { Value.IsInitialized: true } associative =>
-                    AppendArray(associative.Value.PresentKeys, associative.Value.DeclarationValues, ArrayKind.Associative),
-                _ => true
+                _ => TryAppendArrayAssignment(slot, output, CancellationToken.None)
             };
             if (!appended)
                 return false;
@@ -1168,14 +1157,60 @@ public sealed partial class Variables
         bool AppendValue(ShellValue value, ShellQuoteStyle quoteStyle) => output.TryAppend((byte)'=')
             && ShellArgumentEscaping.TryAppendQuoted(output, value.Bytes.Span, quoteStyle);
 
-        bool AppendArray(IEnumerable<ShellValue> keys, IEnumerable<ShellValue?> values, ArrayKind kind)
+    }
+
+    internal ShellValue GetDeclarationAttributes(BindingName name)
+    {
+        TryGetBinding(name, out var slot);
+        Span<byte> flags = stackalloc byte[3];
+        var count = WriteDeclarationAttributes(slot, flags);
+        return count == 0 ? ShellValue.Empty : ShellValue.FromBytes(flags[..count].ToArray());
+    }
+
+    private static int WriteDeclarationAttributes(VariableSlot? slot, Span<byte> flags)
+    {
+        var length = 0;
+        var kind = slot switch
+        {
+            IndexedSlot => (byte)'a',
+            AssociativeSlot => (byte)'A',
+            NamerefSlot => (byte)'n',
+            _ => (byte)0
+        };
+        var attributes = slot?.Attributes ?? BindingAttributes.None;
+        if (kind != 0)
+            flags[length++] = kind;
+        if ((attributes & BindingAttributes.Readonly) != 0)
+            flags[length++] = (byte)'r';
+        if ((attributes & BindingAttributes.Exported) != 0)
+            flags[length++] = (byte)'x';
+        return length;
+    }
+
+    internal bool TryAppendArrayAssignment(BindingName name, ByteMemoryBuilder output, CancellationToken cancellationToken)
+    {
+        TryGetBinding(name, out var slot);
+        return TryAppendArrayAssignment(slot, output, cancellationToken);
+    }
+
+    private static bool TryAppendArrayAssignment(
+        VariableSlot? slot, ByteMemoryBuilder output, CancellationToken cancellationToken)
+    {
+        return slot switch
+        {
+            IndexedSlot { Value.IsInitialized: true } indexed => AppendArray(indexed.Value.Entries, ArrayKind.Indexed),
+            AssociativeSlot { Value.IsInitialized: true } associative => AppendArray(associative.Value.Entries, ArrayKind.Associative),
+            _ => true
+        };
+
+        bool AppendArray(IEnumerable<KeyValuePair<ShellValue, ShellValue?>> entries, ArrayKind kind)
         {
             if (!output.TryAppend("=("u8))
                 return false;
             var first = true;
-            // Both live views share their container's ordering; no dense materialization or second value lookup.
-            foreach (var (key, value) in keys.Zip(values))
+            foreach (var (key, value) in entries)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!first && kind == ArrayKind.Indexed && !output.TryAppend((byte)' '))
                     return false;
                 first = false;

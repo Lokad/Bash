@@ -16,11 +16,11 @@ internal enum TildeExpansion { None, Leading, Assignment, Argument }
 internal static partial class WordExpansion
 {
     internal static Task<ShellValue> ExpandAssignmentValueAsync(Word word, ScopedEvaluation scope) =>
-        ExpandUnsplitValueAsync(word, scope, ExpansionPurpose.Scalar, TildeExpansion.Assignment);
+        ExpandUnsplitValueAsync(word, scope, ExpansionPurpose.Assignment, TildeExpansion.Assignment);
 
     internal static Task<ShellValue> ExpandCompoundValueAsync(Word word, ScopedEvaluation scope, ArrayKind kind) =>
         ExpandUnsplitValueAsync(word, scope,
-            kind == ArrayKind.Indexed ? ExpansionPurpose.IndexedCompound : ExpansionPurpose.Scalar,
+            kind == ArrayKind.Indexed ? ExpansionPurpose.IndexedCompound : ExpansionPurpose.Assignment,
             kind == ArrayKind.Indexed ? TildeExpansion.Assignment : TildeExpansion.None);
 
     internal static Task<ShellValue> ExpandSubscriptAsync(
@@ -108,7 +108,7 @@ internal static partial class WordExpansion
                 return [];
 
             // Join operand fields, not brace alternatives: scalar consumers still select the first alternative.
-            if (purpose == ExpansionPurpose.Scalar)
+            if (purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment)
                 results.Add(ExpandedWord.JoinWithSpaces(expanded, scope.Effects.Memory));
             else
                 results.AddRange(expanded);

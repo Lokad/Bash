@@ -138,11 +138,10 @@ public sealed class ParameterOperatorTests
         Assert.Equal("a b: invalid variable name\n", result.StdErr);
     }
 
-    // These operators are recognized but intentionally unsupported; do not leak CLR exceptions or selector effects.
+    // Prompt expansion remains unsupported and skips selector effects.
     [Theory]
-    [InlineData("x@A")]
     [InlineData("x@P")]
-    [InlineData("a[$(printf effect >&2; printf 0)]@A")]
+    [InlineData("a[$(printf effect >&2; printf 0)]@P")]
     public async Task Evaluation_UnsupportedParameterOperatorsFailBeforeSelection(string expression)
     {
         var result = await EndToEndHarness.RunScriptAsync(

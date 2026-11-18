@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support the `@a`, `@A`, `@K` and `@k` parameter transformations for attributes,
+  reusable declarations and array key/value fields.
+
 - Support bundled flags, required option arguments, and silent error handling in
   `getopts`. Track `OPTIND` across calls and set or unset `OPTARG` for each result.
 

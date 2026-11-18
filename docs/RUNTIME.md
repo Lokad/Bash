@@ -192,6 +192,12 @@ and expands once when reached, before indexed arithmetic or associative lookup.
 In `test`, both sides of `-a` and `-o` are evaluated. Expressions with variable
 predicates evaluate file and variable predicates in argument order.
 
+Declaration and key/value transformations share the variable display flags and
+array order. The transform uses the selected read owner and selector result.
+Quoted rendering holds temporary capacity against the shared allowance until
+the word builder consumes its bytes. Separate key/value fields stream into the
+word builder in array order and use the existing splitting and joining rules.
+
 Shell-word pattern matching shares one traversal core for complete matches,
 prefixes, suffixes and replacement search. Suffix traversal reads characters
 backward and retains bracket expressions as prepared atoms; it does not reverse

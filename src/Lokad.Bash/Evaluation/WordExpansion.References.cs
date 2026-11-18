@@ -17,6 +17,7 @@ internal static partial class WordExpansion
         // Circular local reads can select the hidden global store. Assignment selection
         // remains separate; this owner only supplies the already selected read value.
         internal Variables? ReadOwner { get; init; }
+        internal bool IsWholeBindingRead { get; init; }
         internal sealed record Scalar(BindingName VariableName) : ResolvedVariableReference(VariableName);
         internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName);
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
@@ -598,11 +599,11 @@ internal static partial class WordExpansion
         static ResolvedVariableReference ResolveNameReference(BindingName name, Variables variables)
         {
             if (variables.IndexedArrays.ContainsKey(name))
-                return new ResolvedVariableReference.Indexed(name, default) { ReadOwner = variables };
+                return new ResolvedVariableReference.Indexed(name, default) { ReadOwner = variables, IsWholeBindingRead = true };
             if (variables.AssociativeArrays.ContainsKey(name)
                 && AssociativeArrayKey.TryCreate(ShellValue.FromText("0"), out var key))
-                return new ResolvedVariableReference.Associative(name, key) { ReadOwner = variables };
-            return new ResolvedVariableReference.Scalar(name) { ReadOwner = variables };
+                return new ResolvedVariableReference.Associative(name, key) { ReadOwner = variables, IsWholeBindingRead = true };
+            return new ResolvedVariableReference.Scalar(name) { ReadOwner = variables, IsWholeBindingRead = true };
         }
     }
 
@@ -661,6 +662,7 @@ internal static partial class WordExpansion
         ResolvedVariableReference? Target)
     {
         public ParameterSource? RangeSource { get; init; }
+        internal VariableBinding? InspectionBinding { get; init; }
         public ShellValue Value => Fields.Count == 0 ? ShellValue.Empty : Fields[0];
     }
 

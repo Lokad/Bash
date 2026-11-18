@@ -65,7 +65,7 @@ public sealed class ShellVariableValueTests
         Assert.Equal(2, clone.Count);
         Assert.Equal(12, clone.MaxIndex);
         Assert.Equal(new[] { "7", "12" }, clone.PresentKeys);
-        Assert.Equal(new ShellValue?[] { null, ShellValue.FromText("kept") }, clone.DeclarationValues);
+        Assert.Equal(new ShellValue?[] { null, ShellValue.FromText("kept") }, clone.Entries.Select(entry => entry.Value));
         Assert.False(clone.TryGet(seven, out _));
         Assert.Equal(ShellValue.Empty, clone.CaptureDenseValues()[7]);
         var retained = clone.EstimatedMemoryBytes;
@@ -92,7 +92,7 @@ public sealed class ShellVariableValueTests
 
         Assert.Equal(1, clone.Count);
         Assert.Equal(new[] { key.Value }, clone.PresentKeys);
-        Assert.Null(Assert.Single(clone.DeclarationValues));
+        Assert.Null(Assert.Single(clone.Entries).Value);
         Assert.False(clone.TryGet(key, out _));
         Assert.Equal(ShellValue.Empty, clone.CaptureValues()[key.Value]);
         var retained = clone.EstimatedMemoryBytes;
@@ -103,7 +103,7 @@ public sealed class ShellVariableValueTests
         Assert.False(array.TryGet(key, out _));
         clone.Remove(key);
         Assert.Equal(0, clone.Count);
-        Assert.Empty(clone.DeclarationValues);
+        Assert.Empty(clone.Entries);
         Assert.Equal(1, array.Count);
     }
 
