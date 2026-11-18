@@ -268,6 +268,11 @@ public sealed partial class Evaluation
                 index++;
                 break;
             }
+            if (bytes.SequenceEqual("+"u8))
+            {
+                index++;
+                continue;
+            }
             if (bytes.Length < 2 || bytes[0] is not ((byte)'-' or (byte)'+'))
                 break;
 

@@ -114,15 +114,29 @@ public sealed partial class Evaluation
         bool negated)
     {
         var outputMode = CommandQueryOutputMode.TypeDescription;
+        var lookupMode = CommandLookupMode.Normal;
         var nameIndex = 1;
-        if (nameIndex < words.Count && words[nameIndex].Bytes.Span.SequenceEqual("-t"u8))
+        for (; nameIndex < words.Count; nameIndex++)
         {
-            outputMode = CommandQueryOutputMode.TypeKind;
-            nameIndex++;
+            var operand = words[nameIndex].Bytes.Span;
+            if (operand.Length < 2 || operand[0] != (byte)'-')
+                break;
+            if (operand.SequenceEqual("--"u8))
+            {
+                nameIndex++;
+                break;
+            }
+            foreach (var option in operand[1..])
+            {
+                switch (option)
+                {
+                    case (byte)'t': outputMode = CommandQueryOutputMode.TypeKind; break;
+                    case (byte)'p': outputMode = CommandQueryOutputMode.TypePath; break;
+                    case (byte)'f': lookupMode = CommandLookupMode.BypassFunctions; break;
+                    default: return await InvalidOptionAsync(option).ConfigureAwait(false);
+                }
+            }
         }
-
-        if (nameIndex < words.Count && words[nameIndex].Bytes.Span.SequenceEqual("--"u8))
-            nameIndex++;
 
         var names = new List<ShellValue>(words.Count - nameIndex);
         for (var index = nameIndex; index < words.Count; index++)
@@ -131,10 +145,20 @@ public sealed partial class Evaluation
                 BuiltinKind.Type,
                 names,
                 outputMode,
+                lookupMode,
                 commandVars,
                 context)
             .ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+
+        async Task<EvaluationResult> InvalidOptionAsync(byte option)
+        {
+            using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
+            diagnostic.Append("type: -"u8).Append(option).Append(": invalid option\ntype: usage: "u8)
+                .Append(Utf8Text.Encode(BuiltinDocumentation.For(BuiltinKind.Type).Synopsis("type"))).Append((byte)'\n');
+            await PublishWrite(GetStdErrDescriptor(), diagnostic.ToMemory()).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+        }
     }
 
     /// <summary> Evaluates a command lookup and formats its requested query output. </summary>
@@ -142,6 +166,7 @@ public sealed partial class Evaluation
         BuiltinKind builtin,
         IReadOnlyList<ShellValue> arguments,
         CommandQueryOutputMode outputMode,
+        CommandLookupMode lookupMode,
         Variables vars,
         EvaluationContext context)
     {
@@ -184,9 +209,15 @@ public sealed partial class Evaluation
                     }
 
                     foundCount++;
+                    if (outputMode == CommandQueryOutputMode.TypePath && resolution is not CommandQueryResolution.Host)
+                    {
+                        endOffsets[index] = output.Length;
+                        continue;
+                    }
                     var appended = outputMode switch
                     {
-                        CommandQueryOutputMode.CommandName => resolution is CommandQueryResolution.Host hostCommand
+                        CommandQueryOutputMode.CommandName or CommandQueryOutputMode.TypePath =>
+                            resolution is CommandQueryResolution.Host hostCommand
                             ? AppendText(hostCommand.ResolvedName)
                             : output.TryAppend(name.Bytes.Span),
                         CommandQueryOutputMode.TypeKind => AppendText(resolution switch
@@ -238,10 +269,11 @@ public sealed partial class Evaluation
                     if (endOffset > startOffset && !(diagnostic ? errorClosed : outputClosed))
                     {
                         var descriptor = diagnostic ? stderr : stdout;
-                        var result = await ExecuteWriteAsync(
+                        var result = await PublishWrite(
                                 descriptor,
                                 content[startOffset..endOffset])
                             .ConfigureAwait(false);
+                        CheckCancellation();
                         // Downstream closure is final for this descriptor, including merged stdout/stderr.
                         if (!result.CanAcceptMore && !result.IsError)
                         {
@@ -303,7 +335,7 @@ public sealed partial class Evaluation
                         resolutions[index] = new CommandQueryResolution.Keyword();
                         continue;
                     }
-                    var resolution = ResolveCommandName(names[index], name, CommandLookupMode.Normal);
+                    var resolution = ResolveCommandName(names[index], name, lookupMode);
                     if (resolution is CommandResolution.Function function)
                     {
                         (functionOwners ??= []).Add(function.Binding);
@@ -340,9 +372,10 @@ public sealed partial class Evaluation
                 if (hostNames.Count > 0)
                 {
                     var environment = BuildExportedEnvironment(vars, context);
-                    var hostResults = await AwaitOperationAsync(
-                            ResolveCommandsOperation.AsTask(PublishOperation, hostNames, _state.CurrentDirectory, environment))
+                    CheckCancellation();
+                    var hostResults = await ResolveCommandsOperation.AsTask(PublishOperation, hostNames, _state.CurrentDirectory, environment)
                         .ConfigureAwait(false);
+                    CheckCancellation();
                     if (hostResults.Count != hostNames.Count)
                         throw new InvalidOperationException("Host returned an unexpected number of command lookup results.");
 

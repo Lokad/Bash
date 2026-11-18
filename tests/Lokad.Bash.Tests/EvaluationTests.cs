@@ -3568,6 +3568,41 @@ public partial class EvaluationTests
         Assert.Equal(1, state.LastExitCode);
     }
 
+    [Fact]
+    public async Task Evaluation_TypeBuiltin_PathOnlyUsesTheSelectedClassWithoutFallback()
+    {
+        var state = new Eval(Parser.Parse("cat(){ :; }; type -p cat printf if"));
+
+        // Any host lookup or write would be the next operation.
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Fact]
+    public async Task Evaluation_TypeBuiltin_SkipsFunctionsAndPreservesHostPathAndFailure()
+    {
+        var state = new Eval(Parser.Parse("cat(){ :; }; type -pf printf cat if missing damaged"));
+        var lookup = await NextResolveCommandsAsync(state);
+        Assert.Equal(["cat", "missing", "damaged"], lookup.CommandNames);
+        lookup.SetResult([
+            new CommandLookupResult.Found("/synthetic/cat"),
+            new CommandLookupResult.Missing(),
+            new CommandLookupResult.Failed(new OperationError("lookup unavailable\n"))
+        ]);
+
+        var output = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, output.FileDescriptor);
+        Assert.Equal("/synthetic/cat\n", Text(output.Content));
+        output.SetResult(DescriptorWriteResult.Open);
+        var error = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, error.FileDescriptor);
+        Assert.Equal("type: damaged: lookup unavailable\n", Text(error.Content));
+        error.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData("type -t")]
     [InlineData("type -t --")]

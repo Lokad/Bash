@@ -173,9 +173,37 @@ public sealed class QueryWriteFailureTests
         }
     }
 
+    [Fact]
+    public async Task CanceledQuerySettlesItsWriteBeforeClosingTheOutput()
+    {
+        var state = new Eval(Parser.Parse("type -p cat >out"));
+        var descriptor = new FileDescriptor(10);
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var opened = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        opened.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep());
+        lookup.SetResult([new CommandLookupResult.Found("/fixture/cat")]);
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, write.FileDescriptor);
+
+        cancellation.Cancel();
+        var next = state.GetNextStep();
+        var completedBeforeWrite = await Task.WhenAny(next, Task.Delay(TimeSpan.FromMilliseconds(100))) == next;
+        write.SetResult(DescriptorWriteResult.Open);
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await next.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+        Assert.False(completedBeforeWrite);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
     [Theory]
     [InlineData("type printf : 1>&-", "type: write error: Bad file descriptor\n")]
     [InlineData("type -t printf : 1>&-", "type: write error: Bad file descriptor\n")]
+    [InlineData("type -p cat 1>&-", "type: write error: Bad file descriptor\n")]
     [InlineData("type printf : 1</dev/null", "type: write error: Bad file descriptor\n")]
     public async Task TypeReportsTheHostWriteBoundary(string script, string expectedError)
     {

@@ -191,8 +191,10 @@ physical source order across pipeline/list headers and completed through timing,
 negation and compound-command wrappers. An incomplete body is rejected rather
 than accepted with GNU's end-of-input warning. Builtins implement their documented option subsets;
 `set` sets positional parameters and supports `-e`/`+e` and
-`-o errexit`/`+o errexit`. Errexit stops unhandled failures, including failed
-pipelines under the fixed pipefail policy. Tested conditions, logical-list
+`-o errexit`/`+o errexit`. A bare `+` continues the option scan. A bare `-` ends
+the scan, with following operands becoming positional parameters. `--` replaces
+the parameters even when no operands follow. Errexit stops unhandled failures,
+including failed pipelines under the fixed pipefail policy. Tested conditions, logical-list
 positions and negation suppress it through nested functions/groups and source/eval.
 Command substitution clears errexit by default; parenthesized subshells inherit it.
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
@@ -200,6 +202,11 @@ errexit only; other option changes return an error with a diagnostic.
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the
 pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.
+
+`type -p` prints the host's reported path when the selected name resolves to an
+external command. Builtins, keywords and functions resolve successfully in this
+mode and produce no output. `type -f` skips functions during lookup and combines
+with `-p` or `-t`. The last `-p` or `-t` selects the output mode.
 
 `shift` uses expanded fields and accepts a leading `--`. Its count defaults to
 one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII

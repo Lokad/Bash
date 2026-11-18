@@ -131,6 +131,11 @@ cleanup. Concurrent publication never waits on another evaluator; unused candida
 are refunded, while admission refusal remains a failure. Hosted consumers that
 retain export bytes after command completion own and admit their copies.
 
+Command queries settle host lookup and borrowed writes before releasing their
+arguments, buffered output and borrowed function definitions. `type -f` reuses
+the existing function-bypass lookup policy. `type -p` selects the ordinary
+resolution and emits a path only for an external result.
+
 Line-continuation normalization reuses the structural scan's nested syntax while
 retaining physical source positions. Reusing lookahead through a source slice
 does not cross its end or reset the structural nesting guards.

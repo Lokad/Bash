@@ -49,6 +49,16 @@ public sealed class QueryDiagnosticTests
     [InlineData("type -t qdg_missing", "", "", 1)]
     [InlineData("command -v qdg_missing", "", "", 1)]
     [InlineData("type -t printf qdg_missing", "builtin\n", "", 1)]
+    [InlineData("f(){ :; }; type -p printf f if cat", "/usr/bin/cat\n", "", 0)]
+    [InlineData("f(){ :; }; type -p printf f if >&-", "", "", 0)]
+    [InlineData("type -p printf qdg_missing", "", "", 1)]
+    [InlineData("type -p -- -f printf", "", "", 1)]
+    [InlineData("type -- -p printf", "printf is a shell builtin\n", "type: -p: not found\n", 1)]
+    [InlineData("type -tp printf cat", "/usr/bin/cat\n", "", 0)]
+    [InlineData("type -pt printf cat", "builtin\nfile\n", "", 0)]
+    [InlineData("f(){ :; }; type -f f printf 2>&1", "type: f: not found\nprintf is a shell builtin\n", "", 1)]
+    [InlineData("cat(){ :; }; type -pf cat", "/usr/bin/cat\n", "", 0)]
+    [InlineData("printf(){ :; }; type -ft printf", "builtin\n", "", 0)]
     [InlineData("command -v printf qdg_missing", "printf\n", "", 0)]
     [InlineData("command -V -- -v printf", "printf is a shell builtin\n", "command: -v: not found\n", 0)]
     [InlineData("command -V printf -v", "printf is a shell builtin\n", "command: -v: not found\n", 0)]
@@ -76,6 +86,7 @@ public sealed class QueryDiagnosticTests
     [InlineData("command -V $'a\\n\\xff\\r' 2>&1",
         "636F6D6D616E643A20610AFF0D3A206E6F7420666F756E640A", "", 1)]
     [InlineData("type -t $'\\xff'", "", "", 1)]
+    [InlineData("type $'-t\\xff'", "", "747970653A202DFF3A20696E76616C6964206F7074696F6E0A747970653A2075736167653A2074797065205B2D6674705D205B2D2D5D205B6E616D65202E2E2E5D0A", 2)]
     [InlineData("command -v $'\\xff'", "", "", 1)]
     public async Task QueriesRetainInvalidUtf8InDiagnostics(
         string script, string outputHex, string errorHex, int expectedExitCode)
@@ -99,6 +110,18 @@ public sealed class QueryDiagnosticTests
         Assert.Empty(result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(expectedError + "command: usage: command [-pVv] command [arg ...]\n",
+            await EndToEndHarness.ReadFileAsync(result.Host, "/errors"));
+    }
+
+    [Fact]
+    public async Task InvalidTypeBundleUsesTheActiveErrorDescriptor()
+    {
+        var result = await EndToEndHarness.RunScriptAsync("type -tfz printf 2>/errors", EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("type: -z: invalid option\ntype: usage: type [-ftp] [--] [name ...]\n",
             await EndToEndHarness.ReadFileAsync(result.Host, "/errors"));
     }
 }

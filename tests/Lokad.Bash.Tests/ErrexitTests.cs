@@ -38,6 +38,25 @@ public sealed class ErrexitTests
     }
 
     [Theory]
+    [InlineData("+", "|1|<old>off")]
+    [InlineData("+ +e", "|1|<old>off")]
+    [InlineData("+ --", "|0|<>off")]
+    [InlineData("+ + -- a", "|1|<a>off")]
+    [InlineData("+ - -- a", "|2|<--><a>off")]
+    [InlineData("-- + -e", "|2|<+><-e>off")]
+    [InlineData("+ -e '' x", "|2|<><x>on")]
+    public async Task BarePlusContinuesScanningSetOperands(string operands, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(ReportOption + "set -- old; set " + operands
+            + "; printf '|%s|' \"$#\"; printf '<%s>' \"$@\"; flag", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
     [InlineData("-u")]
     [InlineData("+x")]
     [InlineData("-o unknown")]

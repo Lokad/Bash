@@ -1203,6 +1203,7 @@ public sealed partial class Evaluation : IFileTester
                         BuiltinKind.Command,
                         query.Arguments,
                         query.OutputMode,
+                        CommandLookupMode.Normal,
                         queryScope.Variables,
                         queryScope.Context)
                     .ConfigureAwait(false);
@@ -3743,6 +3744,7 @@ public sealed partial class Evaluation : IFileTester
     {
         CommandName,
         TypeKind,
+        TypePath,
         TypeDescription
     }
 

@@ -75,6 +75,21 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("set +", "<inner><outer>")]
+    [InlineData("set + -- changed", "<changed><changed>")]
+    public async Task Evaluation_SourceBarePlusRestoresTheFrameUnlessSetReplacesIt(string command, string expected)
+    {
+        var host = EndToEndHarness.BuildTree([("/unit", command + "; printf '<%s>' \"$@\"\n")]);
+        var result = await EndToEndHarness.RunScriptAsync(
+            "set -- outer; source ./unit inner; printf '<%s>' \"$@\"", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_SourceBuiltin_WithoutArgumentsKeepsCallerParameters()
     {
