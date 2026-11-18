@@ -73,7 +73,8 @@ internal sealed class EvaluationMemory
     private static long RetainedBytes(ScopedEvaluation scope)
     {
         var bytes = checked(scope.Variables.EstimatedMemoryBytes + scope.Effects.RetainedTrapMemoryBytes
-            + scope.Effects.RetainedFunctionMemoryBytes + scope.Effects.RetainedDescriptorMemoryBytes);
+            + scope.Effects.RetainedFunctionMemoryBytes + scope.Effects.RetainedDescriptorMemoryBytes
+            + scope.Effects.RetainedDirectoryStackBytes);
         for (var function = scope.Context.FunctionContext; function != null; function = function.Enclosing)
             bytes = checked(bytes + function.Locals.SavedMemoryBytes);
         return bytes;

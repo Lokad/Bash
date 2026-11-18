@@ -250,6 +250,65 @@ public sealed class SourceMemoryLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public async Task RefusedPipelinePreparationClosesBothEndsAndRetiresTheSourceBeforeCallerDisposal()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        await using var host = new TestHost();
+        host.AddFile("/a", "f(){ printf unexpected; }\n#" + new string('a', PaddingBytes) + "\n");
+        using var owner = budget.CreateScope();
+        var evaluation = new Eval(Parser.Parse("source /a; f | :; status=$?; unset -f f; printf '%s' \"$status\""));
+        evaluation.Memory.Budget = owner;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        IMemoryReservation? hold = null;
+        var endpoints = new HashSet<FileDescriptor>();
+        var closed = new HashSet<FileDescriptor>();
+        try
+        {
+            while (await evaluation.GetNextStep(deadline.Token) is { } operation)
+            {
+                Assert.IsNotType<RunPipelineEvaluations>(operation);
+                if (operation is CreatePipeOperation create)
+                {
+                    Assert.Empty(endpoints);
+                    Assert.Single(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+                    var result = await host.CreatePipeAsync(deadline.Token, deadline.Token);
+                    var pipe = Assert.IsType<PipeDescriptors>(result.Descriptors);
+                    endpoints.Add(pipe.Read);
+                    endpoints.Add(pipe.Write);
+                    // At the pending pipe operation the evaluator has finished its prior admissions.
+                    // Refuse the next preparation growth while giving the host its ordinary budget.
+                    evaluation.Memory.ReleaseUnusedCapacity();
+                    hold = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
+                    create.ClaimExecution();
+                    create.SetResult(result);
+                    continue;
+                }
+                if (operation is CloseDescriptorOperation close && endpoints.Contains(close.Descriptor))
+                {
+                    Assert.True(closed.Add(close.Descriptor));
+                    Assert.Single(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+                    if (closed.Count == endpoints.Count)
+                        hold?.Dispose();
+                }
+                await ShellOperationDispatcher.DispatchAsync(operation, host, deadline.Token);
+            }
+            await evaluation.Completion;
+        }
+        finally { hold?.Dispose(); }
+
+        Assert.Equal(2, endpoints.Count);
+        Assert.True(endpoints.SetEquals(closed));
+        Assert.Equal("1", host.StandardOutput.TextContent);
+        Assert.Contains("shared memory budget exhausted", host.StandardError.TextContent);
+        Assert.DoesNotContain(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

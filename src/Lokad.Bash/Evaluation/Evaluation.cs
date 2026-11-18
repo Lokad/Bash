@@ -29,8 +29,10 @@ public sealed partial class Evaluation : IFileTester
     private EvaluationState _state;
     // In-process subshells borrow parent maps while their state is installed.
     private long _savedDescriptorMemoryBytes;
+    private long _savedDirectoryStackBytes;
 
     internal long RetainedDescriptorMemoryBytes => checked(_savedDescriptorMemoryBytes + _state.RetainedDescriptorMemoryBytes);
+    internal long RetainedDirectoryStackBytes => checked(_savedDirectoryStackBytes + _state.RetainedDirectoryStackBytes);
     /// <summary> Holds the active variable state; temporarily replaced while evaluating subshells. </summary>
     private Variables _vars;
     /// <summary> Stores the base STDIN descriptor for command invocations. </summary>
@@ -672,15 +674,15 @@ public sealed partial class Evaluation : IFileTester
             memory.Resize(DescriptorCleanupMemoryBytes);
             memory.TrimExcess();
         }
-        // Child resets must not release the parent's saved handlers before restoration.
-        Memory.Charge(RetainedTrapMemoryBytes);
         var (childVars, childContext) = scope.ForkBindings();
         var childState = parentState.CloneForSubshell(Memory);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
         var savedDescriptorBytes = parentState.RetainedDescriptorMemoryBytes;
+        var savedDirectoryStackBytes = parentState.RetainedDirectoryStackBytes;
         _savedDescriptorMemoryBytes = checked(_savedDescriptorMemoryBytes + savedDescriptorBytes);
+        _savedDirectoryStackBytes = checked(_savedDirectoryStackBytes + savedDirectoryStackBytes);
         _state = childState;
         _vars = childVars;
         _subshellBorrowedDescriptorScopes.Push(borrowedDescriptors);
@@ -710,6 +712,7 @@ public sealed partial class Evaluation : IFileTester
                 childState.ReleaseFunctions();
                 _state = parentState;
                 _savedDescriptorMemoryBytes -= savedDescriptorBytes;
+                _savedDirectoryStackBytes -= savedDirectoryStackBytes;
                 _vars = parentVars;
                 _ = _subshellBorrowedDescriptorScopes.Pop();
             }
@@ -766,6 +769,7 @@ public sealed partial class Evaluation : IFileTester
             // All stages borrow the same parent handles. Collect them before a stage retains
             // namespace owners so refusal cannot strand a partially constructed stage.
             var borrowedDescriptors = CollectDescriptorsAvailableToNestedEvaluation();
+            var bindings = CaptureDescriptorBindings();
             for (var index = 0; index < commands.Count; index++)
             {
                 var stdIn = index > 0 ? pipes[index - 1].Read : GetStdInDescriptor();
@@ -775,7 +779,7 @@ public sealed partial class Evaluation : IFileTester
                     command = AppendPipeStandardError(command);
                 var script = new ParsedScript([command]);
                 var descriptors = new EvaluationDescriptorSetup(
-                    CaptureDescriptorBindings().WithStandardStreams(stdIn, stdOut, GetStdErrDescriptor()), []);
+                    bindings.WithStandardStreams(stdIn, stdOut, GetStdErrDescriptor()), []);
                 var forkKind = command is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
                 var (stageVars, stageContext) = scope.ForkBindings();
                 var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory);

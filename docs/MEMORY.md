@@ -102,6 +102,12 @@ is independent and immutable value bytes stay shared. The surrounding command ow
 copied storage through operation and cleanup completion. Cancellation or refusal
 during detachment leaves the caller binding intact.
 
+Directory stacks admit replacement backing before growth, and retained capacity
+stays charged across commands. Child shell-state forks admit independent stack
+and trap-map containers before allocation while sharing immutable paths and
+action bytes. Inline subshells keep the saved stack and handlers admitted through
+restoration. Descriptor snapshots use the map writer's admitted capture headroom.
+
 Local declarations admit inherited temporary mutable containers before copying
 them. When unset exposes a saved command/function prefix, its already-owned slot
 moves into the visible store and leaves the saved owner, without another array

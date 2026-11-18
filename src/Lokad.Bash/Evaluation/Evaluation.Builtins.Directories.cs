@@ -211,7 +211,7 @@ public sealed partial class Evaluation
         if (oldResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly
             || pwdResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly)
             return EvaluationResult.FromExitCode(1);
-        _state.CompleteDirectoryChange(kind, previous);
+        _state.CompleteDirectoryChange(kind, previous, Memory);
         if (kind != DirectoryChangeKind.ChangeDirectory)
             announced = await ExecuteWriteAsync(GetStdOutDescriptor(), _state.FormatDirectoryStack()).ConfigureAwait(false);
         var exitCode = announced.IsError ? 1 : 0;

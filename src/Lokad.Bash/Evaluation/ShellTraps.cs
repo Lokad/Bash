@@ -49,6 +49,9 @@ internal sealed class ShellTraps
 
     public void Reset(TrapCondition condition) => _handlers.Remove(condition);
 
+    // The child owns the listing and the active map for ignored signals. Action bytes stay shared.
+    internal long EstimateForkBackingBytes() => 128L + EntryMemoryBytes * (ListedHandlers.Count + _handlers.Count);
+
     public ShellTraps Fork(ShellForkKind kind)
     {
         // Bash keeps an active EXIT context in substitutions and simple pipeline commands.

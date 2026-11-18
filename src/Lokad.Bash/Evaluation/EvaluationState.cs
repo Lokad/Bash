@@ -172,7 +172,7 @@ internal sealed class EvaluationState
     /// <summary>
     /// Stores the directory stack with the current directory at index 0; updated by pushd/popd style builtins.
     /// </summary>
-    private readonly List<ShellPath> _directoryStack = [];
+    private readonly List<ShellPath> _directoryStack;
 
     /// <summary>One function namespace for invocation, attributes and inspection; independent of variables.</summary>
     private readonly Dictionary<ShellValue, FunctionBinding> _functions = [];
@@ -185,16 +185,15 @@ internal sealed class EvaluationState
         ParsedScript script,
         ShellPath currentDirectory,
         DescriptorTable? inheritedDescriptorTable)
-        : this(script, currentDirectory, new RedirectionState(inheritedDescriptorTable))
+        : this(script, new RedirectionState(inheritedDescriptorTable), new List<ShellPath>(1) { currentDirectory })
     {
     }
 
-    private EvaluationState(ParsedScript script, ShellPath currentDirectory, RedirectionState redirections)
+    private EvaluationState(ParsedScript script, RedirectionState redirections, List<ShellPath> directoryStack)
     {
         Script = script;
-        CurrentDirectory = currentDirectory;
         _redirections = redirections;
-        _directoryStack.Add(CurrentDirectory);
+        _directoryStack = directoryStack;
     }
 
     /// <summary> Stores the parsed script for the lifetime of the evaluation. </summary>
@@ -217,9 +216,12 @@ internal sealed class EvaluationState
     /// <summary>
     /// Stores the current working directory; initialized to "/" and updated by directory-changing builtins.
     /// </summary>
-    public ShellPath CurrentDirectory { get; private set; }
+    public ShellPath CurrentDirectory => _directoryStack[0];
 
     public IReadOnlyList<ShellPath> DirectoryStack => _directoryStack;
+    internal long RetainedDirectoryStackBytes => EstimateDirectoryStackBytes(_directoryStack.Capacity);
+
+    private static long EstimateDirectoryStackBytes(int capacity) => 32L + 8L * capacity;
 
     public IReadOnlyDictionary<ShellValue, FunctionBinding> Functions => _functions;
 
@@ -238,7 +240,8 @@ internal sealed class EvaluationState
     /// </summary>
     public EvaluationState CloneForSubshell(EvaluationMemory memory)
     {
-        memory.Charge(EstimatedFunctionMemoryBytes);
+        // Keep the parent's saved handlers admitted through restoration if the child clears them.
+        memory.Charge(checked(EstimateForkBytes() + (Traps?.EstimatedMemoryBytes ?? 0)));
         var clone = CloneShellState(Script, _redirections.ForkForSubshell(), ShellForkKind.Subshell);
         clone._pendingExpansionErrorExitCode = _pendingExpansionErrorExitCode;
         clone.FatalExpansion = FatalExpansion;
@@ -255,21 +258,22 @@ internal sealed class EvaluationState
         ShellForkKind kind,
         EvaluationMemory memory)
     {
-        memory.Charge(EstimatedFunctionMemoryBytes);
+        memory.Charge(EstimateForkBytes());
         return CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings), kind);
     }
 
+    private long EstimateForkBytes() => checked(EstimatedFunctionMemoryBytes
+        + EstimateDirectoryStackBytes(_directoryStack.Count) + (Traps?.EstimateForkBackingBytes() ?? 0));
+
     private EvaluationState CloneShellState(ParsedScript script, RedirectionState redirections, ShellForkKind kind)
     {
-        var clone = new EvaluationState(script, CurrentDirectory, redirections)
+        // The array is independent. Paths and trap action bytes remain immutable and shared.
+        var clone = new EvaluationState(script, redirections, new List<ShellPath>(_directoryStack))
         {
             LastExitCode = LastExitCode,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
             Traps = Traps?.Fork(kind)
         };
-
-        clone._directoryStack.Clear();
-        clone._directoryStack.AddRange(_directoryStack);
 
         foreach (var function in _functions)
             clone.SetFunctionBinding(function.Value);
@@ -398,32 +402,32 @@ internal sealed class EvaluationState
         _functions.Clear();
     }
 
-    public void ResetDirectoryStack()
-    {
-        EnsureDirectoryStack();
-        _directoryStack.Clear();
-        _directoryStack.Add(CurrentDirectory);
-    }
+    public void ResetDirectoryStack() => _directoryStack.RemoveRange(1, _directoryStack.Count - 1);
 
     /// <summary>Applies a settled lookup, including Bash's partial stack change after a rejected swap.</summary>
     public void ApplyDirectoryLookup(DirectoryChangeKind kind, ShellPath target, bool succeeded)
     {
         if (kind == DirectoryChangeKind.SwapDirectories)
             _directoryStack[1] = CurrentDirectory;
-        if (!succeeded)
-            return;
-
-        CurrentDirectory = target;
-        EnsureDirectoryStack();
-        _directoryStack[0] = target;
+        if (succeeded)
+            _directoryStack[0] = target;
     }
 
     /// <summary>Completes stack publication only after directory-variable bookkeeping succeeds.</summary>
-    public void CompleteDirectoryChange(DirectoryChangeKind kind, ShellPath previous)
+    public void CompleteDirectoryChange(DirectoryChangeKind kind, ShellPath previous, EvaluationMemory memory)
     {
         switch (kind)
         {
             case DirectoryChangeKind.PushDirectory:
+                if (_directoryStack.Count == _directoryStack.Capacity)
+                {
+                    var capacity = (int)Math.Min(Array.MaxLength, Math.Max(4L, 2L * _directoryStack.Capacity));
+                    if (capacity <= _directoryStack.Count)
+                        throw new ByteMemoryBuilder.LimitExceededException();
+                    // Replacement and the old backing overlap during List's copy.
+                    memory.Charge(EstimateDirectoryStackBytes(capacity));
+                    _directoryStack.Capacity = capacity;
+                }
                 _directoryStack.Insert(1, previous);
                 break;
             case DirectoryChangeKind.ChangeDirectory:
@@ -437,17 +441,8 @@ internal sealed class EvaluationState
         }
     }
 
-    private void EnsureDirectoryStack()
-    {
-        if (_directoryStack.Count == 0)
-        {
-            _directoryStack.Add(CurrentDirectory);
-        }
-    }
-
     public ReadOnlyMemory<byte> FormatDirectoryStack()
     {
-        EnsureDirectoryStack();
         var output = string.Join(' ', _directoryStack.Select(p => p.Path)) + "\n";
         return Utf8Text.Encode(output);
     }
