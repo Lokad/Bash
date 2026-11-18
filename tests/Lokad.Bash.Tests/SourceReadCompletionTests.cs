@@ -1,5 +1,6 @@
 using Lokad.Bash.Files;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
@@ -8,6 +9,41 @@ namespace Lokad.Bash.Tests;
 
 public sealed class SourceReadCompletionTests
 {
+    [Fact]
+    public async Task CancelledSourceReadKeepsTheBatchBudgetAndDescriptorUntilTheHostSettles()
+    {
+        var state = new Eval(Parser.Parse("source file; after=1"));
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        using var cancellation = new CancellationTokenSource();
+        var completion = state.EnsureRunning(cancellation.Token);
+        var descriptor = new FileDescriptor(10);
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep(CancellationToken.None));
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep(CancellationToken.None));
+        Assert.Equal(descriptor, read.FileDescriptor);
+        var destination = Assert.IsAssignableFrom<IMemoryBudget>(read.DestinationBudget);
+        using var batch = destination.Reserve(4096);
+
+        cancellation.Cancel();
+        var next = state.GetNextStep(CancellationToken.None);
+        var publishedEarly = await Task.WhenAny(next, Task.Delay(TimeSpan.FromMilliseconds(100))) == next;
+        var pending = batch.Bytes;
+        read.SetResult(ReadResult.Success("sourced=changed\n"u8.ToArray(), [], reachedEoF: true));
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await next.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(descriptor, close.Descriptor);
+        Assert.Equal(0, batch.Bytes);
+        close.SetResult(null);
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.False(publishedEarly, $"Close was published during the read with {pending} bytes still admitted for its batch.");
+        Assert.Equal(4096, pending);
+        Assert.False(state.Variables.ContainsKey("sourced"));
+        Assert.False(state.Variables.ContainsKey("after"));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]

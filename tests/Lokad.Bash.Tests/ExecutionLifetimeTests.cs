@@ -3,11 +3,97 @@ using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ExecutionLifetimeTests
 {
+    [Theory]
+    [InlineData("echo", "\n")]
+    [InlineData("printf '%s'", "")]
+    public async Task CancelledWriteStaysChargedUntilTheHostSettles(string command, string suffix)
+    {
+        var payload = new string('x', 4096);
+        var state = new Eval(Parser.Parse($"{command} '{payload}' >out; after=1"));
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        using var cancellation = new CancellationTokenSource();
+        var completion = state.EnsureRunning(cancellation.Token);
+        var descriptor = new FileDescriptor(9);
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep(CancellationToken.None));
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep(CancellationToken.None));
+        Assert.Equal(descriptor, write.FileDescriptor);
+
+        var before = governor.ReservedBytes;
+        cancellation.Cancel();
+        var next = state.GetNextStep(CancellationToken.None);
+        var publishedEarly = await Task.WhenAny(next, Task.Delay(TimeSpan.FromMilliseconds(100))) == next;
+        var pending = governor.ReservedBytes;
+        var content = System.Text.Encoding.UTF8.GetString(write.Content.Span);
+        write.SetResult(DescriptorWriteResult.Open);
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await next.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(payload + suffix, content);
+        Assert.False(publishedEarly, $"Close was published while the write was pending. Allowance: {before} before cancellation and {pending} while pending.");
+        Assert.Equal(before, pending);
+        Assert.True(governor.ReservedBytes < pending);
+        Assert.False(state.Variables.ContainsKey("after"));
+    }
+
+    [Theory]
+    [InlineData("first | second | third", true)]
+    [InlineData("value=$(printf nested)", false)]
+    [InlineData("read value <<<'value'", false)]
+    public async Task CancelledPipeAcquisitionClosesEveryLateEndpoint(string command, bool earlierPipe)
+    {
+        var state = new Eval(Parser.Parse(command + "; after=1"));
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        using var cancellation = new CancellationTokenSource();
+        var completion = state.EnsureRunning(cancellation.Token);
+        var creation = Assert.IsType<CreatePipeOperation>(await state.GetNextStep(CancellationToken.None));
+        if (earlierPipe)
+        {
+            creation.SetResult(PipeCreationResult.Created(new PipeDescriptors(30, 31)));
+            creation = Assert.IsType<CreatePipeOperation>(await state.GetNextStep(CancellationToken.None));
+        }
+
+        var before = governor.ReservedBytes;
+        cancellation.Cancel();
+        var next = state.GetNextStep(CancellationToken.None);
+        var publishedEarly = await Task.WhenAny(next, Task.Delay(TimeSpan.FromMilliseconds(100))) == next;
+        var pending = governor.ReservedBytes;
+        creation.SetResult(PipeCreationResult.Created(new PipeDescriptors(32, 33)));
+
+        var closed = new List<FileDescriptor>();
+        while (true)
+        {
+            EvaluationOperation? operation;
+            try { operation = await next.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (OperationCanceledException e) when (e.CancellationToken == cancellation.Token) { break; }
+            var close = Assert.IsType<CloseDescriptorOperation>(operation);
+            closed.Add(close.Descriptor);
+            close.SetResult(closed.Count == 1 ? new OperationError("Synthetic close failure\n") : null);
+            next = state.GetNextStep(CancellationToken.None);
+        }
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(earlierPipe
+            ? [new FileDescriptor(33), new FileDescriptor(32), new FileDescriptor(31), new FileDescriptor(30)]
+            : new[] { new FileDescriptor(33), new FileDescriptor(32) }, closed);
+        Assert.False(publishedEarly);
+        Assert.Equal(before, pending);
+        Assert.False(state.Variables.ContainsKey("after"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -188,12 +188,7 @@ public sealed partial class Evaluation
         // cd - prints the selected operand before PWD and OLDPWD bookkeeping.
         var announced = DescriptorWriteResult.Open;
         if (!announcement.IsEmpty)
-        {
-            CheckCancellation();
-            // Keep the announcement's reservation while the host borrows its bytes.
-            announced = await PublishWrite(GetStdOutDescriptor(), announcement).ConfigureAwait(false);
-            CheckCancellation();
-        }
+            announced = await ExecuteWriteAsync(GetStdOutDescriptor(), announcement).ConfigureAwait(false);
         var scope = new ScopedEvaluation(this, variables, context);
         ShellValue? oldPwd = variables.TryGetExpansionValue("PWD", out var pwd) ? pwd : null;
         var oldResult = await AssignBuiltinAsync(VariableReference.ForName("OLDPWD"), oldPwd, scope,
@@ -223,14 +218,10 @@ public sealed partial class Evaluation
             assigned == BuiltinAssignmentResult.Readonly && _state.ErrexitEnabled;
     }
 
-    private async Task<DescriptorWriteResult> WriteDirectoryStackAsync(bool currentOnly)
+    private Task<DescriptorWriteResult> WriteDirectoryStackAsync(bool currentOnly)
     {
         var content = _state.FormatDirectoryStack(currentOnly, Memory, _cancellationToken);
-        CheckCancellation();
-        // Keep the command owner alive until the host has finished borrowing the bytes.
-        var result = await PublishWrite(GetStdOutDescriptor(), content).ConfigureAwait(false);
-        CheckCancellation();
-        return result;
+        return ExecuteWriteAsync(GetStdOutDescriptor(), content);
     }
 
     private static string DirectoryCommandName(DirectoryChangeKind kind) => kind switch

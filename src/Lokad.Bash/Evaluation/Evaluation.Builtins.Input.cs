@@ -249,10 +249,8 @@ public sealed partial class Evaluation
                     ReadResult result;
                     try
                     {
-                        _cancellationToken.ThrowIfCancellationRequested();
-                        result = await ReadLineOperation.AsTask(PublishOperation,
-                            inputDescriptor, 1, destinationBudget: null, reusableLine: physicalLine).ConfigureAwait(false);
-                        _cancellationToken.ThrowIfCancellationRequested();
+                        result = await ExecuteReadAsync(inputDescriptor, 1, destinationBudget: null, reusableLine: physicalLine)
+                            .ConfigureAwait(false);
                     }
                     catch (ByteMemoryBuilder.LimitExceededException)
                     {

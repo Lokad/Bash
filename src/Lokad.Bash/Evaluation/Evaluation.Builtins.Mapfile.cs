@@ -111,8 +111,7 @@ public sealed partial class Evaluation
                 var limit = count == 0 ? ReadBatchRecords : (int)Math.Min(ReadBatchRecords, count - (uint)values.Count);
                 if (delimiter == (byte)'\n')
                 {
-                    var batch = await ReadLineOperation.AsTask(
-                        PublishOperation, descriptor, limit, valuesMemory, reusableLine: null).ConfigureAwait(false);
+                    var batch = await ExecuteReadAsync(descriptor, limit, valuesMemory).ConfigureAwait(false);
                     batch.ThrowIfError();
                     AddBatch(batch.Content, batch.LineStartOffsets);
                     reachedEof = batch.ReachedEoF;
@@ -122,6 +121,7 @@ public sealed partial class Evaluation
                     var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
                     PublishOperation(new ReadRecordBatchOperation(completion, descriptor, delimiter, limit, valuesMemory));
                     var batch = await completion.Task.ConfigureAwait(false);
+                    CheckCancellation();
                     batch.Result.ThrowIfError();
                     AddBatch(batch.Content, batch.RecordStartOffsets);
                     reachedEof = batch.Result.ReachedEoF;

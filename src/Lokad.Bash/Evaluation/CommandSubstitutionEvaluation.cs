@@ -67,6 +67,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             }
             outer.TrackOwnedDescriptor(pipe.Read);
             outer.TrackOwnedDescriptor(pipe.Write);
+            outer.CancellationToken.ThrowIfCancellationRequested();
             using var outputMemory = outer.Memory.Budget.CreateScope();
             var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write);
             CapturedEvaluationResult result;

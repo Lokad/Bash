@@ -774,6 +774,7 @@ public sealed partial class Evaluation : IFileTester
                         .ConfigureAwait(false);
                 }
                 pipes.Add(pipe);
+                CheckCancellation();
             }
 
             // All stages borrow the same parent handles. Collect them before a stage retains
@@ -3190,11 +3191,14 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Emits an append operation, retaining downstream closure and any known failure cause.
     /// </summary>
-    internal Task<DescriptorWriteResult> ExecuteWriteAsync(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content) =>
-        AwaitOperationAsync(PublishWrite(fileDescriptor, content));
-
-    internal Task<DescriptorWriteResult> PublishWrite(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content) =>
-        WriteOperation.AsTask(PublishOperation, fileDescriptor, content);
+    internal async Task<DescriptorWriteResult> ExecuteWriteAsync(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content)
+    {
+        CheckCancellation();
+        // Keep the buffer and descriptor borrowed until the host finishes the write.
+        var result = await WriteOperation.AsTask(PublishOperation, fileDescriptor, content).ConfigureAwait(false);
+        CheckCancellation();
+        return result;
+    }
 
     /// <summary>
     /// Executes file tests and evaluates the aggregated result with a provided evaluator.
@@ -3403,8 +3407,18 @@ public sealed partial class Evaluation : IFileTester
     /// <param name="fileDescriptor">The host descriptor to read.</param>
     /// <param name="limit">The positive maximum number of records to return.</param>
     public Task<ReadResult> ExecuteReadAsync(FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget) =>
-        AwaitOperationAsync(ReadLineOperation.AsTask(PublishOperation, fileDescriptor, limit, destinationBudget, reusableLine: null));
+        ExecuteReadAsync(fileDescriptor, limit, destinationBudget, reusableLine: null);
 
+    private async Task<ReadResult> ExecuteReadAsync(
+        FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine)
+    {
+        CheckCancellation();
+        // The host may still be reading into storage owned by the caller after cancellation.
+        var result = await ReadLineOperation.AsTask(PublishOperation, fileDescriptor, limit, destinationBudget, reusableLine)
+            .ConfigureAwait(false);
+        CheckCancellation();
+        return result;
+    }
 
     /// <summary>
     /// Formats an integer exit code as ASCII bytes.
@@ -3523,15 +3537,30 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Emits a create-pipe operation and returns both endpoints or an acquisition failure.
     /// </summary>
-    internal Task<PipeCreationResult> ExecuteCreatePipeAsync() =>
-        AwaitOperationAsync(CreatePipeOperation.AsTask(PublishOperation));
+    internal async Task<PipeCreationResult> ExecuteCreatePipeAsync()
+    {
+        CheckCancellation();
+        var result = await CreatePipeOperation.AsTask(PublishOperation).ConfigureAwait(false);
+        if (_cancellationToken.IsCancellationRequested)
+        {
+            // A successful acquisition transfers both handles even if cancellation raced the response.
+            if (result.Descriptors is { } pipe)
+                await CloseDescriptorsAsync([pipe.Write, pipe.Read], operationFailed: true).ConfigureAwait(false);
+            CheckCancellation();
+        }
+        return result;
+    }
 
     /// <summary>Transfers a here-input's writer/payload to an independent owner registered on its reader.</summary>
     internal async Task<OperationError?> StartPipeInputAsync(PipeDescriptors pipe, ReadOnlyMemory<byte> content, bool appendNewline)
     {
         var inputs = _pipeInputs ?? throw new InvalidOperationException("Here-input registration was not prepared.");
         PipeInputWriter writer;
-        try { writer = new PipeInputWriter(pipe, content, appendNewline, Memory.Budget); }
+        try
+        {
+            CheckCancellation();
+            writer = new PipeInputWriter(pipe, content, appendNewline, Memory.Budget);
+        }
         catch
         {
             await CloseDescriptorsAsync([pipe.Write], operationFailed: true).ConfigureAwait(false);
@@ -3541,7 +3570,9 @@ public sealed partial class Evaluation : IFileTester
         var completion = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);
         PublishOperation(new StartPipeInputOperation(completion, writer));
         // Keep the registration/payload until dispatch settles, even if the caller cancels startup.
-        return await completion.Task.ConfigureAwait(false);
+        var result = await completion.Task.ConfigureAwait(false);
+        CheckCancellation();
+        return result;
     }
 
     /// <summary>

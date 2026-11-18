@@ -445,7 +445,7 @@ internal sealed class RedirectionEvaluation
     {
         var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
         if (!diagnostic.IsEmpty && !standardError.IsClosed)
-            await scope.Effects.PublishWrite(standardError, diagnostic).ConfigureAwait(false);
+            await scope.Effects.ExecuteWriteAsync(standardError, diagnostic).ConfigureAwait(false);
         scope.Effects.SetExpansionError(1);
     }
 

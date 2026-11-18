@@ -155,7 +155,7 @@ public sealed partial class Evaluation
             using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
             diagnostic.Append("type: -"u8).Append(option).Append(": invalid option\ntype: usage: "u8)
                 .Append(Utf8Text.Encode(BuiltinDocumentation.For(BuiltinKind.Type).Synopsis("type"))).Append((byte)'\n');
-            await PublishWrite(GetStdErrDescriptor(), diagnostic.ToMemory()).ConfigureAwait(false);
+            await ExecuteWriteAsync(GetStdErrDescriptor(), diagnostic.ToMemory()).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
     }
@@ -274,11 +274,10 @@ public sealed partial class Evaluation
                     if (endOffset > startOffset && !(diagnostic ? errorClosed : outputClosed))
                     {
                         var descriptor = diagnostic ? stderr : stdout;
-                        var result = await PublishWrite(
+                        var result = await ExecuteWriteAsync(
                                 descriptor,
                                 content[startOffset..endOffset])
                             .ConfigureAwait(false);
-                        CheckCancellation();
                         // Downstream closure is final for this descriptor, including merged stdout/stderr.
                         if (!result.CanAcceptMore && !result.IsError)
                         {
