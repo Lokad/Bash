@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Apply quote and substitution rules across word fragments after a brace
+  sequence generates a backslash or backtick.
+
 - Retain a descriptor move's source close when an in-process command moves
   into a closed destination and the source has no earlier saved binding.
 

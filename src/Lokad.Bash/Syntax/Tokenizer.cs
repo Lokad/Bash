@@ -746,6 +746,17 @@ internal sealed class Tokenizer
 
     private bool _retainArithmeticSubscripts;
 
+    /// <summary>Reads one already-delimited word after generated punctuation changes its quote context.</summary>
+    internal static Word ReadBraceExpandedWord(ShellSource content, MemoryCapacity memory)
+    {
+        var tokenizer = new Tokenizer(content, 0,
+            new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Temporary });
+        var word = tokenizer.ReadWord(content.AsSpan(), content.Length, ExpansionWordSyntax.BraceExpanded, ShellQuoteKind.None);
+        return tokenizer.Error is { } error
+            ? new Word([new BraceExpansionFailureWordPart(ShellValue.FromText(error.Message))])
+            : word;
+    }
+
     private bool TryReadArithmeticSubscript([NotNullWhen(true)] out WordPart? part)
     {
         part = null;
@@ -767,7 +778,8 @@ internal sealed class Tokenizer
         var parts = new List<WordPart>();
         var unquoted = _scanContext.CreateByteBuilder(0);
         var quotedOperand = outerQuote == ShellQuoteKind.Double;
-        var arithmetic = syntax != ExpansionWordSyntax.Parameter;
+        var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
+        var arithmetic = syntax is not (ExpansionWordSyntax.Parameter or ExpansionWordSyntax.BraceExpanded);
         var continuesQuote = false;
 
         void AddPart(WordPart part)
@@ -789,9 +801,9 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
-            AddPart(WordPart.FromSource(
+            AddPart(new SourceWordPart(
                 quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, ShellSource.FromBytes(unquoted.ToCompactMemory(_scanContext.SyntaxMemory)),
-                _scanContext.SyntaxMemory));
+                _scanContext.SyntaxMemory) { IsBraceExpanded = braceExpanded });
             unquoted = _scanContext.CreateByteBuilder(0);
         }
 
@@ -813,27 +825,15 @@ internal sealed class Tokenizer
                 && TryReadArithmeticExpansion(unquoted))
                 continue;
 
-            if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position))
+            if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
+                || current == (byte)'`' && (!braceExpanded || Position + 1 < span.Length))
             {
                 FlushUnquoted();
-                if (!TryReserveSyntax())
+                if (ReadCommandSubstitutionPart(
+                        quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution,
+                        syntax) is not { } substitution)
                     return new Word([]);
-                if (!TryReadCommandSubstitution(out var content))
-                    return new Word([]);
-                AddPart(new CommandSubstitutionWordPart(
-                    quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution, content));
-                continue;
-            }
-
-            if (current == (byte)'`')
-            {
-                FlushUnquoted();
-                if (!TryReserveSyntax())
-                    return new Word([]);
-                if (!TryReadCommandSubstitution(out var content))
-                    return new Word([]);
-                AddPart(new CommandSubstitutionWordPart(
-                    quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution, content));
+                AddPart(substitution);
                 continue;
             }
 
@@ -905,6 +905,11 @@ internal sealed class Tokenizer
                 Position++;
                 if (Position >= span.Length)
                 {
+                    if (braceExpanded)
+                    {
+                        unquoted.Append(current);
+                        break;
+                    }
                     RecordError("Unexpected end of input after escape.", Position);
                     return new Word([]);
                 }
@@ -958,7 +963,7 @@ internal sealed class Tokenizer
         ShellValue ReadQuotedLiteral()
         {
             var cursor = new ShellSourceCursor(_input, Position, _scanContext);
-            var complete = cursor.TryReadQuotedLiteral(out var value);
+            var complete = cursor.TryReadQuotedLiteral(out var value, allowUnterminated: braceExpanded);
             Position = cursor.Position;
             if (!complete)
                 RecordError("Unterminated single-quoted string.", Position);
@@ -994,9 +999,10 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a substitution, retaining the tree built by parenthesized delimiter parsing.
     /// </summary>
-    private bool TryReadCommandSubstitution([NotNullWhen(true)] out CommandSubstitutionSyntax? substitution)
+    private WordPart? ReadCommandSubstitutionPart(WordPartKind kind, ExpansionWordSyntax syntax)
     {
-        substitution = null;
+        if (!TryReserveSyntax())
+            return null;
         var start = Position;
         if (CommandSubstitutionScanner.ScanParsed(
                 _scanContext,
@@ -1005,13 +1011,21 @@ internal sealed class Tokenizer
                 out var endIndex,
                 out var payload) != ShellScanStatus.Complete)
         {
+            if (syntax == ExpansionWordSyntax.BraceExpanded && _scanContext.LimitError == null)
+            {
+                Position = _input.Length;
+                var delimiter = _input[start] == (byte)'`' ? (byte)'`' : (byte)')';
+                var memory = _scanContext.SyntaxMemory ?? throw new InvalidOperationException("Generated words require an active memory owner.");
+                return new BraceExpansionFailureWordPart(
+                    BraceExpansionFailureWordPart.FormatMissingDelimiter(_input.Slice(start), delimiter, memory));
+            }
             RecordError("Unterminated command substitution.", start);
-            return false;
+            return null;
         }
 
         Position = endIndex + 1;
-        substitution = payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax.");
-        return true;
+        return new CommandSubstitutionWordPart(kind,
+            payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax."));
     }
 
     /// <summary>
@@ -1055,6 +1069,7 @@ internal sealed class Tokenizer
     /// </summary>
     private List<WordPart> ReadDoubleQuotedParts(ReadOnlySpan<byte> span, ExpansionWordSyntax syntax)
     {
+        var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var parts = new List<WordPart>();
         var content = _scanContext.CreateByteBuilder(0);
 
@@ -1104,6 +1119,12 @@ internal sealed class Tokenizer
             {
                 if (Position + 1 >= span.Length)
                 {
+                    if (braceExpanded)
+                    {
+                        content.Append(current);
+                        Position++;
+                        break;
+                    }
                     RecordError("Unexpected end of input after escape.", Position);
                     return parts;
                 }
@@ -1139,25 +1160,13 @@ internal sealed class Tokenizer
                 && TryReadArithmeticExpansion(content))
                 continue;
 
-            if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position))
+            if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
+                || current == (byte)'`' && (!braceExpanded || Position + 1 < span.Length))
             {
                 Flush(allowEmpty: false);
-                if (!TryReserveSyntax())
+                if (ReadCommandSubstitutionPart(WordPartKind.CommandSubstitutionQuoted, syntax) is not { } substitution)
                     return parts;
-                if (!TryReadCommandSubstitution(out var payload))
-                    return parts;
-                AddPart(new CommandSubstitutionWordPart(WordPartKind.CommandSubstitutionQuoted, payload));
-                continue;
-            }
-
-            if (current == (byte)'`')
-            {
-                Flush(allowEmpty: false);
-                if (!TryReserveSyntax())
-                    return parts;
-                if (!TryReadCommandSubstitution(out var payload))
-                    return parts;
-                AddPart(new CommandSubstitutionWordPart(WordPartKind.CommandSubstitutionQuoted, payload));
+                AddPart(substitution);
                 continue;
             }
 
@@ -1168,8 +1177,8 @@ internal sealed class Tokenizer
         if (Error != null)
             return parts;
 
-        // Generated quotes undergo arithmetic quote removal, not source-syntax validation.
-        if (syntax == ExpansionWordSyntax.DecodedArithmetic)
+        // The complete source word was already validated before generating new quote syntax.
+        if (syntax is ExpansionWordSyntax.DecodedArithmetic or ExpansionWordSyntax.BraceExpanded)
         {
             Flush(allowEmpty: true);
             return parts;
@@ -1206,6 +1215,7 @@ internal sealed class Tokenizer
 internal enum ExpansionWordSyntax
 {
     Parameter,
+    BraceExpanded,
     // Array selectors and substring bounds remove ANSI-C quotes.
     Arithmetic,
     // Arithmetic commands/expansions retain ANSI-C quotes after decoding their payload.

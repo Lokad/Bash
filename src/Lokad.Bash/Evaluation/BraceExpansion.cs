@@ -53,7 +53,7 @@ internal static class BraceExpansion
 
     // A branch borrows its prefix and continuation until its complete word can be materialized.
     private sealed record Continuation(FragmentRange Range, Continuation? Next);
-    private sealed record Fragment(ShellSource Source, WordPart? Opaque, Fragment? Previous, int Count);
+    private sealed record Fragment(ShellSource Source, WordPart? Opaque, Fragment? Previous, int Count, bool GeneratedPunctuation);
     private readonly record struct Branch(Continuation? Continuation, Fragment? Prefix);
 
     /// <summary>Expands brace expressions across existing lexical parts in encounter order.</summary>
@@ -135,7 +135,8 @@ internal static class BraceExpansion
                     var values = brace.SequenceValues ??= MaterializeSequence(sequence, memory, cancellationToken);
                     memory.Charge(checked(32L * sequence.Count));
                     for (var value = sequence.Count - 1; value >= 0; value--)
-                        pending.Push(new Branch(suffix, Append(values[value], null, prefix)));
+                        pending.Push(new Branch(suffix, Append(values[value], null, prefix,
+                            sequence.IsCharacter && values[value][0] is (byte)'\\' or (byte)'`')));
                 }
                 else
                 {
@@ -190,19 +191,19 @@ internal static class BraceExpansion
                     var begin = partIndex == start.Part ? start.Offset : 0;
                     var limit = partIndex == end.Part ? end.Offset : source.Source.Length;
                     if (begin < limit)
-                        prefix = Append(source.Source.Slice(begin, limit - begin), null, prefix);
+                        prefix = Append(source.Source.Slice(begin, limit - begin), null, prefix, generatedPunctuation: false);
                 }
                 else
-                    prefix = Append(default, part, prefix);
+                    prefix = Append(default, part, prefix, generatedPunctuation: false);
             }
             return prefix;
         }
 
-        Fragment Append(ShellSource source, WordPart? opaque, Fragment? prefix)
+        Fragment Append(ShellSource source, WordPart? opaque, Fragment? prefix, bool generatedPunctuation)
         {
             cancellationToken.ThrowIfCancellationRequested();
             memory.Charge(64);
-            return new Fragment(source, opaque, prefix, (prefix?.Count ?? 0) + 1);
+            return new Fragment(source, opaque, prefix, (prefix?.Count ?? 0) + 1, generatedPunctuation);
         }
     }
 
@@ -346,6 +347,7 @@ internal static class BraceExpansion
         }
 
         var parts = new List<WordPart>(fragments.Length);
+        var rebuildFrom = -1;
         for (var index = 0; index < fragments.Length;)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -359,12 +361,14 @@ internal static class BraceExpansion
             // Rejoin adjacent unquoted pieces so suffixes keep their original
             // parameter, tilde, generated escape and pathname semantics.
             var source = fragments[index].Source;
+            var generatedPunctuation = fragments[index].GeneratedPunctuation;
             long length = source.Length;
             var end = index + 1;
             while (end < fragments.Length && fragments[end].Opaque == null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 length += fragments[end].Source.Length;
+                generatedPunctuation |= fragments[end].GeneratedPunctuation;
                 end++;
             }
 
@@ -382,8 +386,33 @@ internal static class BraceExpansion
                 source = ShellSource.FromBytes(combined.ToMemory());
             }
 
+            if (rebuildFrom < 0 && generatedPunctuation && end < fragments.Length)
+                rebuildFrom = parts.Count;
             parts.Add(new SourceWordPart(WordPartKind.Unquoted, source, memory.Workspace) { IsBraceExpanded = true });
             index = end;
+        }
+
+        if (rebuildFrom >= 0)
+        {
+            // A generated escape or backtick can reinterpret an adjacent lexical part.
+            // Re-read only that tail. Earlier parts keep their original expansion syntax.
+            var tailCount = parts.Count - rebuildFrom;
+            memory.Charge(checked(128L + 8L * tailCount));
+            var tail = new Word(parts.GetRange(rebuildFrom, tailCount));
+            foreach (var part in tail.Parts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed command })
+                    memory.Charge(checked(256L + 8L * command.Source.Length));
+            }
+            var spelling = new ShellScanContext { SyntaxMemory = memory.Workspace }
+                .CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
+            if (!FunctionDefinitionFormatter.TryAppendBraceSource(tail, spelling, cancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            var rebuilt = Tokenizer.ReadBraceExpandedWord(ShellSource.FromBytes(spelling.ToMemory()), memory.Workspace);
+            memory.Charge(checked(32L + 8L * rebuilt.Parts.Count));
+            parts.RemoveRange(rebuildFrom, tailCount);
+            parts.AddRange(rebuilt.Parts);
         }
         return new Word(parts);
     }

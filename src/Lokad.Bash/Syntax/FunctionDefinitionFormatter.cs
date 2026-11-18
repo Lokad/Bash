@@ -1,14 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Syntax;
 
-/// <summary>Renders retained syntax for display or explicitly bounded child-parser input, without evaluation.</summary>
+/// <summary>Renders retained syntax for display, export, or brace expansion without evaluation.</summary>
 internal static class FunctionDefinitionFormatter
 {
-    private enum Format { Display, Export }
+    private enum Format { Display, Export, BraceSource }
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppend(FunctionDefinition definition, ByteMemoryBuilder output) =>
@@ -20,14 +21,25 @@ internal static class FunctionDefinitionFormatter
         TryAppend(definition, output, Format.Export);
 
     private static bool TryAppend(FunctionDefinition definition, IByteMemoryWriter output, Format format)
+        => TryAppend(new Step.Function(definition, 0, Nested: false), output, format, CancellationToken.None);
+
+    /// <summary>Restores the lexical spelling of a brace-generated word tail whose quote context changed.</summary>
+    internal static bool TryAppendBraceSource(Word word, IByteMemoryWriter output, CancellationToken cancellationToken) =>
+        TryAppend(new Step.Word(word), output, Format.BraceSource, cancellationToken);
+
+    private static bool TryAppend(Step initial, IByteMemoryWriter output, Format format, CancellationToken cancellationToken)
     {
         var display = format == Format.Display;
+        var braceSource = format == Format.BraceSource;
         // Explicit work items keep long left-associated lists off the CLR call stack.
         var work = new Stack<Step>();
         var hereDocuments = new Queue<Redirection>();
-        Push(new Step.Function(definition, 0, Nested: false), new Step.Layout(0));
+        if (!braceSource)
+            work.Push(new Step.Layout(0));
+        work.Push(initial);
         while (work.TryPop(out var step))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             switch (step)
             {
                 case Step.Text(var text):
@@ -37,7 +49,7 @@ internal static class FunctionDefinitionFormatter
                     if (!output.TryAppend(source.AsSpan())) return false;
                     break;
                 case Step.Layout(var indent):
-                    if (display || hereDocuments.Count != 0)
+                    if (display || braceSource || hereDocuments.Count != 0)
                         work.Push(new Step.Line(indent, Terminate: false));
                     else if (!Append(" ")) return false;
                     break;
@@ -49,7 +61,7 @@ internal static class FunctionDefinitionFormatter
                         if (!FlushHereDocuments()) return false;
                         if (display && !Append("\n")) return false;
                     }
-                    if (display && !output.TryAppend(indent, (byte)' ')) return false;
+                    if ((display || braceSource) && !output.TryAppend(indent, (byte)' ')) return false;
                     break;
                 case Step.Word(var word):
                     var doubleQuoted = false;
@@ -65,7 +77,7 @@ internal static class FunctionDefinitionFormatter
                         {
                             WordPartKind.Unquoted => output.TryAppend(content),
                             // ANSI-C quoting keeps embedded apostrophes in one literal part on import.
-                            WordPartKind.SingleQuoted when !display && content.Contains((byte)'\'') =>
+                            WordPartKind.SingleQuoted when format == Format.Export && content.Contains((byte)'\'') =>
                                 ShellArgumentEscaping.TryAppendQuoted(output, content, ShellQuoteStyle.AnsiC),
                             WordPartKind.SingleQuoted => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, content),
                             WordPartKind.DoubleQuoted => output.TryAppend(content),
@@ -73,6 +85,12 @@ internal static class FunctionDefinitionFormatter
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
                                 when part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Legacy legacy } =>
                                 output.TryAppend(legacy.Spelling.AsSpan()),
+                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
+                                when braceSource && part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed parsed } =>
+                                Append(StartsWithParenthesis(parsed.Script) ? "$( " : "$(")
+                                && TryAppend(new Step.Script(parsed.Script), output, format, cancellationToken) && Append(")"),
+                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted when braceSource =>
+                                Append("$(") && output.TryAppend(content) && Append(")"),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
                                 AppendCommandSubstitution(content),
                             _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
@@ -80,6 +98,21 @@ internal static class FunctionDefinitionFormatter
                         if (!success) return false;
                     }
                     if (doubleQuoted && !Append("\"")) return false;
+                    break;
+                case Step.Script(var script):
+                    for (var index = script.Commands.Count - 1; index >= 0; index--)
+                    {
+                        work.Push(new Step.Command(script.Commands[index], 0));
+                        if (index != 0)
+                            work.Push(new Step.CommandSeparator());
+                    }
+                    break;
+                case Step.CommandSeparator:
+                    if (hereDocuments.Count == 0)
+                    {
+                        if (!Append("; ")) return false;
+                    }
+                    else if (!Append("\n") || !FlushHereDocuments() || !Append("\n")) return false;
                     break;
                 case Step.Pipe(var operation):
                     if (!Append(operation == PipelineOperator.PipeAndError ? display ? " 2>&1 |" : " |&" : " |")) return false;
@@ -194,7 +227,7 @@ internal static class FunctionDefinitionFormatter
                             break;
                         case ListCommand list:
                             Push(new Step.Command(list.Left, indent), list.Operator == ListOperator.Sequence
-                                    ? new Step.Line(indent, Terminate: true)
+                                    ? braceSource ? new Step.CommandSeparator() : new Step.Line(indent, Terminate: true)
                                     : new Step.Text(list.Operator == ListOperator.And ? " && " : " || "),
                                 new Step.Command(list.Right, indent));
                             break;
@@ -281,7 +314,7 @@ internal static class FunctionDefinitionFormatter
                     break;
             }
         }
-        return true;
+        return !braceSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
 
         bool Append(string text) => output.TryAppend(Utf8Text.Encode(text).Span);
 
@@ -293,6 +326,25 @@ internal static class FunctionDefinitionFormatter
                 && output.TryAppend(source)
                 && (source.EndsWith("\n"u8) || Append("\n"))
                 && Append(")");
+        }
+
+        static bool StartsWithParenthesis(ParsedScript script)
+        {
+            if (script.Commands.Count == 0)
+                return false;
+            // A leading literal parenthesis after the opener would select arithmetic.
+            var first = script.Commands[0];
+            while (true)
+            {
+                switch (first)
+                {
+                    case SubshellCommand or ArithmeticCommand: return true;
+                    case RedirectedCommand redirected: first = redirected.Body; break;
+                    case ListCommand list: first = list.Left; break;
+                    case PipelineCommand { Negated: false } pipe: first = pipe.Left; break;
+                    default: return false;
+                }
+            }
         }
 
         bool FlushHereDocuments()
@@ -326,6 +378,8 @@ internal static class FunctionDefinitionFormatter
         public sealed record Source(ShellSource Value) : Step;
         public sealed record Layout(int Indent) : Step;
         public sealed record Line(int Indent, bool Terminate) : Step;
+        public sealed record CommandSeparator : Step;
+        public sealed record Script(ParsedScript Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;
         public sealed record Word(Syntax.Word Value) : Step;
         public sealed record Assignment(AssignmentWord Value) : Step;

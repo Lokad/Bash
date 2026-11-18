@@ -153,6 +153,89 @@ public sealed class EvaluationBraceExpansionTests
         Assert.Equal("bad substitution: no closing \"`\" in `suffix\n", result.StdErr);
     }
 
+    [Theory]
+    [InlineData("""p{Y..a..3}"s" """, """<pYs><p"s><p_s>""")]
+    [InlineData("""p{Y..a..3}"$v" """, """<pYone two><p"one><two><p_one two>""")]
+    [InlineData("""p{Y..a..3}"x"$v""", """<pYxone><two><p"xone two><p_xone><two>""")]
+    [InlineData("""p{Y..a..3}'$v'""", "<pY$v><p'one><two><p_$v>")]
+    [InlineData("""p{Y..a..3}\$v""", """<pY$v><p\one><two><p_$v>""")]
+    public async Task GeneratedEscapeChangesTheAdjacentQuoteContext(string word, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync("v='one two'; printf '<%s>' " + word);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("\"s\"")]
+    [InlineData("$(printf s)")]
+    [InlineData("'s'")]
+    public async Task GeneratedBacktickReadsAdjacentSyntaxInItsDiagnostic(string suffix)
+    {
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' {Z..a}" + suffix);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("bad substitution: no closing \"`\" in `" + suffix + "\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task GeneratedEscapeCanMakeAnAdjacentCommandSubstitutionLiteral()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "printf '<%s>' p{Y..a..3}$(printf ok; printf x >>effect)", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<pYok><p$(printf ok; printf x >> effect)><p_ok>", host.StandardOutput.TextContent);
+        Assert.Equal("xx", host.ReadFile("/effect"));
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task AnEscapedSubstitutionShowsTheNormalizedCompoundSpelling()
+    {
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' p{Y..a..3}$(case yes in yes) printf y;; esac)");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<pYy><p$(case yes in \n    yes)\n        printf y\n    ;;\nesac)><p_y>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("$( (printf yes) )", "yes")]
+    [InlineData("$(f(){ printf yes; }; f)", "yes")]
+    [InlineData("$(read -r var <<EOF\nyes\nEOF\nprintf '%s' \"$var\")", "yes")]
+    public async Task ACommandSubstitutionStillRunsAfterItsOuterQuoteIsEscaped(string substitution, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' p{Y..a..3}\"" + substitution + "\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<pY{expected}><p\"{expected}><p_{expected}>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task GeneratedBacktickFailureRetainsPrecedingBranchEffects()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        var result = await host.RunAsync(
+            "printf '<%s>' p{Y..a..7}\"$(printf ok; printf x >>effect)\"\nprintf ':%s' \"$?\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(":1", host.StandardOutput.TextContent);
+        Assert.Equal("x", host.ReadFile("/effect"));
+        Assert.Equal("bad substitution: no closing \"`\" in `\"$(printf ok; printf x >> effect)\"\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task GeneratedSubstitutionFailureDiscardsItsStreamingCommandUnit()
     {

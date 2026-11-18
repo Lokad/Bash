@@ -90,10 +90,13 @@ internal sealed class ShellSourceCursor
     }
 
     /// <summary>Reads one ordinary or ANSI-C literal, retaining its physical span even after decoded NUL.</summary>
-    internal bool TryReadQuotedLiteral(out ShellValue value)
+    internal bool TryReadQuotedLiteral(out ShellValue value) =>
+        TryReadQuotedLiteral(out value, allowUnterminated: false);
+
+    internal bool TryReadQuotedLiteral(out ShellValue value, bool allowUnterminated)
     {
         value = default;
-        if (!TryReadQuotedLiteralSource(out var payload, out var kind))
+        if (!TryReadQuotedLiteralSource(out var payload, out var kind, allowUnterminated))
             return false;
         // Literal arguments may survive source execution (for example, set -- 'value').
         // Keep their storage independent of the complete input buffer.
@@ -108,7 +111,10 @@ internal sealed class ShellSourceCursor
     }
 
     /// <summary>Advances over one literal without decoding again when the token already owns its value.</summary>
-    internal bool TryReadQuotedLiteralSource(out ShellSource payload, out ShellQuoteKind kind)
+    internal bool TryReadQuotedLiteralSource(out ShellSource payload, out ShellQuoteKind kind) =>
+        TryReadQuotedLiteralSource(out payload, out kind, allowUnterminated: false);
+
+    private bool TryReadQuotedLiteralSource(out ShellSource payload, out ShellQuoteKind kind, bool allowUnterminated)
     {
         payload = default;
         kind = Current == (byte)'$' ? ShellQuoteKind.AnsiC : ShellQuoteKind.Single;
@@ -116,10 +122,10 @@ internal sealed class ShellSourceCursor
         var start = Position;
         while (!IsAtEnd && IsQuoted)
             _ = TryConsumeQuoteOrEscape();
-        if (IsQuoted)
+        if (IsQuoted && !allowUnterminated)
             return false;
 
-        payload = _text.Slice(start, Position - start - 1);
+        payload = _text.Slice(start, Position - start - (IsQuoted ? 0 : 1));
         return true;
     }
 

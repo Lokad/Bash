@@ -154,6 +154,21 @@ public sealed class SourceWordPart : WordPart
 
 internal enum DoubleQuoteBoundary : byte { None, Start, Continuation }
 
+/// <summary>A failed substitution in generated syntax, reported in expansion order.</summary>
+internal sealed class BraceExpansionFailureWordPart(ShellValue message) : WordPart(WordPartKind.Unquoted)
+{
+    internal ShellValue Message { get; } = message;
+    public override string GetUtf8Text() => Message.ToUtf8String();
+    public override ShellValue GetUnexpandedValue() => Message;
+
+    internal static ShellValue FormatMissingDelimiter(ShellSource suffix, byte delimiter, MemoryCapacity memory)
+    {
+        var message = new ShellScanContext { SyntaxMemory = memory }.CreateByteBuilder(0);
+        message.Append("no closing \""u8).Append(delimiter).Append("\" in "u8).Append(suffix.Bytes);
+        return ShellValue.FromBytes(message.ToMemory());
+    }
+}
+
 /// <summary>Quoted or unquoted substitution syntax shared by tokenization and execution.</summary>
 internal sealed class CommandSubstitutionWordPart : WordPart
 {

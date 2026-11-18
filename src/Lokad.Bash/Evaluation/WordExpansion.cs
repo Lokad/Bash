@@ -235,6 +235,12 @@ internal static partial class WordExpansion
         ExpandedWordBuilder builder,
         bool allowWordSplitting)
     {
+        if (part is BraceExpansionFailureWordPart failure)
+        {
+            await ReportBraceExpansionFailureAsync(failure.Message, scope).ConfigureAwait(false);
+            return;
+        }
+
         switch (part.Kind)
         {
             case WordPartKind.DoubleQuoted:
@@ -558,10 +564,9 @@ internal static partial class WordExpansion
                 }
                 if (syntax.IsBraceExpanded && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)
                 {
-                    var message = ByteMemoryBuilder.CreateUnaccounted(0);
-                    message.Append("no closing \"`\" in "u8).Append(content.Slice(index).Bytes);
-                    await scope.Effects.ReportFatalExpansionAsync(ShellValue.FromText("bad substitution"),
-                        ShellValue.FromBytes(message.ToMemory()), ExpansionFailureKind.WordSyntax).ConfigureAwait(false);
+                    var message = BraceExpansionFailureWordPart.FormatMissingDelimiter(content.Slice(index), (byte)'`',
+                        scope.Effects.Memory.Workspace);
+                    await ReportBraceExpansionFailureAsync(message, scope).ConfigureAwait(false);
                     return null;
                 }
             }
@@ -804,6 +809,9 @@ internal static partial class WordExpansion
         var operand = await PrepareArithmeticAsync(expression, scope, purpose).ConfigureAwait(false);
         return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Fatal).ConfigureAwait(false);
     }
+
+    private static Task ReportBraceExpansionFailureAsync(ShellValue message, ScopedEvaluation scope) =>
+        scope.Effects.ReportFatalExpansionAsync(ShellValue.FromText("bad substitution"), message, ExpansionFailureKind.WordSyntax);
 
     private static async Task ExpandCommandSubstitutionAsync(
         CommandSubstitutionSyntax script,
