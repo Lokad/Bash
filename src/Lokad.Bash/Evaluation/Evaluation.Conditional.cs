@@ -61,7 +61,7 @@ public sealed partial class Evaluation
         }
 
         async Task<ExpandedWord> ExpandAsync(Word word) => await WordExpansion.ExpandUnsplitWordAsync(
-            word, scope, ExpansionPurpose.Scalar, allowLeadingTilde: true).ConfigureAwait(false);
+            word, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading).ConfigureAwait(false);
 
         async Task<int> EvaluatePredicateAsync(ConditionalExpression expression)
         {

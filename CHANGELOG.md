@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Expand colon-delimited tilde prefixes in assignment values and here-strings.
+  Preserve quoting, array element roles and byte-valued paths.
+
 - Expand `cd` operands as shell fields and reject surplus fields. Support HOME
   with no operand, OLDPWD with `-`, the `--` terminator and empty destinations.
   Print the selected OLDPWD spelling after a successful lookup.

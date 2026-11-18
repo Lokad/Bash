@@ -87,7 +87,7 @@ public sealed partial class Evaluation
                             continue;
                         }
                         var fields = await WordExpansion.ExpandWithoutBraceAsync(
-                            word, scope, allowWordSplitting: true, ExpansionPurpose.Normal, allowLeadingTilde: true)
+                            word, scope, allowWordSplitting: true, ExpansionPurpose.Normal, TildeExpansion.Leading)
                             .ConfigureAwait(false);
                         if (_state.HasPendingExpansionError)
                             return null;

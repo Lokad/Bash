@@ -17,12 +17,11 @@ edits are recorded during that traversal and admitted to the syntax owner before
 normalization storage grows. Display/export spelling omits those lexical edits;
 caller-constructed ConditionalCommand.Expression retains its supplied source.
 
-Leading tilde selection borrows the complete unquoted prefix across adjacent word
-parts before reading its variable. Quotes, escapes or substitutions before the
-first unquoted slash prevent that selection, including empty quoted parts. Parts
-after the delimiter expand once through the ordinary word path. Suffix views share
-their source-owned arithmetic metadata rather than preparing it again at runtime;
-the existing source/command owners retain syntax and values through consumption.
+Tilde selection reads the complete unquoted prefix across adjacent word parts
+before resolving its value. Reached assignment colons open additional prefixes
+in source order. The word walker resumes at the original part and byte offset.
+That offset addresses the existing source-owned arithmetic metadata. The
+source and command owners retain syntax and expanded bytes through consumption.
 
 Here-document collection removes unquoted backslash/LF continuations before
 delimiter comparison, including for commands whose execution will be skipped.

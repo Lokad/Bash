@@ -82,7 +82,7 @@ internal static partial class WordExpansion
         async Task<ExpandedWordBuilder> ExpandAsync(Word operand, ExpansionPurpose operandPurpose)
         {
             var builder = new ExpandedWordBuilder(scope.Variables, budget, operandPurpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
-            await ExpandWordPartsAsync(operand, scope, builder, allowWordSplitting: false, allowLeadingTilde: false).ConfigureAwait(false);
+            await ExpandWordPartsAsync(operand, scope, builder, allowWordSplitting: false, TildeExpansion.None).ConfigureAwait(false);
             return builder;
         }
 

@@ -1527,7 +1527,7 @@ public sealed partial class Evaluation : IFileTester
                     // The enclosing await reports any limit once, before active redirections unwind.
                     var expanded = await WordExpansion.ExpandWithoutBraceAsync(
                         word.Word, assignmentScope, allowWordSplitting: false, ExpansionPurpose.CompoundPrefix,
-                        allowLeadingTilde: false)
+                        TildeExpansion.None)
                         .ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return ShellValue.Empty;

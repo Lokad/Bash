@@ -139,7 +139,7 @@ public sealed class ByteValuedWordTests
 
         var first = await WordExpansion.ExpandToWordsAsync(word, scope);
         var second = await WordExpansion.ExpandToWordsAsync(word, scope);
-        var unsplit = await WordExpansion.ExpandUnsplitWordAsync(word, scope, ExpansionPurpose.Scalar, true);
+        var unsplit = await WordExpansion.ExpandUnsplitWordAsync(word, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading);
         Assert.Same(first, second);
         Assert.Same(Assert.Single(first), unsplit);
         var segment = Assert.Single(unsplit.Segments);
@@ -148,7 +148,7 @@ public sealed class ByteValuedWordTests
 
         evaluation.SetFatalExpansionError(ExpansionFailureKind.NamerefDefault);
         Assert.Empty(await WordExpansion.ExpandToWordsAsync(word, scope));
-        Assert.Empty(await WordExpansion.ExpandWithoutBraceAsync(word, scope, false, ExpansionPurpose.Scalar, true));
+        Assert.Empty(await WordExpansion.ExpandWithoutBraceAsync(word, scope, false, ExpansionPurpose.Scalar, TildeExpansion.Leading));
     }
 
     [Fact]

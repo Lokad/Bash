@@ -14,7 +14,7 @@ public sealed partial class Evaluation
         bool negated)
     {
         var subjectWord = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
-            caseCommand.Subject, scope, ExpansionPurpose.Scalar, allowLeadingTilde: true)).ConfigureAwait(false);
+            caseCommand.Subject, scope, ExpansionPurpose.Scalar, TildeExpansion.Argument)).ConfigureAwait(false);
         var subject = subjectWord.ToValue(Memory);
         if (_state.HasPendingExpansionError)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
@@ -24,7 +24,7 @@ public sealed partial class Evaluation
             foreach (var pattern in item.Patterns)
             {
                 var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
-                    pattern, scope, ExpansionPurpose.Scalar, allowLeadingTilde: true)).ConfigureAwait(false);
+                    pattern, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading)).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
                 var prepared = ShellPattern.FromWord(expanded, Memory, _cancellationToken);

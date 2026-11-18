@@ -108,9 +108,9 @@ copying costs; this transfer does not imply allocation-free cleanup everywhere.
 
 Tilde-prefix eligibility uses borrowed word metadata and bounded scalar state.
 It does not detach a HOME/PWD/OLDPWD binding for an ineligible prefix. Reached
-lookup and output retain their ordinary admission. Suffix views use the existing
-admitted source-slice helper and share immutable arithmetic decisions; they do
-not retain a separately parsed runtime suffix.
+lookup and output retain their ordinary admission. The source cursor resumes
+at the existing part and byte offset, preserving immutable arithmetic decisions
+without allocating a suffix word or copying its remaining source.
 Numeric directory-stack selection borrows the active stack. Encoding a saved
 path uses the ordinary command workspace through expansion and consumption.
 

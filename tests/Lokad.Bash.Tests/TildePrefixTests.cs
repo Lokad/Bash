@@ -27,6 +27,40 @@ public sealed partial class TildePrefixTests
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
+    [Theory]
+    [InlineData("HOME=home; c=:; a=x\":\"~; b=x\\:~; d=x${c}~; e=x:~\"\":~; printf '<%s>' \"$a\" \"$b\" \"$d\" \"$e\"",
+        "<x:~><x:~><x:~><x:~:home>")]
+    [InlineData("unset HOME; x=${HOME:=new}:~; printf '<%s>' \"$x\"", "<new:new>")]
+    [InlineData("HOME=home; unset v; a[3]=${v:-a:~}:~; printf '<%s>' \"${a[3]}\" x=${v:-a:~}:~",
+        "<a:home:home><x=a:~:home>")]
+    [InlineData("HOME=home; a=(a:~ ~:~); b=([2]=a:~ [3]=~:~); printf '<%s>' \"${a[@]}\" \"${b[@]}\"",
+        "<a:~><home:~><a:home><home:home>")]
+    [InlineData("HOME=home; i=0; x=pre:~/$((++i ? i : 0)):~/$((++i)); printf '<%s>' \"$x\" \"$i\"",
+        "<pre:home/1:home/2><2>")]
+    [InlineData("HOME=home; cat <<< a:~; cat <<EOF\na:~\nEOF", "a:home\na:~\n")]
+    [InlineData("HOME=home; v=data; printf '<%s>' ~:a\"b\" ~:a/\"b\" ~:$v ~:$(printf a) ~:$(printf \"a\")",
+        "<~:ab><home:a/b><home:$v><home:$(printf a)><~:a>")]
+    public async Task ColonDelimitedTildeUsesTheReachedSourceRole(string script, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task AssignmentTildePreservesInsertedBytesWithoutExpandingThemAgain()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("HOME=$'\\377:~'; x=~:~; printf '%s' \"$x\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("FF3A7E3AFF3A7E", Convert.ToHexString(host.StandardOutput.Content.Span));
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
     [Fact]
     public async Task NumericStackPrefixesSelectTheCurrentChildStackAndRealPaths()
     {
@@ -116,8 +150,10 @@ public sealed partial class TildePrefixTests
         finally { evaluation.Memory.Finish(retainVariables: false); }
     }
 
-    [Fact]
-    public async Task AnIneligiblePrefixDoesNotDetachAnUnreachedHomeArray()
+    [Theory]
+    [InlineData("~\"\"", "~")]
+    [InlineData("~:tail\"\"", "~:tail")]
+    public async Task AnIneligiblePrefixDoesNotDetachAnUnreachedHomeArray(string source, string expected)
     {
         var caller = Variables.CreateEmpty();
         Assert.True(caller.TryAssignArray("HOME", Enumerable.Repeat(ShellValue.FromText("home"), 4096).ToArray(), ArrayKind.Indexed));
@@ -129,7 +165,7 @@ public sealed partial class TildePrefixTests
         try
         {
             var variables = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);
-            var token = new Tokenizer(ShellSource.FromText("~\"\"")).NextToken();
+            var token = new Tokenizer(ShellSource.FromText(source)).NextToken();
             Assert.True(token.TryGetWordToken(out var parsed));
             var word = Assert.IsType<WordToken>(parsed).Word;
             var scope = new ScopedEvaluation(evaluation, variables, new Eval.EvaluationContext(0, null, Eval.ReturnTargetKind.None));
@@ -138,7 +174,7 @@ public sealed partial class TildePrefixTests
             var failure = await Record.ExceptionAsync(async () => { fields = await WordExpansion.ExpandToWordsAsync(word, scope); });
 
             Assert.Null(failure);
-            Assert.Equal(ShellValue.FromText("~"), Assert.Single(fields).ToValue(evaluation.Memory));
+            Assert.Equal(ShellValue.FromText(expected), Assert.Single(fields).ToValue(evaluation.Memory));
             Assert.Same(original, caller.IndexedArrays["HOME"]);
             Assert.Equal(4096, original.Count);
             Assert.Throws<MemoryBudgetExceededException>(() => variables.TryGetScalar("HOME", out _));

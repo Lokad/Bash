@@ -33,7 +33,8 @@ public sealed class Word
                 if (source.Kind == WordPartKind.DoubleQuoted && bytes.IndexOfAny("$\\`"u8) < 0)
                     quoted = true;
                 else if (source.Kind == WordPartKind.Unquoted && bytes.Length > 0 && bytes[0] != (byte)'~'
-                    && bytes.IndexOfAny("$\\`{}"u8) < 0)
+                    && bytes.IndexOfAny("$\\`{}"u8) < 0
+                    && bytes.IndexOf(":~"u8) < 0 && bytes.IndexOf("=~"u8) < 0)
                     quoted = false;
                 else
                     return null;

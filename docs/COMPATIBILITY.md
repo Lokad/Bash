@@ -16,17 +16,23 @@ The runtime supports deterministic, non-interactive shell workflows:
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT
   handlers. Cancellation and external signals do not deliver traps.
 
-Leading `~`, `~+` and `~-` use HOME, PWD and OLDPWD. Their complete prefix must be
-unquoted up to the first unquoted slash; even an empty quote, escaped slash or
-command substitution inside it prevents tilde expansion. Quoting after that slash
-does not prevent it. Expanded bytes never become new tilde syntax. Missing HOME
+Leading `~`, `~+` and `~-` use HOME, PWD and OLDPWD. The prefix must be unquoted.
+An empty quote or escape inside it makes it ineligible. Quoting after a delimiting
+slash leaves the prefix eligible. Expanded bytes never become new tilde syntax. Missing HOME
 or OLDPWD leaves the spelling literal; missing PWD uses the actual current directory
 for `~+`, an intentional departure from GNU. No account lookup is performed.
 Numeric directory-stack forms `~N` and `~+N` count from the top starting at zero.
 `~-N` counts from the bottom. Selecting the top uses the current shell value of
 PWD, which can be empty. An unset PWD leaves a numeric top selection literal.
-Other entries use their saved directory paths. Out-of-range numbers remain
-literal. Colon-separated assignment tilde expansion remains unimplemented.
+Other entries use their saved directory paths. Out-of-range numbers remain literal.
+
+A literal unquoted colon starts another tilde prefix in scalar and direct array
+assignment values, explicit indexed compound values, here-strings, and unquoted
+assignment-shaped arguments such as `printf '%s' x=~:~`. Ordinary words and implicit
+indexed compound values use only the leading prefix. For example, the ordinary
+word `~:~` expands to the HOME value followed by literal `:~`. Associative compound
+elements retain their existing literal tilde behavior. Quoted, escaped, or
+expanded colons and here-document text do not start tilde prefixes.
 
 Function-call prefixes such as `x=prefix f` supply the initial value of a first
 local declaration, including through unprefixed helper calls. Unsetting that
