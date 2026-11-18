@@ -195,6 +195,9 @@ growth/copies are admitted separately from shared definitions and serialized exp
 Namespace keys follow the current definition's storage. Sorted function-name
 snapshots admit compact copies, and pending command queries retain their selected
 source owners through host lookup and output completion.
+Command queries borrow the expanded operands and admit their resolution records
+and output offsets as a batch. Decoded host names and result indexes remain
+admitted through the lookup. Lookup scratch retires before output formatting.
 
 Serialized function exports share one admitted cache owner across namespaces and
 attribute copies. Its scope belongs to the binding's creator, even when a pipeline

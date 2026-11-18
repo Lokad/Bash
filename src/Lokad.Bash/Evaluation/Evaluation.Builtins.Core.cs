@@ -2,6 +2,7 @@ using System;
 using Lokad.Bash.Memory;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.Unicode;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Files;
@@ -138,12 +139,10 @@ public sealed partial class Evaluation
             }
         }
 
-        var names = new List<ShellValue>(words.Count - nameIndex);
-        for (var index = nameIndex; index < words.Count; index++)
-            names.Add(words[index]);
         var exitCode = await EvaluateCommandQueryAsync(
                 BuiltinKind.Type,
-                names,
+                words,
+                nameIndex,
                 outputMode,
                 lookupMode,
                 commandVars,
@@ -165,17 +164,22 @@ public sealed partial class Evaluation
     private async Task<int> EvaluateCommandQueryAsync(
         BuiltinKind builtin,
         IReadOnlyList<ShellValue> arguments,
+        int firstName,
         CommandQueryOutputMode outputMode,
         CommandLookupMode lookupMode,
         Variables vars,
         EvaluationContext context)
     {
         var builtinName = ShellValue.FromText(builtin == BuiltinKind.Command ? "command" : "type");
-        var names = arguments;
-
-        if (names.Count == 0)
+        var nameCount = arguments.Count - firstName;
+        if (nameCount == 0)
             return 0;
 
+        // Cover the resolution reference and record, output offset, and function-owner
+        // list capacity including growth. Definitions and host result text stay borrowed.
+        const long ResolutionBytesPerName = 72;
+        CheckCancellation();
+        using var resolutionMemory = new MemoryCapacity(Memory.Budget, 128 + ResolutionBytesPerName * nameCount);
         List<FunctionBinding>? functionOwners = null;
         try
         {
@@ -185,14 +189,15 @@ public sealed partial class Evaluation
             try
             {
                 // Build the whole display payload before emitting any channel; endpoints retain operand order.
-                var endOffsets = new int[names.Count];
+                var endOffsets = new int[nameCount];
                 var foundCount = 0;
                 var unresolvedCount = 0;
                 var lookupFailed = false;
-                for (var index = 0; index < names.Count; index++)
+                for (var index = 0; index < nameCount; index++)
                 {
-                    var name = names[index];
-                    var resolution = resolutions[index];
+                    CheckCancellation();
+                    var name = arguments[firstName + index];
+                    var resolution = resolutions[index] ?? throw new InvalidOperationException("Command query was not resolved.");
                     if (resolution is CommandQueryResolution.Missing or CommandQueryResolution.Failed)
                     {
                         unresolvedCount++;
@@ -258,11 +263,11 @@ public sealed partial class Evaluation
                 var stderr = GetStdErrDescriptor();
                 var outputClosed = false;
                 var errorClosed = false;
-                for (var first = 0; first < names.Count;)
+                for (var first = 0; first < nameCount;)
                 {
                     var diagnostic = IsDiagnostic(first);
                     var last = first;
-                    while (last + 1 < names.Count && IsDiagnostic(last + 1) == diagnostic)
+                    while (last + 1 < nameCount && IsDiagnostic(last + 1) == diagnostic)
                         last++;
 
                     var endOffset = endOffsets[last];
@@ -321,21 +326,34 @@ public sealed partial class Evaluation
                 return 1;
             }
 
-            async Task<IReadOnlyList<CommandQueryResolution>> ResolveCommandQueriesAsync()
+            async Task<CommandQueryResolution?[]> ResolveCommandQueriesAsync()
             {
-                var resolutions = new CommandQueryResolution?[names.Count];
+                // Name and index list capacities include both generations during growth.
+                const long HostRequestBytesPerName = 48;
+                using var lookupMemory = new MemoryCapacity(Memory.Budget, 0);
+                long retainedLookupBytes = 0;
+                var resolutions = new CommandQueryResolution?[nameCount];
                 var hostNames = new List<string>();
                 var hostIndexes = new List<int>();
-                for (var index = 0; index < names.Count; index++)
+                for (var index = 0; index < nameCount; index++)
                 {
+                    CheckCancellation();
+                    var value = arguments[firstName + index];
                     // Keywords take precedence in queries, even when a function shadows their spelling.
-                    var hasTextName = names[index].TryGetUtf8Text(out var name);
+                    var hasTextName = Utf8.IsValid(value.Bytes.Span);
+                    var decodeBytes = hasTextName && !value.IsEmpty
+                        ? Math.Max(0, 32 + 2L * value.Bytes.Length
+                            - (builtin == BuiltinKind.Command ? PreparedQueryDecodeBytes(value) : 0))
+                        : 0;
+                    // Only names selected for the host keep their text across iterations.
+                    lookupMemory.Resize(checked(retainedLookupBytes + decodeBytes));
+                    var name = hasTextName ? value.ToUtf8String() : string.Empty;
                     if (hasTextName && Parser.IsSupportedKeyword(name.AsSpan()))
                     {
                         resolutions[index] = new CommandQueryResolution.Keyword();
                         continue;
                     }
-                    var resolution = ResolveCommandName(names[index], name, lookupMode);
+                    var resolution = ResolveCommandName(value, name, lookupMode);
                     if (resolution is CommandResolution.Function function)
                     {
                         (functionOwners ??= []).Add(function.Binding);
@@ -344,7 +362,7 @@ public sealed partial class Evaluation
                         continue;
                     }
                     // Host command names are UTF-8 paths; malformed bytes and empty names cannot resolve.
-                    if (names[index].IsEmpty || !hasTextName)
+                    if (value.IsEmpty || !hasTextName)
                     {
                         resolutions[index] = new CommandQueryResolution.Missing();
                         continue;
@@ -365,12 +383,16 @@ public sealed partial class Evaluation
                     if (resolution is CommandResolution.HostBuiltin)
                         resolutions[index] = new CommandQueryResolution.Builtin();
 
+                    retainedLookupBytes = checked(retainedLookupBytes + decodeBytes + HostRequestBytesPerName);
+                    lookupMemory.Resize(retainedLookupBytes);
                     hostNames.Add(name);
                     hostIndexes.Add(index);
                 }
 
                 if (hostNames.Count > 0)
                 {
+                    lookupMemory.Resize(retainedLookupBytes);
+                    lookupMemory.ReleaseUnusedCapacity();
                     var environment = BuildExportedEnvironment(vars, context);
                     CheckCancellation();
                     var hostResults = await ResolveCommandsOperation.AsTask(PublishOperation, hostNames, _state.CurrentDirectory, environment)
@@ -381,6 +403,7 @@ public sealed partial class Evaluation
 
                     for (var index = 0; index < hostResults.Count; index++)
                     {
+                        CheckCancellation();
                         resolutions[hostIndexes[index]] = hostResults[index] switch
                         {
                             CommandLookupResult.Found
@@ -393,11 +416,7 @@ public sealed partial class Evaluation
                     }
                 }
 
-                var completed = new List<CommandQueryResolution>(resolutions.Length);
-                foreach (var resolution in resolutions)
-                    completed.Add(resolution ?? throw new InvalidOperationException("Command query was not resolved."));
-
-                return completed;
+                return resolutions;
             }
         }
         finally
@@ -408,4 +427,5 @@ public sealed partial class Evaluation
         }
     }
 
+    private static long PreparedQueryDecodeBytes(ShellValue value) => 4L * ((long)value.Bytes.Length + 1);
 }

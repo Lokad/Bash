@@ -148,7 +148,7 @@ public sealed partial class Evaluation
                     // Reserve decoding before later operand effects; malformed bytes need no text copy.
                     for (var nameIndex = firstName; nameIndex < names.Count; nameIndex++)
                         if (System.Text.Unicode.Utf8.IsValid(names[nameIndex].Bytes.Span))
-                            Memory.Charge(checked(4L * ((long)names[nameIndex].Bytes.Length + 1)));
+                            Memory.Charge(PreparedQueryDecodeBytes(names[nameIndex]));
                 }
 
                 return new PreparedCommand.Query(

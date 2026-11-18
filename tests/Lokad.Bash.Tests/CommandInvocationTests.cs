@@ -402,6 +402,46 @@ public sealed class CommandInvocationTests
         }
     }
 
+    [Theory]
+    [InlineData("type -p", 4096, 512, true)]
+    [InlineData("command -v", 4096, 512, true)]
+    [InlineData("type -p", 4096, 2048, false)]
+    [InlineData("command -v", 1, 512, false)]
+    public async Task CommandLookupAdmitsItsBatchBeforeCallingTheHost(string query, int count, int limitKiB, bool refuse)
+    {
+        var script = Parser.Parse(query + " " + string.Join(" ", Enumerable.Repeat("synthetic", count)));
+        var state = new ShellEvaluation(script);
+        var budget = new MemoryGovernor(limitKiB * 1024L);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
+
+        var step = await state.GetNextStep();
+        var workspace = state.Memory.Workspace.Bytes;
+        var reserved = budget.ReservedBytes;
+        if (step is ResolveCommandsOperation lookup)
+        {
+            Assert.Equal(count, lookup.CommandNames.Count);
+            Assert.All(lookup.CommandNames, name => Assert.Equal("synthetic", name));
+            Assert.Equal("PWD", Assert.Single(lookup.Environment).Name.CachedText);
+            var missing = new CommandLookupResult.Missing();
+            lookup.SetResult(Enumerable.Repeat<CommandLookupResult>(missing, count).ToArray());
+        }
+        else
+        {
+            var diagnostic = Assert.IsType<WriteOperation>(step);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Contains("shared memory budget exhausted", Encoding.UTF8.GetString(diagnostic.Content.Span), StringComparison.Ordinal);
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+        }
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(1, state.LastExitCode);
+        Assert.True(refuse == (step is WriteOperation),
+            $"Observed {step?.GetType().Name} with {workspace} B logical workspace and {reserved} B root reservation.");
+        Assert.InRange(budget.ReservedBytes, 1, 4096);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
     [Fact]
     public async Task InheritedEvaluationsKeepCapturedMappingsPrivate()
     {

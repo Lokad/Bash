@@ -1214,6 +1214,7 @@ public sealed partial class Evaluation : IFileTester
                 var queryExitCode = await EvaluateCommandQueryAsync(
                         BuiltinKind.Command,
                         query.Arguments,
+                        firstName: 0,
                         query.OutputMode,
                         CommandLookupMode.Normal,
                         queryScope.Variables,
