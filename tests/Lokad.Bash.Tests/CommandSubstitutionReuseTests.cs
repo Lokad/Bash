@@ -6,6 +6,9 @@ public sealed class CommandSubstitutionReuseTests
 {
     [Theory]
     [InlineData("f() { printf '<%s>' \"$(printf '%s' \"$value\")\"; }; value=one; f; value=two; f; printf '\\n'", "<one><two>\n")]
+    [InlineData("f() { printf '<%s>' \"`printf '%s' \"$value\"`\"; }; value=one; f; value=two; f; printf '\\n'", "<one><two>\n")]
+    [InlineData("for value in one two; do cat <<END\n`printf '%s' \"$value\"`\nEND\ndone", "one\ntwo\n")]
+    [InlineData("f() { printf '<%s>' \"${value:-`printf '%s' \"$fixture\"`}\"; }; fixture=one; f; fixture=two; f", "<one><two>")]
     [InlineData("value=$(cat <<'END'\n$(not-executed) )\nEND\n); printf '<%s>\\n' \"$value\"", "<$(not-executed) )>\n")]
     [InlineData("value=ok; result=$(cat <<END\n$(printf '%s' \"$value\")\nEND\n); printf '<%s>\\n' \"$result\"", "<ok>\n")]
     [InlineData("printf '<%s>\\n' \"$(case b in a|b) printf '%s' \"$(printf chosen)\";; esac)\"", "<chosen>\n")]

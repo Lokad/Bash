@@ -563,7 +563,9 @@ internal static partial class WordExpansion
             if (value == (byte)'`'
                 && quoteContext is ExpansionQuoteContext.Unquoted or ExpansionQuoteContext.HereDocument)
             {
-                var legacyStatus = ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace, out var legacyScript, out var legacyEndIndex);
+                var legacyStatus = ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace,
+                    quoteContext == ExpansionQuoteContext.HereDocument ? LegacySubstitutionOrigin.HereDocument : LegacySubstitutionOrigin.Temporary,
+                    out var legacyScript, out var legacyEndIndex);
                 if (legacyStatus == ShellScanStatus.Complete)
                 {
                     await ExpandCommandSubstitutionAsync(
@@ -648,7 +650,8 @@ internal static partial class WordExpansion
             CommandSubstitutionSyntax? script = null;
             var endIndex = index;
             var commandStatus = arithmeticStatus == ShellScanStatus.NotFound
-                ? ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace, out script, out endIndex)
+                ? ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace,
+                    LegacySubstitutionOrigin.Temporary, out script, out endIndex)
                 : ShellScanStatus.NotFound;
             if (commandStatus == ShellScanStatus.Complete)
             {
@@ -847,10 +850,12 @@ internal static partial class WordExpansion
         ShellSource content,
         int startIndex,
         MemoryCapacity memory,
+        LegacySubstitutionOrigin legacyOrigin,
         out CommandSubstitutionSyntax? script,
         out int endIndex)
     {
-        return CommandSubstitutionScanner.ScanParsed(new ShellScanContext { SyntaxMemory = memory }, content, startIndex, out endIndex, out script);
+        var context = new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = legacyOrigin };
+        return CommandSubstitutionScanner.ScanParsed(context, content, startIndex, out endIndex, out script);
     }
 
     internal static async Task<ExpandedWord> ExpandExpressionAsync(

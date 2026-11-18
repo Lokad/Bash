@@ -72,8 +72,10 @@ inherited by a helper's local declaration.
 Legacy command-substitution metadata keeps executable bytes separately from the
 original delimited spelling. Function display/export emits that spelling without
 parsing the child body, preserving validation timing across replay and import.
-The spelling borrows the existing syntax/source owner; execution and capture keep
-their shared path. Legacy child syntax is still parsed when each execution reaches it.
+The spelling borrows the existing syntax/source owner. Parsing begins when
+execution first reaches the substitution. Successful parses from stable
+source can be reused by later executions under the same owner. Each invocation
+uses the shared execution and capture path with fresh shell state.
 
 Printf retains byte numeric operands through prefix validation, range classification
 and diagnostics. Integer accumulation stays bounded after overflow while validity

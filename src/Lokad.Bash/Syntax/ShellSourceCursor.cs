@@ -372,6 +372,7 @@ internal sealed class ShellScanContext
 
     /// <summary>One reached command unit's coarse syntax and payload allowance; null denotes caller-owned parsing.</summary>
     internal MemoryCapacity? SyntaxMemory { get; set; }
+    internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
 
     internal ByteMemoryBuilder CreateByteBuilder(int capacity) => SyntaxMemory is { } memory
         ? new ByteMemoryBuilder(capacity, memory) : ByteMemoryBuilder.CreateUnaccounted(capacity);

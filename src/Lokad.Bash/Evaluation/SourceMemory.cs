@@ -1,16 +1,23 @@
 using System;
+using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Threading;
 using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
 /// <summary>A source or parsed-unit owner shared by execution and surviving function namespaces.</summary>
 internal sealed class SourceMemory
 {
+    private const long LegacyCacheEntryBytes = 256;
     // The source reader/executor starts with one reference. Namespace copies and active
     // invocations retain this coarse owner, not individual syntax nodes or value objects.
     private int _references = 1;
     private readonly SourceMemory? _parent;
+    private ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript> _legacySyntax =
+        ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript>.Empty;
     public IMemoryScope Budget { get; }
     public MemoryCapacity SyntaxMemory { get; }
 
@@ -31,9 +38,69 @@ internal sealed class SourceMemory
     {
         if (Interlocked.Decrement(ref _references) == 0)
         {
+            _legacySyntax = ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript>.Empty;
             SyntaxMemory.Dispose();
             Budget.Dispose();
             _parent?.Release();
+        }
+    }
+
+    /// <summary>Prepares one reached backtick body under the owner of its original spelling.</summary>
+    /// <remarks>The caller holds a live source reference through parsing and consumption.</remarks>
+    internal bool TryPrepareLegacy(CommandSubstitutionSyntax.Legacy legacy, CancellationToken cancellationToken,
+        [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // ReadOnlyMemory equality identifies a physical source slice.
+        var key = legacy.Spelling.Bytes;
+        var snapshot = Volatile.Read(ref _legacySyntax);
+        error = null;
+        if (snapshot.TryGetValue(key, out script))
+            return true;
+
+        var parseScope = Budget.CreateScope();
+        var published = false;
+        try
+        {
+            using var syntaxMemory = new MemoryCapacity(parseScope, LegacyCacheEntryBytes);
+            var input = legacy.Source.Bytes;
+            if (legacy.Origin == LegacySubstitutionOrigin.HereDocument)
+            {
+                // Here-document decoding happened in the active command's temporary storage.
+                syntaxMemory.Grow(32L + input.Length);
+                input = input.ToArray();
+            }
+            if (!Parser.TryParse(input, new ShellScanContext { SyntaxMemory = syntaxMemory },
+                    out script, out error))
+                return false;
+            syntaxMemory.DetachReservation();
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // Reserve the replacement path and another snapshot through publication.
+                // Each live entry's reservation continues to cover its retained map node.
+                using var overlap = Budget.Reserve(LegacyCacheEntryBytes * (2 + BitOperations.Log2((uint)snapshot.Count + 1)));
+                var updated = snapshot.Add(key, script);
+                var observed = Interlocked.CompareExchange(ref _legacySyntax, updated, snapshot);
+                if (ReferenceEquals(snapshot, observed))
+                {
+                    published = true;
+                    return true;
+                }
+                if (observed.TryGetValue(key, out var installed))
+                {
+                    script = installed;
+                    return true;
+                }
+                snapshot = observed;
+            }
+        }
+        finally
+        {
+            // Ancestor disposal refunds published parse scopes with the syntax map.
+            if (!published)
+                parseScope.Dispose();
         }
     }
 

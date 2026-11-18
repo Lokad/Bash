@@ -21,6 +21,14 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             {
                 if (script is CommandSubstitutionSyntax.Parsed retained)
                     parsed = retained.Script;
+                else if (script is CommandSubstitutionSyntax.Legacy { Origin: not LegacySubstitutionOrigin.Temporary } legacy)
+                {
+                    var owner = scope.Context.SourceMemory ?? outer.GetPreparedSubstitutionMemory();
+                    if (!owner.TryPrepareLegacy(legacy, outer.CancellationToken, out var prepared, out var error))
+                        throw error.ToException();
+                    parsed = prepared;
+                    scope = scope with { Context = scope.Context.WithSourceMemory(owner) };
+                }
                 else
                 {
                     var parent = scope.Context.SourceMemory;

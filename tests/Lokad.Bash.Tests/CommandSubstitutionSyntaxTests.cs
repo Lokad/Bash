@@ -1,9 +1,76 @@
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class CommandSubstitutionSyntaxTests
 {
+    [Fact]
+    public async Task ReachedLegacyTreesSharePhysicalSyntaxAndRefundAfterLastUser()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var allowance = governor.CreateScope();
+        var owner = new SourceMemory(allowance.CreateScope());
+        var source = ShellSource.FromText("`printf stable`");
+        var legacy = ReadBackticks(source);
+        var users = Enumerable.Range(0, 8).Select(index => Task.Run(() =>
+        {
+            using var borrow = new SourceMemory.Borrow(owner);
+            Assert.True(owner.TryPrepareLegacy(ReadBackticks(source), CancellationToken.None, out var result, out _));
+            return result;
+        })).ToArray();
+
+        var prepared = await Task.WhenAll(users);
+        Assert.All(prepared, tree => Assert.Same(prepared[0], tree));
+        var retained = governor.ReservedBytes;
+        Assert.True(retained > 0);
+        Assert.True(owner.TryPrepareLegacy(legacy, CancellationToken.None, out var replay, out _));
+        Assert.Same(prepared[0], replay);
+        Assert.Equal(retained, governor.ReservedBytes);
+
+        var independentlySpelled = ReadBackticks(ShellSource.FromText(source.ToUtf8String()));
+        Assert.True(owner.TryPrepareLegacy(independentlySpelled, CancellationToken.None, out var different, out _));
+        Assert.NotSame(replay, different);
+        using (new SourceMemory.Borrow(owner))
+        {
+            owner.Release();
+            Assert.True(governor.ReservedBytes > retained);
+        }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void LegacyPrepareRefusalAndCancellationLeaveTheOwnerUsable()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var allowance = governor.CreateScope();
+        var owner = new SourceMemory(allowance.CreateScope());
+        var legacy = ReadBackticks(ShellSource.FromText("`printf value`"));
+        using (governor.Reserve(governor.LimitBytes - 256))
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                owner.TryPrepareLegacy(legacy, CancellationToken.None, out _, out _));
+        Assert.Equal(0, governor.ReservedBytes);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        Assert.Throws<OperationCanceledException>(() =>
+            owner.TryPrepareLegacy(legacy, canceled.Token, out _, out _));
+        Assert.Equal(0, governor.ReservedBytes);
+
+        Assert.True(owner.TryPrepareLegacy(legacy, CancellationToken.None, out _, out _));
+        Assert.True(governor.ReservedBytes > 0);
+        owner.Release();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private static CommandSubstitutionSyntax.Legacy ReadBackticks(ShellSource source)
+    {
+        var context = new ShellScanContext { LegacyOrigin = LegacySubstitutionOrigin.Script };
+        Assert.Equal(ShellScanStatus.Complete,
+            CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var syntax));
+        return Assert.IsType<CommandSubstitutionSyntax.Legacy>(syntax);
+    }
+
     [Fact]
     public void TokenizerConsumesTheLookaheadObjectWithoutKeepingItsCacheEntry()
     {

@@ -114,7 +114,7 @@ public static class Parser
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error) =>
         TryParse(input, new ShellScanContext(), out script, out error);
 
-    private static bool TryParse(ReadOnlyMemory<byte> input, ShellScanContext context,
+    internal static bool TryParse(ReadOnlyMemory<byte> input, ShellScanContext context,
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error)
     {
         script = null;
@@ -123,6 +123,7 @@ public static class Parser
             error = new SyntaxError(ScriptSizeLimitMessage, 0);
             return false;
         }
+        context.LegacyOrigin = LegacySubstitutionOrigin.Script;
         var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context);
         SkipNewlines(tokenizer);
         var command = ParseList(tokenizer);
@@ -155,6 +156,7 @@ public static class Parser
             yield break;
         }
 
+        scanContext.LegacyOrigin = LegacySubstitutionOrigin.Script;
         var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, scanContext);
         while (true)
         {

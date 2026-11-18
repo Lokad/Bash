@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reuse successfully parsed backtick substitution bodies across repeated calls
+  while preserving deferred validation and fresh execution state.
+
 - Support legacy `$[…]` arithmetic expansion with nested selectors and the
   existing arithmetic evaluator.
 

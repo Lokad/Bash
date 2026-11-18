@@ -59,6 +59,9 @@ public sealed partial class Evaluation : IFileTester
     /// Carries the shell context visible when this evaluation starts.
     /// </summary>
     private readonly EvaluationContext _initialContext;
+    // Forks borrow the run's cache for caller-prepared syntax. Runtime sources own their own entries.
+    private readonly Evaluation _preparedSyntaxRoot;
+    private SourceMemory? _preparedSubstitutionMemory;
     /// <summary>
     /// Indicates whether flow escaping the root script should be treated as invalid.
     /// </summary>
@@ -135,7 +138,8 @@ public sealed partial class Evaluation : IFileTester
             RootFlowHandling.Normalize,
             publishNextStep,
             onComplete,
-            memoryBudget)
+            memoryBudget,
+            preparedSyntaxRoot: null)
     {
         _vars.TrySetScalar("PWD", ShellValue.FromText(_state.CurrentDirectory.Path));
         _vars.SetExported("PWD", true);
@@ -161,7 +165,8 @@ public sealed partial class Evaluation : IFileTester
             RootFlowHandling.Preserve,
             publishNextStep: null,
             onComplete: null,
-            outer.Memory.Budget);
+            outer.Memory.Budget,
+            outer._preparedSyntaxRoot);
     }
 
     private Evaluation(
@@ -174,7 +179,8 @@ public sealed partial class Evaluation : IFileTester
         RootFlowHandling rootFlowHandling,
         Action<EvaluationOperation?>? publishNextStep,
         Action? onComplete,
-        IMemoryBudget memoryBudget)
+        IMemoryBudget memoryBudget,
+        Evaluation? preparedSyntaxRoot)
     {
         Options = options;
         _state = state;
@@ -185,6 +191,7 @@ public sealed partial class Evaluation : IFileTester
         _forwardNextStep = publishNextStep;
         _onComplete = onComplete ?? (() => PublishOperation(null));
         _initialContext = initialContext;
+        _preparedSyntaxRoot = preparedSyntaxRoot ?? this;
         _rootFlowHandling = rootFlowHandling;
         _borrowedDescriptors = MergeBorrowedDescriptors(
             borrowedDescriptors,
@@ -403,6 +410,22 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Releases a private or child namespace; caller-owned prepared root state stays retained.</summary>
     internal void ReleaseFunctions() => _state.ReleaseFunctions();
 
+    /// <summary>Returns run-owned deferred syntax storage for a caller-prepared tree.</summary>
+    internal SourceMemory GetPreparedSubstitutionMemory()
+    {
+        var root = _preparedSyntaxRoot;
+        var owner = Volatile.Read(ref root._preparedSubstitutionMemory);
+        if (owner != null)
+            return owner;
+
+        var candidate = new SourceMemory(root.Memory.Budget.CreateScope());
+        owner = Interlocked.CompareExchange(ref root._preparedSubstitutionMemory, candidate, null);
+        if (owner == null)
+            return candidate;
+        candidate.Release();
+        return owner;
+    }
+
     /// <summary>
     /// Runs the evaluation loop to completion and publishes the final null operation.
     /// </summary>
@@ -443,6 +466,7 @@ public sealed partial class Evaluation : IFileTester
                 finally
                 {
                     ReleaseReadWorkspace();
+                    Interlocked.Exchange(ref _preparedSubstitutionMemory, null)?.Release();
                     Memory.Finish(_rootFlowHandling == RootFlowHandling.Normalize || _retainCompletedMemory);
                 }
             }
@@ -749,7 +773,8 @@ public sealed partial class Evaluation : IFileTester
                     RootFlowHandling.Preserve,
                     publishNextStep: null,
                     onComplete: null,
-                    Memory.Budget);
+                    Memory.Budget,
+                    _preparedSyntaxRoot);
                 var descriptorsToClose = new List<FileDescriptor>(2);
                 if (index > 0)
                     descriptorsToClose.Add(stdIn);

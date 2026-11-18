@@ -158,9 +158,14 @@ by the caller's evaluation scope. Copied eval and trap source do not retain an
 unrelated enclosing source-file owner. Each command unit has a coarse syntax owner
 retaining its input owner. Completed units refund their metadata unless surviving
 definitions or active users retain it; one early definition does not keep every
-later unit's scratch alive. Deferred legacy parsing has an owner through nested
-execution and cleanup. Function namespace growth/copies are admitted separately
-from shared definitions and serialized exports.
+later unit's scratch alive. Reached backtick substitutions in stable source
+reuse successful syntax under that source owner. This includes backticks reached
+directly in a here-document body. The first parse admits retained syntax and the
+cache entry. Concurrent first callers can parse independently and unpublished
+candidates refund their reservations. Caller-prepared syntax uses a cache owned
+by each run and shared by its forks. Deferred parsing of temporary operand
+fragments uses storage through nested execution and cleanup. Function namespace
+growth/copies are admitted separately from shared definitions and serialized exports.
 Namespace keys follow the current definition's storage. Sorted function-name
 snapshots admit compact copies, and pending command queries retain their selected
 source owners through host lookup and output completion.

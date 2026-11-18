@@ -8,8 +8,12 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
         : CommandSubstitutionSyntax(SourceText);
 
     /// <summary>Legacy executable bytes and their original delimiters/escapes, validated only when reached.</summary>
-    internal sealed record Legacy(ShellSource SourceText, ShellSource Spelling) : CommandSubstitutionSyntax(SourceText);
+    internal sealed record Legacy(ShellSource SourceText, ShellSource Spelling, LegacySubstitutionOrigin Origin)
+        : CommandSubstitutionSyntax(SourceText);
 
     /// <summary>Bytes still requiring execution-time parsing, including unfinished here-documents.</summary>
     internal sealed record Deferred(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);
 }
+
+/// <summary>Identifies which legacy bytes can be owned with the surrounding syntax.</summary>
+internal enum LegacySubstitutionOrigin { Temporary, Script, HereDocument }
