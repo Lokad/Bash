@@ -20,6 +20,11 @@ The runtime supports deterministic, non-interactive shell workflows:
 uses the first byte of `delim`, with an empty operand selecting NUL. `-t`
 removes a record's final delimiter when present. Array values end at the first
 NUL byte, including when NUL is the delimiter.
+`-n count` reads at most that many records and leaves the next record on the
+descriptor. Zero reads to EOF. `-O origin` overwrites consecutive entries
+starting at the supplied index and preserves the other entries. Both operands
+accept unsigned 32-bit decimal values. Destination indices continue from zero
+after index 4294967295.
 
 `$(<file)` and its backtick form read a single input-file redirection on
 descriptor zero. Filename expansion runs in the caller. The result removes

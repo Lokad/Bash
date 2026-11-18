@@ -60,10 +60,12 @@ explicit getopts failure, printf count and descriptor policies. An allocation
 that does not publish its variable remains temporary and uses ordinary cleanup.
 
 `mapfile` and `readarray` validate the target before reading. They collect
-bounded batches from the current stdin descriptor and publish the replacement
-array after successful EOF. Delimiter scans preserve record bytes and the
-staging owner retains the batches through publication. A failed or canceled
-read leaves the prior array intact.
+bounded batches from the current stdin descriptor. A positive count caps both
+the total records and the final batch. The target is published after that count
+or successful EOF, once replacement storage is admitted. An explicit origin
+updates existing sparse positions in place and retains compact copies of new
+values. Repeated writes can reclaim those copies as entries are overwritten.
+A failed or canceled read leaves the prior array intact.
 
 Function-call prefixes retain temporary-binding provenance through nested calls.
 A first local declaration inherits a visible temporary value; a prefix on the

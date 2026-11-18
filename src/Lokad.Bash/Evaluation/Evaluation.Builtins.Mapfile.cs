@@ -21,6 +21,8 @@ public sealed partial class Evaluation
         var targetValue = ShellValue.FromText("MAPFILE");
         var delimiter = (byte)'\n';
         var trimDelimiter = false;
+        uint count = 0;
+        uint? origin = null;
         var targetSeen = false;
         var parseOptions = true;
         for (var argumentIndex = 1; argumentIndex < arguments.Count; argumentIndex++)
@@ -37,26 +39,41 @@ public sealed partial class Evaluation
             {
                 for (var optionIndex = 1; optionIndex < bytes.Length; optionIndex++)
                 {
-                    if (bytes[optionIndex] == (byte)'t')
+                    var option = bytes[optionIndex];
+                    if (option == (byte)'t')
                     {
                         trimDelimiter = true;
                         continue;
                     }
-                    if (bytes[optionIndex] == (byte)'d')
+                    if (option is not ((byte)'d' or (byte)'n' or (byte)'O'))
+                        return await InvalidArgumentsAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
+                            .Append((byte)'-').Append(option).Append(": invalid option"u8).ToMemory())).ConfigureAwait(false);
+
+                    var operand = argument.Bytes[(optionIndex + 1)..];
+                    if (operand.IsEmpty)
                     {
-                        var operand = bytes[(optionIndex + 1)..];
-                        if (operand.IsEmpty)
-                        {
-                            if (++argumentIndex == arguments.Count)
-                                return await InvalidArgumentsAsync(ShellValue.FromText("-d: option requires an argument"))
-                                    .ConfigureAwait(false);
-                            operand = arguments[argumentIndex].Bytes.Span;
-                        }
-                        delimiter = operand.IsEmpty ? (byte)0 : operand[0];
-                        break;
+                        if (++argumentIndex == arguments.Count)
+                            return await InvalidArgumentsAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
+                                .Append((byte)'-').Append(option).Append(": option requires an argument"u8).ToMemory()))
+                                .ConfigureAwait(false);
+                        operand = arguments[argumentIndex].Bytes;
                     }
-                    return await InvalidArgumentsAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                        .Append((byte)'-').Append(bytes[optionIndex]).Append(": invalid option"u8).ToMemory())).ConfigureAwait(false);
+
+                    if (option == (byte)'d')
+                        delimiter = operand.IsEmpty ? (byte)0 : operand.Span[0];
+                    else
+                    {
+                        // Bash's decimal conversion skips C whitespace before the number
+                        // and accepts only a space or tab after it.
+                        var numeric = operand.Span.TrimStart(" \t\n\r\v\f"u8).TrimEnd(" \t"u8);
+                        if (!Integers.TryParseNumber(numeric, out var number) || number is < 0 or > uint.MaxValue)
+                            return await InvalidNumberAsync(operand, option).ConfigureAwait(false);
+                        if (option == (byte)'n')
+                            count = (uint)number;
+                        else
+                            origin = (uint)number;
+                    }
+                    break;
                 }
 
                 continue;
@@ -115,13 +132,14 @@ public sealed partial class Evaluation
         {
             // Bash treats an explicitly closed stdin as empty input; actual host read failures remain failures.
             var reachedEof = descriptor.IsClosed;
-            while (!reachedEof)
+            while (!reachedEof && (count == 0 || (uint)values.Count < count))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
+                var limit = count == 0 ? ReadBatchRecords : (int)Math.Min(ReadBatchRecords, count - (uint)values.Count);
                 if (delimiter == (byte)'\n')
                 {
-                    var batch = await AwaitOperationAsync(ReadLineOperation.AsTask(
-                        PublishOperation, descriptor, ReadBatchRecords, valuesMemory, reusableLine: null)).ConfigureAwait(false);
+                    var batch = await ReadLineOperation.AsTask(
+                        PublishOperation, descriptor, limit, valuesMemory, reusableLine: null).ConfigureAwait(false);
                     batch.ThrowIfError();
                     AddBatch(batch.Content, batch.LineStartOffsets);
                     reachedEof = batch.ReachedEoF;
@@ -129,8 +147,8 @@ public sealed partial class Evaluation
                 else
                 {
                     var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    PublishOperation(new ReadRecordBatchOperation(completion, descriptor, delimiter, ReadBatchRecords, valuesMemory));
-                    var batch = await AwaitOperationAsync(completion.Task).ConfigureAwait(false);
+                    PublishOperation(new ReadRecordBatchOperation(completion, descriptor, delimiter, limit, valuesMemory));
+                    var batch = await completion.Task.ConfigureAwait(false);
                     batch.Result.ThrowIfError();
                     AddBatch(batch.Content, batch.RecordStartOffsets);
                     reachedEof = batch.Result.ReachedEoF;
@@ -141,17 +159,37 @@ public sealed partial class Evaluation
             foreach (var value in values)
                 valueBytes = checked(valueBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
             var retainedBytes = checked((long)values.Count * IndexedArray.ElementMemoryBytes + backingBytes + valueBytes);
+            if (origin.HasValue && variables.Scalars.ContainsKey(resolved))
+                retainedBytes += IndexedArray.ElementMemoryBytes;
             Memory.Charge(retainedBytes);
-            var array = IndexedArray.FromSequential(values);
-            array.RetainedBackingBytes = backingBytes;
+
+            if (origin.HasValue)
+            {
+                // Each replacement owns a compact value. Repeated writes at the same origin
+                // retire the old values without accumulating charges for historic batches.
+                for (var index = 0; index < values.Count; index++)
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    var value = values[index];
+                    if (!value.IsEmpty)
+                        values[index] = ShellValue.FromBytes(value.Bytes.ToArray());
+                }
+            }
 
             _cancellationToken.ThrowIfCancellationRequested();
-            // Preserve even the original reference binding until every record has been read successfully.
+            // Publish only after the requested records have been read and admitted.
             if (!resolvedBinding)
                 variables.RecreateDeclarationArray(resolved, ArrayKind.Indexed);
             else if (unsetNameref)
                 variables.TryDeclareArray(resolved, ArrayKind.Indexed, ScalarArrayPromotion.DiscardValue);
-            assigned = variables.TryAssignResolvedIndexedArray(resolved, array);
+            if (origin is { } first)
+                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values);
+            else
+            {
+                var array = IndexedArray.FromSequential(values);
+                array.RetainedBackingBytes = backingBytes;
+                assigned = variables.TryAssignResolvedIndexedArray(resolved, array);
+            }
         }
         catch (ShellDescriptorReadException)
         {
@@ -175,8 +213,9 @@ public sealed partial class Evaluation
                 var record = content[start..end];
                 start = end;
                 // Even a short/NUL-truncated record pins its batch after the staging scope ends.
-                backingBytes = checked(backingBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(
-                    ShellValue.FromBytes(record)));
+                if (!origin.HasValue)
+                    backingBytes = checked(backingBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(
+                        ShellValue.FromBytes(record)));
                 // Admit geometric list growth, including replacement overlap, before allocation.
                 if (values.Count == values.Capacity)
                 {
@@ -209,6 +248,14 @@ public sealed partial class Evaluation
                 .Append(Utf8Text.Encode(BuiltinDocumentation.For(BuiltinKind.Mapfile).Arguments)).Append((byte)'\n');
             var failure = (await ExecuteWriteAsync(GetStdErrDescriptor(), message.ToMemory()).ConfigureAwait(false)).IsError ? 1 : 0;
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(failure == 0 ? 2 : failure), negated).ConfigureAwait(false);
+        }
+
+        async Task<EvaluationResult> InvalidNumberAsync(ReadOnlyMemory<byte> operand, byte option)
+        {
+            using var detail = new ByteMemoryBuilder(0, Memory.Workspace);
+            detail.Append(operand).Append(option == (byte)'n' ? ": invalid line count"u8 : ": invalid array origin"u8);
+            await ReportExpansionDiagnosticAsync(arguments[0], ShellValue.FromBytes(detail.ToMemory())).ConfigureAwait(false);
+            return await FinishAsync(1).ConfigureAwait(false);
         }
 
         async Task<EvaluationResult> InvalidTargetAsync(ShellValue name)

@@ -31,6 +31,27 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task Evaluation_MapfileBuiltin_CountBoundsTheFinalBatchWithoutAnEofRead()
+    {
+        var state = new Eval(Parser.Parse(Utf8("arr=([0]=keep); mapfile -tn129 -O2 arr")));
+        var first = await NextReadAsync(state);
+        Assert.Equal(128, first.Limit);
+        first.SetResult(ReadResult.Success(Utf8Bytes(new string('\n', 128)),
+            Enumerable.Range(1, 127).ToArray(), reachedEoF: false));
+
+        var last = await NextReadAsync(state);
+        Assert.Equal(1, last.Limit);
+        Assert.Equal(ShellValue.FromText("keep"), Assert.Single(state.IndexedArrays["arr"]));
+        last.SetResult(ReadResult.Success(Utf8Bytes("last\n"), [], reachedEoF: false));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(131, state.IndexedArrays["arr"].Count);
+        Assert.Equal(ShellValue.FromText("keep"), state.IndexedArrays["arr"][0]);
+        Assert.Equal(ShellValue.FromText("last"), state.IndexedArrays["arr"][130]);
+    }
+
+    [Fact]
     public async Task Evaluation_MapfileBuiltin_PropagatesReadFailureWithoutReplacingArray()
     {
         var script = Parser.Parse(Utf8("arr=(old); mapfile arr"));
@@ -123,6 +144,30 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task Evaluation_MapfileBuiltin_SettlesPendingBoundedBatchBeforeCancellation()
+    {
+        var state = new Eval(Parser.Parse(Utf8("arr=(old); mapfile -td: -n2 -O0 arr")));
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = state.EnsureRunning(cancellation.Token);
+
+        var first = Assert.IsType<ReadRecordBatchOperation>(await NextStepAsync(state));
+        Assert.Equal(2, first.Limit);
+        first.SetResult(new DescriptorRecordBatch(Utf8Bytes("a:"), [], ByteReadResult.Success(2, reachedEoF: false)));
+        var last = Assert.IsType<ReadRecordBatchOperation>(await NextStepAsync(state));
+        Assert.Equal(1, last.Limit);
+
+        cancellation.Cancel();
+        var next = state.GetNextStep();
+        var completedBeforeRead = await Task.WhenAny(next, Task.Delay(TimeSpan.FromMilliseconds(100))) == next;
+        last.SetResult(new DescriptorRecordBatch(Utf8Bytes("b:"), [], ByteReadResult.Success(2, reachedEoF: false)));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => next);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+        Assert.False(completedBeforeRead);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+    }
+
+    [Fact]
     public async Task Evaluation_MapfileBuiltin_EmptyInputClearsArrayAndSucceeds()
     {
         var script = Parser.Parse(Utf8("arr=(old); mapfile arr"));
@@ -153,9 +198,7 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("mapfile -n 1 arr")]
     [InlineData("mapfile -s 1 arr")]
-    [InlineData("mapfile -O 1 arr")]
     [InlineData("mapfile -u 3 arr")]
     [InlineData("mapfile -C callback arr")]
     [InlineData("mapfile -c 1 arr")]
@@ -168,7 +211,7 @@ public partial class EvaluationTests
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
         var reason = command.Split(' ')[1] + ": invalid option";
-        Assert.Equal("mapfile: " + reason + "\nmapfile: usage: mapfile [-t] [-d delim] [--] [array]\n",
+        Assert.Equal("mapfile: " + reason + "\nmapfile: usage: mapfile [-t] [-d delim] [-n count] [-O origin] [--] [array]\n",
             Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
@@ -179,19 +222,37 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("mapfile -d : -d", "mapfile")]
-    [InlineData("readarray -td", "readarray")]
-    public async Task Evaluation_MapfileBuiltin_RejectsMissingDelimiterBeforeReading(string command, string builtin)
+    [InlineData("mapfile -d : -d", "mapfile", "-d")]
+    [InlineData("readarray -td", "readarray", "-d")]
+    [InlineData("mapfile -n", "mapfile", "-n")]
+    [InlineData("readarray -tO", "readarray", "-O")]
+    public async Task Evaluation_MapfileBuiltin_RejectsMissingOptionOperandBeforeReading(string command, string builtin, string option)
     {
         var state = new Eval(Parser.Parse(Utf8($"arr=(old); {command}")));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal($"{builtin}: -d: option requires an argument\n{builtin}: usage: {builtin} [-t] [-d delim] [--] [array]\n",
+        Assert.Equal($"{builtin}: {option}: option requires an argument\n{builtin}: usage: {builtin} [-t] [-d delim] [-n count] [-O origin] [--] [array]\n",
             Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(2, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+    }
+
+    [Theory]
+    [InlineData("mapfile -n -1", "mapfile: -1: invalid line count\n")]
+    [InlineData("readarray -O4294967296", "readarray: 4294967296: invalid array origin\n")]
+    public async Task Evaluation_MapfileBuiltin_RejectsInvalidNumbersBeforeReading(string command, string error)
+    {
+        var state = new Eval(Parser.Parse(Utf8($"arr=(old); {command} arr")));
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal(error, Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
         Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
     }
 }

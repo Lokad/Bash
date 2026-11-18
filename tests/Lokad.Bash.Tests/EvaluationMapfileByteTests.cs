@@ -184,6 +184,8 @@ public sealed class EvaluationMapfileByteTests
     [InlineData(false, "", (byte)'\n')]
     [InlineData(true, "", (byte)'\n')]
     [InlineData(true, " -d :", (byte)':')]
+    [InlineData(false, " -O0 -n2", (byte)'\n')]
+    [InlineData(true, " -d : -O0 -n2", (byte)':')]
     public async Task PartialReadDoesNotPublishBytesOnFailureOrCancellation(bool cancel, string option, byte delimiter)
     {
         var state = new Eval(Parser.Parse($"arr=($'\\377'); mapfile{option} arr"));
@@ -205,5 +207,30 @@ public sealed class EvaluationMapfileByteTests
 
         Assert.Equal(new byte[] { 0xFF }, Assert.Single(state.IndexedArrays["arr"]).Bytes.ToArray());
         Assert.Empty(host.ClosedDescriptors);
+    }
+
+    [Fact]
+    public async Task RepeatedOriginOverwritesRetainOnlyActiveValues()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        var input = new string('x', 16 * 1024) + "\n";
+        await using var host = EndToEndHarness.WithMemoryBudget(
+            EndToEndHarness.BuildTree([("/input", input)]), governor);
+        using var owner = governor.CreateScope();
+        var state = new Eval(Parser.Parse("""
+            a=([8]=keep)
+            for ((i=0;i<64;i++)); do mapfile -tn1 -O0 a </input || break; done
+            status="$i"
+            """));
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(ShellValue.FromText("64"), state.Variables["status"]);
+        Assert.Equal(ShellValue.FromText(input[..^1]), state.IndexedArrays["a"][0]);
+        Assert.Equal(ShellValue.FromText("keep"), state.IndexedArrays["a"][8]);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 }

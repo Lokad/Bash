@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support record limits and sparse array origins in `mapfile` and `readarray`
+  through `-n count` and `-O origin`.
+
 - Accept bare `+` while scanning `set` options. Support `type -p` for path output
   and `type -f` for lookup that skips shell functions.
 

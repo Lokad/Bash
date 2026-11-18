@@ -983,6 +983,17 @@ public sealed partial class Variables
         return true;
     }
 
+    /// <summary>Applies admitted records to the selected sparse array after input has settled.</summary>
+    internal bool TryUpdateResolvedIndexedArray(BindingName resolved, uint origin, IReadOnlyList<ShellValue> values)
+    {
+        if (resolved.IsEmpty || IsReadonly(resolved) || AssociativeArrays.ContainsKey(resolved))
+            return false;
+        var array = GetOrCreateIndexedArray(resolved);
+        using var memory = TrackBindingMemory(resolved);
+        array.SetSequential(origin, values);
+        return true;
+    }
+
     /// <summary>
     /// Applies a parsed operand or an already selected literal binding used by builtin output.
     /// </summary>

@@ -17,6 +17,8 @@ internal readonly record struct IndexedArrayIndex
     /// <summary>Gets the non-negative numeric position.</summary>
     public long Value { get; }
 
+    internal static IndexedArrayIndex FromUnsigned(uint value) => new(value);
+
     /// <summary>Creates an index when <paramref name="value"/> is non-negative.</summary>
     public static bool TryCreate(long value, out IndexedArrayIndex index)
     {
@@ -188,15 +190,16 @@ internal sealed class IndexedArray
     public static IndexedArray FromSequential(IReadOnlyList<ShellValue> values)
     {
         var array = new IndexedArray(isInitialized: true);
-        for (var index = 0; index < values.Count; index++)
-        {
-            if (!IndexedArrayIndex.TryCreate(index, out var validated))
-                throw new InvalidOperationException("A sequential array position cannot be negative.");
-
-            array.Set(validated, values[index]);
-        }
-
+        array.SetSequential(0, values);
         return array;
+    }
+
+    /// <summary>Writes consecutive positions using Bash's unsigned mapfile index progression.</summary>
+    internal void SetSequential(uint origin, IReadOnlyList<ShellValue> values)
+    {
+        for (var index = 0; index < values.Count; index++)
+            Set(IndexedArrayIndex.FromUnsigned(unchecked(origin + (uint)index)), values[index]);
+        MarkInitialized();
     }
 
     /// <summary>
