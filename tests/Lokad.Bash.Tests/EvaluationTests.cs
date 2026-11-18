@@ -1347,9 +1347,36 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CdBuiltin_NoArgumentsReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("cd"));
+        var script = Parser.Parse(Utf8("unset HOME; cd"));
         var state = new Eval(script);
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("cd: HOME not set\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
 
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
+    [Fact]
+    public async Task CdPreviousAnnouncesTheOperandAfterLookupAndBeforeBookkeeping()
+    {
+        var state = new Eval(Parser.Parse("OLDPWD=target; readonly OLDPWD; cd -"));
+        var lookup = await NextPathKindsAsync(state);
+        Assert.Equal("/target", Assert.Single(lookup.Paths).Path);
+        Assert.Equal("/", state.CurrentDirectory.Path);
+        lookup.SetResult([PathKindResult(FilePathKind.Directory)]);
+
+        var announcement = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, announcement.FileDescriptor);
+        Assert.Equal("target\n", Text(announcement.Content));
+        Assert.Equal("/target", state.CurrentDirectory.Path);
+        announcement.SetResult(DescriptorWriteResult.Open);
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("OLDPWD: readonly variable\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
     }

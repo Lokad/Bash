@@ -31,7 +31,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Let => new("expression [expression ...]", "Evaluate integer arithmetic expressions; return success if the last value is nonzero."),
         BuiltinKind.Test => new("expression", "Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax."),
         BuiltinKind.Pwd => new("", "Print the current working directory."),
-        BuiltinKind.Cd => new("dir", "Change the working directory to dir; '-' selects the previous directory."),
+        BuiltinKind.Cd => new("[--] [dir]", "Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD."),
         BuiltinKind.Echo => new("[-n ...] [arg ...]", "Print arguments separated by spaces. Leading -n options and bundles such as -nn omit the final newline."),
         BuiltinKind.Printf => new("[-v var] format [arguments]", "Format and print arguments, or assign the result to var with -v."),
         BuiltinKind.Read => new("[-r] [-d delim] [-u fd] [name ...]",

@@ -46,7 +46,6 @@ public sealed class ByteValuedWordTests
     [Theory]
     [InlineData("mapfile names $'\\377' </dev/null; printf after", "after", 0)]
     [InlineData("readarray names \"$(printf '\\377')\" </dev/null; printf after", "after", 0)]
-    [InlineData("cd /tmp $'\\377'; pwd", "/tmp\n", 0)]
     [InlineData("dirs -c $'\\377' >/dev/null; printf after", "after", 0)]
     [InlineData("pushd /tmp $'\\377' >/dev/null; pwd", "/tmp\n", 0)]
     [InlineData("set -- a b; shift 1 $'\\377'; printf '%s' \"$1\"", "b", 0)]
@@ -57,6 +56,21 @@ public sealed class ByteValuedWordTests
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(expectedExitCode, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task CdRejectsSurplusWithoutDecodingOrSkippingOperandEffects()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/tmp"], []);
+        var result = await host.RunAsync(
+            "{ cd /tmp $'\\377' \"$(printf 'reached\\n' >&2)\"; printf '%s:%s' \"$?\" \"$PWD\"; } 2>/errors",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:/", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("reached\ncd: too many arguments\n", host.ReadFile("/errors"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     // Bash 5.2.37: ignored mapfile operands still expand once before the builtin reads input.

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Expand `cd` operands as shell fields and reject surplus fields. Support HOME
+  with no operand, OLDPWD with `-`, the `--` terminator and empty destinations.
+  Print the selected OLDPWD spelling after a successful lookup.
+
 - Expand numeric tilde prefixes from either end of the active directory stack.
   Preserve quoting and literal fallback for unavailable entries.
 - Clear the stack silently for `dirs -c`, including when stdout is closed.

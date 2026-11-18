@@ -46,6 +46,13 @@ effects; an enabled errexit option invokes the existing EXIT path before builtin
 and descriptor restoration. Ordinary tested-status suppression does not defer
 this internal readonly-assignment exit.
 
+`cd` expands its operands once in the caller scope, then checks arity before
+decoding the selected path. HOME and OLDPWD are read from the active command
+bindings when selected. The `cd -` announcement uses the original path bytes
+after a successful host lookup and before directory-variable bookkeeping. The
+existing write and cleanup path retains the output through completion. A
+reported write failure keeps the completed navigation and fails the command.
+
 Nameref declaration validation precedes replacement of values and attributes.
 Circular local references reuse scope ownership to select a global fallback;
 selected reads retain that store through value consumption. Declaration metadata

@@ -54,6 +54,14 @@ replaces its second entry with the current directory, as in Bash. Failed lookup
 preserves PWD/OLDPWD, and empty-stack operations diagnose failure.
 `dirs -c` leaves only the current directory on the stack and emits no output.
 
+`cd` accepts at most one expanded directory field after an optional `--`. Word
+splitting and pathname expansion apply as for ordinary arguments. With no
+field, `cd` uses HOME. A lone `-` uses OLDPWD and prints the selected spelling
+once the destination is reached. Missing HOME or OLDPWD is an error when
+selected. An empty destination revalidates the current directory. A spelling
+such as `./-` is an ordinary path. CDPATH and the `-L`/`-P` modes are outside
+the current path profile.
+
 After successful navigation, directory bookkeeping writes OLDPWD before PWD,
 preserving array kinds, namerefs and attributes. Readonly failures diagnose and
 return 1 after changing cwd; eligible writes still occur, while push/pop completion

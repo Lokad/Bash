@@ -15,7 +15,17 @@ public sealed class DirectoryNavigationHostTests
     [InlineData(true, "PWD")]
     [InlineData(false, "OLDPWD")]
     [InlineData(true, "OLDPWD")]
-    public async Task ReadonlyDiagnosticRetainsPublishedCwdAndOwnersThroughCancellation(bool prepared, string variable)
+    public Task ReadonlyDiagnosticRetainsPublishedCwdAndOwnersThroughCancellation(bool prepared, string variable) =>
+        VerifyPendingDirectoryWriteAsync(prepared, "readonly " + variable + "; set -e; cd /a 2>/out",
+            variable + ": readonly variable\n");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task PreviousDirectoryAnnouncementStaysBorrowedUntilTheHostSettles(bool prepared) =>
+        VerifyPendingDirectoryWriteAsync(prepared, "OLDPWD=a; cd - >/out; printf tail", "a\n");
+
+    private static async Task VerifyPendingDirectoryWriteAsync(bool prepared, string script, string expected)
     {
         using var cancellation = new CancellationTokenSource();
         var memory = new MemoryGovernor(64 * 1024);
@@ -34,7 +44,6 @@ public sealed class DirectoryNavigationHostTests
         host.EnqueuePathInfo(FilePathInfo.FromKind(FilePathKind.Directory));
         host.EnqueueAppendTask(write.Task);
         host.EnqueueCloseDescriptorTask(close.Task);
-        var script = "readonly " + variable + "; set -e; cd /a 2>/out";
         var evaluation = new Eval(Parser.Parse(script));
         var running = prepared
             ? new Engine().RunAsync(evaluation, host, owner, cancellation.Token)
@@ -42,7 +51,7 @@ public sealed class DirectoryNavigationHostTests
         try
         {
             var borrowed = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(Encoding.UTF8.GetBytes(variable + ": readonly variable\n"), borrowed.ToArray());
+            Assert.Equal(Encoding.UTF8.GetBytes(expected), borrowed.ToArray());
             if (prepared) Assert.Equal("/a", evaluation.CurrentDirectory.Path);
             cancellation.Cancel();
             Assert.False(running.IsCompleted);

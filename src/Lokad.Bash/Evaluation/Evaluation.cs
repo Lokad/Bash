@@ -954,7 +954,7 @@ public sealed partial class Evaluation : IFileTester
                         or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
                         or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
                         or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
-                        or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue
+                        or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd
                 })
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
@@ -971,6 +971,8 @@ public sealed partial class Evaluation : IFileTester
                     else
                     {
                         var expanded = await ExpandToWordsAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false);
+                        if (kind == BuiltinKind.Cd)
+                            Memory.Charge(checked(64L * expanded.Count)); // Operand capacity and resize overlap.
                         operands.AddRange(expanded);
                     }
                     if (_state.HasPendingExpansionError)
@@ -1262,6 +1264,8 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Let => await EvaluateBuiltinLetAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Source => await EvaluateBuiltinSourceAsync(sourcePath, byteOperands, builtinScope, commandVars, false).ConfigureAwait(false),
                     BuiltinKind.Getopts => await EvaluateBuiltinGetoptsAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
+                    BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
+                        .ConfigureAwait(false),
                     // hash only distinguishes no operands from some; their values need no decoding.
                     BuiltinKind.Hash => await FinalizeResultAsync(
                         EvaluationResult.FromExitCode(byteOperands.Count == 0 ? 0 : 1), false).ConfigureAwait(false),
@@ -1584,7 +1588,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 BuiltinKind.Colon or BuiltinKind.True or BuiltinKind.False
                     or BuiltinKind.Pwd or BuiltinKind.Popd or BuiltinKind.Caller => 0,
-                BuiltinKind.Cd or BuiltinKind.Dirs or BuiltinKind.Pushd
+                BuiltinKind.Dirs or BuiltinKind.Pushd
                     or BuiltinKind.Shift => 1,
                 _ => words.Count - 1
             };
@@ -2492,9 +2496,6 @@ public sealed partial class Evaluation : IFileTester
         {
             case BuiltinKind.Pwd:
                 return await EvaluateBuiltinPwdAsync(negated).ConfigureAwait(false);
-            case BuiltinKind.Cd:
-                return await EvaluateBuiltinCdAsync(words, commandVars, bindings, scope.Context, negated)
-                    .ConfigureAwait(false);
             case BuiltinKind.Dirs:
                 return await EvaluateBuiltinDirsAsync(words, negated)
                     .ConfigureAwait(false);
@@ -3005,7 +3006,10 @@ public sealed partial class Evaluation : IFileTester
     /// Emits an append operation, retaining downstream closure and any known failure cause.
     /// </summary>
     internal Task<DescriptorWriteResult> ExecuteWriteAsync(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content) =>
-        AwaitOperationAsync(WriteOperation.AsTask(PublishOperation, fileDescriptor, content));
+        AwaitOperationAsync(PublishWrite(fileDescriptor, content));
+
+    private Task<DescriptorWriteResult> PublishWrite(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content) =>
+        WriteOperation.AsTask(PublishOperation, fileDescriptor, content);
 
     /// <summary>
     /// Executes file tests and evaluates the aggregated result with a provided evaluator.

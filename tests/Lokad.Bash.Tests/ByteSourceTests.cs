@@ -14,7 +14,7 @@ public sealed class ByteSourceTests
     [Fact]
     public async Task TextConsumerFailure_UsesTheActiveErrorRedirectionOnce()
     {
-        const string Script = "{ cd $'\\377' \"$(printf later >&2)\"; } 2>/errors; printf after";
+        const string Script = "{ cd $'\\377'; } 2>/errors; printf after";
         var result = await EndToEndHarness.RunScriptAsync(Script, EndToEndHarness.BuildTree([]));
 
         Assert.Equal(1, result.ExitCode);

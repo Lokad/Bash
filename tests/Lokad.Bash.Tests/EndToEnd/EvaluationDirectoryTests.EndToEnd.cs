@@ -117,14 +117,42 @@ public sealed class EvaluationDirectoryTestsEndToEnd
     [Fact]
     public async Task Evaluation_CdBuiltin_NoArgumentsReturnsFailure()
     {
-        // This test verifies that "cd" without arguments returns failure.
-        // The script "cd" must emit no output and exit with code 1.
-        // If a default directory is assumed, the exit code would be 0.
-        var script = @"cd";
+        var script = @"unset HOME; cd";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("cd: HOME not set\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("HOME=target cd", "/target", "", "", 0)]
+    [InlineData("unset x; HOME=target cd -- $x", "/target", "", "", 0)]
+    [InlineData("HOME=target cd \"\"", "/", "", "", 0)]
+    [InlineData("HOME= cd", "/", "", "", 0)]
+    [InlineData("OLDPWD=target; cd -", "/target", "target\n", "", 0)]
+    [InlineData("OLDPWD=/target; cd -- -", "/target", "/target\n", "", 0)]
+    [InlineData("OLDPWD=; cd -", "/", "\n", "", 0)]
+    [InlineData("OLDPWD=target; cd ./-", "/-", "", "", 0)]
+    [InlineData("cd -- -x", "/-x", "", "", 0)]
+    [InlineData("x='one space'; cd \"$x\"", "/one space", "", "", 0)]
+    [InlineData("cd first-*", "/first-hit", "", "", 0)]
+    [InlineData("x='one space'; cd $x", "/", "", "cd: too many arguments\n", 1)]
+    [InlineData("IFS=:; x=multi-a:multi-b; cd $x", "/", "", "cd: too many arguments\n", 1)]
+    [InlineData("cd multi-*", "/", "", "cd: too many arguments\n", 1)]
+    [InlineData("cd -x", "/", "", "cd: -x: invalid option\n", 2)]
+    [InlineData("unset OLDPWD; cd -", "/", "", "cd: OLDPWD not set\n", 1)]
+    [InlineData("OLDPWD=target; cd - 1>&-", "/target", "", "cd: write error: Bad file descriptor\n", 1)]
+    public async Task CdUsesExpandedOperandsAndReportsItsSelectedDestination(
+        string command, string directory, string output, string error, int status)
+    {
+        await using var host = EndToEndHarness.BuildTree(
+            ["/target", "/-", "/-x", "/one space", "/first-hit", "/multi-a", "/multi-b"], []);
+        var result = await host.RunAsync(command + "; status=$?; pwd; exit \"$status\"", CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output + directory + "\n", host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
     }
 }
