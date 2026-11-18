@@ -32,6 +32,7 @@ public sealed partial class Variables
     private const int ValueHeaderBytes = 32;
     private const int ValueCapacityMultiplier = 2;
     private const int BindingOverheadBytes = 128;
+    private const int BindingNameSetEntryBytes = 40;
     private const int PositionalEntryBytes = 32;
 
     /// <summary>Retains bytes and parsed selectors; a null reference denotes an unset nameref.</summary>
@@ -224,6 +225,8 @@ public sealed partial class Variables
         public bool Contains(BindingName name) => _prefixes.Contains(name);
         internal Variables SavedVariables => _saved;
         internal IReadOnlySet<BindingName> PrefixNames => _prefixes;
+        internal long ForkMemoryBytes => checked(384 + _saved.EstimatedMemoryBytes
+            + (long)BindingNameSetEntryBytes * _prefixes.EnsureCapacity(0));
         internal CommandBindings Fork(Variables owner) => new(owner, this);
 
         /// <summary>Exposes a selected binding and ends this prefix's restoration responsibility.</summary>
@@ -358,6 +361,9 @@ public sealed partial class Variables
         private readonly HashSet<BindingName> _promotedPrefixes = new();
 
         internal long SavedMemoryBytes => _saved.EstimatedMemoryBytes;
+        internal long ForkMemoryBytes => checked(256 + SavedMemoryBytes + (long)BindingNameSetEntryBytes
+            * (_names.EnsureCapacity(0) + (long)_unsetNames.EnsureCapacity(0)
+                + _declaredPrefixes.EnsureCapacity(0) + _promotedPrefixes.EnsureCapacity(0)));
 
         public bool Owns(BindingName name) => _parent == null && _names.Contains(name);
 
@@ -665,6 +671,10 @@ public sealed partial class Variables
         public LocalBindings Fork(Variables variables, LocalBindings? enclosing, CommandBindings? prefixes)
         {
             var child = new LocalBindings(variables, _parent == null ? null : enclosing, prefixes);
+            child._names.EnsureCapacity(_names.Count);
+            child._unsetNames.EnsureCapacity(_unsetNames.Count);
+            child._declaredPrefixes.EnsureCapacity(_declaredPrefixes.Count);
+            child._promotedPrefixes.EnsureCapacity(_promotedPrefixes.Count);
             child._names.UnionWith(_names);
             child._unsetNames.UnionWith(_unsetNames);
             child._declaredPrefixes.UnionWith(_declaredPrefixes);

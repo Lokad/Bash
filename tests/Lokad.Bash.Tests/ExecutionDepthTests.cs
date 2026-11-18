@@ -25,6 +25,12 @@ public sealed class ExecutionDepthTests
     [InlineData("eval", true)]
     [InlineData("source", false)]
     [InlineData("source", true)]
+    [InlineData("subshell", false)]
+    [InlineData("subshell", true)]
+    [InlineData("pipeline", false)]
+    [InlineData("pipeline", true)]
+    [InlineData("capture", false)]
+    [InlineData("capture", true)]
     public async Task FiniteCallsCompleteAcrossExecutionDepth(string scenario, bool prepared)
     {
         const int Depth = 512;
@@ -40,6 +46,9 @@ public sealed class ExecutionDepthTests
             "yielded" => "f(){ printf . >&2; ((n-- > 0)) && f; }; n=512; f; printf '%s' \"$n\"",
             "eval" => "code='if ((n-- > 0)); then eval \"$code\"; fi'; n=512; eval \"$code\"; printf '%s' \"$n\"",
             "source" => "n=512; source /depth.sh; printf '%s' \"$n\"",
+            "subshell" => WithChild("(printf child)"),
+            "pipeline" => WithChild(": | printf child"),
+            "capture" => WithChild("printf '%s' \"$(printf child)\""),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario))
         };
         var observed = await RunAsync(source, prepared, 32 * 1024 * 1024, 10000, TestCancellation.Deadline);
@@ -48,6 +57,7 @@ public sealed class ExecutionDepthTests
             "chain" => "after",
             "scopes" => "global:caller:-1",
             "return" => "7:-1",
+            "subshell" or "pipeline" or "capture" => "child:-1",
             _ => "-1"
         };
 
@@ -56,6 +66,9 @@ public sealed class ExecutionDepthTests
         Assert.Equal(Convert.ToHexString(Encoding.UTF8.GetBytes(expected)), observed.OutputHex);
         Assert.Equal(scenario == "yielded" ? new string('.', Depth + 1) : "",
             Encoding.UTF8.GetString(Convert.FromHexString(observed.ErrorHex)));
+
+        static string WithChild(string leaf) => "f(){ if ((n-- > 0)); then f; else " + leaf
+            + "; fi; }; n=512; f; printf ':%s' \"$n\"";
     }
 
     [Theory]

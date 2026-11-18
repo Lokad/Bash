@@ -26,6 +26,10 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>A builtin's closed diagnostic output stops its expansion without making later commands fatal.</summary>
     internal bool CanExpand => !Effects.HasPendingExpansionError && Effects.BuiltinDiagnosticsOpen;
 
+    /// <summary>Copies visible and hidden bindings under the surrounding command's admission.</summary>
+    internal (Variables Variables, Evaluation.EvaluationContext Context) ForkBindings() =>
+        Context.Fork(Variables, Effects.Memory, Effects.CancellationToken);
+
     /// <summary>The current simple command owns the prefix-name set, adding names as their bindings are prepared.</summary>
     internal readonly record struct ExpansionBindings(Variables Variables, HashSet<BindingName> PrefixNames);
 

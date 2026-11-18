@@ -60,13 +60,6 @@ internal sealed class EvaluationMemory
         catch (MemoryBudgetExceededException) { _refused = true; throw; }
     }
 
-    public Variables CloneVariables(Variables variables)
-    {
-        // Cover collection copies and saved values through the surrounding command.
-        Charge(variables.EstimatedMemoryBytes);
-        return variables.Clone();
-    }
-
     public void ReleaseUnusedCapacity() => _memory.ReleaseUnusedCapacity();
 
     public void Finish(bool retainVariables)

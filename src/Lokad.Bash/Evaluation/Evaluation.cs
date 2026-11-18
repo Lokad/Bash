@@ -157,14 +157,14 @@ public sealed partial class Evaluation : IFileTester
     {
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
-        var variables = outer.Memory.CloneVariables(scope.Variables);
+        var (variables, context) = scope.ForkBindings();
         var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution, outer.Memory);
         return new Evaluation(
             state,
             variables,
             descriptors,
             outer.Options with { CurrentDirectory = state.CurrentDirectory },
-            scope.Context.Fork(variables),
+            context,
             [], // Descriptor setup already contains the complete, admitted parent/output union.
             RootFlowHandling.Preserve,
             publishNextStep: null,
@@ -674,8 +674,7 @@ public sealed partial class Evaluation : IFileTester
         }
         // Child resets must not release the parent's saved handlers before restoration.
         Memory.Charge(RetainedTrapMemoryBytes);
-        var childVars = Memory.CloneVariables(scope.Variables);
-        var childContext = scope.Context.Fork(childVars);
+        var (childVars, childContext) = scope.ForkBindings();
         var childState = parentState.CloneForSubshell(Memory);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
@@ -742,6 +741,9 @@ public sealed partial class Evaluation : IFileTester
         var commands = new List<ICommand>();
         var operators = new List<PipelineOperator>();
         FlattenPipeline(pipelineCommand, commands, operators);
+        // The parent owns the pipe and stage lists, per-stage close lists and the dispatcher
+        // task and status arrays through dispatch, status publication and cleanup.
+        Memory.Charge(checked(192L + 128L * commands.Count));
         var pipes = new List<PipeDescriptors>(Math.Max(0, commands.Count - 1));
         var stages = new List<PipelineEvaluationStage>(commands.Count);
         using var pipelineMemory = Memory.Budget.CreateScope();
@@ -761,6 +763,9 @@ public sealed partial class Evaluation : IFileTester
                 pipes.Add(pipe);
             }
 
+            // All stages borrow the same parent handles. Collect them before a stage retains
+            // namespace owners so refusal cannot strand a partially constructed stage.
+            var borrowedDescriptors = CollectDescriptorsAvailableToNestedEvaluation();
             for (var index = 0; index < commands.Count; index++)
             {
                 var stdIn = index > 0 ? pipes[index - 1].Read : GetStdInDescriptor();
@@ -772,8 +777,7 @@ public sealed partial class Evaluation : IFileTester
                 var descriptors = new EvaluationDescriptorSetup(
                     CaptureDescriptorBindings().WithStandardStreams(stdIn, stdOut, GetStdErrDescriptor()), []);
                 var forkKind = command is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
-                var stageVars = Memory.CloneVariables(scope.Variables);
-                var stageContext = scope.Context.Fork(stageVars);
+                var (stageVars, stageContext) = scope.ForkBindings();
                 var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory);
                 var stage = new Evaluation(
                     stageState,
@@ -781,7 +785,7 @@ public sealed partial class Evaluation : IFileTester
                     descriptors,
                     Options with { CurrentDirectory = stageState.CurrentDirectory },
                     stageContext,
-                    CollectDescriptorsAvailableToNestedEvaluation(),
+                    borrowedDescriptors,
                     RootFlowHandling.Preserve,
                     publishNextStep: null,
                     onComplete: null,
@@ -1430,9 +1434,9 @@ public sealed partial class Evaluation : IFileTester
 
         ScopedEvaluation ForkExecScope(ScopedEvaluation source, ShellValue name)
         {
-            var variables = Memory.CloneVariables(source.Variables);
+            var (variables, context) = source.ForkBindings();
             variables.ArgumentZero = name;
-            return source with { Variables = variables, Context = source.Context.Fork(variables) };
+            return source with { Variables = variables, Context = context };
         }
 
         void ClearExecExports(ScopedEvaluation executionScope, Variables commandVariables)
@@ -3841,14 +3845,13 @@ public sealed partial class Evaluation : IFileTester
 
         public bool IsLocal(BindingName name) => Locals.Declares(name) || Enclosing?.IsLocal(name) == true;
 
-        public FunctionContext Fork(Variables variables, GlobalPrefixBindings? prefixes)
+        internal long ForkMemoryBytes => checked(128 + Locals.ForkMemoryBytes + (PrefixBindings?.ForkMemoryBytes ?? 0));
+
+        internal FunctionContext ForkFrame(
+            Variables variables, FunctionContext? enclosing, Variables.CommandBindings? scriptPrefixes)
         {
-            while (prefixes != null && prefixes.FunctionDepth > Depth)
-                prefixes = prefixes.Enclosing;
-            var enclosing = Enclosing?.Fork(variables, prefixes);
             var callPrefixes = PrefixBindings?.Fork(variables);
-            var localPrefixes = prefixes?.FunctionDepth == Depth ? prefixes.Bindings : callPrefixes;
-            return new FunctionContext(FunctionName, Locals.Fork(variables, enclosing?.Locals, localPrefixes), enclosing)
+            return new FunctionContext(FunctionName, Locals.Fork(variables, enclosing?.Locals, scriptPrefixes ?? callPrefixes), enclosing)
             {
                 PrefixBindings = callPrefixes,
                 SavedErrexit = SavedErrexit
@@ -3863,7 +3866,6 @@ public sealed partial class Evaluation : IFileTester
     {
         public Variables Saved => Bindings.SavedVariables;
         public IReadOnlySet<BindingName> Names => Bindings.PrefixNames;
-        public GlobalPrefixBindings Fork(Variables variables) => new(Bindings.Fork(variables), FunctionDepth, Enclosing?.Fork(variables));
     }
 
     internal abstract record LocalNamerefAssignment
@@ -3899,11 +3901,58 @@ public sealed partial class Evaluation : IFileTester
                 { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = sourceMemory };
 
         /// <summary>Preserves local declaration identity while isolating child bindings and restoration.</summary>
-        public EvaluationContext Fork(Variables variables)
+        internal (Variables, EvaluationContext) Fork(Variables source, EvaluationMemory memory, CancellationToken cancellationToken)
         {
-            var prefixes = GlobalPrefixes?.Fork(variables);
-            return new(LoopDepth, FunctionContext?.Fork(variables, prefixes), ReturnTarget)
-                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory };
+            var bytes = source.EstimatedMemoryBytes;
+            var functionDepth = FunctionContext?.Depth ?? 0;
+            var prefixCount = 0;
+            for (var prefix = GlobalPrefixes; prefix != null; prefix = prefix.Enclosing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                prefixCount++;
+                bytes = checked(bytes + prefix.Bindings.ForkMemoryBytes + 48);
+            }
+            for (var frame = FunctionContext; frame != null; frame = frame.Enclosing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                bytes = checked(bytes + frame.ForkMemoryBytes);
+            }
+            // The surrounding command owns these copies until the child and its cleanup finish.
+            memory.Charge(checked(bytes + (functionDepth == 0 ? 0 : 32L + 8L * functionDepth)
+                + (prefixCount == 0 ? 0 : 32L + 8L * prefixCount)));
+            cancellationToken.ThrowIfCancellationRequested();
+            var variables = source.Clone();
+            if (functionDepth == 0 && prefixCount == 0)
+                return (variables, this);
+
+            var frames = functionDepth == 0 ? [] : new FunctionContext[functionDepth];
+            for (var frame = FunctionContext; frame != null; frame = frame.Enclosing)
+                frames[frame.Depth - 1] = frame;
+            var scriptPrefixes = prefixCount == 0 ? [] : new GlobalPrefixBindings[prefixCount];
+            var index = 0;
+            for (var prefix = GlobalPrefixes; prefix != null; prefix = prefix.Enclosing)
+                scriptPrefixes[index++] = prefix;
+
+            // Each eval/source prefix is pushed at the active function depth. Rebuild both chains
+            // outermost-first, selecting the innermost script prefix at each matching depth.
+            GlobalPrefixBindings? prefixes = null;
+            FunctionContext? function = null;
+            for (var depth = 0; depth <= functionDepth; depth++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                while (index > 0 && scriptPrefixes[index - 1].FunctionDepth == depth)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var prefix = scriptPrefixes[--index];
+                    prefixes = new GlobalPrefixBindings(prefix.Bindings.Fork(variables), depth, prefixes);
+                }
+                if (depth != 0)
+                    function = frames[depth - 1].ForkFrame(variables, function,
+                        prefixes?.FunctionDepth == depth ? prefixes.Bindings : null);
+            }
+
+            return (variables, new EvaluationContext(LoopDepth, function, ReturnTarget)
+                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory });
         }
 
         public Variables GetGlobalBindingOwner(BindingName name, Variables active)

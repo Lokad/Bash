@@ -1,6 +1,8 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
@@ -64,7 +66,8 @@ public sealed class PrefixScopeOwnershipTests
             var command = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
             Assert.True(command.TrySetScalar("prepared", ShellValue.FromText("prefix")));
             Assert.True(command.TryUnset("hidden"));
-            var child = memory.CloneVariables(command);
+            var context = default(Eval.EvaluationContext);
+            var (child, _) = context.Fork(command, memory, CancellationToken.None);
             Assert.False(child.HasBinding("hidden"));
             Assert.True(child.TryGetScalar("prepared", out var prepared));
             Assert.Equal("prefix", prepared.ToUtf8String());
@@ -111,11 +114,78 @@ public sealed class PrefixScopeOwnershipTests
             Assert.InRange(governor.PeakBytes, 1, governor.LimitBytes);
 
             // A real child snapshot owns its whole store and must still be admitted.
-            Assert.Throws<MemoryBudgetExceededException>(() => memory.CloneVariables(command));
+            var context = default(Eval.EvaluationContext);
+            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(command, memory, CancellationToken.None));
             Assert.Equal(4096, caller.IndexedArrays["unrelated_array"].Count);
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("local")]
+    [InlineData("function-prefix")]
+    [InlineData("script-prefix")]
+    public void FullChildForkAdmitsHiddenArraysAndKeepsThemIndependent(string owner)
+    {
+        var caller = Variables.CreateEmpty();
+        var original = ShellValue.FromText("outer");
+        var visible = ShellValue.FromText("visible");
+        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(original, 512).ToArray(), ArrayKind.Indexed));
+        var prepared = Variables.CreateEmpty();
+        Assert.True(prepared.TrySetScalar("x", visible));
+        using var bindings = owner == "local" ? null
+            : new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" });
+        var locals = new Variables.LocalBindings(caller, parent: null, bindings);
+        if (owner == "local")
+        {
+            var staging = new EvaluationMemory(new MemoryGovernor(1024 * 1024));
+            try
+            {
+                Assert.True(locals.TryDeclare(caller, caller,
+                    new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("x"), visible),
+                    prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, staging));
+            }
+            finally { staging.Finish(retainVariables: false); }
+        }
+        var function = new Eval.FunctionContext(ShellValue.FromText("f"), locals, enclosing: null)
+            { PrefixBindings = bindings };
+        var context = owner == "script-prefix" && bindings != null
+            ? new Eval.EvaluationContext(0, null, Eval.ReturnTargetKind.Source)
+                { GlobalPrefixes = new Eval.GlobalPrefixBindings(bindings, 0, null) }
+            : new Eval.EvaluationContext(0, function, Eval.ReturnTargetKind.Function);
+
+        var saved = context.GetGlobalBindingOwner("x", caller);
+        var savedArray = saved.IndexedArrays["x"];
+        Assert.True(caller.TryGetScalar("x", out var callerValue));
+        Assert.Equal(visible, callerValue);
+        Assert.Empty(caller.IndexedArrays);
+
+        var tightBudget = new MemoryGovernor(caller.EstimatedMemoryBytes + 4096);
+        var tightMemory = new EvaluationMemory(tightBudget);
+        try
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(caller, tightMemory, CancellationToken.None));
+            Assert.Same(savedArray, context.GetGlobalBindingOwner("x", caller).IndexedArrays["x"]);
+            Assert.Equal(0, tightBudget.ReservedBytes);
+        }
+        finally { tightMemory.Finish(retainVariables: false); }
+
+        var budget = new MemoryGovernor(1024 * 1024);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            var (child, childContext) = context.Fork(caller, memory, CancellationToken.None);
+            var childSaved = childContext.GetGlobalBindingOwner("x", child);
+            Assert.NotSame(savedArray, childSaved.IndexedArrays["x"]);
+            Assert.True(budget.ReservedBytes >= child.EstimatedMemoryBytes + childSaved.EstimatedMemoryBytes);
+            Assert.True(childSaved.TrySetArrayElement("x", default(IndexedArrayIndex), ShellValue.FromText("changed")));
+            Assert.True(savedArray.TryGet(default, out var item));
+            Assert.Equal(original, item);
+            Assert.Equal(visible, Assert.Single(child.Scalars).Value);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
     }
 
     [Fact]

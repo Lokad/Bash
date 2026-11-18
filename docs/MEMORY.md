@@ -96,8 +96,11 @@ the caller's store and positional frame.
 Only reached bindings acquire admitted, independent containers in command
 workspace. Missing command bindings hide caller names without deleting caller
 state. Full child snapshots retain separate admission for their complete visible
-store. Cancellation or refusal during detachment leaves the caller binding intact;
-the surrounding command owns copied storage through operation and cleanup completion.
+store and saved function-local and prefix stores. Child context reconstruction admits
+copies before allocating and reconnects enclosing frames iteratively. Mutable backing
+is independent and immutable value bytes stay shared. The surrounding command owns
+copied storage through operation and cleanup completion. Cancellation or refusal
+during detachment leaves the caller binding intact.
 
 Local declarations admit inherited temporary mutable containers before copying
 them. When unset exposes a saved command/function prefix, its already-owned slot
