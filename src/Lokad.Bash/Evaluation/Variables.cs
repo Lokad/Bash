@@ -234,19 +234,15 @@ public sealed partial class Variables
         {
             if (!_prefixes.Contains(name))
                 return;
-            if (!ReferenceEquals(_owner, visible))
+            if (ReferenceEquals(visible, _saved))
+                _owner.TransferBindingFrom(_saved, name);
+            else
             {
-                if (ReferenceEquals(visible, _saved))
-                {
-                    // Exposing a caller transfers its already owned container, without another array copy.
-                    if (_saved.TryGetBinding(name, out var slot)) _owner.StoreBinding(name, slot);
-                    else _owner.ClearBinding(name);
-                }
-                else
+                if (!ReferenceEquals(_owner, visible))
                     _owner.CopyBindingFrom(visible, name);
+                _saved.ClearBinding(name);
             }
             _prefixes.Remove(name);
-            _saved.ClearBinding(name);
             _retained.ClearBinding(name);
             _retainedNames.Remove(name);
         }
@@ -337,11 +333,15 @@ public sealed partial class Variables
                 if (retained)
                     _retained.SetAttribute(name, BindingAttributes.Temporary, _saved.IsTemporaryBinding(name));
                 var cursor = _owner._getoptsCursor;
-                _owner.CopyBindingFrom(retained ? _retained : _saved, name);
+                // Pending users have settled. The selected store can give its slot back to the caller.
+                _owner.TransferBindingFrom(retained ? _retained : _saved, name);
+                (retained ? _saved : _retained).ClearBinding(name);
                 // A temporary OPTIND changes the visible index. The current bundle belongs to the scan.
                 if (name.CachedText == "OPTIND")
                     _owner._getoptsCursor = cursor with { ArgumentIndex = 0 };
             }
+            _prefixes.Clear();
+            _retainedNames.Clear();
         }
     }
 
@@ -568,7 +568,11 @@ public sealed partial class Variables
                 updated.SetExported(name, true);
 
             if (!ReferenceEquals(updated, command))
-                command.TransferBindingFrom(updated, name);
+            {
+                var stagedCursor = updated._getoptsCursor;
+                if (command.TransferBindingFrom(updated, name) && name.CachedText == "OPTIND")
+                    command._getoptsCursor = stagedCursor;
+            }
             if (unsetPrefixes != null)
                 foreach (var prefix in unsetPrefixes)
                     prefix.ExposeBinding(name, command);
@@ -687,9 +691,19 @@ public sealed partial class Variables
         /// <summary>Called only when the owning function returns, never on a discarded child fork.</summary>
         public void Restore()
         {
+            var savedCursor = _saved._getoptsCursor;
             foreach (var name in _names)
+            {
                 if (!_promotedPrefixes.Contains(name) || !_owner.HasBinding(name))
-                    _owner.CopyBindingFrom(_saved, name);
+                {
+                    _owner.TransferBindingFrom(_saved, name);
+                    if (name.CachedText == "OPTIND")
+                        _owner._getoptsCursor = savedCursor;
+                }
+                else
+                    _saved.ClearBinding(name);
+            }
+            _names.Clear();
         }
     }
 
@@ -1266,18 +1280,17 @@ public sealed partial class Variables
             _getoptsCursor = source._getoptsCursor;
     }
 
-    /// <summary>Publishes a binding from an exclusively owned declaration staging store.</summary>
-    private void TransferBindingFrom(Variables source, BindingName name)
+    /// <summary>Moves a private store's slot, or clears the destination if the slot is absent.</summary>
+    private bool TransferBindingFrom(Variables source, BindingName name)
     {
-        if (!source.TryGetBinding(name, out var slot))
+        if (!source._bindings.TryGetValue(name, out var slot))
         {
             ClearBinding(name);
-            return;
+            return false;
         }
         StoreBinding(name, slot);
-        if (name.CachedText == "OPTIND")
-            _getoptsCursor = source._getoptsCursor;
         source.ClearBinding(name);
+        return true;
     }
 
     /// <summary>

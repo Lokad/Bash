@@ -113,11 +113,11 @@ one admitted byte array that survives the host's write. Descriptor snapshots
 use the map writer's admitted capture headroom.
 
 Local declarations admit inherited temporary mutable containers before copying
-them. When unset exposes a saved command/function prefix, its already-owned slot
-moves into the visible store and leaves the saved owner, without another array
-copy at that boundary. Pending function/command workspace remains live through
-restoration and cleanup. Ordinary saved-binding restoration still has separate
-copying costs; this transfer does not imply allocation-free cleanup everywhere.
+them. Unset can expose a saved prefix by moving its owned slot into the visible
+store. Final prefix and local restoration also move the selected slot, including
+any retained output, after the last pending user settles. The retiring store
+drops the slot and any superseded value. Child snapshots still own independent
+mutable containers. The existing command workspace stays live through cleanup.
 
 Tilde-prefix eligibility uses borrowed word metadata and bounded scalar state.
 It does not detach a HOME/PWD/OLDPWD binding for an ineligible prefix. Reached

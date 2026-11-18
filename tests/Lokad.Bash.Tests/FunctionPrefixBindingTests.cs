@@ -155,6 +155,85 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.Equal(2, saved.Count);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrefixRestorationTransfersTheSelectedArray(bool retainedOutput)
+    {
+        var caller = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        var changed = ShellValue.FromText("output");
+        Assert.True(caller.TryAssignArray("x", [original, original], ArrayKind.Indexed));
+        caller.SetExported("x", true);
+        var prepared = Variables.CreateEmpty();
+        Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
+        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" });
+        var donor = retainedOutput ? bindings.SelectOutputVariables("x") : bindings.SavedVariables;
+        var array = donor.IndexedArrays["x"];
+        if (retainedOutput)
+        {
+            Assert.True(donor.TrySetArrayElement("x", default(IndexedArrayIndex), changed));
+            bindings.CompleteOutput("x", donor);
+        }
+
+        var child = caller.Clone();
+        using var childBindings = bindings.Fork(child);
+        var childArray = childBindings.SavedVariables.IndexedArrays["x"];
+        Assert.NotSame(bindings.SavedVariables.IndexedArrays["x"], childArray);
+
+        bindings.Dispose();
+        Assert.Same(array, caller.IndexedArrays["x"]);
+        Assert.False(donor.HasBinding("x"));
+        Assert.False(bindings.SavedVariables.HasBinding("x"));
+        Assert.Contains((BindingName)"x", caller.ExportedNames);
+        Assert.False(caller.IsTemporaryBinding("x"));
+        Assert.True(array.TryGet(default, out var first));
+        Assert.Equal(retainedOutput ? changed : original, first);
+
+        childBindings.Dispose();
+        Assert.Same(childArray, child.IndexedArrays["x"]);
+        Assert.True(childArray.TryGet(default, out var childValue));
+        Assert.Equal(original, childValue);
+
+        Assert.True(caller.TryUnset("x"));
+        bindings.Dispose();
+        Assert.False(caller.HasBinding("x"));
+    }
+
+    [Fact]
+    public void LocalRestorationTransfersTheSavedAssociativeArray()
+    {
+        var caller = Variables.CreateEmpty();
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromBytes(new byte[] { 0xff }), out var key));
+        var original = ShellValue.FromText("original");
+        Assert.True(caller.TrySetArrayElement("map", key, original));
+        caller.SetExported("map", true);
+        var locals = new Variables.LocalBindings(caller, parent: null, prefixes: null);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.True(locals.TryDeclare(caller, caller,
+                new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("map"), ShellValue.FromText("local")),
+                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, memory));
+            var donor = Assert.IsType<Variables>(locals.ExportSnapshot);
+            var saved = donor.AssociativeArrays["map"];
+
+            locals.Restore();
+            Assert.Same(saved, caller.AssociativeArrays["map"]);
+            Assert.False(donor.HasBinding("map"));
+            Assert.Contains((BindingName)"map", caller.ExportedNames);
+            Assert.True(saved.TryGet(key, out var restored));
+            Assert.Equal(original, restored);
+
+            Assert.True(caller.TryUnset("map"));
+            locals.Restore();
+            Assert.False(caller.HasBinding("map"));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public void RefusingInheritedTemporaryArrayAdmissionLeavesBothOwnersIntact()
     {
