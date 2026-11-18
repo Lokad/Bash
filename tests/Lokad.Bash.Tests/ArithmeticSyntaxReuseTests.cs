@@ -7,14 +7,17 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ArithmeticSyntaxReuseTests
 {
-    [Fact]
-    public void SourceSlicesReuseArithmeticMetadataWithinTheirPhysicalBounds()
+    [Theory]
+    [InlineData("$((value+1))")]
+    [InlineData("$[value+1]")]
+    public void SourceSlicesReuseArithmeticMetadataWithinTheirPhysicalBounds(string expansion)
     {
         var governor = new MemoryGovernor(64 * 1024);
         using var memory = new MemoryCapacity(governor, 0);
         var original = Assert.IsType<SourceWordPart>(WordPart.FromSource(WordPartKind.Unquoted,
-            ShellSource.FromText("name=$((value+1))tail"), memory));
+            ShellSource.FromText("name=" + expansion + "tail"), memory));
         Assert.True(original.TryGetArithmetic(5, out var cached));
+        Assert.NotNull(cached.Operand);
         var admitted = memory.Bytes;
         var suffix = original.Slice(5, original.Source.Length - 5, memory);
         var arithmetic = suffix.Slice(0, suffix.Source.Length - 4, memory);

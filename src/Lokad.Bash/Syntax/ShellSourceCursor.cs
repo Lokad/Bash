@@ -504,7 +504,7 @@ internal enum ShellNestedExpansionKind
     /// <summary>A <c>${...}</c> parameter expansion.</summary>
     Parameter,
 
-    /// <summary>A <c>$((...))</c> arithmetic expansion.</summary>
+    /// <summary>A parenthesized or bracketed arithmetic expansion.</summary>
     Arithmetic,
 
     /// <summary>A <c>$(...)</c> command substitution.</summary>

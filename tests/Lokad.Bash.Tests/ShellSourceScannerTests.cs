@@ -83,14 +83,14 @@ public sealed class ShellSourceScannerTests
         Assert.Equal("out", Source[tokenizer.NextToken().Source]);
     }
 
-    [Fact]
-    public void ContinuedExpansionClosersRetainPhysicalOffsets()
+    [Theory]
+    [InlineData("$\\\n((1+\\\n2)\\\n)tail")]
+    [InlineData("$\\\n[1+\\\n2]tail")]
+    public void ContinuedExpansionClosersRetainPhysicalOffsets(string source)
     {
-        const string Source = "$\\\n((1+\\\n2)\\\n)tail";
-
-        Assert.True(ArithmeticExpansionScanner.TryScan(ShellSource.FromText(Source), 0, out var end, out var expression));
+        Assert.True(ArithmeticExpansionScanner.TryScan(ShellSource.FromText(source), 0, out var end, out var expression));
         Assert.Equal("1+2", expression.ToUtf8String());
-        Assert.Equal("tail", Source[(end + 1)..]);
+        Assert.Equal("tail", source[(end + 1)..]);
     }
 
     [Theory]
@@ -231,6 +231,9 @@ public sealed class ShellSourceScannerTests
     [Theory]
     [InlineData("plain", (int)ShellScanStatus.NotFound)]
     [InlineData("$((1 + 2))", (int)ShellScanStatus.Complete)]
+    [InlineData("$[a[1]+2]", (int)ShellScanStatus.Complete)]
+    [InlineData("$[a[1]", (int)ShellScanStatus.Incomplete)]
+    [InlineData("$[1 + $(printf ok &&)]", (int)ShellScanStatus.Invalid)]
     [InlineData("$((printf left);) $((2 + 3))", (int)ShellScanStatus.NotFound)]
     [InlineData("$((1 + 2)", (int)ShellScanStatus.Incomplete)]
     [InlineData("$((1 + $(printf ok &&) + 2))", (int)ShellScanStatus.Invalid)]

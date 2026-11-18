@@ -6,6 +6,35 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class ArithmeticErrorTestsEndToEnd
 {
+    [Fact]
+    public async Task LegacyArithmeticQuoteFailureKeepsEarlierEffectsAndSkipsOperandEffects()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "printf early >before\nprintf '<%s>' \"$[$(printf data >inner; printf 2)+\"3\"]\" >after",
+            CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Contains("bad substitution", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.Equal("early", host.ReadFile("/before"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/inner"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/after"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("""false && printf '%s' "$[1+]"; printf tail""")]
+    [InlineData("""false && printf '%s' "$["2"+3]"; printf tail""")]
+    public async Task LegacyArithmeticFailuresAreDeferredUntilExpansion(string script)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Theory]
     [InlineData("source /script", "1:10:30:before")]
     [InlineData(". /script", "1:10:30:before")]

@@ -951,7 +951,7 @@ internal sealed class Tokenizer
         if (_scanContext.TryGetCommandSubstitution(_input, start, out _))
             return false;
         var status = ArithmeticExpansionScanner.Scan(
-            _scanContext, _input, start, out var endIndex, out var expression, out _);
+            _scanContext, _input, start, out var endIndex, out var expression, out _, out var bracketed);
         if (status == ShellScanStatus.NotFound)
             return false;
         if (status != ShellScanStatus.Complete)
@@ -961,9 +961,9 @@ internal sealed class Tokenizer
         }
 
         Position = endIndex + 1;
-        unquoted.Append("$(("u8);
+        unquoted.Append(bracketed ? "$["u8 : "$(("u8);
         unquoted.Append(expression.Bytes);
-        unquoted.Append("))"u8);
+        unquoted.Append(bracketed ? "]"u8 : "))"u8);
         return true;
     }
 

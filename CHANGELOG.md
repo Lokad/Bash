@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support legacy `$[…]` arithmetic expansion with nested selectors and the
+  existing arithmetic evaluator.
+
 - Accept standalone braces in word positions, including loop items, case
   operands and redirections. Preserve brace-group delimiters.
 

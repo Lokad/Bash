@@ -91,6 +91,12 @@ An adjacent subshell opener can begin a command substitution, as in
 `$((printf value);)`. A complete `$((…))` arithmetic shape selects arithmetic
 even when its expression is invalid. The existing command grammar handles the
 subshell form and consumes completed here-documents as part of its body.
+Legacy `$[expression]` uses the same arithmetic evaluation as `$((expression))`,
+with a single closing bracket outside nested brackets. Within a double-quoted
+word, an unescaped inner double quote at that level causes a substitution failure
+when the bracketed expansion is reached. Both forms preserve a quoted bracket in
+an associative array key, including `a["]"]` in an unquoted arithmetic expansion.
+Both pinned GNU builds report an arithmetic error for that unquoted key.
 Here-strings expand one scalar operand without brace generation, field splitting
 or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
 dollar, backtick, backslash and LF; double quotes remain ordinary data. Quoting the

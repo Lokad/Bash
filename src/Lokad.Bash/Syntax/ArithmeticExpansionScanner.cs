@@ -1,16 +1,16 @@
 using System;
+using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Syntax;
 
 /// <summary>Scans arithmetic expansions and commands with shared nesting rules and distinct closing delimiters.</summary>
 internal static class ArithmeticExpansionScanner
 {
-    /// <summary>Gets whether a validated position begins <c>$((</c>.</summary>
+    /// <summary>Gets whether a position begins parenthesized or bracketed arithmetic.</summary>
     public static bool HasPrefix(ShellSource text, int startIndex) =>
-        startIndex >= 0
-        && ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), startIndex, "$((", out _);
+        startIndex >= 0 && TryReadExpansionPrefix(text.AsSpan(), startIndex, out _, out _);
 
-    /// <summary>Scans a complete arithmetic expansion and returns its inclusive final parenthesis.</summary>
+    /// <summary>Scans a complete arithmetic expansion and returns its inclusive final delimiter.</summary>
     public static bool TryScan(
         ShellSource text,
         int startIndex,
@@ -37,7 +37,8 @@ internal static class ArithmeticExpansionScanner
         out int endIndex,
         out ShellSource expression,
         out bool containsCommandSubstitution) =>
-        Scan(new ShellScanContext(), text, startIndex, out endIndex, out expression, out containsCommandSubstitution);
+        Scan(new ShellScanContext(), text, startIndex, out endIndex, out expression, out containsCommandSubstitution,
+            out _);
 
     internal static ShellScanStatus Scan(
         ShellScanContext context,
@@ -45,7 +46,8 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out ShellSource expression,
-        out bool containsCommandSubstitution) =>
+        out bool containsCommandSubstitution,
+        out bool bracketed) =>
         ScanCore(
             context,
             text,
@@ -53,6 +55,7 @@ internal static class ArithmeticExpansionScanner
             out endIndex,
             out expression,
             out containsCommandSubstitution,
+            out bracketed,
             captureExpression: true,
             form: ArithmeticForm.Expansion);
 
@@ -69,19 +72,9 @@ internal static class ArithmeticExpansionScanner
             out endIndex,
             out _,
             out containsCommandSubstitution,
+            out _,
             captureExpression: false,
             form: ArithmeticForm.Expansion);
-
-    /// <summary>Captures an expression while retaining the tokenizer's shared nesting budget.</summary>
-    internal static bool TryScan(
-        ShellScanContext context,
-        ShellSource text,
-        int startIndex,
-        out int endIndex,
-        out ShellSource expression) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _,
-            captureExpression: true, form: ArithmeticForm.Expansion)
-            == ShellScanStatus.Complete;
 
     /// <summary>
     /// Scans a command with adjacent closers, sharing the tokenizer's nesting budget.
@@ -93,7 +86,7 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out ShellSource expression) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _,
+        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _,
             captureExpression: true, form: ArithmeticForm.Command);
 
     private static ShellScanStatus ScanCore(
@@ -103,15 +96,22 @@ internal static class ArithmeticExpansionScanner
         out int endIndex,
         out ShellSource expression,
         out bool containsCommandSubstitution,
+        out bool bracketed,
         bool captureExpression,
         ArithmeticForm form)
     {
         endIndex = startIndex;
         expression = ShellSource.Empty;
         containsCommandSubstitution = false;
-        var prefix = form == ArithmeticForm.Expansion ? "$((" : "((";
-        if (startIndex < 0
-            || !ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), startIndex, prefix, out var expressionStart))
+        bracketed = false;
+        if (startIndex < 0)
+            return ShellScanStatus.NotFound;
+
+        var span = text.AsSpan();
+        var hasPrefix = form == ArithmeticForm.Command
+            ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "((", out var expressionStart)
+            : TryReadExpansionPrefix(span, startIndex, out expressionStart, out bracketed);
+        if (!hasPrefix)
             return ShellScanStatus.NotFound;
         if (!context.TryEnter())
             return ShellScanStatus.Invalid;
@@ -119,7 +119,9 @@ internal static class ArithmeticExpansionScanner
         try
         {
             var cursor = new ShellSourceCursor(text, expressionStart, context);
-            var parenthesisDepth = 0;
+            var opening = bracketed ? (byte)'[' : (byte)'(';
+            var closing = bracketed ? (byte)']' : (byte)')';
+            var depth = 0;
             while (!cursor.IsAtEnd)
             {
                 if (cursor.TryConsumeQuoteOrEscape())
@@ -145,44 +147,45 @@ internal static class ArithmeticExpansionScanner
                     continue;
                 }
 
-                if (cursor.Current == (byte)'(')
+                if (cursor.Current == opening)
                 {
-                    parenthesisDepth++;
+                    depth++;
                     cursor.Advance();
                     continue;
                 }
 
-                if (cursor.Current != (byte)')')
+                if (cursor.Current != closing)
                 {
                     cursor.Advance();
                     continue;
                 }
 
-                if (parenthesisDepth > 0)
+                if (depth > 0)
                 {
-                    parenthesisDepth--;
+                    depth--;
                     cursor.Advance();
                     continue;
                 }
 
-                // Expansion closers can cross a continuation; command closers must be adjacent.
-                var closingEnd = cursor.Position + 2;
-                var closed = form == ArithmeticForm.Command
-                    ? text.AsSpan()[cursor.Position..].StartsWith("))"u8)
-                    : ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), cursor.Position, "))", out closingEnd);
+                // Brackets use a single closer. Expansion parentheses can cross a
+                // continuation, while arithmetic command closers must be adjacent.
+                var closingEnd = cursor.Position + (bracketed ? 1 : 2);
+                var closed = bracketed || (form == ArithmeticForm.Command
+                    ? span[cursor.Position..].StartsWith("))"u8)
+                    : ShellSourceCursor.TryMatchLogicalText(span, cursor.Position, "))", out closingEnd));
                 if (!closed)
                 {
                     if (form == ArithmeticForm.Command)
                     {
                         // A continued double closer is invalid arithmetic, not a subshell fallback.
-                        return ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), cursor.Position, "))", out _)
+                        return ShellSourceCursor.TryMatchLogicalText(span, cursor.Position, "))", out _)
                             ? ShellScanStatus.Invalid
                             : ShellScanStatus.NotFound;
                     }
 
                     // This closes the subshell opener in a command substitution.
                     // A later pair belongs to another lexical boundary.
-                    return ShellSourceCursor.SkipLineContinuations(text.AsSpan(), cursor.Position + 1) == text.Length
+                    return ShellSourceCursor.SkipLineContinuations(span, cursor.Position + 1) == text.Length
                         ? ShellScanStatus.Incomplete
                         : ShellScanStatus.NotFound;
                 }
@@ -200,6 +203,56 @@ internal static class ArithmeticExpansionScanner
         {
             context.Exit();
         }
+    }
+
+    private static bool TryReadExpansionPrefix(ReadOnlySpan<byte> span, int start, out int end, out bool bracketed)
+    {
+        bracketed = ShellSourceCursor.TryMatchLogicalText(span, start, "$[", out end);
+        return bracketed || ShellSourceCursor.TryMatchLogicalText(span, start, "$((", out end);
+    }
+
+    /// <summary>Applies an enclosing double quote before expanding a bracketed operand.</summary>
+    internal static bool TryPrepareDoubleQuotedBracketOperand(ShellScanContext context, ref ShellSource expression)
+    {
+        if (!expression.AsSpan().Contains((byte)'"'))
+            return true;
+
+        ByteMemoryBuilder? normalized = null;
+        var runStart = 0;
+        var cursor = new ShellSourceCursor(expression, 0, context);
+        while (!cursor.IsAtEnd)
+        {
+            var position = cursor.Position;
+            if (cursor.Current == (byte)'"')
+                return false;
+            if (cursor.Current == (byte)'\\' && position + 1 < expression.Length)
+            {
+                // The enclosing quote removes only the escape before a double quote here.
+                // Other escapes belong to the arithmetic operand's own expansion.
+                if (expression[position + 1] == (byte)'"')
+                {
+                    normalized ??= context.CreateByteBuilder(expression.Length);
+                    normalized.Append(expression.Bytes[runStart..position]);
+                    normalized.Append((byte)'"');
+                    runStart = position + 2;
+                }
+                cursor.Advance();
+                cursor.Advance();
+                continue;
+            }
+            if ((CommandSubstitutionScanner.HasPrefix(expression, position)
+                    || BracedParameterScanner.HasPrefix(expression, position))
+                && cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
+                continue;
+            cursor.Advance();
+        }
+
+        if (normalized != null)
+        {
+            normalized.Append(expression.Bytes[runStart..]);
+            expression = ShellSource.FromBytes(normalized.ToMemory());
+        }
+        return true;
     }
 
     private enum ArithmeticForm

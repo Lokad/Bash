@@ -60,11 +60,12 @@ public sealed class SourceWordPart : WordPart
     private readonly int _arithmeticOffset;
     private static readonly IReadOnlyDictionary<int, ArithmeticExpansion> NoArithmetic = new Dictionary<int, ArithmeticExpansion>();
 
-    internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource Operand);
+    /// <summary>The selected lexical span and its operand. A missing operand fails if reached.</summary>
+    internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand);
     internal SourceWordPart(WordPartKind kind, ShellSource source, MemoryCapacity? memory) : base(kind)
     {
         Source = source;
-        _arithmetic = PrepareArithmetic(source, memory);
+        _arithmetic = PrepareArithmetic(kind, source, memory);
     }
 
     private SourceWordPart(WordPartKind kind, ShellSource source,
@@ -99,24 +100,35 @@ public sealed class SourceWordPart : WordPart
         return false;
     }
 
-    private static IReadOnlyDictionary<int, ArithmeticExpansion> PrepareArithmetic(ShellSource source, MemoryCapacity? memory)
+    private static IReadOnlyDictionary<int, ArithmeticExpansion> PrepareArithmetic(
+        WordPartKind kind, ShellSource source, MemoryCapacity? memory)
     {
-        var first = source.AsSpan().IndexOf("$(("u8);
-        if (first < 0)
-            return NoArithmetic;
-        var result = new Dictionary<int, ArithmeticExpansion>();
-        for (var index = first; index < source.Length; index++)
+        Dictionary<int, ArithmeticExpansion>? result = null;
+        var bytes = source.AsSpan();
+        for (var cursor = 0; cursor < bytes.Length;)
         {
-            if (source[index] != (byte)'$')
+            var dollar = bytes[cursor..].IndexOf((byte)'$');
+            if (dollar < 0)
+                break;
+            var index = cursor + dollar;
+            cursor = index + 1;
+            if (!ArithmeticExpansionScanner.HasPrefix(source, index))
                 continue;
             var context = new ShellScanContext { SyntaxMemory = memory };
-            if (!ArithmeticExpansionScanner.TryScan(context, source, index, out var end, out var expression))
+            var status = ArithmeticExpansionScanner.Scan(context, source, index, out var end,
+                out var expression, out _, out var bracketed);
+            if (status != ShellScanStatus.Complete)
                 continue;
             memory?.Grow(256);
-            result.Add(index, new ArithmeticExpansion(end, new ArithmeticSource(expression, memory)));
-            index = end;
+            var operand = bracketed && kind == WordPartKind.DoubleQuoted
+                && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression)
+                ? null
+                : new ArithmeticSource(expression, memory);
+            (result ??= new Dictionary<int, ArithmeticExpansion>())
+                .Add(index, new ArithmeticExpansion(end, operand));
+            cursor = end + 1;
         }
-        return result;
+        return result ?? NoArithmetic;
     }
 
     /// <summary>Gets unexpanded syntax without text conversion.</summary>

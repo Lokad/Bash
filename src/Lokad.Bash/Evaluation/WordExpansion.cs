@@ -611,11 +611,26 @@ internal static partial class WordExpansion
             var prepared = syntax.TryGetArithmetic(index, out var captured) ? captured : (SourceWordPart.ArithmeticExpansion?)null;
             var arithmeticEnd = prepared?.End ?? -1;
             var expression = ShellSource.Empty;
-            var arithmeticStatus = prepared.HasValue ? ShellScanStatus.Complete
-                : ArithmeticExpansionScanner.Scan(new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace },
-                    content, index, out arithmeticEnd, out expression, out _);
+            var arithmeticStatus = ShellScanStatus.Complete;
+            var invalidQuotedBracket = prepared is { Operand: null };
+            if (!prepared.HasValue)
+            {
+                var context = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
+                arithmeticStatus = ArithmeticExpansionScanner.Scan(context, content, index, out arithmeticEnd,
+                    out expression, out _, out var bracketed);
+                invalidQuotedBracket = arithmeticStatus == ShellScanStatus.Complete && bracketed
+                    && quoteContext == ExpansionQuoteContext.DoubleQuoted
+                    && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression);
+            }
             if (arithmeticStatus == ShellScanStatus.Complete)
             {
+                if (invalidQuotedBracket)
+                {
+                    await scope.Effects.ReportFatalExpansionAsync(ShellValue.FromText("$["),
+                        ShellValue.FromText("bad substitution: no closing ']'"), ExpansionFailureKind.Arithmetic)
+                        .ConfigureAwait(false);
+                    return null;
+                }
                 var arithmetic = prepared?.Operand;
                 long? result;
                 if (arithmetic != null)
