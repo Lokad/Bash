@@ -59,6 +59,7 @@ public sealed partial class Evaluation
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
 
             _state.ResetDirectoryStack();
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
         }
 
         var content = _state.FormatDirectoryStack();

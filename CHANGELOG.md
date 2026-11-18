@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Expand numeric tilde prefixes from either end of the active directory stack.
+  Preserve quoting and literal fallback for unavailable entries.
+- Clear the stack silently for `dirs -c`, including when stdout is closed.
+
 - Accept brace bodies in word and arithmetic `for` loops, optional opening
   parentheses in case arms and line breaks before case `in`. Reuse the existing
   loop and case execution paths and preserve function display and replay.

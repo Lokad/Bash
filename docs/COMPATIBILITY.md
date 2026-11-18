@@ -22,8 +22,11 @@ command substitution inside it prevents tilde expansion. Quoting after that slas
 does not prevent it. Expanded bytes never become new tilde syntax. Missing HOME
 or OLDPWD leaves the spelling literal; missing PWD uses the actual current directory
 for `~+`, an intentional departure from GNU. No account lookup is performed.
-Numeric directory-stack forms and colon-separated assignment tilde expansion
-remain unimplemented; they do not introduce implicit host or environment access.
+Numeric directory-stack forms `~N` and `~+N` count from the top starting at zero.
+`~-N` counts from the bottom. Selecting the top uses the current shell value of
+PWD, which can be empty. An unset PWD leaves a numeric top selection literal.
+Other entries use their saved directory paths. Out-of-range numbers remain
+literal. Colon-separated assignment tilde expansion remains unimplemented.
 
 Function-call prefixes such as `x=prefix f` supply the initial value of a first
 local declaration, including through unprefixed helper calls. Unsetting that
@@ -49,6 +52,7 @@ Directory navigation revalidates saved stack paths through the host before
 changing cwd. A rejected pop preserves the stack; a rejected no-argument push
 replaces its second entry with the current directory, as in Bash. Failed lookup
 preserves PWD/OLDPWD, and empty-stack operations diagnose failure.
+`dirs -c` leaves only the current directory on the stack and emits no output.
 
 After successful navigation, directory bookkeeping writes OLDPWD before PWD,
 preserving array kinds, namerefs and attributes. Readonly failures diagnose and

@@ -217,6 +217,9 @@ public sealed partial class Evaluation : IFileTester
     /// <summary> Gets the current working directory. </summary>
     public ShellPath CurrentDirectory => _state.CurrentDirectory;
 
+    /// <summary>Borrowed by word expansion on this evaluator's serialized execution path.</summary>
+    internal IReadOnlyList<ShellPath> DirectoryStack => _state.DirectoryStack;
+
     /// <summary> Gets the current variable assignments. </summary>
     public IReadOnlyDictionary<BindingName, ShellValue> Variables => _vars.Scalars;
 

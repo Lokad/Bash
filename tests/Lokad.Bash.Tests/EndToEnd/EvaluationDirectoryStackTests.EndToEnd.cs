@@ -45,15 +45,22 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
     [Fact]
     public async Task Evaluation_DirsClearOption_ResetsStack()
     {
-        // This test verifies that "dirs -c" clears the stack to the current directory.
-        // The script pushes /target (printing "/target /"), clears the stack (printing "/target"),
-        // then prints it again. The combined output must match those three lines.
-        // If -c is ignored, the middle and final lines would still include "/".
         var script = @"pushd /target; dirs -c; dirs";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("/target /\n/target\n/target\n", result.StdOut);
+        Assert.Equal("/target /\n/target\n", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DirsClearSucceedsWithClosedOutput()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "pushd /target >/dev/null; dirs -c 1>&-; printf '%s\\n' \"$?\"; dirs");
+
+        Assert.Equal("0\n/target\n", result.StdOut);
+        Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

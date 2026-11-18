@@ -3105,10 +3105,6 @@ public partial class EvaluationTests
         var pushOutput = await NextWriteAsync(state);
         pushOutput.SetResult(DescriptorWriteResult.Open);
 
-        var clearOutput = await NextWriteAsync(state);
-        Assert.Equal("/target\n", Text(clearOutput.Content));
-        clearOutput.SetResult(DescriptorWriteResult.Open);
-
         var dirsOutput = await NextWriteAsync(state);
         Assert.Equal("/target\n", Text(dirsOutput.Content));
         dirsOutput.SetResult(DescriptorWriteResult.Open);

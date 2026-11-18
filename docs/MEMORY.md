@@ -106,11 +106,13 @@ copy at that boundary. Pending function/command workspace remains live through
 restoration and cleanup. Ordinary saved-binding restoration still has separate
 copying costs; this transfer does not imply allocation-free cleanup everywhere.
 
-Tilde-prefix eligibility uses borrowed word metadata and a bounded stack buffer.
+Tilde-prefix eligibility uses borrowed word metadata and bounded scalar state.
 It does not detach a HOME/PWD/OLDPWD binding for an ineligible prefix. Reached
 lookup and output retain their ordinary admission. Suffix views use the existing
 admitted source-slice helper and share immutable arithmetic decisions; they do
 not retain a separately parsed runtime suffix.
+Numeric directory-stack selection borrows the active stack. Encoding a saved
+path uses the ordinary command workspace through expansion and consumption.
 
 Suffix pattern traversal retains admitted atom offsets on the command-local
 prepared pattern, with separate byte/scalar profiles when both are reached.

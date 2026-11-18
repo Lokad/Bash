@@ -10,6 +10,41 @@ namespace Lokad.Bash.Tests;
 public sealed partial class TildePrefixTests
 {
     [Theory]
+    [InlineData("PWD=logical; printf '<%s>' ~0 ~+00 ~-0", "<logical><logical><logical>")]
+    [InlineData("PWD=; printf '<%s>' ~0 ~+0 ~-0", "<><><>")]
+    [InlineData("unset PWD; printf '<%s>' ~0 ~+0 ~-0 ~+", "<~0><~+0><~-0></>")]
+    [InlineData("PWD=logical; printf '<%s>' ~1 ~-1 ~4294967296 ~-2147483648 ~1x", "<~1><~-1><~4294967296><~-2147483648><~1x>")]
+    [InlineData("PWD=logical; printf '<%s>' ~0\"\" ~\\0 ~0\\/tail ~0/\"x y\"", "<~0><~0><~0/tail><logical/x y>")]
+    [InlineData("PWD=logical; n=0; printf '<%s>' ~$n ~0$(printf '')", "<~0><~0>")]
+    [InlineData("PWD=logical; x=~+0; export y=~-0; printf '<%s>' \"$x\" \"$y\" ${z:-~0} \"${z:-~0}\"", "<logical><logical><logical><~0>")]
+    public async Task NumericStackPrefixesPreserveSpellingAndTheTopEntry(string script, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task NumericStackPrefixesSelectTheCurrentChildStackAndRealPaths()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/a", "/b", "/c"], []);
+        var result = await host.RunAsync(
+            "cd /a; pushd /b >/dev/null; pushd /c >/dev/null; PWD=logical; "
+            + "printf '<%s>' ~0 ~+01 ~2 ~-0 ~-1 ~-002; "
+            + "printf '<%s>' \"$(pushd /a >/dev/null; printf '%s' ~1)\" ~1; "
+            + "printf selected > ~+1/result", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<logical></b></a></a></b><logical></c></b>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("selected", host.ReadFile("/b/result"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [MemberData(nameof(NativeCases))]
     public async Task PrefixRolesPreserveNativeBytesAndCompleteTrees(
         string name, string script, string output, string error, int status, string? source, string tree, bool prepared)
@@ -62,6 +97,7 @@ public sealed partial class TildePrefixTests
     [InlineData(new[] { "~", "+" }, "logical")]
     [InlineData(new[] { "", "~", "-", "/tail" }, "previous/tail")]
     [InlineData(new[] { "~", "", "/tail" }, "home/tail")]
+    [InlineData(new[] { "~", "+000000000000", "00000000", "/tail" }, "logical/tail")]
     public async Task AdjacentUnquotedSourcePartsSelectTheCompletePrefix(string[] sources, string expected)
     {
         var word = new Word(sources.Select(s => WordPart.FromText(WordPartKind.Unquoted, s)).ToArray());

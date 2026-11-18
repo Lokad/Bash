@@ -38,7 +38,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
             "Read one record and split it into fields using IFS; without names, assign REPLY.\n    -d uses the first byte of delim instead of newline; an empty delim selects NUL.\n    -r preserves backslashes; -u fd reads from an open descriptor. Return failure at EOF."),
         BuiltinKind.Unset => new("[-f] [-v] [-n] [name ...]",
             "Remove variables or functions. -f selects functions, -v variables, and -n removes a name reference itself."),
-        BuiltinKind.Dirs => new("[-c]", "Print the directory stack; -c clears it to the current directory."),
+        BuiltinKind.Dirs => new("[-c]", "Print the directory stack. The -c option clears it to the current directory without printing."),
         BuiltinKind.Pushd => new("[dir]", "Push dir onto the directory stack, or swap its top two entries when dir is omitted."),
         BuiltinKind.Popd => new("", "Remove the top directory stack entry and change to the next directory."),
         BuiltinKind.Export => new("[-aAfnp] [name[=value] ...]",

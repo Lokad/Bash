@@ -336,10 +336,11 @@ internal static partial class WordExpansion
             remainingPart = word.Parts.Count;
             remainingOffset = 0;
             value = ShellValue.Empty;
-            // Supported prefixes are ~, ~+ and ~-. Read their complete source spelling
-            // before lookup: even an empty quote or substitution can invalidate it.
-            Span<byte> prefix = stackalloc byte[2];
-            var length = 0;
+            // Read the complete spelling before lookup. Even an empty quote or
+            // substitution can invalidate the prefix.
+            var startsWithTilde = false;
+            byte sign = 0;
+            int? ordinal = null;
             for (var partIndex = 0; partIndex < word.Parts.Count; partIndex++)
             {
                 scope.Effects.CancellationToken.ThrowIfCancellationRequested();
@@ -350,31 +351,67 @@ internal static partial class WordExpansion
                 {
                     scope.Effects.CancellationToken.ThrowIfCancellationRequested();
                     var current = bytes[offset];
-                    if (current == (byte)'/' && length != 0)
+                    if (!startsWithTilde)
+                    {
+                        if (current != (byte)'~')
+                            return false;
+                        startsWithTilde = true;
+                    }
+                    else if (current == (byte)'/')
                     {
                         remainingPart = partIndex;
                         remainingOffset = offset;
-                        return TryExpandTildePrefix(prefix[..length], scope, out value);
+                        return TryExpandTildePrefix(sign, ordinal, scope, out value);
                     }
-                    if (length == 0 ? current != (byte)'~'
-                        : length == prefix.Length || current is not ((byte)'+' or (byte)'-'))
+                    else if (sign == 0 && ordinal == null && current is (byte)'+' or (byte)'-')
+                    {
+                        sign = current;
+                    }
+                    else if (current is >= (byte)'0' and <= (byte)'9')
+                    {
+                        // Arbitrary zero padding needs no buffer. An overflowing ordinal
+                        // cannot select any entry in the stack.
+                        var next = 10L * ordinal.GetValueOrDefault() + current - (byte)'0';
+                        if (next > int.MaxValue)
+                            return false;
+                        ordinal = (int)next;
+                    }
+                    else
+                    {
                         return false;
-                    prefix[length++] = current;
+                    }
                 }
             }
-            return TryExpandTildePrefix(prefix[..length], scope, out value);
+            return startsWithTilde && TryExpandTildePrefix(sign, ordinal, scope, out value);
         }
     }
 
     private static bool TryExpandTildePrefix(
-        ReadOnlySpan<byte> prefix,
+        byte sign,
+        int? ordinal,
         ScopedEvaluation scope,
         out ShellValue expanded)
     {
-        if (prefix.Length == 1 && prefix[0] == (byte)'~')
-            return scope.Variables.TryGetExpansionValue("HOME", out expanded);
+        if (ordinal is { } index)
+        {
+            var stack = scope.Effects.DirectoryStack;
+            if (index >= stack.Count)
+            {
+                expanded = ShellValue.Empty;
+                return false;
+            }
+            var position = sign == (byte)'-' ? stack.Count - index - 1 : index;
+            if (position == 0)
+                return scope.Variables.TryGetExpansionValue("PWD", out expanded);
 
-        if (prefix.Length == 2 && prefix[0] == (byte)'~' && prefix[1] == (byte)'+')
+            var path = stack[position].Path;
+            scope.Effects.Memory.Charge(checked(24L + 3L * path.Length));
+            scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+            expanded = ShellValue.FromText(path);
+            return true;
+        }
+
+        if (sign == (byte)'+')
         {
             if (scope.Variables.TryGetExpansionValue("PWD", out expanded))
                 return true;
@@ -383,11 +420,7 @@ internal static partial class WordExpansion
             return true;
         }
 
-        if (prefix.Length == 2 && prefix[0] == (byte)'~' && prefix[1] == (byte)'-')
-            return scope.Variables.TryGetExpansionValue("OLDPWD", out expanded);
-
-        expanded = ShellValue.Empty;
-        return false;
+        return scope.Variables.TryGetExpansionValue(sign == (byte)'-' ? "OLDPWD" : "HOME", out expanded);
     }
 
     private static Task ExpandSegmentAsync(
