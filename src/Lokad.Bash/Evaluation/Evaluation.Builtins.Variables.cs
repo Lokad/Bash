@@ -399,7 +399,7 @@ public sealed partial class Evaluation
         return BuiltinReferenceResolution.Write;
     }
 
-    internal enum BuiltinAssignmentKind { Value, Getopts, PrintfCount, Descriptor, Directory }
+    internal enum BuiltinAssignmentKind { Value, Read, Getopts, PrintfCount, Descriptor, Directory }
     internal enum BuiltinAssignmentResult { Assigned, NoWrite, Failed, DirectoryReadonly }
 
     /// <summary>Shares selected output writes without replaying selectors; null publishes an unassigned value.</summary>
@@ -421,7 +421,16 @@ public sealed partial class Evaluation
                 ? BuiltinAssignmentResult.Failed : await InvalidElementTargetAsync().ConfigureAwait(false);
         var destination = binding.Owner;
         reference = binding.Reference;
-        if (kind != BuiltinAssignmentKind.Directory && ReferenceEquals(destination, scope.Variables))
+        if (kind == BuiltinAssignmentKind.Read)
+        {
+            // Only a whole-name local nameref output selects the binding saved by this read's prefix.
+            // Later operands and their selectors still see the active command bindings.
+            if (!circular && reference.Kind == VariableReferenceKind.Name && sourceName != reference.Name
+                && ReferenceEquals(destination, scope.Variables) && persistentOutputs?.Contains(reference.Name) == true)
+                destination = persistentOutputs.SavedVariables;
+            persistentOutputs = null;
+        }
+        else if (kind != BuiltinAssignmentKind.Directory && ReferenceEquals(destination, scope.Variables))
             destination = persistentOutputs?.SelectOutputVariables(reference.Name) ?? destination;
         var caller = kind != BuiltinAssignmentKind.Directory && persistentOutputs?.Contains(reference.Name) == true
             ? persistentOutputs.SavedVariables : destination;

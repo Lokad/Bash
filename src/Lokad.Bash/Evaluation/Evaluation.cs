@@ -1305,7 +1305,7 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Printf => await AwaitWordExpansionAsync(EvaluateBuiltinPrintfAsync(
                         byteOperands, commandVars, bindings, builtinScope.Context, false)).ConfigureAwait(false),
                     BuiltinKind.Read => await AwaitWordExpansionAsync(EvaluateBuiltinReadAsync(
-                        byteOperands, new ScopedEvaluation(this, commandVars, builtinScope.Context), false)).ConfigureAwait(false),
+                        byteOperands, new ScopedEvaluation(this, commandVars, builtinScope.Context), bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Mapfile => await AwaitWordExpansionAsync(EvaluateBuiltinMapfileAsync(
                         byteOperands, commandVars, false)).ConfigureAwait(false),
                     BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local =>

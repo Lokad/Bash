@@ -40,4 +40,54 @@ public sealed class ReadTargetBindingTests
         Assert.Equal(Convert.FromHexString(outputHex), result.Host.StandardOutput.Content.ToArray());
         Assert.Equal(Convert.FromHexString(errorHex), result.Host.StandardError.Content.ToArray());
     }
+
+    [Theory]
+    [InlineData("""a=outer; f(){ local -n r=a; a=prefix read -r r <<<new; }; f; printf '<%s>' "$a" """, "<new>")]
+    [InlineData("""a=outer; f(){ local -n r=a; r=prefix read -r r <<<new; }; f; printf '<%s>' "$a" """, "<new>")]
+    [InlineData("""a=outer; f(){ local -n r=a; a=prefix read -r r </dev/null; printf '<%s><%s>' "$?" "$a"; }; f""", "<1><>")]
+    [InlineData("""a=outer; f(){ local -n r=a; g(){ a=prefix read -r r <<<new; }; g; }; f; printf '<%s>' "$a" """, "<new>")]
+    [InlineData("""a=outer; f(){ local a=local; local -n r=a; a=prefix read -r r <<<new; printf '<%s>' "$a"; }; f; printf '<%s>' "$a" """, "<new><outer>")]
+    [InlineData("""a=outer; f(){ local -n r=a; a=prefix read -r a r <<< 'first last'; }; f; printf '<%s>' "$a" """, "<last>")]
+    [InlineData("""a=outer; f(){ local -n r=a; a=prefix read -r r a <<< 'first last'; }; f; printf '<%s>' "$a" """, "<first>")]
+    [InlineData("""a=outer; f(){ local -n r=a; a=2 read -r r 'arr[a]' <<< '4 slot'; }; f; printf '<%s><%s><%s>' "$a" "${arr[2]-missing}" "${arr[4]-missing}" """, "<4><slot><missing>")]
+    [InlineData("""a=(outer keep); f(){ local -n r=a; a=prefix read -r r <<<new; }; f; printf '<%s>' "${a[@]}" """, "<new><keep>")]
+    [InlineData("""declare -A a=([0]=outer [keep]=keep); f(){ local -n r=a; a=prefix read -r r <<<new; }; f; printf '<%s><%s>' "${a[0]}" "${a[keep]}" """, "<new><keep>")]
+    [InlineData("""a=outer; a=prefix read -r a <<<new; printf '<%s>' "$a" """, "<outer>")]
+    [InlineData("""a=outer; declare -n r=a; a=prefix read -r r <<<new; printf '<%s>' "$a" """, "<outer>")]
+    [InlineData("""a=(outer keep); i=1; f(){ local -n r='a[i++]'; a=prefix read -r r <<<new; }; f; printf '<%s><%s><%s>' "$i" "${a[0]}" "${a[1]}" """, "<2><outer><keep>")]
+    [InlineData("""a=outer; f(){ local -n r=a; b=prefix read -r r <<<new; }; f; printf '<%s>' "$a" """, "<new>")]
+    public async Task ReadSelectsOutputsAcrossTemporaryBindings(string script, string expected)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.Host.StandardOutput.TextContent);
+        Assert.Empty(result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ReadRetainsLocalNamerefFieldsAndConsumesOneRecord()
+    {
+        const string script = """
+            a=outer
+            f() {
+                local -n r=a
+                {
+                    a=prefix read -r r second
+                    printf '<%s><%s><%s>' "$?" "$a" "$second"
+                    read -r tail
+                    printf '<%s>' "$tail"
+                } < input
+            }
+            f
+            """;
+        var result = await EndToEndHarness.RunScriptAsync(script,
+            EndToEndHarness.BuildTree([("/input", "new second\nremaining\n")]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><new><second><remaining>", result.Host.StandardOutput.TextContent);
+        Assert.Empty(result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
 }

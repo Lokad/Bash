@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retain whole-name `read` assignments through local namerefs when a command
+  prefix temporarily shadows the referent. Keep selectors in the active scope.
+
 - Apply the implicit stderr duplication in `|&` after the left stage's
   explicit redirections. Preserve the reached stderr during setup.
 

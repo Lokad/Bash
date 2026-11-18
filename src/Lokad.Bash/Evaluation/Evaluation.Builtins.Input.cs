@@ -42,7 +42,7 @@ public sealed partial class Evaluation
 
     /// <summary>Reads one logical record, then selects and writes each destination in operand order.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinReadAsync(
-        IReadOnlyList<ShellValue> words, ScopedEvaluation scope, bool negated)
+        IReadOnlyList<ShellValue> words, ScopedEvaluation scope, Variables.CommandBindings? bindings, bool negated)
     {
         using var diagnostics = new BuiltinDiagnosticScope(this);
         static string Usage() => "read: usage: " + BuiltinDocumentation.For(BuiltinKind.Read).Synopsis("read");
@@ -142,7 +142,7 @@ public sealed partial class Evaluation
                 Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(fields[index]));
                 var copy = fields[index].Bytes.ToArray();
                 var assignment = await AssignBuiltinAsync(reference, ShellValue.FromBytes(copy), scope,
-                    persistentOutputs: null, BuiltinAssignmentKind.Value, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
+                    bindings, BuiltinAssignmentKind.Read, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
                     exitCode = 1;
