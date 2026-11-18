@@ -248,7 +248,7 @@ internal static partial class WordExpansion
                             var previous = destination.TryGetNameref(target.Name, out var alias) ? alias : (ShellValue?)null;
                             destination.RecreateDeclarationArray(target.Name, ArrayKind.Indexed);
                             if (previous is { } scalar)
-                                destination.SetResolvedValuePreservingArray(target.Name, scalar);
+                                destination.SetResolvedValuePreservingArray(target.Name, scalar, scope.Effects.Memory);
                         }
                         else if (!destination.TryDeclareResolvedArray(target.Name, ArrayKind.Indexed, ScalarArrayPromotion.DiscardValue))
                             return new ArithmeticError(ArithmeticErrorKind.InvalidTarget, target.Name.ToValue());

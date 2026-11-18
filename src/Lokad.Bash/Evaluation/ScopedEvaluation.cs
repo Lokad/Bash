@@ -42,7 +42,7 @@ internal readonly record struct ScopedEvaluation(
             if (!resolved.IsEmpty && bindings.RetainSelectorBinding(resolved, Effects.Memory, Effects.CancellationToken) is { } retained)
             {
                 // Scalar writes through local namerefs reach the caller; subsequent reads still see the prefix.
-                retained.SetResolvedValuePreservingArray(resolved, value);
+                retained.SetResolvedValuePreservingArray(resolved, value, Effects.Memory);
                 return;
             }
         }
@@ -51,7 +51,7 @@ internal readonly record struct ScopedEvaluation(
         if (SelectorBindings != null)
         {
             var resolved = Variables.ResolveNamerefName(name);
-            GetSelectorWriteTarget(name, resolved)?.SetResolvedValuePreservingArray(resolved, value);
+            GetSelectorWriteTarget(name, resolved)?.SetResolvedValuePreservingArray(resolved, value, Effects.Memory);
         }
         GetExpansionWriteTarget(name)?.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
     }

@@ -492,7 +492,7 @@ public sealed partial class Evaluation
         var assigned = value is { } written
             ? await target.AssignValueAsync(writeScope, destination, reference.Name, written, AssignmentOperator.Replace,
                 command, WordExpansion.DeclarationWrite.Ordinary).ConfigureAwait(false) is not null
-            : target.TryAssignUnassigned(destination);
+            : target.TryAssignUnassigned(destination, Memory);
         if (assigned && kind == BuiltinAssignmentKind.PrintfCount && !ReferenceEquals(destination, binding.Owner))
         {
             // Count writes are visible to later selectors, without replaying an element selector

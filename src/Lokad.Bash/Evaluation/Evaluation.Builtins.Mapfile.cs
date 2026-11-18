@@ -255,7 +255,7 @@ public sealed partial class Evaluation
                 return false;
             }
             if (!IndexedArrayIndex.TryCreate(first + offset, out var position)
-                || !scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value))
+                || !scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value, memory: null))
                 return false;
         }
         CheckCancellation();

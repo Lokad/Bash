@@ -123,6 +123,11 @@ any retained output, after the last pending user settles. The retiring store
 drops the slot and any superseded value. Child snapshots still own independent
 mutable containers. The existing command workspace stays live through cleanup.
 
+Ordinary element writes admit added positions and retained payload growth before
+mutating an array. Indexed dictionary replacement admits overlapping backing
+before resizing. Refusal leaves the existing entry or scalar binding intact.
+Record input uses its existing batch admission for the selected array.
+
 Tilde-prefix eligibility uses borrowed word metadata and bounded scalar state.
 It does not detach a HOME/PWD/OLDPWD binding for an ineligible prefix. Reached
 lookup and output retain their ordinary admission. The source cursor resumes

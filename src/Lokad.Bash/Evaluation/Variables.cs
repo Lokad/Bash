@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -338,8 +339,23 @@ public sealed partial class Variables
             if (_owner.Scalars.TryGetValue(name, out var value))
             {
                 // A scalar promotion updates element zero of a caller array, not its whole binding.
+                var previousCursor = _retained._getoptsCursor;
+                _retained.TryGetBinding(name, out var previous);
                 StageRetainedBinding(_saved, name, memory, cancellationToken);
-                _retained.SetResolvedValuePreservingArray(name, value);
+                try
+                {
+                    _retained.SetResolvedValuePreservingArray(name, value, memory);
+                }
+                catch (MemoryBudgetExceededException)
+                {
+                    // The staged replacement was never selected. Preserve an earlier output.
+                    if (previous != null)
+                        _retained.StoreBinding(name, previous);
+                    else
+                        _retained.ClearBinding(name);
+                    _retained._getoptsCursor = previousCursor;
+                    throw;
+                }
                 _retained.SetAttribute(name, BindingAttributes.Readonly, _owner.IsReadonlyBinding(name));
                 _retained.SetExported(name, _owner.IsExported(name));
             }
@@ -690,7 +706,7 @@ public sealed partial class Variables
                     return false;
 
                 return !hasAssignment || variables.TrySetResolvedArrayElement(resolved, index, operand.Value,
-                    kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative);
+                    kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative, memory);
             }
         }
 
@@ -816,16 +832,16 @@ public sealed partial class Variables
             _ = TrySetScalar(name, value, memory);
             return;
         }
-        SetResolvedValuePreservingArray(resolved, value);
+        SetResolvedValuePreservingArray(resolved, value, memory);
     }
 
     /// <summary>Writes a resolved scalar or array element zero; callers own readonly checks.</summary>
-    internal void SetResolvedValuePreservingArray(BindingName resolved, ShellValue value)
+    internal void SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory)
     {
         if (IndexedArrays.ContainsKey(resolved))
-            _ = TrySetResolvedArrayElement(resolved, ShellValue.FromText("0"), value, ArrayKind.Indexed);
+            _ = TrySetResolvedArrayElement(resolved, default(IndexedArrayIndex), value, memory);
         else if (AssociativeArrays.ContainsKey(resolved))
-            _ = TrySetResolvedArrayElement(resolved, ShellValue.FromText("0"), value, ArrayKind.Associative);
+            _ = TrySetResolvedArrayElement(resolved, ShellValue.FromText("0"), value, ArrayKind.Associative, memory);
         else
             SetResolvedScalar(resolved, value);
     }
@@ -1015,17 +1031,20 @@ public sealed partial class Variables
     /// <summary>
     /// Attempts to set an element by byte key or non-negative decimal indexed position.
     /// </summary>
-    public bool TrySetArrayElement(BindingName name, ShellValue index, ShellValue value, ArrayKind kind)
+    public bool TrySetArrayElement(BindingName name, ShellValue index, ShellValue value, ArrayKind kind) =>
+        TrySetArrayElement(name, index, value, kind, memory: null);
+
+    private bool TrySetArrayElement(BindingName name, ShellValue index, ShellValue value, ArrayKind kind, EvaluationMemory? memory)
     {
         return TryResolveWritableName(name, out var resolved)
-            && TrySetResolvedArrayElement(resolved, index, value, kind);
+            && TrySetResolvedArrayElement(resolved, index, value, kind, memory);
     }
 
-    private bool TrySetResolvedArrayElement(BindingName resolved, ShellValue index, ShellValue value, ArrayKind kind) =>
+    private bool TrySetResolvedArrayElement(BindingName resolved, ShellValue index, ShellValue value, ArrayKind kind, EvaluationMemory? memory) =>
         kind == ArrayKind.Indexed
             ? IndexedArrayIndex.TryParse(index.Bytes.Span, out var position)
-                && TrySetResolvedArrayElement(resolved, position, value)
-            : AssociativeArrayKey.TryCreate(index, out var key) && TrySetResolvedArrayElement(resolved, key, value);
+                && TrySetResolvedArrayElement(resolved, position, value, memory)
+            : AssociativeArrayKey.TryCreate(index, out var key) && TrySetResolvedArrayElement(resolved, key, value, memory);
 
     /// <summary>
     /// Attempts to assign an entire array from a sequence of values.
@@ -1087,7 +1106,7 @@ public sealed partial class Variables
     internal bool TryApplyAssignment(VariableReference reference, ShellValue value, EvaluationMemory? memory)
     {
         if (reference.Kind != VariableReferenceKind.Name)
-            return TryAssignArrayElement(reference.Name, reference.Subscript.ToValue(), value, ArrayAssignmentKind.Auto);
+            return TryAssignArrayElement(reference.Name, reference.Subscript.ToValue(), value, ArrayAssignmentKind.Auto, memory);
 
         if (!TryResolveBinding(reference.Name, selectOwner: null, out var binding)
             || binding.Reference.Kind != VariableReferenceKind.Name
@@ -1095,14 +1114,14 @@ public sealed partial class Variables
             return false;
         if (binding.IsUnsetNameref)
             return TrySetScalar(reference.Name, value, memory);
-        binding.Owner.SetResolvedValuePreservingArray(binding.Name, value);
+        binding.Owner.SetResolvedValuePreservingArray(binding.Name, value, memory);
         return true;
     }
 
     /// <summary>
     /// Attempts to assign a single array element for the given base name and index.
     /// </summary>
-    internal bool TryAssignArrayElement(BindingName baseName, ShellValue index, ShellValue value, ArrayAssignmentKind kind)
+    internal bool TryAssignArrayElement(BindingName baseName, ShellValue index, ShellValue value, ArrayAssignmentKind kind, EvaluationMemory? memory)
     {
         if (kind == ArrayAssignmentKind.Auto)
         {
@@ -1117,23 +1136,33 @@ public sealed partial class Variables
             baseName,
             index,
             value,
-            kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative);
+            kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative,
+            memory);
     }
 
     /// <summary>Writes a validated indexed position, retaining a promoted scalar at position zero.</summary>
     internal bool TrySetArrayElement(BindingName name, IndexedArrayIndex index, ShellValue value)
     {
-        return TryResolveWritableName(name, out var resolved) && TrySetResolvedArrayElement(resolved, index, value);
+        return TryResolveWritableName(name, out var resolved) && TrySetResolvedArrayElement(resolved, index, value, memory: null);
     }
 
-    internal bool TrySetResolvedArrayElement(BindingName resolved, IndexedArrayIndex index, ShellValue? value)
+    internal bool TrySetResolvedArrayElement(BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory)
     {
         if (resolved.IsEmpty || AssociativeArrays.ContainsKey(resolved))
             return false;
 
-        var array = GetOrCreateIndexedArray(resolved);
-        using var memory = TrackBindingMemory(resolved);
-        array.Set(index, value);
+        if (IndexedArrays.TryGetValue(resolved, out var array))
+        {
+            using var change = TrackBindingMemory(resolved);
+            array.Set(index, value, memory);
+        }
+        else
+        {
+            memory?.Charge(BindingOverheadBytes);
+            array = CreatePromotedIndexedArray(resolved, memory);
+            array.Set(index, value, memory);
+            ReplaceValue(resolved, new IndexedSlot(array));
+        }
         if (index.Value == 0)
             ResetGetoptsPosition(resolved);
         return true;
@@ -1143,34 +1172,44 @@ public sealed partial class Variables
     {
         if (!IndexedArrays.TryGetValue(resolved, out var array))
         {
-            array = new IndexedArray(isInitialized: false);
-            if (Scalars.TryGetValue(resolved, out var scalar))
-                array.Set(default, scalar);
+            array = CreatePromotedIndexedArray(resolved, memory: null);
             ReplaceValue(resolved, new IndexedSlot(array));
         }
 
         return array;
     }
 
+    private IndexedArray CreatePromotedIndexedArray(BindingName resolved, EvaluationMemory? memory)
+    {
+        var array = new IndexedArray(isInitialized: false);
+        if (Scalars.TryGetValue(resolved, out var scalar))
+            array.Set(default, scalar, memory);
+        return array;
+    }
+
     /// <summary>Writes a validated associative key without changing an existing array's kind.</summary>
     internal bool TrySetArrayElement(BindingName name, AssociativeArrayKey key, ShellValue value)
     {
-        return TryResolveWritableName(name, out var resolved) && TrySetResolvedArrayElement(resolved, key, value);
+        return TryResolveWritableName(name, out var resolved) && TrySetResolvedArrayElement(resolved, key, value, memory: null);
     }
 
-    internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue? value)
+    internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue? value, EvaluationMemory? memory)
     {
         if (resolved.IsEmpty || IndexedArrays.ContainsKey(resolved))
             return false;
 
-        if (!AssociativeArrays.TryGetValue(resolved, out var associative))
+        if (AssociativeArrays.TryGetValue(resolved, out var associative))
         {
+            using var change = TrackBindingMemory(resolved);
+            associative.Set(key, value, memory);
+        }
+        else
+        {
+            memory?.Charge(BindingOverheadBytes);
             associative = new AssociativeArray(isInitialized: false);
+            associative.Set(key, value, memory);
             ReplaceValue(resolved, new AssociativeSlot(associative));
         }
-
-        using var memory = TrackBindingMemory(resolved);
-        associative.Set(key, value);
         if (resolved.CachedText == "OPTIND" && key.Value.Bytes.Span.SequenceEqual("0"u8))
             ResetGetoptsPosition(resolved);
         return true;
@@ -1377,7 +1416,7 @@ public sealed partial class Variables
         {
             if (IsReadonlyBinding(name))
                 return ForAssignmentFailure.Readonly;
-            SetResolvedValuePreservingArray(name, item);
+            SetResolvedValuePreservingArray(name, item, memory);
         }
 
         return ForAssignmentFailure.None;

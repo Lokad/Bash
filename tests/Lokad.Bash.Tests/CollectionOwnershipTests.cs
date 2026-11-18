@@ -1,12 +1,145 @@
+using System.Reflection;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class CollectionOwnershipTests
 {
+    [Fact]
+    public void IndexedWriteAdmitsBackingOverlapBeforeAddingAPosition()
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        Assert.True(variables.TryAssignArray("a", Enumerable.Repeat(original, 1024).ToArray(), ArrayKind.Indexed));
+        var array = variables.IndexedArrays["a"];
+        var elements = Assert.IsType<Dictionary<long, ShellValue?>>(typeof(IndexedArray)
+            .GetField("_elements", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(array));
+        var capacity = elements.EnsureCapacity(0);
+        for (var index = array.Count; index < capacity; index++)
+        {
+            Assert.True(IndexedArrayIndex.TryCreate(index, out var position));
+            Assert.True(variables.TrySetArrayElement("a", position, original));
+        }
+        Assert.True(IndexedArrayIndex.TryCreate(capacity, out var next));
+        var positionToAdd = new WordExpansion.ResolvedVariableReference.Indexed("a", next);
+        var budget = new MemoryGovernor(8 * 1024 * 1024);
+        var evaluation = new Eval(Parser.Parse(":"));
+        evaluation.Memory.Budget = budget;
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        try
+        {
+            using var command = evaluation.Memory.BeginCommand(scope);
+            evaluation.Memory.ReleaseUnusedCapacity();
+            var before = evaluation.Memory.Workspace.Bytes;
+            var oldBacking = CollectionBacking.ArrayPayloadBytes(elements);
+            // Permit one prepaid increment for the new entry, below the backing overlap.
+            var limit = (before + 2048 + 65535) / 65536 * 65536;
+            Exception? failure;
+            using (budget.Reserve(budget.LimitBytes - limit))
+                failure = Record.Exception(() => positionToAdd.TryPublishValue(scope, "a", original));
+            var after = CollectionBacking.ArrayPayloadBytes(elements);
+            Assert.True(failure is MemoryBudgetExceededException,
+                $"Assignment result {failure?.GetType().Name ?? "published"}, backing {oldBacking} -> {after} B, workspace {before} -> {evaluation.Memory.Workspace.Bytes} B.");
+            Assert.Equal(oldBacking, after);
+            Assert.Equal(capacity, array.Count);
+            Assert.False(array.TryGet(next, out _));
+
+            Assert.True(positionToAdd.TryPublishValue(scope, "a", original));
+            Assert.True(array.TryGet(next, out var inserted));
+            Assert.Equal(original, inserted);
+            Assert.Equal(capacity + 1, array.Count);
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void RefusedArrayWriteKeepsThePreviousBinding(bool associative, bool replaceElement)
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromBytes(new byte[] { 0xFF }), out var key));
+        if (!replaceElement)
+            Assert.True(variables.TrySetScalar("a", original));
+        else if (associative)
+            Assert.True(variables.TrySetArrayElement("a", key, original));
+        else
+            Assert.True(variables.TrySetArrayElement("a", default(IndexedArrayIndex), original));
+        var target = associative ? (WordExpansion.ResolvedVariableReference)new WordExpansion.ResolvedVariableReference.Associative("a", key)
+            : new WordExpansion.ResolvedVariableReference.Indexed("a", default);
+        var replacement = ShellValue.FromText(new string('x', 2048));
+        var budget = new MemoryGovernor(1024 * 1024);
+        var evaluation = new Eval(Parser.Parse(":"));
+        evaluation.Memory.Budget = budget;
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        try
+        {
+            using var command = evaluation.Memory.BeginCommand(scope);
+            evaluation.Memory.ReleaseUnusedCapacity();
+            Exception? failure;
+            using (budget.Reserve(budget.LimitBytes - budget.ReservedBytes))
+                failure = Record.Exception(() => target.TryPublishValue(scope, "a", replacement));
+            Assert.IsType<MemoryBudgetExceededException>(failure);
+            if (replaceElement)
+            {
+                Assert.True(target.TryRead(variables, out var retained));
+                Assert.Equal(original, retained);
+            }
+            else
+            {
+                Assert.Equal(original, variables.Scalars["a"]);
+                Assert.Empty(variables.IndexedArrays);
+                Assert.Empty(variables.AssociativeArrays);
+            }
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void RefusedArrayPromotionKeepsAnEarlierRetainedOutput()
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        var output = ShellValue.FromText("output");
+        Assert.True(variables.TryAssignArray("a", [original], ArrayKind.Indexed));
+        var prepared = Variables.CreateEmpty();
+        Assert.True(prepared.TrySetScalar("a", ShellValue.FromText(new string('x', 65536))));
+        var budget = new MemoryGovernor(1024 * 1024);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            IndexedArray earlier;
+            using (var bindings = new Variables.CommandBindings(variables, prepared, new HashSet<BindingName> { "a" }, memory, CancellationToken.None))
+            {
+                var retained = bindings.SelectOutputVariables("a", memory, CancellationToken.None);
+                Assert.True(retained.TrySetArrayElement("a", default(IndexedArrayIndex), output));
+                bindings.CompleteOutput("a", retained);
+                earlier = retained.IndexedArrays["a"];
+                memory.ReleaseUnusedCapacity();
+                var before = memory.Workspace.Bytes;
+                // The copied candidate fits, but the new retained value does not.
+                using (budget.Reserve(budget.LimitBytes - 65536))
+                    Assert.Throws<MemoryBudgetExceededException>(() => bindings.RetainBinding("a", memory, CancellationToken.None));
+                Assert.True(memory.Workspace.Bytes > before);
+                Assert.Same(earlier, retained.IndexedArrays["a"]);
+            }
+            Assert.Same(earlier, variables.IndexedArrays["a"]);
+            Assert.True(earlier.TryGet(default, out var restored));
+            Assert.Equal(output, restored);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
     [Fact]
     public void FunctionReplacementRetiresThePreviousNamesBacking()
     {

@@ -52,15 +52,15 @@ internal static partial class WordExpansion
         }
 
         /// <summary>Assigns absence without deleting the selected binding, key, or its attributes.</summary>
-        internal bool TryAssignUnassigned(Variables variables)
+        internal bool TryAssignUnassigned(Variables variables, EvaluationMemory memory)
         {
             if (Name.IsEmpty || variables.IsReadonly(Name))
                 return false;
             return this switch
             {
                 Scalar => variables.TrySetResolvedUnassigned(Name),
-                Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null),
-                Associative associative => variables.TrySetResolvedArrayElement(Name, associative.Key, null),
+                Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null, memory),
+                Associative associative => variables.TrySetResolvedArrayElement(Name, associative.Key, null, memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
         }
@@ -103,7 +103,7 @@ internal static partial class WordExpansion
             if (scope.GetSelectorWriteTarget(sourceName, Name) is { } retained)
             {
                 if (this is Scalar)
-                    retained.SetResolvedValuePreservingArray(Name, value);
+                    retained.SetResolvedValuePreservingArray(Name, value, scope.Effects.Memory);
                 else if (!TryForwardTo(retained, Name))
                     return false;
             }
@@ -127,8 +127,8 @@ internal static partial class WordExpansion
             {
                 Scalar => variables.TrySetScalar(name, value, scope.Effects.Memory),
                 Indexed indexed => variables.TryAssignArrayElement(name,
-                    ShellValue.FromText(Integers.FormatNumber(indexed.Index.Value)), value, ArrayAssignmentKind.Auto),
-                Associative associative => variables.TryAssignArrayElement(name, associative.Key.Value, value, ArrayAssignmentKind.Auto),
+                    ShellValue.FromText(Integers.FormatNumber(indexed.Index.Value)), value, ArrayAssignmentKind.Auto, scope.Effects.Memory),
+                Associative associative => variables.TryAssignArrayElement(name, associative.Key.Value, value, ArrayAssignmentKind.Auto, scope.Effects.Memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
 
@@ -137,8 +137,8 @@ internal static partial class WordExpansion
                 && (declarationWrite == DeclarationWrite.ActiveGlobalIndexed || !variables.IsReadonly(name)) && this switch
             {
                 Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory),
-                Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value),
-                Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value),
+                Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory),
+                Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value, scope.Effects.Memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
         }

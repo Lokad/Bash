@@ -77,6 +77,8 @@ internal sealed class IndexedArray
 {
     // Dictionary capacity and resize overlap, sorted-set nodes, and collection headers.
     internal const int ElementMemoryBytes = 192;
+    private const long DictionarySlotBytes = 48;
+    private const long PositionNodeBytes = 64;
     private readonly Dictionary<long, ShellValue?> _elements;
     // SortedDictionary cannot find the last key without enumeration. Keep an ordered
     // position index for sparse traversal and logarithmic maximum removal.
@@ -160,20 +162,43 @@ internal sealed class IndexedArray
     }
 
     /// <summary>Adds or replaces one validated position.</summary>
-    public void Set(IndexedArrayIndex index, ShellValue? value)
+    public void Set(IndexedArrayIndex index, ShellValue? value) => Set(index, value, memory: null);
+
+    internal void Set(IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory)
     {
-        _elements.TryGetValue(index.Value, out var previous);
-        var valueBytes = checked(_valueBytes - Variables.EstimateValueBytes(previous.GetValueOrDefault())
-            + Variables.EstimateValueBytes(value.GetValueOrDefault()));
-        if (_elements.TryAdd(index.Value, value))
+        var present = _elements.TryGetValue(index.Value, out var previous);
+        var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
+            - Variables.EstimateValueBytes(previous.GetValueOrDefault());
+        var valueBytes = checked(_valueBytes + valueDelta);
+        var replacementCapacity = 0;
+        long overlap = 0;
+        if (memory != null && !present)
+        {
+            var capacity = _elements.EnsureCapacity(0);
+            if (_elements.Count == capacity)
+            {
+                replacementCapacity = (int)Math.Min(int.MaxValue, Math.Max(3L, 2L * capacity));
+                // The per-position estimate already includes resize headroom. Reuse its
+                // share above the live table and nodes before admitting the replacement.
+                var liveStorage = 128 + DictionarySlotBytes * capacity + PositionNodeBytes * _elements.Count;
+                var headroom = Math.Max(0, (long)_entryCapacity * ElementMemoryBytes - liveStorage);
+                var replacement = 128 + DictionarySlotBytes * (2L * replacementCapacity + 1);
+                overlap = Math.Max(0, replacement - headroom);
+            }
+        }
+        memory?.Charge(checked(Math.Max(0, valueDelta) + (present ? 0 : ElementMemoryBytes) + overlap));
+        if (replacementCapacity != 0)
+            _elements.EnsureCapacity(replacementCapacity);
+        _elements[index.Value] = value;
+        if (!present)
             _positions.Add(index.Value);
-        else
-            _elements[index.Value] = value;
         _valueBytes = valueBytes;
         _entryCapacity = Math.Max(_entryCapacity, _elements.Count);
         MarkInitialized();
         if (!_maximumIndex.HasValue || index.Value > _maximumIndex.Value)
             _maximumIndex = index.Value;
+        if (overlap != 0 && memory != null)
+            memory.Workspace.Resize(memory.Workspace.Bytes - overlap);
     }
 
     /// <summary>Removes one position, updating the maximum only when its entry was removed.</summary>
@@ -285,14 +310,18 @@ internal sealed class AssociativeArray
     }
 
     /// <summary>Adds or replaces one validated non-empty key.</summary>
-    public void Set(AssociativeArrayKey key, ShellValue? value)
+    public void Set(AssociativeArrayKey key, ShellValue? value) => Set(key, value, memory: null);
+
+    internal void Set(AssociativeArrayKey key, ShellValue? value, EvaluationMemory? memory)
     {
-        if (_elements.TryGetValue(key.Value, out var previous))
-            _valueBytes -= Variables.EstimateValueBytes(previous.GetValueOrDefault());
-        else
-            _valueBytes = checked(_valueBytes + Variables.EstimateValueBytes(key.Value));
-        _valueBytes = checked(_valueBytes + Variables.EstimateValueBytes(value.GetValueOrDefault()));
+        var present = _elements.TryGetValue(key.Value, out var previous);
+        var keyBytes = present ? 0 : Variables.EstimateValueBytes(key.Value);
+        var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
+            - Variables.EstimateValueBytes(previous.GetValueOrDefault());
+        var valueBytes = checked(_valueBytes + keyBytes + valueDelta);
+        memory?.Charge(checked(Math.Max(0, valueDelta) + (present ? 0 : IndexedArray.ElementMemoryBytes + keyBytes)));
         _elements[key.Value] = value;
+        _valueBytes = valueBytes;
         MarkInitialized();
     }
 
