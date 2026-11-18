@@ -165,16 +165,26 @@ internal sealed class IndexedArray
     /// <summary>Adds or replaces one validated position.</summary>
     public void Set(IndexedArrayIndex index, ShellValue? value) => Set(index, value, memory: null);
 
-    internal void Set(IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory)
+    internal void Set(IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory) =>
+        Set(index, value, memory, prepaidBytes: 0);
+
+    internal void Set(IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
     {
         var present = _elements.TryGetValue(index.Value, out var previous);
         var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
             - Variables.EstimateValueBytes(previous.GetValueOrDefault());
         var valueBytes = checked(_valueBytes + valueDelta);
-        var (replacementCapacity, overlap) = memory != null && !present
-            ? EstimateDictionaryGrowth(_elements.EnsureCapacity(0), checked(_elements.Count + 1), prepaidBytes: 0)
-            : (0, 0L);
-        memory?.Charge(checked(Math.Max(0, valueDelta) + (present ? 0 : ElementMemoryBytes) + overlap));
+        var growthBytes = checked(Math.Max(0, valueDelta) + (present ? 0 : ElementMemoryBytes));
+        var (replacementCapacity, overlap) = (0, 0L);
+        if (memory != null && !present)
+        {
+            var capacity = _elements.EnsureCapacity(0);
+            // Prepaid input already covers the first table when there is no old backing.
+            if (capacity != 0 || prepaidBytes == 0)
+                (replacementCapacity, overlap) = EstimateDictionaryGrowth(
+                    capacity, checked(_elements.Count + 1), Math.Max(0, prepaidBytes - growthBytes));
+        }
+        memory?.Charge(checked(Math.Max(0, growthBytes - prepaidBytes) + overlap));
         if (replacementCapacity != 0)
             _elements.EnsureCapacity(replacementCapacity);
         _elements[index.Value] = value;

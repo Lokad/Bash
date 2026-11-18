@@ -1157,6 +1157,10 @@ public sealed partial class Variables
     }
 
     internal bool TrySetResolvedArrayElement(BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory)
+        => TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes: 0);
+
+    internal bool TrySetResolvedArrayElement(
+        BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
     {
         if (resolved.IsEmpty || AssociativeArrays.ContainsKey(resolved))
             return false;
@@ -1164,13 +1168,13 @@ public sealed partial class Variables
         if (IndexedArrays.TryGetValue(resolved, out var array))
         {
             using var change = TrackBindingMemory(resolved);
-            array.Set(index, value, memory);
+            array.Set(index, value, memory, prepaidBytes);
         }
         else
         {
             memory?.Charge(BindingOverheadBytes);
             array = CreatePromotedIndexedArray(resolved, memory);
-            array.Set(index, value, memory);
+            array.Set(index, value, memory, prepaidBytes);
             ReplaceValue(resolved, new IndexedSlot(array));
         }
         if (index.Value == 0)

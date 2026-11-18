@@ -54,19 +54,21 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData(true, true)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public async Task MapfileOriginAdmitsDictionaryGrowthBeforeApplyingAnyRecord(bool grow, bool limited)
+    [InlineData(false, true, true)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    public async Task MapfileOriginAdmitsDictionaryGrowthBeforeKeepingNewRecords(bool integer, bool grow, bool limited)
     {
         var state = new Eval(Parser.Parse("mapfile -tn2 -O \"$origin\" arr"));
         var variables = Assert.IsType<Variables>(typeof(Eval)
             .GetField("_vars", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(state));
-        var original = ShellValue.FromText("original");
+        var original = ShellValue.FromText(integer ? "42" : "original");
         Assert.True(variables.TryAssignArray("arr", Enumerable.Repeat(original, 1024).ToArray(), ArrayKind.Indexed));
         var array = variables.IndexedArrays["arr"];
-        var elements = Assert.IsType<Dictionary<long, ShellValue?>>(typeof(IndexedArray)
-            .GetField("_elements", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(array));
+        var elements = Elements(array);
         var capacity = elements.EnsureCapacity(0);
         for (var index = array.Count; index < capacity; index++)
         {
@@ -76,6 +78,11 @@ public partial class EvaluationTests
 
         var origin = capacity - (grow ? 1 : 2);
         Assert.True(variables.TrySetScalar("origin", ShellValue.FromText(Integers.FormatNumber(origin))));
+        if (integer)
+        {
+            variables.SetIntegerBinding("arr", true);
+            Assert.True(variables.TrySetScalar("visits", ShellValue.FromText("0")));
+        }
         var budget = new MemoryGovernor(8 * 1024 * 1024);
         using var scope = budget.CreateScope();
         state.Memory.Budget = scope;
@@ -83,9 +90,12 @@ public partial class EvaluationTests
         Assert.Equal(2, read.Limit);
         state.Memory.ReleaseUnusedCapacity();
         var backing = CollectionBacking.ArrayPayloadBytes(elements);
-        // Leave room for a workspace increment and the input list while the read settles.
-        using var held = budget.Reserve(limited ? budget.LimitBytes - budget.ReservedBytes - 72 * 1024 : 0);
-        read.SetResult(ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false));
+        // Leave room for the staged integer binding, one workspace increment, and the input list.
+        var cloneBytes = integer ? variables.EstimateBindingBytes("arr") : 0;
+        using var held = budget.Reserve(limited ? budget.LimitBytes - budget.ReservedBytes - cloneBytes - 72 * 1024 : 0);
+        read.SetResult(integer
+            ? ReadResult.Success(Utf8Bytes("visits++\narr[origin]+5\n"), [9], reachedEoF: false)
+            : ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false));
         var operation = await NextStepAsync(state);
         var diagnostic = operation as WriteOperation;
         if (diagnostic != null)
@@ -94,14 +104,17 @@ public partial class EvaluationTests
             operation = await NextStepAsync(state);
         }
         Assert.Null(operation);
-        Assert.Same(array, variables.IndexedArrays["arr"]);
+        var published = variables.IndexedArrays["arr"];
         Assert.True(IndexedArrayIndex.TryCreate(origin, out var first));
         Assert.True(IndexedArrayIndex.TryCreate(origin + 1, out var second));
-        Assert.True(array.TryGet(first, out var firstValue));
-        var backingAfter = CollectionBacking.ArrayPayloadBytes(elements);
+        Assert.True(published.TryGet(first, out var firstValue));
+        var backingAfter = CollectionBacking.ArrayPayloadBytes(Elements(published));
+        if (integer)
+            Assert.Equal("1", variables.Scalars["visits"].ToUtf8String());
         if (grow && limited)
         {
             Assert.Equal(backing, backingAfter);
+            Assert.Same(array, published);
             Assert.Equal(original, firstValue);
             Assert.False(array.TryGet(second, out _));
             Assert.Equal(capacity, array.Count);
@@ -113,13 +126,18 @@ public partial class EvaluationTests
         else
         {
             Assert.Equal(grow, backingAfter > backing);
-            Assert.Equal(ShellValue.FromText("first"), firstValue);
-            Assert.True(array.TryGet(second, out var secondValue));
-            Assert.Equal(ShellValue.FromText("second"), secondValue);
-            Assert.Equal(capacity + (grow ? 1 : 0), array.Count);
+            Assert.Equal(!integer, ReferenceEquals(array, published));
+            Assert.Equal(ShellValue.FromText(integer ? "0" : "first"), firstValue);
+            Assert.True(published.TryGet(second, out var secondValue));
+            Assert.Equal(ShellValue.FromText(integer ? "5" : "second"), secondValue);
+            Assert.Equal(capacity + (grow ? 1 : 0), published.Count);
             Assert.Equal(0, state.LastExitCode);
             Assert.Null(diagnostic);
         }
+
+        static Dictionary<long, ShellValue?> Elements(IndexedArray array) =>
+            Assert.IsType<Dictionary<long, ShellValue?>>(typeof(IndexedArray)
+                .GetField("_elements", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(array));
     }
 
     [Fact]

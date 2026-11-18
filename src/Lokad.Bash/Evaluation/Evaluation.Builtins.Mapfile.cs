@@ -238,7 +238,9 @@ public sealed partial class Evaluation
     {
         // The longest rendered signed decimal uses 20 bytes. Include each value's backing
         // along with sparse storage while the input records and saved binding remain live.
-        Memory.Charge(checked((long)values.Count * (IndexedArray.ElementMemoryBytes + 96)));
+        const int RecordMemoryBytes = IndexedArray.ElementMemoryBytes + 96;
+        var prepaidBytes = checked((long)values.Count * RecordMemoryBytes);
+        Memory.Charge(prepaidBytes);
         CheckCancellation();
         using var assignment = new Variables.IndexedInputAssignment(scope.Variables, name, origin.HasValue, Memory);
         var first = (long)origin.GetValueOrDefault();
@@ -255,8 +257,10 @@ public sealed partial class Evaluation
                 return false;
             }
             if (!IndexedArrayIndex.TryCreate(first + offset, out var position)
-                || !scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value, memory: null))
+                || !scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value, Memory, prepaidBytes))
                 return false;
+            // Keep consumed credit with the written positions and decimal values.
+            prepaidBytes -= RecordMemoryBytes;
         }
         CheckCancellation();
         assignment.Commit();
