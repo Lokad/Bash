@@ -13,8 +13,9 @@ public sealed partial class Evaluation
 {
     /// <summary>Collects bounded byte records before replacing the selected mapfile/readarray binding.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinMapfileAsync(
-        IReadOnlyList<ShellValue> arguments, Variables variables, bool negated)
+        IReadOnlyList<ShellValue> arguments, ScopedEvaluation scope, bool negated)
     {
+        var variables = scope.Variables;
         const int ReadBatchRecords = 128;
         const int RecordListEntryBytes = 64; // Includes list capacity and resize overlap.
         using var diagnostics = new BuiltinDiagnosticScope(this);
@@ -126,6 +127,10 @@ public sealed partial class Evaluation
                     reachedEof = batch.Result.ReachedEoF;
                 }
             }
+            if (variables.IsIntegerBinding(resolved))
+                return await FinishAsync(await AssignIntegerIndexedInputAsync(resolved, values, origin, scope, arguments[0])
+                    .ConfigureAwait(false) ? 0 : 1).ConfigureAwait(false);
+
             // Admit both collection representations while building the persistent array.
             long valueBytes = 0;
             foreach (var value in values)
@@ -226,6 +231,36 @@ public sealed partial class Evaluation
             await ReportExpansionDiagnosticAsync(arguments[0], ShellValue.FromBytes(detail.ToMemory())).ConfigureAwait(false);
             return await FinishAsync(1).ConfigureAwait(false);
         }
+    }
+
+    private async Task<bool> AssignIntegerIndexedInputAsync(
+        BindingName name, IReadOnlyList<ShellValue> values, uint? origin, ScopedEvaluation scope, ShellValue command)
+    {
+        // The longest rendered signed decimal uses 20 bytes. Include each value's backing
+        // along with sparse storage while the input records and saved binding remain live.
+        Memory.Charge(checked((long)values.Count * (IndexedArray.ElementMemoryBytes + 96)));
+        CheckCancellation();
+        using var assignment = new Variables.IndexedInputAssignment(scope.Variables, name, origin.HasValue, Memory);
+        var first = (long)origin.GetValueOrDefault();
+        for (var offset = 0; offset < values.Count; offset++)
+        {
+            CheckCancellation();
+            var integer = await WordExpansion.EvaluateIntegerAssignmentAsync(values[offset], null, scope, command)
+                .ConfigureAwait(false);
+            if (!integer.HasValue)
+            {
+                // A shell arithmetic error leaves preceding writes visible to EXIT.
+                // Refusal and cancellation throw through the staged assignment and restore the old binding.
+                assignment.Commit();
+                return false;
+            }
+            if (!IndexedArrayIndex.TryCreate(first + offset, out var position)
+                || !scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value))
+                return false;
+        }
+        CheckCancellation();
+        assignment.Commit();
+        return true;
     }
 
     private enum IndexedInputTargetKind { ExistingOrNew, CircularNameref, UnassignedNameref }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support integer declarations and inherited locals with `declare -i` and
+  `local -I`. Apply arithmetic evaluation to scalar and array writes.
+
 - Support the `@a`, `@A`, `@K` and `@k` parameter transformations for attributes,
   reusable declarations and array key/value fields.
 

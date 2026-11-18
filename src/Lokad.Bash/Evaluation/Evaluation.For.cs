@@ -39,9 +39,21 @@ public sealed partial class Evaluation
         foreach (var item in items)
         {
             CheckCancellation();
-            var failure = scope.Variables.AssignForIteration(name, item, Memory);
+            var value = item;
+            if (scope.Variables.IsIntegerBinding(name) && !scope.Variables.TryGetNameref(name, out _)
+                && !scope.Variables.IsReadonlyBinding(name))
+            {
+                var integer = await AwaitWordExpansionAsync(
+                    WordExpansion.EvaluateIntegerAssignmentAsync(item, null, scope, ShellValue.Empty).AsTask()).ConfigureAwait(false);
+                if (!integer.HasValue)
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+                value = integer.Value;
+            }
+            var failure = scope.Variables.AssignForIteration(name, value, Memory);
             if (failure == ForAssignmentFailure.InvalidTarget)
                 return await RejectIdentifierAsync(item).ConfigureAwait(false);
+            if (failure == ForAssignmentFailure.IncompatibleAttributes)
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
             if (failure == ForAssignmentFailure.Readonly)
             {
                 await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);

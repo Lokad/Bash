@@ -59,6 +59,12 @@ does not follow aliases. Builtin outputs share selection and publication, with
 explicit getopts failure, printf count and descriptor policies. An allocation
 that does not publish its variable remains temporary and uses ordinary cleanup.
 
+Integer assignment evaluates the already expanded operand through the shared
+arithmetic evaluator before publishing its decimal value. The selected binding
+supplies the attribute and any append value. Arithmetic writes already carry
+decimal results through publication. Inherited arrays have their own admitted
+storage and are restored with the same function-local lifetime as other bindings.
+
 `getopts` keeps its argument index and bundle offset in the variable owner.
 Explicit writes to `OPTIND` update the scan even when the visible value is
 unchanged. Function-local bindings restore the saved cursor, and child evaluations
@@ -70,6 +76,9 @@ the total records and the final batch. The target is published after that count
 or successful EOF, once replacement storage is admitted. An explicit origin
 updates existing sparse positions in place and retains compact copies of new
 values. Repeated writes can reclaim those copies as entries are overwritten.
+Integer-array input evaluates records in order while the original binding is
+kept for refusal and cancellation. A shell arithmetic error retains preceding
+array writes and their arithmetic effects.
 A failed or canceled read leaves the prior array intact.
 
 `read -a` validates the array destination after consuming its logical record.

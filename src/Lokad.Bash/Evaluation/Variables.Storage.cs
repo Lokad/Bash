@@ -14,7 +14,7 @@ public sealed partial class Variables
     private readonly HashSet<BindingName> _exportedIndex = new();
 
     [Flags]
-    private enum BindingAttributes { None = 0, Readonly = 1, Exported = 2, Temporary = 4 }
+    private enum BindingAttributes { None = 0, Readonly = 1, Exported = 2, Temporary = 4, Integer = 8 }
 
     private abstract class VariableSlot
     {
@@ -146,6 +146,46 @@ public sealed partial class Variables
         NamerefSlot reference => !reference.Value.IsEmpty,
         _ => false
     };
+
+    /// <summary>Stages integer input so later records can read earlier positions during coercion.</summary>
+    internal sealed class IndexedInputAssignment : IDisposable
+    {
+        private readonly Variables _owner;
+        private readonly BindingName _name;
+        private readonly VariableSlot? _previous;
+        private readonly GetoptsCursor _previousCursor;
+        private bool _committed;
+
+        internal IndexedInputAssignment(Variables owner, BindingName name, bool preserve, EvaluationMemory memory)
+        {
+            _owner = owner;
+            _name = name;
+            owner.TryGetBinding(name, out _previous);
+            _previousCursor = owner._getoptsCursor;
+            if (_previous != null)
+                memory.Charge(EstimateSlotBytes(name, _previous));
+            var staged = preserve && _previous is IndexedSlot indexed
+                ? indexed.Value.Clone() : new IndexedArray(isInitialized: true);
+            if (preserve && _previous is ScalarSlot scalar)
+                staged.Set(default, scalar.Value);
+            staged.MarkInitialized();
+            owner.ReplaceValue(name, new IndexedSlot(staged));
+        }
+
+        internal void Commit() => _committed = true;
+
+        public void Dispose()
+        {
+            if (_committed)
+                return;
+            if (_previous != null)
+                _owner.StoreBinding(_name, _previous);
+            else
+                _owner.ClearBinding(_name);
+            if (_name.CachedText == "OPTIND")
+                _owner._getoptsCursor = _previousCursor;
+        }
+    }
 
     /// <summary>Live typed lookup; counts and enumeration scan bindings without copying their values.</summary>
     private sealed class BindingView<TSlot, TValue>(

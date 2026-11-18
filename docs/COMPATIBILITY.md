@@ -293,8 +293,16 @@ including an empty argument. A leading colon selects silent errors. `OPTERR=0`
 suppresses diagnostics while retaining the normal error results.
 An explicit `OPTIND=1` restarts the scan. A visible `OPTIND` can stay unchanged
 between bytes of a bundle. The scanner stops at `--` or the first non-option and
-reports status 1. `OPTIND` uses the existing variable types. Bash's integer
-declaration attribute is outside the supported declaration surface.
+reports status 1. `OPTIND` starts with the integer attribute.
+
+`declare -i` and `local -i` evaluate subsequent assigned values as arithmetic
+and store the decimal result. For integer bindings, `+=` adds the evaluated
+values. `+i` clears the attribute. A command prefix drops the integer attribute.
+Its `=` initializer keeps the expanded bytes, and `+=` uses the caller's
+integer attribute when computing the append. `local -I` and function-local
+`declare -I` inherit the outer value and
+declaration attributes. A nameref contributes its target spelling as scalar
+data unless the new declaration gives the local its own nameref attribute.
 
 The public script runner, `source`, `eval` and reached EXIT actions execute complete command units as
 they are parsed. Earlier units retain their effects before later syntax failure;

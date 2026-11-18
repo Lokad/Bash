@@ -172,7 +172,7 @@ public sealed partial class FunctionPrefixBindingTests
         {
             Assert.Throws<MemoryBudgetExceededException>(() => locals.TryDeclare(caller, caller,
                 new VariableOperand(VariableOperandKind.Name, VariableReference.ForName("x"), ShellValue.Empty),
-                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, memory));
+                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, memory));
             Assert.Empty(locals.SavedNames);
             Assert.Same(array, caller.IndexedArrays["x"]);
             Assert.Equal(256, array.Count);

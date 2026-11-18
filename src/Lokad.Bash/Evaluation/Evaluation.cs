@@ -145,6 +145,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.SetExported("PWD", true);
         var one = ShellValue.FromText("1");
         _vars.TrySetScalar("OPTIND", one);
+        _vars.SetIntegerBinding("OPTIND", true);
         _vars.TrySetScalar("OPTERR", one);
     }
 
@@ -1315,7 +1316,7 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Read => await AwaitWordExpansionAsync(EvaluateBuiltinReadAsync(
                         byteOperands, new ScopedEvaluation(this, commandVars, builtinScope.Context), bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Mapfile => await AwaitWordExpansionAsync(EvaluateBuiltinMapfileAsync(
-                        byteOperands, commandVars, false)).ConfigureAwait(false),
+                        byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
                     BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local =>
                         await AwaitWordExpansionAsync(EvaluateBuiltinDeclarationAsync(
                             declaration ?? throw new InvalidOperationException("Declaration was not prepared."),
@@ -1568,9 +1569,20 @@ public sealed partial class Evaluation : IFileTester
                 }
                 else
                 {
-                    if (assignment.Operator == AssignmentOperator.Append
-                        && commandVars.TryGetExpansionValue(name, out var previous))
-                        value = WordExpansion.AppendAssignmentValue(previous, value, assignmentScope);
+                    if (assignment.Operator == AssignmentOperator.Append)
+                    {
+                        var hasPrevious = commandVars.TryGetExpansionValue(name, out var previous);
+                        if (commandVars.IsIntegerBinding(name))
+                        {
+                            var integer = await WordExpansion.EvaluateIntegerAssignmentAsync(
+                                value, hasPrevious ? previous : null, assignmentScope, ShellValue.Empty).ConfigureAwait(false);
+                            if (!integer.HasValue)
+                                return _state.TryConsumeExpansionError(out error) ? error : 1;
+                            value = integer.Value;
+                        }
+                        else if (hasPrevious)
+                            value = WordExpansion.AppendAssignmentValue(previous, value, assignmentScope);
+                    }
 
                     if (!commandVars.TrySetScalar(name, value))
                     {
@@ -1584,6 +1596,9 @@ public sealed partial class Evaluation : IFileTester
                 }
 
                 prefixNames.Add(name);
+                // The temporary binding drops the integer attribute after preparing its value.
+                if (commandVars.IsIntegerBinding(name))
+                    commandVars.SetIntegerBinding(name, false);
                 commandVars.SetExported(name, true);
             }
             return null;
@@ -1791,6 +1806,7 @@ public sealed partial class Evaluation : IFileTester
                         && (!flags.HasFlag(DeclarationListingAttributes.Associative) || variables.AssociativeArrays.ContainsKey(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Nameref) || variables.TryGetNameref(name, out _))
                         && (!flags.HasFlag(DeclarationListingAttributes.Exported) || variables.IsExported(name))
+                        && (!flags.HasFlag(DeclarationListingAttributes.Integer) || variables.IsIntegerBinding(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Readonly) || variables.IsReadonlyBinding(name));
                 }
             }
@@ -1812,6 +1828,7 @@ public sealed partial class Evaluation : IFileTester
                         && options.ReadonlyChange == DeclarationAttributeChange.Unchanged
                         && options.IndexedChange == DeclarationAttributeChange.Unchanged
                         && options.AssociativeChange == DeclarationAttributeChange.Unchanged
+                        && options.IntegerChange == DeclarationAttributeChange.Unchanged
                         && options.NamerefChange == DeclarationAttributeChange.Unchanged);
                 var filter = FunctionAttributes.None;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Readonly)) filter |= FunctionAttributes.Readonly;
@@ -1988,6 +2005,15 @@ public sealed partial class Evaluation : IFileTester
                         : VariableReference.ForElement(lastTarget.Name, reference.Subscript);
                 }
                 var name = reference.Name;
+                if (options.Nameref && options.IntegerChange == DeclarationAttributeChange.Set)
+                {
+                    // The incompatible nameref request fails without binding its initializer.
+                    if ((!local || declarationScope.Context.FunctionContext?.Locals.Declares(name) == true)
+                        && targetVars.HasBinding(name))
+                        targetVars.SetIntegerBinding(name, true);
+                    exitCode = 1;
+                    continue;
+                }
                 var existingLocal = declarationScope.Context.FunctionContext?.Locals.Declares(name) == true;
                 if (resolution == BindingResolution.LastNameref && name != sourceName
                     && options.ArrayKind == ArrayAssignmentKind.Auto && !operand.CompoundApplied
@@ -2178,7 +2204,7 @@ public sealed partial class Evaluation : IFileTester
                         hasReferenceValue ? VariableOperandKind.Assignment : VariableOperandKind.Name,
                         reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
                     if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
-                            localOperand, prefixNames, options.ArrayKind, options.Nameref, Memory))
+                            localOperand, prefixNames, options.ArrayKind, options.Nameref, options.Inherit, Memory))
                     {
                         var message = targetVars.IsReadonly(name) ? "readonly variable"
                             : options.ArrayKind != ArrayAssignmentKind.Auto
@@ -2341,7 +2367,7 @@ public sealed partial class Evaluation : IFileTester
                             reference.Kind != VariableReferenceKind.Name ? commandVars : writeVariables)).ConfigureAwait(false);
                         if (HasPendingExpansionError || writeTarget == null
                             || !await TryAssignDeclarationValueAsync(writeTarget, writeReference,
-                                writeScope with { Variables = writeVariables }, value, operand.Operator,
+                                writeScope, writeVariables, value, operand.Operator,
                                 declarationWrite, local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName).ConfigureAwait(false))
                         {
                             exitCode = 1;
@@ -2424,17 +2450,17 @@ public sealed partial class Evaluation : IFileTester
                     return false;
                 if (target == null)
                     exitCode = 1;
-                else if (!await TryAssignDeclarationValueAsync(target, reference, declarationScope with { Variables = variables },
+                else if (!await TryAssignDeclarationValueAsync(target, reference, declarationScope, variables,
                     value, operation, WordExpansion.DeclarationWrite.Ordinary, reference.Name).ConfigureAwait(false))
                     exitCode = 1;
                 return true;
             }
 
             async Task<bool> TryAssignDeclarationValueAsync(
-                WordExpansion.ResolvedVariableReference target, VariableReference reference, ScopedEvaluation writeScope,
+                WordExpansion.ResolvedVariableReference target, VariableReference reference, ScopedEvaluation writeScope, Variables destination,
                 ShellValue value, AssignmentOperator operation, WordExpansion.DeclarationWrite declarationWrite, BindingName diagnosticName)
             {
-                if (declarationWrite != WordExpansion.DeclarationWrite.ActiveGlobalIndexed && writeScope.Variables.IsReadonly(target.Name))
+                if (declarationWrite != WordExpansion.DeclarationWrite.ActiveGlobalIndexed && destination.IsReadonly(target.Name))
                 {
                     if (reference.Kind != VariableReferenceKind.Name)
                     {
@@ -2446,7 +2472,10 @@ public sealed partial class Evaluation : IFileTester
                     await DiagnoseAsync(diagnosticName.ToValue(), "readonly variable").ConfigureAwait(false);
                     return false;
                 }
-                return target.TryAssign(writeScope, reference.Name, value, operation, declarationWrite);
+                if (!target.Name.IsEmpty && options.IntegerChange != DeclarationAttributeChange.Unchanged)
+                    destination.SetIntegerBinding(target.Name, options.IntegerChange == DeclarationAttributeChange.Set);
+                return await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
+                    ShellValue.FromText(commandName), declarationWrite).ConfigureAwait(false) is not null;
             }
 
             async Task ApplyAttributesAsync(BindingName name, Variables variables, bool global, bool local)
@@ -2492,6 +2521,8 @@ public sealed partial class Evaluation : IFileTester
 
             void SetAttributes(BindingName name, Variables variables)
             {
+                if (options.IntegerChange != DeclarationAttributeChange.Unchanged)
+                    variables.SetIntegerBinding(name, options.IntegerChange == DeclarationAttributeChange.Set);
                 if (options.ExportChange != DeclarationAttributeChange.Unchanged)
                     variables.SetExported(name, options.ExportChange == DeclarationAttributeChange.Set);
                 if (options.Readonly) variables.SetReadonlyBinding(name);
@@ -2532,7 +2563,8 @@ public sealed partial class Evaluation : IFileTester
             var kind = scope.Variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
             var expanded = await ExpandCompoundArrayItemsAsync(name, items, kind, assignment.Operator, AssignmentContext.Direct, scope).ConfigureAwait(false);
             return expanded != null && await ApplyCompoundArrayItemsAsync(
-                name, assignment.Operator, kind, expanded, scope, scope.Variables, compoundTarget.Name).ConfigureAwait(false);
+                name, assignment.Operator, kind, expanded, scope, scope.Variables, compoundTarget.Name,
+                ShellValue.Empty).ConfigureAwait(false);
         }
     }
 

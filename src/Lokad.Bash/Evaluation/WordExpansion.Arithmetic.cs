@@ -104,7 +104,12 @@ internal static partial class WordExpansion
 
     internal static Task<long?> EvaluateArithmeticAsync(
         ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode,
-        Func<VariableReference, ResolvedVariableReference, ShellValue, bool>? assignOutput)
+        Func<VariableReference, ResolvedVariableReference, ShellValue, bool>? assignOutput) =>
+        EvaluateArithmeticAsync(expression, scope, failureMode, assignOutput, ShellValue.Empty);
+
+    private static Task<long?> EvaluateArithmeticAsync(
+        ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode,
+        Func<VariableReference, ResolvedVariableReference, ShellValue, bool>? assignOutput, ShellValue command)
     {
         var context = scope.Arithmetic ?? new ArithmeticContext(0);
         return context.Depth == 0 ? context.Work.RunAsync(EvaluateCoreAsync) : context.Work.Enqueue(EvaluateCoreAsync);
@@ -149,7 +154,7 @@ internal static partial class WordExpansion
                         // existing numeric pump so recursive reads never grow a callback stack.
                         scope.Effects.Memory.Charge(checked(256L + 4L * stored.Bytes.Length));
                         var nested = await EvaluateArithmeticAsync(ArithmeticOperand.FromValue(stored),
-                            scope, failureMode, assignOutput).ConfigureAwait(false);
+                            scope, failureMode, assignOutput, command).ConfigureAwait(false);
                         if (nested is not { } number)
                         {
                             referenceFailureReported = true;
@@ -254,7 +259,7 @@ internal static partial class WordExpansion
 
                     var writeScope = ReferenceEquals(destination, variables) ? scope
                         : scope with { Variables = destination, ExpansionWriteTarget = null, SelectorBindings = null };
-                    return target.TryAssign(writeScope, sourceName, ShellValue.FromText(Integers.FormatNumber(value)), AssignmentOperator.Replace)
+                    return target.TryPublishValue(writeScope, sourceName, ShellValue.FromText(Integers.FormatNumber(value)))
                         ? null : new ArithmeticError(ArithmeticErrorKind.InvalidTarget, target.Name.ToValue());
                 }
             }
@@ -301,24 +306,30 @@ internal static partial class WordExpansion
             bool AssignExpansion(VariableReference reference, ResolvedVariableReference target, ShellValue value)
             {
                 if (target.ReadOwner is { } owner && !ReferenceEquals(owner, scope.Variables))
-                    return target.TryAssign(scope with { Variables = owner, ExpansionWriteTarget = null, SelectorBindings = null },
-                        reference.Name, value, AssignmentOperator.Replace);
+                    return target.TryPublishValue(scope with { Variables = owner, ExpansionWriteTarget = null, SelectorBindings = null },
+                        reference.Name, value);
                 // Whole-name writes retain scalar-prefix ownership and preserve the caller's array.
                 // Element namerefs use their already selected location, without replaying the selector.
                 if (reference.Kind == VariableReferenceKind.Name
                     && scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
                     && binding.Reference.Kind == VariableReferenceKind.Name)
                     return TrySetVariable(reference.Name, value, scope);
-                return target.TryAssign(scope, reference.Name, value, AssignmentOperator.Replace);
+                return target.TryPublishValue(scope, reference.Name, value);
             }
         }
 
-        Task ReportAsync(ArithmeticError error) => failureMode switch
+        Task ReportAsync(ArithmeticError error)
         {
-            ArithmeticFailureMode.Diagnostic => scope.Effects.ReportExpansionDiagnosticAsync(error.Subject, ShellValue.FromText(error.Message)),
-            _ => scope.Effects.ReportFatalExpansionAsync(error.Subject, ShellValue.FromText(error.Message),
-                failureMode == ArithmeticFailureMode.Assignment ? ExpansionFailureKind.Assignment : ExpansionFailureKind.Arithmetic),
-        };
+            var subject = error.Subject;
+            if (!command.IsEmpty)
+                subject = ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
+                    .Append(command.Bytes).Append(": "u8).Append(subject.Bytes).ToMemory());
+            var message = ShellValue.FromText(error.Message);
+            return failureMode == ArithmeticFailureMode.Diagnostic
+                ? scope.Effects.ReportExpansionDiagnosticAsync(subject, message)
+                : scope.Effects.ReportFatalExpansionAsync(subject, message,
+                    failureMode == ArithmeticFailureMode.Assignment ? ExpansionFailureKind.Assignment : ExpansionFailureKind.Arithmetic);
+        }
     }
 
     // Missing read locations are selected again for writing unless selection retained a fallback.

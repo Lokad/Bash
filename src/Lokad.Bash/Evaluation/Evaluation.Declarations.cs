@@ -106,7 +106,7 @@ public sealed partial class Evaluation
                             : options.ArrayKind;
                         if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
                                 new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
-                                declarationKind, isNameref: false, Memory))
+                                declarationKind, isNameref: false, options.Inherit, Memory))
                         {
                             var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
                             await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(message)).ConfigureAwait(false);
@@ -122,8 +122,11 @@ public sealed partial class Evaluation
                             await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
                         targetVariables.TryRemoveNamerefAttribute(name);
                     }
+                    if (options.IntegerChange != DeclarationAttributeChange.Unchanged)
+                        targetVariables.SetIntegerBinding(name, options.IntegerChange == DeclarationAttributeChange.Set);
                     if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
-                            name, assignment.Operator, kind, expanded, scope, targetVariables, declaredName)).ConfigureAwait(false))
+                            name, assignment.Operator, kind, expanded, scope, targetVariables, declaredName,
+                            ShellValue.FromText(commandName))).ConfigureAwait(false))
                     {
                         if (!HasPendingExpansionError)
                             SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
@@ -158,7 +161,7 @@ public sealed partial class Evaluation
                         // In a function, -g checks the declared name's own array attribute before following a nameref.
                         _ when options.Global && scope.Context.FunctionContext != null => scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables)
                             .AssociativeArrays.ContainsKey(declaredName) ? ArrayKind.Associative : ArrayKind.Indexed,
-                        _ => (!local || targetLocal) && targetVariables.AssociativeArrays.ContainsKey(name)
+                        _ => (!local || targetLocal || options.Inherit) && targetVariables.AssociativeArrays.ContainsKey(name)
                             ? ArrayKind.Associative : ArrayKind.Indexed,
                     };
 
@@ -267,7 +270,10 @@ public sealed partial class Evaluation
 
     /// <summary>Positive options select listing attributes even when a later option clears mutation intent.</summary>
     [Flags]
-    private enum DeclarationListingAttributes { None = 0, Indexed = 1, Associative = 2, Nameref = 4, Exported = 8, Readonly = 16 }
+    private enum DeclarationListingAttributes
+    {
+        None = 0, Indexed = 1, Associative = 2, Nameref = 4, Exported = 8, Readonly = 16, Integer = 32
+    }
 
     /// <summary>Consumes only the initial option fields; later fields retain their operand meaning.</summary>
     private sealed class DeclarationOptions(BuiltinKind builtin)
@@ -280,6 +286,7 @@ public sealed partial class Evaluation
             ? ArrayAssignmentKind.Associative : IndexedChange == DeclarationAttributeChange.Set
                 ? ArrayAssignmentKind.Indexed : ArrayAssignmentKind.Auto;
         public DeclarationAttributeChange NamerefChange { get; private set; }
+        public DeclarationAttributeChange IntegerChange { get; private set; }
         public DeclarationAttributeChange ExportChange { get; private set; } = builtin == BuiltinKind.Export
             ? DeclarationAttributeChange.Set : DeclarationAttributeChange.Unchanged;
         public DeclarationAttributeChange ReadonlyChange { get; private set; } = builtin == BuiltinKind.Readonly
@@ -287,6 +294,7 @@ public sealed partial class Evaluation
         public bool Nameref => NamerefChange == DeclarationAttributeChange.Set && ArrayKind == ArrayAssignmentKind.Auto;
         public bool Readonly => ReadonlyChange == DeclarationAttributeChange.Set;
         public bool Global { get; private set; }
+        public bool Inherit { get; private set; }
         public bool Print { get; private set; }
         public bool Functions { get; private set; }
         public bool FunctionNamesOnly { get; private set; }
@@ -340,7 +348,7 @@ public sealed partial class Evaluation
                     continue;
                 }
                 if (!remove && InvalidFunctionAttribute.Length == 0
-                    && (item.ShortName is (byte)'a' or (byte)'A' || item.ShortName == (byte)'n' && Builtin != BuiltinKind.Export))
+                    && (item.ShortName is (byte)'a' or (byte)'A' or (byte)'i' || item.ShortName == (byte)'n' && Builtin != BuiltinKind.Export))
                     InvalidFunctionAttribute = "-" + (char)item.ShortName;
                 switch (item.ShortName)
                 {
@@ -350,6 +358,8 @@ public sealed partial class Evaluation
                     case (byte)'n' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: NamerefChange = ReadChange(NamerefChange, DeclarationListingAttributes.Nameref); break;
                     case (byte)'r' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: ReadonlyChange = ReadChange(ReadonlyChange, DeclarationListingAttributes.Readonly); break;
                     case (byte)'x' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: ExportChange = ReadChange(ExportChange, DeclarationListingAttributes.Exported); break;
+                    case (byte)'i' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: IntegerChange = ReadChange(IntegerChange, DeclarationListingAttributes.Integer); break;
+                    case (byte)'I' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: Inherit = !remove; break;
                     case (byte)'g' when Builtin == BuiltinKind.Declare: Global |= !remove; break;
                     case (byte)'p': Print = true; break;
                     case (byte)'f':

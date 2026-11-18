@@ -17,7 +17,7 @@ public sealed partial class ComplexityRegressionTests
     {
         const int calls = 32;
         // A readonly binding leaves this large decimal visible while the scan advances.
-        var script = Parser.Parse("printf -v OPTIND '%0262144d' 1; readonly OPTIND; "
+        var script = Parser.Parse("declare +i OPTIND; printf -v OPTIND '%0262144d' 1; readonly OPTIND; "
             + string.Concat(Enumerable.Repeat("getopts a opt -a; ", calls)));
         var state = new Eval(script);
         var host = new TestOperationVisitor([]) { RecordAppends = true };

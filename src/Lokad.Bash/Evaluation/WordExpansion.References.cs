@@ -51,9 +51,6 @@ internal static partial class WordExpansion
             }
         }
 
-        public bool TryAssign(ScopedEvaluation scope, BindingName sourceName, ShellValue value, AssignmentOperator operation)
-            => TryAssign(scope, sourceName, value, operation, DeclarationWrite.Ordinary);
-
         /// <summary>Assigns absence without deleting the selected binding, key, or its attributes.</summary>
         internal bool TryAssignUnassigned(Variables variables)
         {
@@ -68,12 +65,38 @@ internal static partial class WordExpansion
             };
         }
 
-        internal bool TryAssign(ScopedEvaluation scope, BindingName sourceName, ShellValue value,
-            AssignmentOperator operation, DeclarationWrite declarationWrite)
-        {
-            if (operation == AssignmentOperator.Append && TryRead(scope.Variables, out var previous))
-                value = AppendAssignmentValue(previous, value, scope);
+        internal ValueTask<ShellValue?> AssignValueAsync(
+            ScopedEvaluation scope, BindingName sourceName, ShellValue value, AssignmentOperator operation) =>
+            AssignValueAsync(scope, scope.Variables, sourceName, value, operation, ShellValue.Empty, DeclarationWrite.Ordinary);
 
+        internal async ValueTask<ShellValue?> AssignValueAsync(
+            ScopedEvaluation scope, Variables destination, BindingName sourceName, ShellValue value,
+            AssignmentOperator operation, ShellValue command, DeclarationWrite declarationWrite)
+        {
+            if (Name.IsEmpty)
+                return null;
+            ShellValue? previous = operation == AssignmentOperator.Append && TryRead(destination, out var stored)
+                ? stored : null;
+            if (destination.IsIntegerBinding(Name))
+            {
+                if (declarationWrite != DeclarationWrite.ActiveGlobalIndexed && destination.IsReadonly(Name))
+                    return null;
+                var evaluated = await EvaluateIntegerAssignmentAsync(value, previous, scope, command).ConfigureAwait(false);
+                if (!evaluated.HasValue || !scope.CanExpand)
+                    return null;
+                value = evaluated.Value;
+            }
+            else if (previous is { } prefix)
+                value = AppendAssignmentValue(prefix, value, scope);
+            return TryPublishValue(scope with { Variables = destination }, sourceName, value, declarationWrite) ? value : null;
+        }
+
+        internal bool TryPublishValue(ScopedEvaluation scope, BindingName sourceName, ShellValue value) =>
+            TryPublishValue(scope, sourceName, value, DeclarationWrite.Ordinary);
+
+        private bool TryPublishValue(
+            ScopedEvaluation scope, BindingName sourceName, ShellValue value, DeclarationWrite declarationWrite)
+        {
             if (!TryAssignTo(scope.Variables, Name))
                 return false;
 
@@ -196,7 +219,7 @@ internal static partial class WordExpansion
             .ConfigureAwait(false);
         if (!scope.CanExpand || target == null)
             return false;
-        if (target.TryAssign(scope, reference.Name, value, operation))
+        if (await target.AssignValueAsync(scope, reference.Name, value, operation).ConfigureAwait(false) is not null)
             return true;
         if (scope.Variables.IsReadonly(target.Name))
             await scope.Effects.ReportFatalExpansionAsync(
@@ -283,9 +306,12 @@ internal static partial class WordExpansion
                 await scope.Effects.ReportFatalExpansionAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable"), failure).ConfigureAwait(false);
                 return new(NamerefAssignmentAction.Fail, value);
             }
-            if (!target.TryAssign(scope with { Variables = binding.Owner, ExpansionWriteTarget = null, SelectorBindings = null },
-                    reference.Name, value, operation))
+            var written = await target.AssignValueAsync(scope with { ExpansionWriteTarget = null, SelectorBindings = null },
+                binding.Owner, reference.Name, value, operation, ShellValue.Empty, DeclarationWrite.Ordinary)
+                .ConfigureAwait(false);
+            if (!written.HasValue)
                 return new(NamerefAssignmentAction.Fail, value);
+            value = written.Value;
             // A hidden array-element default returns the array's scalar value, not its assigned slot.
             if (failure == ExpansionFailureKind.NamerefDefault
                 && target is ResolvedVariableReference.Indexed or ResolvedVariableReference.Associative)

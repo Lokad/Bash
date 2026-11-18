@@ -166,7 +166,7 @@ public sealed partial class Evaluation
     /// <summary>Applies expanded items in order; selector effects observe earlier writes.</summary>
     private async Task<bool> ApplyCompoundArrayItemsAsync(
         BindingName name, AssignmentOperator operation, ArrayKind kind, IReadOnlyList<ExpandedArrayItem> expanded,
-        ScopedEvaluation scope, Variables targetVariables, BindingName sourceName)
+        ScopedEvaluation scope, Variables targetVariables, BindingName sourceName, ShellValue command)
     {
         var associative = kind == ArrayKind.Associative;
         // Word expansion sees the previous binding. Arithmetic selection and writes see
@@ -217,7 +217,8 @@ public sealed partial class Evaluation
             // Bash 5.2 prefixes reclassified += items with element zero, including earlier writes.
             if (item.PrefixWithElementZero && targetVariables.TryGetExpansionValue(name, out var previous))
                 value = WordExpansion.AppendAssignmentValue(previous, value, scope);
-            if (!target.TryAssign(scope with { Variables = targetVariables }, sourceName, value, item.Operator))
+            if (await target.AssignValueAsync(scope, targetVariables, sourceName, value, item.Operator, command,
+                    WordExpansion.DeclarationWrite.Ordinary).ConfigureAwait(false) is null)
                 return false;
             if (target is WordExpansion.ResolvedVariableReference.Indexed element)
                 lastIndex = element.Index.Value;

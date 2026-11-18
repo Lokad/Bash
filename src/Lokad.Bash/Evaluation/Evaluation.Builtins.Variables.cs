@@ -353,7 +353,7 @@ public sealed partial class Evaluation
         bool AssignOutput(VariableReference reference, WordExpansion.ResolvedVariableReference target, ShellValue value)
         {
             if (target.ReadOwner is { } owner && !ReferenceEquals(owner, commandVars))
-                return target.TryAssign(new ScopedEvaluation(this, owner, context), reference.Name, value, AssignmentOperator.Replace);
+                return target.TryPublishValue(new ScopedEvaluation(this, owner, context), reference.Name, value);
             var sourceName = reference.Name;
             if (reference.Kind == VariableReferenceKind.Name
                 && commandVars.TryResolveBinding(reference.Name, selectOwner: null, out var selected))
@@ -373,8 +373,8 @@ public sealed partial class Evaluation
             // A prefix hiding a caller nameref stays temporary, just like other builtin outputs.
             var outputBindings = ReferenceEquals(bindings?.SelectOutputVariables(target.Name), commandVars) ? null : bindings;
             return !commandVars.IsReadonly(reference.Name)
-                && target.TryAssign(new ScopedEvaluation(this, commandVars, context) { SelectorBindings = outputBindings },
-                    sourceName, value, AssignmentOperator.Replace);
+                && target.TryPublishValue(new ScopedEvaluation(this, commandVars, context) { SelectorBindings = outputBindings },
+                    sourceName, value);
         }
     }
 
@@ -484,12 +484,14 @@ public sealed partial class Evaluation
         }
         var writeScope = scope with
         {
-            Variables = destination,
             ExpansionWriteTarget = expansionWriteTarget,
             SelectorBindings = null
         };
+        if (value == null && kind == BuiltinAssignmentKind.Getopts && destination.IsIntegerBinding(target.Name))
+            value = ShellValue.Empty;
         var assigned = value is { } written
-            ? target.TryAssign(writeScope, reference.Name, written, AssignmentOperator.Replace)
+            ? await target.AssignValueAsync(writeScope, destination, reference.Name, written, AssignmentOperator.Replace,
+                command, WordExpansion.DeclarationWrite.Ordinary).ConfigureAwait(false) is not null
             : target.TryAssignUnassigned(destination);
         if (assigned && kind == BuiltinAssignmentKind.PrintfCount && !ReferenceEquals(destination, binding.Owner))
         {
@@ -497,8 +499,8 @@ public sealed partial class Evaluation
             // or imposing the caller's array kind on a temporary scalar prefix.
             assigned = reference.Kind == VariableReferenceKind.Name
                 ? binding.Owner.TryApplyAssignment(reference, value.GetValueOrDefault(), Memory)
-                : target.TryAssign(scope with { Variables = binding.Owner, ExpansionWriteTarget = null, SelectorBindings = null },
-                    reference.Name, value.GetValueOrDefault(), AssignmentOperator.Replace);
+                : target.TryPublishValue(scope with { Variables = binding.Owner, ExpansionWriteTarget = null, SelectorBindings = null },
+                    reference.Name, value.GetValueOrDefault());
         }
         if (assigned)
         {

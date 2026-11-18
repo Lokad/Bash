@@ -12,7 +12,7 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Whether a kind-only local declaration discards an existing scalar value.</summary>
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
-internal enum ForAssignmentFailure { None, InvalidTarget, Readonly }
+internal enum ForAssignmentFailure { None, InvalidTarget, Readonly, IncompatibleAttributes }
 internal enum BindingResolution { Referent, LastNameref }
 internal readonly record struct VariableBinding(VariableReference Reference, Variables Owner)
 {
@@ -117,6 +117,11 @@ public sealed partial class Variables
 
     /// <summary>Checks the binding's own attribute, without following a nameref.</summary>
     internal bool IsReadonlyBinding(BindingName name) => HasAttribute(name, BindingAttributes.Readonly);
+
+    internal bool IsIntegerBinding(BindingName name) => HasAttribute(name, BindingAttributes.Integer);
+
+    internal void SetIntegerBinding(BindingName name, bool enabled) =>
+        SetAttribute(name, BindingAttributes.Integer, enabled);
 
     internal bool TryDeclareName(BindingName name)
     {
@@ -437,6 +442,7 @@ public sealed partial class Variables
             IReadOnlySet<BindingName>? prefixes,
             ArrayAssignmentKind arrayKind,
             bool isNameref,
+            bool inherit,
             EvaluationMemory memory)
         {
             var hasAssignment = operand.Kind == VariableOperandKind.Assignment;
@@ -523,13 +529,22 @@ public sealed partial class Variables
                     return false;
 
                 var local = new Variables();
-                if (prefixes?.Contains(name) == true || command.IsTemporaryBinding(name))
+                var temporary = prefixes?.Contains(name) == true || command.IsTemporaryBinding(name);
+                var inherited = temporary ? command : inherit ? savedBinding : null;
+                if (inherited != null)
                 {
-                    memory.Charge(command.EstimateBindingBytes(name));
-                    local.CopyBindingFrom(command, name);
-                    // Temporary namerefs supply their raw target text to a fresh local, not a reference.
-                    if (command.IsTemporaryBinding(name) && local.NamerefTargets.TryGetValue(name, out var temporaryReference))
-                        local.SetResolvedScalar(name, temporaryReference.Value);
+                    memory.Charge(inherited.EstimateBindingBytes(name));
+                    local.CopyBindingFrom(inherited, name);
+                    if (inherit)
+                        local.ResetGetoptsPosition(name);
+                    if ((inherit || command.IsTemporaryBinding(name))
+                        && local.NamerefTargets.TryGetValue(name, out var inheritedReference))
+                    {
+                        if (inherit && inheritedReference.IsEmpty)
+                            local.ReplaceValue(name, new UnassignedSlot());
+                        else
+                            local.SetResolvedScalar(name, inheritedReference.Value);
+                    }
                     if (prefixes?.Contains(name) == true)
                         local.SetAttribute(name, BindingAttributes.Temporary, false);
                 }
@@ -547,7 +562,7 @@ public sealed partial class Variables
                 updated.SetExported(name, true);
 
             if (!ReferenceEquals(updated, command))
-                command.CopyBindingFrom(updated, name);
+                command.TransferBindingFrom(updated, name);
             if (unsetPrefixes != null)
                 foreach (var prefix in unsetPrefixes)
                     prefix.ExposeBinding(name, command);
@@ -1129,7 +1144,7 @@ public sealed partial class Variables
             return true;
         if (style != VariableDisplayStyle.Assignment)
         {
-            Span<byte> flags = stackalloc byte[3];
+            Span<byte> flags = stackalloc byte[4];
             var count = WriteDeclarationAttributes(slot, flags);
             if (!output.TryAppend("declare -"u8)
                 || !output.TryAppend(count == 0 ? "-"u8 : flags[..count])
@@ -1162,7 +1177,7 @@ public sealed partial class Variables
     internal ShellValue GetDeclarationAttributes(BindingName name)
     {
         TryGetBinding(name, out var slot);
-        Span<byte> flags = stackalloc byte[3];
+        Span<byte> flags = stackalloc byte[4];
         var count = WriteDeclarationAttributes(slot, flags);
         return count == 0 ? ShellValue.Empty : ShellValue.FromBytes(flags[..count].ToArray());
     }
@@ -1174,12 +1189,15 @@ public sealed partial class Variables
         {
             IndexedSlot => (byte)'a',
             AssociativeSlot => (byte)'A',
-            NamerefSlot => (byte)'n',
             _ => (byte)0
         };
         var attributes = slot?.Attributes ?? BindingAttributes.None;
         if (kind != 0)
             flags[length++] = kind;
+        if ((attributes & BindingAttributes.Integer) != 0)
+            flags[length++] = (byte)'i';
+        if (slot is NamerefSlot)
+            flags[length++] = (byte)'n';
         if ((attributes & BindingAttributes.Readonly) != 0)
             flags[length++] = (byte)'r';
         if ((attributes & BindingAttributes.Exported) != 0)
@@ -1238,6 +1256,20 @@ public sealed partial class Variables
             _getoptsCursor = source._getoptsCursor;
     }
 
+    /// <summary>Publishes a binding from an exclusively owned declaration staging store.</summary>
+    private void TransferBindingFrom(Variables source, BindingName name)
+    {
+        if (!source.TryGetBinding(name, out var slot))
+        {
+            ClearBinding(name);
+            return;
+        }
+        StoreBinding(name, slot);
+        if (name.CachedText == "OPTIND")
+            _getoptsCursor = source._getoptsCursor;
+        source.ClearBinding(name);
+    }
+
     /// <summary>
     /// Stores an unset or syntactically valid target without evaluating its selector.
     /// </summary>
@@ -1273,6 +1305,8 @@ public sealed partial class Variables
                 return ForAssignmentFailure.InvalidTarget;
             if (IsReadonlyBinding(name))
                 return ForAssignmentFailure.Readonly;
+            if (IsIntegerBinding(name))
+                return ForAssignmentFailure.IncompatibleAttributes;
             SetNamerefTarget(name, item, target, memory);
         }
         else
@@ -1296,6 +1330,8 @@ public sealed partial class Variables
         }
 
         ReplaceValue(name, new NamerefSlot(new NamerefTarget(target, reference, literalName)));
+        if (IsIntegerBinding(name))
+            SetIntegerBinding(name, false);
     }
 
     internal bool TryRemoveNamerefAttribute(BindingName name) =>

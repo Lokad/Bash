@@ -178,15 +178,27 @@ internal static partial class WordExpansion
                         : new NamerefAssignmentResult(NamerefAssignmentAction.Assign, expanded);
                     if (action.Action == NamerefAssignmentAction.Fail)
                         return;
-                    var assigned = action.Action == NamerefAssignmentAction.Handled || (!elementNameref && parameter.Source is { Kind: VariableReferenceKind.Name } named
-                        ? TrySetVariable(named.Name, expanded, scope)
-                        : target != null && parameter.Source is { } source
-                            && target.TryAssign(scope, source.Name, expanded, AssignmentOperator.Replace));
-                    if (assigned)
+                    ShellValue? assigned = action.Value;
+                    if (action.Action == NamerefAssignmentAction.Assign)
                     {
-                        output.AppendExpansion(action.Value, allowWordSplitting, globQuoted);
+                        if (!elementNameref && parameter.Source is { Kind: VariableReferenceKind.Name } named)
+                        {
+                            var resolved = scope.Variables.ResolveNamerefName(named.Name);
+                            if (scope.Variables.IsIntegerBinding(resolved) && !scope.Variables.IsReadonly(resolved))
+                                assigned = await EvaluateIntegerAssignmentAsync(expanded, null, scope, ShellValue.Empty).ConfigureAwait(false);
+                            if (assigned is { } value && scope.CanExpand && !TrySetVariable(named.Name, value, scope))
+                                assigned = null;
+                        }
+                        else if (target != null && parameter.Source is { } source)
+                            assigned = await target.AssignValueAsync(scope, source.Name, expanded, AssignmentOperator.Replace).ConfigureAwait(false);
+                        else
+                            assigned = null;
                     }
-                    else
+                    if (assigned is { } stored && scope.CanExpand)
+                    {
+                        output.AppendExpansion(stored, allowWordSplitting, globQuoted);
+                    }
+                    else if (scope.CanExpand)
                     {
                         await scope.Effects.ReportFatalExpansionAsync((target == null ? parsed.Name.ToValue() : target.Name.ToValue()), ShellValue.FromText("readonly variable"), ExpansionFailureKind.Assignment)
                             .ConfigureAwait(false);

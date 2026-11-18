@@ -153,6 +153,12 @@ public sealed partial class Evaluation
                 scope.Variables, Memory, _cancellationToken);
             if (arrayTarget is { } array)
             {
+                if (scope.Variables.IsIntegerBinding(array.Name))
+                {
+                    var assigned = await AssignIntegerIndexedInputAsync(array.Name, fields, null, scope, words[0])
+                        .ConfigureAwait(false);
+                    return await FinishAsync(assigned ? exitCode : 1).ConfigureAwait(false);
+                }
                 Memory.Charge((long)fields.Count * IndexedArray.ElementMemoryBytes);
                 for (var index = 0; index < fields.Count; index++)
                 {
