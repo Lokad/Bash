@@ -2877,6 +2877,9 @@ public sealed partial class Evaluation : IFileTester
         async Task<bool> AppendAsync()
         {
             var expanded = await WordExpansion.ExpandToWordsAsync(word, scope).ConfigureAwait(false);
+            // Each expanded field contributes at least one value, including literal glob fallback.
+            if (expanded.Count > 1)
+                Memory.PrepareListCapacity(operands, expanded.Count);
             return await AppendExpandedWordsAsync(expanded, operands, Memory).ConfigureAwait(false);
         }
     }

@@ -21,10 +21,10 @@ public sealed partial class Evaluation
         if (!name.IsIdentifier)
             return await RejectIdentifierAsync(name.ToValue()).ConfigureAwait(false);
 
-        var items = new List<ShellValue>(forCommand.Items.Count);
-        foreach (var added in forCommand.Items)
+        var items = new List<ShellValue>();
+        foreach (var word in forCommand.Items)
         {
-            items.AddRange(await ExpandToWordsAsync(added, scope).ConfigureAwait(false));
+            await AppendOperandValuesAsync(word, scope, items).ConfigureAwait(false);
             if (_state.HasPendingExpansionError)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
