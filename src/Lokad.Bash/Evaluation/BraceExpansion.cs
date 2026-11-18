@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Text;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -16,260 +17,390 @@ namespace Lokad.Bash.Evaluation;
 /// </remarks>
 internal static class BraceExpansion
 {
-    /// <summary>
-    /// Expands brace expressions in the provided input.
-    /// </summary>
-    /// <param name="input">The input to expand.</param>
-    /// <returns>The expanded source variants, or the original input if no expansion applies.</returns>
-    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
-    /// <param name="cancellationToken">Cancels computation and pending reads.</param>
-    public static IReadOnlyList<ShellSource> Expand(
-        ShellSource input, EvaluationMemory memory, CancellationToken cancellationToken)
+    private readonly record struct Position(int Part, int Offset);
+    private readonly record struct Boundary(Position Position, int BraceIndex)
     {
-        var pending = new Stack<ShellSource>();
-        pending.Push(input);
-        var results = new List<ShellSource>();
-        while (pending.TryPop(out var current))
+        public Boundary AfterDelimiter() => this with { Position = Position with { Offset = Position.Offset + 1 } };
+    }
+
+    private readonly record struct FragmentRange(Boundary Start, Boundary End);
+    private enum BraceKind { None, Alternatives, Sequence, LiteralSequence }
+    private readonly record struct Sequence(long Start, Int128 Step, int Count, int Width, bool IsCharacter);
+
+    private sealed class Brace(Boundary opening, int previousCommas)
+    {
+        public Boundary Opening { get; } = opening;
+        public int PreviousCommas { get; } = previousCommas;
+        public Boundary Closing { get; set; }
+        public BraceKind Kind { get; set; }
+        public bool HasSequenceSeparator { get; set; }
+        public List<Boundary>? Commas { get; set; }
+        public Sequence? Sequence { get; set; }
+        public ShellSource[]? SequenceValues { get; set; }
+        public int ExpansionCount { get; set; }
+
+        public int AlternativeCount => (Commas?.Count ?? 0) + 1;
+
+        public FragmentRange Alternative(int index)
+        {
+            if (Commas is not { } commas)
+                return new FragmentRange(Opening.AfterDelimiter(), Closing);
+            var start = index == 0 ? Opening : commas[index - 1];
+            var end = index == commas.Count ? Closing : commas[index];
+            return new FragmentRange(start.AfterDelimiter(), end);
+        }
+    }
+
+    // A branch borrows its prefix and continuation until its complete word can be materialized.
+    private sealed record Continuation(FragmentRange Range, Continuation? Next);
+    private sealed record Fragment(ShellSource Source, WordPart? Opaque, Fragment? Previous, int Count);
+    private readonly record struct Branch(Continuation? Continuation, Fragment? Prefix);
+
+    /// <summary>Expands brace expressions across existing lexical parts in encounter order.</summary>
+    public static IReadOnlyList<Word> Expand(Word word, EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!word.Parts.Any(static part => part is SourceWordPart { Kind: WordPartKind.Unquoted } source
+            && source.Source.AsSpan().Contains((byte)'{')))
+            return [word];
+        var braces = Scan(word.Parts, memory, cancellationToken);
+        if (braces.Count == 0)
+            return [word];
+
+        // Invalid and unclosed groups remain literal. Link around them so their valid
+        // descendants can be found without revisiting the enclosing text.
+        memory.Charge(checked(32L + 4L * (braces.Count + 1L)));
+        var nextBrace = new int[braces.Count + 1];
+        nextBrace[^1] = braces.Count;
+        for (var index = braces.Count - 1; index >= 0; index--)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryFindExpansion(current.AsSpan(), memory, cancellationToken,
-                    out var openIndex, out var closeIndex, out var expansions))
+            var brace = braces[index];
+            if (brace.Kind == BraceKind.LiteralSequence)
             {
-                memory.Charge(256);
-                results.Add(current);
+                nextBrace[index] = nextBrace[brace.Closing.BraceIndex];
+                continue;
+            }
+            if (brace.Kind == BraceKind.None)
+            {
+                nextBrace[index] = nextBrace[index + 1];
                 continue;
             }
 
-            var prefix = current.AsSpan()[..openIndex];
-            var suffix = current.AsSpan()[(closeIndex + 1)..];
-            // Reverse the push order to retain left-to-right expansion without recursive calls.
-            for (var index = expansions.Count - 1; index >= 0; index--)
+            nextBrace[index] = index;
+            if (brace.Sequence is { } sequence)
+            {
+                brace.ExpansionCount = sequence.Count;
+                continue;
+            }
+
+            long count = 0;
+            for (var alternative = 0; alternative < brace.AlternativeCount && count < Array.MaxLength; alternative++)
+                count += Count(brace.Alternative(alternative));
+            brace.ExpansionCount = (int)Math.Min(count, Array.MaxLength);
+        }
+
+        if (nextBrace[0] == braces.Count)
+            return [word];
+
+        var wholeWord = new FragmentRange(new(new(0, 0), 0), new(new(word.Parts.Count, 0), braces.Count));
+        var total = Count(wholeWord);
+        if (total >= Array.MaxLength)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        memory.Charge(checked(256L * total));
+        var result = new List<Word>(total);
+        var pending = new Stack<Branch>();
+        pending.Push(new Branch(new Continuation(wholeWord, null), null));
+        while (pending.TryPop(out var branch))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (continuation, prefix) = branch;
+            while (continuation is { Range: var range, Next: var remainder })
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var expansion = expansions[index];
-                memory.Charge(checked(256L + 4L * ((long)prefix.Length + expansion.Length + suffix.Length)));
-                pending.Push(Combine(prefix, expansion.AsSpan(), suffix));
-            }
-        }
-        return results;
-
-        static ShellSource Combine(
-            ReadOnlySpan<byte> prefix,
-            ReadOnlySpan<byte> middle,
-            ReadOnlySpan<byte> suffix)
-        {
-            var bytes = ByteMemoryBuilder.CreateUnaccounted(checked(prefix.Length + middle.Length + suffix.Length));
-            bytes.Append(prefix);
-            bytes.Append(middle);
-            bytes.Append(suffix);
-            return ShellSource.FromBytes(bytes.ToMemory());
-        }
-    }
-
-    /// <summary>
-    /// Finds the first brace expansion candidate and returns its bounds and expanded elements.
-    /// </summary>
-    /// <param name="input">The source bytes to scan.</param>
-    /// <param name="openIndex">The index of the opening brace.</param>
-    /// <param name="closeIndex">The index of the closing brace.</param>
-    /// <param name="expansions">The expanded elements found within the braces.</param>
-    /// <returns>True when a valid expansion candidate is found.</returns>
-    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
-    /// <param name="cancellationToken">Cancels computation and pending reads.</param>
-    private static bool TryFindExpansion(
-        ReadOnlySpan<byte> input,
-        EvaluationMemory memory,
-        CancellationToken cancellationToken,
-        out int openIndex,
-        out int closeIndex,
-        out IReadOnlyList<ShellSource> expansions)
-    {
-        openIndex = -1;
-        closeIndex = -1;
-        expansions = [];
-
-        for (var index = 0; index < input.Length; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (input[index] != (byte)'{')
-                continue;
-
-            if (index > 0 && input[index - 1] == (byte)'$')
-            {
-                if (!TryFindClosingBrace(input, index, cancellationToken, out var skipClose))
-                    return false;
-
-                index = skipClose;
-                continue;
-            }
-
-            if (!TryFindClosingBrace(input, index, cancellationToken, out var candidateClose))
-                return false;
-
-            var content = input.Slice(index + 1, candidateClose - index - 1);
-            if (TryExpandContent(content, memory, cancellationToken, out expansions))
-            {
-                openIndex = index;
-                closeIndex = candidateClose;
-                return true;
-            }
-
-            index = candidateClose;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Finds the matching closing brace for an opening brace, tracking nested braces.
-    /// </summary>
-    /// <param name="input">The source bytes to scan.</param>
-    /// <param name="start">The index of the opening brace.</param>
-    /// <param name="cancellationToken">Cancels scanning nested source.</param>
-    /// <param name="closeIndex">The index of the matching closing brace.</param>
-    /// <returns>True when a matching closing brace is found.</returns>
-    private static bool TryFindClosingBrace(ReadOnlySpan<byte> input, int start, CancellationToken cancellationToken, out int closeIndex)
-    {
-        var depth = 0;
-        for (var index = start; index < input.Length; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var value = input[index];
-            if (value == (byte)'{')
-            {
-                if (index <= 0 || input[index - 1] != (byte)'$')
-                    depth++;
-
-                continue;
-            }
-
-            if (value == (byte)'}')
-            {
-                depth--;
-                if (depth == 0)
+                var index = nextBrace[range.Start.BraceIndex];
+                if (index >= range.End.BraceIndex)
                 {
-                    closeIndex = index;
-                    return true;
+                    prefix = AppendRange(range.Start.Position, range.End.Position, prefix);
+                    continuation = remainder;
+                    continue;
                 }
+
+                var brace = braces[index];
+                prefix = AppendRange(range.Start.Position, brace.Opening.Position, prefix);
+                var suffix = Continue(new(brace.Closing.AfterDelimiter(), range.End), remainder);
+                if (brace.Sequence is { } sequence)
+                {
+                    var values = brace.SequenceValues ??= MaterializeSequence(sequence, memory, cancellationToken);
+                    memory.Charge(checked(32L * sequence.Count));
+                    for (var value = sequence.Count - 1; value >= 0; value--)
+                        pending.Push(new Branch(suffix, Append(values[value], null, prefix)));
+                }
+                else
+                {
+                    memory.Charge(checked(32L * brace.AlternativeCount));
+                    for (var alternative = brace.AlternativeCount - 1; alternative >= 0; alternative--)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        pending.Push(new Branch(Continue(brace.Alternative(alternative), suffix), prefix));
+                    }
+                }
+                break;
             }
+
+            if (continuation == null)
+                result.Add(Materialize(prefix, memory, cancellationToken));
+        }
+        return result;
+
+        Continuation? Continue(FragmentRange range, Continuation? next)
+        {
+            if (range.Start.Position == range.End.Position)
+                return next;
+            memory.Charge(64);
+            return new Continuation(range, next);
         }
 
-        closeIndex = -1;
-        return false;
-    }
+        int Count(FragmentRange range)
+        {
+            long count = 1;
+            for (var index = nextBrace[range.Start.BraceIndex]; index < range.End.BraceIndex;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var brace = braces[index];
+                count *= brace.ExpansionCount;
+                if (count >= Array.MaxLength)
+                    return Array.MaxLength;
+                index = nextBrace[brace.Closing.BraceIndex];
+            }
+            return (int)count;
+        }
 
-    /// <summary>
-    /// Expands the brace content into either a comma list or a sequence expansion.
-    /// </summary>
-    /// <param name="content">The source bytes inside braces.</param>
-    /// <param name="expansions">The expanded values when parsing succeeds.</param>
-    /// <returns>True when the content represents a valid expansion.</returns>
-    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
-    /// <param name="cancellationToken">Cancels computation and pending reads.</param>
-    private static bool TryExpandContent(
-        ReadOnlySpan<byte> content,
-        EvaluationMemory memory,
-        CancellationToken cancellationToken,
-        out IReadOnlyList<ShellSource> expansions)
-    {
-        expansions = [];
+        Fragment? AppendRange(Position start, Position end, Fragment? prefix)
+        {
+            for (var partIndex = start.Part; partIndex < word.Parts.Count && partIndex <= end.Part; partIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (partIndex == end.Part && end.Offset == 0)
+                    break;
+                var part = word.Parts[partIndex];
+                if (part is SourceWordPart { Kind: WordPartKind.Unquoted } source)
+                {
+                    var begin = partIndex == start.Part ? start.Offset : 0;
+                    var limit = partIndex == end.Part ? end.Offset : source.Source.Length;
+                    if (begin < limit)
+                        prefix = Append(source.Source.Slice(begin, limit - begin), null, prefix);
+                }
+                else
+                    prefix = Append(default, part, prefix);
+            }
+            return prefix;
+        }
 
-        if (!HasTopLevelComma(content, cancellationToken))
-            return TryExpandSequence(content, memory, cancellationToken, out expansions);
-
-        expansions = SplitCommaList(content, memory, cancellationToken);
-        return true;
-    }
-
-    /// <summary>
-    /// Determines whether the content contains a top-level comma outside nested braces.
-    /// </summary>
-    /// <param name="content">The source bytes inside braces.</param>
-    /// <returns>True when a top-level comma is present.</returns>
-    /// <param name="cancellationToken">Cancels scanning the source.</param>
-    private static bool HasTopLevelComma(ReadOnlySpan<byte> content, CancellationToken cancellationToken)
-    {
-        var depth = 0;
-        for (var index = 0; index < content.Length; index++)
+        Fragment Append(ShellSource source, WordPart? opaque, Fragment? prefix)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var value = content[index];
-            if (value == (byte)'{' && !(index > 0 && content[index - 1] == (byte)'$'))
-            {
-                depth++;
-                continue;
-            }
-
-            if (value == (byte)'}' && depth > 0)
-            {
-                depth--;
-                continue;
-            }
-
-            if (value == (byte)',' && depth == 0)
-                return true;
+            memory.Charge(64);
+            return new Fragment(source, opaque, prefix, (prefix?.Count ?? 0) + 1);
         }
-
-        return false;
     }
 
-    /// <summary>
-    /// Splits a comma-separated list into top-level segments, preserving nested brace content.
-    /// </summary>
-    /// <param name="content">The source bytes inside braces.</param>
-    /// <returns>The top-level comma-separated segments.</returns>
-    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
-    /// <param name="cancellationToken">Cancels scanning the source.</param>
-    private static IReadOnlyList<ShellSource> SplitCommaList(ReadOnlySpan<byte> content, EvaluationMemory memory, CancellationToken cancellationToken)
+    private static List<Brace> Scan(IReadOnlyList<WordPart> parts, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var results = new List<ShellSource>();
-        var depth = 0;
-        var start = 0;
-
-        for (var index = 0; index < content.Length; index++)
+        var braces = new List<Brace>();
+        var open = new Stack<Brace>();
+        var context = new ShellScanContext { SyntaxMemory = memory.Workspace };
+        var rawCommas = 0;
+        var parameterBraces = 0;
+        for (var partIndex = 0; partIndex < parts.Count; partIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var value = content[index];
-            if (value == (byte)'{' && !(index > 0 && content[index - 1] == (byte)'$'))
+            var part = parts[partIndex];
+            var rawOffset = 0;
+            if (part is not SourceWordPart { Kind: WordPartKind.Unquoted } unquoted)
             {
-                depth++;
+                if (open.Count != 0 && part.Kind != WordPartKind.Escaped)
+                {
+                    var opaque = part.GetUnexpandedValue().Bytes.Span;
+                    CountRawCommas(opaque, opaque.Length, ref rawOffset);
+                }
                 continue;
             }
 
-            if (value == (byte)'}' && depth > 0)
-            {
-                depth--;
+            var source = unquoted.Source;
+            var bytes = source.AsSpan();
+            if (bytes.IndexOfAny("{},."u8) < 0)
                 continue;
-            }
-
-            if (value == (byte)',' && depth == 0)
+            var cursor = new ShellSourceCursor(source, 0, context);
+            while (!cursor.IsAtEnd)
             {
-                memory.Charge(checked(256L + 4L * (index - start)));
-                results.Add(ShellSource.FromBytes(content.Slice(start, index - start).ToArray()));
-                start = index + 1;
+                cancellationToken.ThrowIfCancellationRequested();
+                var offset = cursor.Position;
+                if (cursor.TryConsumeQuoteOrEscape())
+                    continue;
+                if (cursor.Current is (byte)'$' or (byte)'`')
+                {
+                    if (!cursor.IsQuoted)
+                    {
+                        // During brace generation, plain braces inside a parameter
+                        // expression also balance its outer delimiter.
+                        if (ShellSourceCursor.TryMatchLogicalText(bytes, offset, "${", out var after))
+                        {
+                            parameterBraces++;
+                            cursor = new ShellSourceCursor(source, after, context);
+                            continue;
+                        }
+                        if (unquoted.TryGetArithmetic(offset, out var arithmetic))
+                        {
+                            cursor = new ShellSourceCursor(source, arithmetic.End + 1, context);
+                            continue;
+                        }
+                    }
+                    if (cursor.SkipNestedExpansion(BracedParameterRecognition.DoubleQuotedOnly) is ShellNestedExpansionScan.Complete)
+                        continue;
+                }
+
+                if (!cursor.IsQuoted)
+                {
+                    if (parameterBraces != 0)
+                    {
+                        if (cursor.Current == (byte)'{') parameterBraces++;
+                        if (cursor.Current == (byte)'}') parameterBraces--;
+                    }
+                    else
+                    {
+                        switch (cursor.Current)
+                        {
+                            case (byte)'{':
+                                CountRawCommas(bytes, offset, ref rawOffset);
+                                memory.Charge(256);
+                                var candidate = new Brace(new(new(partIndex, offset), braces.Count + 1), rawCommas);
+                                braces.Add(candidate);
+                                open.Push(candidate);
+                                break;
+                            case (byte)',' when open.TryPeek(out var enclosing):
+                                memory.Charge(64);
+                                (enclosing.Commas ??= []).Add(new(new(partIndex, offset), braces.Count));
+                                break;
+                            case (byte)'.' when open.TryPeek(out var sequence)
+                                && bytes[offset..].StartsWith(".."u8)
+                                && (offset + 2 == bytes.Length || bytes[offset + 2] != (byte)'}'):
+                                sequence.HasSequenceSeparator = true;
+                                break;
+                            case (byte)'}' when open.TryPop(out var brace):
+                                CountRawCommas(bytes, offset, ref rawOffset);
+                                brace.Closing = new(new(partIndex, offset), braces.Count);
+                                var opening = brace.Opening;
+                                if (brace.Commas != null || brace.HasSequenceSeparator && rawCommas != brace.PreviousCommas)
+                                    brace.Kind = BraceKind.Alternatives;
+                                else if (brace.HasSequenceSeparator)
+                                {
+                                    brace.Kind = BraceKind.LiteralSequence;
+                                    if (opening.Position.Part == partIndex && opening.BraceIndex == braces.Count
+                                        && TryParseSequence(bytes[(opening.Position.Offset + 1)..offset],
+                                            cancellationToken, out var parsed))
+                                    {
+                                        brace.Sequence = parsed;
+                                        brace.Kind = BraceKind.Sequence;
+                                    }
+                                }
+                                break;
+                        }
+                    }
+                }
+                cursor.Advance();
+            }
+            if (open.Count != 0)
+                CountRawCommas(bytes, bytes.Length, ref rawOffset);
+        }
+        return braces;
+
+        // A sequence-shaped group containing a comma in its raw body expands
+        // that body as alternatives, even when the comma is nested or protected.
+        void CountRawCommas(ReadOnlySpan<byte> bytes, int end, ref int offset)
+        {
+            while (offset < end)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var value = bytes[offset++];
+                if (value == (byte)'\\')
+                    offset++;
+                else if (value == (byte)',')
+                    rawCommas++;
             }
         }
+    }
 
-        memory.Charge(checked(256L + 4L * (content.Length - start)));
-        results.Add(ShellSource.FromBytes(content[start..].ToArray()));
-        return results;
+    private static Word Materialize(Fragment? prefix, EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        if (prefix == null)
+            return new Word([]);
+
+        memory.Charge(checked(32L * prefix.Count));
+        var fragments = new Fragment[prefix.Count];
+        for (var current = prefix; current != null; current = current.Previous)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            fragments[current.Count - 1] = current;
+        }
+
+        var parts = new List<WordPart>(fragments.Length);
+        for (var index = 0; index < fragments.Length;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (fragments[index].Opaque is { } part)
+            {
+                parts.Add(part);
+                index++;
+                continue;
+            }
+
+            // Rejoin adjacent unquoted pieces so suffixes keep their original
+            // parameter, tilde, generated escape and pathname semantics.
+            var source = fragments[index].Source;
+            long length = source.Length;
+            var end = index + 1;
+            while (end < fragments.Length && fragments[end].Opaque == null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                length += fragments[end].Source.Length;
+                end++;
+            }
+
+            if (end > index + 1)
+            {
+                if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                memory.Charge(checked(32L + length));
+                var combined = ByteMemoryBuilder.CreateUnaccounted((int)length);
+                for (; index < end; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    combined.Append(fragments[index].Source.Bytes);
+                }
+                source = ShellSource.FromBytes(combined.ToMemory());
+            }
+
+            parts.Add(new SourceWordPart(WordPartKind.Unquoted, source, memory.Workspace) { IsBraceExpanded = true });
+            index = end;
+        }
+        return new Word(parts);
     }
 
     /// <summary>
-    /// Expands a sequence expression like <c>{1..3}</c> or <c>{a..c}</c>.
+    /// Parses a bounded sequence before preparing any of its values.
     /// </summary>
     /// <param name="source">The source bytes inside braces.</param>
-    /// <param name="expansions">The expanded sequence values.</param>
+    /// <param name="sequence">The parsed sequence and its length.</param>
     /// <returns>True when the content is a valid sequence expression.</returns>
-    /// <param name="memory">Owns expansion workspace until the enclosing command completes.</param>
     /// <param name="cancellationToken">Cancels computation and pending reads.</param>
-    private static bool TryExpandSequence(
+    private static bool TryParseSequence(
         ReadOnlySpan<byte> source,
-        EvaluationMemory memory,
         CancellationToken cancellationToken,
-        out IReadOnlyList<ShellSource> expansions)
+        out Sequence sequence)
     {
-        expansions = [];
+        sequence = default;
         var first = IndexOfDoubleDot(source, 0, cancellationToken);
         if (first < 0) return false;
 
@@ -296,24 +427,21 @@ internal static class BraceExpansion
                 return false;
 
             var width = IsPadded(startSpan) || IsPadded(endSpan) ? Math.Max(startSpan.Length, endSpan.Length) : 0;
-            return TryExpandRange(startValue, endValue, distance, Math.Max(20, width),
-                value => FormatNumber(value, width), out expansions);
+            return TryCreateSequence(startValue, endValue, distance, width, isCharacter: false, out sequence);
         }
 
         if (IsLetter(startSpan) && IsLetter(endSpan))
         {
             var start = startSpan[0];
             var end = endSpan[0];
-            return TryExpandRange(start, end, Math.Abs(end - start), 1,
-                static value => ShellSource.FromBytes(new byte[] { (byte)value }), out expansions);
+            return TryCreateSequence(start, end, Math.Abs(end - start), 0, isCharacter: true, out sequence);
         }
 
         return false;
 
-        bool TryExpandRange(long start, long end, Int128 distance, int maximumValueBytes,
-            Func<long, ShellSource> format, out IReadOnlyList<ShellSource> sequence)
+        bool TryCreateSequence(long start, long end, Int128 distance, int width, bool isCharacter, out Sequence range)
         {
-            sequence = [];
+            range = default;
             // An ascending range must be able to reverse a negative increment.
             if (start < end && increment == long.MinValue)
                 return false;
@@ -321,19 +449,7 @@ internal static class BraceExpansion
             var count = distance / step + 1;
             if (count > int.MaxValue - 2)
                 return false;
-            if (count >= Array.MaxLength)
-                throw new ByteMemoryBuilder.LimitExceededException();
-
-            var length = (int)count;
-            memory.Charge(checked(length * (256L + 4L * maximumValueBytes)));
-            var results = new List<ShellSource>(length);
-            var directedStep = start <= end ? step : -step;
-            for (var index = 0; index < length; index++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                results.Add(format((long)(start + index * directedStep)));
-            }
-            sequence = results;
+            range = new Sequence(start, start <= end ? step : -step, (int)count, width, isCharacter);
             return true;
         }
 
@@ -345,6 +461,23 @@ internal static class BraceExpansion
 
         static bool IsLetter(ReadOnlySpan<byte> token) =>
             token.Length == 1 && AsciiByte.ToLowerAscii(token[0]) is >= (byte)'a' and <= (byte)'z';
+    }
+
+    private static ShellSource[] MaterializeSequence(
+        Sequence sequence, EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        var maximumValueBytes = sequence.IsCharacter ? 1 : Math.Max(20, sequence.Width);
+        memory.Charge(checked(sequence.Count * (256L + 4L * maximumValueBytes)));
+        var values = new ShellSource[sequence.Count];
+        for (var index = 0; index < values.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var value = (long)(sequence.Start + index * sequence.Step);
+            values[index] = sequence.IsCharacter
+                ? ShellSource.FromBytes(new byte[] { (byte)value })
+                : FormatNumber(value, sequence.Width);
+        }
+        return values;
 
         static ShellSource FormatNumber(long value, int width)
         {

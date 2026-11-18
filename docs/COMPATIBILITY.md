@@ -86,6 +86,9 @@ They follow the same expansion and quoting rules as ordinary double-quoted words
 Standalone unquoted braces are words in operand positions, including command
 arguments, loop items, case subjects and patterns, array entries and redirection
 operands. Brace groups require a semicolon or LF before their closing delimiter.
+Brace expansion can join alternatives across quoted or escaped fragments and
+substitutions. Protected commas are data and alternatives retain their original
+quoting through splitting and pathname expansion.
 Brace sequences accept signed 64-bit decimal endpoints or single ASCII letters.
 The endpoints choose direction and a zero step selects unit magnitude. Leading
 zeros on unprefixed or negative endpoints request padding to the wider endpoint,

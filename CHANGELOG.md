@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Expand braces across quoted, escaped and substitution fragments. Preserve
+  literal outer braces around valid inner expansions and retain quote masks.
+
 - Match signed decimal brace sequences, endpoint padding, step direction and
   zero increments. Retain ASCII character ranges and their empty backslash field.
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
@@ -121,61 +120,8 @@ internal static partial class WordExpansion
     /// <summary>
     /// Expands brace expressions into a set of words before other expansions.
     /// </summary>
-    internal static IReadOnlyList<Word> ExpandBraceWords(Word word, ScopedEvaluation scope)
-    {
-        var expanded = new List<List<WordPart>> { new() };
-        var changed = false;
-        // Shared source or literal parts are copied when each generated word is flattened.
-        var totalCharacters = 0L;
-        var budget = scope.Effects.Memory;
-
-        foreach (var part in word.Parts)
-        {
-            var source = part is SourceWordPart sourcePart ? sourcePart.Source : ShellSource.Empty;
-            var length = part.GetUnexpandedValue().Bytes.Length;
-            var variants = part.Kind == WordPartKind.Unquoted
-                ? BraceExpansion.Expand(source, budget, scope.Effects.CancellationToken)
-                : [source];
-            if (variants.Count == 1 && variants[0].AsSpan().SequenceEqual(source.AsSpan()))
-            {
-                var addedCharacters = (long)expanded.Count * length;
-                if (changed)
-                    budget.Charge(checked(256L * (expanded.Count) + 4L * addedCharacters));
-                foreach (var branch in expanded)
-                    branch.Add(part);
-                totalCharacters += addedCharacters;
-                continue;
-            }
-
-            changed = true;
-            var nextCount = (long)expanded.Count * variants.Count;
-            if (nextCount >= Array.MaxLength)
-                throw new ByteMemoryBuilder.LimitExceededException();
-            var nextCharacters = totalCharacters * variants.Count
-                + expanded.Count * variants.Sum(static variant => (long)variant.Length);
-            budget.Charge(checked(256L * (nextCount * (expanded[0].Count + 1L)) + 4L * nextCharacters));
-            var nextExpanded = new List<List<WordPart>>((int)nextCount);
-
-            foreach (var baseParts in expanded)
-            {
-                foreach (var variant in variants)
-                {
-                    scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                    var newParts = new List<WordPart>(baseParts.Count + 1);
-                    newParts.AddRange(baseParts);
-                    newParts.Add(new SourceWordPart(WordPartKind.Unquoted, variant, budget.Workspace) { IsBraceExpanded = true });
-                    nextExpanded.Add(newParts);
-                }
-            }
-
-            expanded = nextExpanded;
-            totalCharacters = nextCharacters;
-        }
-
-        return changed
-            ? expanded.Select(w => new Word(w)).ToArray()
-            : [word];
-    }
+    internal static IReadOnlyList<Word> ExpandBraceWords(Word word, ScopedEvaluation scope) =>
+        BraceExpansion.Expand(word, scope.Effects.Memory, scope.Effects.CancellationToken);
 
     /// <summary>Expands a source word without brace expansion or pathname lookup.</summary>
     public static async Task<IReadOnlyList<ExpandedWord>> ExpandWithoutBraceAsync(
