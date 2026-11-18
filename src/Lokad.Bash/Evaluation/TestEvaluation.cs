@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 using static Lokad.Bash.Evaluation.ShellPredicates;
@@ -36,6 +37,7 @@ public sealed class TestEvaluation
     public bool HasParseError => ErrorMessage.Length != 0;
     internal ShellValue? ErrorOperand { get; private set; }
     internal string ErrorMessage { get; private set; } = string.Empty;
+    internal bool HasVariablePredicates { get; private set; }
 
     /// <summary>Encodes text arguments and parses them through the byte-valued test grammar.</summary>
     public static TestEvaluation Parse(IReadOnlyList<string> arguments)
@@ -61,6 +63,38 @@ public sealed class TestEvaluation
     public bool CompleteFileTests(IReadOnlyList<bool> fileResults)
     {
         ArgumentNullException.ThrowIfNull(fileResults);
+        return CompletePredicates(fileResults, []);
+    }
+
+    /// <summary>Evaluates reached leaves in argument order, including both sides of -a and -o.</summary>
+    internal async Task<bool> EvaluateVariablePredicatesAsync(
+        ScopedEvaluation scope, Func<UnresolvedFileTest, Task<bool>> testFile)
+    {
+        var fileResults = new bool[_files.Count];
+        var variableResults = new bool[_arguments.Count];
+        foreach (var step in _steps)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (!scope.CanExpand)
+                return false;
+            switch (step.Kind)
+            {
+                case StepKind.File:
+                    fileResults[step.Value] = await testFile(_files[step.Value]).ConfigureAwait(false);
+                    break;
+                case StepKind.VariableIsSet:
+                case StepKind.NamerefIsSet:
+                    var kind = step.Kind == StepKind.VariableIsSet ? UnaryPredicateKind.VariableIsSet : UnaryPredicateKind.NamerefIsSet;
+                    variableResults[step.Value] = await WordExpansion.TestVariableAsync(kind, _arguments[step.Value], scope)
+                        .ConfigureAwait(false);
+                    break;
+            }
+        }
+        return CompletePredicates(fileResults, variableResults);
+    }
+
+    private bool CompletePredicates(IReadOnlyList<bool> fileResults, ReadOnlySpan<bool> variableResults)
+    {
         if (HasParseError)
             return false;
         var values = new bool[_steps.Count];
@@ -72,6 +106,8 @@ public sealed class TestEvaluation
             {
                 case StepKind.Constant: values[count++] = step.Value != 0; break;
                 case StepKind.File: values[count++] = fileResults[step.Value]; break;
+                case StepKind.VariableIsSet:
+                case StepKind.NamerefIsSet: values[count++] = variableResults[step.Value]; break;
                 case StepKind.Not: values[count - 1] = !values[count - 1]; break;
                 case StepKind.And:
                 case StepKind.Or:
@@ -96,8 +132,8 @@ public sealed class TestEvaluation
                 var first = Next();
                 if (Is(first, "!"u8))
                     Constant(Next().IsEmpty);
-                else if (TryGetUnaryPredicate(first.Bytes.Span, out var unary))
-                    Unary(unary, Next());
+                else if (TryUnary(first, out var unary))
+                    Unary(unary);
                 else
                     Fail(first, "unary operator expected");
                 return;
@@ -118,7 +154,10 @@ public sealed class TestEvaluation
                     Constant(Is(op, "-a"u8) ? left && right : left || right);
                     return;
                 }
-                goto case 4;
+                if (Is(_arguments[_index], "!"u8) || Is(_arguments[_index], "("u8) && Is(_arguments[_end - 1], ")"u8))
+                    goto case 4;
+                Fail(op, "binary operator expected");
+                return;
             case 4:
                 if (Is(_arguments[_index], "!"u8))
                 {
@@ -195,8 +234,8 @@ public sealed class TestEvaluation
         else
         {
             var first = Next();
-            if (_index < _end && TryGetUnaryPredicate(first.Bytes.Span, out var unary))
-                Unary(unary, Next());
+            if (_index < _end && TryUnary(first, out var unary))
+                Unary(unary);
             else
                 Constant(!first.IsEmpty);
         }
@@ -204,12 +243,20 @@ public sealed class TestEvaluation
             _steps.Add(new(StepKind.Not, 0));
     }
 
-    private void Unary(UnaryPredicate predicate, ShellValue operand)
+    private void Unary(UnaryPredicate predicate)
     {
+        var operandIndex = _index;
+        var operand = Next();
         if (predicate.IsFilePredicate)
             File(predicate.FileKind, operand, null);
         else if (predicate.Operator == UnaryPredicateKind.OptionEnabled)
             Constant(IsOptionEnabled(operand.Bytes.Span, _errexitEnabled));
+        else if (predicate.IsVariablePredicate)
+        {
+            HasVariablePredicates = true;
+            _steps.Add(new(predicate.Operator == UnaryPredicateKind.VariableIsSet ? StepKind.VariableIsSet : StepKind.NamerefIsSet,
+                operandIndex));
+        }
         else
             Constant(predicate.Operator == UnaryPredicateKind.StringLengthZero ? operand.IsEmpty : !operand.IsEmpty);
     }
@@ -280,6 +327,10 @@ public sealed class TestEvaluation
     private static bool TryTestBinary(ShellValue token, out BinaryPredicate predicate) =>
         TryGetBinaryPredicate(token.Bytes.Span, out predicate) && predicate.Operator != BinaryPredicateKind.RegexMatch;
 
+    // The public file-only adapter has no shell bindings or selector executor.
+    private bool TryUnary(ShellValue token, out UnaryPredicate predicate) =>
+        TryGetUnaryPredicate(token.Bytes.Span, out predicate) && (!predicate.IsVariablePredicate || _memory != null);
+
     private ShellValue Next() => _arguments[_index++];
     private static bool Is(ShellValue value, ReadOnlySpan<byte> token) => value.Bytes.Span.SequenceEqual(token);
     private bool Consume(ReadOnlySpan<byte> token)
@@ -297,6 +348,6 @@ public sealed class TestEvaluation
         ErrorOperand = operand;
         ErrorMessage = message;
     }
-    private enum StepKind { Constant, File, Not, And, Or }
+    private enum StepKind { Constant, File, VariableIsSet, NamerefIsSet, Not, And, Or }
     private readonly record struct Step(StepKind Kind, int Value);
 }

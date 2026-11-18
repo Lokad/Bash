@@ -146,7 +146,11 @@ Execution expands reached operands against the current scope, preserving quotati
 and bytes; short-circuited operands cause no expansion or host work. Reached file
 predicates use the existing file-operation path in source order. The distinct
 `test`/`[` grammar consumes completed byte arguments and shares predicate metadata
-and filesystem execution with `[[`.
+and filesystem execution with `[[`. Variable predicates share the binding and
+array selector resolver. A lexical conditional selector retains its own word
+and expands once when reached, before indexed arithmetic or associative lookup.
+In `test`, both sides of `-a` and `-o` are evaluated. Expressions with variable
+predicates evaluate file and variable predicates in argument order.
 
 Shell-word pattern matching shares one traversal core for complete matches,
 prefixes, suffixes and replacement search. Suffix traversal reads characters

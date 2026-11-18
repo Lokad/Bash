@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
+using static Lokad.Bash.Evaluation.ShellPredicates;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -322,6 +323,59 @@ internal static partial class WordExpansion
     internal static Task<ResolvedVariableReference?> ResolveReadReferenceAsync(VariableReference reference, ScopedEvaluation scope) =>
         ResolveReferenceAsync(reference, ReferenceUse.Read, scope, ExpansionPurpose.ArithmeticSource);
 
+    internal static Task<bool> TestVariableAsync(UnaryPredicateKind predicate, ShellValue operand, ScopedEvaluation scope)
+    {
+        if (!scope.CanExpand)
+            return Task.FromResult(false);
+        if (predicate == UnaryPredicateKind.VariableIsSet
+            && Integers.TryParseNumber(Integers.TrimWhitespace(operand.Bytes.Span), out var position))
+            return Task.FromResult(position >= 0 && position <= scope.Variables.PositionalParameters.Count);
+        if (!VariableReference.TryParse(ShellSource.FromBytes(operand.Bytes), scope.Effects.Memory, out var reference))
+            return Task.FromResult(false);
+        if (predicate == UnaryPredicateKind.NamerefIsSet)
+            return Task.FromResult(reference.Kind == VariableReferenceKind.Name
+                && scope.Variables.TryGetNameref(reference.Name, out var target) && !target.IsEmpty);
+        return IsVariableSetAsync(reference, scope, null);
+    }
+
+    /// <summary>Expands a lexical conditional selector once, then reads the selected location.</summary>
+    internal static async Task<bool> TestVariableElementAsync(Word name, Word selector, ScopedEvaluation scope)
+    {
+        var operandName = await ExpandUnsplitValueAsync(name, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading)
+            .ConfigureAwait(false);
+        var subscript = await ExpandUnsplitValueAsync(selector, scope, ExpansionPurpose.Scalar, TildeExpansion.None)
+            .ConfigureAwait(false);
+        if (!scope.CanExpand || !VariableNames.IsValidVariableName(operandName.Bytes.Span))
+            return false;
+        scope.Effects.Memory.Charge(checked(4L * operandName.Bytes.Length));
+        var reference = VariableReference.ForElement(operandName.ToUtf8String(), ShellSource.FromBytes(subscript.Bytes));
+        return await IsVariableSetAsync(reference, scope, new ExpandedArraySubscript(subscript, ArithmeticBracketMode.References))
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Checks assignment presence, retaining element selectors until reached.</summary>
+    private static async Task<bool> IsVariableSetAsync(
+        VariableReference reference, ScopedEvaluation scope, ExpandedArraySubscript? preparedSubscript)
+    {
+        var variables = scope.Variables;
+        if (reference.Kind == VariableReferenceKind.Name)
+            return variables.TryGetExpansionValue(reference.Name, out _);
+        if (reference.IsAggregate)
+        {
+            var binding = await ResolveReadBindingAsync(reference, ReferenceUse.Read, scope, variables).ConfigureAwait(false);
+            if (binding is not { Reference.Kind: VariableReferenceKind.Name } selected)
+                return false;
+            if (!selected.Owner.AssociativeArrays.ContainsKey(selected.Name))
+                return selected.Owner.IndexedArrays.TryGetValue(selected.Name, out var indexed)
+                    ? indexed.Count != 0
+                    : selected.Owner.Scalars.ContainsKey(selected.Name);
+        }
+        var element = await ResolveReferenceAsync(reference, ReferenceUse.Presence, scope, ExpansionPurpose.ArithmeticSource,
+                null, variables, variables, preparedSubscript)
+            .ConfigureAwait(false);
+        return element != null && element.TryRead(variables, out _);
+    }
+
     /// <summary>Selects a builtin destination once, while expanding its selector in the active command scope.</summary>
     internal static Task<ResolvedVariableReference?> ResolveBuiltinReferenceAsync(
         VariableReference reference, ScopedEvaluation scope, Variables destination, Variables indexVariables) =>
@@ -365,7 +419,7 @@ internal static partial class WordExpansion
         if (!scope.CanExpand)
             return null;
         var convertedNameref = false;
-        if (use is ReferenceUse.Read or ReferenceUse.Length && reference.Kind != VariableReferenceKind.Name
+        if (use is ReferenceUse.Read or ReferenceUse.Length or ReferenceUse.Presence && reference.Kind != VariableReferenceKind.Name
             && !targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out _))
         {
             var selected = await ResolveReadBindingAsync(reference, use, scope, targetVariables).ConfigureAwait(false);
@@ -447,6 +501,8 @@ internal static partial class WordExpansion
             : reference;
         if (selector.Subscript.IsEmpty || selector.IsAggregate && !associative)
         {
+            if (use == ReferenceUse.Presence && selector.Subscript.IsEmpty)
+                return null;
             if (use == ReferenceUse.ArithmeticAssign && selector.Subscript.IsEmpty)
             {
                 await scope.Effects.ReportExpansionDiagnosticAsync(SubscriptDiagnostic(includeName: true),
@@ -480,6 +536,8 @@ internal static partial class WordExpansion
         {
             if (AssociativeArrayKey.TryCreate(expanded, out var key))
                 return new ResolvedVariableReference.Associative(name, key) { ReadOwner = targetVariables };
+            if (use == ReferenceUse.Presence)
+                return null;
         }
         else
         {
@@ -525,7 +583,7 @@ internal static partial class WordExpansion
         {
             ReferenceUse.Unset => scope.Effects.ReportExpansionDiagnosticAsync(
                 ShellValue.FromText("unset"), ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(SubscriptDiagnostic(includeName: true).Bytes).Append(": bad array subscript"u8).ToMemory())),
-            ReferenceUse.Read or ReferenceUse.ArithmeticRead => scope.Effects.ReportExpansionDiagnosticAsync(
+            ReferenceUse.Read or ReferenceUse.ArithmeticRead or ReferenceUse.Presence => scope.Effects.ReportExpansionDiagnosticAsync(
                 reference.Name.ToValue(), ShellValue.FromText("bad array subscript")),
             ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign => scope.Effects.ReportExpansionDiagnosticAsync(
                 SubscriptDiagnostic(includeName: true), ShellValue.FromText("bad array subscript")),
@@ -566,6 +624,7 @@ internal static partial class WordExpansion
     {
         Read,
         Length,
+        Presence,
         Assign,
         DirectAssign,
         DeclarationAssign,

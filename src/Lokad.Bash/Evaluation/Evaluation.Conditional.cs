@@ -76,6 +76,8 @@ public sealed partial class Evaluation
                         return 1;
                     if (unary.Predicate.IsFilePredicate)
                         return await FileAsync(unary.Predicate.FileKind, operand, null).ConfigureAwait(false);
+                    if (unary.Predicate.IsVariablePredicate)
+                        return await WordExpansion.TestVariableAsync(unary.Predicate.Operator, operand, scope).ConfigureAwait(false) ? 0 : 1;
                     return (unary.Predicate.Operator switch
                     {
                         UnaryPredicateKind.StringLengthZero => operand.IsEmpty,
@@ -83,6 +85,9 @@ public sealed partial class Evaluation
                         UnaryPredicateKind.OptionEnabled => IsOptionEnabled(operand.Bytes.Span, _state.ErrexitEnabled),
                         _ => throw new InvalidOperationException("Unexpected conditional unary predicate.")
                     }) ? 0 : 1;
+                case ConditionalExpression.VariableElement element:
+                    return await WordExpansion.TestVariableElementAsync(element.Name, element.Selector, scope)
+                        .ConfigureAwait(false) ? 0 : 1;
                 case ConditionalExpression.Binary binary:
                     var leftWord = await ExpandAsync(binary.Left).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)

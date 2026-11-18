@@ -19,6 +19,68 @@ public sealed class ConditionalExpansionTests
     }
 
     [Theory]
+    [InlineData("declare absent; empty=; [[ -v empty && ! -v absent ]]")]
+    [InlineData("a=([3]=); [[ -v a[-1] && -v a[@] && ! -v a ]]")]
+    [InlineData("declare -A a=([k]=); [[ -v a[k] && ! -v a[@] ]]")]
+    [InlineData("declare -A a; k=$'\\377'; a[$k]=; [[ -v \"a[$k]\" ]]")]
+    [InlineData("declare -A a; a['$v']=; k='$v'; v=other; [[ -v \"a[$k]\" && ! -v \"a['$k']\" ]]")]
+    [InlineData("unset target; declare -n ref=target; declare -n unassigned; [[ -R ref && ! -R unassigned && ! -v ref ]]")]
+    [InlineData("set -- ''; [[ -v 1 && ! -v 2 ]] && [ -v 0 ] && test -v = -v")]
+    public async Task VariablePredicatesPreserveAssignmentPresence(string script)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("[[ yes || -v a[i++] ]]", "0 3")]
+    [InlineData("test yes -o -v 'a[i++]'", "0 4")]
+    [InlineData("[ '' -a -v 'a[i++]' ]", "1 4")]
+    [InlineData("i=0; i=3 test -v 'a[i++]'", "0 4")]
+    [InlineData("[[ -v a[$((i++))] ]]", "0 4")]
+    public async Task VariablePredicatesEvaluateSelectorsInTheCallerGrammar(string predicate, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"a=([3]=); i=3; {predicate}; printf '%s %s' \"$?\" \"$i\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("test -e marker -a -v 'a[$(printf 3; : >marker)]'", "1")]
+    [InlineData("test -v 'a[$(printf 3; : >marker)]' -a -e marker", "0")]
+    public async Task TestEvaluatesFileAndVariablePredicatesInArgumentOrder(string predicate, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"a=([3]=); {predicate}; printf '%s' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Equal(string.Empty, host.ReadFile("/marker"));
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("[[ -v 'a[1+]' ]]")]
+    [InlineData("test -v 'a[1+]'")]
+    public async Task InvalidVariablePredicateArithmeticEndsTheCommandUnit(string predicate)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"a=([3]=); {predicate}; printf tail", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Contains("arithmetic", host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData("[[ 1/0 -eq 0 ]]", "1")]
     [InlineData("[[ ! 1/0 -eq 0 ]]", "0")]
     [InlineData("[[ 1/0 -eq 0 || x ]]", "0")]

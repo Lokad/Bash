@@ -172,7 +172,7 @@ public static class Integers
         return value is >= (byte)'0' and <= (byte)'9';
     }
 
-    private static ReadOnlySpan<byte> TrimWhitespace(ReadOnlySpan<byte> span)
+    internal static ReadOnlySpan<byte> TrimWhitespace(ReadOnlySpan<byte> span)
     {
         var start = 0;
         var end = span.Length - 1;

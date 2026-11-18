@@ -125,8 +125,17 @@ internal sealed class ConditionalParser
             }
             if (ShellPredicates.TryGetUnaryPredicate(operation[..ReadOperator(token, operation)], out var unary))
             {
-                var operand = ReadOperand(false);
-                expression = operand == null ? null : new ConditionalExpression.Unary(unary, operand);
+                if (unary.Operator == ShellPredicates.UnaryPredicateKind.VariableIsSet
+                    && ParseVariableElement(Peek()) is { } element)
+                {
+                    Take();
+                    expression = element;
+                }
+                else
+                {
+                    var operand = ReadOperand(false);
+                    expression = operand == null ? null : new ConditionalExpression.Unary(unary, operand);
+                }
             }
             else
             {
@@ -178,9 +187,52 @@ internal sealed class ConditionalParser
         return ParseWord(token);
     }
 
-    private Word? ParseWord(Token token)
+    private ConditionalExpression.VariableElement? ParseVariableElement(Token token)
     {
-        if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, ShellQuoteKind.None, _context,
+        if (token.Kind != TokenKind.Word || !token.Source.AsSpan().Contains((byte)'['))
+            return null;
+
+        // A double-quoted whole operand still gives the bracket contents
+        // their own expansion context. A single-quoted operand is data.
+        var source = token.Source;
+        var offset = token.Offset;
+        var nameQuote = ShellQuoteKind.None;
+        if (source.Length > 1 && source[0] == (byte)'"' && source[source.Length - 1] == (byte)'"')
+        {
+            source = source.Slice(1, source.Length - 2);
+            offset++;
+            nameQuote = ShellQuoteKind.Double;
+        }
+        var cursor = new ShellSourceCursor(source, 0, _context);
+        while (!cursor.IsAtEnd)
+        {
+            if (!cursor.IsQuoted && cursor.Current == (byte)'[')
+                break;
+            if (cursor.TryConsumeQuoteOrEscape())
+                continue;
+            switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
+            {
+                case ShellNestedExpansionScan.Complete: continue;
+                case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid: return null;
+            }
+            cursor.Advance();
+        }
+        var opening = cursor.Position;
+        if (cursor.IsAtEnd || opening == 0
+            || !ArraySubscriptScanner.TryScan(_context, source, opening, out var closing)
+            || closing != source.Length - 1)
+            return null;
+
+        var name = ParseWord(new Token(TokenKind.Word, source.Slice(0, opening), offset), nameQuote);
+        var selector = ParseWord(new Token(TokenKind.Word, source.Slice(opening + 1, closing - opening - 1), offset + opening + 1));
+        return name == null || selector == null ? null : new ConditionalExpression.VariableElement(name, selector);
+    }
+
+    private Word? ParseWord(Token token) => ParseWord(token, ShellQuoteKind.None);
+
+    private Word? ParseWord(Token token, ShellQuoteKind quote)
+    {
+        if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, quote, _context,
                 out var word, out var error))
             return word;
         _error ??= new SyntaxError(error.Message, token.Offset + error.Offset);

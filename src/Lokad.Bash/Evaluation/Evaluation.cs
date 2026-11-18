@@ -1241,7 +1241,8 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Break or BuiltinKind.Continue => await EvaluateBuiltinLoopControlAsync(
                         evaluatorBuiltin.Kind, byteOperands, builtinScope, false).ConfigureAwait(false),
                     BuiltinKind.Exit => await EvaluateBuiltinExitAsync(byteOperands, builtinScope, executable.Completion).ConfigureAwait(false),
-                    BuiltinKind.Test => await EvaluateBuiltinTestAsync(commandName, byteOperands, false).ConfigureAwait(false),
+                    BuiltinKind.Test => await EvaluateBuiltinTestAsync(commandName, byteOperands,
+                        builtinScope with { Variables = commandVars, SelectorBindings = bindings }, false).ConfigureAwait(false),
                     BuiltinKind.Echo => await EvaluateBuiltinEchoAsync(echoContent, false).ConfigureAwait(false),
                     BuiltinKind.Type => await EvaluateBuiltinTypeAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Help => await AwaitWordExpansionAsync(EvaluateBuiltinHelpAsync(byteOperands, false)).ConfigureAwait(false),

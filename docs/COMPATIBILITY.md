@@ -243,6 +243,13 @@ prefixes. Invalid integers, malformed expressions and a missing closing `]` repo
 a diagnostic and status 2. `-o` queries recognize `errexit` and the fixed `pipefail`
 policy; unknown option names are false. File predicates retain the UTF-8 path boundary.
 
+`[[ … ]]`, `test` and `[` recognize `-v` and `-R`. An assigned empty value counts as
+set. `-v` accepts variable names, array selectors and numeric positional parameters.
+A bare array name queries element zero. For indexed arrays, `[@]` and `[*]` query
+element presence across the array. For associative arrays, they denote the literal
+keys `@` and `*`. `-R` tests whether the named binding is an initialized nameref,
+including a reference to an unset target.
+
 Printf numeric operands use byte-oriented C-locale prefix parsing. Invalid suffixes
 retain the converted prefix, report a byte-preserving diagnostic and return status 1;
 range warnings preserve their successful conversion status. Character constants

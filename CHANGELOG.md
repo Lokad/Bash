@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `-v` and `-R` in `[[ … ]]`, `test` and `[` for assigned variables and
+  initialized namerefs. Preserve selector expansion order and byte-valued keys.
+
 - Expand colon-delimited tilde prefixes in assignment values and here-strings.
   Preserve quoting, array element roles and byte-valued paths.
 

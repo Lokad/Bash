@@ -18,6 +18,7 @@ public sealed partial class Evaluation
     /// </summary>
     /// <param name="commandName">The resolved command name.</param>
     /// <param name="words">The completed command name and operands.</param>
+    /// <param name="scope">The active builtin variable bindings.</param>
     /// <param name="negated">Whether to negate the final exit status.</param>
     /// <returns>
     /// The finalized evaluation result.
@@ -25,6 +26,7 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateBuiltinTestAsync(
         string commandName,
         IReadOnlyList<ShellValue> words,
+        ScopedEvaluation scope,
         bool negated)
     {
         var argumentLimit = words.Count;
@@ -46,6 +48,14 @@ public sealed partial class Evaluation
             arguments.Add(words[index]);
 
         var evaluation = TestEvaluation.ParseValues(arguments, _cancellationToken, _state.ErrexitEnabled, Memory);
+        bool? mixed = null;
+        if (evaluation.HasVariablePredicates)
+        {
+            mixed = await AwaitWordExpansionAsync(evaluation.EvaluateVariablePredicatesAsync(scope, TestFileAsync))
+                .ConfigureAwait(false);
+            if (!scope.CanExpand)
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+        }
         if (evaluation.HasParseError)
         {
             using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
@@ -60,6 +70,8 @@ public sealed partial class Evaluation
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
         }
 
+        if (mixed is { } matched)
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(matched ? 0 : 1), negated).ConfigureAwait(false);
         var fileTests = evaluation.CollectFileTests(out var result);
         if (result.HasValue)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.Value ? 0 : 1), negated);
@@ -67,6 +79,9 @@ public sealed partial class Evaluation
         var exitCode = await ExecuteFileTestsForEvaluationAsync(fileTests, evaluation.CompleteFileTests)
             .ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+
+        async Task<bool> TestFileAsync(UnresolvedFileTest file) =>
+            await ExecuteFileTestsForEvaluationAsync([file], results => results[0]).ConfigureAwait(false) == 0;
     }
 
     /// <summary>

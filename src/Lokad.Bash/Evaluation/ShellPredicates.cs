@@ -6,7 +6,10 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Predicate vocabulary shared by the distinct [[ and test/[ grammars.</summary>
 internal static class ShellPredicates
 {
-    internal enum UnaryPredicateKind { StringLengthNonZero, StringLengthZero, OptionEnabled, FilePredicate }
+    internal enum UnaryPredicateKind
+    {
+        StringLengthNonZero, StringLengthZero, OptionEnabled, VariableIsSet, NamerefIsSet, FilePredicate
+    }
     internal enum BinaryPredicateKind
     {
         NumericEqual, NumericNotEqual, NumericLess, NumericLessOrEqual, NumericGreater,
@@ -17,6 +20,7 @@ internal static class ShellPredicates
     internal readonly record struct UnaryPredicate(UnaryPredicateKind Operator, FilePredicateKind FileKind)
     {
         public bool IsFilePredicate => Operator == UnaryPredicateKind.FilePredicate;
+        public bool IsVariablePredicate => Operator is UnaryPredicateKind.VariableIsSet or UnaryPredicateKind.NamerefIsSet;
     }
 
     internal readonly record struct BinaryPredicate(BinaryPredicateKind Operator, FilePredicateKind FileKind)
@@ -34,6 +38,8 @@ internal static class ShellPredicates
             ('-', 'n', '\0') => UnaryPredicateKind.StringLengthNonZero,
             ('-', 'z', '\0') => UnaryPredicateKind.StringLengthZero,
             ('-', 'o', '\0') => UnaryPredicateKind.OptionEnabled,
+            ('-', 'v', '\0') => UnaryPredicateKind.VariableIsSet,
+            ('-', 'R', '\0') => UnaryPredicateKind.NamerefIsSet,
             _ => null
         };
         if (kind.HasValue)
