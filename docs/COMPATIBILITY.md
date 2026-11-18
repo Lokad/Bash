@@ -83,6 +83,9 @@ Source and shell values preserve bytes, including invalid UTF-8 values. Text-onl
 host boundaries validate UTF-8. Only LF terminates a source line; CR is data.
 Locale-quoted words `$"…"` use their original text under the invariant profile.
 They follow the same expansion and quoting rules as ordinary double-quoted words.
+Standalone unquoted braces are words in operand positions, including command
+arguments, loop items, case subjects and patterns, array entries and redirection
+operands. Brace groups require a semicolon or LF before their closing delimiter.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
 An adjacent subshell opener can begin a command substitution, as in
 `$((printf value);)`. A complete `$((…))` arithmetic shape selects arithmetic

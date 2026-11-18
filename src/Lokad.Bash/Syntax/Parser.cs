@@ -720,7 +720,7 @@ public static class Parser
                     break;
                 }
 
-                if (token.TryGetWordToken(out var itemToken))
+                if (tokenizer.TryGetOperandWord(token, out var itemToken))
                 {
                     items.Add(itemToken.Word);
                     tokenizer.NextTokenCore();
@@ -769,7 +769,7 @@ public static class Parser
             return null;
 
         var nameToken = tokenizer.NextTokenCore();
-        if (!nameToken.TryGetWordToken(out var nameTokenWord))
+        if (!tokenizer.TryGetOperandWord(nameToken, out var nameTokenWord))
         {
             tokenizer.RecordError("Expected function name.", tokenizer.Position);
             return null;
@@ -802,7 +802,7 @@ public static class Parser
             return null;
 
         var subjectToken = tokenizer.NextTokenCore();
-        if (!subjectToken.TryGetWordToken(out var subjectWord))
+        if (!tokenizer.TryGetOperandWord(subjectToken, out var subjectWord))
         {
             tokenizer.RecordError("Expected case subject word.", tokenizer.Position);
             return null;
@@ -827,7 +827,7 @@ public static class Parser
             while (true)
             {
                 var patternToken = tokenizer.NextTokenCore();
-                if (!patternToken.TryGetWordToken(out var patternWord))
+                if (!tokenizer.TryGetOperandWord(patternToken, out var patternWord))
                 {
                     tokenizer.RecordError("Expected case pattern.", tokenizer.Position);
                     return null;
@@ -997,7 +997,9 @@ public static class Parser
                     case TokenKind.Newline:
                         continue;
                     case TokenKind.Word:
-                        if (!token.TryGetWordToken(out var wordToken))
+                    case TokenKind.OpenBrace:
+                    case TokenKind.CloseBrace:
+                        if (!tokenizer.TryGetOperandWord(token, out var wordToken))
                         {
                             tokenizer.RecordError("Expected word in array assignment.", tokenizer.Position);
                             return values;
@@ -1061,7 +1063,6 @@ public static class Parser
                     tokenizer.RecordError("Unexpected pipeline operator.", tokenizer.Position);
                     return null;
                 case TokenKind.CloseParen:
-                case TokenKind.CloseBrace:
                     return sawAny
                         ? CreateCommand()
                         : null;
@@ -1079,8 +1080,10 @@ public static class Parser
                     ReadRedirection(tokenizer, token, null, string.Empty, redirections);
                     continue;
                 case TokenKind.Word:
+                case TokenKind.OpenBrace:
+                case TokenKind.CloseBrace:
                     sawAny = true;
-                    if (!token.TryGetWordToken(out var wordToken))
+                    if (!tokenizer.TryGetOperandWord(token, out var wordToken))
                     {
                         tokenizer.RecordError("Expected a word token.", tokenizer.Position);
                         return null;
@@ -1125,7 +1128,7 @@ public static class Parser
                             }
 
                             var suffix = tokenizer.NextTokenCore();
-                            if (!suffix.TryGetWordToken(out var suffixWord) || !tokenizer.IsAtWordBoundary())
+                            if (!tokenizer.TryGetOperandWord(suffix, out var suffixWord) || !tokenizer.IsAtWordBoundary())
                             {
                                 tokenizer.RecordError("Unexpected parenthesized assignment suffix.", suffix.Source.Start.Value);
                                 return null;
@@ -1256,7 +1259,7 @@ public static class Parser
         List<Redirection> redirections)
     {
         var target = tokenizer.NextTokenCore();
-        if (!target.TryGetWordToken(out var targetWord))
+        if (!tokenizer.TryGetOperandWord(target, out var targetWord))
         {
             tokenizer.RecordError("Expected a word after redirection operator.", tokenizer.Position);
             return;

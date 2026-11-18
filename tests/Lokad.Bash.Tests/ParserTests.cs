@@ -611,6 +611,28 @@ public class ParserTests
         Assert.Equal("echo", WordText(body.Words[0]));
     }
 
+    [Fact]
+    public void Parse_GroupDistinguishesUnquotedBraceArgumentsFromDelimiters()
+    {
+        var group = AssertCompoundCommand<GroupCommand>(
+            Assert.Single(Parser.Parse("{ printf '<%s>' { }\\\n; }").Commands));
+        var command = Assert.IsType<SimpleCommand>(group.Body);
+
+        Assert.Equal(["printf", "<%s>", "{", "}"], command.Words.Select(WordText));
+        Assert.All(command.Words.Skip(2), word =>
+            Assert.Equal(WordPartKind.Unquoted, Assert.Single(word.Parts).Kind));
+    }
+
+    [Theory]
+    [InlineData("}")]
+    [InlineData("{ printf value }")]
+    [InlineData("{ printf value };")]
+    [InlineData("{ :; }; }")]
+    public void Parse_GroupStillRequiresStructuralClosingBrace(string source)
+    {
+        Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+    }
+
     [Theory]
     [InlineData("{ ; echo ok; }")]
     [InlineData("( ; echo ok )")]

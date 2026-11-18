@@ -458,6 +458,26 @@ internal sealed class Tokenizer
         _pushback.Push(token);
     }
 
+    /// <summary>Reads a brace token as a literal when the grammar expects a word.</summary>
+    internal bool TryGetOperandWord(Token token, [NotNullWhen(true)] out WordToken? wordToken)
+    {
+        if (token.Kind is TokenKind.OpenBrace or TokenKind.CloseBrace)
+        {
+            if (!TryReserveSyntax())
+            {
+                wordToken = null;
+                return false;
+            }
+
+            // Match the compact storage of an ordinary unquoted part.
+            var literal = ShellSource.FromBytes(_input[token.Source].Bytes.ToArray());
+            var word = new Word([WordPart.FromSource(WordPartKind.Unquoted, literal, _scanContext.SyntaxMemory)]);
+            token = Token.FromWord(word) with { Source = token.Source };
+        }
+
+        return token.TryGetWordToken(out wordToken);
+    }
+
     /// <summary>
     /// Reads a here-document body from the current position until the delimiter line.
     /// </summary>

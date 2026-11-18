@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept standalone braces in word positions, including loop items, case
+  operands and redirections. Preserve brace-group delimiters.
+
 - Preserve literal pathname prefix separators and restrict glob patterns ending
   in a slash to directories. Prepare each literal prefix once for traversal.
 
