@@ -6,6 +6,49 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationGlobTestsEndToEnd
 {
+    [Theory]
+    [InlineData("?", "<7><é><😀><😁>")]
+    [InlineData("??", "<😀x><😁x>")]
+    [InlineData("????", "<????>")]
+    [InlineData("[😀]", "<😀>")]
+    [InlineData("[!a]", "<7><é><😀><😁>")]
+    [InlineData("[😀-😂]", "<😀><😁>")]
+    [InlineData("[😀]*", "<😀><😀[x><😀x>")]
+    [InlineData("[😀[:digit:]]", "<7><😀>")]
+    [InlineData("[[.😀.]]", "<😀>")]
+    [InlineData("[[=😀=]]", "<😀>")]
+    [InlineData("😀'['?", "<😀[x>")]
+    [InlineData("[😀*", "<[😀x>")]
+    public async Task Evaluation_GlobExpansion_CountsSupplementaryCharactersOnce(string pattern, string expected)
+    {
+        var tree = EndToEndHarness.BuildTree([
+            ("/7", ""), ("/é", ""), ("/😀", ""), ("/😁", ""),
+            ("/😀x", ""), ("/😁x", ""), ("/😀[x", ""), ("/[😀x", "")
+        ]);
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' " + pattern, tree: tree);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task Evaluation_GlobExpansion_SelectsSupplementaryDirectoryForFileEffects()
+    {
+        await using var host = EndToEndHarness.BuildTree(
+            ["/dir", "/dir/😀", "/dir/😀x"],
+            [("/dir/😀/é", "initial"), ("/dir/😀x/é", "initial")]);
+        var result = await host.RunAsync(
+            "for file in dir/?/?; do printf selected >\"$file\"; done; printf tail",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("selected", host.ReadFile("/dir/😀/é"));
+        Assert.Equal("initial", host.ReadFile("/dir/😀x/é"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
 
     [Fact]
     public async Task Evaluation_GlobExpansion_ExpandsUnquotedNamerefArrayElementsIndependently()

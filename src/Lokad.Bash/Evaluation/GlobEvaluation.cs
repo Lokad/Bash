@@ -190,8 +190,8 @@ internal sealed class GlobEvaluation
             if (!matchDot && nameSpan[0] == '.')
                 continue;
 
-            if (TextGlobMatcher.MatchText(_currentSegment.AsSpan(), _currentMask.AsSpan(), nameSpan,
-                    _cancellationToken) == GlobMatchResult.Match)
+            if (TextGlobMatcher.MatchesPathComponent(_currentSegment.AsSpan(), _currentMask.AsSpan(), nameSpan,
+                    _cancellationToken))
             {
                 if (!_currentSegmentIsFinal && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
                     continue;

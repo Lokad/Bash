@@ -128,9 +128,10 @@ their ordinary bracket roles. Complete unknown classes have no members.
 Collating symbols `[[.c.]]` and equivalence elements `[[=c=]]` select one unquoted
 matching unit with exact identity, without locale weights or multi-unit symbols.
 Malformed/quoted atom spellings retain their distinct literal-fallback rules.
-The byte APIs use the operand's scalar/byte profile. Public text matcher overloads
-and current pathname matching use UTF-16 code units; supplementary characters can
-therefore differ from shell-word matching in pathname patterns.
+The byte APIs use the operand's scalar/byte profile. Pathname matching treats a
+valid UTF-16 surrogate pair as one character within each component. Emitted paths
+are sorted by ordinal UTF-16 order. Public text matcher overloads count UTF-16
+code units.
 
 Replacement chooses the leftmost, longest match. A global replacement applies
 the character profile to each remaining operand: after consuming malformed bytes

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Match supplementary Unicode characters as single characters in pathname
+  wildcards and bracket expressions.
+
 - Recognize command substitutions that begin with an adjacent subshell opener.
   Complete arithmetic expansions retain their usual precedence and diagnostics.
 

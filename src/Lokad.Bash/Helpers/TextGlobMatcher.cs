@@ -94,8 +94,18 @@ public static class TextGlobMatcher
     public static GlobMatchResult MatchText(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
         CancellationToken cancellationToken) =>
-        Match(new PatternInput(new GlobInput(pattern), mask, default, PatternTraversal.Forward),
-            new GlobInput(text), requireEnd: true, shortestPrefix: false, cancellationToken, out _, out _);
+        MatchText(pattern, in mask, text, scalarCharacters: false, cancellationToken);
+
+    internal static bool MatchesPathComponent(
+        ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> name,
+        CancellationToken cancellationToken) =>
+        MatchText(pattern, in mask, name, scalarCharacters: true, cancellationToken) == GlobMatchResult.Match;
+
+    private static GlobMatchResult MatchText(
+        ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
+        bool scalarCharacters, CancellationToken cancellationToken) =>
+        Match(new PatternInput(new GlobInput(pattern, scalarCharacters), mask, default, PatternTraversal.Forward),
+            new GlobInput(text, scalarCharacters), requireEnd: true, shortestPrefix: false, cancellationToken, out _, out _);
 
     private static GlobMatchResult Match(PatternInput pattern, GlobInput text, bool requireEnd,
         bool shortestPrefix, CancellationToken cancellationToken, out int start, out int length)
@@ -427,13 +437,15 @@ public static class TextGlobMatcher
         private readonly ReadOnlySpan<byte> _bytes;
         private readonly bool _utf8;
         private readonly bool _byteCharacters;
+        private readonly bool _scalarText;
         private readonly bool _reverse;
-        public GlobInput(ReadOnlySpan<char> text)
+        public GlobInput(ReadOnlySpan<char> text, bool scalarCharacters)
         {
             _text = text;
             _bytes = default;
             _utf8 = false;
             _byteCharacters = false;
+            _scalarText = scalarCharacters;
             _reverse = false;
         }
         public GlobInput(ReadOnlySpan<byte> bytes, bool byteCharacters, bool reverse)
@@ -442,12 +454,19 @@ public static class TextGlobMatcher
             _text = default;
             _utf8 = true;
             _byteCharacters = byteCharacters;
+            _scalarText = false;
             _reverse = reverse;
         }
         public int Length => _utf8 ? _bytes.Length : _text.Length;
+
+        // Advance over pairs while keeping indices in the original UTF-16 mask coordinates.
+        private bool HasSurrogatePair(int index) =>
+            _scalarText && index + 1 < _text.Length && char.IsSurrogatePair(_text[index], _text[index + 1]);
+
         public int Width(int index)
         {
-            if (!_utf8 || _byteCharacters) return 1;
+            if (!_utf8) return HasSurrogatePair(index) ? 2 : 1;
+            if (_byteCharacters) return 1;
             if (!_reverse) return Utf8Text.FirstCharacterLength(_bytes[index..]);
             return Rune.DecodeLastFromUtf8(_bytes[..(_bytes.Length - index)], out _, out var width) == OperationStatus.Done ? width : 1;
         }
@@ -455,7 +474,8 @@ public static class TextGlobMatcher
         {
             get
             {
-                if (!_utf8) return _text[index];
+                if (!_utf8)
+                    return HasSurrogatePair(index) ? char.ConvertToUtf32(_text[index], _text[index + 1]) : _text[index];
                 if (_byteCharacters) return _bytes[_reverse ? _bytes.Length - index - 1 : index];
                 var status = _reverse
                     ? Rune.DecodeLastFromUtf8(_bytes[..(_bytes.Length - index)], out var rune, out _)
