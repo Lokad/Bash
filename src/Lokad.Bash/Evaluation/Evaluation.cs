@@ -944,7 +944,6 @@ public sealed partial class Evaluation : IFileTester
         // Expand once in the caller scope before redirections and temporary bindings.
         IReadOnlyList<string> arguments = [];
         IReadOnlyList<ShellValue> byteOperands = [];
-        string? sourcePath = null;
         if (preparation is PreparedCommand.Executable command)
         {
             if (command.Resolution is not CommandResolution.EvaluatorBuiltin
@@ -959,19 +958,17 @@ public sealed partial class Evaluation : IFileTester
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
                 var operands = new List<ShellValue>();
-                if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo and not BuiltinKind.Hash and not BuiltinKind.Source)
+                if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo and not BuiltinKind.Hash)
                     operands.Add(ShellValue.FromText(command.CommandName));
                 for (var index = 1; (declaration == null || kind is not (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)) && index < command.SimpleCommand.Words.Count; index++)
                 {
-                    if (kind == BuiltinKind.Source && index == 1)
-                        sourcePath = await ExpandWordAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false);
-                    else if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
+                    if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
                         || kind == BuiltinKind.Getopts && index <= 2)
                         operands.Add(await ExpandWordValueAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false));
                     else
                     {
                         var expanded = await ExpandToWordsAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false);
-                        if (kind == BuiltinKind.Cd)
+                        if (kind is BuiltinKind.Cd or BuiltinKind.Source)
                             Memory.Charge(checked(64L * expanded.Count)); // Operand capacity and resize overlap.
                         operands.AddRange(expanded);
                     }
@@ -1258,12 +1255,12 @@ public sealed partial class Evaluation : IFileTester
                             commandVars, bindings, builtinScope, false)).ConfigureAwait(false),
                     BuiltinKind.Set => await EvaluateBuiltinSetAsync(byteOperands, commandVars, false).ConfigureAwait(false),
                     BuiltinKind.Unset => await AwaitWordExpansionAsync(EvaluateBuiltinUnsetAsync(byteOperands, commandVars, builtinScope, bindings, false)).ConfigureAwait(false),
-                    BuiltinKind.Eval => await EvaluateBuiltinEvalAsync(byteOperands, builtinScope, commandVars, false).ConfigureAwait(false),
+                    BuiltinKind.Eval or BuiltinKind.Source => await EvaluateBuiltinScriptingAsync(evaluatorBuiltin.Kind,
+                        commandName, byteOperands, builtinScope with { Variables = commandVars }, false).ConfigureAwait(false),
                     BuiltinKind.Trap => await AwaitWordExpansionAsync(EvaluateBuiltinTrapAsync(byteOperands, builtinScope)).ConfigureAwait(false),
                     BuiltinKind.Return => await AwaitWordExpansionAsync(
                         EvaluateBuiltinReturnAsync(byteOperands, builtinScope, false)).ConfigureAwait(false),
                     BuiltinKind.Let => await EvaluateBuiltinLetAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
-                    BuiltinKind.Source => await EvaluateBuiltinSourceAsync(sourcePath, byteOperands, builtinScope, commandVars, false).ConfigureAwait(false),
                     BuiltinKind.Getopts => await EvaluateBuiltinGetoptsAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),

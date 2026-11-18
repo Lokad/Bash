@@ -10,6 +10,7 @@ public sealed class ByteSourceEvalTests
     // Bash 5.2.21/UTF-8; the expansion-error fixture omits only the source location prefix.
     [Theory]
     [InlineData("eval \"printf '%s' '\"$'\\377'\"'\"", 0, "FF", "")]
+    [InlineData("eval -- \"printf '%s' '\"$'\\377'\"'\"", 0, "FF", "")]
     [InlineData("set -- \"printf '%s'\" \"'\" $'\\377' \"'\"; eval \"$@\"", 0, "20FF20", "")]
     [InlineData("args=(\"printf '%s'\" \"'\" $'\\377' \"'\"); eval \"${args[@]}\"", 0, "20FF20", "")]
     [InlineData("set -- \"printf '%s' '\" '' $'\\377' \"'\"; eval \"$@\"", 0, "2020FF20", "")]
@@ -46,6 +47,21 @@ public sealed class ByteSourceEvalTests
     }
 
     [Fact]
+    public async Task EvalInvalidOptionDiagnosesTheFirstOptionByteWithoutDecodingIt()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("eval -$'\\377'x 'printf wrong'", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        var diagnostic = host.StandardError.Content.Span;
+        var prefix = "eval: -"u8;
+        Assert.True(diagnostic.StartsWith(prefix));
+        Assert.Equal(0xff, diagnostic[prefix.Length]);
+        Assert.True(diagnostic[(prefix.Length + 1)..].StartsWith(": invalid option\n"u8));
+    }
+
+    [Fact]
     public async Task EvalExpandsArgumentPathnamesBeforeParsingTheResult()
     {
         var tree = EndToEndHarness.BuildTree([("/printf", "")]);
@@ -64,7 +80,7 @@ public sealed class ByteSourceEvalTests
         var tree = EndToEndHarness.BuildTree([]);
         var host = EndToEndHarness.WithMemoryBudget(tree, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes));
         var script = "printf \"printf '%%s' '\\377' \\\"\\$1\\\"; value=\\\"\\$1\\\"\" > /script; "
-            + $"set -- outer; {builtin} /script $'\\376'; printf ':%s:%s' \"$1\" \"$value\"";
+            + $"set -- outer; {builtin} -- /script $'\\376'; printf ':%s:%s' \"$1\" \"$value\"";
         var result = await EndToEndHarness.RunScriptAsync(script, host);
 
         Assert.Equal(0, result.ExitCode);

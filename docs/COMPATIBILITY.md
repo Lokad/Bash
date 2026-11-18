@@ -223,6 +223,15 @@ The public script runner, `source`, `eval` and reached EXIT actions execute comp
 they are parsed. Earlier units retain their effects before later syntax failure;
 the failing unit executes no partial command list. Explicit whole-script parsing
 remains available for callers that require validation before execution.
+
+`eval`, `source` and `.` consume one leading `--` from their expanded fields.
+Other multi-byte dash options report status 2. A leading `--help` prints the
+builtin's usage and returns 2. Later fields are ordinary operands.
+`eval` joins its remaining fields with spaces and succeeds on empty input.
+`source` and `.` require a filename and use any following fields as positional
+parameters for that file. The filename must be valid UTF-8 for the host path
+boundary. Script content and positional parameters retain their byte values.
+
 EXIT actions preserve the triggering status on ordinary completion and parse failure
 without errexit. Explicit return/exit and errexit failures can replace that status.
 Arithmetic/default expansion failures end their unit; assignment-target and parameter

@@ -29,49 +29,78 @@ public sealed partial class Evaluation
     }
 
     /// <summary>
-    /// Handles the <c>source</c>/<c>.</c> builtin by evaluating a script file in the current context.
+    /// Selects the script operands of the resolved builtin before parsing or opening any source.
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
-    private async Task<EvaluationResult> EvaluateBuiltinSourceAsync(
-        string? path,
-        IReadOnlyList<ShellValue> arguments,
-        ScopedEvaluation scope,
-        Variables commandVars,
-        bool negated)
-    {
-        if (path is null)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
-
-        if (arguments.Count == 0)
-        {
-            var resultWithoutArguments = await ExecuteSourceAsync(path, scope with { Variables = commandVars }).ConfigureAwait(false);
-            return ApplyNegation(resultWithoutArguments, negated);
-        }
-
-        Memory.Charge(checked(commandVars.PositionalMemoryBytes + 32L * arguments.Count));
-        using var positionalParametersScope = commandVars.EnterPositionalParametersScope(
-            arguments,
-            PositionalParametersRestorePolicy.UnlessReplaced);
-        var result = await ExecuteSourceAsync(path, scope with { Variables = commandVars }).ConfigureAwait(false);
-
-        return ApplyNegation(result, negated);
-    }
-
-    /// <summary>
-    /// Handles the <c>eval</c> builtin by parsing and executing the concatenated arguments.
-    /// </summary>
-    /// <returns>The finalized evaluation result.</returns>
-    private async Task<EvaluationResult> EvaluateBuiltinEvalAsync(
+    private async Task<EvaluationResult> EvaluateBuiltinScriptingAsync(
+        BuiltinKind kind,
+        string commandName,
         IReadOnlyList<ShellValue> words,
         ScopedEvaluation scope,
-        Variables commandVars,
         bool negated)
     {
-        if (words.Count == 1)
-            return ApplyNegation(EvaluationResult.FromExitCode(0), negated);
+        var first = 1;
+        var command = words[0];
+        if (first < words.Count)
+        {
+            var option = words[first].Bytes;
+            if (option.Span.SequenceEqual("--"u8))
+                first++;
+            else if (option.Span.SequenceEqual("--help"u8))
+            {
+                var documentation = BuiltinDocumentation.For(kind);
+                var output = Utf8Text.Encode(commandName + ": " + documentation.Synopsis(commandName)
+                    + "\n    " + documentation.Description + "\n");
+                var write = await ExecuteWriteAsync(GetStdOutDescriptor(), output).ConfigureAwait(false);
+                await ReportBuiltinWriteFailureAsync(command, write).ConfigureAwait(false);
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(write.IsError ? 1 : 2), negated)
+                    .ConfigureAwait(false);
+            }
+            else if (option.Span is [(byte)'-', _, ..])
+            {
+                using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
+                diagnostic.Append(option[..2]).Append(": invalid option"u8);
+                return await UsageErrorAsync(ShellValue.FromBytes(diagnostic.ToMemory())).ConfigureAwait(false);
+            }
+        }
 
-        return ApplyNegation(await EvaluateCopiedCommandUnitsAsync(words, 1,
-            scope with { Variables = commandVars }, ScriptExecutionKind.Eval).ConfigureAwait(false), negated);
+        if (kind == BuiltinKind.Eval)
+        {
+            if (first == words.Count)
+                return ApplyNegation(EvaluationResult.FromExitCode(0), negated);
+
+            var result = await EvaluateCopiedCommandUnitsAsync(words, first, scope, ScriptExecutionKind.Eval)
+                .ConfigureAwait(false);
+            return ApplyNegation(result, negated);
+        }
+
+        if (first == words.Count)
+            return await UsageErrorAsync(ShellValue.FromText("filename argument required")).ConfigureAwait(false);
+        if (words[first].IsEmpty)
+        {
+            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("empty filename")).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+        }
+
+        var path = await DecodeExpandedValueAsync(words[first]).ConfigureAwait(false);
+        if (HasPendingExpansionError)
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+
+        var argumentStart = first + 1;
+        var argumentCount = words.Count - argumentStart;
+        if (argumentCount > 0)
+            Memory.Charge(checked(scope.Variables.PositionalMemoryBytes + 32L * argumentCount));
+        using var positionalScope = argumentCount == 0 ? null : scope.Variables.EnterPositionalParametersScope(
+            words, argumentStart, PositionalParametersRestorePolicy.UnlessReplaced);
+        return ApplyNegation(await ExecuteSourceAsync(path, scope).ConfigureAwait(false), negated);
+
+        async Task<EvaluationResult> UsageErrorAsync(ShellValue message)
+        {
+            await ReportExpansionDiagnosticAsync(command, message).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("usage: "
+                + BuiltinDocumentation.For(kind).Synopsis(commandName))).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+        }
     }
 
     private enum ScriptExecutionKind { Root, Source, Eval, Trap }

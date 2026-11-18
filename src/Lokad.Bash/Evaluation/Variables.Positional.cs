@@ -40,7 +40,12 @@ public sealed partial class Variables
 
     internal PositionalParametersScope EnterPositionalParametersScope(
         IReadOnlyList<ShellValue> values, PositionalParametersRestorePolicy restorePolicy) =>
-        new(this, values, restorePolicy);
+        EnterPositionalParametersScope(values, 0, restorePolicy);
+
+    /// <summary>Saves the caller frame and copies only the selected argument tail.</summary>
+    internal PositionalParametersScope EnterPositionalParametersScope(
+        IReadOnlyList<ShellValue> values, int start, PositionalParametersRestorePolicy restorePolicy) =>
+        new(this, values, start, restorePolicy);
 
     /// <summary>Drops leading entries without moving surviving values or changing frame identity.</summary>
     internal bool TryShiftPositionalParameters(int count)
@@ -128,11 +133,11 @@ public sealed partial class Variables
         private bool _isDisposed;
 
         internal PositionalParametersScope(
-            Variables variables, IReadOnlyList<ShellValue> values, PositionalParametersRestorePolicy restorePolicy)
+            Variables variables, IReadOnlyList<ShellValue> values, int start, PositionalParametersRestorePolicy restorePolicy)
         {
             _variables = variables;
             _saved = variables._positional;
-            _entered = new PositionalParametersFrame(values, 0);
+            _entered = new PositionalParametersFrame(values, start);
             _restorePolicy = restorePolicy;
             variables._positional = _entered;
         }

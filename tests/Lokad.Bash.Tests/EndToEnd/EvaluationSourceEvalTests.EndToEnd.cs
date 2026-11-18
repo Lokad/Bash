@@ -147,18 +147,49 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
-    public async Task Evaluation_SourceBuiltin_MissingArgumentReturnsFailure()
+    [Theory]
+    [InlineData("source", "source")]
+    [InlineData(".", ".")]
+    [InlineData("source --", "source")]
+    public async Task Evaluation_SourceBuiltin_RequiresFilenameAfterOptionParsing(string script, string name)
     {
-        // This test verifies that "source" with no argument fails.
-        // The script "source" must emit no output and return exit code 1.
-        // If missing arguments are not validated, the exit code would be 0.
-        var script = @"source";
-        var result = await EvaluationTestHelper.RunAsync(script);
+        var tree = EndToEndHarness.BuildTree([("/--", "printf decoy\n")]);
+        var result = await EvaluationTestHelper.RunAsync(script, tree: tree);
 
-        Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.StartsWith(name + ": filename argument required\n", result.StdErr);
+        Assert.Equal(2, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("set -- -- ./unit inner; source \"$@\"; printf ':%s' \"$1\"", "<inner>:--")]
+    [InlineData("fields='-- ./unit inner'; . $fields", "<inner>")]
+    [InlineData("set -- outer; source -- ./unit; printf ':%s' \"$1\"", "<outer>:outer")]
+    [InlineData("set -- outer; . -- ./unit --; printf ':%s' \"$1\"", "<-->:outer")]
+    [InlineData("source -- -- tail", "<tail>")]
+    public async Task Evaluation_SourceBuiltin_SelectsFilenameAndRemainingFields(string script, string expected)
+    {
+        const string Body = "printf '<%s>' \"$@\"\n";
+        var tree = EndToEndHarness.BuildTree([("/unit", Body), ("/--", Body)]);
+        var result = await EvaluationTestHelper.RunAsync(script, tree: tree);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task Evaluation_SourceBuiltin_InvalidOptionReportsThroughRedirection()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/unit", ": >selected\n")]);
+        var result = await host.RunAsync(". -x ./unit 2>diagnostic", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.StartsWith(".: -x: invalid option\n", host.ReadFile("/diagnostic"));
+        Assert.DoesNotContain("selected", host.CaptureEntries().Keys);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Fact]
@@ -186,6 +217,30 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
 
         Assert.Equal(string.Empty, result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("eval --", "")]
+    [InlineData("eval -- 'printf %s' yes", "yes")]
+    [InlineData("eval 'printf %s' --", "--")]
+    [InlineData("eval(){ printf '<%s>' \"$@\"; }; eval -- tail", "<--><tail>")]
+    public async Task Evaluation_EvalBuiltin_ConsumesOnlyItsLeadingTerminator(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task Evaluation_EvalBuiltin_RejectsOptionBeforeRunningJoinedSource()
+    {
+        var result = await EvaluationTestHelper.RunAsync("f(){ printf ran; }; eval -xyz f; printf '<%s>' \"$?\"");
+
+        Assert.Equal("<2>", result.StdOut);
+        Assert.StartsWith("eval: -x: invalid option\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

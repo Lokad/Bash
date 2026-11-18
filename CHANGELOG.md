@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Honor the leading `--` delimiter in `eval`, `source` and `.`. Validate options
+  after field expansion and pass the selected file's remaining fields as arguments.
+
 - Support `-v` and `-R` in `[[ … ]]`, `test` and `[` for assigned variables and
   initialized namerefs. Preserve selector expansion order and byte-valued keys.
 

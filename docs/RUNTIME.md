@@ -320,6 +320,10 @@ Keep that scope alive as long as retained evaluator data is used.
 through the same evaluator. A newline completes a unit only after its compound
 syntax, continuations, quoting and here-documents are complete. Later syntax errors
 retain earlier units' effects; an invalid unit executes none of its commands.
+`source` and `eval` select operands from completed byte fields after command
+resolution. They validate leading options before performing a file lookup or
+allocating copied script source. `source` decodes its selected filename and
+copies its positional argument tail directly into the callee frame.
 Explicit `Parser.Parse`/`Parser.TryParse` and prepared `Evaluation` execution retain
 whole-script validation. Recoverable arithmetic/assignment expansion failures end
 their current unit; unrecoverable failures and explicit exit stop the script.

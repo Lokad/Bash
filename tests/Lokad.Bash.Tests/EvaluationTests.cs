@@ -1039,13 +1039,23 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_SourceBuiltin_MissingArgumentReturnsFailure()
+    public async Task Evaluation_SourceBuiltin_UsageErrorDoesNotOpenAFile()
     {
-        var script = Parser.Parse(Utf8("source"));
+        var script = Parser.Parse(Utf8("source --"));
         var state = new Eval(script);
 
+        var error = await NextWriteAsync(state);
+        Assert.Equal(2, error.FileDescriptor.Id);
+        Assert.Equal("source: filename argument required\n", Text(error.Content));
+        error.SetResult(DescriptorWriteResult.Open);
+
+        var usage = await NextWriteAsync(state);
+        Assert.Equal(2, usage.FileDescriptor.Id);
+        Assert.Equal("source: usage: source [--] filename [arguments]\n", Text(usage.Content));
+        usage.SetResult(DescriptorWriteResult.Open);
+
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(2, state.LastExitCode);
     }
 
     [Fact]
