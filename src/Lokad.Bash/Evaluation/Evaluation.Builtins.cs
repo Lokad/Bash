@@ -131,7 +131,7 @@ public sealed partial class Evaluation
             if (outputMode.HasValue)
             {
                 var operands = RemainingCommand(next).Words;
-                var names = new List<ShellValue>(operands.Count);
+                var names = new List<ShellValue>();
                 foreach (var word in operands)
                 {
                     var firstName = names.Count;
@@ -139,10 +139,10 @@ public sealed partial class Evaluation
                     {
                         // Option scanning may already have captured this field; retain it without another byte copy.
                         Memory.Charge(256);
-                        names.Add(literal.Value);
+                        AddOperand(names, literal.Value);
                     }
                     else
-                        names.AddRange(await ExpandToWordsAsync(word, scope).ConfigureAwait(false));
+                        await AppendOperandValuesAsync(word, scope, names).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         break;
                     // Reserve decoding before later operand effects; malformed bytes need no text copy.
@@ -232,8 +232,9 @@ public sealed partial class Evaluation
 
         SimpleCommand RemainingCommand(ShellValue? first)
         {
-            var words = new List<Word>((first.HasValue ? 1 : 0)
-                + fields.Count - fieldIndex + simpleCommand.Words.Count - wordIndex);
+            var words = new List<Word>();
+            PrepareOperandCapacity(words, checked((first.HasValue ? 1 : 0)
+                + fields.Count - fieldIndex + simpleCommand.Words.Count - wordIndex), Memory);
             if (first is { } value)
                 words.Add(new Word([WordPart.FromValue(WordPartKind.SingleQuoted, value)]));
             for (var index = fieldIndex; index < fields.Count; index++)

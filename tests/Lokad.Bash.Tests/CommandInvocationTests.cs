@@ -442,6 +442,54 @@ public sealed class CommandInvocationTests
         Assert.Equal(0, budget.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("inspect", 4096, 96, true)]
+    [InlineData("hash", 4096, 96, true)]
+    [InlineData("inspect", 2048, 96, false)]
+    [InlineData("inspect", 4096, 256, false)]
+    [InlineData("hash", 4096, 256, false)]
+    public async Task CommandOperandsAdmitTheirBackingBeforeUse(string command, int count, int limitKiB, bool refuse)
+    {
+        var state = new ShellEvaluation(Parser.Parse(command + " " + string.Join(" ", Enumerable.Repeat("synthetic", count))));
+        var budget = new MemoryGovernor(limitKiB * 1024L);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
+
+        var step = await state.GetNextStep();
+        var workspace = state.Memory.Workspace.Bytes;
+        long backingBytes = 0;
+        if (step is RunCommand run)
+        {
+            var arguments = Assert.IsType<List<ShellValue>>(run.Command.Arguments);
+            Assert.Equal(count, arguments.Count);
+            Assert.All(arguments, argument => Assert.Equal("synthetic", argument.ToUtf8String()));
+            backingBytes = (long)arguments.Capacity * Unsafe.SizeOf<ShellValue>();
+            run.SetResult(new CommandExecutionResult.Completed(0));
+        }
+        else if (step is WriteOperation diagnostic)
+        {
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Contains("shared memory budget exhausted", Encoding.UTF8.GetString(diagnostic.Content.Span), StringComparison.Ordinal);
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+        }
+        if (step != null)
+            Assert.Null(await state.GetNextStep());
+
+        Assert.True(refuse == (step is WriteOperation),
+            $"Observed {step?.GetType().Name ?? "completion"} with {workspace} B of workspace and {backingBytes} B of operand backing.");
+        if (refuse || command == "hash")
+            Assert.Equal(1, state.LastExitCode);
+        else
+        {
+            Assert.IsType<RunCommand>(step);
+            Assert.Equal(0, state.LastExitCode);
+            Assert.True(workspace >= backingBytes, $"Operand backing held {backingBytes} B with only {workspace} B of workspace.");
+        }
+        Assert.InRange(budget.ReservedBytes, 1, 4096);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
     [Fact]
     public async Task InheritedEvaluationsKeepCapturedMappingsPrivate()
     {
