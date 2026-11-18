@@ -67,6 +67,11 @@ updates existing sparse positions in place and retains compact copies of new
 values. Repeated writes can reclaim those copies as entries are overwritten.
 A failed or canceled read leaves the prior array intact.
 
+`read -a` validates the array destination after consuming its logical record.
+It shares the field scanner with scalar `read` and publishes all split fields
+in one admitted replacement. Array destinations follow whole-name namerefs.
+Temporary command bindings remain in effect during the array assignment.
+
 Function-call prefixes retain temporary-binding provenance through nested calls.
 A first local declaration inherits a visible temporary value; a prefix on the
 declaration command itself retains its distinct lifetime. Unsetting a temporary

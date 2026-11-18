@@ -40,7 +40,7 @@ public sealed partial class Evaluation
         memory?.Dispose();
     }
 
-    /// <summary>Reads one logical record, then selects and writes each destination in operand order.</summary>
+    /// <summary>Reads one logical record and assigns an array or a list of scalar destinations.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinReadAsync(
         IReadOnlyList<ShellValue> words, ScopedEvaluation scope, Variables.CommandBindings? bindings, bool negated)
     {
@@ -51,6 +51,7 @@ public sealed partial class Evaluation
         var delimiter = (byte)'\n';
         var inputNumber = LogicalDescriptor.StdIn;
         var inputDescriptor = GetStdInDescriptor();
+        ShellValue? arrayName = null;
         while (argumentIndex < words.Count)
         {
             var option = words[argumentIndex].Bytes;
@@ -69,7 +70,7 @@ public sealed partial class Evaluation
                     continue;
                 }
                 var flag = option.Span[index];
-                if (flag is not ((byte)'u' or (byte)'d'))
+                if (flag is not ((byte)'u' or (byte)'d' or (byte)'a'))
                     return await FailAsync(
                         ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append("-"u8).Append(option.Slice(index, 1))
                             .Append(Utf8Text.Encode(": invalid option\n" + Usage())).ToMemory()), 2).ConfigureAwait(false);
@@ -86,6 +87,11 @@ public sealed partial class Evaluation
                 if (flag == (byte)'d')
                 {
                     delimiter = operand.Bytes.IsEmpty ? (byte)0 : operand.Bytes.Span[0];
+                    break;
+                }
+                if (flag == (byte)'a')
+                {
+                    arrayName = operand;
                     break;
                 }
 
@@ -110,10 +116,11 @@ public sealed partial class Evaluation
             argumentIndex++;
         }
 
-        var implicitReply = argumentIndex == words.Count;
-        var fieldCount = implicitReply ? 1 : words.Count - argumentIndex;
-        var firstName = implicitReply ? ShellValue.FromText("REPLY") : words[argumentIndex];
-        if (!TryParseTarget(firstName, out var firstReference))
+        var implicitReply = arrayName == null && argumentIndex == words.Count;
+        var fieldCount = arrayName.HasValue ? 0 : implicitReply ? 1 : words.Count - argumentIndex;
+        var firstName = arrayName ?? (implicitReply ? ShellValue.FromText("REPLY") : words[argumentIndex]);
+        VariableReference firstReference = default;
+        if (arrayName == null && !TryParseTarget(firstName, out firstReference))
             return await InvalidTargetAsync(firstName).ConfigureAwait(false);
 
         var memory = _readWorkspace ??= new ReadWorkspace(Memory.Budget);
@@ -127,21 +134,45 @@ public sealed partial class Evaluation
             if (input.Failed)
                 return await FinishAsync(input.ExitCode).ConfigureAwait(false);
             exitCode = input.ExitCode;
+            IndexedInputTarget? arrayTarget = null;
+            var fieldMode = implicitReply ? ReadFieldMode.PreserveInput : ReadFieldMode.Split;
+            if (arrayName is { } destination)
+            {
+                // Bash consumes the record before checking an array destination.
+                var (target, status) = await SelectIndexedInputTargetAsync(
+                    words[0], destination, scope.Variables, warn: !GetStdErrDescriptor().IsClosed).ConfigureAwait(false);
+                if (target == null)
+                    return await FinishAsync(status == 0 ? exitCode : status).ConfigureAwait(false);
+                arrayTarget = target;
+                fieldMode = ReadFieldMode.SplitAll;
+            }
+
             var fields = ReadFieldSplitter.Split(input.Content, fieldCount, new ReadBuiltinOptions(
-                FieldSeparators.FromVariables(scope.Variables), backslashMode,
-                implicitReply ? ReadFieldMode.PreserveInput : ReadFieldMode.Split), memory.FieldListMemory, memory.DecodedFieldMemory,
+                FieldSeparators.FromVariables(scope.Variables), backslashMode, fieldMode),
+                memory.FieldListMemory, memory.DecodedFieldMemory,
                 scope.Variables, Memory, _cancellationToken);
+            if (arrayTarget is { } array)
+            {
+                Memory.Charge((long)fields.Count * IndexedArray.ElementMemoryBytes);
+                for (var index = 0; index < fields.Count; index++)
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    fields[index] = RetainField(fields[index]);
+                }
+                var replacement = IndexedArray.FromSequential(fields);
+                _cancellationToken.ThrowIfCancellationRequested();
+                array.PrepareForPublication(scope.Variables);
+                if (!scope.Variables.TryAssignResolvedIndexedArray(array.Name, replacement))
+                    exitCode = 1;
+                return await FinishAsync(exitCode).ConfigureAwait(false);
+            }
             for (var index = 0; index < fieldCount; index++)
             {
                 var name = implicitReply ? firstName : words[argumentIndex + index];
                 var reference = firstReference;
                 if (index != 0 && !TryParseTarget(name, out reference))
                     return await InvalidTargetAsync(name).ConfigureAwait(false);
-                // Each retained field owns a compact copy. Command scratch covers publication;
-                // the variable estimate keeps accepted fields charged after the command ends.
-                Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(fields[index]));
-                var copy = fields[index].Bytes.ToArray();
-                var assignment = await AssignBuiltinAsync(reference, ShellValue.FromBytes(copy), scope,
+                var assignment = await AssignBuiltinAsync(reference, RetainField(fields[index]), scope,
                     bindings, BuiltinAssignmentKind.Read, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
@@ -166,6 +197,13 @@ public sealed partial class Evaluation
                 ReleaseReadWorkspace();
         }
         return await FinishAsync(exitCode).ConfigureAwait(false);
+
+        ShellValue RetainField(ShellValue value)
+        {
+            // Command scratch covers publication; the variable estimate keeps accepted values charged.
+            Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
+            return value.IsEmpty ? ShellValue.Empty : ShellValue.FromBytes(value.Bytes.ToArray());
+        }
 
         Task ReportInputRefusalAsync() => ReportExpansionDiagnosticAsync(ShellValue.FromText("read"),
             ShellValue.FromText("shared memory budget exhausted"));
@@ -205,8 +243,10 @@ public sealed partial class Evaluation
                     ReadResult result;
                     try
                     {
-                        result = await AwaitOperationAsync(ReadLineOperation.AsTask(PublishOperation,
-                            inputDescriptor, 1, destinationBudget: null, reusableLine: physicalLine)).ConfigureAwait(false);
+                        _cancellationToken.ThrowIfCancellationRequested();
+                        result = await ReadLineOperation.AsTask(PublishOperation,
+                            inputDescriptor, 1, destinationBudget: null, reusableLine: physicalLine).ConfigureAwait(false);
+                        _cancellationToken.ThrowIfCancellationRequested();
                     }
                     catch (ByteMemoryBuilder.LimitExceededException)
                     {
@@ -276,10 +316,12 @@ public sealed partial class Evaluation
                 var status = 1;
                 while (true)
                 {
+                    _cancellationToken.ThrowIfCancellationRequested();
                     memory.RecordMemory.Resize(0);
                     var completion = new TaskCompletionSource<ReadRecordResult>(TaskCreationOptions.RunContinuationsAsynchronously);
                     PublishOperation(new ReadRecordOperation(completion, inputDescriptor, delimiter, remaining, memory.RecordMemory));
-                    var result = await AwaitOperationAsync(completion.Task).ConfigureAwait(false);
+                    var result = await completion.Task.ConfigureAwait(false);
+                    _cancellationToken.ThrowIfCancellationRequested();
                     if (result.Record is { ExceedsLimit: true })
                         return await RejectInputAsync().ConfigureAwait(false);
                     if (result.Failure.Error is { } error)

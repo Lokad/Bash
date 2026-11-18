@@ -18,4 +18,5 @@ internal enum ReadFieldMode
 {
     PreserveInput,
     Split,
+    SplitAll,
 }

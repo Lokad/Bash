@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `read -a array` to replace an indexed array with all fields from
+  one logical record.
+
 - Support record limits and sparse array origins in `mapfile` and `readarray`
   through `-n count` and `-O origin`.
 

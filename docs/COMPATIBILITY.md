@@ -26,6 +26,11 @@ starting at the supplied index and preserves the other entries. Both operands
 accept unsigned 32-bit decimal values. Destination indices continue from zero
 after index 4294967295.
 
+`read -a array` replaces an indexed array with all fields from one logical
+record using IFS and the ordinary delimiter and escape rules. It assigns an
+empty array for a record with no fields. At EOF it publishes fields
+from the partial record, or an empty array, and returns failure.
+
 `$(<file)` and its backtick form read a single input-file redirection on
 descriptor zero. Filename expansion runs in the caller. The result removes
 NUL bytes with a diagnostic and strips trailing LF bytes. CR is preserved.

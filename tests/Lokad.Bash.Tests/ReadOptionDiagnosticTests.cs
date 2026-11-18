@@ -5,6 +5,19 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ReadOptionDiagnosticTests
 {
+    [Fact]
+    public async Task MissingReadArrayOperandIsAnOptionErrorBeforeInput()
+    {
+        var result = await EndToEndHarness.RunScriptAsync(
+            "{ read -ra; printf '<%s>' \"$?\"; read next; printf '<%s>' \"$next\"; } <<< data",
+            EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2><data>", result.StdOut);
+        Assert.Equal("read: -a: option requires an argument\nread: usage: read [-r] [-a array] [-d delim] [-u fd] [name ...]\n",
+            result.StdErr);
+    }
+
     // Recorded error-byte/status/effect contracts; usage lists only supported options.
     [Theory]
     [InlineData("read -z value <<< data; printf '<%s><%s>' \"$?\" \"${value-missing}\"", "3C323E3C6D697373696E673E", "7A")]
@@ -23,7 +36,7 @@ public sealed class ReadOptionDiagnosticTests
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
         byte[] diagnostic = [.. "read: -"u8, .. Convert.FromHexString(optionHex),
-            .. ": invalid option\nread: usage: read [-r] [-d delim] [-u fd] [name ...]\n"u8];
+            .. ": invalid option\nread: usage: read [-r] [-a array] [-d delim] [-u fd] [name ...]\n"u8];
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(Convert.FromHexString(outputHex), result.Host.StandardOutput.Content.ToArray());

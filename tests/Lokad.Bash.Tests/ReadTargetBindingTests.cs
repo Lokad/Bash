@@ -1,9 +1,109 @@
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ReadTargetBindingTests
 {
+    [Theory]
+    [InlineData("""a=([2]=old [9]=keep); REPLY=reply; read -a a <<< 'one two three'; printf '<%s><%s>' "${#a[@]}" "$REPLY"; printf '[%s]' "${a[@]}" """,
+        "<3><reply>[one][two][three]", "")]
+    [InlineData("""a=(old); read -a a </dev/null; printf '<%s><%s>' "$?" "${#a[@]}" """,
+        "<1><0>", "")]
+    [InlineData("""a=old; read -a a <input; printf '<%s><%s>' "$?" "${#a[@]}"; printf '[%s]' "${a[@]}" """,
+        "<1><3>[one][two][three]", "")]
+    [InlineData("""a=(old); { read -a 'a[i++]'; printf '<%s>' "$?"; read tail; }; printf '<%s><%s><%s>' "${a[0]}" "${i-0}" "$tail" """,
+        "<1><old><0><two>", "read: `a[i++]': not a valid identifier\n")]
+    [InlineData("""declare -A a=([key]=keep); declare -n ref=a; { read -a ref; printf '<%s>' "$?"; read tail; }; printf '<%s><%s>' "${a[key]}" "$tail" """,
+        "<1><keep><two>", "read: ref: not an indexed array\n")]
+    [InlineData("""a=(old); readonly a; declare -n ref=a; { read -a ref; printf '<%s>' "$?"; read tail; }; printf '<%s><%s>' "${a[0]}" "$tail" """,
+        "<1><old><two>", "ref: readonly variable\n")]
+    [InlineData("""a=(outer keep); f(){ local -n ref=a; a=temp read -a ref <<< 'one two'; }; f; printf '<%s>' "${a[@]}" """,
+        "<outer><keep>", "")]
+    [InlineData("""a=(old); declare -rn ref=a; read -ra ref <<< 'one two'; printf '<%s>' "${a[@]}" """,
+        "<one><two>", "")]
+    [InlineData("""declare -n a; read -a a 2>&- <<< 'one two'; printf '<%s>' "${a[@]}" """,
+        "<one><two>", "")]
+    public async Task ReadArraySelectsTheWholeTargetAfterConsumingInput(string script, string output, string error)
+    {
+        var host = EndToEndHarness.BuildTree([("/input", "one two three")]);
+        var result = await EndToEndHarness.RunScriptAsync(script, host, "one\ntwo\n"u8.ToArray());
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("""IFS=: read -a a <<< ':one::two:'; printf '[%s]' "${a[@]}" """, "[][one][][two]")]
+    [InlineData("""IFS=: read -a a <<< 'a\:b::c'; printf '[%s]' "${a[@]}" """, "[a:b][][c]")]
+    [InlineData("""IFS=: read -ra a <<< 'a\:b::c'; printf '[%s]' "${a[@]}" """, "[a\\][b][][c]")]
+    [InlineData("""IFS= read -ra a <<< ' one two '; printf '[%s]' "${a[@]}" """, "[ one two ]")]
+    [InlineData("""IFS=é read -ra a <<< 'oneétwoéthree'; printf '[%s]' "${a[@]}" """, "[one][two][three]")]
+    [InlineData("""read -ra a ignored '1bad' -z <<< 'one two'; printf '[%s]' "${a[@]}" """, "[one][two]")]
+    public async Task ReadArraySplitsEveryFieldWithoutFoldingTheRemainder(string script, string output)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task ReadArrayPreservesBytesAndLeavesTheNextDelimitedRecord()
+    {
+        var host = EndToEndHarness.BuildTree([]);
+        var result = await EndToEndHarness.RunScriptAsync(
+            """read -a a -rd:; read -rd: tail; printf '<%s><%s><%s>' "${a[0]}" "${a[1]}" "$tail" """,
+            host, Convert.FromHexString("FF20FE0D3A6E6578743A"));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString("3CFF3E3CFE0D3E3C6E6578743E"), host.StandardOutput.Content.ToArray());
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task ReadArrayKeepsItsTargetOnPublicationRefusal()
+    {
+        var governor = new MemoryGovernor(96 * 1024);
+        await using var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), governor);
+        host.SetStandardInputBytes(System.Text.Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("x ", 1000)) + "\n"));
+        using var owner = governor.CreateScope();
+        var state = new Eval(Parser.Parse("a=(old keep); read -a a; status=$?"));
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(new[] { ShellValue.FromText("old"), ShellValue.FromText("keep") }, state.IndexedArrays["a"]);
+        Assert.Equal(ShellValue.FromText("1"), state.Variables["status"]);
+        Assert.Equal("read: shared memory budget exhausted\n", host.StandardError.TextContent);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ReadArrayLeavesTheTargetUntilACanceledInputBorrowSettles()
+    {
+        var state = new Eval(Parser.Parse("a=(old); read -a a"));
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep());
+        cancellation.Cancel();
+        var next = state.GetNextStep();
+        var completedBeforeRead = await Task.WhenAny(next, Task.Delay(TimeSpan.FromMilliseconds(100))) == next;
+        read.SetResult(ReadResult.Success("one two\n"u8.ToArray(), [], reachedEoF: true));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => next);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+        Assert.False(completedBeforeRead);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["a"]));
+    }
+
     // Recorded byte-stream contracts; no fresh native comparison is implied.
     [Theory]
     [InlineData("index=0; read index 'arr[index]' <<< '2 value'; printf '<%s><%s><%s>' \"$index\" \"${arr[0]-missing}\" \"${arr[2]}\"", 0, "3C323E3C6D697373696E673E3C76616C75653E", "")]

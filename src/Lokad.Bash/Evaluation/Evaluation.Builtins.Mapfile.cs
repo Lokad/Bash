@@ -87,39 +87,11 @@ public sealed partial class Evaluation
             parseOptions = false;
         }
 
-        if (!VariableReference.TryParse(ShellSource.FromBytes(targetValue.Bytes), Memory, out var reference)
-            || reference.Kind != VariableReferenceKind.Name)
-            return await InvalidTargetAsync(targetValue).ConfigureAwait(false);
-
-        var target = reference.Name;
-        var resolvedBinding = variables.TryResolveBinding(target, selectOwner: null, out var binding);
-        BindingName resolved = resolvedBinding ? binding.Name : target;
-        if (resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name)
-            return await InvalidTargetAsync(binding.Reference.ToValue(Memory)).ConfigureAwait(false);
-        if (!resolved.IsIdentifier)
-            return await InvalidTargetAsync(resolved.ToValue()).ConfigureAwait(false);
-
-        var unsetNameref = resolvedBinding && variables.TryGetNameref(resolved, out var referenced) && referenced.IsEmpty;
-        if (!resolvedBinding)
-            await ReportCircularNameReferenceAsync(target).ConfigureAwait(false);
-        else if (unsetNameref)
-            await ReportRemovingNamerefAsync(target).ConfigureAwait(false);
-        if (!diagnostics.Result.CanAcceptMore)
-            return await FinishAsync(0).ConfigureAwait(false);
-
-        // A cycle recreates the binding; otherwise readonly belongs to the selected array, not its alias.
-        if (resolvedBinding && variables.IsReadonly(resolved))
-        {
-            await ReportExpansionDiagnosticAsync(targetValue, ShellValue.FromText("readonly variable")).ConfigureAwait(false);
-            return await FinishAsync(1).ConfigureAwait(false);
-        }
-        if (variables.AssociativeArrays.ContainsKey(resolved))
-        {
-            await ReportExpansionDiagnosticAsync(arguments[0],
-                ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(targetValue.Bytes)
-                    .Append(": not an indexed array"u8).ToMemory())).ConfigureAwait(false);
-            return await FinishAsync(1).ConfigureAwait(false);
-        }
+        var (selected, targetStatus) = await SelectIndexedInputTargetAsync(arguments[0], targetValue, variables, warn: true)
+            .ConfigureAwait(false);
+        if (selected is not { } target)
+            return await FinishAsync(targetStatus).ConfigureAwait(false);
+        var resolved = target.Name;
 
         var descriptor = GetStdInDescriptor();
         // Keep one owned copy per batch; array entries borrow slices for the same lifetime.
@@ -178,10 +150,7 @@ public sealed partial class Evaluation
 
             _cancellationToken.ThrowIfCancellationRequested();
             // Publish only after the requested records have been read and admitted.
-            if (!resolvedBinding)
-                variables.RecreateDeclarationArray(resolved, ArrayKind.Indexed);
-            else if (unsetNameref)
-                variables.TryDeclareArray(resolved, ArrayKind.Indexed, ScalarArrayPromotion.DiscardValue);
+            target.PrepareForPublication(variables);
             if (origin is { } first)
                 assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values);
             else
@@ -257,12 +226,72 @@ public sealed partial class Evaluation
             await ReportExpansionDiagnosticAsync(arguments[0], ShellValue.FromBytes(detail.ToMemory())).ConfigureAwait(false);
             return await FinishAsync(1).ConfigureAwait(false);
         }
+    }
 
-        async Task<EvaluationResult> InvalidTargetAsync(ShellValue name)
+    private enum IndexedInputTargetKind { ExistingOrNew, CircularNameref, UnassignedNameref }
+
+    private readonly record struct IndexedInputTarget(BindingName Name, IndexedInputTargetKind Kind)
+    {
+        public void PrepareForPublication(Variables variables)
         {
-            await ReportExpansionDiagnosticAsync(arguments[0], ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
+            if (Kind == IndexedInputTargetKind.CircularNameref)
+                variables.RecreateDeclarationArray(Name, ArrayKind.Indexed);
+            else if (Kind == IndexedInputTargetKind.UnassignedNameref)
+                variables.TryDeclareArray(Name, ArrayKind.Indexed, ScalarArrayPromotion.DiscardValue);
+        }
+    }
+
+    /// <summary>Selects a whole indexed-array destination without altering its binding.</summary>
+    private async Task<(IndexedInputTarget? Target, int ExitCode)> SelectIndexedInputTargetAsync(
+        ShellValue command, ShellValue operand, Variables variables, bool warn)
+    {
+        if (!VariableReference.TryParse(ShellSource.FromBytes(operand.Bytes), Memory, out var reference)
+            || reference.Kind != VariableReferenceKind.Name)
+            return await InvalidTargetAsync(operand).ConfigureAwait(false);
+
+        var target = reference.Name;
+        var resolvedBinding = variables.TryResolveBinding(target, selectOwner: null, out var binding);
+        var resolved = resolvedBinding ? binding.Name : target;
+        if (resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name)
+            return await InvalidTargetAsync(binding.Reference.ToValue(Memory)).ConfigureAwait(false);
+        if (!resolved.IsIdentifier)
+            return await InvalidTargetAsync(resolved.ToValue()).ConfigureAwait(false);
+
+        var kind = !resolvedBinding ? IndexedInputTargetKind.CircularNameref
+            : variables.TryGetNameref(resolved, out var referenced) && referenced.IsEmpty
+                ? IndexedInputTargetKind.UnassignedNameref
+                : IndexedInputTargetKind.ExistingOrNew;
+        if (warn)
+        {
+            if (kind == IndexedInputTargetKind.CircularNameref)
+                await ReportCircularNameReferenceAsync(target).ConfigureAwait(false);
+            else if (kind == IndexedInputTargetKind.UnassignedNameref)
+                await ReportRemovingNamerefAsync(target).ConfigureAwait(false);
+        }
+        if (!BuiltinDiagnosticsOpen)
+            return (null, 0);
+
+        // A cycle recreates the binding; otherwise readonly belongs to the selected array.
+        if (resolvedBinding && variables.IsReadonly(resolved))
+        {
+            await ReportExpansionDiagnosticAsync(operand, ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+            return (null, 1);
+        }
+        if (variables.AssociativeArrays.ContainsKey(resolved))
+        {
+            await ReportExpansionDiagnosticAsync(command,
+                ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(operand.Bytes)
+                    .Append(": not an indexed array"u8).ToMemory())).ConfigureAwait(false);
+            return (null, 1);
+        }
+
+        return (new IndexedInputTarget(resolved, kind), 0);
+
+        async Task<(IndexedInputTarget?, int)> InvalidTargetAsync(ShellValue name)
+        {
+            await ReportExpansionDiagnosticAsync(command, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
                 .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(name).Bytes).Append(": not a valid identifier"u8).ToMemory())).ConfigureAwait(false);
-            return await FinishAsync(1).ConfigureAwait(false);
+            return (null, 1);
         }
     }
 }

@@ -19,7 +19,12 @@ internal static class ReadFieldSplitter
         var fieldSeparators = options.FieldSeparators;
         const int FieldSlotBytes = 2 * sizeof(long);
         const int FieldListOverheadBytes = 64;
-        var capacity = options.FieldMode == ReadFieldMode.PreserveInput ? 1 : fieldCount;
+        var capacity = options.FieldMode switch
+        {
+            ReadFieldMode.PreserveInput => 1,
+            ReadFieldMode.SplitAll => 0,
+            _ => fieldCount
+        };
         listMemory.Grow(FieldListOverheadBytes + (long)FieldSlotBytes * capacity);
         return SplitReadFields(content.Length);
 
@@ -28,8 +33,27 @@ internal static class ReadFieldSplitter
             if (options.FieldMode == ReadFieldMode.PreserveInput)
                 return [BuildValue(0, contentEnd)];
 
-            var splitFields = new List<ShellValue>(fieldCount);
+            var splitFields = new List<ShellValue>(capacity);
             var position = 0;
+            if (options.FieldMode == ReadFieldMode.SplitAll)
+            {
+                while (TryReadField(ref position, out var start, out var end))
+                {
+                    if (splitFields.Count == splitFields.Capacity)
+                    {
+                        var previous = splitFields.Capacity;
+                        var next = (int)Math.Min(Array.MaxLength, Math.Max(4L, 2L * previous));
+                        if (next == previous)
+                            throw new MemoryBudgetExceededException();
+                        listMemory.Resize(FieldListOverheadBytes + FieldSlotBytes * ((long)next + previous));
+                        splitFields.Capacity = next;
+                        listMemory.Resize(FieldListOverheadBytes + (long)FieldSlotBytes * next);
+                    }
+                    splitFields.Add(BuildValue(start, end));
+                }
+                return splitFields;
+            }
+
             for (var fieldIndex = 0; fieldIndex < fieldCount - 1; fieldIndex++)
             {
                 splitFields.Add(TryReadField(ref position, out var start, out var end)
