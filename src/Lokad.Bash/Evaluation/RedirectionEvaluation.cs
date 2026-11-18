@@ -238,14 +238,13 @@ internal sealed class RedirectionEvaluation
             await ReportFailureAsync(scope, new OperationError($"{targetDescriptor}: Bad file descriptor\n")).ConfigureAwait(false);
             return RedirectionOutcome.Failure;
         }
-        var sourceWords = await scope.Effects.ExpandTextWordsAsync(target, scope).ConfigureAwait(false);
+        var (fieldCount, sourceWord) = await scope.Effects.ExpandRedirectionFieldsAsync(target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
-        if (sourceWords.Count > 1 || sourceWords.Count == 0 && !move)
+        if (fieldCount > 1 || fieldCount == 0 && !move)
         {
             await ReportFailureAsync(scope, new OperationError("ambiguous redirect\n")).ConfigureAwait(false);
             return RedirectionOutcome.Failure;
         }
-        var sourceWord = sourceWords.Count == 0 ? string.Empty : sourceWords[0];
         if (sourceWord == "-" || move && sourceWord.Length == 0)
         {
             if (allocate)
@@ -491,11 +490,11 @@ internal sealed class RedirectionEvaluation
         ScopedEvaluation scope,
         Word target)
     {
-        var words = await scope.Effects.ExpandTextWordsAsync(target, scope).ConfigureAwait(false);
+        var (fieldCount, path) = await scope.Effects.ExpandRedirectionFieldsAsync(target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError)
             return null;
 
-        if (words.Count != 1)
+        if (fieldCount != 1)
         {
             if (_inputSubstitution)
             {
@@ -509,7 +508,7 @@ internal sealed class RedirectionEvaluation
             return null;
         }
 
-        return words[0];
+        return path;
     }
 
     private enum RedirectionOutcome

@@ -1063,12 +1063,7 @@ public sealed partial class Evaluation : IFileTester
         }
         else if (preparation is PreparedCommand.Terminal terminalArguments)
         {
-            foreach (var word in terminalArguments.SimpleCommand.Words)
-            {
-                _ = await ExpandToWordsAsync(word, scope).ConfigureAwait(false);
-                if (_state.HasPendingExpansionError)
-                    break;
-            }
+            await ExpandUnusedOperandsAsync(terminalArguments.SimpleCommand.Words, 0).ConfigureAwait(false);
         }
 
         if (_state.TryConsumeExpansionError(out var argumentError))
@@ -1416,17 +1411,19 @@ public sealed partial class Evaluation : IFileTester
             if (GetLiteralWithoutGlob(first) != null)
                 return source;
 
+            using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
+            var fields = new List<ShellValue>();
             var words = new List<Word>();
             for (var index = 0; index < source.Words.Count; index++)
             {
-                var fields = await ExpandToWordsAsync(source.Words[index], scope).ConfigureAwait(false);
+                await AppendOperandValuesAsync(source.Words[index], scope, fields, fieldMemory).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     break;
                 if (fields.Count == 0)
                     continue;
                 Memory.PrepareListCapacity(words, checked(fields.Count + source.Words.Count - index - 1));
                 foreach (var field in fields)
-                    words.Add(new Word([WordPart.FromValue(WordPartKind.SingleQuoted, field)]));
+                    words.Add(CaptureLiteralWord(field));
                 for (var remaining = index + 1; remaining < source.Words.Count; remaining++)
                     words.Add(source.Words[remaining]);
                 break;
@@ -1679,13 +1676,12 @@ public sealed partial class Evaluation : IFileTester
 
         async Task<IReadOnlyList<string>> ExpandArgumentsAsync(PreparedCommand.Executable command)
         {
-            var builtin = command.Resolution as CommandResolution.EvaluatorBuiltin;
+            var builtin = (CommandResolution.EvaluatorBuiltin)command.Resolution;
             var words = command.SimpleCommand.Words;
             var expanded = new List<string>();
-            if (builtin != null)
-                AddOperand(expanded, command.CommandName);
+            AddOperand(expanded, command.CommandName);
             // Match existing consumer arity; unused operands still expand for effects and limits.
-            var lastTextOperandIndex = builtin?.Kind switch
+            var lastTextOperandIndex = builtin.Kind switch
             {
                 BuiltinKind.Colon or BuiltinKind.True or BuiltinKind.False
                     or BuiltinKind.Pwd or BuiltinKind.Popd or BuiltinKind.Caller => 0,
@@ -1693,32 +1689,30 @@ public sealed partial class Evaluation : IFileTester
                 _ => words.Count - 1
             };
 
-            for (var index = 1; index < words.Count; index++)
+            for (var index = 1; index <= lastTextOperandIndex && index < words.Count; index++)
             {
-                // Preserve each existing text consumer's scalar-versus-field expansion contract.
-                var scalar = builtin?.Kind switch
-                {
-                    null or BuiltinKind.Echo or BuiltinKind.Type => false,
-                    BuiltinKind.Test => command.CommandName == "[" && index == words.Count - 1,
-                    _ => true
-                };
-                if (index > lastTextOperandIndex)
-                {
-                    _ = await ExpandToWordsAsync(words[index], scope).ConfigureAwait(false);
-                }
-                else if (scalar)
-                    AddOperand(expanded, await ExpandWordAsync(words[index], scope).ConfigureAwait(false));
-                else
-                {
-                    var values = await ExpandTextWordsAsync(words[index], scope).ConfigureAwait(false);
-                    Memory.PrepareListCapacity(expanded, values.Count);
-                    expanded.AddRange(values);
-                }
+                AddOperand(expanded, await ExpandWordAsync(words[index], scope).ConfigureAwait(false));
+                if (_state.HasPendingExpansionError)
+                    return expanded;
+            }
+            await ExpandUnusedOperandsAsync(words, lastTextOperandIndex + 1).ConfigureAwait(false);
+            return expanded;
+        }
 
+        async Task ExpandUnusedOperandsAsync(IReadOnlyList<Word> words, int start)
+        {
+            if (start >= words.Count)
+                return;
+
+            using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
+            var fields = new List<ShellValue>();
+            for (var index = start; index < words.Count; index++)
+            {
+                await AppendOperandValuesAsync(words[index], scope, fields, fieldMemory).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     break;
+                fields.Clear();
             }
-            return expanded;
         }
 
         // Applies or inspects prepared declarations without replaying expansion effects.
@@ -2861,21 +2855,28 @@ public sealed partial class Evaluation : IFileTester
                 .ConfigureAwait(false)).ConfigureAwait(false);
     }
 
-    internal Task<IReadOnlyList<ShellValue>> ExpandToWordsAsync(Word word, ScopedEvaluation scope) =>
-        AwaitWordExpansionAsync(ExpandAndFlattenAsync(word, scope));
-
     private static ExpandedWord? GetLiteralWithoutGlob(Word word) => word.LiteralFields is [var literal]
         && (literal.Segments is [{ IsGlobQuoted: true }] || !GlobPattern.RequiresExpansion(literal)) ? literal : null;
 
+    private Word CaptureLiteralWord(ShellValue field)
+    {
+        // The argument borrows the expanded bytes and owns its syntax and cached expansion.
+        Memory.Charge(256);
+        return new Word([WordPart.FromValue(WordPartKind.SingleQuoted, field)]);
+    }
+
     /// <summary>Expands directly into the command's admitted operand list.</summary>
-    private Task AppendOperandValuesAsync(Word word, ScopedEvaluation scope, List<ShellValue> operands)
+    private Task AppendOperandValuesAsync(Word word, ScopedEvaluation scope, List<ShellValue> operands) =>
+        AppendOperandValuesAsync(word, scope, operands, Memory.Workspace);
+
+    private Task AppendOperandValuesAsync(Word word, ScopedEvaluation scope, List<ShellValue> operands, MemoryCapacity backingOwner)
     {
         return AwaitWordExpansionAsync(AppendAsync());
 
         async Task<bool> AppendAsync()
         {
             var expanded = await WordExpansion.ExpandToWordsAsync(word, scope).ConfigureAwait(false);
-            return await AppendExpandedWordsAsync(expanded, operands, Memory.Workspace, static value => value)
+            return await AppendExpandedWordsAsync(expanded, operands, backingOwner, static value => value)
                 .ConfigureAwait(false);
         }
     }
@@ -2886,30 +2887,33 @@ public sealed partial class Evaluation : IFileTester
         operands.Add(value);
     }
 
-    /// <summary>Expands byte fields and preflights decoding at text-only consumers.</summary>
-    internal Task<IReadOnlyList<string>> ExpandTextWordsAsync(Word word, ScopedEvaluation scope)
+    /// <summary>Validates redirection fields in order and decodes a single candidate.</summary>
+    internal async Task<(int Count, string Value)> ExpandRedirectionFieldsAsync(Word word, ScopedEvaluation scope)
     {
-        return AwaitWordExpansionAsync(ExpandAndDecodeAsync());
-
-        async Task<IReadOnlyList<string>> ExpandAndDecodeAsync()
+        if (scope.CanExpand && GetLiteralWithoutGlob(word) is { } literal)
         {
-            var values = await ExpandAndFlattenAsync(word, scope).ConfigureAwait(false);
-            var results = new List<string>(values.Count);
-            foreach (var value in values)
-            {
-                var text = await DecodeExpandedValueAsync(value).ConfigureAwait(false);
-                if (_state.HasPendingExpansionError)
-                    return [];
-                results.Add(text);
-            }
-            return results;
+            CheckCancellation();
+            return (1, await DecodeExpandedValueAsync(literal.ToValue(Memory)).ConfigureAwait(false));
         }
-    }
 
-    private async Task<IReadOnlyList<ShellValue>> ExpandAndFlattenAsync(Word word, ScopedEvaluation scope)
-    {
-        var expanded = await WordExpansion.ExpandToWordsAsync(word, scope).ConfigureAwait(false);
-        return await ExpandExpandedWordsAsync(expanded).ConfigureAwait(false);
+        using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
+        var values = new List<ShellValue>();
+        await AppendOperandValuesAsync(word, scope, values, fieldMemory).ConfigureAwait(false);
+        if (_state.HasPendingExpansionError)
+            return (0, string.Empty);
+        if (values.Count == 1)
+            return (1, await DecodeExpandedValueAsync(values[0]).ConfigureAwait(false));
+
+        foreach (var value in values)
+        {
+            CheckCancellation();
+            if (!System.Text.Unicode.Utf8.IsValid(value.Bytes.Span))
+            {
+                await ReportInvalidTextValueAsync().ConfigureAwait(false);
+                return (0, string.Empty);
+            }
+        }
+        return (values.Count, string.Empty);
     }
 
     private async Task<string> DecodeExpandedValueAsync(ShellValue value)
@@ -2920,10 +2924,12 @@ public sealed partial class Evaluation : IFileTester
         if (value.TryGetUtf8Text(out var text))
             return text;
 
-        await ReportFatalExpansionAsync(ShellValue.FromText("shell"),
-            ShellValue.FromText("text value must be valid UTF-8"), ExpansionFailureKind.Parameter).ConfigureAwait(false);
+        await ReportInvalidTextValueAsync().ConfigureAwait(false);
         return string.Empty;
     }
+
+    private Task ReportInvalidTextValueAsync() => ReportFatalExpansionAsync(ShellValue.FromText("shell"),
+        ShellValue.FromText("text value must be valid UTF-8"), ExpansionFailureKind.Parameter);
 
     private async Task<T> AwaitWordExpansionAsync<T>(Task<T> expansion)
     {
@@ -3018,27 +3024,18 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    private async Task<IReadOnlyList<ShellValue>> ExpandExpandedWordsAsync(
-        IReadOnlyList<ExpandedWord> expanded)
-    {
-        var results = new List<ShellValue>(expanded.Count);
-        return await AppendExpandedWordsAsync(expanded, results, backingOwner: null, static value => value)
-            .ConfigureAwait(false) ? results : [];
-    }
-
     private async Task<bool> AppendExpandedWordsAsync<T>(
-        IReadOnlyList<ExpandedWord> expanded, List<T> results, MemoryCapacity? backingOwner, Func<ShellValue, T> createItem)
+        IReadOnlyList<ExpandedWord> expanded, List<T> results, MemoryCapacity backingOwner, Func<ShellValue, T> createItem)
     {
         // Each expanded field contributes at least one value, including literal glob fallback.
-        if (expanded.Count > 1 && backingOwner != null)
+        if (expanded.Count > 1)
             Memory.PrepareListCapacity(backingOwner, results, expanded.Count);
         foreach (var expandedWord in expanded)
         {
             CheckCancellation();
             if (!GlobPattern.RequiresExpansion(expandedWord))
             {
-                if (backingOwner != null)
-                    Memory.PrepareListCapacity(backingOwner, results, 1);
+                Memory.PrepareListCapacity(backingOwner, results, 1);
                 results.Add(createItem(expandedWord.ToValue(Memory)));
                 continue;
             }
@@ -3054,8 +3051,7 @@ public sealed partial class Evaluation : IFileTester
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
                 globMemory, _cancellationToken);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
-            if (backingOwner != null)
-                Memory.PrepareListCapacity(backingOwner, results, matches.Count);
+            Memory.PrepareListCapacity(backingOwner, results, matches.Count);
             foreach (var match in matches)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
@@ -3515,8 +3511,14 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Emits a run-command operation and returns its execution result.
     /// </summary>
-    private Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command) =>
-        AwaitOperationAsync(RunCommand.AsTask(PublishOperation, command));
+    private async Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command)
+    {
+        CheckCancellation();
+        // The invocation borrows arguments, exports and descriptors until the host settles.
+        var result = await RunCommand.AsTask(PublishOperation, command).ConfigureAwait(false);
+        CheckCancellation();
+        return result;
+    }
 
     /// <summary>
     /// Emits a create-pipe operation and returns both endpoints or an acquisition failure.

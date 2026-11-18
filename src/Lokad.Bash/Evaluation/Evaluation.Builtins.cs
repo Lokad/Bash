@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -25,11 +26,16 @@ public sealed partial class Evaluation
         var allowsPersistentRedirections = true;
         // Keep source words and surplus expansion fields separate; wrappers consume them without rebuilding the suffix.
         var wordIndex = 1;
-        IReadOnlyList<ShellValue> fields = [];
-        var fieldIndex = 0;
         // Byte-valued function names need no text allocation. Other names use the shared decode budget.
         var commandName = _state.Functions.ContainsKey(commandValue) ? string.Empty
             : await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
+        if (!BuiltinClassification.TryResolve(commandName.AsSpan(), out var initialBuiltin)
+            || initialBuiltin is not (BuiltinKind.Builtin or BuiltinKind.Command or BuiltinKind.Exec))
+            return Executable(simpleCommand);
+
+        using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
+        var fields = new List<ShellValue>();
+        var fieldIndex = 0;
 
         while (BuiltinClassification.TryResolve(commandName.AsSpan(), out var builtinKind))
         {
@@ -130,25 +136,31 @@ public sealed partial class Evaluation
 
             if (outputMode.HasValue)
             {
-                var operands = RemainingCommand(next).Words;
                 var names = new List<ShellValue>();
-                foreach (var word in operands)
+                Memory.PrepareListCapacity(names, checked((next.HasValue ? 1 : 0) + fields.Count - fieldIndex));
+                if (next is { } firstName)
+                    AddCapturedName(firstName);
+                for (var index = fieldIndex; index < fields.Count; index++)
+                    AddCapturedName(fields[index]);
+                fields.Clear();
+                fieldMemory.Dispose();
+
+                for (var index = wordIndex; index < simpleCommand.Words.Count && !_state.HasPendingExpansionError; index++)
                 {
-                    var firstName = names.Count;
+                    var word = simpleCommand.Words[index];
                     if (word.Parts is [LiteralWordPart { Kind: WordPartKind.SingleQuoted } literal])
                     {
-                        // Option scanning may already have captured this field; retain it without another byte copy.
-                        Memory.Charge(256);
-                        AddOperand(names, literal.Value);
+                        AddCapturedName(literal.Value);
+                        continue;
                     }
-                    else
-                        await AppendOperandValuesAsync(word, scope, names).ConfigureAwait(false);
+
+                    var firstAdded = names.Count;
+                    await AppendOperandValuesAsync(word, scope, names).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         break;
                     // Reserve decoding before later operand effects; malformed bytes need no text copy.
-                    for (var nameIndex = firstName; nameIndex < names.Count; nameIndex++)
-                        if (System.Text.Unicode.Utf8.IsValid(names[nameIndex].Bytes.Span))
-                            Memory.Charge(PreparedQueryDecodeBytes(names[nameIndex]));
+                    for (var nameIndex = firstAdded; nameIndex < names.Count; nameIndex++)
+                        ReserveNameDecoding(names[nameIndex]);
                 }
 
                 return new PreparedCommand.Query(
@@ -157,6 +169,18 @@ public sealed partial class Evaluation
                     executionOptions,
                     completion,
                     RedirectionLifetime.Command);
+
+                void AddCapturedName(ShellValue name)
+                {
+                    AddOperand(names, name);
+                    ReserveNameDecoding(name);
+                }
+
+                void ReserveNameDecoding(ShellValue name)
+                {
+                    if (System.Text.Unicode.Utf8.IsValid(name.Bytes.Span))
+                        Memory.Charge(PreparedQueryDecodeBytes(name));
+                }
             }
 
             if (next is not { } target)
@@ -174,8 +198,10 @@ public sealed partial class Evaluation
             }
         }
 
-        return new PreparedCommand.Executable(
-            wordIndex == 1 && fields.Count == 0 ? simpleCommand : RemainingCommand(commandValue),
+        return Executable(RemainingCommand(commandValue));
+
+        PreparedCommand.Executable Executable(SimpleCommand command) => new(
+            command,
             commandName,
             ResolveCommandName(commandValue, commandName, lookupMode),
             executionOptions,
@@ -221,11 +247,14 @@ public sealed partial class Evaluation
                     return fields[fieldIndex++];
                 if (wordIndex >= simpleCommand.Words.Count)
                     break;
+                fields.Clear();
+                fieldIndex = 0;
                 var word = simpleCommand.Words[wordIndex++];
                 if (word.Parts.Count == 1 && word.Parts[0].Kind == WordPartKind.SingleQuoted)
                     return word.Parts[0].GetUnexpandedValue();
-                fields = await ExpandToWordsAsync(word, scope).ConfigureAwait(false);
-                fieldIndex = 0;
+                await AppendOperandValuesAsync(word, scope, fields, fieldMemory).ConfigureAwait(false);
+                if (_state.HasPendingExpansionError)
+                    fields.Clear();
             }
             return null;
         }
@@ -236,9 +265,9 @@ public sealed partial class Evaluation
             Memory.PrepareListCapacity(words, checked((first.HasValue ? 1 : 0)
                 + fields.Count - fieldIndex + simpleCommand.Words.Count - wordIndex));
             if (first is { } value)
-                words.Add(new Word([WordPart.FromValue(WordPartKind.SingleQuoted, value)]));
+                words.Add(CaptureLiteralWord(value));
             for (var index = fieldIndex; index < fields.Count; index++)
-                words.Add(new Word([WordPart.FromValue(WordPartKind.SingleQuoted, fields[index])]));
+                words.Add(CaptureLiteralWord(fields[index]));
             for (var index = wordIndex; index < simpleCommand.Words.Count; index++)
                 words.Add(simpleCommand.Words[index]);
             return simpleCommand with { Words = words };
