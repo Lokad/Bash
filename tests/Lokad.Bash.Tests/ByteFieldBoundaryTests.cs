@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 
@@ -6,6 +7,41 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteFieldBoundaryTests
 {
+    [Fact]
+    public void SplitRunsReuseScratchWithinTheSameWord()
+    {
+        const int RunCount = 16;
+        var body = new string('x', 8192);
+        var input = ShellValue.FromText(" " + body + " ");
+        var marker = ShellValue.FromText("|");
+        var governor = new MemoryGovernor(4 * 1024 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var builder = new ExpandedWordBuilder(Variables.CreateEmpty(), memory,
+                ExpansionPurpose.Normal, ImplicitEmptyPolicy.Preserve);
+            for (var index = 0; index < RunCount; index++)
+            {
+                builder.AppendExpansion(input, allowWordSplitting: true, globQuoted: false);
+                builder.AppendValue(marker, globQuoted: true);
+            }
+
+            memory.ReleaseUnusedCapacity();
+            // Admit split output and one scratch window while the input builders remain live.
+            using var held = governor.Reserve(governor.LimitBytes - governor.ReservedBytes - 768 * 1024);
+            var fields = builder.Build();
+            Assert.Equal(2 * RunCount, fields.Count);
+            for (var index = 0; index < fields.Count; index++)
+            {
+                var segment = Assert.Single(fields[index].Segments);
+                Assert.Equal(index % 2 == 0 ? body : "|", segment.Content.ToUtf8String());
+                Assert.Equal(index % 2 != 0, segment.IsGlobQuoted);
+            }
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false, false, new[] { "707265", "706F7374" })]
     [InlineData(true, false, new[] { "707265C3", "706F7374" })]

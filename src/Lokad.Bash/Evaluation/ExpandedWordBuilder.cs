@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -272,9 +273,15 @@ internal sealed class ExpandedWordBuilder
 
     public IReadOnlyList<ExpandedWord> Build()
     {
+        var results = new List<ExpandedWord>();
+        AppendTo(results);
+        return results;
+    }
+
+    internal void AppendTo(List<ExpandedWord> results)
+    {
         // Expansions can assign IFS: joins use its value at expansion time, splitting uses the final value.
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
-        var results = new List<ExpandedWord>();
         foreach (var word in _words)
         {
             _cancellationToken.ThrowIfCancellationRequested();
@@ -291,10 +298,11 @@ internal sealed class ExpandedWordBuilder
             }
 
             _memory.Charge(256);
-            var fields = new List<List<SegmentBuilder>> { new() };
-            var emitEmpty = new List<bool> { false };
+            var field = new List<SegmentBuilder>();
+            var emitEmpty = false;
             var pendingBreak = false;
-            var pendingBytes = ByteMemoryBuilder.CreateUnaccounted(0);
+            using var pendingBytes = new ByteMemoryBuilder(0, _memory.Budget);
+            using var quoteScratch = new MemoryCapacity(_memory.Budget, 0);
             var quoteRuns = new List<QuoteRun>();
 
             foreach (var part in word.Parts)
@@ -308,7 +316,7 @@ internal sealed class ExpandedWordBuilder
                     {
                         FlushExpansion();
                         ApplyPendingBreak();
-                        emitEmpty[^1] = true;
+                        emitEmpty = true;
                     }
                     else
                     {
@@ -335,30 +343,22 @@ internal sealed class ExpandedWordBuilder
                 }
             }
             FlushExpansion();
-
-            for (var index = 0; index < fields.Count; index++)
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-                if (fields[index].Count > 0 || emitEmpty[index])
-                {
-                    results.Add(new ExpandedWord(fields[index]
-                        .Select(segment => new ExpandedSegment(segment.ToValue(), segment.IsGlobQuoted))
-                        .ToArray()));
-                }
-            }
+            CompleteField();
 
             void QueueExpansion(ReadOnlyMemory<byte> bytes, bool globQuoted)
             {
                 if (bytes.IsEmpty)
                     return;
-                _memory.Charge(checked(4L * bytes.Length));
                 pendingBytes.Append(bytes);
                 var run = new QuoteRun(pendingBytes.Length, globQuoted);
                 if (quoteRuns.Count > 0 && quoteRuns[^1].IsGlobQuoted == globQuoted)
                     quoteRuns[^1] = run;
                 else
                 {
-                    _memory.Charge(256);
+                    // Cover both backing arrays at list growth, then reuse that allowance on every flush.
+                    var needed = 32L * (quoteRuns.Count + 1L) + 32;
+                    if (needed > quoteScratch.Bytes)
+                        quoteScratch.Resize(needed);
                     quoteRuns.Add(run);
                 }
             }
@@ -374,10 +374,9 @@ internal sealed class ExpandedWordBuilder
 
             void AppendBytes(ReadOnlyMemory<byte> bytes, bool globQuoted)
             {
-                var current = fields[^1];
-                if (current.Count == 0 || current[^1].IsGlobQuoted != globQuoted)
-                    current.Add(new SegmentBuilder(globQuoted, _memory));
-                current[^1].AppendValue(ShellValue.FromBytes(bytes));
+                if (field.Count == 0 || field[^1].IsGlobQuoted != globQuoted)
+                    field.Add(new SegmentBuilder(globQuoted, _memory));
+                field[^1].AppendValue(ShellValue.FromBytes(bytes));
             }
 
             void FlushExpansion()
@@ -418,7 +417,7 @@ internal sealed class ExpandedWordBuilder
                     }
                     else
                     {
-                        emitEmpty[^1] = true;
+                        emitEmpty = true;
                         StartNewField();
                     }
                     position += length;
@@ -454,7 +453,7 @@ internal sealed class ExpandedWordBuilder
                 if (!pendingBreak)
                     return;
                 pendingBreak = false;
-                if (fields[^1].Count > 0 || emitEmpty[^1])
+                if (field.Count > 0 || emitEmpty)
                     StartNewField();
             }
 
@@ -462,11 +461,21 @@ internal sealed class ExpandedWordBuilder
             {
                 _memory.Charge(256);
                 pendingBreak = false;
-                fields.Add([]);
-                emitEmpty.Add(false);
+                CompleteField();
+            }
+
+            void CompleteField()
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                if (field.Count == 0 && !emitEmpty)
+                    return;
+                results.Add(new ExpandedWord(field
+                    .Select(segment => new ExpandedSegment(segment.ToValue(), segment.IsGlobQuoted))
+                    .ToArray()));
+                field.Clear();
+                emitEmpty = false;
             }
         }
-        return results;
     }
 
     private SegmentBuilder GetPart(PartOrigin origin, bool globQuoted)

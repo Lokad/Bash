@@ -93,6 +93,8 @@ internal static partial class WordExpansion
 
         var braceExpanded = ExpandBraceWords(word, scope);
         var results = new List<ExpandedWord>();
+        // Scalar consumers join fields per alternative before selecting their value.
+        var joinFields = purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment;
 
         foreach (var expansion in braceExpanded)
         {
@@ -101,17 +103,15 @@ internal static partial class WordExpansion
                     scope,
                     allowWordSplitting,
                     purpose,
-                    TildeExpansion.Argument)
+                    TildeExpansion.Argument,
+                    joinFields ? null : results)
                 .ConfigureAwait(false);
 
             if (!scope.CanExpand)
                 return [];
 
-            // Join operand fields, not brace alternatives: scalar consumers still select the first alternative.
-            if (purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment)
+            if (joinFields)
                 results.Add(ExpandedWord.JoinWithSpaces(expanded, scope.Effects.Memory));
-            else
-                results.AddRange(expanded);
         }
 
         return results;
@@ -124,18 +124,34 @@ internal static partial class WordExpansion
         BraceExpansion.Expand(word, scope.Effects.Memory, scope.Effects.CancellationToken);
 
     /// <summary>Expands a source word without brace expansion or pathname lookup.</summary>
-    public static async Task<IReadOnlyList<ExpandedWord>> ExpandWithoutBraceAsync(
+    public static Task<IReadOnlyList<ExpandedWord>> ExpandWithoutBraceAsync(
         Word word,
         ScopedEvaluation scope,
         bool allowWordSplitting,
         ExpansionPurpose purpose,
-        TildeExpansion tildeExpansion)
+        TildeExpansion tildeExpansion) =>
+        ExpandWithoutBraceAsync(word, scope, allowWordSplitting, purpose, tildeExpansion, destination: null);
+
+    private static async Task<IReadOnlyList<ExpandedWord>> ExpandWithoutBraceAsync(
+        Word word,
+        ScopedEvaluation scope,
+        bool allowWordSplitting,
+        ExpansionPurpose purpose,
+        TildeExpansion tildeExpansion,
+        List<ExpandedWord>? destination)
     {
         if (!scope.CanExpand)
             return [];
         scope.Effects.CancellationToken.ThrowIfCancellationRequested();
         if (word.LiteralFields is { } literal)
+        {
+            if (destination != null)
+            {
+                destination.AddRange(literal);
+                return destination;
+            }
             return literal;
+        }
         if (word.Parts.Count == 0)
             return [];
 
@@ -145,7 +161,12 @@ internal static partial class WordExpansion
             .ConfigureAwait(false);
 
         // Discard unfinished words before encoding or splitting can mask the first failure.
-        return !scope.CanExpand ? [] : builder.Build();
+        if (!scope.CanExpand)
+            return [];
+        if (destination == null)
+            return builder.Build();
+        builder.AppendTo(destination);
+        return destination;
     }
 
     private static async Task ExpandWordPartsAsync(

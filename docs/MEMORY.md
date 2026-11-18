@@ -161,6 +161,9 @@ fields borrow its bytes; runtime-expanded operands, selectors and argument
 collections retain command workspace admission. Aggregate operand lists admit
 replacement backing before growth and keep the current backing charged through
 command completion. Byte consumers append reached fields directly to that list.
+Field splitting owns one reusable scratch buffer for pending bytes and one
+quote-run list. It completes fields at their boundaries and reuses the segment
+builder list. Non-scalar brace expansion appends directly to the word's result.
 Caller-prepared syntax remains
 caller-owned. Runtime parsing supplies coarse admission to source copies, command-unit
 tokens/parts and payload buffers, arithmetic/conditional metadata and reached deferred
