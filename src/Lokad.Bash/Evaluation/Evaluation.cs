@@ -1687,13 +1687,15 @@ public sealed partial class Evaluation : IFileTester
         {
             var options = declaration.Options;
             var executionScope = declarationScope with { Variables = commandVars };
+            var functionContext = declarationScope.Context.FunctionContext;
+            var localBuiltinFrame = options.Builtin == BuiltinKind.Local ? functionContext : null;
             if (!options.InvalidOption.IsEmpty)
             {
                 await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), WordExpansion.AppendAssignmentValue(options.InvalidOption, ShellValue.FromText(": invalid option"), declarationScope))
                     .ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), declarationNegated).ConfigureAwait(false);
             }
-            if (options.Builtin == BuiltinKind.Local && declarationScope.Context.FunctionContext == null)
+            if (options.Builtin == BuiltinKind.Local && localBuiltinFrame == null)
             {
                 await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("can only be used in a function"))
                     .ConfigureAwait(false);
@@ -1704,6 +1706,7 @@ public sealed partial class Evaluation : IFileTester
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(await EvaluateFunctionsAsync().ConfigureAwait(false)), declarationNegated).ConfigureAwait(false);
             if (listing || options.Print && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
             {
+                var listOptionSnapshot = listing && localBuiltinFrame?.HasOwnOptionSnapshot == true;
                 var style = listing && options.Builtin == BuiltinKind.Declare && !options.Print
                     && options.ListingAttributes == DeclarationListingAttributes.None
                     ? VariableDisplayStyle.Assignment : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationName : VariableDisplayStyle.Declaration;
@@ -1714,8 +1717,10 @@ public sealed partial class Evaluation : IFileTester
                     if (HasPendingExpansionError)
                         break;
                     var name = BindingNameExpansion.FromValue(nameValue, Memory);
-                    if (!SelectVariables(name).HasBinding(name)
-                        || options.Builtin == BuiltinKind.Local && declarationScope.Context.FunctionContext?.Locals.Declares(name) != true)
+                    var optionSnapshot = nameValue.Bytes.Span.SequenceEqual("-"u8)
+                        && (listing ? listOptionSnapshot : HasOptionSnapshot());
+                    if (!optionSnapshot && (!SelectVariables(name).HasBinding(name)
+                        || localBuiltinFrame != null && !localBuiltinFrame.Locals.Declares(name)))
                     {
                         printStatus = 1;
                         await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
@@ -1723,7 +1728,9 @@ public sealed partial class Evaluation : IFileTester
                         continue;
                     }
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
-                    if (!SelectVariables(name).TryAppendVariable(name, output, style))
+                    if (optionSnapshot)
+                        output.Append(listing && localBuiltinFrame != null ? "local -\n"u8 : "declare -- -\n"u8);
+                    else if (!SelectVariables(name).TryAppendVariable(name, output, style))
                     {
                         printStatus = 1;
                         await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("output limit exceeded")).ConfigureAwait(false);
@@ -1743,6 +1750,10 @@ public sealed partial class Evaluation : IFileTester
                     printStatus = await EvaluateFunctionsAsync().ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(printStatus), declarationNegated).ConfigureAwait(false);
 
+                bool HasOptionSnapshot() => localBuiltinFrame?.HasOwnOptionSnapshot == true
+                    || options.Builtin == BuiltinKind.Declare && options.Print
+                    && functionContext?.HasVisibleOptionSnapshot() == true;
+
                 // No-argument listings hide only this command's prefixes; named queries inspect them.
                 Variables SelectVariables(BindingName name) => !listing ? commandVars
                     : bindings?.Contains(name) == true ? bindings.SavedVariables : declarationScope.Variables;
@@ -1752,7 +1763,8 @@ public sealed partial class Evaluation : IFileTester
                     var names = commandVars.BindingNames;
                     if (bindings != null)
                         names = names.Concat(bindings.SavedVariables.BindingNames);
-                    return names.Distinct().Where(MatchesFilter).Select(EncodeName);
+                    var filtered = names.Distinct().Where(MatchesFilter).Select(EncodeName);
+                    return listOptionSnapshot ? filtered.Prepend(ShellValue.FromText("-")) : filtered;
 
                     ShellValue EncodeName(BindingName name)
                     {
@@ -1767,8 +1779,8 @@ public sealed partial class Evaluation : IFileTester
                     if (!variables.HasBinding(name))
                         return false;
                     // Attribute options do not narrow a local listing.
-                    if (options.Builtin == BuiltinKind.Local)
-                        return declarationScope.Context.FunctionContext?.Locals.Declares(name) == true;
+                    if (localBuiltinFrame != null)
+                        return localBuiltinFrame.Locals.Declares(name);
                     var flags = options.ListingAttributes;
                     return (!flags.HasFlag(DeclarationListingAttributes.Indexed) || variables.IndexedArrays.ContainsKey(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Associative) || variables.AssociativeArrays.ContainsKey(name))
@@ -1804,6 +1816,8 @@ public sealed partial class Evaluation : IFileTester
                 await foreach (var name in GetNamesAsync(names, copyNames: true).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError) break;
+                    if (!options.Print && TrySaveLocalOptions(name))
+                        continue;
                     if (!noOperands && !options.Print && name.Bytes.Span.Contains((byte)'=')
                         && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
                     {
@@ -1895,6 +1909,8 @@ public sealed partial class Evaluation : IFileTester
             var exitCode = 0;
             foreach (var operand in declaration.Operands)
             {
+                if (operand.Value == null && TrySaveLocalOptions(operand.Name))
+                    continue;
                 if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference))
                 {
                     var invalidOperand = await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
@@ -2366,6 +2382,14 @@ public sealed partial class Evaluation : IFileTester
             }
 
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
+
+            bool TrySaveLocalOptions(ShellValue operand)
+            {
+                if (localBuiltinFrame == null || !operand.Bytes.Span.SequenceEqual("-"u8))
+                    return false;
+                localBuiltinFrame.SaveErrexit(_state.ErrexitEnabled);
+                return true;
+            }
 
             async Task<bool> AssignReferencedElementAsync(
                 VariableReference reference, VariableBinding attributes, ShellValue value, AssignmentOperator operation, bool global)
@@ -3685,6 +3709,33 @@ public sealed partial class Evaluation : IFileTester
         /// <summary>Promotion candidates for this scope, filtered before its bindings are restored.</summary>
         public HashSet<BindingName> PromotedNames { get; } = new();
 
+        /// <summary>The supported option state saved by the first local dash operand in this invocation.</summary>
+        internal bool? SavedErrexit { get; private set; }
+
+        private FunctionContext OptionOwner
+        {
+            get
+            {
+                var owner = this;
+                // Prefix wrappers around eval and source share the active function invocation.
+                while (owner.Locals.IsTemporaryPrefixScope && owner.Enclosing is { } enclosing)
+                    owner = enclosing;
+                return owner;
+            }
+        }
+
+        internal void SaveErrexit(bool enabled) => OptionOwner.SavedErrexit ??= enabled;
+
+        internal bool HasOwnOptionSnapshot => OptionOwner.SavedErrexit.HasValue;
+
+        internal bool HasVisibleOptionSnapshot()
+        {
+            for (FunctionContext? frame = this; frame != null; frame = frame.Enclosing)
+                if (frame.SavedErrexit.HasValue)
+                    return true;
+            return false;
+        }
+
         public bool IsLocal(BindingName name) => Locals.Declares(name) || Enclosing?.IsLocal(name) == true;
 
         public FunctionContext Fork(Variables variables, GlobalPrefixBindings? prefixes)
@@ -3695,7 +3746,10 @@ public sealed partial class Evaluation : IFileTester
             var callPrefixes = PrefixBindings?.Fork(variables);
             var localPrefixes = prefixes?.FunctionDepth == Depth ? prefixes.Bindings : callPrefixes;
             return new FunctionContext(FunctionName, Locals.Fork(variables, enclosing?.Locals, localPrefixes), enclosing)
-            { PrefixBindings = callPrefixes };
+            {
+                PrefixBindings = callPrefixes,
+                SavedErrexit = SavedErrexit
+            };
         }
 
     }

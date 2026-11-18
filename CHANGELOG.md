@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `local -` to save and restore the function's shell options.
+
 - Apply quote and substitution rules across word fragments after a brace
   sequence generates a backslash or backtick.
 

@@ -187,6 +187,9 @@ positions and negation suppress it through nested functions/groups and source/ev
 Command substitution clears errexit by default; parenthesized subshells inherit it.
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
+Inside a function, `local -` saves the active mutable option state. The function
+restores it on return. A second `local -` keeps the first snapshot, as in the
+pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.
 
 `shift` uses expanded fields and accepts a leading `--`. Its count defaults to
 one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII

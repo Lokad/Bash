@@ -197,6 +197,11 @@ Compound commands preserve the tested origin of their final status; simple
 invocations expose a fresh status. Early exit follows the ordinary EXIT-trap and
 descriptor cleanup path. Command substitutions clear errexit on entry, while
 subshells and pipeline stages inherit it.
+The `local -` operand saves errexit on the active function invocation, including
+when it is reached through eval or source. Normal return and expansion failure
+unwind the snapshot. A terminating exit or errexit lets the EXIT action see the
+active option state. A child evaluation forks the function frames and their
+snapshots alongside the ordinary shell state.
 
 Loop flow is settled at the loop that owns its remaining level. In while/until
 conditions, the condition gate precedes body suppression: a closed gate retains

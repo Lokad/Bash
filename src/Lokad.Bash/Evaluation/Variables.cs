@@ -362,6 +362,7 @@ public sealed partial class Variables
         }
 
         internal Variables? ExportSnapshot => _parent == null ? _saved : null;
+        internal bool IsTemporaryPrefixScope => _parent != null;
         internal IReadOnlySet<BindingName> SavedNames => _names;
         internal IReadOnlySet<BindingName> PromotedPrefixes => _promotedPrefixes;
 

@@ -33,6 +33,7 @@ public sealed partial class Evaluation
             arguments,
             PositionalParametersRestorePolicy.Always);
         EvaluationResult functionResult;
+        var preserveExitOptions = false;
         try
         {
             functionResult = await EvaluateCommandAsync(
@@ -47,16 +48,21 @@ public sealed partial class Evaluation
                     negated: false)
                 .ConfigureAwait(false);
 
+            // A terminating exit or errexit leaves the active options visible to EXIT.
+            // Expansion errors unwind the function before the script handles the failure.
+            preserveExitOptions = functionResult.Flow == FlowControlKind.Exit && _state.FatalExpansion == null;
             CompletePromotions(functionContext, scope.Context.FunctionContext, scope.Variables, bindings);
         }
         finally
         {
+            if (!preserveExitOptions && functionContext.SavedErrexit is { } savedErrexit)
+                _state.ErrexitEnabled = savedErrexit;
             functionContext.Locals.Restore();
         }
 
         if (functionResult.Flow == FlowControlKind.Return)
         {
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(functionResult.ExitCode), negated);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(functionResult.ExitCode), negated).ConfigureAwait(false);
         }
 
         return ApplyNegation(functionResult, negated);
