@@ -617,7 +617,9 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope,
         bool negated)
     {
-        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope, persistAllocations: true)
+        var persistence = redirectedCommand.Body is SubshellCommand
+            ? RedirectionPersistence.Allocations : RedirectionPersistence.AllocationsAndMoves;
+        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope, persistence)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var result = EvaluationResult.FromExitCode(0);
@@ -954,7 +956,8 @@ public sealed partial class Evaluation : IFileTester
                     exitCode = 1;
             }
 
-            var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, scope, persistAllocations: true)
+            var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, scope,
+                RedirectionPersistence.AllocationsAndMoves)
                 .ConfigureAwait(false);
             Exception? assignmentFailure = null;
             var assignmentResult = EvaluationResult.FromExitCode(exitCode);
@@ -1127,7 +1130,8 @@ public sealed partial class Evaluation : IFileTester
             };
         }
         var commandRedirections = await OpenRedirectionScopeAsync(
-                simpleCommand.Redirections, redirectionExpansionScope, persistAllocations: !externalRedirections)
+                simpleCommand.Redirections, redirectionExpansionScope,
+                externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         List<FunctionBinding>? exportOwners = null;
@@ -2605,37 +2609,27 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>
     /// Opens a lexical redirection scope and records ownership of every descriptor it creates.
-    /// External command allocations stay in their isolated expansion scope; in-process allocations persist.
+    /// The command's execution policy determines which bindings can reach the enclosing scope.
     /// </summary>
     private async Task<RedirectionScope> OpenRedirectionScopeAsync(
         IReadOnlyList<Redirection> redirections,
         ScopedEvaluation scope,
-        bool persistAllocations)
+        RedirectionPersistence persistence)
     {
         if (redirections.Count == 0)
-            return new RedirectionScope(this, active: false, []);
+            return new RedirectionScope(this, active: false, [], []);
 
-        var restoredTable = _state.CurrentRedirectionTable
-            ?? throw new InvalidOperationException("Redirection setup requires an enclosing descriptor table.");
+        if (_state.CurrentRedirectionTable == null)
+            throw new InvalidOperationException("Redirection setup requires an enclosing descriptor table.");
         var evaluation = new RedirectionEvaluation(redirections, CaptureDescriptorBindings().Fork());
-        var changedDescriptors = new HashSet<LogicalDescriptor>();
         IReadOnlyList<FileDescriptor> releasedDescriptors = [];
         // Expose the table as setup advances, so later target expansions and their substitutions
         // inherit earlier redirections. Descriptor ownership is finalized after setup succeeds.
         _state.PushRedirectionTable(evaluation.DescriptorTable, evaluation.OpenedDescriptors, evaluation.TouchedDescriptors, Memory);
         try
         {
-            await evaluation.EvaluateAsync(scope, persistAllocations).ConfigureAwait(false);
-            // Allocations can update the enclosing table during setup. Its stable
-            // owner now contains the bindings against which restoration is selected.
-            foreach (var logicalDescriptor in evaluation.TouchedDescriptors)
-            {
-                if (evaluation.DescriptorTable.Resolve(logicalDescriptor) != restoredTable.Resolve(logicalDescriptor)
-                    || evaluation.DescriptorTable.HasMapping(logicalDescriptor) != restoredTable.HasMapping(logicalDescriptor))
-                    RedirectionEvaluation.AddDescriptorToSet(changedDescriptors, logicalDescriptor, Memory);
-            }
+            await evaluation.EvaluateAsync(scope, persistence).ConfigureAwait(false);
             releasedDescriptors = evaluation.GetDescriptorsToReleaseWhenPreserved(Memory);
-            _state.CompleteRedirectionSetup(changedDescriptors);
         }
         catch (Exception error)
         {
@@ -2650,17 +2644,14 @@ public sealed partial class Evaluation : IFileTester
             }
             finally
             {
-                _state.PopRedirectionTable();
-                // Earlier allocations may already be persistent. Retain their
-                // handles in the surviving owner while closing only unused opens.
-                await CloseDescriptorsAsync(_state.TransferRedirectionDescriptors(evaluation.OpenedDescriptors.Handles, Memory, _descriptorCloseBuffer),
-                    operationFailed: true).ConfigureAwait(false);
+                await new RedirectionScope(this, active: true, [], evaluation.ConsumedSources)
+                    .CloseAsync(operationFailed: true).ConfigureAwait(false);
             }
             if (error is MemoryBudgetExceededException)
-                return new RedirectionScope(this, active: false, []);
+                return new RedirectionScope(this, active: false, [], []);
             throw;
         }
-        return new RedirectionScope(this, active: true, releasedDescriptors);
+        return new RedirectionScope(this, active: true, releasedDescriptors, evaluation.ConsumedSources);
 
     }
 
@@ -3561,40 +3552,20 @@ public sealed partial class Evaluation : IFileTester
     private sealed class RedirectionScope(
         Evaluation owner,
         bool active,
-        IReadOnlyList<FileDescriptor> descriptorsToReleaseWhenPreserved)
+        IReadOnlyList<FileDescriptor> descriptorsToReleaseWhenPreserved,
+        IReadOnlyCollection<FileDescriptor> consumedSources)
     {
         private bool _active = active;
 
-        public async Task<OperationError?> PreserveAsync()
+        public Task<OperationError?> PreserveAsync()
         {
             if (!_active)
-                return null;
+                return Task.FromResult<OperationError?>(null);
 
             var openedDescriptors = owner._state.PreserveRedirectionTable(
                 owner.Memory, owner._pendingDescriptorCleanup, owner._subshellBorrowedDescriptorScopes);
             _active = false;
-            var handles = owner._descriptorCloseBuffer;
-            owner._state.TransferRedirectionDescriptors(openedDescriptors, owner.Memory, handles);
-            foreach (var descriptor in descriptorsToReleaseWhenPreserved)
-            {
-                if (TryTakeOwnedDescriptor(descriptor))
-                    handles.AddPrepared(descriptor);
-            }
-
-            return await owner.CloseDescriptorsAsync(handles, operationFailed: false).ConfigureAwait(false);
-
-            // Take only handles whose lifetime belongs to this evaluator and whose aliases have all been released.
-            bool TryTakeOwnedDescriptor(FileDescriptor descriptor)
-            {
-                if (owner._borrowedDescriptors.Contains(descriptor)
-                    || owner._subshellBorrowedDescriptorScopes.Any(scope => scope.Contains(descriptor))
-                    || owner._state.ReferencesDescriptor(descriptor))
-                {
-                    return false;
-                }
-
-                return owner._state.TryTakeRedirectionDescriptor(descriptor, owner.Memory);
-            }
+            return FinishAsync(openedDescriptors, descriptorsToReleaseWhenPreserved, operationFailed: false);
         }
 
         public async ValueTask<OperationError?> CloseAsync(bool operationFailed)
@@ -3603,9 +3574,30 @@ public sealed partial class Evaluation : IFileTester
                 return null;
 
             _active = false;
-            var openedDescriptors = owner._state.PopRedirectionTable();
-            return await owner.CloseDescriptorsAsync(owner._state.TransferRedirectionDescriptors(
-                openedDescriptors, owner.Memory, owner._descriptorCloseBuffer), operationFailed).ConfigureAwait(false);
+            return await FinishAsync(owner._state.PopRedirectionTable(), [], operationFailed).ConfigureAwait(false);
+        }
+
+        private Task<OperationError?> FinishAsync(IReadOnlyCollection<FileDescriptor> openedDescriptors,
+            IReadOnlyList<FileDescriptor> releasedDescriptors, bool operationFailed)
+        {
+            var handles = owner._descriptorCloseBuffer;
+            owner._state.TransferRedirectionDescriptors(openedDescriptors, owner.Memory, handles);
+            foreach (var descriptor in releasedDescriptors)
+                RetireUnreferenced(descriptor);
+            foreach (var descriptor in consumedSources)
+                RetireUnreferenced(descriptor);
+            return owner.CloseDescriptorsAsync(handles, operationFailed);
+
+            void RetireUnreferenced(FileDescriptor descriptor)
+            {
+                if (!owner._borrowedDescriptors.Contains(descriptor)
+                    && !owner._subshellBorrowedDescriptorScopes.Any(scope => scope.Contains(descriptor))
+                    && !owner._state.ReferencesDescriptor(descriptor)
+                    && owner._state.TryTakeRedirectionDescriptor(descriptor, owner.Memory))
+                {
+                    handles.AddPrepared(descriptor);
+                }
+            }
         }
 
     }

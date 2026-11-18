@@ -14,6 +14,7 @@ namespace Lokad.Bash.Evaluation;
 internal struct RedirectionState
 {
     private readonly Stack<RedirectionFrame> _frames;
+    // A lexical restoration boundary belongs to a logical number even when its handle is unchanged.
     private IReadOnlySet<LogicalDescriptor> _changedDescriptors;
     private long _savedAdditionalBytes;
     private DescriptorHandleOwner _openedDescriptors;
@@ -98,10 +99,6 @@ internal struct RedirectionState
         _changedDescriptors = previous.Changed;
         return openedDescriptors;
     }
-
-    /// <summary>Completes setup without reinstalling the already active lexical lifetime.</summary>
-    public void CompleteSetup(IReadOnlySet<LogicalDescriptor> changedDescriptors) =>
-        _changedDescriptors = changedDescriptors;
 
     /// <summary>
     /// Commits the current scope through enclosing scopes until each logical descriptor reaches

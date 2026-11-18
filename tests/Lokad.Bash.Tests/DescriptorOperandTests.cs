@@ -126,6 +126,60 @@ public sealed class DescriptorOperandTests
         Assert.Contains("Bad file descriptor", host.StandardError.TextContent);
     }
 
+    [Theory]
+    [InlineData(": 4>&3-", "alias", 1, "3: Bad file descriptor\n")]
+    [InlineData(": 4>&3- 3>&4", "alias", 1, "3: Bad file descriptor\n")]
+    [InlineData(": 3>&5 4>&3-", "afteralias", 0, "")]
+    [InlineData(": 3>&3 4>&3-", "alias", 1, "3: Bad file descriptor\n")]
+    [InlineData("exec 4>&5; : 4>&3-", "afteralias", 0, "")]
+    [InlineData("exec 3>&3-", "afteralias", 0, "")]
+    [InlineData(": 4>&3- 4>&99", "alias", 1, "99: Bad file descriptor\n3: Bad file descriptor\n")]
+    [InlineData("( : ) 4>&3-", "afteralias", 0, "")]
+    [InlineData("cat /dev/null 4>&3-", "afteralias", 0, "")]
+    public async Task MoveRestoresOnlySavedBindings(string command, string file, int writeStatus, string error)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "exec 3>out 5>&3; " + command + "; printf after >&3; printf '%s' \"$?\"; printf alias >&5",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(writeStatus.ToString(System.Globalization.CultureInfo.InvariantCulture), host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(file, host.ReadFile("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task MoveConsumesTheEnclosingAliasEvenWhenItUsesTheSameHandle()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "exec 3>out 5>&3; { : 4>&3-; printf inside >&3; } 3>&5; printf after >&3",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("", host.StandardOutput.TextContent);
+        Assert.Equal("3: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal("after", host.ReadFile("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task MoveConsumesAnInputBindingWhileItsDestinationReadsTheSameBytes()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/in", "first\nsecond\n");
+        var result = await host.RunAsync(
+            "exec 3<in; { read -r -u4 a; printf '%s;' \"$a\"; } 4<&3-; read -r -u3 b; printf '%s:%s' \"$?\" \"$b\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("first;1:", host.StandardOutput.TextContent);
+        Assert.Equal("read: 3: invalid file descriptor: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ASourceLeadingCloseDashLeavesFollowingTextAsAnArgument()
     {

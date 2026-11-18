@@ -56,6 +56,66 @@ public sealed class DescriptorOwnershipLifetimeTests
     }
 
     [Theory]
+    [InlineData("", "")]
+    [InlineData(" 7>&99", "99: Bad file descriptor\n")]
+    public async Task ConsumedHandleClosesBeforeTheNextCommandBegins(string laterRedirection, string error)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new RecordingCloseHost { MemoryBudget = owner };
+        var closedBeforeNextOpen = -1;
+        host.BeforeWritableOpen = path =>
+        {
+            if (path.Path == "/next")
+                closedBeforeNextOpen = host.Closed.Count;
+        };
+        var evaluation = new Eval(Parser.Parse("exec 3>out; : 4>&3-" + laterRedirection + "; printf ready >next"));
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, closedBeforeNextOpen);
+        Assert.Equal(2, host.Opened.Count);
+        Assert.Equal(host.Opened, host.Closed);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal("ready", host.ReadFile("/next"));
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task CancellationAwaitsTheConsumedHandleClose()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var host = new PendingCloseHost { MemoryBudget = owner };
+        var evaluation = new Eval(Parser.Parse("exec 3>out; : 4>&3-; printf unreached"));
+        var running = new Engine().RunAsync(evaluation, host, owner, cancellation.Token);
+
+        try
+        {
+            await host.Entered.Task.WaitAsync(deadline.Token);
+            cancellation.Cancel();
+            Assert.False(running.IsCompleted);
+            Assert.Empty(host.StandardOutput.Content.ToArray());
+        }
+        finally
+        {
+            host.Release.TrySetResult();
+        }
+
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(deadline.Token));
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal(1, host.Closes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RepeatedAllocationsAdmitReceivingOwnershipWhileBoundedHandlesReuseIt(bool bounded)

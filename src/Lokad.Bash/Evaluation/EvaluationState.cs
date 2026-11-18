@@ -287,9 +287,6 @@ internal sealed class EvaluationState
 
     public IReadOnlyCollection<FileDescriptor> PopRedirectionTable() => _redirections.Pop();
 
-    internal void CompleteRedirectionSetup(IReadOnlySet<LogicalDescriptor> changedDescriptors) =>
-        _redirections.CompleteSetup(changedDescriptors);
-
     /// <summary>Commits the current scope's changed bindings through their temporary restoration boundaries.</summary>
     public IReadOnlyCollection<FileDescriptor> PreserveRedirectionTable(
         EvaluationMemory? memory, OrderedDescriptorSet? pending, Stack<HashSet<FileDescriptor>>? borrowed) =>

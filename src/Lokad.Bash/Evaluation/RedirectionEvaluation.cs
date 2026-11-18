@@ -9,6 +9,8 @@ using Lokad.Bash.Tools;
 
 namespace Lokad.Bash.Evaluation;
 
+internal enum RedirectionPersistence { None, Allocations, AllocationsAndMoves }
+
 /// <summary>
 /// Evaluates redirections and resolves descriptor mappings in order.
 /// </summary>
@@ -24,6 +26,7 @@ internal sealed class RedirectionEvaluation
     private readonly OrderedDescriptorSet _releasedDescriptors = new();
     /// <summary> Stores logical descriptors explicitly targeted by the redirections. </summary>
     private readonly HashSet<LogicalDescriptor> _touchedDescriptors = new();
+    private OrderedDescriptorSet? _consumedSources;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RedirectionEvaluation"/> class.
@@ -63,12 +66,17 @@ internal sealed class RedirectionEvaluation
     /// </summary>
     public IReadOnlySet<LogicalDescriptor> TouchedDescriptors => _touchedDescriptors;
 
+    /// <summary>Gets moved handles whose caller binding was closed during setup.</summary>
+    public IReadOnlyCollection<FileDescriptor> ConsumedSources =>
+        _consumedSources is { } consumed ? consumed : Array.Empty<FileDescriptor>();
+
     /// <summary>
     /// Evaluates all redirections sequentially, issuing operations as needed.
     /// Allocation uses the active expansion bindings and the command's descriptor lifetime.
     /// </summary>
-    public async Task EvaluateAsync(ScopedEvaluation scope, bool persistAllocations)
+    public async Task EvaluateAsync(ScopedEvaluation scope, RedirectionPersistence persistence)
     {
+        var persistAllocations = persistence != RedirectionPersistence.None;
         foreach (var redirection in _redirections)
         {
             if (scope.Effects.HasPendingExpansionError)
@@ -79,7 +87,7 @@ internal sealed class RedirectionEvaluation
             if (redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput)
             {
                 var outcome = await DuplicateDescriptorAsync(scope, redirection, targetDescriptor,
-                    persistAllocations).ConfigureAwait(false);
+                    persistence).ConfigureAwait(false);
                 if (outcome == RedirectionOutcome.Failure) return;
                 continue;
             }
@@ -210,7 +218,7 @@ internal sealed class RedirectionEvaluation
         ScopedEvaluation scope,
         Redirection redirection,
         LogicalDescriptor targetDescriptor,
-        bool persistAllocations)
+        RedirectionPersistence persistence)
     {
         var allocate = redirection.VariableName.Length != 0;
         var move = redirection.MovesDescriptor;
@@ -271,6 +279,9 @@ internal sealed class RedirectionEvaluation
             return RedirectionOutcome.Success;
         }
 
+        if (!allocate && targetDescriptor == sourceDescriptor)
+            return RedirectionOutcome.Success;
+
         var resolvedSource = _descriptorTable.Resolve(sourceDescriptor);
         if (resolvedSource.IsClosed)
         {
@@ -280,11 +291,26 @@ internal sealed class RedirectionEvaluation
         }
 
         var previouslyTouched = _touchedDescriptors.Contains(targetDescriptor);
+        var consumeSource = move && !allocate && persistence == RedirectionPersistence.AllocationsAndMoves
+            && _descriptorTable.Resolve(targetDescriptor).IsClosed && !_touchedDescriptors.Contains(sourceDescriptor);
         SetDescriptor(scope, targetDescriptor, resolvedSource);
-        if (move) SetDescriptor(scope, sourceDescriptor, FileDescriptor.Closed);
+        if (consumeSource)
+        {
+            // An unopened destination contributes no saved source binding. Retire the source
+            // through enclosing scopes while keeping the moved handle live through its aliases.
+            var consumed = _consumedSources ??= new OrderedDescriptorSet();
+            if (!consumed.Contains(resolvedSource))
+            {
+                consumed.PrepareAdditional(1, scope.Effects.Memory.Workspace);
+                consumed.AddPrepared(resolvedSource);
+            }
+            scope.Effects.BindPersistentDescriptor(sourceDescriptor, FileDescriptor.Closed);
+        }
+        else if (move)
+            SetDescriptor(scope, sourceDescriptor, FileDescriptor.Closed);
         if (allocate)
             await BindAllocatedDescriptorAsync(scope, redirection.VariableName,
-                targetDescriptor, resolvedSource, previouslyTouched, persistAllocations).ConfigureAwait(false);
+                targetDescriptor, resolvedSource, previouslyTouched, persistence != RedirectionPersistence.None).ConfigureAwait(false);
         return RedirectionOutcome.Success;
 
     }

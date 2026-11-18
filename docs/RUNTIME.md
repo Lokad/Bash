@@ -307,9 +307,14 @@ only lookups and retains the existing once-only handle closure path.
 
 Descriptor redirections prepare source move syntax on their immutable node and
 resolve its operand against current bindings. Valid filename fallback opens the
-already expanded target; it does not repeat its effects. Closing or moving a
-logical descriptor uses the same alias/restoration and cleanup path. Invalid
-descriptor words report shell failures rather than escaping implementation exceptions.
+already expanded target without repeating its effects. A move to the same logical
+number is a no-op. A non-allocated move to a closed destination can consume the
+source across an in-process command boundary. Earlier redirections that saved the
+source restore it at their own boundary, including when both bindings use the
+same host handle. An open destination keeps the source close temporary unless
+`exec` preserves it. Child moves retain their own bindings. Source handles retire
+through the ordinary alias and cleanup path after their last reference.
+Invalid descriptor words report shell failures through the active descriptor map.
 
 `CommandInvocation` carries byte arguments, environment, working directory, stdio,
 exported function definitions, ownership and an optional typed interpreter payload.

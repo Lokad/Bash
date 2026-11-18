@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retain a descriptor move's source close when an in-process command moves
+  into a closed destination and the source has no earlier saved binding.
+
 - Retain whole-name `read` assignments through local namerefs when a command
   prefix temporarily shadows the referent. Keep selectors in the active scope.
 
