@@ -37,17 +37,7 @@ public sealed class OrderedDescriptorSetTests
         var retained = descriptors.EstimatedMemoryBytes;
         Cycle();
 
-        // Check for sustained allocations across fixed samples. A one-time runtime
-        // allocation on this thread should not dominate the reuse measurement.
-        Span<long> samples = stackalloc long[3];
-        for (var sample = 0; sample < samples.Length; sample++)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var iteration = 0; iteration < 1000; iteration++) Cycle();
-            samples[sample] = GC.GetAllocatedBytesForCurrentThread() - before;
-        }
-        samples.Sort();
-        Assert.True(samples[1] <= 1024, $"Batch reuse allocation samples were {samples[0]}, {samples[1]}, and {samples[2]} bytes.");
+        AssertSustainedReuseAllocation(Cycle, iterations: 1000);
         Assert.Equal(calls, counted.AdmissionCalls);
         Assert.Equal(retained, descriptors.EstimatedMemoryBytes);
         Assert.Empty(descriptors);
@@ -127,11 +117,8 @@ public sealed class OrderedDescriptorSetTests
         for (var iteration = 0; iteration < 1000; iteration++) Cycle();
         var retained = descriptors.EstimatedMemoryBytes;
         var calls = counted.AdmissionCalls;
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var iteration = 0; iteration < 20000; iteration++) Cycle();
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.True(allocated <= 1024, $"Bounded synchronous reuse allocated {allocated} bytes.");
+        AssertSustainedReuseAllocation(Cycle, iterations: 20000);
         Assert.Equal(calls, counted.AdmissionCalls);
         Assert.Equal(retained, descriptors.EstimatedMemoryBytes);
         Assert.Equal(new[] { new FileDescriptor(11), new FileDescriptor(12), new FileDescriptor(10) }, descriptors.ToArray());
@@ -142,5 +129,20 @@ public sealed class OrderedDescriptorSetTests
             descriptors.PrepareAdditional(1, memory);
             descriptors.AddPrepared(new FileDescriptor(10));
         }
+    }
+
+    private static void AssertSustainedReuseAllocation(Action cycle, int iterations)
+    {
+        // Check steady reuse independently of a one-time allocation on the current thread.
+        Span<long> samples = stackalloc long[3];
+        for (var sample = 0; sample < samples.Length; sample++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var iteration = 0; iteration < iterations; iteration++) cycle();
+            samples[sample] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        samples.Sort();
+        Assert.True(samples[1] <= 1024,
+            $"Synchronous reuse allocation samples were {samples[0]}, {samples[1]}, and {samples[2]} bytes.");
     }
 }
