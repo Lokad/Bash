@@ -1,7 +1,9 @@
+using System.Reflection;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
@@ -49,6 +51,75 @@ public partial class EvaluationTests
         Assert.Equal(131, state.IndexedArrays["arr"].Count);
         Assert.Equal(ShellValue.FromText("keep"), state.IndexedArrays["arr"][0]);
         Assert.Equal(ShellValue.FromText("last"), state.IndexedArrays["arr"][130]);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task MapfileOriginAdmitsDictionaryGrowthBeforeApplyingAnyRecord(bool grow, bool limited)
+    {
+        var state = new Eval(Parser.Parse("mapfile -tn2 -O \"$origin\" arr"));
+        var variables = Assert.IsType<Variables>(typeof(Eval)
+            .GetField("_vars", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(state));
+        var original = ShellValue.FromText("original");
+        Assert.True(variables.TryAssignArray("arr", Enumerable.Repeat(original, 1024).ToArray(), ArrayKind.Indexed));
+        var array = variables.IndexedArrays["arr"];
+        var elements = Assert.IsType<Dictionary<long, ShellValue?>>(typeof(IndexedArray)
+            .GetField("_elements", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(array));
+        var capacity = elements.EnsureCapacity(0);
+        for (var index = array.Count; index < capacity; index++)
+        {
+            Assert.True(IndexedArrayIndex.TryCreate(index, out var position));
+            Assert.True(variables.TrySetArrayElement("arr", position, original));
+        }
+
+        var origin = capacity - (grow ? 1 : 2);
+        Assert.True(variables.TrySetScalar("origin", ShellValue.FromText(Integers.FormatNumber(origin))));
+        var budget = new MemoryGovernor(8 * 1024 * 1024);
+        using var scope = budget.CreateScope();
+        state.Memory.Budget = scope;
+        var read = await NextReadAsync(state);
+        Assert.Equal(2, read.Limit);
+        state.Memory.ReleaseUnusedCapacity();
+        var backing = CollectionBacking.ArrayPayloadBytes(elements);
+        // Leave room for a workspace increment and the input list while the read settles.
+        using var held = budget.Reserve(limited ? budget.LimitBytes - budget.ReservedBytes - 72 * 1024 : 0);
+        read.SetResult(ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false));
+        var operation = await NextStepAsync(state);
+        var diagnostic = operation as WriteOperation;
+        if (diagnostic != null)
+        {
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+            operation = await NextStepAsync(state);
+        }
+        Assert.Null(operation);
+        Assert.Same(array, variables.IndexedArrays["arr"]);
+        Assert.True(IndexedArrayIndex.TryCreate(origin, out var first));
+        Assert.True(IndexedArrayIndex.TryCreate(origin + 1, out var second));
+        Assert.True(array.TryGet(first, out var firstValue));
+        var backingAfter = CollectionBacking.ArrayPayloadBytes(elements);
+        if (grow && limited)
+        {
+            Assert.Equal(backing, backingAfter);
+            Assert.Equal(original, firstValue);
+            Assert.False(array.TryGet(second, out _));
+            Assert.Equal(capacity, array.Count);
+            Assert.Equal(2, state.LastExitCode);
+            Assert.NotNull(diagnostic);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
+        }
+        else
+        {
+            Assert.Equal(grow, backingAfter > backing);
+            Assert.Equal(ShellValue.FromText("first"), firstValue);
+            Assert.True(array.TryGet(second, out var secondValue));
+            Assert.Equal(ShellValue.FromText("second"), secondValue);
+            Assert.Equal(capacity + (grow ? 1 : 0), array.Count);
+            Assert.Equal(0, state.LastExitCode);
+            Assert.Null(diagnostic);
+        }
     }
 
     [Fact]

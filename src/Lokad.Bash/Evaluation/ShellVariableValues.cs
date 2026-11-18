@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Evaluation;
@@ -170,22 +171,9 @@ internal sealed class IndexedArray
         var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
             - Variables.EstimateValueBytes(previous.GetValueOrDefault());
         var valueBytes = checked(_valueBytes + valueDelta);
-        var replacementCapacity = 0;
-        long overlap = 0;
-        if (memory != null && !present)
-        {
-            var capacity = _elements.EnsureCapacity(0);
-            if (_elements.Count == capacity)
-            {
-                replacementCapacity = (int)Math.Min(int.MaxValue, Math.Max(3L, 2L * capacity));
-                // The per-position estimate already includes resize headroom. Reuse its
-                // share above the live table and nodes before admitting the replacement.
-                var liveStorage = 128 + DictionarySlotBytes * capacity + PositionNodeBytes * _elements.Count;
-                var headroom = Math.Max(0, (long)_entryCapacity * ElementMemoryBytes - liveStorage);
-                var replacement = 128 + DictionarySlotBytes * (2L * replacementCapacity + 1);
-                overlap = Math.Max(0, replacement - headroom);
-            }
-        }
+        var (replacementCapacity, overlap) = memory != null && !present
+            ? EstimateDictionaryGrowth(_elements.EnsureCapacity(0), checked(_elements.Count + 1), prepaidBytes: 0)
+            : (0, 0L);
         memory?.Charge(checked(Math.Max(0, valueDelta) + (present ? 0 : ElementMemoryBytes) + overlap));
         if (replacementCapacity != 0)
             _elements.EnsureCapacity(replacementCapacity);
@@ -216,16 +204,64 @@ internal sealed class IndexedArray
     public static IndexedArray FromSequential(IReadOnlyList<ShellValue> values)
     {
         var array = new IndexedArray(isInitialized: true);
-        array.SetSequential(0, values);
+        array.SetSequential(0, values, memory: null, CancellationToken.None);
         return array;
     }
 
-    /// <summary>Writes consecutive positions using Bash's unsigned mapfile index progression.</summary>
-    internal void SetSequential(uint origin, IReadOnlyList<ShellValue> values)
+    /// <summary>Publishes admitted records after checking dictionary growth for the whole batch.</summary>
+    internal void SetSequential(
+        uint origin, IReadOnlyList<ShellValue> values, EvaluationMemory? memory, CancellationToken cancellationToken)
     {
+        if (memory != null)
+        {
+            var capacity = _elements.EnsureCapacity(0);
+            if (capacity != 0 && values.Count > capacity - _elements.Count)
+            {
+                var added = 0;
+                for (var index = 0; index < values.Count; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!_elements.ContainsKey(unchecked(origin + (uint)index)))
+                        added++;
+                }
+
+                // Keep the new position nodes covered by the existing per-record admission.
+                var prepaid = (long)values.Count * ElementMemoryBytes - added * PositionNodeBytes;
+                var (replacementCapacity, overlap) = EstimateDictionaryGrowth(
+                    capacity, checked(_elements.Count + added), prepaid);
+                if (replacementCapacity != 0)
+                {
+                    memory.Charge(overlap);
+                    try
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        _elements.EnsureCapacity(replacementCapacity);
+                    }
+                    finally
+                    {
+                        if (overlap != 0)
+                            memory.Workspace.Resize(memory.Workspace.Bytes - overlap);
+                    }
+                }
+            }
+        }
+
         for (var index = 0; index < values.Count; index++)
             Set(IndexedArrayIndex.FromUnsigned(unchecked(origin + (uint)index)), values[index]);
         MarkInitialized();
+    }
+
+    private (int Capacity, long Overlap) EstimateDictionaryGrowth(int capacity, int required, long prepaidBytes)
+    {
+        if (required <= capacity)
+            return (0, 0);
+
+        var replacementCapacity = (int)Math.Min(int.MaxValue, Math.Max(required, Math.Max(3L, 2L * capacity)));
+        // Reuse the part of the retained estimate above the live table and nodes.
+        var liveStorage = 128 + DictionarySlotBytes * capacity + PositionNodeBytes * _elements.Count;
+        var headroom = Math.Max(0, (long)_entryCapacity * ElementMemoryBytes - liveStorage);
+        var replacement = 128 + DictionarySlotBytes * (2L * replacementCapacity + 1);
+        return (replacementCapacity, Math.Max(0, replacement - headroom - prepaidBytes));
     }
 
     /// <summary>

@@ -157,7 +157,7 @@ public sealed partial class Evaluation
             // Publish only after the requested records have been read and admitted.
             target.PrepareForPublication(variables);
             if (origin is { } first)
-                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values);
+                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values, Memory, _cancellationToken);
             else
             {
                 var array = IndexedArray.FromSequential(values);
