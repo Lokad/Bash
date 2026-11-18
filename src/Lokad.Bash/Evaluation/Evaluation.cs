@@ -958,7 +958,8 @@ public sealed partial class Evaluation : IFileTester
         PreparedDeclaration? declaration = null;
         if (simpleCommand.DeclarationAssignments.Count > 0)
         {
-            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(simpleCommand, scope)).ConfigureAwait(false);
+            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(simpleCommand, scope, captureCommandWords: true))
+                .ConfigureAwait(false);
             simpleCommand = declaration.Command;
         }
         simpleCommand = await ExpandCommandNameAsync(simpleCommand).ConfigureAwait(false);
@@ -1019,8 +1020,8 @@ public sealed partial class Evaluation : IFileTester
         if (declaration == null && preparation is PreparedCommand.Executable
             { Resolution: CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local } } declarationCommand)
         {
-            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(declarationCommand.SimpleCommand, scope)).ConfigureAwait(false);
-            preparation = declarationCommand with { SimpleCommand = declaration.Command };
+            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(declarationCommand.SimpleCommand, scope, captureCommandWords: false))
+                .ConfigureAwait(false);
         }
         if (_state.TryConsumeExpansionError(out var declarationError))
             return await FailPreparationAsync(declarationError).ConfigureAwait(false);
@@ -1412,8 +1413,7 @@ public sealed partial class Evaluation : IFileTester
                 return source;
             var first = source.Words[0];
             // A prepared field can stay in its original word unless pathname expansion can replace it.
-            if (first.LiteralFields is [var literal]
-                && (literal.Segments is [{ IsGlobQuoted: true }] || !GlobPattern.RequiresExpansion(literal)))
+            if (GetLiteralWithoutGlob(first) != null)
                 return source;
 
             var words = new List<Word>();
@@ -2868,6 +2868,9 @@ public sealed partial class Evaluation : IFileTester
 
     internal Task<IReadOnlyList<ShellValue>> ExpandToWordsAsync(Word word, ScopedEvaluation scope) =>
         AwaitWordExpansionAsync(ExpandAndFlattenAsync(word, scope));
+
+    private static ExpandedWord? GetLiteralWithoutGlob(Word word) => word.LiteralFields is [var literal]
+        && (literal.Segments is [{ IsGlobQuoted: true }] || !GlobPattern.RequiresExpansion(literal)) ? literal : null;
 
     /// <summary>Expands directly into the command's admitted operand list.</summary>
     private Task AppendOperandValuesAsync(Word word, ScopedEvaluation scope, List<ShellValue> operands)

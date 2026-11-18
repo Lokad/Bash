@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -10,15 +11,20 @@ namespace Lokad.Bash.Evaluation;
 public sealed partial class Evaluation
 {
     /// <summary>Prepares declaration fields once; compound writes precede dispatch and later operand expansion.</summary>
-    private async Task<PreparedDeclaration> PrepareDeclarationAsync(SimpleCommand command, ScopedEvaluation scope)
+    private async Task<PreparedDeclaration> PrepareDeclarationAsync(
+        SimpleCommand command, ScopedEvaluation scope, bool captureCommandWords)
     {
         var commandName = command.Words[0].Parts[0].GetUtf8Text();
         if (!BuiltinClassification.TryResolve(commandName.AsSpan(), out var builtin))
             throw new InvalidOperationException("A declaration requires a declaration command name.");
 
         var options = new DeclarationOptions(builtin);
-        var words = new List<Word>(command.Words.Count) { command.Words[0] };
+        // Parser-recognized assignments run before resolution. A shadowing function can still receive the words.
+        var words = captureCommandWords ? new List<Word>() : null;
+        if (words != null)
+            AddOperand(words, command.Words[0]);
         var operands = new List<PreparedDeclarationOperand>();
+        var fields = new List<ShellValue>();
         for (var index = 1; index < command.Words.Count; index++)
         {
             var word = command.Words[index];
@@ -89,8 +95,7 @@ public sealed partial class Evaluation
                         if (options.Global && scope.Context.FunctionContext != null)
                         {
                             await ReportExpansionDiagnosticAsync(declaredName.ToValue(), ShellValue.FromText(ArrayConversionMessage(kind))).ConfigureAwait(false);
-                            AddField(declaredValue);
-                            operands.Add(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
+                            AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;
                         }
                         await ReportFatalExpansionAsync((options.Global ? declaredName : name).ToValue(), ShellValue.FromText(ArrayConversionMessage(kind)), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
@@ -111,8 +116,7 @@ public sealed partial class Evaluation
                             var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
                             await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(message)).ConfigureAwait(false);
                             // Dispatch still visits this name and later operands; a shadowing function can also run.
-                            AddField(declaredValue);
-                            operands.Add(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
+                            AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;
                         }
                     }
@@ -133,8 +137,7 @@ public sealed partial class Evaluation
                         break;
                     }
 
-                    AddField(declaredValue);
-                    operands.Add(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: true));
+                    AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: true));
 
                     bool SelectTarget(out BindingName targetName, out Variables variables, out bool isLocal)
                     {
@@ -207,34 +210,67 @@ public sealed partial class Evaluation
                         .ConfigureAwait(false);
                     if (HasPendingExpansionError)
                         break;
-                    // Retain the pieces; ordinary dispatch flattens them through the shared word memory.
-                    var operand = new PreparedDeclarationOperand(name, value, assignment.Operator, CompoundApplied: false);
-                    words.Add(operand.ToWord());
-                    operands.Add(operand);
+                    AddAssignment(new PreparedDeclarationOperand(name, value, assignment.Operator, CompoundApplied: false));
                 }
                 continue;
             }
 
-            var fields = await ExpandToWordsAsync(word, scope).ConfigureAwait(false);
+            if (scope.CanExpand && GetLiteralWithoutGlob(word) is { } literal)
+            {
+                CheckCancellation();
+                AddField(literal.ToValue(Memory), word, remainingFields: 1);
+                continue;
+            }
+
+            await AppendOperandValuesAsync(word, scope, fields).ConfigureAwait(false);
             if (HasPendingExpansionError)
                 break;
-            foreach (var field in fields)
-            {
-                AddField(field);
-                if (options.TryConsume(field, Memory))
-                    continue;
-                operands.Add(PrepareVariableOperand(field));
-            }
+            if (words != null)
+                Memory.PrepareListCapacity(words, fields.Count);
+            for (var fieldIndex = 0; fieldIndex < fields.Count; fieldIndex++)
+                AddField(fields[fieldIndex], sourceWord: null, remainingFields: fields.Count - fieldIndex);
+            fields.Clear();
         }
 
-        return new PreparedDeclaration(command with { Words = words }, options, operands);
+        Memory.Workspace.Resize(Memory.Workspace.Bytes - MemoryCapacity.ArrayBackingBytes<ShellValue>(fields.Capacity));
+        Memory.Workspace.TrimExcess();
+        return new PreparedDeclaration(words == null ? command : command with { Words = words }, options, operands);
 
         PreparedDeclarationOperand PrepareVariableOperand(ShellValue input) =>
             AssignmentWord.TrySplitOperand(ShellSource.FromBytes(input.Bytes), Memory.Workspace, out var name, out var value, out var operation)
                 ? new PreparedDeclarationOperand(name.ToValue(), value.ToValue(), operation, CompoundApplied: false)
                 : new PreparedDeclarationOperand(input, null, AssignmentOperator.Replace, CompoundApplied: false);
 
-        void AddField(ShellValue field) => words.Add(new Word([WordPart.FromValue(WordPartKind.SingleQuoted, field)]));
+        void AddField(ShellValue field, Word? sourceWord, int remainingFields)
+        {
+            if (words != null)
+            {
+                if (sourceWord != null)
+                    AddOperand(words, sourceWord);
+                else
+                    CaptureArgument(new PreparedDeclarationOperand(field, null, AssignmentOperator.Replace, CompoundApplied: false));
+            }
+            if (options.TryConsume(field, Memory))
+                return;
+            // Once option scanning stops, every remaining field in this word is an operand.
+            Memory.PrepareListCapacity(operands, remainingFields);
+            operands.Add(PrepareVariableOperand(field));
+        }
+
+        void AddAssignment(PreparedDeclarationOperand operand)
+        {
+            CaptureArgument(operand);
+            AddOperand(operands, operand);
+        }
+
+        void CaptureArgument(PreparedDeclarationOperand operand)
+        {
+            if (words == null)
+                return;
+            // Admit the word, its literal parts and its cached expansion before constructing them.
+            Memory.Charge(256);
+            AddOperand(words, operand.ToWord());
+        }
 
         static bool HasConflictingArrayKind(Variables variables, BindingName name, ArrayKind kind) =>
             kind == ArrayKind.Associative ? variables.IndexedArrays.ContainsKey(name) : variables.AssociativeArrays.ContainsKey(name);
@@ -253,7 +289,7 @@ public sealed partial class Evaluation
         ? "cannot convert indexed to associative array" : "cannot convert associative to indexed array";
 
     /// <summary>Null Value means a name without an explicit value, not an assigned empty value.</summary>
-    private sealed record PreparedDeclarationOperand(ShellValue Name, ShellValue? Value, AssignmentOperator Operator, bool CompoundApplied)
+    private readonly record struct PreparedDeclarationOperand(ShellValue Name, ShellValue? Value, AssignmentOperator Operator, bool CompoundApplied)
     {
         // Frozen pieces reuse ordinary word flattening only when dispatch or inspection needs a joined value.
         public Word ToWord() => new(Value is { } value
