@@ -86,6 +86,12 @@ They follow the same expansion and quoting rules as ordinary double-quoted words
 Standalone unquoted braces are words in operand positions, including command
 arguments, loop items, case subjects and patterns, array entries and redirection
 operands. Brace groups require a semicolon or LF before their closing delimiter.
+Brace sequences accept signed 64-bit decimal endpoints or single ASCII letters.
+The endpoints choose direction and a zero step selects unit magnitude. Leading
+zeros on unprefixed or negative endpoints request padding to the wider endpoint,
+including its sign. The pinned Bash 5.2 profile formats padded results as signed
+32-bit values after computing the sequence in 64 bits. Empty or overflowing
+increments remain literal.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
 An adjacent subshell opener can begin a command substitution, as in
 `$((printf value);)`. A complete `$((…))` arithmetic shape selects arithmetic

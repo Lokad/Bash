@@ -9,11 +9,14 @@ namespace Lokad.Bash.Tests;
 public sealed class ExecutionLifetimeTests
 {
     [Theory]
-    [InlineData("printf '%s' {-2147483648..2147483647} >/out", false)]
-    [InlineData("{ printf '%s' {-2147483648..2147483647}; } 2>/errors", true)]
-    public async Task RepresentationOverflowReportsOnceBeforeAllocatingTheExpansion(string script, bool redirected)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepresentationOverflowReportsOnceBeforeAllocatingTheExpansion(bool redirected)
     {
         await using var host = new TestHost();
+        // Bash's sequence count limit is higher than the CLR backing-array limit.
+        var command = $"printf '%s' {{0..{Array.MaxLength - 1}}}";
+        var script = redirected ? "{ " + command + "; } 2>/errors" : command + " >/out";
         var result = await host.RunAsync(script, CancellationToken.None);
         var diagnostic = redirected ? host.ReadFile("/errors") : host.StandardError.TextContent;
 

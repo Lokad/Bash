@@ -66,6 +66,9 @@ public sealed class SourceWordPart : WordPart
     private readonly int _arithmeticOffset;
     private static readonly IReadOnlyDictionary<int, ArithmeticExpansion> NoArithmetic = new Dictionary<int, ArithmeticExpansion>();
 
+    /// <summary>Brace sequences can synthesize escapes after the original word was tokenized.</summary>
+    internal bool IsBraceExpanded { get; init; }
+
     /// <summary>The selected lexical span and its operand. A missing operand fails if reached.</summary>
     internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand);
     internal SourceWordPart(WordPartKind kind, ShellSource source, MemoryCapacity? memory) : base(kind)
@@ -91,7 +94,11 @@ public sealed class SourceWordPart : WordPart
             memory?.Grow(checked(32L + length));
             source = ShellSource.FromBytes(source.Bytes.ToArray());
         }
-        return new(Kind, source, _arithmetic, checked(_arithmeticOffset + start)) { DoubleQuote = DoubleQuote };
+        return new(Kind, source, _arithmetic, checked(_arithmeticOffset + start))
+        {
+            DoubleQuote = DoubleQuote,
+            IsBraceExpanded = IsBraceExpanded
+        };
     }
 
     internal bool TryGetArithmetic(int start, out ArithmeticExpansion expansion)

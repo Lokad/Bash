@@ -13,6 +13,8 @@ namespace Lokad.Bash.Evaluation;
 internal enum ExpansionFailureKind
 {
     Arithmetic,
+    /// <summary>A generated word fails substitution parsing and discards its command unit.</summary>
+    WordSyntax,
     Parameter,
     Assignment,
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>

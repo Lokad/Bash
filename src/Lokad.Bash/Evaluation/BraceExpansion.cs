@@ -1,6 +1,6 @@
 using System;
+using System.Buffers.Text;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -270,106 +270,100 @@ internal static class BraceExpansion
         out IReadOnlyList<ShellSource> expansions)
     {
         expansions = [];
-        // Sequence endpoints and decimal increments are a text grammar; comma-list data is not.
-        memory.Charge(checked(4L * (2L * source.Length)));
-        if (!ShellValue.FromBytes(source.ToArray()).TryGetUtf8Text(out var text))
-            return false;
-        var content = text.AsSpan();
-
-        foreach (var character in content)
-            if (character == ',')
-                return false;
-
-        var first = IndexOfDoubleDot(content, 0, cancellationToken);
+        var first = IndexOfDoubleDot(source, 0, cancellationToken);
         if (first < 0) return false;
 
-        var second = IndexOfDoubleDot(content, first + 2, cancellationToken);
-        if (second >= 0 && IndexOfDoubleDot(content, second + 2, cancellationToken) >= 0)
-            return false;
-
-        var startSpan = content[..first];
+        var second = IndexOfDoubleDot(source, first + 2, cancellationToken);
+        var startSpan = source[..first];
         var endSpan = second >= 0
-            ? content.Slice(first + 2, second - first - 2)
-            : content[(first + 2)..];
-        var incrementSpan = second >= 0 ? content[(second + 2)..] : ReadOnlySpan<char>.Empty;
+            ? source.Slice(first + 2, second - first - 2)
+            : source[(first + 2)..];
 
-        if (startSpan.IsEmpty || endSpan.IsEmpty)
+        long increment = 1;
+        if (second >= 0 && !Integers.TryParseNumber(source[(second + 2)..], out increment))
             return false;
+        var step = increment == 0 ? 1 : Int128.Abs(increment);
 
-        if (Integers.TryParseNumberToken(startSpan, out var startValue, out var startDigits, out var padStart)
-            && Integers.TryParseNumberToken(endSpan, out var endValue, out var endDigits, out var padEnd))
+        if (Integers.TryParseNumber(startSpan, out var startValue)
+            && Integers.TryParseNumber(endSpan, out var endValue))
         {
-            var padWidth = (padStart || padEnd) ? Math.Max(startDigits, endDigits) : 0;
-            if (!TryParseIncrement(incrementSpan, startValue, endValue, out var increment))
+            var difference = (Int128)endValue - startValue;
+            var distance = Int128.Abs(difference);
+            // The Bash 5.2 subtraction guard leaves room for the first value and terminator.
+            if (distance > long.MaxValue
+                || startValue < 0 && difference > long.MaxValue - 2
+                || startValue > 0 && difference < long.MinValue + 3)
                 return false;
 
-            if ((increment > 0 && startValue > endValue) || (increment < 0 && startValue < endValue))
-                return false;
-
-            var format = "D" + padWidth.ToString(CultureInfo.InvariantCulture);
-            expansions = ExpandRange(startValue, endValue, increment, 2 * Math.Max(11L, (long)padWidth + 1),
-                value => value.ToString(format, CultureInfo.InvariantCulture));
-            return true;
+            var width = IsPadded(startSpan) || IsPadded(endSpan) ? Math.Max(startSpan.Length, endSpan.Length) : 0;
+            return TryExpandRange(startValue, endValue, distance, Math.Max(20, width),
+                value => FormatNumber(value, width), out expansions);
         }
 
-        if (startSpan.Length == 1 && endSpan.Length == 1)
+        if (IsLetter(startSpan) && IsLetter(endSpan))
         {
-            var startChar = (int)startSpan[0];
-            var endChar = (int)endSpan[0];
-            if (!TryParseIncrement(incrementSpan, startChar, endChar, out var increment))
-                return false;
-
-            if ((increment > 0 && startChar > endChar) || (increment < 0 && startChar < endChar))
-                return false;
-
-            expansions = ExpandRange(startChar, endChar, increment, 4, static value => new string((char)value, 1));
-            return true;
+            var start = startSpan[0];
+            var end = endSpan[0];
+            return TryExpandRange(start, end, Math.Abs(end - start), 1,
+                static value => ShellSource.FromBytes(new byte[] { (byte)value }), out expansions);
         }
 
         return false;
 
-        IReadOnlyList<ShellSource> ExpandRange(int start, int end, int increment, long maximumCopiedUnits, Func<int, string> format)
+        bool TryExpandRange(long start, long end, Int128 distance, int maximumValueBytes,
+            Func<long, ShellSource> format, out IReadOnlyList<ShellSource> sequence)
         {
-            // Widen before subtraction/absolute value, including int.MinValue increments.
-            // Enumerate by count so stepping past either int endpoint cannot wrap.
-            var count = Math.Abs((long)end - start) / Math.Abs((long)increment) + 1;
-            // CLR collections require a representable backing array, independently of execution duration.
+            sequence = [];
+            // An ascending range must be able to reverse a negative increment.
+            if (start < end && increment == long.MinValue)
+                return false;
+            // Widen magnitude and count to cover long.MinValue and avoid an overflowing terminal step.
+            var count = distance / step + 1;
+            if (count > int.MaxValue - 2)
+                return false;
             if (count >= Array.MaxLength)
                 throw new ByteMemoryBuilder.LimitExceededException();
-            memory.Charge(checked(256L * (count)));
-            memory.Charge(checked(4L * (count * maximumCopiedUnits)));
-            var results = new List<ShellSource>((int)count);
-            for (var index = 0; index < count; index++)
+
+            var length = (int)count;
+            memory.Charge(checked(length * (256L + 4L * maximumValueBytes)));
+            var results = new List<ShellSource>(length);
+            var directedStep = start <= end ? step : -step;
+            for (var index = 0; index < length; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                results.Add(ShellSource.FromText(format((int)(start + (long)index * increment))));
+                results.Add(format((long)(start + index * directedStep)));
             }
-            return results;
-        }
-    }
-
-    /// <summary>
-    /// Parses an optional sequence increment and chooses the default based on direction.
-    /// </summary>
-    /// <param name="span">The decimal increment text.</param>
-    /// <param name="start">The start value of the sequence.</param>
-    /// <param name="end">The end value of the sequence.</param>
-    /// <param name="increment">The parsed increment value.</param>
-    /// <returns>True when the increment is valid for the sequence direction.</returns>
-    private static bool TryParseIncrement<T>(ReadOnlySpan<char> span, T start, T end, out int increment)
-        where T : IComparable<T>
-    {
-        increment = 0;
-        if (span.IsEmpty)
-        {
-            increment = start.CompareTo(end) <= 0 ? 1 : -1;
+            sequence = results;
             return true;
         }
 
-        if (!Integers.TryParseInt(span, out increment))
-            return false;
+        static bool IsPadded(ReadOnlySpan<byte> endpoint)
+        {
+            var digits = endpoint[0] == (byte)'-' ? endpoint[1..] : endpoint;
+            return digits.Length > 1 && digits[0] == (byte)'0';
+        }
 
-        return increment != 0;
+        static bool IsLetter(ReadOnlySpan<byte> token) =>
+            token.Length == 1 && AsciiByte.ToLowerAscii(token[0]) is >= (byte)'a' and <= (byte)'z';
+
+        static ShellSource FormatNumber(long value, int width)
+        {
+            // The pinned Bash 5.2 builds narrow padded output to signed int after stepping in intmax_t.
+            if (width != 0)
+                value = unchecked((int)value);
+            Span<byte> text = stackalloc byte[20];
+            if (!Utf8Formatter.TryFormat(value, text, out var written))
+                throw new InvalidOperationException("A signed decimal must fit its format buffer.");
+
+            var padding = Math.Max(0, width - written);
+            var bytes = new byte[written + padding];
+            var signWidth = value < 0 ? 1 : 0;
+            if (signWidth != 0)
+                bytes[0] = (byte)'-';
+            bytes.AsSpan(signWidth, padding).Fill((byte)'0');
+            text[signWidth..written].CopyTo(bytes.AsSpan(signWidth + padding));
+            return ShellSource.FromBytes(bytes);
+        }
     }
 
     /// <summary>
@@ -379,12 +373,12 @@ internal static class BraceExpansion
     /// <param name="start">The index to start scanning.</param>
     /// <returns>The index of the first dot in a ".." sequence, or -1 if none found.</returns>
     /// <param name="cancellationToken">Cancels scanning the source.</param>
-    private static int IndexOfDoubleDot(ReadOnlySpan<char> span, int start, CancellationToken cancellationToken)
+    private static int IndexOfDoubleDot(ReadOnlySpan<byte> span, int start, CancellationToken cancellationToken)
     {
         for (var index = start; index + 1 < span.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (span[index] == '.' && span[index + 1] == '.')
+            if (span[index] == (byte)'.' && span[index + 1] == (byte)'.')
             {
                 return index;
             }

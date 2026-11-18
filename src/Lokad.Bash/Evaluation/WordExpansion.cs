@@ -163,7 +163,7 @@ internal static partial class WordExpansion
                     scope.Effects.CancellationToken.ThrowIfCancellationRequested();
                     var newParts = new List<WordPart>(baseParts.Count + 1);
                     newParts.AddRange(baseParts);
-                    newParts.Add(WordPart.FromSource(WordPartKind.Unquoted, variant, budget.Workspace));
+                    newParts.Add(new SourceWordPart(WordPartKind.Unquoted, variant, budget.Workspace) { IsBraceExpanded = true });
                     nextExpanded.Add(newParts);
                 }
             }
@@ -555,6 +555,18 @@ internal static partial class WordExpansion
                 return null;
 
             var value = content[index];
+            if (value == (byte)'\\' && syntax.IsBraceExpanded)
+            {
+                if (++index == length)
+                {
+                    output.MarkCurrentWordForEmission();
+                    break;
+                }
+                var escapedLength = Utf8Text.FirstCharacterLength(content.AsSpan()[index..]);
+                output.AppendSource(content.Slice(index, escapedLength), globQuoted: true);
+                index += escapedLength - 1;
+                continue;
+            }
             if (quoteContext == ExpansionQuoteContext.HereDocument
                 && value == (byte)'\\'
                 && index + 1 < length)
@@ -596,6 +608,14 @@ internal static partial class WordExpansion
                     && legacyStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid)
                 {
                     await RejectHereDocumentAsync(scope, legacyStatus).ConfigureAwait(false);
+                    return null;
+                }
+                if (syntax.IsBraceExpanded && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)
+                {
+                    var message = ByteMemoryBuilder.CreateUnaccounted(0);
+                    message.Append("no closing \"`\" in "u8).Append(content.Slice(index).Bytes);
+                    await scope.Effects.ReportFatalExpansionAsync(ShellValue.FromText("bad substitution"),
+                        ShellValue.FromBytes(message.ToMemory()), ExpansionFailureKind.WordSyntax).ConfigureAwait(false);
                     return null;
                 }
             }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Match signed decimal brace sequences, endpoint padding, step direction and
+  zero increments. Retain ASCII character ranges and their empty backslash field.
+
 - Report invalid for-loop variable names when the loop is reached and skip
   expanding its items. Incomplete loop syntax still fails during parsing.
 

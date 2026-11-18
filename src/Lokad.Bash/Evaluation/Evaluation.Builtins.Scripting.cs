@@ -189,10 +189,12 @@ public sealed partial class Evaluation
     /// <summary>Recovers unit-scoped expansion failures while preserving root versus nested status rules.</summary>
     private EvaluationResult RecoverScriptExpansionFailure(EvaluationResult result, ScriptExecutionKind kind)
     {
-        if (_state.FatalExpansion is not { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
+        if (_state.FatalExpansion is not
+            { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
+                or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
             return result;
 
-        // Arithmetic/default expansion failures end their unit even under errexit.
+        // Recoverable expansion failures end their current unit even under errexit.
         // A reached assignment-target failure terminates an errexit-enabled EXIT action.
         if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && failure.Kind == ExpansionFailureKind.AssignmentTarget)
             return result;
