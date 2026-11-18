@@ -14,6 +14,41 @@ namespace Lokad.Bash.Tests;
 
 public sealed class CommandInvocationTests
 {
+    [Theory]
+    [InlineData("x", 16, true)]
+    [InlineData("x", 4096, false)]
+    [InlineData("π", 120, false)]
+    public async Task CommandMemoryRefusalBoundsTheDiagnosticName(string unit, int count, bool preserveName)
+    {
+        var name = string.Concat(Enumerable.Repeat(unit, count));
+        var state = new ShellEvaluation(Parser.Parse("\"$1\" 2>errors"));
+        state.ReplacePositionalParameters([ShellValue.FromText(name)]);
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var descriptor = new FileDescriptor(17);
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var run = Assert.IsType<RunCommand>(await state.GetNextStep());
+        Assert.Equal(name, run.Command.CommandName);
+        using var other = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
+        Assert.True(run.TrySetException(new MemoryBudgetExceededException()));
+
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, write.FileDescriptor);
+        Assert.Equal(governor.LimitBytes, governor.ReservedBytes);
+        var message = Utf8Text.Decode(write.Content);
+        write.SetResult(DescriptorWriteResult.Open);
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+        Assert.Null(await state.GetNextStep());
+
+        Assert.Equal((preserveName ? name : "shell") + ": shared memory budget exhausted\n", message);
+        Assert.Equal(1, state.LastExitCode);
+    }
+
     [Fact]
     public void RuntimeInheritanceUsesOneUnionAfterSelectingOwnedStreams()
     {

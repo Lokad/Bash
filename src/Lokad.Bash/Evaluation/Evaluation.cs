@@ -3131,13 +3131,25 @@ public sealed partial class Evaluation : IFileTester
         _state.SetExpansionError(_state.FatalExpansion.Value.ExitCode);
     }
 
+    private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
+    private const int DiagnosticPunctuationBytes = 3; // Colon, space and LF.
+
     /// <summary>Emits an expansion diagnostic without changing the caller's expansion status.</summary>
     internal async Task ReportExpansionDiagnosticAsync(ShellValue name, ShellValue message)
     {
         var scope = _builtinDiagnostics;
         if (scope is { Result.CanAcceptMore: false })
             return;
-        var diagnostic = ByteMemoryBuilder.CreateUnaccounted(0);
+
+        var length = (long)name.Bytes.Length + message.Bytes.Length + DiagnosticPunctuationBytes;
+        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        // Small diagnostics, including refusal messages, fit within caller headroom.
+        // Reached names and messages can be much larger and must be admitted through the write.
+        using var diagnostic = length <= SmallDiagnosticBytes
+            ? ByteMemoryBuilder.CreateUnaccounted((int)length)
+            : new ByteMemoryBuilder((int)length, Memory.Budget);
         diagnostic.Append(name.Bytes).Append(": "u8).Append(message.Bytes).Append((byte)'\n');
         var result = await ExecuteWriteAsync(GetStdErrDescriptor(), diagnostic.ToMemory()).ConfigureAwait(false);
         if (scope != null)

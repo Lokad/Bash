@@ -73,6 +73,11 @@ Refusal fails the current command with a resource-limit failure. The command/hos
 boundary reports a diagnostic and nonzero status, awaits cleanup and refunds
 relinquished storage. Retained storage stays charged.
 
+The shared expansion diagnostic formatter admits buffers larger than 256 bytes
+through stderr write completion. Short messages fit in caller headroom. Memory
+refusal uses the active stderr and falls back to the name `shell` when the
+command name would make the message exceed that bound.
+
 Do not recover by retrying, waiting, spilling, switching to streaming, evicting caches
 or dropping optional storage. Failed allocation releases unused admission. Refusal
 is distinct from cancellation and `OutOfMemoryException`; earlier effects remain,

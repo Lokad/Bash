@@ -1,11 +1,65 @@
+using Lokad.Bash.Evaluation;
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tree;
 namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationGetoptsTestsEndToEnd
 {
+    [Theory]
+    [InlineData(16, false)]
+    [InlineData(16, true)]
+    [InlineData(4096, false)]
+    [InlineData(4096, true)]
+    public async Task Getopts_DiagnosticBackingFollowsThePendingWrite(int nameBytes, bool exhaustBudget)
+    {
+        var name = new byte[nameBytes];
+        name.AsSpan().Fill((byte)'x');
+        name[^1] = 0xff;
+        var expected = name.Concat(": illegal option -- x\n"u8.ToArray()).ToArray();
+        var state = new Evaluation.Evaluation(Parser.Parse("exec -a \"$1\" eval 'getopts a opt -x 2>errors'"));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(name)]);
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        var before = governor.ReservedBytes;
+        using var other = exhaustBudget ? governor.Reserve(governor.LimitBytes - before) : null;
+        var beforeWrite = governor.ReservedBytes;
+        var descriptor = new FileDescriptor(17);
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        var pending = governor.ReservedBytes;
+        var actual = write.Content.ToArray();
+        Assert.Equal(descriptor, write.FileDescriptor);
+        write.SetResult(DescriptorWriteResult.Open);
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        var afterWrite = governor.ReservedBytes;
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+        Assert.Null(await state.GetNextStep());
+
+        if (exhaustBudget && nameBytes == 4096)
+        {
+            Assert.Equal(1, state.LastExitCode);
+            Assert.Equal("getopts: shared memory budget exhausted\n"u8.ToArray(), actual);
+            Assert.Equal(governor.LimitBytes, pending);
+        }
+        else
+        {
+            Assert.Equal(0, state.LastExitCode);
+            Assert.Equal(expected, actual);
+            Assert.Equal(nameBytes == 4096 ? expected.Length : 0, pending - beforeWrite);
+            if (nameBytes == 4096)
+                Assert.True(afterWrite < pending);
+        }
+    }
+
     [Theory]
     [InlineData("a=(outer tail); a=temp getopts a a -a; printf '%s:%s' \"${a[0]}\" \"${a[1]}\"", "a:tail")]
     [InlineData("opt=outer; opt=temp getopts a opt -a; sh -c 'printf \"%s\" \"${opt-unset}\"'", "unset")]

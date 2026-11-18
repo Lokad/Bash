@@ -196,9 +196,13 @@ public sealed partial class Evaluation
 
     private async Task ReportMemoryRefusalAsync(string failedCommand)
     {
+        const string Message = "shared memory budget exhausted";
+        var nameByteLimit = SmallDiagnosticBytes - Message.Length - DiagnosticPunctuationBytes;
+        var name = failedCommand.Length > nameByteLimit || Utf8Text.StrictUtf8.GetByteCount(failedCommand) > nameByteLimit
+            ? "shell" : failedCommand;
         try
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText(failedCommand), ShellValue.FromText("shared memory budget exhausted"))
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText(name), ShellValue.FromText(Message))
                 .ConfigureAwait(false);
         }
         catch (MemoryBudgetExceededException)
