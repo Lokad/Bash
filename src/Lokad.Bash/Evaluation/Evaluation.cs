@@ -1350,7 +1350,9 @@ public sealed partial class Evaluation : IFileTester
             if (source.Words.Count == 0)
                 return source;
             var first = source.Words[0];
-            if (first.Parts.Count == 1 && first.Parts[0].Kind == WordPartKind.SingleQuoted)
+            // A prepared field can stay in its original word unless pathname expansion can replace it.
+            if (first.LiteralFields is [var literal]
+                && (literal.Segments is [{ IsGlobQuoted: true }] || !GlobPattern.RequiresExpansion(literal)))
                 return source;
 
             var words = new List<Word>(source.Words.Count);

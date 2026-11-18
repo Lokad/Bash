@@ -138,11 +138,13 @@ expansions and writes use the current scope. Dynamic shell splicing still prepar
 fresh operands, and syntax failures remain at their reached execution point.
 
 Literal-only single-part words retain their expanded fields and quote flags on
-the immutable word, borrowing its byte storage. Expansion still observes pending
-failure and cancellation; tilde, brace, parameter and other dynamic syntax stay
-late-bound. Pathname expansion scans components in the existing pattern and
-quote mask. It prepares the literal prefix once with separate spelling for
-output and lookup. Lookup preserves dot and dot-dot components for host traversal.
+the immutable word, borrowing its byte storage. A prepared literal command field
+stays in its original word when it needs no pathname expansion. Expansion
+continues to check for pending failures and cancellation. Tilde, brace, parameter
+and other dynamic syntax stay late-bound. Pathname expansion scans components in
+the existing pattern and quote mask. It prepares the literal prefix once and
+keeps separate spellings for output and lookup. Lookup preserves dot and dot-dot
+components for host traversal.
 
 Command lists prepare immutable navigation once per reached syntax root. Each
 execution keeps its cursor, status and scope locally and dispatches leaves through

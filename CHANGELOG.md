@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reuse prepared literal command words when their fields need no pathname
+  expansion.
+
 - Reuse successfully parsed backtick substitution bodies across repeated calls
   while preserving deferred validation and fresh execution state.
 

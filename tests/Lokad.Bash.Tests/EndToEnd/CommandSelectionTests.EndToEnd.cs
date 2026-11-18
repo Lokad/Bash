@@ -157,4 +157,23 @@ public sealed class CommandSelectionTestsEndToEnd
         Assert.Equal(expectedError, result.StdErr);
         Assert.Equal(expectedExitCode, result.ExitCode);
     }
+
+    [Theory]
+    [InlineData("printf")]
+    [InlineData("\"printf\"")]
+    [InlineData("'printf'")]
+    public async Task Evaluation_LiteralCommandName_LeavesArgumentExpansionInOrder(string name)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/alpha.txt", "");
+        var result = await host.RunAsync(
+            $"f() {{ {name} '<%s:%s>\\n' *.txt \"$((calls++))\"; }}; calls=0; f; f",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<alpha.txt:0>\n<alpha.txt:1>\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(2, host.DirectoryListingBatches.Count);
+        Assert.Equal(0, host.OpenFileCount);
+    }
 }
