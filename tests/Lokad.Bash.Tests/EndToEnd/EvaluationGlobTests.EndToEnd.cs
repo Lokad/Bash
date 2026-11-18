@@ -51,6 +51,34 @@ public sealed class EvaluationGlobTestsEndToEnd
     }
 
     [Fact]
+    public async Task Evaluation_GlobExpansion_KeepsOrderingWithinEachWord()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/\U00010000", ""), ("/\uE000", "")]);
+        var result = await host.RunAsync("printf '<%s>' '\U00010000'* *", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("3CF09080803E3CEE80803E3CF09080803E",
+            Convert.ToHexString(host.StandardOutput.Content.ToArray()));
+    }
+
+    [Theory]
+    [InlineData("$1", "\uE000")]
+    [InlineData("$2", "\U00010000")]
+    public async Task Evaluation_GlobExpansion_UsesPathOrderForFileSelection(string operand, string expected)
+    {
+        await using var host = EndToEndHarness.BuildTree([("/\U00010000", ""), ("/\uE000", "")]);
+        var result = await host.RunAsync(
+            $"set -- *; printf '%s' \"{operand}\" >chosen; printf tail", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(expected, host.ReadFile("/chosen"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task Evaluation_GlobExpansion_ExpandsUnquotedNamerefArrayElementsIndependently()
     {
         var tree = EndToEndHarness.BuildTree([

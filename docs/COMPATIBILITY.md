@@ -130,8 +130,8 @@ matching unit with exact identity, without locale weights or multi-unit symbols.
 Malformed/quoted atom spellings retain their distinct literal-fallback rules.
 The byte APIs use the operand's scalar/byte profile. Pathname matching treats a
 valid UTF-16 surrogate pair as one character within each component. Emitted paths
-are sorted by ordinal UTF-16 order. Public text matcher overloads count UTF-16
-code units.
+for each expanded word are sorted by unsigned UTF-8 byte order, independent of
+locale. Public text matcher overloads count UTF-16 code units.
 
 Replacement chooses the leftmost, longest match. A global replacement applies
 the character profile to each remaining operand: after consuming malformed bytes

@@ -1,6 +1,8 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
@@ -18,6 +20,32 @@ namespace Lokad.Bash.Evaluation;
 /// </remarks>
 internal sealed class GlobEvaluation
 {
+    private static readonly IComparer<string> OutputPathOrder = Comparer<string>.Create(static (left, right) =>
+    {
+        var leftPath = left.AsSpan();
+        var rightPath = right.AsSpan();
+        var prefixLength = leftPath.CommonPrefixLength(rightPath);
+
+        // A shared high surrogate may be the first half of two different scalars.
+        if (prefixLength > 0 && char.IsHighSurrogate(leftPath[prefixLength - 1])
+            && (StartsWithLowSurrogate(leftPath[prefixLength..]) || StartsWithLowSurrogate(rightPath[prefixLength..])))
+            prefixLength--;
+
+        var leftSuffix = leftPath[prefixLength..];
+        var rightSuffix = rightPath[prefixLength..];
+        if (leftSuffix.IsEmpty || rightSuffix.IsEmpty)
+            return leftSuffix.Length.CompareTo(rightSuffix.Length);
+
+        // Scalar order agrees with UTF-8 byte order. Compare just the differing characters.
+        return FirstCharacter(leftSuffix).CompareTo(FirstCharacter(rightSuffix));
+
+        static bool StartsWithLowSurrogate(ReadOnlySpan<char> suffix) =>
+            !suffix.IsEmpty && char.IsLowSurrogate(suffix[0]);
+
+        static int FirstCharacter(ReadOnlySpan<char> suffix) =>
+            Rune.DecodeFromUtf16(suffix, out var rune, out _) == OperationStatus.Done ? rune.Value : suffix[0];
+    });
+
     /// <summary> Stores the original pattern used for fallback results. </summary>
     private readonly string _pattern;
     /// <summary> Owns the pathname segments prepared for this expansion. </summary>
@@ -160,8 +188,7 @@ internal sealed class GlobEvaluation
             _candidates.Count == 0
                 ? [_pattern]
                 : _candidates
-                    // Bash sorts pathname expansion results instead of preserving filesystem enumeration order.
-                    .OrderBy(static candidate => candidate.OutputPath, StringComparer.Ordinal)
+                    .OrderBy(static candidate => candidate.OutputPath, OutputPathOrder)
                     .Select(static candidate => candidate.OutputPath)
                     .ToArray();
     }

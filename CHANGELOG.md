@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Sort each word's pathname matches by UTF-8 byte order, including paths with
+  both BMP and supplementary characters.
+
 - Match supplementary Unicode characters as single characters in pathname
   wildcards and bracket expressions.
 
