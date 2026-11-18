@@ -269,7 +269,9 @@ internal static class FunctionDefinitionFormatter
                                     work.Push(new Step.Word(item.Patterns[pattern]));
                                     if (pattern != 0) work.Push(new Step.Text(" | "));
                                 }
-                                work.Push(new Step.Text("    "));
+                                // A bare esac at the start of an arm would close the case.
+                                work.Push(new Step.Text(item.Patterns.Count > 0 && Parser.IsKeyword(item.Patterns[0], "esac")
+                                    ? "    (" : "    "));
                             }
                             Push(new Step.Text("case "), new Step.Word(selection.Subject), new Step.Text(" in "), new Step.Layout(indent));
                             break;

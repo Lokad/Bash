@@ -944,6 +944,45 @@ public class ParserTests
         Assert.Equal("b", WordText(caseCommand.Items[0].Patterns[1]));
     }
 
+    [Fact]
+    public void Parse_CaseCommand_ParenthesizedPatternsAfterSubjectLine()
+    {
+        var command = AssertCaseCommand(Assert.Single(Parser.Parse(
+            "case $x # comment\n\nin (esac|\"a b\") :;; esac").Commands));
+
+        Assert.Equal("$x", WordText(command.Subject));
+        var item = Assert.Single(command.Items);
+        Assert.Collection(item.Patterns, first => Assert.Equal("esac", WordText(first)),
+            second => Assert.Equal("a b", WordText(second)));
+    }
+
+    [Theory]
+    [InlineData("for x in a; { :; }", false)]
+    [InlineData("for x\n{ :\n}", false)]
+    [InlineData("for ((i=0;i<1;i++)) { :; }", true)]
+    public void Parse_ForCommand_LowersBraceBodyToExistingLoopBody(string source, bool arithmetic)
+    {
+        var loop = Assert.Single(Parser.Parse(source).Commands);
+        var body = arithmetic ? AssertArithmeticForCommand(loop).Body : AssertForCommand(loop).Body;
+
+        Assert.IsType<SimpleCommand>(body);
+    }
+
+    [Theory]
+    [InlineData("for x { :; }")]
+    [InlineData("for x in a { :; }")]
+    [InlineData("for x in a; { : }")]
+    [InlineData("for x in a; { }")]
+    [InlineData("for ((i=0;i<1;i++)); { : }")]
+    [InlineData("case x; in (x) :;; esac")]
+    [InlineData("case\nx in (x) :;; esac")]
+    [InlineData("case x in (\nx) :;; esac")]
+    [InlineData("case x in () :;; esac")]
+    public void Parse_ForAndCase_RejectMisplacedTerminators(string source)
+    {
+        Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+    }
+
     [Theory]
     [InlineData("case value in value)")]
     [InlineData("case value in value) ;;")]

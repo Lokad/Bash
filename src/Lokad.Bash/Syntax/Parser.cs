@@ -413,7 +413,8 @@ public static class Parser
                     command = ParseSubshell(tokenizer);
                     break;
                 case TokenKind.OpenBrace:
-                    command = ParseGroup(tokenizer);
+                    var groupBody = ParseBraceList(tokenizer);
+                    command = groupBody == null ? null : new GroupCommand(groupBody);
                     break;
                 case TokenKind.CloseParen:
                 case TokenKind.CloseBrace:
@@ -525,9 +526,9 @@ public static class Parser
     }
 
     /// <summary>
-    /// Parses a grouped command enclosed in braces.
+    /// Parses the list enclosed in a brace group or for-loop body.
     /// </summary>
-    private static ICommand? ParseGroup(Tokenizer tokenizer)
+    private static ICommand? ParseBraceList(Tokenizer tokenizer)
     {
         var open = tokenizer.NextTokenCore();
         if (open.Kind != TokenKind.OpenBrace)
@@ -557,7 +558,7 @@ public static class Parser
         }
 
         tokenizer.NextTokenCore();
-        return new GroupCommand(result.Command);
+        return result.Command;
     }
 
     /// <summary>
@@ -672,15 +673,9 @@ public static class Parser
             tokenizer.NextTokenCore();
             if (tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
                 tokenizer.NextTokenCore();
-            SkipNewlines(tokenizer);
-            if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
-                return null;
-            var arithmeticBody = ParseListUntilKeyword(tokenizer, KeywordDone, requireTerminator: true);
-            if (arithmeticBody == null)
-                return null;
-            if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
-                return null;
-            return new ArithmeticForCommand(next.CommandExpression, arithmeticBody, tokenizer.ScanContext.SyntaxMemory);
+            var arithmeticBody = ParseBody(acceptsBraces: true);
+            return arithmeticBody == null ? null
+                : new ArithmeticForCommand(next.CommandExpression, arithmeticBody, tokenizer.ScanContext.SyntaxMemory);
         }
 
         var nameToken = tokenizer.NextTokenCore();
@@ -710,8 +705,7 @@ public static class Parser
         }
 
         var items = new List<Word>();
-        var separator = tokenizer.PeekTokenCore();
-        var hadNewline = separator.Kind == TokenKind.Newline;
+        var canUseBraceBody = tokenizer.PeekTokenCore().Kind == TokenKind.Newline;
         SkipNewlines(tokenizer);
         if (IsKeyword(tokenizer.PeekTokenCore(), KeywordIn))
         {
@@ -722,6 +716,7 @@ public static class Parser
                 if (token.Kind is TokenKind.Newline or TokenKind.Semicolon)
                 {
                     tokenizer.NextTokenCore();
+                    canUseBraceBody = true;
                     break;
                 }
 
@@ -742,19 +737,27 @@ public static class Parser
             // to the existing word path, including the snapshot taken before the body.
             items.Add(Tokenizer.ReadExpansionWord(ShellSource.FromText("\"$@\""),
                 ExpansionWordSyntax.Parameter, ShellQuoteKind.None));
-            if (!hadNewline && tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
+            if (!canUseBraceBody && tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
+            {
                 tokenizer.NextTokenCore();
+                canUseBraceBody = true;
+            }
         }
 
-        SkipNewlines(tokenizer);
-        if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
-            return null;
-        var body = ParseListUntilKeyword(tokenizer, KeywordDone, requireTerminator: true);
-        if (body == null)
-            return null;
-        if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
-            return null;
-        return new ForCommand(name, items, body);
+        var body = ParseBody(canUseBraceBody);
+        return body == null ? null : new ForCommand(name, items, body);
+
+        ICommand? ParseBody(bool acceptsBraces)
+        {
+            SkipNewlines(tokenizer);
+            if (acceptsBraces && tokenizer.PeekTokenCore().Kind == TokenKind.OpenBrace)
+                return ParseBraceList(tokenizer);
+
+            if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
+                return null;
+            var list = ParseListUntilKeyword(tokenizer, KeywordDone, requireTerminator: true);
+            return list != null && TryConsumeKeyword(tokenizer, KeywordDone, "done") ? list : null;
+        }
     }
 
     /// <summary>
@@ -806,16 +809,19 @@ public static class Parser
         }
 
         var subject = subjectWord.Word;
+        SkipNewlines(tokenizer);
         if (!TryConsumeKeyword(tokenizer, KeywordIn, "in"))
             return null;
-        SkipNewlines(tokenizer);
 
         var items = new List<CaseItem>();
-        while (!IsKeyword(tokenizer.PeekTokenCore(), KeywordEsac))
+        while (true)
         {
             SkipNewlines(tokenizer);
             if (IsKeyword(tokenizer.PeekTokenCore(), KeywordEsac))
                 break;
+
+            if (tokenizer.PeekTokenCore().Kind == TokenKind.OpenParen)
+                tokenizer.NextTokenCore();
 
             var patterns = new List<Word>();
             while (true)
@@ -857,7 +863,6 @@ public static class Parser
 
             // An empty matching branch succeeds without executing a command.
             items.Add(new CaseItem(patterns, body ?? new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments)));
-            SkipNewlines(tokenizer);
         }
 
         if (!TryConsumeKeyword(tokenizer, KeywordEsac, "esac"))
@@ -1438,17 +1443,11 @@ public static class Parser
     /// </summary>
     private static bool IsKeyword(Token token, string keyword)
     {
-        if (token.Kind != TokenKind.Word)
-            return false;
-
-        if (!token.TryGetWordToken(out var wordToken))
-            return false;
-
-        if (!TryGetPlainUnquotedSource(wordToken.Word, out var source))
-            return false;
-
-        return AsciiByte.EqualsAscii(source.AsSpan(), keyword);
+        return token.Kind == TokenKind.Word && token.TryGetWordToken(out var wordToken) && IsKeyword(wordToken.Word, keyword);
     }
+
+    internal static bool IsKeyword(Word word, string keyword) =>
+        TryGetPlainUnquotedSource(word, out var source) && AsciiByte.EqualsAscii(source.AsSpan(), keyword);
 
 
     /// <summary>

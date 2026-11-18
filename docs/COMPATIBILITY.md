@@ -177,8 +177,14 @@ its ordinary lexical rules. Comments do not execute expansions or terminate earl
 on quotes, `]]` or CR.
 
 Extended shell patterns `?(...)`, `*(...)`, `+(...)`, `@(...)` and `!(...)` are
-unsupported in `[[`, case arms and parameter pattern operators. Case arms support
-the `;;` terminator; `;&` fallthrough and `;;&` retesting are unsupported.
+unsupported in `[[`, case arms and parameter pattern operators. Case allows line
+breaks between the subject and `in`, an optional opening `(` before each arm's
+patterns and the `;;` terminator. Fallthrough `;&` and retesting `;;&` remain
+unsupported.
+
+Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
+A word loop needs a semicolon or line break before the opening brace. An
+arithmetic loop can place the opening brace immediately after `))`.
 
 Out of scope: interactive prompts/history/completion, aliases, background execution,
 job/process-group control, OS signal handling, process substitution, `coproc`,

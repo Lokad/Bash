@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Accept brace bodies in word and arithmetic `for` loops, optional opening
+  parentheses in case arms and line breaks before case `in`. Reuse the existing
+  loop and case execution paths and preserve function display and replay.
+
 - Honor repeated and bundled leading `echo -n` options. Preserve literal
   operands from the first non-option onward and skip writes for empty output.
 

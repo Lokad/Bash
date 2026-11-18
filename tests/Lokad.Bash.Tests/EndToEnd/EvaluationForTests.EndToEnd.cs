@@ -7,6 +7,32 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationForTestsEndToEnd
 {
     [Fact]
+    public async Task BraceBodyRedirectionWrapsAllIterations()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "set -- a \"\" b; for x; { printf '<%s>' \"$x\"; } >out; printf tail",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("<a><><b>", host.ReadFile("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task BraceBodyCompletesHereDocumentOnEachIteration()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "for x in a b; { cat <<END\n$x\nEND\n}");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("a\nb\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
     public async Task Evaluation_ForCommand_RebindsNamerefWithoutMutatingItsTarget()
     {
         var script = @"arr=(a b); i=1; declare -n ref='arr[i]'; for ref in x; do :; done; ref=updated; printf '<%s>:<%s>\n' ""${arr[1]}"" ""$x""";
