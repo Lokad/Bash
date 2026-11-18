@@ -20,6 +20,7 @@ internal sealed class RedirectionEvaluation
     private readonly IReadOnlyList<Redirection> _redirections;
     /// <summary> Stores the descriptor mappings produced while evaluating redirections. </summary>
     private readonly DescriptorTable _descriptorTable;
+    private readonly bool _inputSubstitution;
     /// <summary> Stores descriptors opened during redirection evaluation, in open order. </summary>
     private readonly DescriptorHandleOwner _openedDescriptors = new();
     /// <summary> Stores resolved descriptors hidden by close or replacement redirections. </summary>
@@ -33,10 +34,12 @@ internal sealed class RedirectionEvaluation
     /// </summary>
     public RedirectionEvaluation(
         IReadOnlyList<Redirection> redirections,
-        DescriptorTable descriptorTable)
+        DescriptorTable descriptorTable,
+        bool inputSubstitution)
     {
         _redirections = redirections;
         _descriptorTable = descriptorTable;
+        _inputSubstitution = inputSubstitution;
     }
 
     /// <summary>
@@ -47,6 +50,8 @@ internal sealed class RedirectionEvaluation
     /// Gets the descriptors opened during evaluation, in open order.
     /// </summary>
     public DescriptorHandleOwner OpenedDescriptors => _openedDescriptors;
+    /// <summary>Whether opening an input path failed after its target expanded successfully.</summary>
+    public bool InputOpenFailed { get; private set; }
     /// <summary>
     /// Gets released descriptors that no logical mapping retains after all redirections have been applied.
     /// </summary>
@@ -175,6 +180,11 @@ internal sealed class RedirectionEvaluation
         var path = await ExpandRedirectionTargetAsync(scope, redirection.Target).ConfigureAwait(false);
         if (path == null)
         {
+            return;
+        }
+        if (_inputSubstitution && path.Length == 0)
+        {
+            await ReportOpenFailureAsync(scope, path, mode, null).ConfigureAwait(false);
             return;
         }
 
@@ -420,10 +430,13 @@ internal sealed class RedirectionEvaluation
         return RedirectionOutcome.Success;
     }
 
-    private Task ReportOpenFailureAsync(ScopedEvaluation scope, string path, FileOpenMode mode, OperationError? error) =>
-        mode == FileOpenMode.Read
+    private Task ReportOpenFailureAsync(ScopedEvaluation scope, string path, FileOpenMode mode, OperationError? error)
+    {
+        InputOpenFailed = _inputSubstitution;
+        return mode == FileOpenMode.Read && !_inputSubstitution
             ? ReportFailureAsync(scope, error)
             : ReportFailureAsync(scope, ShellToolErrors.FormatPathError(Utf8Text.Encode(path), error));
+    }
 
     private Task ReportFailureAsync(ScopedEvaluation scope, OperationError? error) =>
         ReportFailureAsync(scope, error is { } failure ? Utf8Text.Encode(failure.Message) : ReadOnlyMemory<byte>.Empty);
@@ -433,7 +446,7 @@ internal sealed class RedirectionEvaluation
     {
         var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
         if (!diagnostic.IsEmpty && !standardError.IsClosed)
-            await scope.Effects.ExecuteWriteAsync(standardError, diagnostic).ConfigureAwait(false);
+            await scope.Effects.PublishWrite(standardError, diagnostic).ConfigureAwait(false);
         scope.Effects.SetExpansionError(1);
     }
 
@@ -474,7 +487,7 @@ internal sealed class RedirectionEvaluation
     }
 
     /// <summary> Expands the redirection target word into a single path or returns null on failure. </summary>
-    private static async Task<string?> ExpandRedirectionTargetAsync(
+    private async Task<string?> ExpandRedirectionTargetAsync(
         ScopedEvaluation scope,
         Word target)
     {
@@ -484,7 +497,15 @@ internal sealed class RedirectionEvaluation
 
         if (words.Count != 1)
         {
-            scope.Effects.SetExpansionError(1);
+            if (_inputSubstitution)
+            {
+                using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Workspace);
+                if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.CancellationToken))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                await ReportFailureAsync(scope, diagnostic.Append(": ambiguous redirect\n"u8).ToMemory()).ConfigureAwait(false);
+            }
+            else
+                scope.Effects.SetExpansionError(1);
             return null;
         }
 

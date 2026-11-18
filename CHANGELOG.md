@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `$(<file)` and the corresponding backtick shorthand without a host
+  command invocation. Preserve the caller's filename expansion effects.
+
 - Support `mapfile -d delim` and `readarray -d delim`, including NUL delimiters
   and `-t` trimming of the selected delimiter.
 

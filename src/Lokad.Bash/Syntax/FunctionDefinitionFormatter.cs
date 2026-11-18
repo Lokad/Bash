@@ -23,8 +23,8 @@ internal static class FunctionDefinitionFormatter
     private static bool TryAppend(FunctionDefinition definition, IByteMemoryWriter output, Format format)
         => TryAppend(new Step.Function(definition, 0, Nested: false), output, format, CancellationToken.None);
 
-    /// <summary>Restores the lexical spelling of a brace-generated word tail whose quote context changed.</summary>
-    internal static bool TryAppendBraceSource(Word word, IByteMemoryWriter output, CancellationToken cancellationToken) =>
+    /// <summary>Renders the word's lexical structure, retaining its quotes and escapes.</summary>
+    internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, CancellationToken cancellationToken) =>
         TryAppend(new Step.Word(word), output, Format.BraceSource, cancellationToken);
 
     private static bool TryAppend(Step initial, IByteMemoryWriter output, Format format, CancellationToken cancellationToken)

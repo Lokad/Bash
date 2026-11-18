@@ -16,6 +16,8 @@ internal enum ExpansionFailureKind
     /// <summary>A generated word fails substitution parsing and discards its command unit.</summary>
     WordSyntax,
     Parameter,
+    /// <summary>An errexit-enabled file substitution could not open its input.</summary>
+    InputSubstitution,
     Assignment,
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>
     NamerefDefault,

@@ -619,7 +619,7 @@ public sealed partial class Evaluation : IFileTester
     {
         var persistence = redirectedCommand.Body is SubshellCommand
             ? RedirectionPersistence.Allocations : RedirectionPersistence.AllocationsAndMoves;
-        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope, persistence)
+        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope, persistence, inputSubstitution: false)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var result = EvaluationResult.FromExitCode(0);
@@ -957,7 +957,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, scope,
-                RedirectionPersistence.AllocationsAndMoves)
+                RedirectionPersistence.AllocationsAndMoves, inputSubstitution: false)
                 .ConfigureAwait(false);
             Exception? assignmentFailure = null;
             var assignmentResult = EvaluationResult.FromExitCode(exitCode);
@@ -1131,7 +1131,8 @@ public sealed partial class Evaluation : IFileTester
         }
         var commandRedirections = await OpenRedirectionScopeAsync(
                 simpleCommand.Redirections, redirectionExpansionScope,
-                externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves)
+                externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,
+                inputSubstitution: false)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         List<FunctionBinding>? exportOwners = null;
@@ -2638,14 +2639,15 @@ public sealed partial class Evaluation : IFileTester
     private async Task<RedirectionScope> OpenRedirectionScopeAsync(
         IReadOnlyList<Redirection> redirections,
         ScopedEvaluation scope,
-        RedirectionPersistence persistence)
+        RedirectionPersistence persistence,
+        bool inputSubstitution)
     {
         if (redirections.Count == 0)
             return new RedirectionScope(this, active: false, [], []);
 
         if (_state.CurrentRedirectionTable == null)
             throw new InvalidOperationException("Redirection setup requires an enclosing descriptor table.");
-        var evaluation = new RedirectionEvaluation(redirections, CaptureDescriptorBindings().Fork());
+        var evaluation = new RedirectionEvaluation(redirections, CaptureDescriptorBindings().Fork(), inputSubstitution);
         IReadOnlyList<FileDescriptor> releasedDescriptors = [];
         // Expose the table as setup advances, so later target expansions and their substitutions
         // inherit earlier redirections. Descriptor ownership is finalized after setup succeeds.
@@ -2675,7 +2677,10 @@ public sealed partial class Evaluation : IFileTester
                 return new RedirectionScope(this, active: false, [], []);
             throw;
         }
-        return new RedirectionScope(this, active: true, releasedDescriptors, evaluation.ConsumedSources);
+        return new RedirectionScope(this, active: true, releasedDescriptors, evaluation.ConsumedSources)
+        {
+            InputOpenFailed = evaluation.InputOpenFailed
+        };
 
     }
 
@@ -3080,7 +3085,7 @@ public sealed partial class Evaluation : IFileTester
     internal Task<DescriptorWriteResult> ExecuteWriteAsync(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content) =>
         AwaitOperationAsync(PublishWrite(fileDescriptor, content));
 
-    private Task<DescriptorWriteResult> PublishWrite(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content) =>
+    internal Task<DescriptorWriteResult> PublishWrite(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content) =>
         WriteOperation.AsTask(PublishOperation, fileDescriptor, content);
 
     /// <summary>
@@ -3414,8 +3419,10 @@ public sealed partial class Evaluation : IFileTester
     {
         if (!RawShellPath.TryParse(path, out var raw))
             return Task.FromResult(FileOpenResult.Failed(new OperationError("Invalid file path\n")));
-        return AwaitOperationAsync(OpenFileOperation.AsTask(PublishOperation,
-            new FilePathLookup(raw, _state.CurrentDirectory, FileLinkFollowing.Follow), mode));
+        CheckCancellation();
+        // A successful open transfers ownership even if cancellation races its completion.
+        return OpenFileOperation.AsTask(PublishOperation,
+            new FilePathLookup(raw, _state.CurrentDirectory, FileLinkFollowing.Follow), mode);
     }
 
     /// <summary>Transfers an owned descriptor to the host and awaits cleanup without cancellation.</summary>
@@ -3435,6 +3442,63 @@ public sealed partial class Evaluation : IFileTester
         {
             owner.MarkDescriptorClosed(descriptor);
         }
+    }
+
+    /// <summary>Reads the single input redirection of a file substitution in the caller's context.</summary>
+    internal async Task<CommandSubstitutionResult> ReadInputSubstitutionAsync(
+        IReadOnlyList<Redirection> redirections, ScopedEvaluation scope)
+    {
+        using var outputMemory = Memory.Budget.CreateScope();
+        var redirectionScope = await OpenRedirectionScopeAsync(redirections, scope, RedirectionPersistence.None, inputSubstitution: true)
+            .ConfigureAwait(false);
+        var output = ShellValue.Empty;
+        var status = 1;
+        OperationError? closeError;
+        try
+        {
+            if (_state.FatalExpansion is { } targetFailure)
+                status = targetFailure.ExitCode;
+            else if (_state.TryConsumeExpansionError(out var redirectionStatus))
+            {
+                status = redirectionStatus;
+                if (redirectionScope.InputOpenFailed && _state.ErrexitEnabled)
+                    SetFatalExpansionError(ExpansionFailureKind.InputSubstitution);
+            }
+            else
+            {
+                CheckCancellation();
+                var completion = new TaskCompletionSource<BoundedReadResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                PublishOperation(new ReadSubstitutionInputOperation(completion, GetStdInDescriptor(), outputMemory));
+                // Keep both the read buffer owner and the descriptor until the host operation settles.
+                var read = await completion.Task.ConfigureAwait(false);
+                CheckCancellation();
+                switch (read)
+                {
+                    case BoundedReadResult.Complete complete:
+                        output = ShellValue.FromBytes(complete.Content);
+                        Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(output));
+                        status = 0;
+                        break;
+                    case BoundedReadResult.Failed { Failure.Error: { } error }:
+                        await ReportOperationErrorAsync(error).ConfigureAwait(false);
+                        break;
+                    case BoundedReadResult.TooLarge:
+                        throw new ByteMemoryBuilder.LimitExceededException();
+                    default:
+                        throw new InvalidOperationException("Unexpected file substitution read outcome.");
+                }
+            }
+        }
+        finally
+        {
+            closeError = await redirectionScope.CloseAsync(operationFailed: status != 0).ConfigureAwait(false);
+        }
+        if (closeError is { } failure)
+        {
+            await ReportOperationErrorAsync(failure).ConfigureAwait(false);
+            status = 1;
+        }
+        return new CommandSubstitutionResult(output, status);
     }
 
     /// <summary>
@@ -3580,6 +3644,8 @@ public sealed partial class Evaluation : IFileTester
         IReadOnlyCollection<FileDescriptor> consumedSources)
     {
         private bool _active = active;
+
+        public bool InputOpenFailed { get; init; }
 
         public Task<OperationError?> PreserveAsync()
         {

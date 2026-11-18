@@ -21,6 +21,11 @@ uses the first byte of `delim`, with an empty operand selecting NUL. `-t`
 removes a record's final delimiter when present. Array values end at the first
 NUL byte, including when NUL is the delimiter.
 
+`$(<file)` and its backtick form read a single input-file redirection on
+descriptor zero. Filename expansion runs in the caller. The result removes
+NUL bytes with a diagnostic and strips trailing LF bytes. CR is preserved.
+Input failures reported by the host retain their failure status.
+
 Leading `~`, `~+` and `~-` use HOME, PWD and OLDPWD. The prefix must be unquoted.
 An empty quote or escape inside it makes it ineligible. Quoting after a delimiting
 slash leaves the prefix eligible. Expanded bytes never become new tilde syntax. Missing HOME

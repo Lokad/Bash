@@ -1,5 +1,8 @@
+using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
@@ -22,5 +25,206 @@ public sealed class CommandSubstitutionCaptureTests
         Assert.Equal(ShellValue.FromBytes(new byte[] { 0xff, 13 }), state.Variables["value"]);
         Assert.Equal([new FileDescriptor(11), new FileDescriptor(10)], host.ClosedDescriptors);
         Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
+    [Fact]
+    public async Task InputShorthandReadsRawBytesAndClosesOnlyTheOpenedFile()
+    {
+        var state = new Eval(Parser.Parse("value=$(<input)"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueOpenFileDescriptor(10);
+        host.EnqueueCloseDescriptor();
+        byte[] content = [0xff, (byte)'a', 0, 13, 10, 10];
+        host.EnqueueByteReadResult(content, ByteReadResult.Success(content.Length, reachedEoF: true));
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        await new Engine().RunAsync(state, host);
+
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(new byte[] { 0xff, (byte)'a', 13 }, state.Variables["value"].Bytes.ToArray());
+        Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        var warning = Assert.Single(host.Appends);
+        Assert.Equal(FileDescriptor.StdErr, warning.Descriptor);
+        Assert.Equal("warning: command substitution: ignored null byte in input\n"u8.ToArray(), warning.Content);
+    }
+
+    [Theory]
+    [InlineData("$(<input)", "one\ntwo")]
+    [InlineData("$(0<input;)", "one\ntwo")]
+    [InlineData("$( ! <input )", "one\ntwo")]
+    [InlineData("`< input`", "one\ntwo")]
+    [InlineData("$(<input <input)", "")]
+    [InlineData("$(x=y <input)", "")]
+    [InlineData("$($unset <input)", "")]
+    [InlineData("$(3<input)", "")]
+    [InlineData("$(<<<data)", "")]
+    [InlineData("$({ <input; })", "")]
+    [InlineData("$(<input; printf tail)", "tail")]
+    public async Task OnlyInputFileSubstitutionSyntaxReadsContents(string substitution, string expected)
+    {
+        var host = EndToEndHarness.BuildTree([("/input", "one\ntwo\n\n")]);
+        var result = await EndToEndHarness.RunScriptAsync($"x={substitution}; printf '<%s>' \"$x\"", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{expected}>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FileTargetExpansionRunsOnceInItsCallerAndPreservesBorrowedInput(bool prepared)
+    {
+        const string script = """
+            exec 3<input
+            part=1
+            { x=$(<"$(printf hit >>effects)$((part=2))"); read -r line; } <&3
+            modern=$part
+            part=1
+            y=`<"$((part=2))"`
+            printf '<%s><%s><%s><%s><%s>' "$modern" "$part" "$x" "$y" "$line"
+            """;
+        var host = EndToEndHarness.BuildTree([("/2", "file\n"), ("/input", "borrowed\n")]);
+        var exitCode = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("<2><2><file><file><borrowed>", host.StandardOutput.TextContent);
+        Assert.Equal("hit", host.ReadFile("/effects"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task FailedReadDiscardsPartialInputAndPreservesReadDiagnostic()
+    {
+        var state = new Eval(Parser.Parse("value=$(<input)"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueOpenFileDescriptor(10);
+        host.EnqueueByteReadResult("prefix"u8.ToArray(), ByteReadResult.Success(6, reachedEoF: false));
+        host.EnqueueByteReadResult(ReadOnlyMemory<byte>.Empty,
+            ByteReadResult.Failure(0, new OperationError("read failed\n"), reachedEoF: false));
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueueCloseDescriptorResult(new OperationError("close failed\n"));
+
+        await new Engine().RunAsync(state, host);
+
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(ShellValue.Empty, state.Variables["value"]);
+        Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        var diagnostic = Assert.Single(host.Appends);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
+        Assert.Equal("shell: read failed\n"u8.ToArray(), diagnostic.Content);
+    }
+
+    [Theory]
+    [InlineData("set -e; if value=$(<missing); then printf wrong; fi; printf after", 1, "")]
+    [InlineData("set -e; printf '<%s>' \"$(<missing)\"; printf after", 1, "")]
+    [InlineData("printf '<%s><%s>' \"$(<missing)\" \"$?\"; printf after", 0, "<><1>after")]
+    public async Task FileOpenFailureKeepsTheCallerStatusPolicy(string script, int exitCode, string output)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal("missing: No such file or directory\n", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("unset path; printf '<%s>' \"$(<\"${path:?required}\")\"; printf after", 1, "", "path: required\n")]
+    [InlineData("set -e; path=; printf '<%s>' \"$(<$path)\"; printf after", 0, "<>after", "$path: ambiguous redirect\n")]
+    public async Task FileTargetExpansionRetainsTheErrorOrigin(string script, int status, string stdout, string stderr)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(stdout, result.StdOut);
+        Assert.Equal(stderr, result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task CancellationSettlesTheBorrowBeforeClosingTheFile()
+    {
+        var state = new Eval(Parser.Parse("value=$(<input)"));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settled = false;
+        var host = new TestOperationVisitor([])
+        {
+            ReadOverride = async token =>
+            {
+                started.SetResult();
+                await settle.Task;
+                settled = true;
+                token.ThrowIfCancellationRequested();
+                return DescriptorReadBuffer.EndOfFile;
+            },
+            BeforeDescriptorClose = _ => Assert.True(settled)
+        };
+        host.EnqueueOpenFileDescriptor(10);
+        host.EnqueueCloseDescriptor();
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = new Engine().RunAsync(state, host, cancellation.Token);
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            cancellation.Cancel();
+        }
+        finally
+        {
+            settle.SetResult();
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+        Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
+    [Fact]
+    public async Task FileOpenedDuringCancellationIsClosedBeforeTheEvaluationSettles()
+    {
+        var state = new Eval(Parser.Parse("value=$(<input)"));
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var descriptor = new FileDescriptor(10);
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+
+        cancellation.Cancel();
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep().WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
+    [Fact]
+    public async Task CaptureAdmissionRefusalClosesTheFileWithoutPublishingItsValue()
+    {
+        var state = new Eval(Parser.Parse("value=old; value=$(<input)"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueOpenFileDescriptor(10);
+        var bytes = new byte[64 * 1024];
+        host.EnqueueByteReadResult(bytes, ByteReadResult.Success(bytes.Length, reachedEoF: true));
+        host.EnqueueCloseDescriptor();
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        var governor = new MemoryGovernor(48 * 1024);
+
+        using (var budget = governor.CreateScope())
+        {
+            await new Engine().RunAsync(state, host, budget, CancellationToken.None);
+            Assert.Equal(1, state.LastExitCode);
+            Assert.Equal(ShellValue.FromText("old"), state.Variables["value"]);
+        }
+
+        Assert.Equal(0, governor.ReservedBytes);
+        Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
+        Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
     }
 }

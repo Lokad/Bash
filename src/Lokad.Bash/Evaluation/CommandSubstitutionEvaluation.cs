@@ -7,7 +7,7 @@ using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
-/// <summary>Captures a nested evaluation through an ordinary streaming pipe.</summary>
+/// <summary>Evaluates command substitution syntax using descriptor input or nested capture.</summary>
 internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax script)
 {
     public async Task<CommandSubstitutionResult> EvaluateAsync(ScopedEvaluation scope)
@@ -41,6 +41,21 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             {
                 await outer.ReportSyntaxErrorAsync(exception.Error).ConfigureAwait(false);
                 return new CommandSubstitutionResult(ShellValue.Empty, 2);
+            }
+
+            if (parsed.Commands is [var command])
+            {
+                // Bash recognizes the one-redirection form even with a leading negation.
+                while (command is NegatedCommand negated)
+                    command = negated.Inner;
+
+                if (command is SimpleCommand
+                    {
+                        Assignments.Count: 0,
+                        Words.Count: 0,
+                        Redirections: [{ Kind: RedirectionKind.Input, FileDescriptor: null or 0, VariableName.Length: 0 }]
+                    } input)
+                    return await outer.ReadInputSubstitutionAsync(input.Redirections, scope).ConfigureAwait(false);
             }
 
             outer.PrepareOwnedDescriptors(2);

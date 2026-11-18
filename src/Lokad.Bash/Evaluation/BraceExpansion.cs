@@ -407,7 +407,7 @@ internal static class BraceExpansion
             }
             var spelling = new ShellScanContext { SyntaxMemory = memory.Workspace }
                 .CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
-            if (!FunctionDefinitionFormatter.TryAppendBraceSource(tail, spelling, cancellationToken))
+            if (!FunctionDefinitionFormatter.TryAppendWordSource(tail, spelling, cancellationToken))
                 throw new ByteMemoryBuilder.LimitExceededException();
             var rebuilt = Tokenizer.ReadBraceExpandedWord(ShellSource.FromBytes(spelling.ToMemory()), memory.Workspace);
             memory.Charge(checked(32L + 8L * rebuilt.Parts.Count));

@@ -276,6 +276,16 @@ public sealed class RunPipelineEvaluations(
     }
 }
 
+/// <summary>Reads a substitution's expanded input redirection through EOF.</summary>
+internal sealed class ReadSubstitutionInputOperation(
+    TaskCompletionSource<BoundedReadResult> completion,
+    FileDescriptor descriptor,
+    IMemoryBudget destinationBudget) : EvaluationOperation<BoundedReadResult>(completion)
+{
+    public FileDescriptor Descriptor { get; } = descriptor;
+    public IMemoryBudget DestinationBudget { get; } = destinationBudget;
+}
+
 /// <summary>Captured output and the producer's command status.</summary>
 public sealed record CapturedEvaluationResult(BoundedReadResult Output, int ExitCode);
 

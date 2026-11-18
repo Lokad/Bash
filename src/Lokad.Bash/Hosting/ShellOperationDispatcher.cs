@@ -56,6 +56,9 @@ internal static class ShellOperationDispatcher
                     request.Delimiter, request.Limit, request.DestinationBudget, state.CancellationToken))),
             ReadRecordOperation record => record.UseResult(state, static (request, state) =>
                 ReadRecordAsync(request, state.Host, state.CancellationToken)),
+            ReadSubstitutionInputOperation input => input.UseResult(state, static (request, state) =>
+                state.Host.TryReadAllBytesAsync(request.Descriptor, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1,
+                    static _ => { }, request.DestinationBudget, state.CancellationToken)),
             ResolveCommandsOperation resolve => resolve.UseResult(state, static (request, state) =>
                 state.Host.ResolveCommandsAsync(
                     request.CommandNames, request.CurrentDirectory, request.Environment, state.CancellationToken)),

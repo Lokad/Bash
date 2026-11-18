@@ -80,8 +80,13 @@ original delimited spelling. Function display/export emits that spelling without
 parsing the child body, preserving validation timing across replay and import.
 The spelling borrows the existing syntax/source owner. Parsing begins when
 execution first reaches the substitution. Successful parses from stable
-source can be reused by later executions under the same owner. Each invocation
-uses the shared execution and capture path with fresh shell state.
+source can be reused by later executions under the same owner. Ordinary command
+substitutions use the shared execution and capture path with fresh shell state.
+The single input-file form expands its target in the caller, reads bounded bytes
+through the host and closes the temporary redirection before value expansion
+resumes. The capture owner stays live until the host read and cleanup settle.
+An open failure under errexit ends the caller's expansion. Ambiguous targets
+return a substitution failure status through the ordinary expansion path.
 
 Printf retains byte numeric operands through prefix validation, range classification
 and diagnostics. Integer accumulation stays bounded after overflow while validity
