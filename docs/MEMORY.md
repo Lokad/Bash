@@ -103,10 +103,14 @@ copied storage through operation and cleanup completion. Cancellation or refusal
 during detachment leaves the caller binding intact.
 
 Directory stacks admit replacement backing before growth, and retained capacity
-stays charged across commands. Child shell-state forks admit independent stack
-and trap-map containers before allocation while sharing immutable paths and
-action bytes. Inline subshells keep the saved stack and handlers admitted through
-restoration. Descriptor snapshots use the map writer's admitted capture headroom.
+and owned path text stay charged across commands. Navigation admits normalized
+path storage before construction, and stack mutations update the retained path
+estimate as entries are replaced or removed. Child shell-state forks admit
+independent stack and trap-map containers while borrowing immutable paths and
+action bytes from the active parent. Inline subshells keep the saved stack and
+handlers admitted through restoration. Directory output encodes directly into
+one admitted byte array that survives the host's write. Descriptor snapshots
+use the map writer's admitted capture headroom.
 
 Local declarations admit inherited temporary mutable containers before copying
 them. When unset exposes a saved command/function prefix, its already-owned slot

@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
@@ -34,9 +35,9 @@ public sealed class CollectionOwnershipTests
         var staging = new EvaluationMemory(new MemoryGovernor(64 * 1024));
         try
         {
-            parent.ApplyDirectoryLookup(DirectoryChangeKind.PushDirectory, target, succeeded: true);
+            var previousEntry = parent.ApplyDirectoryLookup(DirectoryChangeKind.PushDirectory, target, succeeded: true, staging);
             for (var index = 0; index < 512; index++)
-                parent.CompleteDirectoryChange(DirectoryChangeKind.PushDirectory, previous, staging);
+                parent.CompleteDirectoryChange(DirectoryChangeKind.PushDirectory, previousEntry, staging);
         }
         finally { staging.Finish(retainVariables: false); }
 
@@ -54,13 +55,14 @@ public sealed class CollectionOwnershipTests
         try
         {
             var child = Fork(memory);
-            Assert.Equal(513, child.DirectoryStack.Count);
+            Assert.Equal(513, child.DirectoryStackCount);
             Assert.Same(target, child.CurrentDirectory);
-            Assert.Same(previous, child.DirectoryStack[1]);
+            Assert.Same(previous, child.GetDirectoryStackPath(1));
             Assert.True(budget.ReservedBytes >= child.RetainedDirectoryStackBytes);
             child.ResetDirectoryStack();
-            Assert.Same(target, Assert.Single(child.DirectoryStack));
-            Assert.Equal(513, parent.DirectoryStack.Count);
+            Assert.Equal(1, child.DirectoryStackCount);
+            Assert.Same(target, child.CurrentDirectory);
+            Assert.Equal(513, parent.DirectoryStackCount);
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, budget.ReservedBytes);
@@ -70,7 +72,8 @@ public sealed class CollectionOwnershipTests
         try
         {
             var child = Fork(compact);
-            Assert.Same(target, Assert.Single(child.DirectoryStack));
+            Assert.Equal(1, child.DirectoryStackCount);
+            Assert.Same(target, child.CurrentDirectory);
             Assert.True(child.RetainedDirectoryStackBytes < parent.RetainedDirectoryStackBytes);
         }
         finally { compact.Finish(retainVariables: false); }
@@ -118,6 +121,29 @@ public sealed class CollectionOwnershipTests
 
         EvaluationState Fork(EvaluationMemory owner) =>
             parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.CommandSubstitution, owner);
+    }
+
+    [Fact]
+    public void RefusedDirectoryOutputLeavesTheBorrowedPathAvailable()
+    {
+        var target = new ShellPath("/" + new string('é', 1024));
+        var script = Parser.Parse(":");
+        var state = new EvaluationState(script, target, inheritedDescriptorTable: null);
+        var smaller = new EvaluationState(script, ShellPath.Root, inheritedDescriptorTable: null);
+        var budget = new MemoryGovernor(1024);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => state.FormatDirectoryStack(
+                currentOnly: false, memory, CancellationToken.None));
+            Assert.Same(target, state.CurrentDirectory);
+            Assert.Equal(1, state.DirectoryStackCount);
+            Assert.Equal(0, budget.ReservedBytes);
+            Assert.Equal("/\n", Utf8Text.Decode(smaller.FormatDirectoryStack(
+                currentOnly: false, memory, CancellationToken.None)));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
     }
 
     [Fact]

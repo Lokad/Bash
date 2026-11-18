@@ -231,7 +231,8 @@ public sealed partial class Evaluation : IFileTester
     public ShellPath CurrentDirectory => _state.CurrentDirectory;
 
     /// <summary>Borrowed by word expansion on this evaluator's serialized execution path.</summary>
-    internal IReadOnlyList<ShellPath> DirectoryStack => _state.DirectoryStack;
+    internal int DirectoryStackCount => _state.DirectoryStackCount;
+    internal ShellPath GetDirectoryStackPath(int index) => _state.GetDirectoryStackPath(index);
 
     /// <summary> Gets the current variable assignments. </summary>
     public IReadOnlyDictionary<BindingName, ShellValue> Variables => _vars.Scalars;
@@ -3114,7 +3115,11 @@ public sealed partial class Evaluation : IFileTester
     private ShellPath? ResolvePath(string path)
     {
         if (!RawShellPath.TryParse(path, out var raw)) return null;
-        return raw.TryToAbsolute(_state.CurrentDirectory, jail: false, out var absolute) ? absolute : null;
+        var current = _state.CurrentDirectory;
+        var length = (long)path.Length + (path[0] == '/' ? 0 : (long)current.Path.Length + 1);
+        // Cover the combined and normalized text plus overlapping segment buffers.
+        Memory.Charge(checked(256 + 16 * length));
+        return raw.TryToAbsolute(current, jail: false, out var absolute) ? absolute : null;
     }
 
     internal async Task ReportSyntaxErrorAsync(SyntaxError error)

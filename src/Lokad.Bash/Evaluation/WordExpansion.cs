@@ -454,17 +454,17 @@ internal static partial class WordExpansion
     {
         if (ordinal is { } index)
         {
-            var stack = scope.Effects.DirectoryStack;
-            if (index >= stack.Count)
+            var count = scope.Effects.DirectoryStackCount;
+            if (index >= count)
             {
                 expanded = ShellValue.Empty;
                 return false;
             }
-            var position = sign == (byte)'-' ? stack.Count - index - 1 : index;
+            var position = sign == (byte)'-' ? count - index - 1 : index;
             if (position == 0)
                 return scope.Variables.TryGetExpansionValue("PWD", out expanded);
 
-            var path = stack[position].Path;
+            var path = scope.Effects.GetDirectoryStackPath(position).Path;
             scope.Effects.Memory.Charge(checked(24L + 3L * path.Length));
             scope.Effects.CancellationToken.ThrowIfCancellationRequested();
             expanded = ShellValue.FromText(path);

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -172,7 +171,12 @@ internal sealed class EvaluationState
     /// <summary>
     /// Stores the directory stack with the current directory at index 0; updated by pushd/popd style builtins.
     /// </summary>
-    private readonly List<ShellPath> _directoryStack;
+    private readonly List<DirectoryStackEntry> _directoryStack;
+    private long _ownedDirectoryPathBytes;
+
+    internal readonly record struct DirectoryStackEntry(ShellPath Path, long OwnedBytes);
+
+    private static DirectoryStackEntry OwnPath(ShellPath path) => new(path, 48L + 2L * path.Path.Length);
 
     /// <summary>One function namespace for invocation, attributes and inspection; independent of variables.</summary>
     private readonly Dictionary<ShellValue, FunctionBinding> _functions = [];
@@ -185,11 +189,12 @@ internal sealed class EvaluationState
         ParsedScript script,
         ShellPath currentDirectory,
         DescriptorTable? inheritedDescriptorTable)
-        : this(script, new RedirectionState(inheritedDescriptorTable), new List<ShellPath>(1) { currentDirectory })
+        : this(script, new RedirectionState(inheritedDescriptorTable), new List<DirectoryStackEntry>(1) { OwnPath(currentDirectory) })
     {
+        _ownedDirectoryPathBytes = _directoryStack[0].OwnedBytes;
     }
 
-    private EvaluationState(ParsedScript script, RedirectionState redirections, List<ShellPath> directoryStack)
+    private EvaluationState(ParsedScript script, RedirectionState redirections, List<DirectoryStackEntry> directoryStack)
     {
         Script = script;
         _redirections = redirections;
@@ -216,12 +221,14 @@ internal sealed class EvaluationState
     /// <summary>
     /// Stores the current working directory; initialized to "/" and updated by directory-changing builtins.
     /// </summary>
-    public ShellPath CurrentDirectory => _directoryStack[0];
+    public ShellPath CurrentDirectory => GetDirectoryStackPath(0);
 
-    public IReadOnlyList<ShellPath> DirectoryStack => _directoryStack;
-    internal long RetainedDirectoryStackBytes => EstimateDirectoryStackBytes(_directoryStack.Capacity);
+    internal int DirectoryStackCount => _directoryStack.Count;
+    internal ShellPath GetDirectoryStackPath(int index) => _directoryStack[index].Path;
+    internal long RetainedDirectoryStackBytes => checked(EstimateDirectoryStackBytes(_directoryStack.Capacity)
+        + _ownedDirectoryPathBytes);
 
-    private static long EstimateDirectoryStackBytes(int capacity) => 32L + 8L * capacity;
+    private static long EstimateDirectoryStackBytes(int capacity) => 32L + 16L * capacity;
 
     public IReadOnlyDictionary<ShellValue, FunctionBinding> Functions => _functions;
 
@@ -267,8 +274,11 @@ internal sealed class EvaluationState
 
     private EvaluationState CloneShellState(ParsedScript script, RedirectionState redirections, ShellForkKind kind)
     {
-        // The array is independent. Paths and trap action bytes remain immutable and shared.
-        var clone = new EvaluationState(script, redirections, new List<ShellPath>(_directoryStack))
+        // The parent outlives the child, so its path text remains admitted to the parent.
+        var childStack = new List<DirectoryStackEntry>(_directoryStack.Count);
+        foreach (var entry in _directoryStack)
+            childStack.Add(new DirectoryStackEntry(entry.Path, OwnedBytes: 0));
+        var clone = new EvaluationState(script, redirections, childStack)
         {
             LastExitCode = LastExitCode,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
@@ -402,19 +412,43 @@ internal sealed class EvaluationState
         _functions.Clear();
     }
 
-    public void ResetDirectoryStack() => _directoryStack.RemoveRange(1, _directoryStack.Count - 1);
+    public void ResetDirectoryStack()
+    {
+        _directoryStack.RemoveRange(1, _directoryStack.Count - 1);
+        _ownedDirectoryPathBytes = _directoryStack[0].OwnedBytes;
+    }
 
     /// <summary>Applies a settled lookup, including Bash's partial stack change after a rejected swap.</summary>
-    public void ApplyDirectoryLookup(DirectoryChangeKind kind, ShellPath target, bool succeeded)
+    public DirectoryStackEntry ApplyDirectoryLookup(DirectoryChangeKind kind, ShellPath target, bool succeeded, EvaluationMemory memory)
     {
+        var previous = _directoryStack[0];
+        var fromStack = kind is DirectoryChangeKind.PopDirectory or DirectoryChangeKind.SwapDirectories;
+        var destination = fromStack ? _directoryStack[1] : ReferenceEquals(previous.Path, target) ? previous : OwnPath(target);
         if (kind == DirectoryChangeKind.SwapDirectories)
-            _directoryStack[1] = CurrentDirectory;
+        {
+            if (!succeeded)
+                memory.Charge(Math.Max(0, previous.OwnedBytes - destination.OwnedBytes));
+            Replace(1, previous);
+        }
+        // A successful lookup publishes the head before variable assignments. A pop can
+        // leave two occurrences of the same path if those assignments reject the change.
         if (succeeded)
-            _directoryStack[0] = target;
+        {
+            if (kind == DirectoryChangeKind.PopDirectory)
+                memory.Charge(Math.Max(0, destination.OwnedBytes - previous.OwnedBytes));
+            Replace(0, destination);
+        }
+        return previous;
+
+        void Replace(int index, DirectoryStackEntry entry)
+        {
+            _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes - _directoryStack[index].OwnedBytes);
+            _directoryStack[index] = entry;
+        }
     }
 
     /// <summary>Completes stack publication only after directory-variable bookkeeping succeeds.</summary>
-    public void CompleteDirectoryChange(DirectoryChangeKind kind, ShellPath previous, EvaluationMemory memory)
+    public void CompleteDirectoryChange(DirectoryChangeKind kind, DirectoryStackEntry previous, EvaluationMemory memory)
     {
         switch (kind)
         {
@@ -429,11 +463,13 @@ internal sealed class EvaluationState
                     _directoryStack.Capacity = capacity;
                 }
                 _directoryStack.Insert(1, previous);
+                _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + previous.OwnedBytes);
                 break;
             case DirectoryChangeKind.ChangeDirectory:
             case DirectoryChangeKind.SwapDirectories:
                 break;
             case DirectoryChangeKind.PopDirectory:
+                _ownedDirectoryPathBytes -= _directoryStack[1].OwnedBytes;
                 _directoryStack.RemoveAt(1);
                 break;
             default:
@@ -441,9 +477,27 @@ internal sealed class EvaluationState
         }
     }
 
-    public ReadOnlyMemory<byte> FormatDirectoryStack()
+    public ReadOnlyMemory<byte> FormatDirectoryStack(bool currentOnly, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var output = string.Join(' ', _directoryStack.Select(p => p.Path)) + "\n";
-        return Utf8Text.Encode(output);
+        var count = currentOnly ? 1 : _directoryStack.Count;
+        long bytes = count; // A space after each path except the last, which ends with LF.
+        for (var index = 0; index < count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            bytes += Utf8Text.StrictUtf8.GetByteCount(GetDirectoryStackPath(index).Path);
+        }
+        if (bytes >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        memory.Charge(checked(32 + bytes));
+        var output = new byte[(int)bytes];
+        var offset = 0;
+        for (var index = 0; index < count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            offset += Utf8Text.StrictUtf8.GetBytes(GetDirectoryStackPath(index).Path.AsSpan(), output.AsSpan(offset));
+            output[offset++] = index + 1 == count ? (byte)'\n' : (byte)' ';
+        }
+        return output;
     }
 }

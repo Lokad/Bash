@@ -6,7 +6,7 @@ namespace Lokad.Bash.Helpers;
 
 public static class Utf8Text
 {
-    private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    internal static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly ReadOnlyMemory<byte> Newline = "\n"u8.ToArray();
 
     /// <summary>Consumes one UTF-8 character from nonempty input, or one byte if malformed or incomplete.</summary>

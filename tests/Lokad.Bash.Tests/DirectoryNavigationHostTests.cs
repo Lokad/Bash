@@ -11,6 +11,62 @@ namespace Lokad.Bash.Tests;
 public sealed class DirectoryNavigationHostTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryStackMemoryFollowsLivePathsAndPendingOutput(bool measureOutput)
+    {
+        var paths = Enumerable.Range(0, 24).Select(index => "/" + index + new string('é', 640)).ToArray();
+        await using var host = new TestHost();
+        foreach (var path in paths)
+            host.AddDirectory(path);
+        var setup = string.Join('\n', paths.Select(path => "pushd " + path + " >/dev/null"));
+        var evaluation = new Eval(Parser.Parse(setup + "\nprintf @full; dirs; dirs -c; printf @idle"));
+        var budget = new MemoryGovernor(1024 * 1024);
+        using var owner = budget.CreateScope();
+        evaluation.Memory.Budget = owner;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        long retainedBeforeClear = 0, retainedAfterClear = 0, pendingOutput = 0;
+        var expectedOutput = string.Join(' ', paths.Reverse()) + " /\n";
+        while (await evaluation.GetNextStep(deadline.Token) is { } operation)
+        {
+            if (operation is WriteOperation write && write.FileDescriptor == FileDescriptor.StdOut)
+            {
+                var bytes = evaluation.Memory.Workspace.Bytes;
+                if (write.Content.Span.SequenceEqual("@full"u8))
+                    retainedBeforeClear = bytes;
+                else if (write.Content.Span.SequenceEqual("@idle"u8))
+                    retainedAfterClear = bytes;
+                else
+                {
+                    Assert.Equal(expectedOutput, Encoding.UTF8.GetString(write.Content.Span));
+                    pendingOutput = bytes;
+                }
+            }
+            await ShellOperationDispatcher.DispatchAsync(operation, host, deadline.Token);
+        }
+        await evaluation.Completion;
+
+        Assert.True(retainedBeforeClear > 0 && retainedAfterClear > 0 && pendingOutput > 0);
+        if (measureOutput)
+        {
+            var outputBytes = Encoding.UTF8.GetByteCount(expectedOutput);
+            var delta = pendingOutput - retainedBeforeClear;
+            Assert.True(delta >= outputBytes - 1024, $"Pending output changed admission by {delta} B for {outputBytes} B of output.");
+        }
+        else
+        {
+            var lowerBound = 2 * paths.Take(paths.Length - 1).Sum(path => path.Length);
+            var delta = retainedBeforeClear - retainedAfterClear;
+            Assert.True(delta >= lowerBound, $"Clearing the stack retired {delta} B for {lowerBound} B of path text.");
+        }
+        Assert.Equal("@full" + expectedOutput + "@idle", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false, "PWD")]
     [InlineData(true, "PWD")]
     [InlineData(false, "OLDPWD")]
@@ -24,6 +80,12 @@ public sealed class DirectoryNavigationHostTests
     [InlineData(true)]
     public Task PreviousDirectoryAnnouncementStaysBorrowedUntilTheHostSettles(bool prepared) =>
         VerifyPendingDirectoryWriteAsync(prepared, "OLDPWD=a; cd - >/out; printf tail", "a\n");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task DirectoryStackOutputStaysBorrowedUntilTheHostSettles(bool prepared) =>
+        VerifyPendingDirectoryWriteAsync(prepared, "cd /a; dirs >/out; printf tail", "/a\n");
 
     private static async Task VerifyPendingDirectoryWriteAsync(bool prepared, string script, string expected)
     {
