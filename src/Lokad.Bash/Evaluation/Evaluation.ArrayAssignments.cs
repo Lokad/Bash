@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -9,8 +10,9 @@ namespace Lokad.Bash.Evaluation;
 public sealed partial class Evaluation
 {
     /// <summary>Expands compound operands against the old binding, before replacement starts.</summary>
-    private async Task<IReadOnlyList<ExpandedArrayItem>?> ExpandCompoundArrayItemsAsync(
-        BindingName name, IReadOnlyList<CompoundArrayItem> items, ArrayKind kind, AssignmentOperator operation, AssignmentContext context, ScopedEvaluation scope)
+    private async Task<List<ExpandedArrayItem>?> ExpandCompoundArrayItemsAsync(
+        BindingName name, IReadOnlyList<CompoundArrayItem> items, ArrayKind kind, AssignmentOperator operation,
+        AssignmentContext context, ScopedEvaluation scope, MemoryCapacity itemMemory)
     {
         var associative = kind == ArrayKind.Associative;
         var retainQuotes = context == AssignmentContext.QuotedIndexedDeclaration;
@@ -31,8 +33,7 @@ public sealed partial class Evaluation
                     : ShellValue.Empty;
                 if (_state.HasPendingExpansionError)
                     return null;
-                expanded.Add(new ExpandedArrayItem(
-                    VariableReference.ForElement(name, ShellSource.FromBytes(key.Bytes)), key, value,
+                AddItem(new ExpandedArrayItem(ShellSource.FromBytes(key.Bytes), key, value,
                     AssignmentOperator.Replace, PrefixWithElementZero: false));
             }
         }
@@ -45,6 +46,14 @@ public sealed partial class Evaluation
                     // Invalid words in explicit associative form are diagnosed without expanding them.
                     await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("must use subscript when assigning associative array"))
                         .ConfigureAwait(false);
+                    continue;
+                }
+
+                if (!retainQuotes && item.Element == null && scope.CanExpand && GetLiteralWithoutGlob(item.Word) is { } literal)
+                {
+                    CheckCancellation();
+                    AddItem(new ExpandedArrayItem(null, ShellValue.Empty, literal.ToValue(Memory),
+                        AssignmentOperator.Replace, PrefixWithElementZero: false));
                     continue;
                 }
 
@@ -68,8 +77,8 @@ public sealed partial class Evaluation
                         selector = QuoteLiteral(selector);
                         value = QuoteLiteral(value);
                     }
-                    expanded.Add(associative || retainQuotes
-                        ? new ExpandedArrayItem(VariableReference.ForElement(name, element.Subscript), selector, value,
+                    AddItem(associative || retainQuotes
+                        ? new ExpandedArrayItem(element.Subscript, selector, value,
                             element.Operator, PrefixWithElementZero: false)
                         : ClassifyIndexedItem(element, selector, value));
                 }
@@ -82,7 +91,7 @@ public sealed partial class Evaluation
                             var value = await ExpandValueAsync(word).ConfigureAwait(false);
                             if (_state.HasPendingExpansionError)
                                 return null;
-                            expanded.Add(new ExpandedArrayItem(null, ShellValue.Empty, QuoteLiteral(value),
+                            AddItem(new ExpandedArrayItem(null, ShellValue.Empty, QuoteLiteral(value),
                                 AssignmentOperator.Replace, PrefixWithElementZero: false));
                             continue;
                         }
@@ -91,18 +100,24 @@ public sealed partial class Evaluation
                             .ConfigureAwait(false);
                         if (_state.HasPendingExpansionError)
                             return null;
-                        var values = await ExpandExpandedWordsAsync(fields).ConfigureAwait(false);
-                        if (_state.HasPendingExpansionError)
+                        if (!await AppendExpandedWordsAsync(fields, expanded, itemMemory,
+                                static value => new ExpandedArrayItem(null, ShellValue.Empty, value,
+                                    AssignmentOperator.Replace, PrefixWithElementZero: false)).ConfigureAwait(false)
+                            || _state.HasPendingExpansionError)
                             return null;
-                        foreach (var value in values)
-                            expanded.Add(new ExpandedArrayItem(null, ShellValue.Empty, value,
-                                AssignmentOperator.Replace, PrefixWithElementZero: false));
                     }
                 }
             }
         }
 
+        itemMemory.ReleaseUnusedCapacity();
         return expanded;
+
+        void AddItem(ExpandedArrayItem item)
+        {
+            Memory.PrepareListCapacity(itemMemory, expanded, 1);
+            expanded.Add(item);
+        }
 
         Task<ShellValue> ExpandValueAsync(Word word) => WordExpansion.ExpandCompoundValueAsync(
             word, scope, retainQuotes ? ArrayKind.Associative : kind);
@@ -124,7 +139,7 @@ public sealed partial class Evaluation
             // Ordinary arithmetic cannot change the item boundaries. Avoid copying its RHS.
             if (selector.Bytes.Span.IndexOfAny("[]'\"\\$`"u8) < 0)
                 return new ExpandedArrayItem(
-                    VariableReference.ForElement(name, element.Subscript), selector, value,
+                    element.Subscript, selector, value,
                     element.Operator, PrefixWithElementZero: false);
 
             // Expansion may expose an earlier closing bracket or turn the assignment into data.
@@ -143,7 +158,7 @@ public sealed partial class Evaluation
                 if (equals < source.Length && source[equals] == (byte)'=')
                 {
                     var subscript = source.Slice(1, closing - 1);
-                    return new ExpandedArrayItem(VariableReference.ForElement(name, subscript),
+                    return new ExpandedArrayItem(subscript,
                         subscript.ToValue(), source.Slice(equals + 1).ToValue(), operation, PrefixWithElementZero: false);
                 }
             }
@@ -154,13 +169,13 @@ public sealed partial class Evaluation
 
     private ShellValue FlattenCompoundArrayItem(ShellValue selector, ShellValue value, AssignmentOperator operation)
     {
-        Memory.Charge(checked(1024L));
-        var word = new ExpandedWord([
-            new ExpandedSegment(ShellValue.FromText("["), isGlobQuoted: true),
-            new ExpandedSegment(selector, isGlobQuoted: true),
-            new ExpandedSegment(ShellValue.FromText(operation == AssignmentOperator.Append ? "]+=" : "]="), isGlobQuoted: true),
-            new ExpandedSegment(value, isGlobQuoted: true)]);
-        return word.ToValue(Memory);
+        var separator = operation == AssignmentOperator.Append ? "]+="u8 : "]="u8;
+        var length = 1L + selector.Bytes.Length + separator.Length + value.Bytes.Length;
+        if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+        Memory.Charge(checked(32L + 4L * length));
+        return ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted((int)length)
+            .Append((byte)'[').Append(selector.Bytes.Span).Append(separator).Append(value.Bytes.Span).ToMemory());
     }
 
     /// <summary>Applies expanded items in order; selector effects observe earlier writes.</summary>
@@ -193,10 +208,10 @@ public sealed partial class Evaluation
         foreach (var item in expanded)
         {
             WordExpansion.ResolvedVariableReference? target;
-            if (item.Target is { } reference)
+            if (item.Subscript is { } subscript)
             {
                 target = await WordExpansion.ResolveCompoundElementAsync(
-                    VariableReference.ForElement(name, reference.Subscript), item.ExpandedSubscript, scope, targetVariables).ConfigureAwait(false);
+                    VariableReference.ForElement(name, subscript), item.ExpandedSubscript, scope, targetVariables).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     return false;
                 if (target == null)
@@ -226,4 +241,11 @@ public sealed partial class Evaluation
         return true;
 
     }
+
+    private readonly record struct ExpandedArrayItem(
+        ShellSource? Subscript,
+        ShellValue ExpandedSubscript,
+        ShellValue Value,
+        AssignmentOperator Operator,
+        bool PrefixWithElementZero);
 }

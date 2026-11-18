@@ -61,9 +61,11 @@ internal sealed class EvaluationMemory
         catch (MemoryBudgetExceededException) { _refused = true; throw; }
     }
 
-    internal void PrepareListCapacity<T>(List<T> list, int additional)
+    internal void PrepareListCapacity<T>(List<T> list, int additional) => PrepareListCapacity(_memory, list, additional);
+
+    internal void PrepareListCapacity<T>(MemoryCapacity owner, List<T> list, int additional)
     {
-        try { _memory.PrepareListCapacity(list, additional); }
+        try { owner.PrepareListCapacity(list, additional); }
         catch (MemoryBudgetExceededException) { _refused = true; throw; }
     }
 

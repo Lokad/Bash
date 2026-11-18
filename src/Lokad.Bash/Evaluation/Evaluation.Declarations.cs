@@ -45,7 +45,9 @@ public sealed partial class Evaluation
                     var kind = SelectKind();
                     var context = options.Global && kind == ArrayKind.Indexed && targetVariables.AssociativeArrays.ContainsKey(name)
                         ? AssignmentContext.QuotedIndexedDeclaration : AssignmentContext.Declaration;
-                    var expanded = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(name, items, kind, assignment.Operator, context, scope))
+                    using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
+                    var expanded = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(
+                            name, items, kind, assignment.Operator, context, scope, itemMemory))
                         .ConfigureAwait(false);
                     if (expanded == null)
                         break;
@@ -55,7 +57,7 @@ public sealed partial class Evaluation
                     var expansionKind = kind;
                     kind = SelectKind();
                     if (expansionKind != kind && kind == ArrayKind.Associative)
-                        expanded = await ReclassifyAssociativeItemsAsync().ConfigureAwait(false);
+                        await ReclassifyAssociativeItemsAsync(expanded).ConfigureAwait(false);
 
                     if (!resolved)
                     {
@@ -168,31 +170,36 @@ public sealed partial class Evaluation
                             ? ArrayKind.Associative : ArrayKind.Indexed,
                     };
 
-                    async Task<IReadOnlyList<ExpandedArrayItem>> ReclassifyAssociativeItemsAsync()
+                    async Task ReclassifyAssociativeItemsAsync(List<ExpandedArrayItem> expandedItems)
                     {
-                        Memory.Charge(checked(256L * (expanded.Count)));
-                        var result = new List<ExpandedArrayItem>();
+                        // Write only into the consumed prefix. The unread items keep their original order.
+                        var retained = 0;
                         if (items.Count > 0 && items[0].Element != null)
                         {
-                            foreach (var item in expanded)
+                            for (var itemIndex = 0; itemIndex < expandedItems.Count; itemIndex++)
                             {
-                                if (item.Target != null) result.Add(item);
-                                else await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("must use subscript when assigning associative array")).ConfigureAwait(false);
+                                CheckCancellation();
+                                var item = expandedItems[itemIndex];
+                                if (item.Subscript != null)
+                                    expandedItems[retained++] = item;
+                                else
+                                    await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("must use subscript when assigning associative array")).ConfigureAwait(false);
                             }
                         }
                         else
                         {
-                            for (var itemIndex = 0; itemIndex < expanded.Count; itemIndex += 2)
+                            for (var itemIndex = 0; itemIndex < expandedItems.Count; itemIndex += 2)
                             {
-                                var key = Flatten(expanded[itemIndex]);
-                                var value = itemIndex + 1 < expanded.Count ? Flatten(expanded[itemIndex + 1]) : ShellValue.Empty;
-                                result.Add(new ExpandedArrayItem(VariableReference.ForElement(name, ShellSource.FromBytes(key.Bytes)),
-                                    key, value, AssignmentOperator.Replace, PrefixWithElementZero: false));
+                                CheckCancellation();
+                                var key = Flatten(expandedItems[itemIndex]);
+                                var value = itemIndex + 1 < expandedItems.Count ? Flatten(expandedItems[itemIndex + 1]) : ShellValue.Empty;
+                                expandedItems[retained++] = new ExpandedArrayItem(ShellSource.FromBytes(key.Bytes),
+                                    key, value, AssignmentOperator.Replace, PrefixWithElementZero: false);
                             }
                         }
-                        return result;
+                        expandedItems.RemoveRange(retained, expandedItems.Count - retained);
 
-                        ShellValue Flatten(ExpandedArrayItem item) => item.Target == null ? item.Value
+                        ShellValue Flatten(ExpandedArrayItem item) => item.Subscript == null ? item.Value
                             : FlattenCompoundArrayItem(item.ExpandedSubscript, item.Value, item.Operator);
                     }
                 }

@@ -2581,19 +2581,14 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var kind = scope.Variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
-            var expanded = await ExpandCompoundArrayItemsAsync(name, items, kind, assignment.Operator, AssignmentContext.Direct, scope).ConfigureAwait(false);
+            using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
+            var expanded = await ExpandCompoundArrayItemsAsync(
+                name, items, kind, assignment.Operator, AssignmentContext.Direct, scope, itemMemory).ConfigureAwait(false);
             return expanded != null && await ApplyCompoundArrayItemsAsync(
                 name, assignment.Operator, kind, expanded, scope, scope.Variables, compoundTarget.Name,
                 ShellValue.Empty).ConfigureAwait(false);
         }
     }
-
-    private sealed record ExpandedArrayItem(
-        VariableReference? Target,
-        ShellValue ExpandedSubscript,
-        ShellValue Value,
-        AssignmentOperator Operator,
-        bool PrefixWithElementZero);
 
     private EvaluationResult CompleteCommandResult(
         EvaluationResult result,
@@ -2880,10 +2875,8 @@ public sealed partial class Evaluation : IFileTester
         async Task<bool> AppendAsync()
         {
             var expanded = await WordExpansion.ExpandToWordsAsync(word, scope).ConfigureAwait(false);
-            // Each expanded field contributes at least one value, including literal glob fallback.
-            if (expanded.Count > 1)
-                Memory.PrepareListCapacity(operands, expanded.Count);
-            return await AppendExpandedWordsAsync(expanded, operands, Memory).ConfigureAwait(false);
+            return await AppendExpandedWordsAsync(expanded, operands, Memory.Workspace, static value => value)
+                .ConfigureAwait(false);
         }
     }
 
@@ -3029,19 +3022,24 @@ public sealed partial class Evaluation : IFileTester
         IReadOnlyList<ExpandedWord> expanded)
     {
         var results = new List<ShellValue>(expanded.Count);
-        return await AppendExpandedWordsAsync(expanded, results, backingOwner: null).ConfigureAwait(false) ? results : [];
+        return await AppendExpandedWordsAsync(expanded, results, backingOwner: null, static value => value)
+            .ConfigureAwait(false) ? results : [];
     }
 
-    private async Task<bool> AppendExpandedWordsAsync(
-        IReadOnlyList<ExpandedWord> expanded, List<ShellValue> results, EvaluationMemory? backingOwner)
+    private async Task<bool> AppendExpandedWordsAsync<T>(
+        IReadOnlyList<ExpandedWord> expanded, List<T> results, MemoryCapacity? backingOwner, Func<ShellValue, T> createItem)
     {
+        // Each expanded field contributes at least one value, including literal glob fallback.
+        if (expanded.Count > 1 && backingOwner != null)
+            Memory.PrepareListCapacity(backingOwner, results, expanded.Count);
         foreach (var expandedWord in expanded)
         {
             CheckCancellation();
             if (!GlobPattern.RequiresExpansion(expandedWord))
             {
-                backingOwner?.PrepareListCapacity(results, 1);
-                results.Add(expandedWord.ToValue(Memory));
+                if (backingOwner != null)
+                    Memory.PrepareListCapacity(backingOwner, results, 1);
+                results.Add(createItem(expandedWord.ToValue(Memory)));
                 continue;
             }
 
@@ -3056,13 +3054,14 @@ public sealed partial class Evaluation : IFileTester
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
                 globMemory, _cancellationToken);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
-            backingOwner?.PrepareListCapacity(results, matches.Count);
+            if (backingOwner != null)
+                Memory.PrepareListCapacity(backingOwner, results, matches.Count);
             foreach (var match in matches)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 // Glob paths are UTF-16; reserve their UTF-8 copies before building argument values.
                 Memory.Charge(checked(256L + 4L * (Encoding.UTF8.GetByteCount(match))));
-                results.Add(ShellValue.FromText(match));
+                results.Add(createItem(ShellValue.FromText(match)));
             }
         }
 
