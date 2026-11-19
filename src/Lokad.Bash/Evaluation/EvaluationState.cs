@@ -289,26 +289,82 @@ internal sealed class EvaluationState
         }
     }
 
-    /// <summary>Prepares the exported subset before changing its attributes and retiring its cached selection.</summary>
-    internal void ClearFunctionExports(EvaluationMemory memory, CancellationToken cancellationToken)
+    /// <summary>Clears the exported subset while an in-process replacement is in flight.</summary>
+    internal FunctionExportClear? BeginClearFunctionExports(EvaluationMemory memory, CancellationToken cancellationToken)
     {
         if (_exportedFunctionCount == 0)
-            return;
+            return null;
 
-        const int replacementBytes = 64;
-        using var staging = memory.Budget.Reserve(checked(
-            MemoryCapacity.ArrayBackingBytes<FunctionBinding>(_exportedFunctionCount) + (long)replacementBytes * _exportedFunctionCount));
-        var replacements = new FunctionBinding[_exportedFunctionCount];
-        var index = 0;
-        foreach (var binding in _exportedFunctions ?? EnumerateExportedFunctions(cancellationToken))
+        // Both versions can still be held after a nested command publishes an edit.
+        const int bindingPairBytes = 96;
+        var staging = memory.Budget.Reserve(checked(64L
+            + MemoryCapacity.ArrayBackingBytes<(FunctionBinding, FunctionBinding)>(_exportedFunctionCount)
+            + (long)bindingPairBytes * _exportedFunctionCount));
+        FunctionExportClear? clear = null;
+        try
         {
+            var changes = new (FunctionBinding Original, FunctionBinding Cleared)[_exportedFunctionCount];
+            var index = 0;
+            foreach (var binding in _exportedFunctions ?? EnumerateExportedFunctions(cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                changes[index++] = (binding, binding with { Attributes = binding.Attributes & ~FunctionAttributes.Exported });
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            replacements[index++] = binding with { Attributes = binding.Attributes & ~FunctionAttributes.Exported };
+            clear = new FunctionExportClear(this, changes, staging);
+            clear.Apply();
+            return clear;
+        }
+        catch
+        {
+            if (clear == null)
+                staging.Dispose();
+            else
+                clear.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Owns both binding versions until the replacement completes or unwinds.</summary>
+    internal sealed class FunctionExportClear(EvaluationState owner,
+        (FunctionBinding Original, FunctionBinding Cleared)[] changes, IMemoryReservation staging) : IDisposable
+    {
+        private int _applied;
+        private bool _committed;
+
+        internal void Apply()
+        {
+            for (; _applied < changes.Length; _applied++)
+            {
+                var (original, cleared) = changes[_applied];
+                original.Retain();
+                try { owner.SetFunctionBinding(cleared); }
+                catch { original.Release(); throw; }
+            }
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        foreach (var replacement in replacements)
-            SetFunctionBinding(replacement);
+        internal void Commit() => _committed = true;
+
+        public void Dispose()
+        {
+            try
+            {
+                while (_applied > 0)
+                {
+                    var (original, cleared) = changes[--_applied];
+                    try
+                    {
+                        // Earlier commands in an eval can publish edits before a later refusal.
+                        var name = original.Definition.Name.Value;
+                        if (!_committed && owner._functions.TryGetValue(name, out var current) && ReferenceEquals(current, cleared))
+                            owner.SetFunctionBinding(original);
+                    }
+                    finally { original.Release(); }
+                }
+            }
+            finally { staging.Dispose(); }
+        }
     }
 
     internal void ReleaseExportedFunctionSelection()

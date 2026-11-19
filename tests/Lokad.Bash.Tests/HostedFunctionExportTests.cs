@@ -99,17 +99,120 @@ public sealed class HostedFunctionExportTests
         var before = governor.ReservedBytes;
         using (governor.Reserve(governor.LimitBytes - before))
         {
-            Assert.Throws<MemoryBudgetExceededException>(() => state.ClearFunctionExports(memory, CancellationToken.None));
+            Assert.Throws<MemoryBudgetExceededException>(() => state.BeginClearFunctionExports(memory, CancellationToken.None));
             Assert.Same(binding, state.Functions[definition.Name.Value]);
         }
         Assert.Equal(before, governor.ReservedBytes);
 
-        state.ClearFunctionExports(memory, CancellationToken.None);
-        Assert.Same(definition, state.Functions[definition.Name.Value].Definition);
-        Assert.Equal(FunctionAttributes.Readonly, state.Functions[definition.Name.Value].Attributes);
-        Assert.True(state.GetExportedFunctions(memory).IsEmpty);
+        using (var clear = Assert.IsType<EvaluationState.FunctionExportClear>(
+                   state.BeginClearFunctionExports(memory, CancellationToken.None)))
+        {
+            Assert.Same(definition, state.Functions[definition.Name.Value].Definition);
+            Assert.Equal(FunctionAttributes.Readonly, state.Functions[definition.Name.Value].Attributes);
+            Assert.True(state.GetExportedFunctions(memory).IsEmpty);
+            Assert.True(governor.ReservedBytes > before);
+            clear.Commit();
+        }
         Assert.Equal(0, governor.ReservedBytes);
         state.ReleaseFunctions();
+    }
+
+    [Theory]
+    [InlineData("exec -c command -v item", false, "")]
+    [InlineData("exec -c type -t item", false, "type")]
+    [InlineData("exec -c eval 'printf unexpected'", true, "eval")]
+    public async Task RefusedExecPreparationPreservesTheCallersFunctionExports(string exec, bool copiedScript, string name)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        var budget = new RefusingExecBudget(owner);
+        var state = new Eval(Parser.Parse("f(){ :; }; export -f f; inspect\n" + exec + "\ninspect \"$?\""));
+        state.Memory.Budget = budget;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var first = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        var cached = Assert.Single(first.Command.Functions).Source;
+        // A one-name query reserves its resolution record before host lookup.
+        budget.RefuseNext = copiedScript ? (child, bytes) => child && bytes > 0 : (child, bytes) => !child && bytes == 200;
+        first.SetResult(new CommandExecutionResult.Completed(0));
+
+        var error = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal(FileDescriptor.StdErr, error.FileDescriptor);
+        Assert.Equal(name + ": shared memory budget exhausted\n", Utf8Text.Decode(error.Content));
+        Assert.Equal(1, budget.Refusals);
+        error.SetResult(DescriptorWriteResult.Open);
+
+        var later = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("inspect", later.Command.CommandName);
+        Assert.Equal("1", Assert.Single(later.Command.Arguments).ToUtf8String());
+        Assert.Equal(cached, Assert.Single(later.Command.Functions).Source);
+        later.SetResult(new CommandExecutionResult.Completed(0));
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        state.ReleaseFunctions();
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task RefusedExecEvalPreservesEarlierFunctionEdits()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        var budget = new RefusingExecBudget(owner);
+        var state = new Eval(Parser.Parse("f(){ :; }; g(){ :; }; export -f f g;\n"
+            + "exec -c eval 'unset -f g\nprintf ready\n:'\ninspect \"$?\""));
+        state.Memory.Budget = budget;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var marker = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("ready", Utf8Text.Decode(marker.Content));
+        budget.RefuseNext = (child, bytes) => child && bytes > 0;
+        marker.SetResult(DescriptorWriteResult.Open);
+
+        var error = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("eval: shared memory budget exhausted\n", Utf8Text.Decode(error.Content));
+        Assert.Equal(1, budget.Refusals);
+        error.SetResult(DescriptorWriteResult.Open);
+        var later = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("1", Assert.Single(later.Command.Arguments).ToUtf8String());
+        var definition = Assert.IsType<FunctionDefinition>(
+            Assert.Single(Parser.Parse(Assert.Single(later.Command.Functions).Source).Commands));
+        Assert.Equal(ShellValue.FromText("f"), definition.Name.Value);
+        later.SetResult(new CommandExecutionResult.Completed(0));
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        state.ReleaseFunctions();
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class RefusingExecBudget(IMemoryBudget budget) : IMemoryBudget
+    {
+        public Func<bool, long, bool>? RefuseNext { get; set; }
+        public int Refusals { get; private set; }
+
+        public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation) =>
+            TryReserve(budget, false, bytes, out reservation);
+
+        public IMemoryScope CreateScope() => new Scope(budget.CreateScope(), this);
+
+        private bool TryReserve(IMemoryBudget inner, bool child, long bytes,
+            [NotNullWhen(true)] out IMemoryReservation? reservation)
+        {
+            if (RefuseNext?.Invoke(child, bytes) == true)
+            {
+                RefuseNext = null;
+                Refusals++;
+                reservation = null;
+                return false;
+            }
+            return inner.TryReserve(bytes, out reservation);
+        }
+
+        private sealed class Scope(IMemoryScope inner, RefusingExecBudget owner) : IMemoryScope
+        {
+            public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation) =>
+                owner.TryReserve(inner, true, bytes, out reservation);
+            public IMemoryScope CreateScope() => new Scope(inner.CreateScope(), owner);
+            public void Dispose() => inner.Dispose();
+        }
     }
 
     [Theory]

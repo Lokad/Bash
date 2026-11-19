@@ -1214,9 +1214,9 @@ public sealed partial class Evaluation : IFileTester
                 {
                     var queryName = PrepareExecArgumentZero(queryOptions, "command");
                     queryScope = ForkExecScope(queryScope, queryName);
-                    if (queryOptions.ClearEnvironment)
-                        ClearExecExports(queryScope, queryScope.Variables);
                 }
+                using var clearedExports = query.ExecutionOptions is { ClearEnvironment: true }
+                    ? ClearExecExports(queryScope, queryScope.Variables) : null;
                 var queryExitCode = await EvaluateCommandQueryAsync(
                         BuiltinKind.Command,
                         query.Arguments,
@@ -1228,6 +1228,7 @@ public sealed partial class Evaluation : IFileTester
                     .ConfigureAwait(false);
                 var queryResult = await FinalizeResultAsync(EvaluationResult.FromExitCode(queryExitCode), false)
                     .ConfigureAwait(false);
+                clearedExports?.Commit();
                 return CompleteCommandResult(queryResult, query.Completion, commandInvoked: true);
             }
 
@@ -1323,8 +1324,8 @@ public sealed partial class Evaluation : IFileTester
                     };
                 }
 
-                if (executable.ExecutionOptions is { ClearEnvironment: true })
-                    ClearExecExports(builtinScope, commandVars);
+                using var clearedExports = executable.ExecutionOptions is { ClearEnvironment: true }
+                    ? ClearExecExports(builtinScope, commandVars) : null;
 
                 var builtinResult = evaluatorBuiltin.Kind switch
                 {
@@ -1380,6 +1381,7 @@ public sealed partial class Evaluation : IFileTester
                 };
                 if (scriptFunction != null)
                     CompletePromotions(scriptFunction, enclosingFunction, commandVars, bindings);
+                clearedExports?.Commit();
                 return CompleteCommandResult(builtinResult, executable.Completion, commandInvoked: true);
             }
 
@@ -1469,7 +1471,7 @@ public sealed partial class Evaluation : IFileTester
             return source with { Variables = variables, Context = context };
         }
 
-        void ClearExecExports(ScopedEvaluation executionScope, Variables commandVariables)
+        EvaluationState.FunctionExportClear? ClearExecExports(ScopedEvaluation executionScope, Variables commandVariables)
         {
             // Prepare the fork's visible and saved bindings before updating the function namespace.
             ClearExports(commandVariables);
@@ -1485,7 +1487,7 @@ public sealed partial class Evaluation : IFileTester
                     ClearExports(functionBindings.SavedVariables);
             }
 
-            _state.ClearFunctionExports(Memory, _cancellationToken);
+            return _state.BeginClearFunctionExports(Memory, _cancellationToken);
 
             void ClearExports(Variables variables) => variables.ClearExportAttributes(Memory, _cancellationToken);
         }
