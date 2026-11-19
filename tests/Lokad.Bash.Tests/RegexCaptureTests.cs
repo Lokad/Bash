@@ -1,10 +1,33 @@
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class RegexCaptureTests
 {
+    [Theory]
+    [InlineData(false, 136 * 1024)]
+    [InlineData(true, 47 * 1024)]
+    public async Task PatternPreparationFitsWithoutUnusedScratch(bool quotedAndClass, int allowance)
+    {
+        var source = quotedAndClass
+            ? "set -- '" + new string('a', 1012) + ".' '[[:alpha:]]'; [[ ! % =~ \"$1\"$2 ]]"
+            : "set -- '" + new string('a', 4096) + "'; [[ ! % =~ $1 ]]";
+        var evaluation = new Eval(Parser.Parse(source));
+        var governor = new MemoryGovernor(allowance);
+        await using var host = new TestHost { MemoryBudget = governor };
+        using var owner = governor.CreateScope();
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(64 * 1024, false)]
     [InlineData(2 * 1024 * 1024, true)]
@@ -36,6 +59,7 @@ public sealed class RegexCaptureTests
     [InlineData("declare -A BASH_REMATCH=([key]=value); [[ ab =~ (a)(b) ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<ab><a><b>")]
     [InlineData("declare -n BASH_REMATCH=target; [[ ab =~ (a)(b) ]]; printf '<%s>:<%s>' \"${BASH_REMATCH[*]}\" \"${target-unset}\"", "<ab a b>:<unset>")]
     [InlineData("[[ '😀x' =~ (😀)(.) ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<😀x><😀><x>")]
+    [InlineData("prefix='\\'; tail='([[:digit:]]+)'; [[ '\\42' =~ \"$prefix\"$tail ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<\\42><42>")]
     public async Task CapturesPreserveValuesAndGlobalBindingRules(string script, string expected)
     {
         await using var host = new TestHost();

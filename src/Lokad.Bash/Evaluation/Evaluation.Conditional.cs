@@ -99,8 +99,10 @@ public sealed partial class Evaluation
                     if (_state.HasPendingExpansionError)
                         return 1;
                     var left = leftWord.ToValue(Memory);
-                    var right = rightWord.ToValue(Memory);
                     var predicate = binary.Predicate;
+                    if (predicate.Operator == BinaryPredicateKind.RegexMatch)
+                        return await MatchRegexAsync(left, rightWord).ConfigureAwait(false);
+                    var right = rightWord.ToValue(Memory);
                     if (predicate.IsFilePredicate)
                         return await FileAsync(predicate.FileKind, left, right).ConfigureAwait(false);
                     if (predicate.IsNumeric)
@@ -120,8 +122,6 @@ public sealed partial class Evaluation
                             .IsMatch(left.Bytes.Span, _cancellationToken);
                         return matched == (predicate.Operator == BinaryPredicateKind.StringEqual) ? 0 : 1;
                     }
-                    if (predicate.Operator == BinaryPredicateKind.RegexMatch)
-                        return await MatchRegexAsync(left, rightWord).ConfigureAwait(false);
                     var comparison = ShellValue.ByteOrder.Compare(left, right);
                     return (predicate.Operator == BinaryPredicateKind.StringLess ? comparison < 0 : comparison > 0) ? 0 : 1;
                 default: throw new InvalidOperationException("Unexpected conditional predicate node.");
@@ -142,29 +142,17 @@ public sealed partial class Evaluation
         async Task<int> MatchRegexAsync(ShellValue input, ExpandedWord patternWord)
         {
             var pattern = patternWord.ToValue(Memory);
-            Memory.Charge(checked(16L * (input.Bytes.Length + (long)pattern.Bytes.Length)));
+            // Include the capture binding's fixed overhead in the initial admission.
+            Memory.Charge(checked(512L + 16L * (input.Bytes.Length + (long)pattern.Bytes.Length)));
             if (!input.TryGetUtf8Text(out var text) || !System.Text.Unicode.Utf8.IsValid(pattern.Bytes.Span))
                 return await ErrorAsync("regex operands must be valid UTF-8").ConfigureAwait(false);
-            var activity = patternWord.GetGlobMask(Memory);
-            using var quoted = new ByteMemoryBuilder(0, Memory.Budget);
-            for (var index = 0; index < pattern.Bytes.Length; index++)
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-                var ch = pattern.Bytes.Span[index];
-                if (activity.AsSpan()[index] != GlobMask.Active
-                    && ch is (byte)'.' or (byte)'^' or (byte)'$' or (byte)'|' or (byte)'?' or (byte)'*'
-                        or (byte)'+' or (byte)'(' or (byte)')' or (byte)'[' or (byte)']' or (byte)'{' or (byte)'}' or (byte)'\\')
-                    quoted.Append((byte)'\\');
-                quoted.Append(ch);
-            }
-            using var encoded = new ByteMemoryBuilder(0, Memory.Budget);
-            if (!TranslateClasses(quoted.ToMemory().Span, encoded))
+            if (!TryPreparePattern(patternWord, pattern.Bytes, out var expression))
                 return 2;
             Match match;
             try
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                match = Regex.Match(text, ShellValue.FromBytes(encoded.ToMemory()).ToUtf8String(),
+                match = Regex.Match(text, expression,
                     RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
             }
             catch (ArgumentException) { return 2; }
@@ -173,7 +161,6 @@ public sealed partial class Evaluation
             var owner = scope.Context.GetGlobalBindingOwner(global::Lokad.Bash.Evaluation.Variables.RegexCaptureName, scope.Variables);
             if (!match.Success)
             {
-                Memory.Charge(512);
                 owner.SetRegexCaptures([]);
                 return 1;
             }
@@ -190,7 +177,7 @@ public sealed partial class Evaluation
                     return 2;
                 bytes = checked(bytes + Encoding.UTF8.GetByteCount(group.ValueSpan));
             }
-            Memory.Charge(checked(512L + 256L * match.Groups.Count + 2L * bytes));
+            Memory.Charge(checked(256L * match.Groups.Count + 2L * bytes));
             var captures = new ShellValue[match.Groups.Count];
             for (var index = 0; index < captures.Length; index++)
             {
@@ -206,8 +193,58 @@ public sealed partial class Evaluation
             bool IsScalarBoundary(int position) => position == 0 || position == text.Length
                 || !char.IsHighSurrogate(text[position - 1]) || !char.IsLowSurrogate(text[position]);
 
-            bool TranslateClasses(ReadOnlySpan<byte> source, ByteMemoryBuilder output)
+            bool TryPreparePattern(ExpandedWord word, ReadOnlyMemory<byte> patternBytes, out string expression)
             {
+                ByteMemoryBuilder? escaped = null;
+                ByteMemoryBuilder? translated = null;
+                expression = string.Empty;
+                try
+                {
+                    var source = patternBytes.Span;
+                    var segmentStart = 0;
+                    var copyStart = 0;
+                    foreach (var segment in word.Segments)
+                    {
+                        _cancellationToken.ThrowIfCancellationRequested();
+                        var end = segmentStart + segment.Content.Bytes.Length;
+                        if (segment.IsGlobQuoted)
+                        {
+                            for (var index = segmentStart; index < end; index++)
+                            {
+                                _cancellationToken.ThrowIfCancellationRequested();
+                                if (source[index] is not ((byte)'.' or (byte)'^' or (byte)'$' or (byte)'|' or (byte)'?' or (byte)'*'
+                                    or (byte)'+' or (byte)'(' or (byte)')' or (byte)'[' or (byte)']' or (byte)'{' or (byte)'}' or (byte)'\\'))
+                                    continue;
+                                (escaped ??= new ByteMemoryBuilder(0, Memory.Budget))
+                                    .Append(source[copyStart..index]).Append((byte)'\\');
+                                copyStart = index;
+                            }
+                        }
+                        segmentStart = end;
+                    }
+                    escaped?.Append(source[copyStart..]);
+
+                    var rendered = escaped?.ToMemory() ?? patternBytes;
+                    if (!TranslateClasses(rendered.Span, ref translated))
+                        return false;
+
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    expression = ShellValue.FromBytes(translated?.ToMemory() ?? rendered).ToUtf8String();
+                    return true;
+                }
+                finally
+                {
+                    translated?.Dispose();
+                    escaped?.Dispose();
+                }
+            }
+
+            bool TranslateClasses(ReadOnlySpan<byte> source, ref ByteMemoryBuilder? output)
+            {
+                if (!source.Contains((byte)'['))
+                    return true;
+
+                var copyStart = 0;
                 var bracket = false;
                 var first = false;
                 for (var index = 0; index < source.Length; index++)
@@ -216,7 +253,6 @@ public sealed partial class Evaluation
                     var ch = source[index];
                     if (ch == (byte)'\\' && index + 1 < source.Length)
                     {
-                        output.Append(source.Slice(index, 2));
                         index++;
                         if (bracket) first = false;
                         continue;
@@ -236,8 +272,9 @@ public sealed partial class Evaluation
                                 ? ShellCharacterClass.RegexMembers(kind) : default;
                             if (members.IsEmpty)
                                 return false;
-                            output.Append(members);
+                            (output ??= new ByteMemoryBuilder(0, Memory.Budget)).Append(source[copyStart..index]).Append(members);
                             index += end + 3;
+                            copyStart = index + 1;
                             first = false;
                             continue;
                         }
@@ -249,8 +286,8 @@ public sealed partial class Evaluation
                         bracket = true;
                         first = true;
                     }
-                    output.Append(ch);
                 }
+                output?.Append(source[copyStart..]);
                 return true;
             }
         }
