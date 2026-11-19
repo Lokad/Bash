@@ -1073,7 +1073,7 @@ public sealed partial class Evaluation : IFileTester
         {
             try
             {
-                echoContent = EchoFormatting.Format(byteOperands, EchoFormatting.GetOutputFormat(byteOperands), echoMemory);
+                echoContent = EchoFormatting.Format(byteOperands, echoMemory);
             }
             catch (MemoryBudgetExceededException)
             {

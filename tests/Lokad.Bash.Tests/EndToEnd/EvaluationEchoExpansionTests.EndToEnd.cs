@@ -21,6 +21,34 @@ public sealed class EvaluationEchoExpansionTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Fact]
+    public async Task EchoStopEscapePreservesExpansionEffectsOfLaterOperands()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            """set -- -En -e; echo "$@" 'head\ctail' "$(printf touched >effect; printf omitted)"; printf end""",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("headend", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("touched", host.ReadFile("/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task EchoWritesDecodedNulAndFollowingBytesToTheActiveDescriptor()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""builtin echo -ne 'pre\0after\x00tail' >effect""", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("pre\0after\0tail"u8.ToArray(), host.ReadFileBytes("/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("unset HOME; printf '<%s>\\n' ~", "<~>\n")]
     [InlineData("HOME=; printf '<%s>\\n' ~", "<>\n")]

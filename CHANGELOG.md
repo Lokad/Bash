@@ -138,8 +138,8 @@
   parentheses in case arms and line breaks before case `in`. Reuse the existing
   loop and case execution paths and preserve function display and replay.
 
-- Honor repeated and bundled leading `echo -n` options. Preserve literal
-  operands from the first non-option onward and skip writes for empty output.
+- Honor repeated and bundled leading `echo -n`, `-e` and `-E` options. Decode
+  escapes into bytes and stop at `\c` when enabled. Skip writes for empty output.
 
 - Index descriptor handle references with frozen alias counts and reusable writer
   deltas. Merge only live changes, preserving snapshots, closed mappings and alias

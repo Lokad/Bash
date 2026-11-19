@@ -251,10 +251,19 @@ positional window returns 1 silently. Negative or invalid counts return 1 with
 a diagnostic. A valid count followed by any surplus field diagnoses the arity
 error and exits the current shell evaluation with status 1.
 
-`echo` consumes leading arguments made of a dash followed by one or more `n`
-bytes and omits the final LF if any such argument is consumed. The first other
-argument, including `--` or an empty argument, ends option recognition. Arguments
-are joined with one space and backslashes remain literal.
+`echo` consumes leading arguments made of a dash followed by one or more `n`,
+`e` or `E` bytes. Any consumed `n` omits the final LF. Backslashes are literal
+by default. The last consumed `e` or `E` enables or disables escape processing.
+The first argument outside that grammar, including `--` or an empty argument,
+ends option recognition and becomes the first output operand.
+
+`echo -e` decodes `\\`, `\a`, `\b`, `\e`, `\E`, `\f`, `\n`, `\r`, `\t`,
+`\v`, `\0` with up to three following octal digits, and `\x` with one or two
+hexadecimal digits. `\u` and `\U` take up to four or eight hexadecimal digits,
+respectively, and use Bash's extended UTF-8 encoding independently of locale.
+Unknown escapes and hexadecimal escapes without digits remain literal. Decoded
+NUL is written as an output byte. `\c` ends output at that point, omitting the
+final LF. Arguments expand before formatting and are separated by a single space.
 
 Regular expression conditions use .NET regular expressions with quote-aware pattern
 escaping and dot matching LF. They require valid UTF-8. Named bracket classes

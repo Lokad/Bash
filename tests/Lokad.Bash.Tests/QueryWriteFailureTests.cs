@@ -15,6 +15,7 @@ public sealed class QueryWriteFailureTests
     [InlineData("printf x 1>&-3", "printf: write error: Bad file descriptor\n")]
     [InlineData("printf x 1>&-0", "printf: write error: Bad file descriptor\n")]
     [InlineData("echo x 1>&-", "echo: write error: Bad file descriptor\n")]
+    [InlineData(@"echo -e 'x\c' later 1>&-", "echo: write error: Bad file descriptor\n")]
     public async Task FormattingBuiltinsReportClosedOutput(string script, string error)
     {
         await using var host = new TestHost();
@@ -64,6 +65,7 @@ public sealed class QueryWriteFailureTests
     [InlineData("printf '' 1>&-")]
     [InlineData("echo -n 1>&-")]
     [InlineData("echo -nn -n 1>&-")]
+    [InlineData(@"echo -e '\c' later 1>&-")]
     [InlineData("printf -v value x 1>&-")]
     public async Task FormattingWithoutOutputDoesNotTouchAClosedOutputDescriptor(string script)
     {

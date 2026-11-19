@@ -11,7 +11,7 @@ public enum ShellEscapeStatus { Literal, Decoded, StopOutput, MissingDigits }
 /// <summary>Counts source bytes after the backslash and bytes written into the caller's scratch span.</summary>
 public readonly record struct ShellEscapeResult(int Consumed, int Written, ShellEscapeStatus Status);
 
-/// <summary>Shares byte decoding for shell literals, parameter values and printf escapes.</summary>
+/// <summary>Shares byte decoding for shell literals, parameter values and formatting escapes.</summary>
 public static class ShellEscapeDecoder
 {
     public const int MaximumEscapeBytes = 6;
@@ -53,6 +53,17 @@ public static class ShellEscapeDecoder
                 break;
         }
         return ShellValue.FromBytes(output.ToCompactMemory(memory));
+    }
+
+    /// <summary>Decodes echo escapes, whose octal form requires a zero and whose unknown escapes are literal.</summary>
+    internal static ShellEscapeResult DecodeEcho(ReadOnlySpan<byte> source, Span<byte> output)
+    {
+        if (source[0] is >= (byte)'1' and <= (byte)'7')
+            return default;
+
+        // Echo shares byte conversion and the stop escape with printf %b.
+        var decoded = Decode(source, ShellEscapeMode.PrintfArgument, output);
+        return decoded.Status == ShellEscapeStatus.MissingDigits ? default : decoded;
     }
 
     /// <summary>Requires nonempty source after a backslash and space for MaximumEscapeBytes.</summary>
