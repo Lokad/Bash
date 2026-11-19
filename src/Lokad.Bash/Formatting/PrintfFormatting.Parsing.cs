@@ -301,12 +301,8 @@ public static partial class PrintfFormatting
                             else
                                 seconds = -1;
 
-                            var value = seconds switch
-                            {
-                                -1 => timestamp,
-                                -2 => timestamp,
-                                _ => FromUnixTime(seconds, timestamp.Offset)
-                            };
+                            if (seconds is -1 or -2)
+                                seconds = timestamp.ToUnixTimeSeconds();
 
                             try
                             {
@@ -318,10 +314,10 @@ public static partial class PrintfFormatting
                                 var timeFormat = configuredFormat.IsEmpty ? "%X"
                                     : Encoding.Latin1.GetString(configuredFormat.Bytes.Span);
                                 const int MaximumTimeBytes = 127; // GNU's 128-byte strftime buffer includes its terminator.
-                                if (!GnuDateFormatting.TryFormat(
-                                        value,
+                                if (!GnuDateFormatting.TryFormatUnixTime(
+                                        seconds,
+                                        timestamp.Offset,
                                         timeFormat,
-                                        GnuDateFormatDialect.Strftime,
                                         MaximumTimeBytes,
                                         out var text, count =>
                                         {
@@ -343,18 +339,6 @@ public static partial class PrintfFormatting
                             }
 
                             return;
-
-                            static DateTimeOffset FromUnixTime(long unixSeconds, TimeSpan offset)
-                            {
-                                try
-                                {
-                                    return DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToOffset(offset);
-                                }
-                                catch (ArgumentOutOfRangeException)
-                                {
-                                    return DateTimeOffset.UnixEpoch;
-                                }
-                            }
                         }
                     case 'd':
                     case 'i':

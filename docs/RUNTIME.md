@@ -130,6 +130,8 @@ returned output remains admitted through its consumer's ownership scope.
 Printf time formats borrow their original bytes until conversion. An admitted,
 reversible byte/character projection shares the date renderer's ASCII directive
 grammar, and invariant directive results map back beside unchanged literal bytes.
+Explicit seconds use a repeating Gregorian cycle to derive local calendar fields
+and retain the original Unix seconds alongside them.
 GNU's bounded strftime result is selected before ordinary outer width/precision.
 Projection and rendering workspace share the current conversion owner; copied
 output keeps the ordinary result and descriptor-write lifetime.

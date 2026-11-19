@@ -393,7 +393,13 @@ changes fixed notation to scientific notation.
 
 Printf time-format literals preserve bytes, including malformed UTF-8. Directives
 and widths use ASCII grammar with invariant date text; unknown directives follow
-the pinned Linux strftime spelling. Each `%(...)T` conversion uses GNU's 128-byte
+the pinned Linux strftime spelling. Explicit seconds use the configured fixed
+offset with a Gregorian calendar. The calendar admits local years whose difference
+from 1900 fits in a signed 32-bit field. Within that range `%s` retains the supplied
+seconds. Numeric year rendering and padding follow the pinned Linux profile,
+including its signed 32-bit year display. An out-of-range operand falls back to
+the Unix epoch at the configured offset. The missing, `-1` and `-2` operands
+select the configured timestamp. Each `%(...)T` conversion uses GNU's 128-byte
 buffer profile: a result requiring 128 or more bytes becomes an empty value with
 successful status. Outer field width and precision apply afterward. This conversion
 rule is distinct from shared-memory refusal, which remains a reported failure.

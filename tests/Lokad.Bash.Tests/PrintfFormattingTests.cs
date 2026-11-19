@@ -382,15 +382,65 @@ public sealed class PrintfFormattingTests
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
-    public void Evaluate_FallsBackToEpochForTimestampOutsideDateTimeOffsetRange()
+    [Theory]
+    [InlineData("-62135596801", "-62135596801|0-12-31 23:59:59|0|00|0-52")]
+    [InlineData("-62135596800", "-62135596800|1-01-01 00:00:00|0|01|1-01")]
+    [InlineData("253402300799", "253402300799|9999-12-31 23:59:59|99|99|9999-52")]
+    [InlineData("253402300800", "253402300800|10000-01-01 00:00:00|100|00|9999-52")]
+    [InlineData("-67768040609740800", "-67768040609740800|-2147481748-01-01 00:00:00|-21474818|52|-2147481748-01")]
+    [InlineData("67768036191676799", "67768036191676799|-2147481749-12-31 23:59:59|-21474818|47|-2147481748-01")]
+    [InlineData("-67768040609740801", "0|1970-01-01 00:00:00|19|70|1970-01")]
+    [InlineData("67768036191676800", "0|1970-01-01 00:00:00|19|70|1970-01")]
+    [InlineData("-9223372036854775808", "0|1970-01-01 00:00:00|19|70|1970-01")]
+    [InlineData("9223372036854775807", "0|1970-01-01 00:00:00|19|70|1970-01")]
+    public void Evaluate_FormatsExtendedSecondsAndCalendarBounds(string seconds, string expected)
     {
         var result = EvaluateText(
-            "%(%Y-%m-%d %H:%M:%S)T",
-            ["253402300800"],
+            "%(%s|%F %T|%C|%y|%G-%V)T",
+            [seconds],
             DateTimeOffset.UnixEpoch);
 
-        Assert.Equal("1970-01-01 00:00:00", Text(result.Output));
+        Assert.Equal(expected, Text(result.Output));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Theory]
+    [InlineData("253402300799", "253402300799|10000-01-01 05:29:59 +0530")]
+    [InlineData("9223372036854775807", "0|1970-01-01 05:30:00 +0530")]
+    [InlineData("-1", "0|1970-01-01 05:30:00 +0530")]
+    [InlineData("-2", "0|1970-01-01 05:30:00 +0530")]
+    public void Evaluate_TimeFormattingUsesTheConfiguredOffset(string seconds, string expected)
+    {
+        var result = EvaluateText("%(%s|%F %T %z)T", [seconds],
+            DateTimeOffset.UnixEpoch.ToOffset(TimeSpan.FromHours(5.5)));
+
+        Assert.Equal(expected, Text(result.Output));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Theory]
+    [InlineData("-62198755200", "-1|-001|   -1|   -1|-1|-2|99|-1-01-01")]
+    [InlineData("-62167219200", "0|0000|    0|    0|0|-1|00|0-01-01")]
+    [InlineData("-62135596800", "1|0001|    1|    1|0|1|01|1-01-01")]
+    public void Evaluate_TimeYearsUseLinuxStrftimePadding(string seconds, string expected)
+    {
+        var result = EvaluateText("%(%Y|%4Y|%_5Y|%-5Y|%C|%G|%y|%F)T", [seconds], DateTimeOffset.UnixEpoch);
+
+        Assert.Equal(expected, Text(result.Output));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Theory]
+    [InlineData("67767977906064000", "-2147483596|53|04")]
+    [InlineData("67767981061478400", "-2147483496|53|04")]
+    public void Evaluate_TimeIsoWeeksUseTheLinuxSignedYear(string seconds, string expected)
+    {
+        var result = EvaluateText("%(%G|%V|%g)T", [seconds], DateTimeOffset.UnixEpoch);
+
+        Assert.Equal(expected, Text(result.Output));
         Assert.Equal(0, result.ExitCode);
         Assert.Empty(result.Diagnostics);
     }

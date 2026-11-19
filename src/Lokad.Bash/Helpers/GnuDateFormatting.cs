@@ -28,13 +28,66 @@ public static class GnuDateFormatting
         bool Supported,
         char DefaultPadding);
 
+    // Weekdays and leap days repeat in a 400-year Gregorian cycle.
+    private readonly record struct CalendarTime(DateTimeOffset Local, long YearOffset, long UnixSeconds)
+    {
+        internal int StrftimeYear => unchecked((int)(Local.Year + YearOffset));
+
+        internal (int Year, int Week) GetStrftimeIsoWeek()
+        {
+            var year = StrftimeYear;
+            var dayFromMonday = ((int)Local.DayOfWeek + 6) % 7;
+            var thursday = Local.DayOfYear - 1 - dayFromMonday + 3;
+            if (thursday < 0)
+            {
+                year = unchecked(year - 1);
+                thursday += DaysInYear(year);
+            }
+            else
+            {
+                // Linux strftime counts leap days using its signed display year.
+                var daysInYear = DaysInYear(year);
+                if (thursday >= daysInYear)
+                {
+                    year = unchecked(year + 1);
+                    thursday -= daysInYear;
+                }
+            }
+            return (year, thursday / 7 + 1);
+
+            static int DaysInYear(int year) =>
+                year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 366 : 365;
+        }
+
+        internal static CalendarTime FromUnixSeconds(long unixSeconds, TimeSpan offset)
+        {
+            const long SecondsPerCycle = 146097L * 86400;
+            var (cycles, remainder) = Int128.DivRem((Int128)unixSeconds + offset.Ticks / TimeSpan.TicksPerSecond, SecondsPerCycle);
+            if (remainder < 0)
+            {
+                cycles--;
+                remainder += SecondsPerCycle;
+            }
+
+            var yearOffset = (long)cycles * 400;
+            var local = DateTime.UnixEpoch.AddTicks((long)remainder * TimeSpan.TicksPerSecond);
+            var tmYear = local.Year + yearOffset - 1900;
+            return tmYear is >= int.MinValue and <= int.MaxValue
+                ? new CalendarTime(new DateTimeOffset(local.Ticks, offset), yearOffset, unixSeconds)
+                : new CalendarTime(DateTimeOffset.UnixEpoch.ToOffset(offset), 0, 0);
+        }
+    }
+
     public static string Format(DateTimeOffset value, string format) =>
         Format(value, format, GnuDateFormatDialect.Date);
 
     public static string Format(
         DateTimeOffset value,
         string format,
-        GnuDateFormatDialect dialect)
+        GnuDateFormatDialect dialect) =>
+        Format(new CalendarTime(value, 0, value.ToUnixTimeSeconds()), format, dialect);
+
+    private static string Format(CalendarTime value, string format, GnuDateFormatDialect dialect)
     {
         if (!TryFormat(value, format, dialect, int.MaxValue, out var result, static _ => { }))
             throw new InvalidOperationException("Unbounded date formatting unexpectedly exceeded its limit.");
@@ -45,6 +98,21 @@ public static class GnuDateFormatting
     /// <summary>Formats a timestamp without constructing text beyond an explicit maximum length.</summary>
     public static bool TryFormat(
         DateTimeOffset value,
+        string format,
+        GnuDateFormatDialect dialect,
+        int maximumLength,
+        out string result,
+        Action<int> reserveCharacters) =>
+        TryFormat(new CalendarTime(value, 0, value.ToUnixTimeSeconds()), format, dialect,
+            maximumLength, out result, reserveCharacters);
+
+    internal static bool TryFormatUnixTime(
+        long seconds, TimeSpan offset, string format, int maximumLength, out string result, Action<int> reserveCharacters) =>
+        TryFormat(CalendarTime.FromUnixSeconds(seconds, offset), format, GnuDateFormatDialect.Strftime,
+            maximumLength, out result, reserveCharacters);
+
+    private static bool TryFormat(
+        CalendarTime value,
         string format,
         GnuDateFormatDialect dialect,
         int maximumLength,
@@ -182,7 +250,9 @@ public static class GnuDateFormatting
                 text = SwapCase(text);
             }
 
-            var directiveLength = formatted.Supported && !noPadding ? Math.Max(width, text.Length) : text.Length;
+            var strftimeWidth = dialect == GnuDateFormatDialect.Strftime && specifier is 'C' or 'F' or 'G' or 'Y' or 's';
+            var directiveLength = formatted.Supported && (!noPadding || strftimeWidth)
+                ? Math.Max(width, text.Length) : text.Length;
             if (directiveLength > maximumLength - builder.Length)
             {
                 result = string.Empty;
@@ -197,7 +267,8 @@ public static class GnuDateFormatting
                     formatted.DefaultPadding,
                     width,
                     maximumLength - builder.Length,
-                    fractionalSeconds: specifier == 'N'))
+                    specifier,
+                    strftimeWidth))
             {
                 result = string.Empty;
                 return false;
@@ -244,7 +315,7 @@ public static class GnuDateFormatting
         }
 
         static FormattedDirective FormatDirective(
-            DateTimeOffset directiveValue,
+            CalendarTime calendar,
             char specifier,
             int colonCount,
             char? modifier,
@@ -260,6 +331,8 @@ public static class GnuDateFormatting
             if (colonCount > 0 && specifier != 'z')
                 throw new GnuDateFormatException(directive);
 
+            var directiveValue = calendar.Local;
+            var strftime = directiveDialect == GnuDateFormatDialect.Strftime;
             var text = specifier switch
             {
                 '%' => "%",
@@ -273,26 +346,29 @@ public static class GnuDateFormatting
                 'N' => FormatNanoseconds(directiveValue),
                 'p' => directiveValue.ToString("tt", Culture),
                 'P' => directiveValue.ToString("tt", Culture).ToLowerInvariant(),
-                'r' => Format(directiveValue, "%I:%M:%S %p", directiveDialect),
-                'R' => Format(directiveValue, "%H:%M", directiveDialect),
-                's' => directiveValue.ToUnixTimeSeconds().ToString(Culture),
+                'r' => Format(calendar, "%I:%M:%S %p", directiveDialect),
+                'R' => Format(calendar, "%H:%M", directiveDialect),
+                's' => calendar.UnixSeconds.ToString(Culture),
                 'S' => directiveValue.ToString("ss", Culture),
-                'T' => Format(directiveValue, "%H:%M:%S", directiveDialect),
-                'X' => Format(directiveValue, "%H:%M:%S", directiveDialect),
-                '+' => Format(directiveValue, "%a %b %e %H:%M:%S %Z %Y", directiveDialect),
+                'T' => Format(calendar, "%H:%M:%S", directiveDialect),
+                'X' => Format(calendar, "%H:%M:%S", directiveDialect),
+                '+' => Format(calendar, "%a %b %e %H:%M:%S %Z %Y", directiveDialect),
                 'z' => FormatOffset(directiveValue.Offset, colonCount),
                 'Z' => directiveValue.Offset == TimeSpan.Zero ? "UTC" : FormatOffset(directiveValue.Offset, 1),
                 'a' => directiveValue.ToString("ddd", Culture),
                 'A' => directiveValue.ToString("dddd", Culture),
                 'b' => directiveValue.ToString("MMM", Culture),
                 'B' => directiveValue.ToString("MMMM", Culture),
-                'c' => Format(directiveValue, "%a %b %e %H:%M:%S %Y", directiveDialect),
+                'c' => Format(calendar, "%a %b %e %H:%M:%S %Y", directiveDialect),
+                'C' when strftime => ((calendar.StrftimeYear - (long)LastTwoDigits(calendar.StrftimeYear)) / 100).ToString(Culture),
                 'C' => (directiveValue.Year / 100).ToString(Culture).PadLeft(2, '0'),
                 'd' => directiveValue.ToString("dd", Culture),
-                'D' => Format(directiveValue, "%m/%d/%y", directiveDialect),
+                'D' => Format(calendar, "%m/%d/%y", directiveDialect),
                 'e' => directiveValue.Day.ToString(Culture).PadLeft(2, ' '),
-                'F' => Format(directiveValue, "%Y-%m-%d", directiveDialect),
+                'F' => Format(calendar, "%Y-%m-%d", directiveDialect),
+                'g' when strftime => LastTwoDigits(calendar.GetStrftimeIsoWeek().Year).ToString("00", Culture),
                 'g' => (ISOWeek.GetYear(directiveValue.DateTime) % 100).ToString(Culture).PadLeft(2, '0'),
+                'G' when strftime => calendar.GetStrftimeIsoWeek().Year.ToString(Culture),
                 'G' => ISOWeek.GetYear(directiveValue.DateTime).ToString(Culture).PadLeft(4, '0'),
                 'h' => directiveValue.ToString("MMM", Culture),
                 'j' => directiveValue.DayOfYear.ToString(Culture).PadLeft(3, '0'),
@@ -300,15 +376,24 @@ public static class GnuDateFormatting
                 'q' => (((directiveValue.Month - 1) / 3) + 1).ToString(Culture),
                 'u' => (directiveValue.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)directiveValue.DayOfWeek).ToString(Culture),
                 'U' => GetWeekNumber(directiveValue, mondayFirst: false).ToString(Culture).PadLeft(2, '0'),
+                'V' when strftime => calendar.GetStrftimeIsoWeek().Week.ToString("00", Culture),
                 'V' => ISOWeek.GetWeekOfYear(directiveValue.DateTime).ToString(Culture).PadLeft(2, '0'),
                 'w' => ((int)directiveValue.DayOfWeek).ToString(Culture),
                 'W' => GetWeekNumber(directiveValue, mondayFirst: true).ToString(Culture).PadLeft(2, '0'),
-                'x' => Format(directiveValue, "%m/%d/%y", directiveDialect),
+                'x' => Format(calendar, "%m/%d/%y", directiveDialect),
+                'y' when strftime => LastTwoDigits(directiveValue.Year + calendar.YearOffset).ToString("00", Culture),
                 'y' => directiveValue.ToString("yy", Culture),
+                'Y' when strftime => calendar.StrftimeYear.ToString(Culture),
                 'Y' => directiveValue.ToString("yyyy", Culture),
                 _ => throw new GnuDateFormatException(directive)
             };
             return new FormattedDirective(text, true, GetDefaultPadding(specifier));
+
+            static int LastTwoDigits(long year)
+            {
+                var remainder = (int)(year % 100);
+                return remainder < 0 ? remainder + 100 : remainder;
+            }
 
             static char GetDefaultPadding(char value) => value is
                 'C' or 'd' or 'g' or 'G' or 'H' or 'I' or 'j' or 'm' or 'M'
@@ -360,9 +445,20 @@ public static class GnuDateFormatting
             char defaultPadding,
             int width,
             int maximumLength,
-            bool fractionalSeconds)
+            char specifier,
+            bool strftimeWidth)
         {
-            if (fractionalSeconds)
+            if (strftimeWidth)
+            {
+                if (width > maximumLength)
+                    return false;
+                var pad = noPadding ? ' ' : padding ?? defaultPadding;
+                if (width > input.Length)
+                    input = pad == '0' && input[0] == '-' && specifier is 'C' or 'G' or 'Y'
+                        ? "-" + input[1..].PadLeft(width - 1, pad)
+                        : input.PadLeft(width, pad);
+            }
+            else if (specifier == 'N')
             {
                 // %N widths select fractional precision; padding and trimming apply on the right.
                 width = width == 0 ? input.Length : width;

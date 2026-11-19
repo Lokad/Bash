@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Format explicit printf timestamps across the pinned Linux calendar range,
+  preserving Unix seconds and Linux year padding.
+
 - Report ambiguous redirections through the active stderr mapping and preserve
   the expansion effects used to form the diagnostic.
 

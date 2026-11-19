@@ -25,8 +25,8 @@ public static partial class PrintfFormatting
     /// <remarks>
     /// This output-only entry point uses the Unix epoch for the special <c>-1</c> and <c>-2</c>
     /// timestamp arguments. Evaluator callers use <see cref="EvaluateAsync"/> with their configured timestamp.
-    /// Timestamp operands outside the range supported by <see cref="DateTimeOffset"/> also fall back to
-    /// the Unix epoch instead of using Bash's wider platform-dependent <c>time_t</c> range.
+    /// Explicit timestamp operands use the pinned Linux calendar range. An operand
+    /// whose calendar year cannot be represented in that profile falls back to the Unix epoch.
     /// </remarks>
     public static ReadOnlyMemory<byte> Format(ShellValue format, IReadOnlyList<ShellValue> arguments, IMemoryBudget memoryBudget) =>
         Evaluate(format, arguments, DateTimeOffset.UnixEpoch, memoryBudget).Output;
