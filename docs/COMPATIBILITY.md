@@ -440,6 +440,15 @@ limits. The deterministic Linux profile includes the alternate-form decimal poin
 for hexadecimal zero and discarded fractional zeros when a general-format carry
 changes fixed notation to scientific notation.
 
+For dynamic precision, Bash's field-range warning can name the following
+operand. Range alone preserves successful status. An invalid numeric suffix
+still retains its consumed prefix and returns status 1. For positive literal
+precision overflow, the Linux profile consumes the argument for ordinary
+character, string and numeric conversions, emits no bytes for that conversion,
+and subtracts one from the current format cycle's `%n` count. With `-v`, it
+also removes the last buffered byte when one exists. Bash-specific conversions
+use their own precision rules.
+
 Printf time-format literals preserve bytes, including malformed UTF-8. Directives
 and widths use ASCII grammar with invariant date text; unknown directives follow
 the pinned Linux strftime spelling. Explicit seconds use the configured fixed

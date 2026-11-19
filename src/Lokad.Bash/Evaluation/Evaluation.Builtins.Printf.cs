@@ -90,7 +90,7 @@ public sealed partial class Evaluation
         IMemoryReservation? truncatedMemory = null;
         try
         {
-            var result = await PrintfFormatting.EvaluateAsync(format, arguments, Options.Timestamp,
+            var result = await PrintfFormatting.EvaluateAsync(format, arguments, Options.Timestamp, outputReference.HasValue,
                 outputMemory, AssignCountAsync, GetStdErrDescriptor().IsClosed ? null : ReportDiagnosticAsync,
                 _cancellationToken).ConfigureAwait(false);
             var exitCode = result.ExitCode;

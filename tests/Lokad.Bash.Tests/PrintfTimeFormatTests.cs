@@ -137,7 +137,7 @@ public sealed class PrintfTimeFormatTests
         var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await PrintfFormatting.EvaluateAsync(format,
                 [ShellValue.FromText("before"), ShellValue.FromText("0"), ShellValue.FromText("after")],
-                DateTimeOffset.UnixEpoch, owner,
+                DateTimeOffset.UnixEpoch, assignOutput: false, owner,
                 count => { counts.Add(count); return ValueTask.FromResult(true); },
                 _ => throw new InvalidOperationException("Unreached diagnostic."), cancellation.Token));
         Assert.Equal(cancellation.Token, failure.CancellationToken);

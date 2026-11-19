@@ -26,6 +26,7 @@ public static partial class PrintfFormatting
                 {
                     var argumentIndexAtCycleStart = _argumentIndex;
                     _cycleOutputStart = _output.Length;
+                    _cycleCountAdjustment = 0;
                     await FormatCycleAsync().ConfigureAwait(false);
 
                     if (_stop || _failed || _argumentIndex == argumentIndexAtCycleStart)
@@ -133,7 +134,7 @@ public static partial class PrintfFormatting
                 if (index < format.Length && (char)format.Span[index] == '*')
                 {
                     index++;
-                    width = ReadDynamicInteger(": field width out of range", 0);
+                    width = ReadDynamicWidth();
                     if (width < 0)
                     {
                         flags |= FormatFlags.LeftJustify;
@@ -148,13 +149,14 @@ public static partial class PrintfFormatting
                 }
 
                 int? precision = null;
+                var literalPrecisionOverflow = false;
                 if (index < format.Length && (char)format.Span[index] == '.')
                 {
                     index++;
                     if (index < format.Length && (char)format.Span[index] == '*')
                     {
                         index++;
-                        var dynamicPrecision = ReadDynamicInteger(": precision out of range", -1);
+                        var dynamicPrecision = ReadDynamicPrecision();
                         if (dynamicPrecision >= 0)
                             precision = dynamicPrecision;
                     }
@@ -166,8 +168,14 @@ public static partial class PrintfFormatting
 
                         if (!TryReadDecimal(format, ref index, out var parsedPrecision))
                         {
-                            AddConversionDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..index]),
-                                ": numerical result out of range"));
+                            if (negative)
+                                AddConversionDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..index]),
+                                    ": numerical result out of range"));
+                            else
+                            {
+                                literalPrecisionOverflow = true;
+                                precision = parsedPrecision;
+                            }
                         }
                         else if (!negative)
                         {
@@ -181,8 +189,10 @@ public static partial class PrintfFormatting
 
                 if (index >= format.Length)
                 {
-                    AddFatalDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..]),
-                        ": missing format character"));
+                    var incomplete = ShellValue.FromBytes(format[specificationStart..]);
+                    AddFatalDiagnostic(literalPrecisionOverflow
+                        ? new Diagnostic("`", incomplete, "': missing format character")
+                        : new Diagnostic(string.Empty, incomplete, ": missing format character"));
                     specification = default;
                     return false;
                 }
@@ -216,15 +226,25 @@ public static partial class PrintfFormatting
                     conversion = 'T';
                 }
 
+                var suppressOutput = literalPrecisionOverflow && conversion is
+                    'c' or 's' or 'd' or 'i' or 'o' or 'u' or 'x' or 'X'
+                    or 'a' or 'A' or 'e' or 'E' or 'f' or 'F' or 'g' or 'G';
+                if (suppressOutput)
+                    precision = null;
+                // %Q uses a signed accumulator for literal precision before quoting.
+                else if (literalPrecisionOverflow && (conversion != 'Q' || precision is < 0))
+                    precision = int.MaxValue;
+
                 specification = new FormatSpecification(
                     flags,
                     width,
                     precision,
                     conversion,
-                    timeFormat);
+                    timeFormat,
+                    suppressOutput);
                 return true;
 
-                int ReadDynamicInteger(string overflowSuffix, int overflowValue)
+                int ReadDynamicWidth()
                 {
                     if (!TryGetArgument(out var argument))
                         return 0;
@@ -232,30 +252,42 @@ public static partial class PrintfFormatting
                     var value = ParseSigned(argument);
                     if (value is < int.MinValue or > int.MaxValue)
                     {
-                        AddNumericDiagnostic(argument, overflowSuffix, warning: false);
-                        return overflowValue;
+                        AddNumericDiagnostic(argument, ": field width out of range", warning: false);
+                        return 0;
                     }
 
                     return (int)value;
                 }
 
-                static bool TryReadDecimal(ReadOnlyMemory<byte> source, ref int cursor, out int value)
+                int ReadDynamicPrecision()
+                {
+                    if (!TryGetArgument(out var argument))
+                        return 0;
+
+                    var value = ParseSigned(argument);
+                    if (value is >= int.MinValue and <= int.MaxValue)
+                        return (int)value;
+
+                    if (_argumentIndex == arguments.Count)
+                        return unchecked((int)value);
+                    // The Bash field parser reports the operand following the precision.
+                    AddNumericDiagnostic(arguments[_argumentIndex], ": Numerical result out of range", warning: true);
+                    return value > 0 ? int.MaxValue : int.MinValue;
+                }
+
+                bool TryReadDecimal(ReadOnlyMemory<byte> source, ref int cursor, out int value)
                 {
                     value = 0;
+                    var overflow = false;
                     while (cursor < source.Length && (char)source.Span[cursor] is >= '0' and <= '9')
                     {
+                        if ((cursor & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
                         var digit = (char)source.Span[cursor] - '0';
-                        if (value > (int.MaxValue - digit) / 10)
-                        {
-                            while (cursor < source.Length && (char)source.Span[cursor] is >= '0' and <= '9')
-                                cursor++;
-                            return false;
-                        }
-
-                        value = value * 10 + digit;
+                        overflow |= value > (int.MaxValue - digit) / 10;
+                        value = unchecked(value * 10 + digit);
                         cursor++;
                     }
-                    return true;
+                    return !overflow;
                 }
             }
 
@@ -296,7 +328,7 @@ public static partial class PrintfFormatting
 
                             await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
                             if (!_stop && !await assignCount(new PrintfVariableAssignment(
-                                    variable.ToUtf8String(), _output.Length - _cycleOutputStart)).ConfigureAwait(false))
+                                    variable.ToUtf8String(), _output.Length - _cycleOutputStart + _cycleCountAdjustment)).ConfigureAwait(false))
                                 _stop = true;
                             return;
                         }
@@ -562,6 +594,12 @@ public static partial class PrintfFormatting
                     ReadOnlyMemory<byte> bytes,
                     bool ignorePrecision)
                 {
+                    if (textSpecification.SuppressOutput)
+                    {
+                        SkipOverflowedOutput();
+                        return;
+                    }
+
                     if (!ignorePrecision
                         && textSpecification.Precision is { } precision
                         && precision < bytes.Length)
@@ -596,6 +634,12 @@ public static partial class PrintfFormatting
                     FormatSpecification numberSpecification,
                     FormattedNumber number)
                 {
+                    if (numberSpecification.SuppressOutput)
+                    {
+                        SkipOverflowedOutput();
+                        return;
+                    }
+
                     var sign = number.Sign switch
                     {
                         FormattedNumberSign.Negative => "-",
@@ -631,6 +675,16 @@ public static partial class PrintfFormatting
 
                     if (left)
                         AppendPadding(padding, (byte)' ');
+                }
+
+                void SkipOverflowedOutput()
+                {
+                    // The pinned Linux conversion contributes -1 to %n. Its assignment buffer
+                    // also rewinds by one byte when a byte is available to remove.
+                    if (assignOutput && _output.Length > 0)
+                        _output.Truncate(_output.Length - 1);
+                    else
+                        _cycleCountAdjustment--;
                 }
 
             }
@@ -677,5 +731,6 @@ public static partial class PrintfFormatting
         int Width,
         int? Precision,
         char Conversion,
-        ShellValue? TimeFormat);
+        ShellValue? TimeFormat,
+        bool SuppressOutput);
 }

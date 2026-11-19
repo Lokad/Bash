@@ -136,6 +136,53 @@ public sealed class PrintfFieldSizeTests
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
         CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
 
+    // GNU Bash 5.2.21 Linux, LC_ALL=C. Diagnostic executable and line prefixes are omitted.
+    private static readonly object[][] PrecisionOverflowSamples =
+    [
+        ["literal-s-2147483647", "printf 'A%.2147483647s%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", ""],
+        ["literal-s-2147483648", "printf 'A%.2147483648s%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C303E3C3E", ""],
+        ["literal-s-4294967297", "printf 'A%.4294967297s%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C303E3C3E", ""],
+        ["dynamic-s-2147483647", "printf 'A%.*s%nZ\\n'  '2147483647' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", ""],
+        ["dynamic-s-2147483648", "printf 'A%.*s%nZ\\n'  '2147483648' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-s-9223372036854775808", "printf 'A%.*s%nZ\\n'  '9223372036854775808' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20393232333337323033363835343737353830383A204E756D65726963616C20726573756C74206F7574206F662072616E67650A7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-s--2147483648", "printf 'A%.*s%nZ\\n'  '-2147483648' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", ""],
+        ["dynamic-s--2147483649", "printf 'A%.*s%nZ\\n'  '-2147483649' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-prefix-2147483648junk", "printf 'A%.*s%nZ\\n' '2147483648junk' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C313A3C353E3C3E", "7072696E74663A20323134373438333634386A756E6B3A20696E76616C6964206E756D6265720A7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-prefix-0x80000000", "printf 'A%.*s%nZ\\n' '0x80000000' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-prefix-invalid", "printf 'A%.*s%nZ\\n' '2junk' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "4174655A0A7C313A3C333E3C3E", "7072696E74663A20326A756E6B3A20696E76616C6964206E756D6265720A"],
+        ["literal-b-2147483648", "printf 'A%.2147483648b%nZ\\n'  'a\\nb' mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41610A625A0A7C303A3C343E3C3E", ""],
+        ["literal-q-2147483648", "printf 'A%.2147483648q%nZ\\n'  'a b' mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41615C20625A0A7C303A3C353E3C3E", ""],
+        ["literal-Q-4294967297", "printf 'A%.4294967297Q%nZ\\n'  'a b' mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41615A0A7C303A3C323E3C3E", ""],
+        ["literal-c-2147483648", "printf 'A%.2147483648c%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C303E3C3E", ""],
+        ["literal-n-2147483648", "printf 'A%.2147483648n%nZ\\n'  written mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C313E3C313E", ""],
+        ["dynamic-n-2147483648", "printf 'A%.*n%nZ\\n'  '2147483648' written mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["incomplete-overflow", "printf 'A%.999999999999'\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "417C313A3C3E3C3E", "7072696E74663A2060252E393939393939393939393939273A206D697373696E6720666F726D6174206368617261637465720A"],
+        ["invalid-overflow", "printf 'A%.999999999999Z' x\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "417C313A3C3E3C3E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
+        ["dynamic-missing", "printf 'A%.*sZ' 2147483648\nprintf ':%s' \"$?\"\n", 0, "415A3A30", ""],
+        ["dynamic-overflow-empty-text", "printf 'A%.*s%nZ' 2147483648 '' mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A303A31", "7072696E74663A207761726E696E673A203A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["literal-v", "printf -v saved 'A%.2147483648s%nZ' text mark; printf '%s:<%s>:<%s>' \"$?\" \"$saved\" \"$mark\"\n", 0, "303A3C5A3E3A3C303E", ""],
+        ["literal-b-stop", "printf 'A%.2147483648b%nZ' 'a\\cb' mark; printf ':%s:<%s>' \"$?\" \"$mark\"\n", 0, "41613A303A3C3E", ""],
+        ["literal-time", "printf 'A%.2147483648(%s)T%nZ' 0 mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "41305A3A303A32", ""],
+        ["literal-both-counts", "printf '%.2147483648s%.2147483648c%nZ' x y mark; printf ':%s:<%s>' \"$?\" \"$mark\"\n", 0, "5A3A303A3C2D323E", ""],
+        ["literal-cycle", "printf 'A%.2147483648s%nZ' text first text second; printf ':%s:<%s><%s>' \"$?\" \"$first\" \"$second\"\n", 0, "415A415A3A303A3C303E3C303E", ""],
+        ["literal-signed", "printf 'A%.2147483648d%nZ' bad mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A313A30", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["literal-float", "printf 'A%.2147483648g%nZ' 1.5 mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A303A30", ""],
+        ["literal-small-width", "printf 'A%5.2147483648s%nZ' text mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A303A30", ""],
+    ];
+
+    public static IEnumerable<object[]> PrecisionOverflowCases()
+    {
+        foreach (var prepared in new[] { false, true })
+        foreach (var row in PrecisionOverflowSamples)
+            yield return [prepared, ..row];
+    }
+
+    [Theory]
+    [MemberData(nameof(PrecisionOverflowCases))]
+    public Task PrecisionOverflowPreservesConversionPolicy(
+        bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
+        CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
+
     private static async Task CheckAsync(
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex)
     {
@@ -220,7 +267,7 @@ public sealed class PrintfFieldSizeTests
         var counts = new List<PrintfVariableAssignment>();
         var diagnostics = new List<PrintfFormatting.Diagnostic>();
         var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText("a%n%1048577s%n"),
-            [ShellValue.FromText("before"), ShellValue.FromText("x"), ShellValue.FromText("after")], DateTimeOffset.UnixEpoch, owner,
+            [ShellValue.FromText("before"), ShellValue.FromText("x"), ShellValue.FromText("after")], DateTimeOffset.UnixEpoch, assignOutput: false, owner,
             assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
             diagnostic => { diagnostics.Add(diagnostic); return ValueTask.FromResult(true); }, CancellationToken.None);
         Assert.Equal(1, result.ExitCode);
@@ -276,7 +323,7 @@ public sealed class PrintfFieldSizeTests
         };
         var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await PrintfFormatting.EvaluateAsync(ShellValue.FromText("%1048577s%n"),
-                [ShellValue.FromText("x"), ShellValue.FromText("after")], DateTimeOffset.UnixEpoch, owner,
+                [ShellValue.FromText("x"), ShellValue.FromText("after")], DateTimeOffset.UnixEpoch, assignOutput: false, owner,
                 _ => throw new InvalidOperationException("Unreached count."),
                 _ => throw new InvalidOperationException("Unreached diagnostic."), cancellation.Token));
         Assert.Equal(cancellation.Token, failure.CancellationToken);

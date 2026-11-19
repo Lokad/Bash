@@ -43,10 +43,10 @@ public static partial class PrintfFormatting
     /// <summary>Runs count writes and diagnostics in conversion order; false stops later formatting.</summary>
     /// <remarks>A null diagnostic callback discards records while retaining their effect on status.</remarks>
     internal static ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode)> EvaluateAsync(
-        ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, IMemoryBudget memoryBudget,
+        ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool assignOutput, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
         Func<Diagnostic, ValueTask<bool>>? reportDiagnostic, CancellationToken cancellationToken) =>
-        new Formatter(format, arguments, timestamp, allowAssignments: true, memoryBudget, reportDiagnostic, cancellationToken).RunAsync(assignCount);
+        new Formatter(format, arguments, timestamp, allowAssignments: true, assignOutput, memoryBudget, reportDiagnostic, cancellationToken).RunAsync(assignCount);
 
     /// <summary>Formats command output, rejecting the shell-only <c>%n</c> assignment.</summary>
     /// <remarks>Like <see cref="Format"/>, uses the Unix epoch for implicit timestamps.</remarks>
@@ -88,7 +88,7 @@ public static partial class PrintfFormatting
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool allowAssignments, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic)
     {
-        var pending = new Formatter(format, arguments, timestamp, allowAssignments, memoryBudget, reportDiagnostic, CancellationToken.None)
+        var pending = new Formatter(format, arguments, timestamp, allowAssignments, assignOutput: false, memoryBudget, reportDiagnostic, CancellationToken.None)
             .RunAsync(assignCount);
         // These callbacks never suspend; do not block the synchronous formatting API.
         if (!pending.IsCompleted)
@@ -122,7 +122,7 @@ public static partial class PrintfFormatting
         ShellValue formatValue,
         IReadOnlyList<ShellValue> arguments,
         DateTimeOffset timestamp,
-        bool allowAssignments, IMemoryBudget memoryBudget, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic,
+        bool allowAssignments, bool assignOutput, IMemoryBudget memoryBudget, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic,
         CancellationToken cancellationToken)
     {
         private readonly ReadOnlyMemory<byte> format = formatValue.Bytes;
@@ -136,6 +136,7 @@ public static partial class PrintfFormatting
         private BoundedByteMemoryBuilder? _temporaryOutput;
         private int _argumentIndex;
         private int _cycleOutputStart;
+        private int _cycleCountAdjustment;
         private bool _conversionError;
         private bool _failed;
         private bool _stop;
