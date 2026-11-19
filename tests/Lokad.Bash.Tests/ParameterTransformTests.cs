@@ -12,6 +12,44 @@ namespace Lokad.Bash.Tests;
 public sealed class ParameterTransformTests
 {
     [Theory]
+    [InlineData("^")]
+    [InlineData("^^")]
+    [InlineData("@U")]
+    public async Task UnchangedCaseConversionUsesOrdinaryExpansionWorkspace(string operation)
+    {
+        var subject = new string('A', 16 * 1024);
+        var plain = await MeasureAsync("\"$x\"");
+        var converted = await MeasureAsync($"\"${{x{operation}}}\"");
+        Assert.InRange(converted - plain, 0, 4096);
+
+        async Task<long> MeasureAsync(string source)
+        {
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            var evaluation = new Eval(Parser.Parse(string.Empty));
+            evaluation.Memory.Budget = owner;
+            var variables = Variables.CreateEmpty();
+            Assert.True(variables.TrySetScalar("x", ShellValue.FromText(subject)));
+            var scope = new ScopedEvaluation(evaluation, variables, default);
+            var tokenizer = new Tokenizer(ShellSource.FromText(source));
+            Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+            var word = Assert.IsType<WordToken>(token).Word;
+
+            long workspace;
+            using (evaluation.Memory.BeginCommand(scope))
+            {
+                var before = evaluation.Memory.Workspace.Bytes;
+                var result = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
+                workspace = evaluation.Memory.Workspace.Bytes - before;
+                Assert.Equal(subject, result.ToUtf8String());
+            }
+            evaluation.Memory.Finish(retainVariables: false);
+            Assert.Equal(0, governor.ReservedBytes);
+            return workspace;
+        }
+    }
+
+    [Theory]
     [InlineData("""x=; declare y; export z; show "${x@A}" "${y@A}" "${z@A}" "${missing@A}" """,
         "<4>[x=''][][declare -x z][]\n")]
     [InlineData("""a=([4]='two words'); readonly a; show "${a@a}" "${a[9]@a}" "${a[@]@a}"; show "${a[4]@A}" "${a[9]@A}" """,
@@ -191,6 +229,9 @@ public sealed class ParameterTransformTests
 
     [Theory]
     [InlineData("x=$'\\377aλ'; printf '%s' \"${x@U}\"", "FF41CE9B")]
+    [InlineData("x=$'\\377aλ'; printf '%s|%s' \"${x^}\" \"${x^^}\"", "FF61CEBB7CFF41CE9B")]
+    [InlineData("x='𐐨é'; printf '%s|%s' \"${x^}\" \"${x^^}\"", "F0909080C3A97CF0909080C389")]
+    [InlineData("x='AK𐐀'; printf '%s' \"${x,,}\"", "616BF09090A8")]
     [InlineData("x=$'\\377aλ'; printf '%s' \"${x//?/X}\"", "585858")]
     [InlineData("x=$'a\\377b'; printf '%s' \"${x/$'\\377'/$'\\376'}\"", "61FE62")]
     [InlineData("x=$'a\\377b'; printf '%s' \"${x//a/$'\\376&'}\"", "FE26FF62")]

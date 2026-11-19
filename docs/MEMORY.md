@@ -192,6 +192,9 @@ fields borrow its bytes; runtime-expanded operands, selectors and argument
 collections retain command workspace admission. Dynamic arithmetic copies joined
 fields directly into admitted operand backing. Growth accounts for replacement
 overlap and the operand keeps its charge through numeric evaluation.
+Parameter case conversion passes unchanged values through to field expansion.
+Changed values join original byte ranges with the converted characters in
+an admitted command buffer.
 Aggregate operand lists admit replacement backing before growth and keep the
 current backing charged through command completion. Byte consumers append
 reached fields directly to that list.

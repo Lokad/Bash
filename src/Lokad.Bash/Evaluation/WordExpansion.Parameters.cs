@@ -901,31 +901,35 @@ internal static partial class WordExpansion
             ShellValue ChangeCase(ShellValue value, bool upper, bool firstOnly, ParameterOperand? pattern)
             {
                 var bytes = value.Bytes.Span;
-                // ASCII stays one byte; any other valid character starts with at least two bytes.
-                // Reserve a twofold bound instead of locking the shared allowance for every character.
-                budget.Charge(checked(4L * (2L * bytes.Length)));
-                var builder = ByteMemoryBuilder.CreateUnaccounted(0);
+                using var builder = new ByteMemoryBuilder(0, budget.Workspace);
                 Span<byte> encoded = stackalloc byte[4];
+                var copiedThrough = 0;
                 for (var position = 0; position < bytes.Length;)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var valid = Rune.DecodeFromUtf8(bytes[position..], out var rune, out var length) == OperationStatus.Done;
                     if (!valid)
                         length = 1;
-                    var original = bytes.Slice(position, length);
-                    if (valid && (!firstOnly || position == 0) && (pattern == null || Match(pattern, original, true) >= 0))
+                    if (valid && (pattern == null || Match(pattern, bytes.Slice(position, length), true) >= 0))
                     {
                         var changed = upper ? Rune.ToUpperInvariant(rune) : Rune.ToLowerInvariant(rune);
-                        var written = changed.EncodeToUtf8(encoded);
-                        builder.Append(encoded[..written]);
+                        if (changed != rune)
+                        {
+                            builder.Append(bytes[copiedThrough..position]);
+                            var written = changed.EncodeToUtf8(encoded);
+                            builder.Append(encoded[..written]);
+                            copiedThrough = position + length;
+                        }
                     }
-                    else
-                    {
-                        builder.Append(original);
-                    }
+                    if (firstOnly)
+                        break;
                     position += length;
                 }
-                return ShellValue.FromBytes(builder.ToMemory());
+                if (copiedThrough == 0)
+                    return value;
+
+                builder.Append(bytes[copiedThrough..]);
+                return ShellValue.FromBytes(builder.DetachSnapshot());
             }
         }
 
