@@ -136,8 +136,11 @@ For unquoted delimiters, escaped LF is removed while collecting the body, before
 delimiter recognition. Continued lines can form a delimiter; a physical line that
 only resembles one inside continued data does not end the body. The `<<-` mode
 removes leading tabs from logical lines rather than from every physical fragment.
-Literal command-substitution spellings such as `$(...)` in delimiter words remain
-outside the qualified delimiter profile.
+Structured spellings such as `$(...)`, backticks, arithmetic and braced
+parameters provide literal delimiter text. Quoting any part of the delimiter word
+applies quote removal to the whole word and disables expansion of the body.
+Nested source retains its lexical spelling after continuation and quote-prefix
+processing. Function display and export keep the opener and matching closer.
 Unquoted body substitution structure is validated when redirection setup is
 reached; setup failure prevents target invocation. Quoted and skipped bodies
 retain their inert data semantics.

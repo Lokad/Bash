@@ -1252,13 +1252,6 @@ public static class Parser
         string variableName,
         List<Redirection> redirections)
     {
-        var target = tokenizer.NextTokenCore();
-        if (!tokenizer.TryGetOperandWord(target, out var targetWord))
-        {
-            tokenizer.RecordError("Expected a word after redirection operator.", tokenizer.Position);
-            return;
-        }
-
         if (token.RedirectionKind == null)
         {
             tokenizer.RecordError("Redirection token missing kind.", tokenizer.Position);
@@ -1273,9 +1266,18 @@ public static class Parser
                 RedirectionKind.Output => RedirectionKind.AllocateOutput,
                 _ => kind
             };
-        if (kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs)
+        var hereDocument = kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs;
+        if (!tokenizer.TryReadRedirectionWord(hereDocument, out var target, out var targetWord, out var delimiter))
         {
-            var redirection = new Redirection(kind, fileDescriptor, targetWord.Word, variableName, hereDocumentDelimiter: null);
+            tokenizer.RecordError("Expected a word after redirection operator.", tokenizer.Position);
+            return;
+        }
+        if (hereDocument)
+        {
+            var redirection = new Redirection(kind, fileDescriptor, targetWord.Word, variableName, hereDocumentDelimiter: null)
+            {
+                DelimiterSyntax = delimiter
+            };
             redirections.Add(redirection);
             (tokenizer.HereDocuments ??= new HereDocumentReader()).Enqueue(redirection);
             return;

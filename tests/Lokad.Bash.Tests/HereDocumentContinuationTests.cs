@@ -101,6 +101,42 @@ public sealed class HereDocumentContinuationTests
             yield return [prepared, "x=VALUE; cat <<$x\n$x\n$x\nprintf tail", 0, "7461696C", "56414C55453A20636F6D6D616E64206E6F7420666F756E640A", "{}"];
             // literal-variable-delimiter-body
             yield return [prepared, "x=VALUE; cat <<$x\nliteral-$x\n$x\nprintf tail", 0, "6C69746572616C2D56414C55450A7461696C", "", "{}"];
+            // A command in the delimiter stays inert while the body can have effects.
+            yield return [prepared, """
+                mark(){ printf forbidden >delim_effect; }
+                x=VALUE
+                cat <<$(mark)
+                ${x}$(printf yes >body_effect)
+                $(mark)
+                printf '/tail'
+                """, 0, "56414C55450A2F7461696C", "", """{"body_effect":"File:796573"}"""];
+            // This malformed body is never expanded, even though its delimiter is unquoted.
+            yield return [prepared, "false && cat <<$(printf END)\n${x\n$(printf END)\nprintf '/tail'", 0, "2F7461696C", "", "{}"];
+            yield return [prepared, "cat <<\"$(printf END)\"\n${x\n$(printf END)\nprintf '/tail'", 0, "247B780A2F7461696C", "", "{}"];
+            // Tabs and a closing marker can be normalized without evaluating the delimiter.
+            yield return [prepared, "x=VALUE\ncat <<-$(printf END)\n\t$x\n\t$(printf E\\\nND)\nprintf '/tail'", 0, "56414C55450A2F7461696C", "", "{}"];
+            yield return [prepared, "x=VALUE\ncaptured=$(cat <<$(printf END)\n$x\n$(printf END)\n)\nprintf '<%s>' \"$captured\"", 0, "3C56414C55453E", "", "{}"];
+            // Display and import must retain both the raw opener and the collected closer.
+            yield return [prepared, """
+                x=VALUE
+                show(){ cat <<"$(printf "END")"
+                $x
+                $(printf END)
+                }
+                eval "$(declare -f show)"
+                show
+                printf '/tail'
+                """, 0, "24780A2F7461696C", "", "{}"];
+            yield return [prepared, """
+                export x=VALUE
+                show(){ cat <<$(printf 'END')
+                $x
+                $(printf 'END')
+                }
+                export -f show
+                /usr/bin/bash -c show
+                printf '/tail'
+                """, 0, "56414C55450A2F7461696C", "", "{}"];
         }
     }
 

@@ -178,7 +178,9 @@ internal static class FunctionDefinitionFormatter
                     if (redirection.HereDocumentDelimiter is { } delimiterWord)
                     {
                         hereDocuments.Enqueue(redirection);
-                        work.Push(new Step.Word(delimiterWord));
+                        work.Push(redirection.DelimiterSyntax is { } syntax
+                            ? new Step.Source(syntax.Spelling)
+                            : new Step.Word(delimiterWord));
                     }
                     else work.Push(new Step.Word(redirection.Target));
                     break;
@@ -355,7 +357,8 @@ internal static class FunctionDefinitionFormatter
                     if (!output.TryAppend(part.GetUnexpandedValue().Bytes.Span)) return false;
                 var delimiter = redirection.HereDocumentDelimiter
                     ?? throw new InvalidOperationException("A here-document requires its delimiter syntax.");
-                if (!output.TryAppend(HereDocumentReader.GetHereDocumentDelimiter(delimiter, out _).AsSpan()) || !Append("\n")) return false;
+                var literal = redirection.DelimiterSyntax?.Value ?? HereDocumentReader.GetHereDocumentDelimiter(delimiter, out _);
+                if (!output.TryAppend(literal.AsSpan()) || !Append("\n")) return false;
             }
             return true;
         }

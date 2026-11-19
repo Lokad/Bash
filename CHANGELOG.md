@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve literal structured here-document delimiters through body collection,
+  function display, and export.
+
 - Reject capacity adjustments after their enclosing memory scope is disposed,
   including zero growth and same-size resizes.
 

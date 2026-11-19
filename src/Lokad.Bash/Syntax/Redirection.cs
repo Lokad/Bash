@@ -81,6 +81,8 @@ public sealed class Redirection
     /// <summary>Retains the parsed delimiter separately from the completed body in Target.</summary>
     public Word? HereDocumentDelimiter { get; }
 
+    internal HereDocumentDelimiterSyntax? DelimiterSyntax { get; init; }
+
     /// <summary>Source-final move syntax is prepared once; expanded digits followed by '-' remain ordinary words.</summary>
     internal bool MovesDescriptor { get; }
     internal Word DescriptorOperand { get; }

@@ -70,6 +70,17 @@ internal sealed class ShellSourceCursor
         return position;
     }
 
+    internal bool TrySkipLineContinuations()
+    {
+        if (_quote is ShellQuoteKind.Single or ShellQuoteKind.AnsiC)
+            return false;
+        var next = SkipLineContinuations(_text.AsSpan(), Position);
+        if (next == Position)
+            return false;
+        Position = next;
+        return true;
+    }
+
     /// <summary>Skips token spaces, tabs and backslash-LF pairs, but no physical newline or CR.</summary>
     public static int SkipTokenSpacing(ReadOnlySpan<byte> source, int position)
     {
@@ -176,12 +187,8 @@ internal sealed class ShellSourceCursor
         while (!cursor.IsAtEnd)
         {
             var start = cursor.Position;
-            var next = SkipLineContinuations(source.AsSpan(), start);
-            if (cursor._quote is not (ShellQuoteKind.Single or ShellQuoteKind.AnsiC) && next != start)
-            {
-                cursor.Position = next;
+            if (cursor.TrySkipLineContinuations())
                 continue;
-            }
 
             var precedingQuote = cursor._quote;
             if (!cursor.TryConsumeQuoteOrEscape()
@@ -240,8 +247,7 @@ internal sealed class ShellSourceCursor
                 return true;
             }
 
-            if (Position + 1 < _text.Length
-                && _text[Position + 1] is (byte)'$' or (byte)'`' or (byte)'"' or (byte)'\\' or (byte)'\n')
+            if (Position + 1 < _text.Length && IsDoubleQuoteEscape(_text[Position + 1]))
             {
                 Position += 2;
                 return true;
@@ -269,6 +275,9 @@ internal sealed class ShellSourceCursor
 
         return false;
     }
+
+    internal static bool IsDoubleQuoteEscape(byte value) =>
+        value is (byte)'$' or (byte)'`' or (byte)'"' or (byte)'\\' or (byte)'\n';
 
     /// <summary>
     /// Attempts to consume one nested arithmetic, parameter, or command substitution.
@@ -379,6 +388,7 @@ internal sealed class ShellScanContext
     /// <summary>One reached command unit's coarse syntax and payload allowance; null denotes caller-owned parsing.</summary>
     internal MemoryCapacity? SyntaxMemory { get; set; }
     internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
+    internal bool PreserveDelimiterLookahead { get; set; }
 
     internal ByteMemoryBuilder CreateByteBuilder(int capacity) => SyntaxMemory is { } memory
         ? new ByteMemoryBuilder(capacity, memory) : ByteMemoryBuilder.CreateUnaccounted(capacity);

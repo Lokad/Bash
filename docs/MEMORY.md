@@ -205,6 +205,8 @@ Literal payloads, assignment-name slices and completed expansion segments avoid
 pinning disproportionately large builder buffers after their parsing/command
 owner ends. Retained scalar, array, nameref and positional values keep the ordinary
 value estimate; syntax slices share immutable arithmetic metadata without reparsing.
+Structured here-document delimiters keep admitted compact spelling and closing
+bytes with the parsed redirection, for collection and later function serialization.
 
 A sourced input scope stays admitted while parsing/executing the file, while a
 function namespace retains its definitions, and through active function preparation,

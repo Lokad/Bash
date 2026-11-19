@@ -10,6 +10,31 @@ namespace Lokad.Bash.Tests;
 public sealed class ByteHereDocumentTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StructuredDelimiterRetainsMalformedUtf8(bool prepared)
+    {
+        byte[] source = [
+            .. "x=VALUE\ncat <<$(printf "u8, 0xff, .. ")\n$x\n$(printf "u8, 0xff, .. ")\nprintf tail"u8
+        ];
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        var script = prepared ? Parser.Parse(source)
+            : new ParsedScript([new ScriptCommand(ShellSource.FromBytes(source))]);
+
+        var result = await new Engine().RunAsync(ShellEvaluationStartup.CreateForNewHost(script, Evaluation.EvaluationOptions.Default),
+            host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("VALUE\ntail", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false, "4CFF5C0A52", "4CFF520A")]
     [InlineData(true, "4CFF5C0A52", "4CFF520A")]
     [InlineData(false, "4C5C0D", "4C5C0D0A")]

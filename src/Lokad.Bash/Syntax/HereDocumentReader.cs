@@ -22,13 +22,23 @@ internal sealed class HereDocumentReader
     {
         while (_pending.TryDequeue(out var redirection))
         {
-            var delimiter = GetHereDocumentDelimiter(redirection.Target, tokenizer.ScanContext.SyntaxMemory, out var allowExpansion);
+            bool allowExpansion;
+            ShellSource delimiter;
+            if (redirection.DelimiterSyntax is { } syntax)
+            {
+                allowExpansion = syntax.AllowsExpansion;
+                delimiter = syntax.Value;
+            }
+            else delimiter = GetHereDocumentDelimiter(redirection.Target, tokenizer.ScanContext.SyntaxMemory, out allowExpansion);
             if (!tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
                     joinContinuations: allowExpansion, out var content))
                 return false;
             var kind = allowExpansion ? WordPartKind.HereDocument : WordPartKind.SingleQuoted;
             _completed.Add(redirection, new Redirection(redirection.Kind, redirection.FileDescriptor,
-                new Word([WordPart.FromSource(kind, content, tokenizer.ScanContext.SyntaxMemory)]), redirection.VariableName, redirection.Target));
+                new Word([WordPart.FromSource(kind, content, tokenizer.ScanContext.SyntaxMemory)]), redirection.VariableName, redirection.Target)
+            {
+                DelimiterSyntax = redirection.DelimiterSyntax
+            });
         }
         return true;
     }

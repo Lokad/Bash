@@ -5,6 +5,38 @@ namespace Lokad.Bash.Tests;
 public sealed class ParserHereDocumentTests
 {
     [Theory]
+    [InlineData("$(printf 'END')", "$(printf 'END')", true)]
+    [InlineData("\"$(printf \"END\")\"", "$(printf END)", false)]
+    [InlineData("''$(printf 'END')", "$(printf END)", false)]
+    [InlineData("`printf 'END'`", "`printf 'END'`", true)]
+    [InlineData("`printf 'E\\\nND'`", "`printf 'END'`", true)]
+    [InlineData("${x:-\"END END\"}", "${x:-\"END END\"}", true)]
+    [InlineData("${x:-'END'}''", "${x:-END}", false)]
+    [InlineData("$((1 + \"2\"))", "$((1 + \"2\"))", true)]
+    [InlineData("$[1 + 2]", "$[1 + 2]", true)]
+    [InlineData("$'pre\\x2d'$(printf 'END')", "pre-$(printf END)", false)]
+    [InlineData("$(printf $'E\\x4eD')", "$(printf 'END')", true)]
+    [InlineData("$(printf \"$(printf E\\\nND)\")", "$(printf \"$(printf END)\")", true)]
+    [InlineData("$\\\n(printf END)", "$(printf END)", true)]
+    public void StructuredDelimiterKeepsSpellingAndBodyPolicy(string spelling, string closing, bool expands)
+    {
+        var script = Parser.Parse("cat <<" + spelling + "\n$value\n" + closing + "\nprintf tail\n");
+        var commands = Assert.IsType<ListCommand>(Assert.Single(script.Commands));
+        var command = Assert.IsType<SimpleCommand>(commands.Left);
+        var tail = Assert.IsType<SimpleCommand>(commands.Right);
+        Assert.Equal("tail", Assert.Single(tail.Words[1].Parts).GetUtf8Text());
+        var redirection = Assert.Single(command.Redirections);
+        Assert.NotNull(redirection.HereDocumentDelimiter);
+        var syntax = Assert.IsType<HereDocumentDelimiterSyntax>(redirection.DelimiterSyntax);
+        Assert.Equal(spelling, syntax.Spelling.ToUtf8String());
+        Assert.Equal(closing, syntax.Value.ToUtf8String());
+        Assert.Equal(expands, syntax.AllowsExpansion);
+        var body = Assert.Single(redirection.Target.Parts);
+        Assert.Equal(expands ? WordPartKind.HereDocument : WordPartKind.SingleQuoted, body.Kind);
+        Assert.Equal("$value\n", body.GetUtf8Text());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void JoinedDelimiterKeepsFollowingErrorsAtTheirPhysicalOffset(bool bytes)

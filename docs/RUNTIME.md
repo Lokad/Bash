@@ -23,8 +23,11 @@ in source order. The word walker resumes at the original part and byte offset.
 That offset addresses the existing source-owned arithmetic metadata. The
 source and command owners retain syntax and expanded bytes through consumption.
 
-Here-document collection removes unquoted backslash/LF continuations before
-delimiter comparison, including for commands whose execution will be skipped.
+Here-document delimiter words keep literal structured spelling and determine
+body expansion from outer quoting. Collection and function serialization share
+the resulting closing bytes. Here-document collection removes unquoted
+backslash/LF continuations before delimiter comparison, including for commands
+whose execution will be skipped.
 Tab-stripping applies at the start of each logical line, preserving tabs inside
 continued lines. Quoted delimiters retain physical body lines. This normalization
 does not expand values or validate reached substitutions; their existing execution

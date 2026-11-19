@@ -61,6 +61,8 @@ internal static class CommandSubstitutionScanner
         out int endIndex,
         out CommandSubstitutionSyntax? substitution)
     {
+        if (context.PreserveDelimiterLookahead)
+            return ScanParsedForLaterReuse(context, text, startIndex, out endIndex, out substitution);
         if (context.TryTakeCommandSubstitution(text, startIndex, out var cached))
         {
             endIndex = startIndex + cached.Length - 1;

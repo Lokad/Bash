@@ -490,6 +490,30 @@ internal sealed class Tokenizer
         return token.TryGetWordToken(out wordToken);
     }
 
+    internal bool TryReadRedirectionWord(bool hereDocument, out Token token,
+        [NotNullWhen(true)] out WordToken? word, out HereDocumentDelimiterSyntax? delimiter)
+    {
+        delimiter = null;
+        if (!hereDocument)
+        {
+            token = NextTokenCore();
+            return TryGetOperandWord(token, out word);
+        }
+
+        // The spelling pass needs the same nested boundaries as the token reader.
+        var previous = _scanContext.PreserveDelimiterLookahead;
+        _scanContext.PreserveDelimiterLookahead = true;
+        try
+        {
+            token = NextTokenCore();
+            if (!TryGetOperandWord(token, out word))
+                return false;
+            delimiter = HereDocumentDelimiterSyntax.Prepare(word.Word, _input[word.Token.Source], _scanContext);
+            return true;
+        }
+        finally { _scanContext.PreserveDelimiterLookahead = previous; }
+    }
+
     /// <summary>
     /// Reads a here-document body from the current position until the delimiter line.
     /// </summary>
