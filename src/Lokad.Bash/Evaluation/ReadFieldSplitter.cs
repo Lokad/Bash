@@ -198,12 +198,14 @@ internal static class ReadFieldSplitter
                 var index = start;
                 while (index < valueEnd && TryReadCharacter(index, out var character, out var next))
                 {
+                    // A quoted NUL affects splitting before it terminates the assigned field.
+                    if (character.Bytes.Span[0] == 0)
+                        break;
                     builder.Append(character.Bytes);
                     index = next;
                 }
 
-                // A quoted NUL affects splitting before it terminates the assigned field.
-                return ShellValue.FromBytes(builder.DetachSnapshot()).BeforeFirstNul();
+                return ShellValue.FromBytes(builder.DetachSnapshot());
             }
         }
     }

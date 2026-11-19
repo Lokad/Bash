@@ -1,6 +1,7 @@
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Tree;
 namespace Lokad.Bash.Tests.EndToEnd;
 
@@ -224,6 +225,82 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
         Assert.Equal("value\n", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("", "615C00623A630A464F4C4C4F570A", "0<a><>", "464F4C4C4F570A")]
+    [InlineData("-d $'\\n'", "615C00625C0A633A640A464F4C4C4F570A", "0<a><>", "464F4C4C4F570A")]
+    [InlineData("-d ';'", "615C00625C3B633B464F4C4C4F570A", "0<a><>", "464F4C4C4F570A")]
+    [InlineData("-d ''", "615C00623A6300464F4C4C4F570A", "0<a><>", "464F4C4C4F570A")]
+    [InlineData("-d '\\'", "615C00625C63", "1<a><>", "")]
+    [InlineData("-r", "615C00623A630A464F4C4C4F570A", "0<a\\b><c>", "464F4C4C4F570A")]
+    [InlineData("-r -d ''", "615C00623A6300464F4C4C4F570A", "0<a\\><>", "623A6300464F4C4C4F570A")]
+    [InlineData("", "615C00623A63", "1<a><>", "")]
+    [InlineData("", "615C5C00623A630A464F4C4C4F570A", "0<a\\b><c>", "464F4C4C4F570A")]
+    public async Task ReadSeparatesEscapedNulAssignmentFromRecordConsumption(
+        string options, string inputHex, string assignment, string tailHex)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", Convert.FromHexString(inputHex));
+        var result = await host.RunAsync("exec 3<input; IFS=' :' read -u 3 " + options +
+            " first last; printf '%s<%s><%s>|' \"$?\" \"$first\" \"$last\"; cat <&3", CancellationToken.None);
+
+        byte[] expected = [.. Utf8Text.Encode(assignment + "|").Span, .. Convert.FromHexString(tailHex)];
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("", "6101627F3A5C007461696C0A6E6578740A")]
+    [InlineData("-d ';'", "6101627F3A5C007461696C3B6E6578740A")]
+    [InlineData("-d ''", "6101627F3A5C007461696C006E6578740A")]
+    public async Task ReadArrayRetainsLiteralControlsAndTheProtectedEmptyField(string options, string inputHex)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", Convert.FromHexString(inputHex));
+        var result = await host.RunAsync("exec 3<input; IFS=' :' read -u 3 " + options +
+            " -a values; printf '%s<%s>' \"$?\" \"${#values[@]}\"; printf '<%s>' \"${values[@]}\"; cat <&3",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0<2><a\u0001b\u007f><>next\n"u8.ToArray(), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ReadDoesNotRetainTheDiscardedSuffixAcrossPhysicalRecords()
+    {
+        const int FragmentLength = 2048;
+        const int FragmentCount = 256;
+        byte[] prefix = [(byte)'a', (byte)'\\', 0];
+        var suffix = ";next\n"u8.ToArray();
+        var input = new byte[prefix.Length + FragmentLength * FragmentCount + suffix.Length];
+        prefix.CopyTo(input, 0);
+        for (var index = prefix.Length; index < input.Length - suffix.Length; index += FragmentLength)
+        {
+            input.AsSpan(index, FragmentLength - 2).Fill((byte)'b');
+            input[index + FragmentLength - 2] = (byte)'\\';
+            input[index + FragmentLength - 1] = (byte)';';
+        }
+        suffix.CopyTo(input, input.Length - suffix.Length);
+
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        host.AddFile("/input", input);
+        var result = await host.RunAsync(
+            "exec 3<input; IFS= read -d ';' -u 3 value; printf '%s<%s>' \"$?\" \"$value\"; cat <&3",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0<a>next\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]

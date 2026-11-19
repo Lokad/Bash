@@ -31,6 +31,13 @@ record using IFS and the ordinary delimiter and escape rules. It assigns an
 empty array for a record with no fields. At EOF it publishes fields
 from the partial record, or an empty array, and returns failure.
 
+`read` skips unquoted NUL bytes unless NUL is the chosen delimiter. With
+escape processing enabled, a quoted NUL ends the text available for assignment
+and counts as a protected empty field when it occurs on its own. The read still
+consumes the logical record, including escaped delimiters. If Bash 5.2 emits
+its internal `0x01` marker for that empty field, Lokad.Bash assigns empty text.
+Literal `0x01` input remains data. With `-r`, backslashes remain literal.
+
 `$(<file)` and its backtick form read a single input-file redirection on
 descriptor zero. Filename expansion runs in the caller. The result removes
 NUL bytes with a diagnostic and strips trailing LF bytes. CR is preserved.

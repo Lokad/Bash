@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Use the same escaped-NUL and continuation rules for newline and custom
+  delimiters in `read`.
+
 - Format explicit printf timestamps across the pinned Linux calendar range,
   preserving Unix seconds and Linux year padding.
 

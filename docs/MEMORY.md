@@ -151,6 +151,8 @@ input with an explicit origin admits uncovered dictionary replacement backing
 before applying any record. Integer input admits uncovered growth at each
 reached write, using remaining batch credit and holding the original binding
 through rollback.
+`read` retains the normalized assignment prefix while consuming the complete
+logical record. The physical read keeps its ordinary admitted buffer lifetime.
 
 Tilde-prefix eligibility uses borrowed word metadata and bounded scalar state.
 It does not detach a HOME/PWD/OLDPWD binding for an ineligible prefix. Reached

@@ -236,10 +236,12 @@ public sealed partial class Evaluation
 
         async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectInputAsync()
         {
+            var content = memory.Content;
+            var escaped = false;
+            var assignedContentEnded = false;
             if (delimiter != (byte)'\n')
                 return await CollectDelimitedInputAsync().ConfigureAwait(false);
 
-            var content = memory.Content;
             var physicalLine = memory.PhysicalLine ??= new ByteMemoryBuilder(0, Memory.Budget);
             try
             {
@@ -268,13 +270,10 @@ public sealed partial class Evaluation
                         break;
                     }
 
-                    // Decide physical-line continuation before discarding NULs: they can separate
-                    // a backslash from LF or interrupt a run of backslashes.
                     var line = result.Content;
-                    if (backslashMode == ReadBackslashMode.InterpretEscapes
-                        && TryGetContinuationContentLength(line, out var continuationContentLength))
+                    var hasTerminator = line.Span[^1] == (byte)'\n';
+                    if (AppendRecord(hasTerminator ? line[..^1] : line, hasTerminator))
                     {
-                        ShellValue.FromBytes(line[..continuationContentLength]).AppendWithoutNuls(content);
                         if (result.ReachedEoF)
                         {
                             exitCode = 1;
@@ -283,17 +282,13 @@ public sealed partial class Evaluation
                         continue;
                     }
 
-                    ShellValue.FromBytes(line).AppendWithoutNuls(content);
-                    if (result.ReachedEoF && (line.Length == 0 || line.Span[^1] != '\n'))
+                    if (result.ReachedEoF && !hasTerminator)
                         exitCode = 1;
 
                     break;
                 }
 
-                var collected = content.ToMemory();
-                if (!collected.IsEmpty && collected.Span[^1] == (byte)'\n')
-                    collected = collected[..^1];
-                return (exitCode, collected, false);
+                return (exitCode, content.ToMemory(), false);
             }
             catch (MemoryBudgetExceededException)
             {
@@ -311,9 +306,7 @@ public sealed partial class Evaluation
 
             async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectDelimitedInputAsync()
             {
-                var content = memory.Content;
                 var remaining = ByteMemoryBuilder.MaxMemoryBuilderBytes;
-                var status = 1;
                 while (true)
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
@@ -333,75 +326,64 @@ public sealed partial class Evaluation
                     if (sourceBytes > remaining)
                         return await RejectInputAsync().ConfigureAwait(false);
                     remaining -= sourceBytes;
-                    content.Append(record.Content);
-                    if (record.HasTerminator && backslashMode == ReadBackslashMode.InterpretEscapes
-                        && (delimiter == (byte)'\\' || HasTrailingEscape(record.Content)))
+                    if (AppendRecord(record.Content, record.HasTerminator))
+                        continue;
+                    return (record.HasTerminator ? 0 : 1, content.ToMemory(), false);
+                }
+
+                return (1, content.ToMemory(), false);
+            }
+
+            // Normalize as we collect the record. Quoting still controls framing
+            // after a quoted NUL has ended the assigned text.
+            bool AppendRecord(ReadOnlyMemory<byte> input, bool hasTerminator)
+            {
+                if (backslashMode == ReadBackslashMode.Preserve)
+                {
+                    ShellValue.FromBytes(input).AppendWithoutNuls(content);
+                    return false;
+                }
+
+                var bytes = input.Span;
+                while (!bytes.IsEmpty)
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    if (escaped)
                     {
-                        content.Append(delimiter);
+                        AppendEscapedByte(bytes[0]);
+                        bytes = bytes[1..];
                         continue;
                     }
-                    status = record.HasTerminator ? 0 : 1;
-                    break;
+
+                    var special = bytes.IndexOfAny((byte)0, (byte)'\\');
+                    if (!assignedContentEnded)
+                        content.Append(special < 0 ? bytes : bytes[..special]);
+                    if (special < 0)
+                        break;
+                    escaped = bytes[special] == (byte)'\\';
+                    bytes = bytes[(special + 1)..];
                 }
 
-                return (status, NormalizeInput(content.ToMemory()), false);
+                if (!hasTerminator)
+                    return false;
+                if (escaped)
+                    AppendEscapedByte(delimiter);
+                else if (delimiter == (byte)'\\')
+                    escaped = true;
+                else
+                    return false;
+                return true;
+            }
 
-                ReadOnlyMemory<byte> NormalizeInput(ReadOnlyMemory<byte> input)
-                {
-                    if (backslashMode == ReadBackslashMode.Preserve)
-                    {
-                        if (!input.Span.Contains((byte)0))
-                            return input;
-                        var unquoted = GetScratch();
-                        ShellValue.FromBytes(input).AppendWithoutNuls(unquoted);
-                        return unquoted.ToMemory();
-                    }
+            void AppendEscapedByte(byte value)
+            {
+                escaped = false;
+                if (value == (byte)'\n' || assignedContentEnded)
+                    return;
 
-                    ByteMemoryBuilder? cleaned = null;
-                    var start = 0;
-                    for (var index = 0; index < input.Length; index++)
-                    {
-                        var special = input.Span[index..].IndexOfAny((byte)0, (byte)'\\');
-                        if (special < 0)
-                            break;
-                        index += special;
-                        var removedBytes = 1;
-                        if (input.Span[index] != 0)
-                        {
-                            if (index + 1 == input.Length)
-                                break;
-                            // Keep the quoted NUL through field splitting; discard the following input.
-                            if (input.Span[index + 1] == 0)
-                            {
-                                if (cleaned is null)
-                                    return input[..(index + 2)];
-                                cleaned.Append(input[start..(index + 2)]);
-                                return cleaned.ToMemory();
-                            }
-                            if (input.Span[index + 1] != (byte)'\n')
-                            {
-                                index++;
-                                continue;
-                            }
-                            removedBytes = 2;
-                        }
-                        cleaned ??= GetScratch();
-                        cleaned.Append(input[start..index]);
-                        start = index + removedBytes;
-                        index = start - 1;
-                    }
-                    if (cleaned is null)
-                        return input;
-                    cleaned.Append(input[start..]);
-                    return cleaned.ToMemory();
-
-                    ByteMemoryBuilder GetScratch()
-                    {
-                        var scratch = memory.PhysicalLine ??= new ByteMemoryBuilder(0, Memory.Budget);
-                        scratch.Truncate(0);
-                        return scratch;
-                    }
-                }
+                content.Append((byte)'\\').Append(value);
+                // The quoted NUL participates in splitting as a protected empty field.
+                assignedContentEnded = value == 0;
             }
 
             async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> ReadFailureAsync(OperationError error)
@@ -416,27 +398,6 @@ public sealed partial class Evaluation
                 ReleaseReadWorkspace();
                 await ReportInputRefusalAsync().ConfigureAwait(false);
                 return (1, default, true);
-            }
-
-            static bool TryGetContinuationContentLength(ReadOnlyMemory<byte> line, out int contentLength)
-            {
-                contentLength = 0;
-                if (line.Length < 2 || line.Span[^1] != '\n')
-                    return false;
-
-                if (!HasTrailingEscape(line[..^1]))
-                    return false;
-
-                contentLength = line.Length - 2;
-                return true;
-            }
-
-            static bool HasTrailingEscape(ReadOnlyMemory<byte> content)
-            {
-                var count = 0;
-                for (var index = content.Length - 1; index >= 0 && content.Span[index] == (byte)'\\'; index--)
-                    count++;
-                return count % 2 != 0;
             }
         }
     }
