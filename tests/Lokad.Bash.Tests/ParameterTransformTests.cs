@@ -82,6 +82,57 @@ public sealed class ParameterTransformTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public async Task EscapeDecodingKeepsThePlainByteValue()
+    {
+        var bytes = new byte[16 * 1024];
+        bytes.AsSpan().Fill(0xff);
+        var original = ShellValue.FromBytes(bytes);
+        var governor = new MemoryGovernor(4 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        var evaluation = new Eval(Parser.Parse(string.Empty));
+        evaluation.Memory.Budget = owner;
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("x", original));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        var tokenizer = new Tokenizer(ShellSource.FromText("\"${x@E}\""));
+        Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+        var word = Assert.IsType<WordToken>(token).Word;
+
+        using (evaluation.Memory.BeginCommand(scope))
+        {
+            var result = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
+            Assert.True(original.Bytes.Equals(result.Bytes));
+        }
+        evaluation.Memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ValueQuotingAdmitsTheActualRenderedBytesBeforeOpeningOutput(bool denseEscapes)
+    {
+        var governor = new MemoryGovernor(512 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        var state = new Eval(Parser.Parse("""printf before; : "${value@Q}" >effect"""));
+        var bytes = new byte[32 * 1024];
+        bytes.AsSpan().Fill(denseEscapes ? (byte)0xff : (byte)'x');
+        state.SetVariable("value", ShellValue.FromBytes(bytes));
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(denseEscapes ? 1 : 0, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal(denseEscapes, host.StandardError.TextContent.Contains("shared memory", StringComparison.Ordinal));
+        Assert.Equal(!denseEscapes, host.CaptureEntries().ContainsKey("effect"));
+        Assert.Equal(bytes, state.Variables["value"].Bytes.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("""x=; declare y; export z; show "${x@A}" "${y@A}" "${z@A}" "${missing@A}" """,
         "<4>[x=''][][declare -x z][]\n")]

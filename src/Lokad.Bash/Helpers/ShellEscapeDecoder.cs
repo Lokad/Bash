@@ -19,11 +19,11 @@ public static class ShellEscapeDecoder
     /// <summary>Decodes an ANSI-C value to bytes, preserving unknown escapes and truncating at decoded NUL.</summary>
     public static ShellValue DecodeAnsiCValue(ReadOnlySpan<byte> source) => DecodeAnsiCValue(source, memory: null);
 
-    /// <summary>Retains decoded backing capacities in the parser's command-unit owner.</summary>
+    /// <summary>Retains decoded backing capacities in the supplied parser or expansion owner.</summary>
     internal static ShellValue DecodeAnsiCValue(ReadOnlySpan<byte> source, MemoryCapacity? memory)
     {
         var capacity = Math.Min(source.Length, 256);
-        var output = memory is null ? ByteMemoryBuilder.CreateUnaccounted(capacity)
+        using var output = memory is null ? ByteMemoryBuilder.CreateUnaccounted(capacity)
             : new ByteMemoryBuilder(capacity, memory);
         Span<byte> encoded = stackalloc byte[MaximumEscapeBytes];
         for (var index = 0; index < source.Length;)

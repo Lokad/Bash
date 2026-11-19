@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -12,6 +13,14 @@ internal static partial class WordExpansion
     private static readonly ShellValue EndOptionsWord = ShellValue.FromText("--");
     private static readonly ShellValue PositionalAssignmentPrefix = ShellValue.FromText("set -- ");
     private static readonly ShellValue SpaceSeparator = ShellValue.FromText(" ");
+
+    private static ShellValue QuoteParameterField(ShellValue field, MemoryCapacity memory)
+    {
+        using var rendered = new ByteMemoryBuilder(0, memory);
+        if (!ShellArgumentEscaping.TryAppendQuoted(rendered, field.Bytes.Span, ShellQuoteStyle.SingleQuoted))
+            throw new ByteMemoryBuilder.LimitExceededException();
+        return ShellValue.FromBytes(rendered.DetachSnapshot());
+    }
 
     private static void ExpandInspectionTransform(
         byte transform, ParameterValue parameter, ScopedEvaluation scope, ExpandedWordBuilder output,
@@ -131,9 +140,7 @@ internal static partial class WordExpansion
             foreach (var field in fields)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                using var rendered = new ByteMemoryBuilder(0, scope.Effects.Memory.Workspace);
-                AppendQuoted(rendered, field, ShellQuoteStyle.SingleQuoted);
-                yield return ShellValue.FromBytes(rendered.DetachSnapshot());
+                yield return QuoteParameterField(field, scope.Effects.Memory.Workspace);
             }
         }
 

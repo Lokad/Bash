@@ -198,6 +198,9 @@ an admitted command buffer. Parameter replacement expands both operands before
 matching. It borrows literal replacement bytes and reserves any quoted escape
 encoding as scratch from the first match through the last field. Emitted bytes
 remain charged to the command until field expansion and use finish.
+Parameter quoting and escape decoding retain their emitted backing under the
+command owner. Escape decoding borrows inputs with no backslashes.
+
 Aggregate operand lists admit replacement backing before growth and keep the
 current backing charged through command completion. Byte consumers append
 reached fields directly to that list.

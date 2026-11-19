@@ -675,17 +675,12 @@ internal static partial class WordExpansion
                     switch (parsed.Word[0])
                     {
                         case (byte)'E':
-                            budget.Charge(checked(4L * value.Bytes.Length));
-                            result.Add(ShellEscapeDecoder.DecodeAnsiCValue(value.Bytes.Span));
+                            result.Add(value.Bytes.Span.Contains((byte)'\\')
+                                ? ShellEscapeDecoder.DecodeAnsiCValue(value.Bytes.Span, budget.Workspace)
+                                : value);
                             break;
                         case (byte)'Q':
-                            // Every input byte can become a four-byte escape; reserve before building it.
-                            var maximumLength = 4L * value.Bytes.Length + 3;
-                            budget.Charge(checked(4L * maximumLength));
-                            var quoted = BoundedByteMemoryBuilder.CreateUnaccounted(0, (int)maximumLength);
-                            if (!ShellArgumentEscaping.TryAppendQuoted(quoted, value.Bytes.Span, ShellQuoteStyle.SingleQuoted))
-                                throw new InvalidOperationException("Parameter quote exceeded its reserved bound.");
-                            result.Add(ShellValue.FromBytes(quoted.ToMemory()));
+                            result.Add(QuoteParameterField(value, budget.Workspace));
                             break;
                         default:
                             result.Add(ChangeCase(value, parsed.Word[0] != (byte)'L', parsed.Word[0] == (byte)'u', null));

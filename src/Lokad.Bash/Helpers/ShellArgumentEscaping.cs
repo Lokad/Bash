@@ -45,10 +45,7 @@ public static class ShellArgumentEscaping
                 || output.TryAppend(style == ShellQuoteStyle.DoubleQuoted ? "\"\""u8 : "''"u8);
 
         var needsAnsi = style == ShellQuoteStyle.AnsiC;
-        var needsQuotes = false;
-        for (var index = 0; index < input.Length; index++)
-            needsQuotes |= !IsShellSafe(input, index);
-        for (var index = 0; index < input.Length;)
+        for (var index = 0; !needsAnsi && index < input.Length;)
         {
             var length = PrintableCharacterLength(input[index..]);
             if (length == 0)
@@ -110,7 +107,9 @@ public static class ShellArgumentEscaping
         if (style is ShellQuoteStyle.AssociativeKey or ShellQuoteStyle.AssignmentValue)
         {
             // '@' is special as an entire array key, not as a scalar assignment value.
-            needsQuotes |= style == ShellQuoteStyle.AssociativeKey && input.Length == 1 && input[0] == (byte)'@';
+            var needsQuotes = style == ShellQuoteStyle.AssociativeKey && input.Length == 1 && input[0] == (byte)'@';
+            for (var index = 0; !needsQuotes && index < input.Length; index++)
+                needsQuotes = !IsShellSafe(input, index);
             if (!needsQuotes)
                 return output.TryAppend(input);
             style = style == ShellQuoteStyle.AssociativeKey ? ShellQuoteStyle.DoubleQuoted : ShellQuoteStyle.SingleQuoted;
