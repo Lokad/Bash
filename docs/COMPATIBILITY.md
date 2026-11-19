@@ -319,6 +319,12 @@ a literal pattern. Lokad.Bash applies that grammar inside command substitutions
 and captures the selected arm's output and status. In the recorded conformance
 case, both GNU Bash pins produce text from the arm's source inside the capture.
 
+Quoted `$@` and `${array[@]}` in a case subject join fields with spaces. An
+empty field contributes an empty payload, and a literal DEL byte (`0x7F`)
+remains data. In the recorded multi-field comparisons, both GNU Bash pins
+select the same DEL-containing pattern for an empty field and a field that
+contains DEL.
+
 Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
 A word loop needs a semicolon or line break before the opening brace. An
 arithmetic loop can place the opening brace immediately after `))`.

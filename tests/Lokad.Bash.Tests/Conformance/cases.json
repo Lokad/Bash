@@ -1303,6 +1303,74 @@
       }
     },
     {
+      "id": "case-quoted-at-empty-middle",
+      "classification": "deviation",
+      "reason": "Lokad.Bash keeps the empty field distinct from a literal DEL byte in a quoted case subject. Both Bash pins select the DEL arm for this empty field.",
+      "locale": "C",
+      "script": "set -- a '' b; case \"$@\" in ('a  b') printf empty;; ($'a \\177 b') printf del;; (*) printf other;; esac\n",
+      "scriptSha256": "85441ca3e6c97399690a81ba8dbb2c53a9088e70f44d73f808d829102ab8693d",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "64656c",
+      "stderrHex": "",
+      "managedExpectation": {
+        "fileEffects": [],
+        "exitCode": 0,
+        "stdoutHex": "656d707479",
+        "stderrHex": ""
+      }
+    },
+    {
+      "id": "case-quoted-array-at-leading-empty",
+      "classification": "deviation",
+      "reason": "Lokad.Bash keeps the empty field distinct from a literal DEL byte in a quoted case subject. Both Bash pins select the DEL arm for this empty field.",
+      "locale": "C",
+      "script": "fields=('' b); case \"${fields[@]}\" in (' b') printf empty;; ($'\\177 b') printf del;; (*) printf other;; esac\n",
+      "scriptSha256": "209a328e6ea0bc91197ec9c40c0ab0cf8f2cae4634b1704789904538a1936cbb",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "64656c",
+      "stderrHex": "",
+      "managedExpectation": {
+        "fileEffects": [],
+        "exitCode": 0,
+        "stdoutHex": "656d707479",
+        "stderrHex": ""
+      }
+    },
+    {
+      "id": "case-quoted-at-literal-del",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- a $'\\177' b; case \"$@\" in ('a  b') printf empty;; ($'a \\177 b') printf del;; (*) printf other;; esac\n",
+      "scriptSha256": "edd7c4ccd627558d24534a792fce20973dc3d3a19468449e7386426f1c12a204",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "64656c",
+      "stderrHex": ""
+    },
+    {
+      "id": "case-quoted-at-solitary-empty",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "set -- ''; case \"$@\" in ('') printf empty;; ($'\\177') printf del;; (*) printf other;; esac\n",
+      "scriptSha256": "87439a89f470e8943d2cd6938a439060d2ce4b6bc9b3aae0ef5f4e4821c509fb",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "656d707479",
+      "stderrHex": ""
+    },
+    {
       "id": "case-quoted-literal",
       "classification": "supported",
       "reason": "",
