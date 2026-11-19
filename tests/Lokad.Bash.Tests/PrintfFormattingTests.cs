@@ -58,9 +58,9 @@ public sealed class PrintfFormattingTests
             return true;
         }
 
-        ValueTask<bool> DiagnoseAsync(ShellValue diagnostic)
+        ValueTask<bool> DiagnoseAsync(PrintfFormatting.Diagnostic diagnostic)
         {
-            events.Add(diagnostic.ToUtf8String());
+            events.Add(diagnostic.Prefix + diagnostic.Operand.ToUtf8String() + diagnostic.Suffix);
             return ValueTask.FromResult(true);
         }
     }
@@ -73,21 +73,20 @@ public sealed class PrintfFormattingTests
             static _ => ValueTask.FromResult(false), static _ => throw new InvalidOperationException("Unreached diagnostic."), CancellationToken.None);
 
         Assert.Equal("before", Text(result.Output));
-        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]
     public async Task EvaluateAsync_ReportsWarningsBeforeTheStopEscape()
     {
-        var diagnostics = new List<ShellValue>();
+        var diagnostics = new List<PrintfFormatting.Diagnostic>();
         var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText("%b%n"),
             [ShellValue.FromText("\\x\\c"), ShellValue.FromText("count")], DateTimeOffset.UnixEpoch, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes),
             static _ => throw new InvalidOperationException("Unreached count write."), DiagnoseAsync, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("missing hex digit for \\x", Assert.Single(diagnostics).ToUtf8String());
+        Assert.Equal(PrintfFormatting.Diagnostic.FromText("missing hex digit for \\x"), Assert.Single(diagnostics));
 
-        ValueTask<bool> DiagnoseAsync(ShellValue diagnostic)
+        ValueTask<bool> DiagnoseAsync(PrintfFormatting.Diagnostic diagnostic)
         {
             diagnostics.Add(diagnostic);
             return ValueTask.FromResult(true);

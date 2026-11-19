@@ -39,6 +39,90 @@ public sealed class ExecutionLifetimeTests
         return VerifyPendingWriteAsync($"trap '{action}' INT; trap -p INT >out; after=1", $"trap -- '{action}' SIGINT\n");
     }
 
+    [Fact]
+    public Task CancelledPrintfDiagnosticStaysChargedUntilTheHostSettles()
+    {
+        var number = new string('x', 4096);
+        return VerifyPendingWriteAsync($"printf '%d' '{number}' 2>out; after=1", $"printf: {number}: invalid number\n");
+    }
+
+    [Fact]
+    public async Task ClosedPrintfStderrDoesNotReserveDiscardedConversionDiagnostics()
+    {
+        var operand = new string('x', 4095);
+        var state = new Eval(Parser.Parse("printf 'ab%n%d%d%n' before \"$1\" \"$2\" after 2>&-"));
+        state.ReplacePositionalParameters([ShellValue.FromText("1" + operand), ShellValue.FromText("2" + operand)]);
+        var governor = new MemoryGovernor(44 * 1024);
+        using var owner = governor.CreateScope();
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        var write = Assert.Single(host.Appends);
+        Assert.Equal(FileDescriptor.StdOut, write.Descriptor);
+        Assert.Equal("ab12"u8.ToArray(), write.Content);
+        Assert.Equal(ShellValue.FromText("2"), state.Variables["before"]);
+        Assert.Equal(ShellValue.FromText("4"), state.Variables["after"]);
+        Assert.Equal(1, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task PrintfReleasesEachDiagnosticBeforeTheNextConversion()
+    {
+        var firstOperand = MakeOperand((byte)'1', 0xff);
+        var secondOperand = MakeOperand((byte)'2', 0xfe);
+        var state = new Eval(Parser.Parse("printf 'ab%n%d%d%n' before \"$1\" \"$2\" after 2>out"));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(firstOperand), ShellValue.FromBytes(secondOperand)]);
+        var governor = new MemoryGovernor(512 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        var descriptor = new FileDescriptor(9);
+
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var first = await ReceiveDiagnosticAsync(firstOperand);
+        var second = await ReceiveDiagnosticAsync(secondOperand);
+        var output = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(FileDescriptor.StdOut, output.FileDescriptor);
+        Assert.Equal("ab12"u8.ToArray(), output.Content.ToArray());
+        output.SetResult(DescriptorWriteResult.Open);
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("4"), state.Variables["after"]);
+        Assert.Equal(first, second);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        async Task<long> ReceiveDiagnosticAsync(byte[] operand)
+        {
+            var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+            Assert.Equal(descriptor, write.FileDescriptor);
+            byte[] expected = [.. "printf: "u8, .. operand, .. ": invalid number\n"u8];
+            Assert.Equal(expected, write.Content.ToArray());
+            Assert.Equal(ShellValue.FromText("2"), state.Variables["before"]);
+            Assert.False(state.Variables.ContainsKey("after"));
+            var reserved = governor.ReservedBytes;
+            write.SetResult(DescriptorWriteResult.Open);
+            return reserved;
+        }
+
+        static byte[] MakeOperand(byte first, byte last)
+        {
+            var bytes = new byte[4096];
+            bytes.AsSpan().Fill((byte)'x');
+            bytes[0] = first;
+            bytes[^1] = last;
+            return bytes;
+        }
+    }
+
     [Theory]
     [InlineData("cd \"-$1\"", "cd: -", ": invalid option\n", 2, 56 * 1024)]
     [InlineData("trap -p \"$1\"", "trap: ", ": invalid signal specification\n", 1, 32 * 1024)]

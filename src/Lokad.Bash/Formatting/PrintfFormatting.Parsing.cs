@@ -10,11 +10,9 @@ public static partial class PrintfFormatting
 {
     private sealed partial class Formatter
     {
-        public async ValueTask<PrintfResult> RunAsync(
-            Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
-            Func<ShellValue, ValueTask<bool>> reportDiagnostic)
+        public async ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode)> RunAsync(
+            Func<PrintfVariableAssignment, ValueTask<bool>> assignCount)
         {
-            var reportedDiagnostics = 0;
             var diagnosticOutputClosed = false;
             using var timeMemory = new MemoryCapacity(memoryBudget, 0);
             using var numericMemory = new MemoryCapacity(memoryBudget, 0);
@@ -40,11 +38,19 @@ public static partial class PrintfFormatting
             }
             catch (MemoryBudgetExceededException)
             {
-                AddFatalDiagnostic("shared memory budget exhausted");
-                await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
-                return new PrintfResult(ReadOnlyMemory<byte>.Empty, [], _diagnostics, 1);
+                try { await ReportPendingDiagnosticsAsync().ConfigureAwait(false); }
+                catch (MemoryBudgetExceededException) { } // Report the refusal without retrying a queued record.
+                if (reportDiagnostic != null && !diagnosticOutputClosed)
+                    await reportDiagnostic(Diagnostic.MemoryRefusal).ConfigureAwait(false);
+                return (ReadOnlyMemory<byte>.Empty, 1);
             }
-            finally { _temporaryOutput?.Dispose(); _output.Dispose(); }
+            finally
+            {
+                _pendingDiagnostics?.Clear();
+                _diagnosticMemory?.Dispose();
+                _temporaryOutput?.Dispose();
+                _output.Dispose();
+            }
 
             async ValueTask FormatCycleAsync()
             {
@@ -92,7 +98,7 @@ public static partial class PrintfFormatting
                     if (!TryParseSpecification(specificationStart, ref index, out var specification))
                         return;
 
-                    await ApplySpecificationAsync(specification).ConfigureAwait(false);
+                    await ApplySpecificationAsync(specification, index - 1).ConfigureAwait(false);
                     await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
                 }
             }
@@ -127,7 +133,7 @@ public static partial class PrintfFormatting
                 if (index < format.Length && (char)format.Span[index] == '*')
                 {
                     index++;
-                    width = ReadDynamicInteger("field width", 0);
+                    width = ReadDynamicInteger(": field width out of range", 0);
                     if (width < 0)
                     {
                         flags |= FormatFlags.LeftJustify;
@@ -136,7 +142,8 @@ public static partial class PrintfFormatting
                 }
                 else if (!TryReadDecimal(format, ref index, out width))
                 {
-                    AddConversionDiagnostic($"{Utf8Text.Decode(format[specificationStart..index])}: numerical result out of range");
+                    AddConversionDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..index]),
+                        ": numerical result out of range"));
                     width = 0;
                 }
 
@@ -147,7 +154,7 @@ public static partial class PrintfFormatting
                     if (index < format.Length && (char)format.Span[index] == '*')
                     {
                         index++;
-                        var dynamicPrecision = ReadDynamicInteger("precision", -1);
+                        var dynamicPrecision = ReadDynamicInteger(": precision out of range", -1);
                         if (dynamicPrecision >= 0)
                             precision = dynamicPrecision;
                     }
@@ -159,7 +166,8 @@ public static partial class PrintfFormatting
 
                         if (!TryReadDecimal(format, ref index, out var parsedPrecision))
                         {
-                            AddConversionDiagnostic($"{Utf8Text.Decode(format[specificationStart..index])}: numerical result out of range");
+                            AddConversionDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..index]),
+                                ": numerical result out of range"));
                         }
                         else if (!negative)
                         {
@@ -173,7 +181,8 @@ public static partial class PrintfFormatting
 
                 if (index >= format.Length)
                 {
-                    AddFatalDiagnostic($"{Utf8Text.Decode(format[specificationStart..])}: missing format character");
+                    AddFatalDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..]),
+                        ": missing format character"));
                     specification = default;
                     return false;
                 }
@@ -215,7 +224,7 @@ public static partial class PrintfFormatting
                     timeFormat);
                 return true;
 
-                int ReadDynamicInteger(string role, int overflowValue)
+                int ReadDynamicInteger(string overflowSuffix, int overflowValue)
                 {
                     if (!TryGetArgument(out var argument))
                         return 0;
@@ -223,7 +232,7 @@ public static partial class PrintfFormatting
                     var value = ParseSigned(argument);
                     if (value is < int.MinValue or > int.MaxValue)
                     {
-                        AddNumericDiagnostic(argument, role + " out of range", warning: false);
+                        AddNumericDiagnostic(argument, overflowSuffix, warning: false);
                         return overflowValue;
                     }
 
@@ -250,7 +259,7 @@ public static partial class PrintfFormatting
                 }
             }
 
-            async ValueTask ApplySpecificationAsync(FormatSpecification specification)
+            async ValueTask ApplySpecificationAsync(FormatSpecification specification, int conversionOffset)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 switch (specification.Conversion)
@@ -281,9 +290,7 @@ public static partial class PrintfFormatting
 
                             if (!VariableNames.IsValidVariableName(variable.Bytes.Span))
                             {
-                                AddFatalDiagnostic(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                                    .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(variable).Bytes)
-                                    .Append(": not a valid identifier"u8).ToMemory()));
+                                AddFatalDiagnostic(new Diagnostic("`", variable, "': not a valid identifier"));
                                 return;
                             }
 
@@ -428,9 +435,9 @@ public static partial class PrintfFormatting
                                     out var valid,
                                     out var overflow);
                                 if (!valid)
-                                    AddNumericDiagnostic(unsignedArgument, NumericErrorDetail(unsignedArgument), warning: false);
+                                    AddNumericDiagnostic(unsignedArgument, NumericErrorSuffix(unsignedArgument), warning: false);
                                 else if (overflow)
-                                    AddNumericDiagnostic(unsignedArgument, "Numerical result out of range", warning: true);
+                                    AddNumericDiagnostic(unsignedArgument, ": Numerical result out of range", warning: true);
 
                                 if (overflow)
                                     return ulong.MaxValue;
@@ -456,19 +463,17 @@ public static partial class PrintfFormatting
                                 specification.Flags.HasFlag(FormatFlags.Alternate), numericMemory.Grow, cancellationToken);
                             if (result.Invalid)
                             {
-                                AddNumericDiagnostic(argument, NumericErrorDetail(argument), warning: false);
+                                AddNumericDiagnostic(argument, NumericErrorSuffix(argument), warning: false);
                             }
                             if (result.RangeError)
-                                AddNumericDiagnostic(argument, "Numerical result out of range", warning: true);
+                                AddNumericDiagnostic(argument, ": Numerical result out of range", warning: true);
 
                             AppendNumber(specification, result.Number);
                             return;
                         }
                     default:
-                        var diagnostic = ByteMemoryBuilder.CreateUnaccounted(0);
-                        diagnostic.Append((byte)'`').Append((byte)specification.Conversion)
-                            .Append("': invalid format character"u8);
-                        AddFatalDiagnostic(ShellValue.FromBytes(diagnostic.ToMemory()));
+                        AddFatalDiagnostic(new Diagnostic("`", ShellValue.FromBytes(format.Slice(conversionOffset, 1)),
+                            "': invalid format character"));
                         return;
                 }
 
@@ -632,19 +637,26 @@ public static partial class PrintfFormatting
 
             async ValueTask ReportPendingDiagnosticsAsync()
             {
-                while (!diagnosticOutputClosed && reportedDiagnostics < _diagnostics.Count)
-                    if (!await reportDiagnostic(_diagnostics[reportedDiagnostics++]).ConfigureAwait(false))
+                if (reportDiagnostic == null || diagnosticOutputClosed || _pendingDiagnostics is not { Count: > 0 } pending)
+                    return;
+
+                try
+                {
+                    foreach (var diagnostic in pending)
                     {
-                        diagnosticOutputClosed = true;
-                        _stop = true;
+                        if (!await reportDiagnostic(diagnostic).ConfigureAwait(false))
+                        {
+                            diagnosticOutputClosed = true;
+                            _stop = true;
+                            break;
+                        }
                     }
+                }
+                finally { pending.Clear(); }
             }
 
-            PrintfResult BuildResult() => new(
-                _output.DetachSnapshot(),
-                [],
-                _diagnostics,
-                _failed || _conversionError ? 1 : 0);
+            (ReadOnlyMemory<byte> Output, int ExitCode) BuildResult() =>
+                (_output.DetachSnapshot(), _failed || _conversionError ? 1 : 0);
         }
     }
 

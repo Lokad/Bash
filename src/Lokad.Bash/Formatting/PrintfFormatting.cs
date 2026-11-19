@@ -29,7 +29,8 @@ public static partial class PrintfFormatting
     /// whose calendar year cannot be represented in that profile falls back to the Unix epoch.
     /// </remarks>
     public static ReadOnlyMemory<byte> Format(ShellValue format, IReadOnlyList<ShellValue> arguments, IMemoryBudget memoryBudget) =>
-        Evaluate(format, arguments, DateTimeOffset.UnixEpoch, memoryBudget).Output;
+        RunSynchronously(format, arguments, DateTimeOffset.UnixEpoch, allowAssignments: true, memoryBudget,
+            static _ => ValueTask.FromResult(true), reportDiagnostic: null).Output;
 
     /// <summary>
     /// Formats arguments and returns output, deferred variable assignments, and conversion diagnostics.
@@ -40,11 +41,12 @@ public static partial class PrintfFormatting
         DateTimeOffset timestamp, IMemoryBudget memoryBudget) => EvaluateSynchronously(format, arguments, timestamp, allowAssignments: true, memoryBudget);
 
     /// <summary>Runs count writes and diagnostics in conversion order; false stops later formatting.</summary>
-    internal static ValueTask<PrintfResult> EvaluateAsync(
+    /// <remarks>A null diagnostic callback discards records while retaining their effect on status.</remarks>
+    internal static ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode)> EvaluateAsync(
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
-        Func<ShellValue, ValueTask<bool>> reportDiagnostic, CancellationToken cancellationToken) =>
-        new Formatter(format, arguments, timestamp, allowAssignments: true, memoryBudget, cancellationToken).RunAsync(assignCount, reportDiagnostic);
+        Func<Diagnostic, ValueTask<bool>>? reportDiagnostic, CancellationToken cancellationToken) =>
+        new Formatter(format, arguments, timestamp, allowAssignments: true, memoryBudget, reportDiagnostic, cancellationToken).RunAsync(assignCount);
 
     /// <summary>Formats command output, rejecting the shell-only <c>%n</c> assignment.</summary>
     /// <remarks>Like <see cref="Format"/>, uses the Unix epoch for implicit timestamps.</remarks>
@@ -55,17 +57,64 @@ public static partial class PrintfFormatting
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool allowAssignments, IMemoryBudget memoryBudget)
     {
         var assignments = new List<PrintfVariableAssignment>();
-        var pending = new Formatter(format, arguments, timestamp, allowAssignments, memoryBudget, CancellationToken.None)
-            .RunAsync(CaptureCount, static _ => ValueTask.FromResult(true));
-        // These callbacks never suspend; do not block the synchronous formatting API.
-        if (!pending.IsCompleted)
-            throw new InvalidOperationException("Synchronous printf callbacks must complete synchronously.");
-        return pending.GetAwaiter().GetResult() with { Assignments = assignments };
+        var diagnostics = new List<ShellValue>();
+        using var resultMemory = new MemoryCapacity(memoryBudget, 0);
+        var result = RunSynchronously(format, arguments, timestamp, allowAssignments, memoryBudget, CaptureCount, CaptureDiagnostic);
+        resultMemory.DetachReservation();
+        return new PrintfResult(result.Output, assignments, diagnostics, result.ExitCode);
 
         ValueTask<bool> CaptureCount(PrintfVariableAssignment assignment)
         {
+            resultMemory.PrepareListCapacity(assignments, 1);
             assignments.Add(assignment);
             return ValueTask.FromResult(true);
+        }
+
+        ValueTask<bool> CaptureDiagnostic(Diagnostic diagnostic)
+        {
+            // Every admitted diagnostic leaves room to report a later refusal.
+            if (diagnostic == Diagnostic.MemoryRefusal)
+                diagnostics.Add(Diagnostic.MemoryRefusalValue);
+            else
+            {
+                resultMemory.PrepareListCapacity(diagnostics, 2);
+                diagnostics.Add(diagnostic.ToValue(memoryBudget));
+            }
+            return ValueTask.FromResult(true);
+        }
+    }
+
+    private static (ReadOnlyMemory<byte> Output, int ExitCode) RunSynchronously(
+        ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool allowAssignments, IMemoryBudget memoryBudget,
+        Func<PrintfVariableAssignment, ValueTask<bool>> assignCount, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic)
+    {
+        var pending = new Formatter(format, arguments, timestamp, allowAssignments, memoryBudget, reportDiagnostic, CancellationToken.None)
+            .RunAsync(assignCount);
+        // These callbacks never suspend; do not block the synchronous formatting API.
+        if (!pending.IsCompleted)
+            throw new InvalidOperationException("Synchronous printf callbacks must complete synchronously.");
+        return pending.GetAwaiter().GetResult();
+    }
+
+    /// <summary>A diagnostic borrows its operand through the awaited reporting callback.</summary>
+    internal readonly record struct Diagnostic(string Prefix, ShellValue Operand, string Suffix)
+    {
+        internal static readonly Diagnostic MemoryRefusal = FromText("shared memory budget exhausted");
+        internal static readonly ShellValue MemoryRefusalValue = ShellValue.FromText(MemoryRefusal.Suffix);
+
+        internal static Diagnostic FromText(string message) => new(string.Empty, ShellValue.Empty, message);
+
+        internal ShellValue ToValue(IMemoryBudget memoryBudget)
+        {
+            var length = (long)Utf8Text.StrictUtf8.GetByteCount(Prefix) + Operand.Bytes.Length
+                + Utf8Text.StrictUtf8.GetByteCount(Suffix);
+            if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                throw new ByteMemoryBuilder.LimitExceededException();
+            var bytes = ScopedMemory.Allocate((int)length, memoryBudget);
+            var start = Utf8Text.StrictUtf8.GetBytes(Prefix, bytes);
+            Operand.Bytes.Span.CopyTo(bytes.AsSpan(start));
+            Utf8Text.StrictUtf8.GetBytes(Suffix, bytes.AsSpan(start + Operand.Bytes.Length));
+            return ShellValue.FromBytes(bytes);
         }
     }
 
@@ -73,7 +122,8 @@ public static partial class PrintfFormatting
         ShellValue formatValue,
         IReadOnlyList<ShellValue> arguments,
         DateTimeOffset timestamp,
-        bool allowAssignments, IMemoryBudget memoryBudget, CancellationToken cancellationToken)
+        bool allowAssignments, IMemoryBudget memoryBudget, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic,
+        CancellationToken cancellationToken)
     {
         private readonly ReadOnlyMemory<byte> format = formatValue.Bytes;
 
@@ -81,7 +131,8 @@ public static partial class PrintfFormatting
 
         private readonly BoundedByteMemoryBuilder _output = new(
             0, MaximumOutputBytes, memoryBudget);
-        private readonly List<ShellValue> _diagnostics = [];
+        private List<Diagnostic>? _pendingDiagnostics;
+        private MemoryCapacity? _diagnosticMemory;
         private BoundedByteMemoryBuilder? _temporaryOutput;
         private int _argumentIndex;
         private int _cycleOutputStart;
@@ -101,20 +152,29 @@ public static partial class PrintfFormatting
             return true;
         }
 
-        private void AddWarning(string message) => _diagnostics.Add(ShellValue.FromText(message));
+        private void AddWarning(string message) => AddDiagnostic(Diagnostic.FromText(message));
 
-        private void AddConversionDiagnostic(string message)
+        private void AddConversionDiagnostic(Diagnostic diagnostic)
         {
-            _diagnostics.Add(ShellValue.FromText(message));
+            AddDiagnostic(diagnostic);
             _conversionError = true;
         }
 
-        private void AddFatalDiagnostic(string message) => AddFatalDiagnostic(ShellValue.FromText(message));
+        private void AddFatalDiagnostic(string message) => AddFatalDiagnostic(Diagnostic.FromText(message));
 
-        private void AddFatalDiagnostic(ShellValue message)
+        private void AddFatalDiagnostic(Diagnostic diagnostic)
         {
-            _diagnostics.Add(message);
+            AddDiagnostic(diagnostic);
             _failed = true;
+        }
+
+        private void AddDiagnostic(Diagnostic diagnostic)
+        {
+            if (reportDiagnostic == null)
+                return;
+            var pending = _pendingDiagnostics ??= [];
+            (_diagnosticMemory ??= new MemoryCapacity(memoryBudget, 0)).PrepareListCapacity(pending, 1);
+            pending.Add(diagnostic);
         }
 
         private void AppendText(string text) => TryAppendUtf8Prefix(_output, text.AsSpan(), int.MaxValue);

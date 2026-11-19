@@ -19,7 +19,12 @@ public static partial class PrintfFormatting
             var result = ShellEscapeDecoder.Decode(source.Span[index..], mode, encoded);
             stop = result.Status == ShellEscapeStatus.StopOutput;
             if (result.Status == ShellEscapeStatus.MissingDigits)
-                AddWarning((char)source.Span[index] == 'x' ? "missing hex digit for \\x" : $"missing unicode digit for \\{(char)source.Span[index]}");
+                AddWarning((char)source.Span[index] switch
+                {
+                    'x' => "missing hex digit for \\x",
+                    'u' => "missing unicode digit for \\u",
+                    _ => "missing unicode digit for \\U"
+                });
             if (result.Written != 0)
                 TryAppendBytes(output, encoded[..result.Written]);
             return result.Consumed;

@@ -93,6 +93,25 @@ public sealed class QueryWriteFailureTests
     }
 
     [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 1)]
+    public async Task PrintfStopsAfterAHostRejectsAConversionDiagnostic(bool failure, int status)
+    {
+        var state = new Eval(Parser.Parse(@"printf 'ab%n%b%n' before '\x' after"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(failure ? DescriptorWriteResult.WriteFailure : DescriptorWriteResult.Closed);
+
+        await new Engine().RunAsync(state, host, CancellationToken.None);
+
+        var write = Assert.Single(host.Appends);
+        Assert.Equal(FileDescriptor.StdErr, write.Descriptor);
+        Assert.Equal("printf: missing hex digit for \\x\n"u8.ToArray(), write.Content);
+        Assert.Equal(ShellValue.FromText("2"), state.Variables["before"]);
+        Assert.False(state.Variables.ContainsKey("after"));
+        Assert.Equal(status, state.LastExitCode);
+    }
+
+    [Theory]
     [InlineData("printf x")]
     [InlineData("echo x")]
     public async Task FormattingDoesNotRetryAMergedFailedDescriptor(string script)

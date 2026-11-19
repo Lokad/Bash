@@ -84,6 +84,11 @@ than 256 bytes through stderr write completion. Short messages fit in caller
 headroom. Expansion and builtin invocation errors can supply borrowed name
 and message fragments. The formatter copies them directly into the admitted
 record and returns the write result to callers that select their status from it.
+Shell `printf` admits the list of pending diagnostic fragments and reuses its
+capacity between conversions. An emitted record stays charged through the
+stderr write. Standalone formatting that returns diagnostics owns their
+materialized bytes under the caller's scope. Output-only formatting and
+shell-closed stderr skip diagnostic storage.
 Prepared terminal messages admit their final buffer in the command workspace,
 which holds it through later expansion, redirection setup and host writes.
 The builtin wrapper checks the target in the byte registry and decodes names

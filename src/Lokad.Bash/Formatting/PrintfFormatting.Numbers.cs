@@ -20,9 +20,9 @@ public static partial class PrintfFormatting
             var parsed = ParseInteger(argument, out var negative, out var valid, out var overflow);
             var signedLimit = negative ? (ulong)long.MaxValue + 1 : (ulong)long.MaxValue;
             if (!valid)
-                AddNumericDiagnostic(argument, NumericErrorDetail(argument), warning: false);
+                AddNumericDiagnostic(argument, NumericErrorSuffix(argument), warning: false);
             else if (overflow || parsed > signedLimit)
-                AddNumericDiagnostic(argument, "Numerical result out of range", warning: true);
+                AddNumericDiagnostic(argument, ": Numerical result out of range", warning: true);
 
             if (negative)
             {
@@ -107,19 +107,16 @@ public static partial class PrintfFormatting
             return true;
         }
 
-        private static string NumericErrorDetail(ShellValue argument) => argument.Bytes.Span switch
+        private static string NumericErrorSuffix(ShellValue argument) => argument.Bytes.Span switch
         {
-            [(byte)'0', (byte)'x' or (byte)'X', ..] => "invalid hex number",
-            [(byte)'0', >= (byte)'0' and <= (byte)'9', ..] => "invalid octal number",
-            _ => "invalid number"
+            [(byte)'0', (byte)'x' or (byte)'X', ..] => ": invalid hex number",
+            [(byte)'0', >= (byte)'0' and <= (byte)'9', ..] => ": invalid octal number",
+            _ => ": invalid number"
         };
 
-        private void AddNumericDiagnostic(ShellValue argument, string detail, bool warning)
+        private void AddNumericDiagnostic(ShellValue argument, string suffix, bool warning)
         {
-            using var output = new ByteMemoryBuilder(0, memoryBudget);
-            if (warning) output.Append("warning: "u8);
-            output.Append(argument.Bytes).Append(": "u8).Append(Utf8Text.Encode(detail));
-            _diagnostics.Add(ShellValue.FromBytes(output.DetachSnapshot()));
+            AddDiagnostic(new Diagnostic(warning ? "warning: " : string.Empty, argument, suffix));
             if (!warning) _conversionError = true;
         }
     }

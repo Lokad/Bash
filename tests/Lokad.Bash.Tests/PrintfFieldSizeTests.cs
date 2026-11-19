@@ -218,14 +218,47 @@ public sealed class PrintfFieldSizeTests
         var memory = new MemoryGovernor(64 * 1024);
         using var owner = memory.CreateScope();
         var counts = new List<PrintfVariableAssignment>();
+        var diagnostics = new List<PrintfFormatting.Diagnostic>();
         var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText("a%n%1048577s%n"),
             [ShellValue.FromText("before"), ShellValue.FromText("x"), ShellValue.FromText("after")], DateTimeOffset.UnixEpoch, owner,
             assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
-            _ => ValueTask.FromResult(true), CancellationToken.None);
+            diagnostic => { diagnostics.Add(diagnostic); return ValueTask.FromResult(true); }, CancellationToken.None);
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(new[] { new PrintfVariableAssignment("before", 1) }, counts);
         Assert.Empty(result.Output.ToArray());
-        Assert.Equal("shared memory budget exhausted", Assert.Single(result.Diagnostics).ToUtf8String());
+        Assert.Equal(PrintfFormatting.Diagnostic.MemoryRefusal, Assert.Single(diagnostics));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public void ReturnedFormatDiagnosticsKeepTheirOwnByteReservation()
+    {
+        var format = "%" + new string('9', 4096);
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+
+        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText(format), [], owner);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output.ToArray());
+        Assert.Equal([format + ": numerical result out of range", format + ": missing format character"],
+            result.Diagnostics.Select(diagnostic => diagnostic.ToUtf8String()));
+        Assert.True(memory.ReservedBytes >= result.Diagnostics.Sum(diagnostic => diagnostic.Bytes.Length));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public void OutputOnlyFormattingFitsWithoutMaterializingDiscardedDiagnostics()
+    {
+        var invalidNumber = ShellValue.FromText("1" + new string('x', 4096));
+        var memory = new MemoryGovernor(4096);
+        using var owner = memory.CreateScope();
+
+        var result = PrintfFormatting.Format(ShellValue.FromText("%d"), [invalidNumber], owner);
+
+        Assert.Equal("1"u8.ToArray(), result.ToArray());
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);
     }
