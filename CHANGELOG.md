@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject capacity adjustments after their enclosing memory scope is disposed,
+  including zero growth and same-size resizes.
+
 - Support integer declarations and inherited locals with `declare -i` and
   `local -I`. Apply arithmetic evaluation to scalar and array writes.
 

@@ -36,6 +36,15 @@ public sealed class MemoryGovernor : IMemoryBudget
     public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation) =>
         _root.TryReserve(bytes, out reservation);
 
+    // Empty capacity can check our own budgets without allocating a temporary child scope.
+    internal static bool TryCheckLifetime(IMemoryBudget budget)
+    {
+        if (budget is MemoryGovernor) return true;
+        if (budget is not Scope scope) return false;
+        ObjectDisposedException.ThrowIf(scope.IsDisposed, scope);
+        return true;
+    }
+
     private bool TryAcquire(long bytes)
     {
         if (bytes == 0)

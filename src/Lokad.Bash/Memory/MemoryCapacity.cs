@@ -12,6 +12,7 @@ namespace Lokad.Bash.Memory;
 /// admitting each item separately. Publication leaves logical usage charged to the enclosing scope.
 /// Refused admission fails the operation, including requests for spare capacity.
 /// Owners must stop all users before disposing this allowance or its enclosing memory scope.
+/// Capacity adjustments require a live owner, including adjustments that leave usage unchanged.
 /// </remarks>
 public sealed class MemoryCapacity : IDisposable
 {
@@ -58,10 +59,6 @@ public sealed class MemoryCapacity : IDisposable
 
         public bool TryResize(long bytes)
         {
-            // Zero can mean an empty charge or a disposed ancestor. Validate that
-            // uncommon case through the underlying reservation, even for a zero resize.
-            if (reservation.Bytes == 0)
-                reservation.TryResize(0);
             var previous = capacity.Bytes;
             if (!capacity.TryResize(bytes))
                 return false;
@@ -73,7 +70,8 @@ public sealed class MemoryCapacity : IDisposable
         public void Dispose() => capacity.Dispose();
     }
 
-    /// <summary>Current logical usage, excluding unused capacity still charged to the governor.</summary>
+    /// <summary>The last logical usage recorded by this helper, excluding unused prepaid capacity.</summary>
+    /// <remarks>Disposing or detaching this helper clears the estimate. The enclosing scope controls the live charge.</remarks>
     public long Bytes { get; private set; }
 
     public bool TryResize(long bytes)
@@ -93,14 +91,17 @@ public sealed class MemoryCapacity : IDisposable
             if (!admitted)
                 return false;
         }
+        else if (previous == 0)
+        {
+            CheckEmptyCapacityLifetime();
+        }
         Bytes = bytes;
         return true;
     }
 
     public void Resize(long bytes)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (bytes != Bytes && !TryResize(bytes))
+        if (!TryResize(bytes))
             throw new MemoryBudgetExceededException();
     }
 
@@ -108,8 +109,7 @@ public sealed class MemoryCapacity : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
-        if (bytes != 0)
-            Resize(checked(Bytes + bytes));
+        Resize(checked(Bytes + bytes));
     }
 
     internal static long ArrayBackingBytes<T>(int capacity) =>
@@ -133,24 +133,51 @@ public sealed class MemoryCapacity : IDisposable
     public void TrimExcess()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        var prepaid = _reservation?.Bytes ?? 0;
+        if (prepaid == 0)
+        {
+            CheckEmptyCapacityLifetime();
+            return;
+        }
         // Keep one capacity increment of slack after trimming, and another before the next trim.
         // Otherwise a descending record loop would resize the reservation on every release.
-        if (_reservation is { } reservation && reservation.Bytes - Bytes > 2 * CapacityIncrementBytes)
+        if (prepaid - Bytes > 2 * CapacityIncrementBytes && _reservation is { } reservation)
             reservation.Resize(checked(Bytes + CapacityIncrementBytes));
     }
 
     /// <summary>Returns spare credit so a refused operation does not starve later work.</summary>
-    public void ReleaseUnusedCapacity() => _reservation?.Resize(Bytes);
+    public void ReleaseUnusedCapacity()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_reservation is { } reservation)
+            reservation.Resize(Bytes);
+        else
+            CheckEmptyCapacityLifetime();
+    }
 
     /// <summary>Leaves logical usage charged to the enclosing scope and returns unused credit.</summary>
     /// <remarks>This ends the capacity owner's lifetime; retained data must stay within that scope.</remarks>
     public void DetachReservation()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        _reservation?.Resize(Bytes);
+        ReleaseUnusedCapacity();
         _reservation = null;
         Bytes = 0;
         _disposed = true;
+    }
+
+    private void CheckEmptyCapacityLifetime()
+    {
+        // A zero reading can also mean that the reservation's enclosing scope ended.
+        if (_reservation is { } reservation)
+        {
+            _ = reservation.TryResize(0);
+            return;
+        }
+
+        // Unused scratch owns no reservation. A host budget can check its lifetime
+        // through the empty-scope operation, which requests no admission.
+        if (!MemoryGovernor.TryCheckLifetime(_budget))
+            _budget.CreateScope().Dispose();
     }
 
     public void Dispose()

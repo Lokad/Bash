@@ -44,6 +44,12 @@ Use adapters to the application's governor or the provided `MemoryGovernor`.
 Its `LimitBytes`, `ReservedBytes` and `PeakBytes` are estimates, not process memory.
 Never copy a remaining balance or create a governor for a nested invocation.
 
+`MemoryCapacity.Bytes` records the helper's logical usage and clears on its own
+disposal or detachment. A live reservation reports the prepaid charge, which its
+enclosing scope can refund. Capacity adjustments require a live enclosing scope,
+including zero growth and same-size resize. An unused helper keeps reservation
+creation deferred until it needs capacity.
+
 ## Calls, results and streaming
 
 Scope creators own disposal; callees borrow supplied budgets and dispose only their
