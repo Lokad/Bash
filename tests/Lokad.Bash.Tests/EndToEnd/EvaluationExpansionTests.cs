@@ -4,6 +4,8 @@ using Lokad.Bash.Helpers;
 using Lokad.Bash.Tree;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests.EndToEnd;
 
@@ -140,6 +142,37 @@ public sealed class EvaluationExpansionTests
         Assert.Equal(0, result.ShellExitCode);
         Assert.Equal("ok", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData(16, true)]
+    [InlineData(26, false)]
+    public async Task CompoundPrefix_AdmitsOneCopyOfMultipartFields(int budgetMiB, bool refuses)
+    {
+        var governor = new MemoryGovernor(budgetMiB * 1024L * 1024);
+        using var owner = governor.CreateScope();
+        var script = Parser.Parse("A=($left\"$right\" $left\"$right\" $left\"$right\") true; printf '%s' \"$?\"");
+        var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(script);
+        evaluation.Memory.Budget = owner;
+        evaluation.SetVariable("left", ShellValue.FromText(new string('x', 512 * 1024)));
+        evaluation.SetVariable("right", ShellValue.FromText(new string('y', 512 * 1024)));
+
+        if (refuses)
+        {
+            var diagnostic = Assert.IsType<WriteOperation>(await evaluation.GetNextStep());
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.EndsWith(": shared memory budget exhausted\n", ShellValue.FromBytes(diagnostic.Content).ToUtf8String());
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+        }
+
+        var status = Assert.IsType<WriteOperation>(await evaluation.GetNextStep());
+        Assert.Equal(FileDescriptor.StdOut, status.FileDescriptor);
+        Assert.Equal(refuses ? "1" : "0", ShellValue.FromBytes(status.Content).ToUtf8String());
+        status.SetResult(DescriptorWriteResult.Open);
+        Assert.Null(await evaluation.GetNextStep());
+        Assert.Equal(0, evaluation.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Theory]

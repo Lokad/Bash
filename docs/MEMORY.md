@@ -154,6 +154,10 @@ is independent and immutable value bytes stay shared. The surrounding command ow
 copied storage through operation and cleanup completion. Cancellation or refusal
 during detachment leaves the caller binding intact.
 
+Compound command prefixes keep expanded field groups through a single copy
+into their parenthesized scalar value and refund the grouping list before
+installing the binding.
+
 Directory stacks admit replacement backing before growth, and retained capacity
 and owned path text stay charged across commands. Navigation admits normalized
 path storage before construction, and stack mutations update the retained path

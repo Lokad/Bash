@@ -1638,8 +1638,9 @@ public sealed partial class Evaluation : IFileTester
 
             async Task<ShellValue> ExpandCompoundPrefixAsync(IReadOnlyList<CompoundArrayItem> words)
             {
-                var items = new List<ShellValue>();
-                long length = 2;
+                using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
+                var items = new List<IReadOnlyList<ExpandedWord>>();
+                var length = 2L;
                 foreach (var word in words)
                 {
                     // The enclosing await reports any limit once, before active redirections unwind.
@@ -1650,14 +1651,13 @@ public sealed partial class Evaluation : IFileTester
                     if (_state.HasPendingExpansionError)
                         return ShellValue.Empty;
 
-                    // Even an empty aggregate occupies its source item's place in the prefix text.
-                    if (expanded.Count == 0)
-                        AddItem(ShellValue.Empty);
-                    foreach (var field in expanded)
-                        AddItem(field.ToValue(Memory));
+                    // Even a group with no fields occupies its source item's place in the prefix text.
+                    length += ExpandedWord.GetJoinedValueLength(expanded) + (items.Count == 0 ? 0L : 1L);
+                    Memory.PrepareListCapacity(itemMemory, items, 1);
+                    items.Add(expanded);
                 }
 
-                // Build the parentheses and separators in one budgeted copy, without an intermediate join.
+                // Copy the segments, parentheses and separators straight into the budgeted result.
                 if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
                     throw new ByteMemoryBuilder.LimitExceededException();
                 Memory.Charge(checked(4L * length));
@@ -1672,16 +1672,9 @@ public sealed partial class Evaluation : IFileTester
                         destination[0] = (byte)' ';
                         destination = destination[1..];
                     }
-                    items[index].Bytes.Span.CopyTo(destination);
-                    destination = destination[items[index].Bytes.Length..];
+                    destination = ExpandedWord.CopyJoinedValueTo(items[index], destination);
                 }
                 return ShellValue.FromBytes(joined);
-
-                void AddItem(ShellValue item)
-                {
-                    length += item.Bytes.Length + (items.Count == 0 ? 0L : 1L);
-                    items.Add(item);
-                }
             }
         }
 

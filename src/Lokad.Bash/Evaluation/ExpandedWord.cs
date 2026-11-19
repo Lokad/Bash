@@ -83,7 +83,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         return length;
     }
 
-    internal static void CopyJoinedValueTo(IReadOnlyList<ExpandedWord> words, Span<byte> destination)
+    internal static Span<byte> CopyJoinedValueTo(IReadOnlyList<ExpandedWord> words, Span<byte> destination)
     {
         for (var index = 0; index < words.Count; index++)
         {
@@ -94,6 +94,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
             }
             destination = words[index].CopyValueTo(destination);
         }
+        return destination;
     }
 
     private long GetValueLength()
