@@ -244,6 +244,10 @@ preparation. Keyword, builtin and descriptor classification borrow source bytes;
 stored loop/allocation names admit their text before decoding. Pure caller-owned
 preparation remains unbudgeted. This is not complete allocation coverage; parser
 structural guards remain independent of admission and execution duration.
+Each running arithmetic parser admits its pending productions and traversal
+backing before growth. Repeated productions at the same depth reuse this
+allowance. It stays live through pending bindings and writes, including nested
+numeric reads, and refunds once the parser settles.
 Retained command lookahead includes the depth required by its tree. A nested
 subshell can use an already prepared tree within the same syntax owner when the
 receiving command and expansion depths have enough headroom.

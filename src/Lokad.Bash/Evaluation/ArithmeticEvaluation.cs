@@ -288,16 +288,24 @@ public static partial class ArithmeticEvaluation
 
             // Grammar calls suspend here instead of growing the CLR stack at each precedence level.
             // Only binding and publication await effects; completed adapters stay synchronous.
-            var frames = new Stack<IEnumerator<ParseStep>>();
-            frames.Push(TryParseExpression().GetEnumerator());
+            using var frameMemory = _memory == null ? null : new MemoryCapacity(_memory.Budget, 0);
+            var frames = new List<IEnumerator<ParseStep>>();
+            var admittedFrames = 0;
+            AdmitNextFrame();
+            frames.Add(TryParseExpression().GetEnumerator());
             try
             {
-                while (frames.TryPeek(out var frame))
+                while (frames.Count != 0)
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
+                    // A production can construct its child while advancing. Prepay that slot
+                    // before MoveNext and reuse it for subsequent calls at the same depth.
+                    if (frames.Count == admittedFrames)
+                        AdmitNextFrame();
+                    var frame = frames[^1];
                     if (!frame.MoveNext())
                     {
-                        frames.Pop().Dispose();
+                        DisposeTopFrame();
                         continue;
                     }
 
@@ -307,7 +315,7 @@ public static partial class ArithmeticEvaluation
                             if (_nextProduction is { } production)
                             {
                                 _nextProduction = null;
-                                frames.Push(production.GetEnumerator());
+                                frames.Add(production.GetEnumerator());
                             }
                             break;
                         case ParseStep.Bind:
@@ -327,8 +335,8 @@ public static partial class ArithmeticEvaluation
             }
             finally
             {
-                while (frames.TryPop(out var frame))
-                    frame.Dispose();
+                while (frames.Count != 0)
+                    DisposeTopFrame();
             }
 
             if (_parsed.Success)
@@ -338,6 +346,25 @@ public static partial class ArithmeticEvaluation
                     return new ArithmeticResult(_parsed.Value, null);
             }
             return new ArithmeticResult(0, Error ?? new ArithmeticError(ArithmeticErrorKind.InvalidExpression, _expression));
+
+            void AdmitNextFrame()
+            {
+                if (frameMemory == null)
+                    return;
+                const int estimatedFrameBytes = 192;
+                // Admit iterator state, including temporary child state retained by a production.
+                frameMemory.Grow(estimatedFrameBytes);
+                frameMemory.PrepareListCapacity(frames, 1);
+                admittedFrames++;
+            }
+
+            void DisposeTopFrame()
+            {
+                var index = frames.Count - 1;
+                var frame = frames[index];
+                frames.RemoveAt(index);
+                frame.Dispose();
+            }
         }
 
         // The driver returns child results through _parsed and binding results through _bound.

@@ -1,10 +1,78 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ArithmeticBindingTests
 {
+    [Fact]
+    public async Task FrameAdmissionRefusesGroupedWorkBeforeSelectingTheBinding()
+    {
+        var governor = new MemoryGovernor(8192);
+        using var owner = governor.CreateScope();
+        using var workspace = new MemoryCapacity(owner, 0);
+        using var retained = owner.Reserve(4096);
+        var flat = FrameOperand(grouped: false);
+        var grouped = FrameOperand(grouped: true);
+        Assert.Equal(flat.Value.Bytes.Length, grouped.Value.Bytes.Length);
+
+        var binds = 0;
+        await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => EvaluateAsync(grouped));
+        Assert.Equal(0, binds);
+        Assert.Equal(4096, governor.ReservedBytes);
+
+        Assert.Equal(new ArithmeticResult(7, null), await EvaluateAsync(flat));
+        Assert.Equal(1, binds);
+        Assert.Equal(4096, governor.ReservedBytes);
+
+        Task<ArithmeticResult> EvaluateAsync(ArithmeticOperand operand) => ArithmeticEvaluation.EvaluateAsync<string>(
+            operand, (_, _) =>
+            {
+                binds++;
+                return ValueTask.FromResult<ArithmeticBinding<string>>(new ArithmeticBinding<string>.Bound("value", 7));
+            }, static (_, _, _) => throw new InvalidOperationException("Unexpected write"), workspace, CancellationToken.None).AsTask();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FramesRemainAdmittedUntilBindingSettles(bool cancel)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var workspace = new MemoryCapacity(owner, 0);
+        using var retained = owner.Reserve(4096);
+        using var cancellation = new CancellationTokenSource();
+        var selected = new TaskCompletionSource<ArithmeticBinding<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var pending = ArithmeticEvaluation.EvaluateAsync<string>(FrameOperand(grouped: true),
+            (_, _) => new ValueTask<ArithmeticBinding<string>>(selected.Task),
+            static (_, _, _) => throw new InvalidOperationException("Unexpected write"), workspace, cancellation.Token).AsTask();
+        var charged = governor.ReservedBytes;
+        if (cancel)
+            cancellation.Cancel();
+        var held = governor.ReservedBytes;
+        selected.SetResult(new ArithmeticBinding<string>.Bound("value", 7));
+
+        if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        else
+            Assert.Equal(new ArithmeticResult(7, null), await pending);
+        Assert.True(charged > 4096);
+        Assert.Equal(charged, held);
+        Assert.Equal(4096, governor.ReservedBytes);
+    }
+
+    private static ArithmeticOperand FrameOperand(bool grouped)
+    {
+        const int width = 64;
+        var text = grouped ? new string('(', width) + "value" + new string(')', width)
+            : string.Concat(Enumerable.Repeat("0+", width)) + "value";
+        var source = ShellSource.FromText(text);
+        return ArithmeticOperand.FromSyntax(source, new ArithmeticEvaluation.LexicalSyntax(source, null));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
