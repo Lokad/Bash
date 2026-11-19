@@ -9,8 +9,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot
 $catalogPath = Join-Path $repository 'tests/Lokad.Bash.Tests/Conformance/cases.json'
-$catalog = Get-Content -LiteralPath $catalogPath -Raw -Encoding utf8 | ConvertFrom-Json
+$catalogBytes = [System.IO.File]::ReadAllBytes($catalogPath)
+$catalog = [System.Text.Encoding]::UTF8.GetString($catalogBytes).TrimStart([char]0xfeff) | ConvertFrom-Json
 if ($catalog.schemaVersion -ne 1) { throw 'Unsupported conformance catalog schema.' }
+$destination = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path $repository $OutputPath }
+if (Test-Path -LiteralPath $destination) { throw "Evidence output already exists: $destination" }
 
 function Invoke-Reference([string[]]$Arguments, [string]$Locale, [byte[]]$InputBytes, [string]$WorkingDirectory) {
     $start = [System.Diagnostics.ProcessStartInfo]::new()
@@ -194,17 +197,18 @@ $results = foreach ($sample in $catalog.cases) {
     $actual | Add-Member -NotePropertyName finalEntries -NotePropertyValue @($observedEntries.Values)
     [pscustomobject]@{ id = $sample.id; classification = $sample.classification; reason = $sample.reason; passed = $passed; actual = $actual }
 }
-$destination = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path $repository $OutputPath }
 [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($destination))
 $export = [ordered]@{
     schemaVersion = 1
     referenceId = $referenceId
     referenceVersion = $reference[0].version
     referenceSha256 = $referenceHash
-    catalogSha256 = (Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    catalogSha256 = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($catalogBytes)).ToLowerInvariant()
     results = @($results)
 }
-$export | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $destination -Encoding utf8NoBOM
+$bytes = [System.Text.Encoding]::UTF8.GetBytes(($export | ConvertTo-Json -Depth 12) + "`n")
+$outputFile = [System.IO.File]::Open($destination, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+try { $outputFile.Write($bytes, 0, $bytes.Length) } finally { $outputFile.Dispose() }
 $failed = @($results | Where-Object { $_.passed -eq $false })
 $skipped = @($results | Where-Object skipped)
 $verifiedCount = $results.Count - $skipped.Count

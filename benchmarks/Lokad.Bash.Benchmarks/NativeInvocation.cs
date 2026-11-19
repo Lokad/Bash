@@ -16,14 +16,15 @@ internal sealed class NativeInvocation
     private readonly bool _wsl;
     public NativeInvocation(Workload workload, string executable, string? distribution, string root, string? resourceCollector)
     {
+        EvidenceFiles.CreateDirectory(root);
         _fixtures = Path.Combine(root, "fixtures");
         Directory.CreateDirectory(_fixtures);
-        File.WriteAllBytes(Path.Combine(root, "script.bash"), workload.Script.Bytes);
+        EvidenceFiles.WriteBytes(Path.Combine(root, "script.bash"), workload.Script.Bytes);
         foreach (var file in workload.Files)
         {
             var path = Path.Combine(_fixtures, file.Key);
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? _fixtures);
-            File.WriteAllBytes(path, file.Value.Bytes);
+            EvidenceFiles.WriteBytes(path, file.Value.Bytes);
         }
         _input = workload.Input.Bytes;
         _wsl = distribution != null;

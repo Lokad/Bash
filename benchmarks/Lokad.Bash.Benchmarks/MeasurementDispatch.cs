@@ -23,29 +23,34 @@ internal static class MeasurementDispatch
         if (!Enum.TryParse<MeasurementLane>(args[2].Replace("-", "", StringComparison.Ordinal), true, out var lane))
             throw new ArgumentException("Unknown measurement lane.");
         var directory = Path.GetFullPath(args[1]);
-        var catalogPath = Path.Combine(directory, "catalog.json");
-        var catalog = WorkloadCatalog.Read(catalogPath);
         var prefixIndex = timing ? 4 : 3;
         var prefix = args.Length > prefixIndex ? args[prefixIndex] : "";
         var native = args.Length > prefixIndex + 1 ? Path.GetFullPath(args[prefixIndex + 1]) : null;
+        VmDeclaration? vm = timing ? JsonSerializer.Deserialize<VmDeclaration>(File.ReadAllBytes(args[3]), WorkloadCatalog.Json) : null;
+        var source = IdentifySource();
+        if (timing && source.Dirty) throw new InvalidDataException("Dedicated-VM measurements require a clean source checkout.");
+        var root = Path.Combine(directory, "measurements", lane + "-" + Guid.NewGuid().ToString("N"));
+        EvidenceFiles.CreateDirectory(root);
+        var catalogPath = Path.Combine(root, "catalog.json");
+        File.Copy(Path.Combine(directory, "catalog.json"), catalogPath);
+        var referenceCatalog = Path.Combine(root, "reference-catalog.json");
+        File.Copy(VerificationGate.FindReferenceCatalog(), referenceCatalog);
+        foreach (var evidence in Directory.EnumerateFiles(directory, "*verification.json"))
+            File.Copy(evidence, Path.Combine(root, Path.GetFileName(evidence)));
+        var catalogBytes = File.ReadAllBytes(catalogPath);
+        var catalog = WorkloadCatalog.Read(catalogBytes);
         var selected = catalog.Cases.Where(workload => workload.SkipReason.Length == 0
             && workload.Id.StartsWith(prefix, StringComparison.Ordinal)
             && (lane is not (MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess)
                 || workload.ProcessComparisonExclusion.Length == 0 && workload.NativeExclusion(OperatingSystem.IsWindows() ? "gnu-msys" : "gnu-linux").Length == 0)
             && (lane != MeasurementLane.Parse || workload.Variant == WorkloadVariant.WholeInvocation)).ToArray();
-        VmDeclaration? vm = timing ? JsonSerializer.Deserialize<VmDeclaration>(File.ReadAllBytes(args[3]), WorkloadCatalog.Json) : null;
-        var root = Path.Combine(directory, "measurements", lane + "-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        var context = new MeasurementContext(directory, root, lane, selected.Select(workload => workload.Id).ToArray(), native, vm);
+        var probe = lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess
+            ? ProbeInvocation.Freeze(Path.Combine(root, "probe")).Executable : null;
+        var context = new MeasurementContext(root, root, lane, selected.Select(workload => workload.Id).ToArray(), native, probe, vm);
         context.Validate(timing);
         var contextPath = Path.Combine(root, "context.json");
         context.Write(contextPath);
-        File.Copy(catalogPath, Path.Combine(root, "catalog.json"));
-        foreach (var evidence in Directory.EnumerateFiles(directory, "*verification.json"))
-            File.Copy(evidence, Path.Combine(root, Path.GetFileName(evidence)));
         var environment = HostEnvironmentInfo.GetInformation();
-        var source = IdentifySource();
-        if (timing && source.Dirty) throw new InvalidDataException("Dedicated-VM measurements require a clean source checkout.");
         var manifestPath = Path.Combine(root, "manifest.json");
         var completed = false;
         var benchmarkCount = 0;
@@ -64,7 +69,6 @@ internal static class MeasurementDispatch
             };
             using var run = BenchmarkConverter.TypeToBenchmarks(type, config);
             benchmarkCount = ValidateDiscovery(run, selected.Length, root);
-            WriteManifest();
             if (timing)
             {
                 var summary = BenchmarkRunner.Run(run);
@@ -76,14 +80,15 @@ internal static class MeasurementDispatch
             {
                 await CheckLifecycleAsync();
                 lifecycleChecked = true;
-                Console.WriteLine($"Planned {benchmarkCount} verified {lane} benchmark cases and checked one iteration lifecycle. No timing job started. Manifest: {manifestPath}");
             }
         }
         finally
         {
-            WriteManifest();
             Environment.SetEnvironmentVariable(MeasurementContext.EnvironmentKey, oldContext);
+            WriteManifest();
         }
+        if (!timing)
+            Console.WriteLine($"Planned {benchmarkCount} verified {lane} benchmark cases and checked one iteration lifecycle. No timing job started. Manifest: {manifestPath}");
 
         void WriteManifest()
         {
@@ -92,7 +97,8 @@ internal static class MeasurementDispatch
                 schemaVersion = 1, timingsRequested = timing, timingsComplete = completed, lifecycleChecked,
                 recordedAt = DateTimeOffset.UtcNow, source, environment, vm, lane, benchmarkCount,
                 runtimeRole = Environment.Version.Major == 11 ? "primary" : "compatibility-control",
-                catalogSha256 = Blob.Hash(File.ReadAllBytes(catalogPath)),
+                catalogSha256 = Blob.Hash(catalogBytes),
+                referenceCatalogSha256 = Blob.Hash(File.ReadAllBytes(referenceCatalog)),
                 harnessSha256 = Blob.Hash(File.ReadAllBytes(typeof(MeasurementDispatch).Assembly.Location)),
                 interpreterSha256 = Blob.Hash(File.ReadAllBytes(typeof(BashScript).Assembly.Location)),
                 independentLaunches = 3, warmup = "BenchmarkDotNet automatic", iterations = "BenchmarkDotNet automatic",
@@ -115,7 +121,7 @@ internal static class MeasurementDispatch
                     amortized = "One process/evaluation executes the declared function wrapper and rounds; startup remains included and no empty-process subtraction is used"
                 }
             };
-            File.WriteAllBytes(manifestPath, JsonSerializer.SerializeToUtf8Bytes(document, WorkloadCatalog.Json));
+            EvidenceFiles.WriteJson(manifestPath, document);
         }
 
         async Task CheckLifecycleAsync()
@@ -156,12 +162,14 @@ internal static class MeasurementDispatch
         var role = Environment.Version.Major == 11 ? "primary" : "compatibility-control";
         var job = Job.Default.WithId($"net{Environment.Version.Major}-{role}")
             .WithRuntime(Environment.Version.Major == 10 ? CoreRuntime.Core10_0 : CoreRuntime.CreateForNewVersion("net11.0", ".NET 11"))
-            .WithToolchain(BenchmarkToolchain.Create($"net{Environment.Version.Major}.0"))
+            .WithToolchain(BenchmarkToolchain.Create($"net{Environment.Version.Major}.0", root))
             .WithLaunchCount(3).WithGcServer(System.Runtime.GCSettings.IsServerGC)
             .WithEnvironmentVariable(contextKey, contextPath);
         // BDN 0.15.8's automatic build scheduling looks up a version enum that
         // predates .NET 11. One explicit sequential build avoids that lookup.
-        return ManualConfig.Create(DefaultConfig.Instance).WithOptions(ConfigOptions.DisableParallelBuild).AddJob(job).AddValidator(CompilationValidator.FailOnError)
+        return ManualConfig.Create(DefaultConfig.Instance)
+            .WithOptions(ConfigOptions.DisableParallelBuild | ConfigOptions.KeepBenchmarkFiles)
+            .AddJob(job).AddValidator(CompilationValidator.FailOnError)
             .AddExporter(JsonExporter.Full).WithArtifactsPath(Path.Combine(root, "bdn"));
     }
 
@@ -171,8 +179,8 @@ internal static class MeasurementDispatch
         if (count == 0 || count != expectedCount)
             throw new InvalidDataException("Benchmark discovery did not cover the selected cases exactly once.");
         var validation = run.Config.GetCompositeValidator().Validate(new ValidationParameters(run.BenchmarksCases, run.Config)).ToArray();
-        File.WriteAllBytes(Path.Combine(root, "validation.json"), JsonSerializer.SerializeToUtf8Bytes(
-            validation.Select(error => new { error.IsCritical, error.Message }), WorkloadCatalog.Json));
+        EvidenceFiles.WriteJson(Path.Combine(root, "validation.json"),
+            validation.Select(error => new { error.IsCritical, error.Message }));
         if (validation.Any(error => error.IsCritical))
             throw new InvalidDataException("BenchmarkDotNet configuration validation failed: " + string.Join("; ", validation.Select(error => error.Message)));
         return count;
@@ -180,7 +188,7 @@ internal static class MeasurementDispatch
 
     internal static SourceIdentity IdentifySource()
     {
-        var directory = Path.GetDirectoryName(VerificationGate.FindReferenceCatalog()) ?? throw new InvalidOperationException("Missing checkout.");
+        var directory = VerificationGate.FindCheckout();
         return new(Git("rev-parse", "HEAD").Trim(), Git("status", "--porcelain").Length > 0);
 
         string Git(params string[] arguments)

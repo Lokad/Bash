@@ -35,10 +35,12 @@ internal sealed record MicroWorkload(string Id, MicroKind Kind, int Scale, int S
 }
 internal sealed record MicroCatalog(int SchemaVersion, IReadOnlyList<MicroWorkload> Cases)
 {
-    public void Write(string path) => File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(this, WorkloadCatalog.Json));
-    public static MicroCatalog Read(string path)
+    public void Write(string path) => EvidenceFiles.WriteJson(path, this);
+    public static MicroCatalog Read(string path) => Read(File.ReadAllBytes(path));
+
+    public static MicroCatalog Read(ReadOnlySpan<byte> bytes)
     {
-        var catalog = JsonSerializer.Deserialize<MicroCatalog>(File.ReadAllBytes(path), WorkloadCatalog.Json)
+        var catalog = JsonSerializer.Deserialize<MicroCatalog>(bytes, WorkloadCatalog.Json)
             ?? throw new InvalidDataException("Missing micro catalog.");
         if (catalog.SchemaVersion != 1 || catalog.Cases.Count != 36 || catalog.Cases.Select(row => row.Id).Distinct().Count() != 36)
             throw new InvalidDataException("Incomplete or unsupported micro catalog.");

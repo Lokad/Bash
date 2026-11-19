@@ -94,6 +94,8 @@ Linux UTF-8 controls use the pinned Linux reference and locale. MSYS exclusions
 retain their reasons. Known managed departures carry separate native and managed
 expectations: a passing departure row does not establish GNU compatibility.
 Reference verification collects correctness evidence and no comparative timings.
+Supply a fresh `-OutputPath` when rerunning `Verify-GnuBash.ps1`. The report's
+catalog hash identifies the exact bytes read for the invocation.
 
 Keep CPU cancellation, shared allowance/refusal, pending borrowed-write/read/close
 cleanup and early-pipe-close controls deterministic. Cancellation requests do not

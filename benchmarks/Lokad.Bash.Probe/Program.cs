@@ -37,7 +37,8 @@ using (var inputOwner = memory.CreateScope())
     var observed = new ProbeResult(Environment.Version.Major, System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
         System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), System.Runtime.GCSettings.IsServerGC,
         request.Mode, host.FileDigests, host.Counts, memory.PeakBytes, allocations);
-    File.WriteAllBytes(args[2], JsonSerializer.SerializeToUtf8Bytes(observed, WorkloadCatalog.Json));
+    using var outputFile = new FileStream(args[2], FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+    JsonSerializer.Serialize(outputFile, observed, WorkloadCatalog.Json);
     exitCode = result.ExitCode;
 }
 if (memory.ReservedBytes != 0) throw new InvalidOperationException("Probe teardown retained admitted storage.");

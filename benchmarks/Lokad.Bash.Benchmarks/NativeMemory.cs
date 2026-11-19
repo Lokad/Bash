@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using BenchmarkDotNet.Environments;
 
 namespace Lokad.Bash.Benchmarks;
@@ -18,11 +17,17 @@ internal static class NativeMemory
             throw new InvalidOperationException("Native RSS collection uses Linux GNU time; Windows qualification requires an explicit WSL distribution.");
         var directory = Path.GetFullPath(args[1]);
         var catalogPath = Path.Combine(directory, "catalog.json");
-        var workload = WorkloadCatalog.Read(catalogPath).Cases.Single(row => row.Id == args[2]);
+        var catalog = File.ReadAllBytes(catalogPath);
+        var workload = WorkloadCatalog.Read(catalog).Cases.Single(row => row.Id == args[2]);
         var exclusion = workload.NativeExclusion("gnu-linux");
         if (exclusion.Length > 0) throw new InvalidDataException(exclusion);
         var transport = distribution == null ? VerificationTransport.NativeDirect : VerificationTransport.WslCorrectness;
-        VerificationGate.Read(VerificationReport.NativePath(directory, "gnu-linux"), catalogPath, transport, false);
+        var root = Path.Combine(directory, "memory", $"Native-net{Environment.Version.Major}-" + Guid.NewGuid().ToString("N"));
+        EvidenceFiles.CreateDirectory(root);
+        EvidenceFiles.WriteBytes(Path.Combine(root, "catalog.json"), catalog);
+        var nativeReport = VerificationReport.NativePath(root, "gnu-linux");
+        File.Copy(VerificationReport.NativePath(directory, "gnu-linux"), nativeReport);
+        VerificationGate.Read(nativeReport, catalog, transport, false, probeExecutable: null);
         var native = distribution == null ? Path.GetFullPath(args[3]) : args[3];
         var collector = distribution == null ? Path.GetFullPath(args[4]) : args[4];
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -33,8 +38,6 @@ internal static class NativeMemory
         var platform = await NativeInvocation.ReadCommandAsync("/usr/bin/uname", ["-srm"], distribution, deadline.Token);
         if (!platform.StartsWith("Linux ", StringComparison.Ordinal)) throw new InvalidDataException("Native RSS units require a Linux kernel.");
         CheckFormat();
-        var root = Path.Combine(directory, "memory", $"Native-net{Environment.Version.Major}-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
         var source = MeasurementDispatch.IdentifySource();
         var environment = HostEnvironmentInfo.GetInformation();
         var invocation = new NativeInvocation(workload, native, distribution, Path.Combine(root, "child"), collector);
@@ -43,7 +46,6 @@ internal static class NativeMemory
         Blob? raw = null;
         IReadOnlyDictionary<string, ContentDigest>? files = null;
         var complete = false;
-        Write();
         try
         {
             output = await invocation.RunAsync(deadline.Token);
@@ -70,17 +72,17 @@ internal static class NativeMemory
             }
         }
 
-        void Write() => File.WriteAllBytes(Path.Combine(root, "result.json"), JsonSerializer.SerializeToUtf8Bytes(new
+        void Write() => EvidenceFiles.WriteJson(Path.Combine(root, "result.json"), new
         {
             schemaVersion = 1, complete, throughputTimingsCollected = false, singleColdInvocation = true,
             recordedAt = DateTimeOffset.UtcNow, source, environment, nativePlatform = platform.TrimEnd(),
             transport, reference = pin, collector = identity, resourceFormat = "%M\\n%x", formatChecksPassed = true,
             workload.Id, workload.Locale, workload.Variant, workload.Rounds,
-            catalogSha256 = Blob.Hash(File.ReadAllBytes(catalogPath)),
+            catalogSha256 = Blob.Hash(catalog),
             harnessSha256 = Blob.Hash(File.ReadAllBytes(typeof(NativeMemory).Assembly.Location)),
             output, files, raw, resource,
             scope = "Linux GNU time %M high-water RSS in KiB, including startup/script parsing. It is not summed simultaneous process-tree residency. This separate instrumented invocation verifies exact shell status/output/effects. No parent CLR or Windows/WSL launcher memory is observed. Compare neither this metric nor cooperative live admission with cumulative managed allocation bytes."
-        }, WorkloadCatalog.Json));
+        });
     }
 
     internal static NativeResource Parse(ReadOnlySpan<byte> bytes, int expectedExit)

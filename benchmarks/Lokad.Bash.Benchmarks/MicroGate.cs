@@ -14,10 +14,11 @@ internal static class MicroGate
     }
     public static void Validate(VerificationReport report, string catalogPath)
     {
-        VerificationGate.ValidateIdentity(report, catalogPath, VerificationTransport.MicroCore, false);
+        var catalog = File.ReadAllBytes(catalogPath);
+        VerificationGate.ValidateIdentity(report, catalog, VerificationTransport.MicroCore, false);
         if (report.Reference != null || report.Probe != null || report.HostChecksPassed)
             throw new InvalidDataException("Core micro evidence must not claim host or native qualification.");
-        var expected = MicroCatalog.Read(catalogPath).Cases.ToDictionary(row => row.Id, StringComparer.Ordinal);
+        var expected = MicroCatalog.Read(catalog).Cases.ToDictionary(row => row.Id, StringComparer.Ordinal);
         if (report.Results.Count != expected.Count) throw new InvalidDataException("Incomplete micro coverage.");
         foreach (var row in report.Results)
         {

@@ -88,9 +88,11 @@ internal sealed record WorkloadCatalog(int SchemaVersion, int Seed, IReadOnlyDic
         }
     }
 
-    public static WorkloadCatalog Read(string path)
+    public static WorkloadCatalog Read(string path) => Read(File.ReadAllBytes(path));
+
+    public static WorkloadCatalog Read(ReadOnlySpan<byte> bytes)
     {
-        var catalog = JsonSerializer.Deserialize<WorkloadCatalog>(File.ReadAllBytes(path), Json)
+        var catalog = JsonSerializer.Deserialize<WorkloadCatalog>(bytes, Json)
             ?? throw new InvalidDataException("Missing workload catalog.");
         catalog.Validate();
         return catalog;

@@ -36,9 +36,46 @@ internal static class GateChecks
             catch (InvalidDataException) { rejected = true; }
             if (!rejected) throw new InvalidOperationException("Unidentified probe was accepted.");
         }
-        try { new MeasurementContext(directory, directory, MeasurementLane.Public, [], null, null).Validate(true); }
-        catch (InvalidDataException) { Console.WriteLine("Verification gates reject stale or partial evidence, mismatched outcomes and timing without a quiet VM declaration."); return; }
+        CheckExclusiveEvidence();
+        try { new MeasurementContext(directory, directory, MeasurementLane.Public, [], null, null, null).Validate(true); }
+        catch (InvalidDataException) { Console.WriteLine("Verification gates reject stale, partial or duplicate evidence, mismatched outcomes and timing without a quiet VM declaration."); return; }
         throw new InvalidOperationException("Timing without a quiet VM declaration was accepted.");
+
+        void CheckExclusiveEvidence()
+        {
+            var root = Path.Combine(directory, "gate-checks", Guid.NewGuid().ToString("N"));
+            var wonDirectory = 0;
+            Parallel.Invoke(CreatePacket, CreatePacket);
+            if (wonDirectory != 1)
+                throw new InvalidOperationException("Concurrent preparation did not reserve one packet.");
+
+            var reportPath = Path.Combine(root, "report.json");
+            using (var output = EvidenceFiles.Create(reportPath))
+            {
+                RejectCollision(() => EvidenceFiles.WriteBytes(reportPath, "{}"u8));
+                EvidenceFiles.WriteJson(output, new { complete = true });
+            }
+            var original = File.ReadAllBytes(reportPath);
+            RejectCollision(() => EvidenceFiles.WriteBytes(reportPath, "{}"u8));
+            RejectCollision(() => EvidenceFiles.CreateDirectory(root));
+            if (!original.AsSpan().SequenceEqual(File.ReadAllBytes(reportPath))
+                || Directory.GetFileSystemEntries(root).Length != 1)
+                throw new InvalidOperationException("A rejected producer changed the existing evidence packet.");
+
+            void CreatePacket()
+            {
+                try { EvidenceFiles.CreateDirectory(root); }
+                catch (IOException) { return; }
+                Interlocked.Increment(ref wonDirectory);
+            }
+
+            static void RejectCollision(Action create)
+            {
+                try { create(); }
+                catch (IOException) { return; }
+                throw new InvalidOperationException("An existing evidence output was accepted.");
+            }
+        }
 
         void Rejected(VerificationReport invalid)
         {

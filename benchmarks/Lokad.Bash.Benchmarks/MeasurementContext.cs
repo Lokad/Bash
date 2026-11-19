@@ -15,7 +15,7 @@ internal sealed record VmDeclaration(bool QuietDedicated, string MachineLabel, s
 }
 
 internal sealed record MeasurementContext(string CatalogDirectory, string OutputDirectory, MeasurementLane Lane,
-    IReadOnlyList<string> CaseIds, string? NativeExecutable, VmDeclaration? Vm)
+    IReadOnlyList<string> CaseIds, string? NativeExecutable, string? ProbeExecutable, VmDeclaration? Vm)
 {
     public const string EnvironmentKey = "LOKAD_BASH_BENCH_CONTEXT";
     public string CatalogPath => Path.Combine(CatalogDirectory, "catalog.json");
@@ -32,14 +32,16 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
         var path = Environment.GetEnvironmentVariable(EnvironmentKey) ?? throw new InvalidOperationException("Missing measurement context.");
         var context = JsonSerializer.Deserialize<MeasurementContext>(File.ReadAllBytes(path), WorkloadCatalog.Json)
             ?? throw new InvalidDataException("Missing measurement context.");
-        _ = context.SelectedCases();
+        _ = context.SelectedCases(context.Catalog);
         return context;
     }
     public void Validate(bool timing)
     {
         if (timing) VmDeclaration.RequireQuiet(Vm);
-        var selected = SelectedCases();
-        VerificationGate.Read(Path.Combine(CatalogDirectory, $"managed-net{Environment.Version.Major}-verification.json"), CatalogPath, VerificationTransport.InProcess, false);
+        var catalog = File.ReadAllBytes(CatalogPath);
+        var selected = SelectedCases(WorkloadCatalog.Read(catalog));
+        VerificationGate.Read(Path.Combine(CatalogDirectory, $"managed-net{Environment.Version.Major}-verification.json"),
+            catalog, VerificationTransport.InProcess, false, probeExecutable: null);
         var nativeReports = new List<VerificationReport>();
         foreach (var id in new[] { "gnu-msys", "gnu-linux" })
         {
@@ -49,12 +51,14 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
                 ?? throw new InvalidDataException("Missing GNU correctness evidence.");
             if (report.Transport is not (VerificationTransport.NativeDirect or VerificationTransport.WslCorrectness) || report.Reference?.Id != id)
                 throw new InvalidDataException("Wrong native evidence identity or transport.");
-            VerificationGate.Validate(report, CatalogPath, report.Transport, false);
+            VerificationGate.ValidateNative(report, catalog, Path.Combine(CatalogDirectory, "reference-catalog.json"));
             nativeReports.Add(report);
         }
         if (Lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess)
         {
-            VerificationGate.Read(Path.Combine(CatalogDirectory, $"process-net{Environment.Version.Major}-verification.json"), CatalogPath, VerificationTransport.ManagedProcess, false);
+            var executable = ProbeExecutable ?? throw new InvalidDataException("Missing frozen managed process probe.");
+            VerificationGate.Read(Path.Combine(CatalogDirectory, $"process-net{Environment.Version.Major}-verification.json"),
+                catalog, VerificationTransport.ManagedProcess, false, executable);
             nativeReports.RemoveAll(report => report.Transport != VerificationTransport.NativeDirect);
             if (nativeReports.Count == 0)
                 throw new InvalidDataException("Whole-process comparison needs direct native qualification; WSL startup is excluded.");
@@ -72,10 +76,10 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
             throw new InvalidDataException("Selected cases lack native equivalence evidence for their locale/reference; UTF-8 rows need pinned GNU Linux C.utf8.");
     }
 
-    private IReadOnlyList<Workload> SelectedCases()
+    private IReadOnlyList<Workload> SelectedCases(WorkloadCatalog catalog)
     {
         if (Environment.Version.Major is not (10 or 11) || !Enum.IsDefined(Lane)) throw new InvalidDataException("Unsupported benchmark runtime or lane.");
-        var selected = Catalog.Cases.Where(workload => CaseIds.Contains(workload.Id)).ToArray();
+        var selected = catalog.Cases.Where(workload => CaseIds.Contains(workload.Id)).ToArray();
         if (selected.Length != CaseIds.Count || selected.Length == 0 || CaseIds.Distinct(StringComparer.Ordinal).Count() != CaseIds.Count
             || selected.Any(workload => workload.SkipReason.Length > 0
                 || Lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess && workload.ProcessComparisonExclusion.Length > 0))
@@ -83,5 +87,5 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
         return selected;
     }
 
-    public void Write(string path) => File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(this, WorkloadCatalog.Json));
+    public void Write(string path) => EvidenceFiles.WriteJson(path, this);
 }

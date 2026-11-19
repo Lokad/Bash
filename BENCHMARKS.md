@@ -38,6 +38,10 @@ has a scale, seed, named semantic work-unit count, locale, options, expected
 status/output and file effects. Work units describe that row's operations, not a
 universal interpreter instruction count. Seeded read input uses an explicit
 32-bit arithmetic formula, without ambient randomness.
+Choose a fresh directory for `prepare` or `micro-prepare`. Each verification
+command reserves its report path before running and writes the terminal result
+once. A repeated command for the same runtime and transport needs a fresh
+prepared directory. Failed and interrupted attempts keep their report names.
 After the Release build, add `--no-build --no-restore` before `--` in driver commands
 to reuse those binaries throughout qualification.
 
@@ -48,10 +52,11 @@ neither an executor nor a timing runner. Reports under `builds/` retain generate
 code/project files, asset hashes, build logs and completion status. CI exercises
 this path on Windows/Linux and .NET 10/.NET 11.
 
-Generated wrappers reference the existing Release binaries directly. This keeps
-the benchmark driver, interpreter and dependencies identical to the binaries used
-for correctness qualification, including their PE/PDB identity. The driver keeps
-its BenchmarkDotNet dependency private. Metadata discovery reads validated case
+Generated wrappers reference private snapshots of the Release assemblies.
+Each wrapper build checks the frozen assembly hashes against the built output
+before execution. Project generation uses the live checkout's benchmark project
+even when older project copies exist under `artifacts/`. The driver keeps its
+BenchmarkDotNet dependency private. Metadata discovery reads validated case
 selection; dispatch and actual benchmark setup still require complete correctness
 evidence and the quiet-VM declaration. Build checks confirm all five setup methods
 reject their declaration-free compilation contexts.
@@ -164,6 +169,9 @@ iteration selection. .NET 11 is labelled primary; a separately invoked .NET 10 j
 is labelled compatibility/control. Manifests retain source commit/cleanliness,
 CPU/OS/SDK/runtime information, VM policy, selected/excluded rows, exact workload
 hashes, boundaries, full BenchmarkDotNet JSON and copied correctness evidence.
+Preview, measurement and memory invocations use the catalog and reports copied
+into their run directory. Managed process invocations run a copied probe whose
+binaries match the verification report. The run retains its generated build files.
 Incomplete or failed benchmark reports never mark a timing run complete.
 Run all qualification commands under each runtime before its preview or timing
 job. Native evidence uses `gnu-REFERENCE-netMAJOR-verification.json`; qualifying

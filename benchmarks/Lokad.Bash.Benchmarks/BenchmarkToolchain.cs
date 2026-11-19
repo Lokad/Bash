@@ -9,6 +9,7 @@ using BenchmarkDotNet.Running;
 using BenchmarkDotNet.Toolchains;
 using BenchmarkDotNet.Toolchains.CsProj;
 using BenchmarkDotNet.Toolchains.DotNetCli;
+using BenchmarkDotNet.Toolchains.Results;
 using BenchmarkDotNet.Validators;
 
 namespace Lokad.Bash.Benchmarks;
@@ -18,17 +19,17 @@ internal sealed record BenchmarkAsset(string FileName, string Sha256);
 /// <summary>Builds the timing wrapper against the exact binaries that supplied correctness evidence.</summary>
 internal static class BenchmarkToolchain
 {
-    public static IToolchain Create(string framework)
+    public static IToolchain Create(string framework, string runDirectory)
     {
         var standard = CsProjCoreToolchain.From(new NetCoreAppSettings(framework, null, framework));
-        return new CompiledReferences(standard, new CompiledGenerator(framework));
+        return new CompiledReferences(standard, new CompiledGenerator(framework, runDirectory));
     }
 
     private sealed class CompiledReferences(IToolchain standard, IGenerator generator) : IToolchain
     {
         public string Name => "Qualified binaries " + standard.Name;
         public IGenerator Generator => generator;
-        public IBuilder Builder => standard.Builder;
+        public IBuilder Builder { get; } = new QualifiedBuilder(standard.Builder);
         public IExecutor Executor => standard.Executor;
         public bool IsInProcess => standard.IsInProcess;
         public IEnumerable<ValidationError> Validate(BenchmarkCase benchmarkCase, IResolver resolver)
@@ -46,8 +47,46 @@ internal static class BenchmarkToolchain
         }
     }
 
-    private sealed class CompiledGenerator(string framework) : CsProjGenerator(framework, "", "", "", true)
+    private sealed class QualifiedBuilder(IBuilder builder) : IBuilder
     {
+        public BuildResult Build(GenerateResult generated, BuildPartition partition, ILogger logger)
+        {
+            var built = builder.Build(generated, partition, logger);
+            if (!built.IsBuildSuccess) return built;
+            var paths = generated.ArtifactsPaths;
+            var assets = ReadAssets(paths.BuildArtifactsDirectoryPath);
+            foreach (var asset in assets)
+            {
+                var frozen = Path.Combine(paths.BuildArtifactsDirectoryPath, "qualified-binaries", asset.FileName);
+                var output = Path.Combine(paths.BinariesDirectoryPath, asset.FileName);
+                if (Blob.Hash(File.ReadAllBytes(frozen)) != asset.Sha256 || Blob.Hash(File.ReadAllBytes(output)) != asset.Sha256)
+                    throw new InvalidDataException("Generated wrapper changed a qualified binary: " + asset.FileName);
+            }
+            return built;
+        }
+    }
+
+    internal static IReadOnlyList<BenchmarkAsset> ReadAssets(string directory) =>
+        JsonSerializer.Deserialize<BenchmarkAsset[]>(File.ReadAllBytes(Path.Combine(directory, "qualified-assets.json")), WorkloadCatalog.Json)
+        ?? throw new InvalidDataException("Missing qualified binary assets.");
+
+    private sealed class CompiledGenerator(string framework, string runDirectory) : CsProjGenerator(framework, "", "", "", true)
+    {
+        protected override string GetBuildArtifactsDirectoryPath(BuildPartition partition, string programName)
+        {
+            var directory = Path.Combine(runDirectory, "wrapper-builds", programName);
+            EvidenceFiles.CreateDirectory(directory);
+            File.Copy(Path.Combine(VerificationGate.FindCheckout(), "global.json"), Path.Combine(directory, "global.json"));
+            return directory;
+        }
+
+        protected override FileInfo GetProjectFilePath(Type benchmarkTarget, ILogger logger)
+        {
+            var name = benchmarkTarget.Assembly.GetName().Name ?? throw new InvalidDataException("Missing benchmark assembly name.");
+            var project = new FileInfo(Path.Combine(VerificationGate.FindCheckout(), "benchmarks", name, name + ".csproj"));
+            return project.Exists ? project : throw new InvalidDataException("Cannot locate the live benchmark project: " + project.FullName);
+        }
+
         protected override void GenerateProject(BuildPartition partition, ArtifactsPaths paths, ILogger logger)
         {
             base.GenerateProject(partition, paths, logger);
@@ -60,19 +99,25 @@ internal static class BenchmarkToolchain
             var references = new XElement(ns + "ItemGroup");
             var assets = new List<BenchmarkAsset>();
             var directory = Path.GetDirectoryName(partition.AssemblyLocation) ?? throw new InvalidDataException("Missing benchmark binary directory.");
+            var frozenRoot = Path.Combine(paths.BuildArtifactsDirectoryPath, "qualified-binaries");
+            EvidenceFiles.CreateDirectory(frozenRoot);
             foreach (var path in Directory.EnumerateFiles(directory, "*.dll").Order(StringComparer.Ordinal))
             {
-                using var stream = File.OpenRead(path);
+                var bytes = File.ReadAllBytes(path);
+                using var stream = new MemoryStream(bytes, writable: false);
                 using var pe = new PEReader(stream);
                 if (!pe.HasMetadata) continue;
+                var name = Path.GetFileName(path);
+                var frozen = Path.Combine(frozenRoot, name);
+                EvidenceFiles.WriteBytes(frozen, bytes);
                 references.Add(new XElement(ns + "Reference", new XAttribute("Include", Path.GetFileNameWithoutExtension(path)),
-                    new XElement(ns + "HintPath", path), new XElement(ns + "Private", "true")));
-                assets.Add(new(Path.GetFileName(path), Blob.Hash(File.ReadAllBytes(path))));
+                    new XElement(ns + "HintPath", Path.GetRelativePath(paths.BuildArtifactsDirectoryPath, frozen)),
+                    new XElement(ns + "Private", "true")));
+                assets.Add(new(name, Blob.Hash(bytes)));
             }
             root.Add(references);
             project.Save(paths.ProjectFilePath);
-            File.WriteAllBytes(Path.Combine(paths.BuildArtifactsDirectoryPath, "qualified-assets.json"),
-                JsonSerializer.SerializeToUtf8Bytes(assets, WorkloadCatalog.Json));
+            EvidenceFiles.WriteJson(Path.Combine(paths.BuildArtifactsDirectoryPath, "qualified-assets.json"), assets);
         }
     }
 }

@@ -14,7 +14,9 @@ $cache = Join-Path $runDirectory 'packages'
 [void][System.IO.Directory]::CreateDirectory($feed)
 $assemblyHashes = @{}
 
-$archive = [System.IO.Compression.ZipFile]::OpenRead($package)
+$frozenPackage = Join-Path $runDirectory 'input.nupkg'
+[System.IO.File]::Copy($package, $frozenPackage)
+$archive = [System.IO.Compression.ZipFile]::OpenRead($frozenPackage)
 try {
     $nuspec = @($archive.Entries | Where-Object FullName -like '*.nuspec')
     if ($nuspec.Count -ne 1) { throw 'Expected one NuGet specification.' }
@@ -39,8 +41,9 @@ try {
     }
 } finally { $archive.Dispose() }
 
-Copy-Item -LiteralPath $package -Destination (Join-Path $feed "Lokad.Bash.$version.nupkg")
-Copy-Item -LiteralPath (Join-Path $repository 'validation/PackageConsumer.cs') -Destination (Join-Path $runDirectory 'Program.cs')
+$feedPackage = Join-Path $feed "Lokad.Bash.$version.nupkg"
+[System.IO.File]::Move($frozenPackage, $feedPackage)
+[System.IO.File]::Copy((Join-Path $repository 'validation/PackageConsumer.cs'), (Join-Path $runDirectory 'Program.cs'))
 $projectPath = Join-Path $runDirectory 'Consumer.csproj'
 # Explicit SDK imports prevent repository build policy or a project reference from masking the installed-package boundary.
 $project = @"
@@ -90,12 +93,14 @@ $manifest = [ordered]@{
     schemaVersion = 1
     packageId = $id
     packageVersion = $version
-    packageSha256 = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+    packageSha256 = (Get-FileHash -LiteralPath $feedPackage -Algorithm SHA256).Hash.ToLowerInvariant()
     sdk = (& dotnet --version).Trim()
     os = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
     consumerSha256 = (Get-FileHash -LiteralPath (Join-Path $runDirectory 'Program.cs') -Algorithm SHA256).Hash.ToLowerInvariant()
     results = @($results)
 }
 $manifestPath = Join-Path $runDirectory 'results.json'
-[System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8).Replace("`r`n", "`n"), [System.Text.UTF8Encoding]::new($false))
+$manifestBytes = [System.Text.Encoding]::UTF8.GetBytes(($manifest | ConvertTo-Json -Depth 8).Replace("`r`n", "`n"))
+$manifestFile = [System.IO.File]::Open($manifestPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+try { $manifestFile.Write($manifestBytes, 0, $manifestBytes.Length) } finally { $manifestFile.Dispose() }
 Write-Host "Installed Lokad.Bash $version verified on .NET 10 and .NET 11. Evidence: $manifestPath"

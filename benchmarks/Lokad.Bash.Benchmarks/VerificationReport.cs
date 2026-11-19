@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 
 namespace Lokad.Bash.Benchmarks;
 
@@ -18,14 +17,10 @@ internal sealed record VerificationReport(int SchemaVersion, string CatalogSha25
     public static string NativePath(string directory, string referenceId) =>
         Path.Combine(directory, $"{referenceId}-net{Environment.Version.Major}-verification.json");
 
-    public static VerificationReport Create(string catalog, ReferencePin? reference, ProbeIdentity? probe,
-        VerificationTransport transport, bool hostChecks, bool complete,
-        IReadOnlyList<VerificationRow> results) => new(2, Blob.Hash(File.ReadAllBytes(catalog)),
+    public static VerificationReport Begin(ReadOnlySpan<byte> catalog, VerificationTransport transport) => new(2, Blob.Hash(catalog),
             Blob.Hash(File.ReadAllBytes(Assembly.GetExecutingAssembly().Location)),
             Blob.Hash(File.ReadAllBytes(typeof(BashScript).Assembly.Location)),
             RuntimeInformation.FrameworkDescription, Environment.Version.Major, RuntimeInformation.OSDescription,
             RuntimeInformation.ProcessArchitecture.ToString(), Environment.ProcessorCount,
-            System.Runtime.GCSettings.IsServerGC, DateTimeOffset.UtcNow, reference, probe, transport, hostChecks, complete, results);
-
-    public void Write(string path) => File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(this, WorkloadCatalog.Json));
+            System.Runtime.GCSettings.IsServerGC, DateTimeOffset.UtcNow, null, null, transport, false, false, []);
 }

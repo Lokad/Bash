@@ -39,15 +39,19 @@ if (args[0] == "verify-gates")
 if (args[0] == "verify-process")
 {
     var path = Path.Combine(directory, $"process-net{Environment.Version.Major}-verification.json");
-    VerificationReport.Create(catalogPath, null, null, VerificationTransport.ManagedProcess, false, false, []).Write(path);
-    var executable = ProbeInvocation.FindExecutable();
-    var identity = ProbeInvocation.Identify(executable);
-    var processCatalog = WorkloadCatalog.Read(catalogPath);
+    var catalogBytes = File.ReadAllBytes(catalogPath);
+    var report = VerificationReport.Begin(catalogBytes, VerificationTransport.ManagedProcess);
+    using var outputFile = EvidenceFiles.Create(path);
+    ProbeIdentity? identity = null;
     var rows = new List<VerificationRow>();
     var complete = false;
     var root = Path.Combine(directory, "process", Guid.NewGuid().ToString("N"));
     try
     {
+        var processCatalog = WorkloadCatalog.Read(catalogBytes);
+        EvidenceFiles.CreateDirectory(root);
+        var (executable, frozenIdentity) = ProbeInvocation.Freeze(Path.Combine(root, "probe"));
+        identity = frozenIdentity;
         foreach (var workload in processCatalog.Cases)
         {
             if (workload.SkipReason.Length != 0)
@@ -70,7 +74,13 @@ if (args[0] == "verify-process")
         }
         complete = true;
     }
-    finally { VerificationReport.Create(catalogPath, null, identity, VerificationTransport.ManagedProcess, false, complete, rows).Write(path); }
+    finally
+    {
+        EvidenceFiles.WriteJson(outputFile, report with
+        {
+            RecordedAt = DateTimeOffset.UtcNow, Probe = identity, Complete = complete, Results = rows
+        });
+    }
     Console.WriteLine($"Verified {rows.Count(row => row.Status == VerificationStatus.Passed)} fresh managed processes with {rows.Count(row => row.Status == VerificationStatus.Skipped)} labelled exclusions. No timings collected.");
     return;
 }
@@ -78,7 +88,8 @@ if (args[0] == "smoke")
 {
     if (args.Length != 4 || args[3] is not ("parse" or "prepared" or "public"))
         throw new ArgumentException("A smoke invocation requires one case and one managed lane: parse, prepared or public.");
-    var workload = WorkloadCatalog.Read(catalogPath).Cases.Single(row => row.Id == args[2]);
+    var catalogBytes = File.ReadAllBytes(catalogPath);
+    var workload = WorkloadCatalog.Read(catalogBytes).Cases.Single(row => row.Id == args[2]);
     if (workload.SkipReason.Length != 0)
     {
         Console.WriteLine(JsonSerializer.Serialize(new { workload.Id, skipped = workload.SkipReason }, WorkloadCatalog.Json));
@@ -106,10 +117,10 @@ if (args[0] == "smoke")
             allocationScope = "All managed threads in this otherwise idle probe process during awaited execution and evaluation cleanup; includes harness result/digest work. Setup and final host disposal are excluded. Cold smoke only; no throughput or steady-state allocation claim." };
     }
     var report = new { workload.Id, lane = args[3], singleInvocation = true, timingsCollected = false,
-        catalogSha256 = Blob.Hash(File.ReadAllBytes(catalogPath)), runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+        catalogSha256 = Blob.Hash(catalogBytes), runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
         result };
     var path = Path.Combine(directory, "smoke-" + workload.Id + "-" + Guid.NewGuid().ToString("N") + ".json");
-    File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(report, WorkloadCatalog.Json));
+    EvidenceFiles.WriteJson(path, report);
     Console.WriteLine("Single invocation verified. No timings collected. Evidence: " + path);
     return;
 }
@@ -121,19 +132,20 @@ if (args[0] == "verify-native")
     var referenceId = distribution != null || !OperatingSystem.IsWindows() ? "gnu-linux" : "gnu-msys";
     var reportPath = VerificationReport.NativePath(directory, referenceId);
     var transport = distribution == null ? VerificationTransport.NativeDirect : VerificationTransport.WslCorrectness;
-    VerificationReport.Create(catalogPath, null, null, transport, false, false, []).Write(reportPath);
-    DirectoryInfo? repository = new DirectoryInfo(AppContext.BaseDirectory);
-    while (repository != null && !File.Exists(Path.Combine(repository.FullName, "Lokad.Bash.slnx"))) repository = repository.Parent;
-    if (repository == null) throw new InvalidOperationException("Cannot locate the pinned reference catalog.");
-    using var identification = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-    var pin = await NativeInvocation.VerifyReferenceAsync(native, distribution,
-        Path.Combine(repository.FullName, "tests/Lokad.Bash.Tests/Conformance/cases.json"), identification.Token);
-    var prepared = WorkloadCatalog.Read(catalogPath);
+    var catalogBytes = File.ReadAllBytes(catalogPath);
+    var report = VerificationReport.Begin(catalogBytes, transport);
+    using var outputFile = EvidenceFiles.Create(reportPath);
+    ReferencePin? pin = null;
     var results = new List<VerificationRow>();
-    var root = Path.Combine(directory, "native-" + pin.Id, Guid.NewGuid().ToString("N"));
+    var root = Path.Combine(directory, "native-" + referenceId, Guid.NewGuid().ToString("N"));
     var complete = false;
     try
     {
+        var prepared = WorkloadCatalog.Read(catalogBytes);
+        using var identification = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        pin = await NativeInvocation.VerifyReferenceAsync(native, distribution,
+            VerificationGate.FindReferenceCatalog(), identification.Token);
+        EvidenceFiles.CreateDirectory(root);
         foreach (var workload in prepared.Cases)
         {
             if (workload.NativeExclusion(pin.Id) is { Length: > 0 } exclusion)
@@ -161,14 +173,22 @@ if (args[0] == "verify-native")
         }
         complete = true;
     }
-    finally { VerificationReport.Create(catalogPath, pin, null, transport, false, complete, results).Write(reportPath); }
-    Console.WriteLine($"Verified {results.Count(row => row.Status == VerificationStatus.Passed)} GNU workload expectations with {results.Count(row => row.Status == VerificationStatus.Skipped)} labelled exclusions ({pin.Id}). No timings collected.");
+    finally
+    {
+        EvidenceFiles.WriteJson(outputFile, report with
+        {
+            RecordedAt = DateTimeOffset.UtcNow, Reference = pin, Complete = complete, Results = results
+        });
+    }
+    Console.WriteLine($"Verified {results.Count(row => row.Status == VerificationStatus.Passed)} GNU workload expectations with {results.Count(row => row.Status == VerificationStatus.Skipped)} labelled exclusions ({referenceId}). No timings collected.");
     return;
 }
 if (args[0] == "verify-managed")
 {
     var reportPath = Path.Combine(directory, $"managed-net{Environment.Version.Major}-verification.json");
-    VerificationReport.Create(catalogPath, null, null, VerificationTransport.InProcess, false, false, []).Write(reportPath);
+    var catalogBytes = File.ReadAllBytes(catalogPath);
+    var report = VerificationReport.Begin(catalogBytes, VerificationTransport.InProcess);
+    using var outputFile = EvidenceFiles.Create(reportPath);
     var results = new List<VerificationRow>();
     var complete = false;
     var hostChecks = false;
@@ -176,7 +196,7 @@ if (args[0] == "verify-managed")
     {
         await HostChecks.RunAsync();
         hostChecks = true;
-        var prepared = WorkloadCatalog.Read(catalogPath);
+        var prepared = WorkloadCatalog.Read(catalogBytes);
         foreach (var workload in prepared.Cases)
         {
             if (workload.SkipReason.Length != 0)
@@ -203,30 +223,36 @@ if (args[0] == "verify-managed")
         }
         complete = true;
     }
-    finally { VerificationReport.Create(catalogPath, null, null, VerificationTransport.InProcess, hostChecks, complete, results).Write(reportPath); }
+    finally
+    {
+        EvidenceFiles.WriteJson(outputFile, report with
+        {
+            RecordedAt = DateTimeOffset.UtcNow, HostChecksPassed = hostChecks, Complete = complete, Results = results
+        });
+    }
     Console.WriteLine($"Verified {results.Count} managed observations, including labelled exclusions. Host ownership/backpressure controls passed. No timings collected.");
     return;
 }
-Directory.CreateDirectory(directory);
+EvidenceFiles.CreateDirectory(directory);
 var catalog = CatalogBuilder.Create();
-File.WriteAllBytes(catalogPath, JsonSerializer.SerializeToUtf8Bytes(catalog, WorkloadCatalog.Json));
-MicroCatalog.Create().Write(Path.Combine(directory, "micro-catalog.json"));
 foreach (var workload in catalog.Cases)
 {
     var root = Path.Combine(directory, workload.Id);
     Directory.CreateDirectory(root);
-    File.WriteAllBytes(Path.Combine(root, "script.bash"), workload.Script.Bytes);
-    File.WriteAllBytes(Path.Combine(root, "stdin.bin"), workload.Input.Bytes);
+    EvidenceFiles.WriteBytes(Path.Combine(root, "script.bash"), workload.Script.Bytes);
+    EvidenceFiles.WriteBytes(Path.Combine(root, "stdin.bin"), workload.Input.Bytes);
     if (workload.Expected is { } expected)
     {
-        File.WriteAllBytes(Path.Combine(root, "stdout.expected.bin"), expected.Stdout.Bytes);
-        File.WriteAllBytes(Path.Combine(root, "stderr.expected.bin"), expected.Stderr.Bytes);
+        EvidenceFiles.WriteBytes(Path.Combine(root, "stdout.expected.bin"), expected.Stdout.Bytes);
+        EvidenceFiles.WriteBytes(Path.Combine(root, "stderr.expected.bin"), expected.Stderr.Bytes);
     }
     foreach (var fixture in workload.Files)
     {
         var path = Path.Combine(root, "fixtures", fixture.Key);
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? root);
-        File.WriteAllBytes(path, fixture.Value.Bytes);
+        EvidenceFiles.WriteBytes(path, fixture.Value.Bytes);
     }
 }
+MicroCatalog.Create().Write(Path.Combine(directory, "micro-catalog.json"));
+EvidenceFiles.WriteJson(catalogPath, catalog);
 Console.WriteLine($"Prepared {catalog.Cases.Count} versioned workload rows in {directory}. Timings pending.");
