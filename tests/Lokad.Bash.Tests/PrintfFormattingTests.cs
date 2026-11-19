@@ -1,10 +1,33 @@
 using System.Text;
 using Lokad.Bash.Formatting;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
-public sealed class PrintfFormattingTests
+public sealed class PrintfFormattingTests : IDisposable
 {
+    private readonly IMemoryScope _resultMemory = new MemoryGovernor(TestMemoryBudget.TextToolBytes).CreateScope();
+
+    public void Dispose() => _resultMemory.Dispose();
+
+    [Fact]
+    public void OutputOnlyResultCanReuseSharedAllowanceAfterScopeDisposal()
+    {
+        var memory = new MemoryGovernor(32);
+        using var unrelated = memory.Reserve(16);
+
+        for (var call = 0; call < 2; call++)
+        {
+            using (var resultMemory = memory.CreateScope())
+            {
+                var result = PrintfFormatting.Format(ShellValue.FromText("%s\\n"), [ShellValue.FromText("sample")], resultMemory);
+                Assert.Equal("sample\n", Text(result));
+                Assert.True(memory.ReservedBytes > unrelated.Bytes);
+            }
+            Assert.Equal(unrelated.Bytes, memory.ReservedBytes);
+        }
+    }
+
     [Fact]
     public void FloatingPointWorkspaceRefusalIsAShellFormattingFailure()
     {
@@ -449,10 +472,10 @@ public sealed class PrintfFormattingTests
     {
         var argument = ShellValue.FromText(new string('é', 100_000));
         var format = ShellValue.FromText("%.1s|%.1Q");
-        _ = PrintfFormatting.Format(format, [argument, argument], new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.TextToolBytes));
+        _ = PrintfFormatting.Format(format, [argument, argument], _resultMemory);
 
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        var output = PrintfFormatting.Format(format, [argument, argument], new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.TextToolBytes));
+        var output = PrintfFormatting.Format(format, [argument, argument], _resultMemory);
         var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
 
         byte[] expected =
@@ -646,12 +669,12 @@ public sealed class PrintfFormattingTests
             result.Assignments);
     }
 
-    private static ReadOnlyMemory<byte> FormatText(string format, IReadOnlyList<string> arguments) =>
-        PrintfFormatting.Format(ShellValue.FromText(format), arguments.Select(ShellValue.FromText).ToArray(), new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.TextToolBytes));
+    private ReadOnlyMemory<byte> FormatText(string format, IReadOnlyList<string> arguments) =>
+        PrintfFormatting.Format(ShellValue.FromText(format), arguments.Select(ShellValue.FromText).ToArray(), _resultMemory);
 
-    private static PrintfResult EvaluateText(
+    private PrintfResult EvaluateText(
         string format, IReadOnlyList<string> arguments, DateTimeOffset timestamp) =>
-        PrintfFormatting.Evaluate(ShellValue.FromText(format), arguments.Select(ShellValue.FromText).ToArray(), timestamp, new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.TextToolBytes));
+        PrintfFormatting.Evaluate(ShellValue.FromText(format), arguments.Select(ShellValue.FromText).ToArray(), timestamp, _resultMemory);
 
     private static string Text(ReadOnlyMemory<byte> content) => Encoding.UTF8.GetString(content.Span);
 }

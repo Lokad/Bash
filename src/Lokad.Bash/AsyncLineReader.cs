@@ -39,6 +39,10 @@ public readonly struct ByteLine
 /// Reported read failures remain terminal. Constructed readers retain immutable source batches across refills;
 /// CreateStreaming uses the shorter batch lifetimes documented on its factories.
 /// Cancellation tokens reach refills; reading already-buffered lines does not perform another cancellation check.
+/// Whole-input reads charge their returned buffer to the budget supplied when creating this reader.
+/// Host constructors without a budget use <see cref="IBashHost.MemoryBudget"/>. Use a caller-owned
+/// <see cref="IMemoryScope"/> for whole-input reads and keep it alive through result consumption,
+/// including when consumption outlives the reader.
 /// </remarks>
 public sealed class AsyncLineReader : IDisposable
 {

@@ -23,6 +23,9 @@ public static partial class PrintfFormatting
     /// Formats arguments without applying the variable assignments produced by <c>%n</c>.
     /// </summary>
     /// <remarks>
+    /// Supply a caller-owned <see cref="IMemoryScope"/> as <paramref name="memoryBudget"/>.
+    /// Keep it alive until every consumer of the returned buffer finishes.
+    ///
     /// This output-only entry point uses the Unix epoch for the special <c>-1</c> and <c>-2</c>
     /// timestamp arguments. Shell invocations use the timestamp supplied by the evaluator.
     /// Explicit timestamp operands use the pinned Linux calendar range. An operand
@@ -58,7 +61,11 @@ public static partial class PrintfFormatting
             reportDiagnostic, cancellationToken).RunAsync(assignCount);
 
     /// <summary>Formats command output, rejecting the shell-only <c>%n</c> assignment.</summary>
-    /// <remarks>Like <see cref="Format"/>, uses the Unix epoch for implicit timestamps.</remarks>
+    /// <remarks>
+    /// Supply a caller-owned <see cref="IMemoryScope"/> as <paramref name="memoryBudget"/>.
+    /// Keep it alive while consuming the output and diagnostics. Like <see cref="Format"/>,
+    /// this method uses the Unix epoch for implicit timestamps.
+    /// </remarks>
     public static PrintfResult EvaluateCommand(ShellValue format, IReadOnlyList<ShellValue> arguments, IMemoryBudget memoryBudget) =>
         EvaluateSynchronously(format, arguments, DateTimeOffset.UnixEpoch, allowAssignments: false, memoryBudget);
 

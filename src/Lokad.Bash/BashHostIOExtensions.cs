@@ -13,6 +13,12 @@ using Lokad.Bash.Tree;
 namespace Lokad.Bash;
 
 /// <summary> Extension helpers specific to <see cref="IBashHost"/>. </summary>
+/// <remarks>
+/// Whole-descriptor and whole-file reads that return bytes or text charge the result to the destination budget.
+/// Overloads without a destination budget use <see cref="IBashHost.MemoryBudget"/> for these reads.
+/// For a result with a bounded lifetime, supply a caller-owned <see cref="IMemoryScope"/> and dispose it
+/// after every consumer finishes with the result.
+/// </remarks>
 public static class BashHostIOExtensions
 {
     /// <summary>
@@ -130,7 +136,7 @@ public static class BashHostIOExtensions
     /// Accounts for each nonfailed read before accumulation, including zero-byte EOF and the overflow probe;
     /// may reject further work by throwing.
     /// </param>
-    /// <param name="destinationBudget">Owns the completed bytes; consumers must finish before its scope is disposed.</param>
+    /// <param name="destinationBudget">A caller-owned scope that stays alive through consumption of the completed bytes.</param>
     /// <param name="cancellationToken">Cancellation for every read and publication of the completed result.</param>
     /// <returns>Complete bytes after EOF, the original descriptor failure, or a size rejection without partial output.</returns>
     public static async ValueTask<BoundedReadResult> TryReadAllBytesAsync(

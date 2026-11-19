@@ -216,6 +216,10 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     }
 
     /// <summary>Leaves the backing array charged to the enclosing scope until that scope is disposed.</summary>
+    /// <remarks>
+    /// For a governed builder, supply a caller-owned <see cref="IMemoryScope"/> or prepaid capacity backed by one.
+    /// Keep that scope alive until every consumer of the detached snapshot finishes.
+    /// </remarks>
     public ReadOnlyMemory<byte> DetachSnapshot()
     {
         var bytes = _buffer;

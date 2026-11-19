@@ -68,6 +68,12 @@ Returned/lazy results require an owner surviving consumption. Establish it befor
 allocation: child scopes cannot outlive parents, and there is no automatic
 reparenting or transfer to GC.
 
+Supply a caller-owned scope to standalone `printf` and timing formatters and to
+whole-input readers that materialize results under a supplied budget. Keep the
+scope alive through the last consumer, including any pending host write, then
+dispose it to release the result's charge. A root governor has no result lifetime
+to dispose, and the returned byte memory carries no reservation handle.
+
 Release streaming scratch at safe batch/record boundaries; retained state and
 reusable capacity stay charged. Do not accumulate every processed record's charge
 or refund storage still held by variables/closures. Prefer existing lifetimes,

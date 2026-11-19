@@ -1,4 +1,5 @@
 using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
@@ -9,16 +10,21 @@ public sealed class BoundedReadTests
     [InlineData(true)]
     public async Task CompleteInputPreservesBytesAndFinalData(bool finalDataIsEof)
     {
-        var host = new TestOperationVisitor([]);
+        var memory = new MemoryGovernor(64);
+        var host = new TestOperationVisitor([]) { MemoryBudget = memory };
         host.EnqueueByteReadResult(new byte[] { 0xff, 13, 10 }, ByteReadResult.Success(3, reachedEoF: false));
         host.EnqueueByteReadResult(new byte[] { 0, 0xc3, 0xa9 }, ByteReadResult.Success(3, finalDataIsEof));
         if (!finalDataIsEof)
             host.EnqueueByteReadResult(ReadOnlyMemory<byte>.Empty, ByteReadResult.EndOfFile);
         var charged = new List<int>();
 
-        var result = await host.TryReadAllBytesAsync(new(71), 6, charged.Add, host.MemoryBudget, CancellationToken.None);
-
-        Assert.Equal(new byte[] { 0xff, 13, 10, 0, 0xc3, 0xa9 }, Assert.IsType<BoundedReadResult.Complete>(result).Content.ToArray());
+        using (var destination = memory.CreateScope())
+        {
+            var result = await host.TryReadAllBytesAsync(new(71), 6, charged.Add, destination, CancellationToken.None);
+            Assert.Equal(new byte[] { 0xff, 13, 10, 0, 0xc3, 0xa9 }, Assert.IsType<BoundedReadResult.Complete>(result).Content.ToArray());
+            Assert.Equal(6, memory.ReservedBytes);
+        }
+        Assert.Equal(0, memory.ReservedBytes);
         Assert.Equal(finalDataIsEof ? new[] { 3, 3 } : [3, 3, 0], charged);
         Assert.Empty(host.ClosedDescriptors);
     }

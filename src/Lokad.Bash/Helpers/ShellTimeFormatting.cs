@@ -10,6 +10,11 @@ public static class ShellTimeFormatting
     public static readonly ShellValue DefaultFormat = ShellValue.FromText("\nreal\t%3lR\nuser\t%3lU\nsys\t%3lS");
     public static readonly ShellValue PortableFormat = ShellValue.FromText("real %2R\nuser %2U\nsys %2S");
 
+    /// <summary>Formats elapsed and CPU times or returns a diagnostic for an invalid format.</summary>
+    /// <remarks>
+    /// Supply a caller-owned <see cref="IMemoryScope"/> as <paramref name="memoryBudget"/>.
+    /// Successful output stays charged until the scope ends. Dispose the scope after every output consumer finishes.
+    /// </remarks>
     public static bool TryFormat(ShellValue format, ShellTimingSnapshot duration,
         out ReadOnlyMemory<byte> output, out ReadOnlyMemory<byte> error, IMemoryBudget memoryBudget)
     {
