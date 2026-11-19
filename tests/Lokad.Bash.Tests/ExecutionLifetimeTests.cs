@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
@@ -23,6 +24,41 @@ public sealed class ExecutionLifetimeTests
     {
         var subject = "${" + new string('x', 4096) + " name}";
         return VerifyPendingWriteAsync("{ : \"" + subject + "\"; } 2>out; after=1", subject + ": bad substitution\n");
+    }
+
+    [Fact]
+    public async Task AmbiguousRedirectionWritesOneExactBufferToReachedDescriptor()
+    {
+        var operand = new byte[4096];
+        operand.AsSpan().Fill((byte)'x');
+        operand[^1] = 0xff;
+        byte[] expected = [.. operand, .. ": ambiguous redirect\n"u8];
+        var state = new Eval(Parser.Parse("a=('two fields' \"$1\"); i=0; : 2>out >${a[i++]} >later"));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(operand)]);
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        var descriptor = new FileDescriptor(9);
+
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, write.FileDescriptor);
+        Assert.Equal(expected, write.Content.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(write.Content, out var backing));
+        Assert.Equal(expected.Length, backing.Array!.Length);
+        var pending = governor.ReservedBytes;
+        write.SetResult(DescriptorWriteResult.Open);
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, close.Descriptor);
+        Assert.True(governor.ReservedBytes <= pending - expected.Length);
+        close.SetResult(null);
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("2"), state.Variables["i"]);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]

@@ -116,22 +116,23 @@ public sealed partial class Evaluation
         var nameIndex = 1;
         for (; nameIndex < words.Count; nameIndex++)
         {
-            var operand = words[nameIndex].Bytes.Span;
-            if (operand.Length < 2 || operand[0] != (byte)'-')
+            var operand = words[nameIndex].Bytes;
+            if (operand.Length < 2 || operand.Span[0] != (byte)'-')
                 break;
-            if (operand.SequenceEqual("--"u8))
+            if (operand.Span.SequenceEqual("--"u8))
             {
                 nameIndex++;
                 break;
             }
-            foreach (var option in operand[1..])
+            for (var optionIndex = 1; optionIndex < operand.Length; optionIndex++)
             {
-                switch (option)
+                switch (operand.Span[optionIndex])
                 {
                     case (byte)'t': outputMode = CommandQueryOutputMode.TypeKind; break;
                     case (byte)'p': outputMode = CommandQueryOutputMode.TypePath; break;
                     case (byte)'f': lookupMode = CommandLookupMode.BypassFunctions; break;
-                    default: return await InvalidOptionAsync(option).ConfigureAwait(false);
+                    default: return await InvalidOptionAsync(ShellValue.FromBytes(operand.Slice(optionIndex, 1)))
+                        .ConfigureAwait(false);
                 }
             }
         }
@@ -147,12 +148,11 @@ public sealed partial class Evaluation
             .ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
 
-        async Task<EvaluationResult> InvalidOptionAsync(byte option)
+        async Task<EvaluationResult> InvalidOptionAsync(ShellValue option)
         {
-            using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
-            diagnostic.Append("type: -"u8).Append(option).Append(": invalid option\ntype: usage: "u8)
-                .Append(Utf8Text.Encode(BuiltinDocumentation.For(BuiltinKind.Type).Synopsis("type"))).Append((byte)'\n');
-            await ExecuteWriteAsync(GetStdErrDescriptor(), diagnostic.ToMemory()).ConfigureAwait(false);
+            await WriteDiagnosticAsync(GetStdErrDescriptor(), [ShellValue.FromText("type")], [ShellValue.FromText("-"),
+                option, ShellValue.FromText(": invalid option\ntype: usage: "
+                    + BuiltinDocumentation.For(BuiltinKind.Type).Synopsis("type"))], scope: null).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
     }

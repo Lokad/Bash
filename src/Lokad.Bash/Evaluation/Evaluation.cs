@@ -3259,6 +3259,16 @@ public sealed partial class Evaluation : IFileTester
             return Task.FromResult(DescriptorWriteResult.Closed);
         }
 
+        return WriteDiagnosticAsync(descriptor, name, message, scope);
+    }
+
+    /// <summary>Writes one diagnostic to the descriptor reached during redirection.</summary>
+    internal Task WriteRedirectionDiagnosticAsync(FileDescriptor descriptor, ShellValue name, ShellValue message) =>
+        WriteDiagnosticAsync(descriptor, [name], [message], scope: null);
+
+    private Task<DescriptorWriteResult> WriteDiagnosticAsync(FileDescriptor descriptor, ReadOnlySpan<ShellValue> name,
+        ReadOnlySpan<ShellValue> message, BuiltinDiagnosticScope? scope)
+    {
         var length = (long)DiagnosticPunctuationBytes;
         foreach (var part in name)
             length += part.Bytes.Length;

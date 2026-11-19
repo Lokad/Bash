@@ -455,14 +455,18 @@ internal sealed class RedirectionEvaluation
         var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
         if (!standardError.IsClosed)
         {
-            using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
             if (field is { } value)
-                diagnostic.Append(value.Bytes);
-            else if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.CancellationToken))
-                throw new ByteMemoryBuilder.LimitExceededException();
+                await scope.Effects.WriteRedirectionDiagnosticAsync(standardError, value,
+                    ShellValue.FromText("ambiguous redirect")).ConfigureAwait(false);
+            else
+            {
+                using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+                if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.CancellationToken))
+                    throw new ByteMemoryBuilder.LimitExceededException();
 
-            await scope.Effects.ExecuteWriteAsync(standardError, diagnostic.Append(": ambiguous redirect\n"u8).ToMemory())
-                .ConfigureAwait(false);
+                await scope.Effects.ExecuteWriteAsync(standardError, diagnostic.Append(": ambiguous redirect\n"u8).ToMemory())
+                    .ConfigureAwait(false);
+            }
         }
         scope.Effects.SetExpansionError(1);
     }

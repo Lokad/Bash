@@ -75,9 +75,9 @@ public sealed partial class Evaluation
             }
             else if (option.Span is [(byte)'-', _, ..])
             {
-                using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
-                diagnostic.Append(option[..2]).Append(": invalid option"u8);
-                return await UsageErrorAsync(ShellValue.FromBytes(diagnostic.ToMemory())).ConfigureAwait(false);
+                await ReportExpansionDiagnosticAsync([command],
+                    [ShellValue.FromBytes(option[..2]), ShellValue.FromText(": invalid option")]).ConfigureAwait(false);
+                return await FinishUsageErrorAsync().ConfigureAwait(false);
             }
         }
 
@@ -92,7 +92,11 @@ public sealed partial class Evaluation
         }
 
         if (first == words.Count)
-            return await UsageErrorAsync(ShellValue.FromText("filename argument required")).ConfigureAwait(false);
+        {
+            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("filename argument required"))
+                .ConfigureAwait(false);
+            return await FinishUsageErrorAsync().ConfigureAwait(false);
+        }
         if (words[first].IsEmpty)
         {
             await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("empty filename")).ConfigureAwait(false);
@@ -111,9 +115,8 @@ public sealed partial class Evaluation
             words, argumentStart, PositionalParametersRestorePolicy.UnlessReplaced);
         return ApplyNegation(await ExecuteSourceAsync(path, scope).ConfigureAwait(false), negated);
 
-        async Task<EvaluationResult> UsageErrorAsync(ShellValue message)
+        async Task<EvaluationResult> FinishUsageErrorAsync()
         {
-            await ReportExpansionDiagnosticAsync(command, message).ConfigureAwait(false);
             await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("usage: "
                 + BuiltinDocumentation.For(kind).Synopsis(commandName))).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
