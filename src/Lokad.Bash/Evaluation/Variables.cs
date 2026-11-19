@@ -49,6 +49,7 @@ public sealed partial class Variables
     private ShellValue _argumentZero = ShellValue.Empty;
     private int _bindingCapacity;
     private long _bindingBytes;
+    private LocalBindings? _savedLocalBindings;
 
     // Account bindings as a coarse owner. Shared values can be counted twice; no object identities
     // are registered. Callers keep saved bindings charged through restoration.
@@ -99,7 +100,11 @@ public sealed partial class Variables
     internal readonly struct BindingMemoryChange(Variables owner, BindingName name) : IDisposable
     {
         private readonly long _before = owner.EstimateOwnedBindingBytes(name);
-        public void Dispose() => owner._bindingBytes = checked(owner._bindingBytes + owner.EstimateOwnedBindingBytes(name) - _before);
+        public void Dispose()
+        {
+            owner._bindingBytes = checked(owner._bindingBytes + owner.EstimateOwnedBindingBytes(name) - _before);
+            owner._savedLocalBindings?.RefreshSavedMemory();
+        }
     }
 
     internal IReadOnlyDictionary<BindingName, ShellValue> Scalars { get; }
@@ -138,10 +143,27 @@ public sealed partial class Variables
     internal IReadOnlyCollection<BindingName> ExportedNames { get; }
     internal IEnumerable<VariableBinding> ExportedBindings => ExportedNames.Select(name => new VariableBinding(VariableReference.ForName(name), this));
     internal IReadOnlyCollection<BindingName> ReadonlyNames { get; }
-    internal ShellValue ArgumentZero { get => _argumentZero; set => _argumentZero = value; }
+    internal ShellValue ArgumentZero
+    {
+        get => _argumentZero;
+        set
+        {
+            _argumentZero = value;
+            _savedLocalBindings?.RefreshSavedMemory();
+        }
+    }
 
     /// <summary>Immutable snapshot of the last resolved IFS; completed membership belongs to this variable owner.</summary>
-    internal FieldSeparators CachedFieldSeparators { get; set; } = FieldSeparators.Default;
+    private FieldSeparators _fieldSeparators = FieldSeparators.Default;
+    internal FieldSeparators CachedFieldSeparators
+    {
+        get => _fieldSeparators;
+        set
+        {
+            _fieldSeparators = value;
+            _savedLocalBindings?.RefreshSavedMemory();
+        }
+    }
 
     private Variables()
     {
@@ -418,6 +440,35 @@ public sealed partial class Variables
         private readonly HashSet<BindingName> _unsetNames = new();
         private readonly HashSet<BindingName> _declaredPrefixes = new();
         private readonly HashSet<BindingName> _promotedPrefixes = new();
+        private long _trackedSavedBytes;
+
+        internal EvaluationMemory.SavedLocalMemory? SavedMemoryTracker { get; private set; }
+
+        internal void TrackSavedMemory(EvaluationMemory.SavedLocalMemory tracker)
+        {
+            SavedMemoryTracker = tracker;
+            _saved._savedLocalBindings = this;
+            RefreshSavedMemory();
+        }
+
+        internal void RefreshSavedMemory()
+        {
+            if (SavedMemoryTracker is not { } tracker)
+                return;
+            var currentBytes = SavedMemoryBytes;
+            tracker.Bytes = checked(tracker.Bytes + (currentBytes - _trackedSavedBytes));
+            _trackedSavedBytes = currentBytes;
+        }
+
+        internal void RetireSavedMemory()
+        {
+            if (SavedMemoryTracker is not { } tracker)
+                return;
+            tracker.Bytes -= _trackedSavedBytes;
+            _trackedSavedBytes = 0;
+            _saved._savedLocalBindings = null;
+            SavedMemoryTracker = null;
+        }
 
         internal long SavedMemoryBytes => _saved.EstimatedMemoryBytes;
         internal long ForkMemoryBytes => checked(256 + SavedMemoryBytes + (long)BindingNameSetEntryBytes

@@ -1280,12 +1280,13 @@ public sealed partial class Evaluation : IFileTester
                     commandVars = builtinScope.Variables;
 
                 var enclosingFunction = builtinScope.Context.FunctionContext;
-                FunctionContext? scriptFunction = null;
-                if (enclosingFunction != null && bindings != null
-                    && evaluatorBuiltin.Kind is BuiltinKind.Eval or BuiltinKind.Source)
+                using var scriptFunction = enclosingFunction != null && bindings != null
+                    && evaluatorBuiltin.Kind is BuiltinKind.Eval or BuiltinKind.Source
+                    ? new FunctionContext(enclosingFunction.FunctionName,
+                        enclosingFunction.Locals.WithTemporaryPrefixes(bindings), enclosingFunction)
+                    : null;
+                if (scriptFunction != null)
                 {
-                    scriptFunction = new FunctionContext(enclosingFunction.FunctionName,
-                        enclosingFunction.Locals.WithTemporaryPrefixes(bindings), enclosingFunction);
                     builtinScope = builtinScope with
                     {
                         Context = new EvaluationContext(builtinScope.Context.LoopDepth, scriptFunction, builtinScope.Context.ReturnTarget)
@@ -4012,14 +4013,24 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>Carries function identity and its active local-binding scope, including temporary commands.</summary>
-    internal sealed class FunctionContext(
-        ShellValue functionName, Variables.LocalBindings locals, FunctionContext? enclosing)
+    internal sealed class FunctionContext : IDisposable
     {
-        public ShellValue FunctionName { get; } = functionName;
-        public FunctionContext? Enclosing { get; } = enclosing;
-        public int Depth { get; } = (enclosing?.Depth ?? 0) + 1;
+        public FunctionContext(ShellValue functionName, Variables.LocalBindings locals, FunctionContext? enclosing)
+        {
+            FunctionName = functionName;
+            Enclosing = enclosing;
+            Depth = (enclosing?.Depth ?? 0) + 1;
+            Locals = locals;
+            locals.TrackSavedMemory(enclosing?.Locals.SavedMemoryTracker ?? new EvaluationMemory.SavedLocalMemory());
+        }
 
-        public Variables.LocalBindings Locals { get; } = locals;
+        public void Dispose() => Locals.RetireSavedMemory();
+
+        public ShellValue FunctionName { get; }
+        public FunctionContext? Enclosing { get; }
+        public int Depth { get; }
+
+        public Variables.LocalBindings Locals { get; }
         public Variables.CommandBindings? PrefixBindings { get; init; }
         public IReadOnlySet<BindingName> PrefixNames => PrefixBindings?.PrefixNames ?? NoPrefixNames;
         private static IReadOnlySet<BindingName> NoPrefixNames { get; } = new HashSet<BindingName>();

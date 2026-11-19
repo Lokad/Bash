@@ -132,6 +132,10 @@ store. Final prefix and local restoration also move the selected slot, including
 any retained output, after the last pending user settles. The retiring store
 drops the slot and any superseded value. Child snapshots still own independent
 mutable containers. The existing command workspace stays live through cleanup.
+The active function chain maintains the total estimate for its saved local
+stores. Mutating a saved store updates the total, including writes to an outer
+hidden binding. A function or script prefix wrapper retires its contribution
+when its scope ends. Each child context builds its own total from copied stores.
 
 Ordinary element writes admit added positions and retained payload growth before
 mutating an array. Indexed dictionary replacement admits overlapping backing

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
@@ -81,12 +80,17 @@ internal sealed class EvaluationMemory
 
     private static long RetainedBytes(ScopedEvaluation scope)
     {
-        var bytes = checked(scope.Variables.EstimatedMemoryBytes + scope.Effects.RetainedTrapMemoryBytes
+        var savedBytes = scope.Context.FunctionContext?.Locals.SavedMemoryTracker?.Bytes ?? 0;
+        return checked(scope.Variables.EstimatedMemoryBytes + scope.Effects.RetainedTrapMemoryBytes
             + scope.Effects.RetainedFunctionMemoryBytes + scope.Effects.RetainedDescriptorMemoryBytes
-            + scope.Effects.RetainedDirectoryStackBytes);
-        for (var function = scope.Context.FunctionContext; function != null; function = function.Enclosing)
-            bytes = checked(bytes + function.Locals.SavedMemoryBytes);
-        return bytes;
+            + scope.Effects.RetainedDirectoryStackBytes + savedBytes);
+    }
+
+    // Active scopes read this total at command boundaries. Frames enter and leave in stack order,
+    // while detached child contexts build their own total.
+    internal sealed class SavedLocalMemory
+    {
+        public long Bytes { get; set; }
     }
 
     private sealed class Command(EvaluationMemory owner, ScopedEvaluation scope, Command? parent, long baseline) : IDisposable

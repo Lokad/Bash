@@ -9,6 +9,57 @@ namespace Lokad.Bash.Tests;
 
 public sealed partial class FunctionPrefixBindingTests
 {
+    [Fact]
+    public void SavedLocalTotalFollowsHiddenWritesForksAndRestoration()
+    {
+        var state = new Eval(Parser.Parse(":"));
+        var variables = Variables.CreateEmpty();
+        var outerLocals = SaveLocal("x");
+        using var outer = new Eval.FunctionContext(ShellValue.FromText("outer"), outerLocals, enclosing: null);
+        var outerSaved = Assert.IsType<Variables>(outerLocals.ExportSnapshot);
+        var innerLocals = SaveLocal("y");
+        using var inner = new Eval.FunctionContext(ShellValue.FromText("inner"), innerLocals, outer);
+        var total = Assert.IsType<EvaluationMemory.SavedLocalMemory>(innerLocals.SavedMemoryTracker);
+        Assert.Same(total, outerLocals.SavedMemoryTracker);
+        Assert.Equal(outerLocals.SavedMemoryBytes + innerLocals.SavedMemoryBytes, total.Bytes);
+
+        // A global write can reach an outer saved store while the inner frame is active.
+        Assert.True(outerSaved.TrySetScalar("x", ShellValue.FromText(new string('x', 4096))));
+        Assert.Equal(outerLocals.SavedMemoryBytes + innerLocals.SavedMemoryBytes, total.Bytes);
+        var context = new Eval.EvaluationContext(0, inner, Eval.ReturnTargetKind.Function);
+        var (_, fork) = context.Fork(variables, state.Memory, CancellationToken.None);
+        var forkedLeaf = Assert.IsType<Eval.FunctionContext>(fork.FunctionContext);
+        using var forkedOuter = Assert.IsType<Eval.FunctionContext>(forkedLeaf.Enclosing);
+        using var forkedInner = forkedLeaf;
+        var forkedTotal = Assert.IsType<EvaluationMemory.SavedLocalMemory>(forkedInner.Locals.SavedMemoryTracker);
+        Assert.NotSame(total, forkedTotal);
+        Assert.Equal(total.Bytes, forkedTotal.Bytes);
+
+        var parentBytes = total.Bytes;
+        var forkedSaved = Assert.IsType<Variables>(forkedOuter.Locals.ExportSnapshot);
+        Assert.True(forkedSaved.TrySetScalar("x", ShellValue.FromText("child")));
+        Assert.Equal(forkedOuter.Locals.SavedMemoryBytes + forkedInner.Locals.SavedMemoryBytes, forkedTotal.Bytes);
+        Assert.Equal(parentBytes, total.Bytes);
+
+        innerLocals.Restore();
+        inner.Dispose();
+        Assert.Equal(outerLocals.SavedMemoryBytes, total.Bytes);
+        Assert.Equal("hidden", variables.Scalars["y"].ToUtf8String());
+        outerLocals.Restore();
+        outer.Dispose();
+        Assert.Equal(0, total.Bytes);
+        Assert.Equal(4096, variables.Scalars["x"].Bytes.Length);
+
+        Variables.LocalBindings SaveLocal(BindingName name)
+        {
+            var locals = new Variables.LocalBindings(variables, parent: null, prefixes: null);
+            Assert.True(variables.TrySetScalar(name, ShellValue.FromText("hidden")));
+            locals.ShadowNamerefTarget(name, variables, state.Memory);
+            Assert.True(variables.TrySetScalar(name, ShellValue.FromText("visible")));
+            return locals;
+        }
+    }
+
     [Theory]
     [MemberData(nameof(SelectedBindings))]
     public async Task SelectedBindingsPreserveNativeValuesAndCompleteEffects(

@@ -36,7 +36,13 @@ public sealed partial class Variables
 
     /// <summary>Copies the selected argument tail once into an owned frame.</summary>
     internal void ReplacePositionalParameters(IReadOnlyList<ShellValue> values, int start) =>
-        _positional = new PositionalParametersFrame(values, start);
+        SetPositionalFrame(new PositionalParametersFrame(values, start));
+
+    private void SetPositionalFrame(PositionalParametersFrame frame)
+    {
+        _positional = frame;
+        _savedLocalBindings?.RefreshSavedMemory();
+    }
 
     internal PositionalParametersScope EnterPositionalParametersScope(
         IReadOnlyList<ShellValue> values, PositionalParametersRestorePolicy restorePolicy) =>
@@ -53,6 +59,7 @@ public sealed partial class Variables
         if (count < 0 || count > _positional.Count)
             return false;
         _positional.Shift((int)count);
+        _savedLocalBindings?.RefreshSavedMemory();
         return true;
     }
 
@@ -139,7 +146,7 @@ public sealed partial class Variables
             _saved = variables._positional;
             _entered = new PositionalParametersFrame(values, start);
             _restorePolicy = restorePolicy;
-            variables._positional = _entered;
+            variables.SetPositionalFrame(_entered);
         }
 
         public void Dispose()
@@ -148,7 +155,7 @@ public sealed partial class Variables
                 return;
             _isDisposed = true;
             if (_restorePolicy == PositionalParametersRestorePolicy.Always || ReferenceEquals(_variables._positional, _entered))
-                _variables._positional = _saved;
+                _variables.SetPositionalFrame(_saved);
         }
     }
 }

@@ -24,7 +24,7 @@ public sealed partial class Evaluation
         using var bindings = prefixNames == null
             ? null
             : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames, Memory, _cancellationToken);
-        var functionContext = new FunctionContext(
+        using var functionContext = new FunctionContext(
             functionDefinition.Name.Value, new Variables.LocalBindings(scope.Variables, parent: null, bindings), scope.Context.FunctionContext)
         {
             PrefixBindings = bindings
