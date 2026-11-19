@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
-using Lokad.Bash.Tools;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -434,11 +433,20 @@ internal sealed class RedirectionEvaluation
         InputOpenFailed = _inputSubstitution;
         return mode == FileOpenMode.Read && !_inputSubstitution
             ? ReportFailureAsync(scope, error)
-            : ReportFailureAsync(scope, ShellToolErrors.FormatPathError(Utf8Text.Encode(path), error));
+            : ReportFailureAsync(scope, path, error is { Message: not null } failure
+                ? failure : new OperationError("No such file or directory\n"));
     }
 
     private Task ReportFailureAsync(ScopedEvaluation scope, OperationError? error) =>
-        ReportFailureAsync(scope, error is { } failure ? Utf8Text.Encode(failure.Message) : ReadOnlyMemory<byte>.Empty);
+        ReportFailureAsync(scope, path: null, error);
+
+    private async Task ReportFailureAsync(ScopedEvaluation scope, string? path, OperationError? error)
+    {
+        var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
+        if (!standardError.IsClosed && error is { Message.Length: > 0 } failure)
+            await scope.Effects.WriteOperationDiagnosticAsync(standardError, string.Empty, path, failure).ConfigureAwait(false);
+        scope.Effects.SetExpansionError(1);
+    }
 
     /// <summary>Reports a failure through the stderr mapping reached so far, before scope restoration.</summary>
     private async Task ReportFailureAsync(ScopedEvaluation scope, ReadOnlyMemory<byte> diagnostic)

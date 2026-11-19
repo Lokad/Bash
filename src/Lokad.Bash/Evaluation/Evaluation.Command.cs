@@ -194,15 +194,18 @@ public sealed partial class Evaluation
         }
     }
 
+    private const string MemoryRefusalMessage = "shared memory budget exhausted";
+    private static readonly ReadOnlyMemory<byte> ShellMemoryRefusalDiagnostic =
+        Utf8Text.Encode("shell: " + MemoryRefusalMessage + "\n");
+
     private async Task ReportMemoryRefusalAsync(string failedCommand)
     {
-        const string Message = "shared memory budget exhausted";
-        var nameByteLimit = SmallDiagnosticBytes - Message.Length - DiagnosticPunctuationBytes;
+        var nameByteLimit = SmallDiagnosticBytes - MemoryRefusalMessage.Length - DiagnosticPunctuationBytes;
         var name = failedCommand.Length > nameByteLimit || Utf8Text.StrictUtf8.GetByteCount(failedCommand) > nameByteLimit
             ? "shell" : failedCommand;
         try
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText(name), ShellValue.FromText(Message))
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText(name), ShellValue.FromText(MemoryRefusalMessage))
                 .ConfigureAwait(false);
         }
         catch (MemoryBudgetExceededException)

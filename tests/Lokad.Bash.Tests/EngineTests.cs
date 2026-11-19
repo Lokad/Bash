@@ -3,6 +3,7 @@ using Lokad.Bash.Helpers;
 using Lokad.Bash.Tree;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Files;
@@ -11,6 +12,146 @@ namespace Lokad.Bash.Tests;
 
 public class EngineTests
 {
+    [Theory]
+    [InlineData(16, false, false)]
+    [InlineData(4096, false, false)]
+    [InlineData(4096, true, false)]
+    [InlineData(4096, true, true)]
+    public async Task PipeFailureAdmitsItsDiagnosticBeforeClosingEarlierEndpoints(int detailLength, bool exhaustBudget, bool negate)
+    {
+        var pipeline = negate ? "! first | second | third" : "first | second | third";
+        var state = new Eval(Parser.Parse("{ " + pipeline + "; } 2>errors"));
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        var stderr = new FileDescriptor(17);
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        open.SetResult(FileOpenResult.Opened(stderr, readSize: null));
+        var first = Assert.IsType<CreatePipeOperation>(await state.GetNextStep());
+        first.SetResult(PipeCreationResult.Created(new PipeDescriptors(21, 22)));
+        var second = Assert.IsType<CreatePipeOperation>(await state.GetNextStep());
+        using var other = exhaustBudget ? governor.Reserve(governor.LimitBytes - governor.ReservedBytes) : null;
+        var before = governor.ReservedBytes;
+        var detail = new string('x', detailLength) + "é\r\n\n";
+        second.SetResult(PipeCreationResult.Failed(new OperationError(detail)));
+
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(stderr, write.FileDescriptor);
+        var actual = write.Content.ToArray();
+        var pending = governor.ReservedBytes;
+        write.SetResult(DescriptorWriteResult.Open);
+
+        var writer = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(new FileDescriptor(22), writer.Descriptor);
+        var afterWrite = governor.ReservedBytes;
+        writer.SetResult(new OperationError("secondary close failure\n"));
+        var reader = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(new FileDescriptor(21), reader.Descriptor);
+        reader.SetResult(null);
+        var errorFile = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(stderr, errorFile.Descriptor);
+        errorFile.SetResult(null);
+        Assert.Null(await state.GetNextStep());
+
+        var expected = Utf8Text.Encode(exhaustBudget
+            ? "shell: shared memory budget exhausted\n" : "shell: " + detail);
+        Assert.Equal(negate ? 0 : 1, state.LastExitCode);
+        Assert.Equal(detailLength == 4096 && !exhaustBudget ? expected.Length : 0, pending - before);
+        Assert.Equal(before, afterWrite);
+        Assert.Equal(expected.ToArray(), actual);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
+    [Theory]
+    [InlineData(": 2>errors <operand", "", false, false, 2048)]
+    [InlineData(": 2>errors >operand", "operand: ", false, false, 2048)]
+    [InlineData("{ :; } 2>errors >operand", "operand: ", false, true, 2048)]
+    [InlineData("{ :; } 2>errors >operand", "operand: ", false, true, 8)]
+    [InlineData("source operand 2>errors", "shell: operand: ", true, false, 2048)]
+    [InlineData("source operand 2>errors", "shell: operand: ", true, true, 2048)]
+    public async Task ReachedHostDiagnosticAdmitsEncodedPathAndDetail(
+        string script, string prefix, bool source, bool exhaustBudget, int detailCharacters)
+    {
+        var state = new Eval(Parser.Parse(script));
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        using var other = exhaustBudget ? governor.CreateScope() : null;
+        state.Memory.Budget = owner;
+        var stderr = new FileDescriptor(17);
+        var openError = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        openError.SetResult(FileOpenResult.Opened(stderr, readSize: null));
+        var openOperand = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        var error = new OperationError(new string('é', detailCharacters) + "\r\n");
+        long before;
+        if (source)
+        {
+            var input = new FileDescriptor(18);
+            openOperand.SetResult(FileOpenResult.Opened(input, readSize: null));
+            var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep());
+            read.SetResult(ReadResult.EndOfFile);
+            var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+            Assert.Equal(input, close.Descriptor);
+            before = PrepareAllowance();
+            close.SetResult(error);
+        }
+        else
+        {
+            before = PrepareAllowance();
+            openOperand.SetResult(FileOpenResult.Failed(error));
+        }
+
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(stderr, write.FileDescriptor);
+        var actual = write.Content.ToArray();
+        var pending = governor.ReservedBytes;
+        write.SetResult(DescriptorWriteResult.Open);
+        var closeError = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(stderr, closeError.Descriptor);
+        var afterWrite = governor.ReservedBytes;
+        closeError.SetResult(null);
+        Assert.Null(await state.GetNextStep());
+
+        var expectsReservation = detailCharacters == 2048 && !exhaustBudget;
+        var refused = detailCharacters == 2048 && exhaustBudget;
+        var expected = Utf8Text.Encode(refused ? "shell: shared memory budget exhausted\n" : prefix + error.Message);
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(expectsReservation ? expected.Length : 0, pending - before);
+        if (expectsReservation)
+            Assert.True(afterWrite < pending);
+        Assert.Equal(expected.ToArray(), actual);
+
+        long PrepareAllowance()
+        {
+            if (other != null)
+                other.Reserve(governor.LimitBytes - governor.ReservedBytes);
+            return governor.ReservedBytes;
+        }
+    }
+
+    [Fact]
+    public async Task FinalCloseDiagnosticRefusalCompletesWithTheCloseFailureStatus()
+    {
+        var state = new Eval(Parser.Parse("exec 9>out"));
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        var descriptor = new FileDescriptor(17);
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(new OperationError(new string('x', 128 * 1024) + "\n"));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(FileDescriptor.StdErr, write.FileDescriptor);
+        var diagnostic = Utf8Text.Decode(write.Content);
+        write.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal("shell: shared memory budget exhausted\n", diagnostic);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
     [Theory]
     [InlineData("first | second | third", 1, false)]
     [InlineData("! first | second | third", 0, false)]

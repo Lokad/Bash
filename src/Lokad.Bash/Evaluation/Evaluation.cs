@@ -2701,7 +2701,9 @@ public sealed partial class Evaluation : IFileTester
         try
         {
             await evaluation.EvaluateAsync(scope, persistence).ConfigureAwait(false);
-            releasedDescriptors = evaluation.GetDescriptorsToReleaseWhenPreserved(Memory);
+            // Preservation is reached only after successful setup.
+            if (!_state.HasPendingExpansionError)
+                releasedDescriptors = evaluation.GetDescriptorsToReleaseWhenPreserved(Memory);
         }
         catch (Exception error)
         {
@@ -2829,7 +2831,34 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Reports an expected host failure without unwinding shell control flow.</summary>
     internal Task ReportOperationErrorAsync(OperationError error) =>
-        ExecuteWriteAsync(GetStdErrDescriptor(), Utf8Text.Encode($"shell: {error.Message}"));
+        WriteOperationDiagnosticAsync(GetStdErrDescriptor(), "shell: ", path: null, error);
+
+    /// <summary>Writes LF-framed host detail through the supplied descriptor, with an optional path.</summary>
+    internal async Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, string prefix, string? path, OperationError error)
+    {
+        var encoding = Utf8Text.StrictUtf8;
+        var prefixLength = encoding.GetByteCount(prefix);
+        var pathLength = path is null ? 0 : encoding.GetByteCount(path);
+        var detailLength = encoding.GetByteCount(error.Message.AsSpan());
+        var length = (long)prefixLength + pathLength + (path is null ? 0 : 2) + detailLength;
+        if (!TryReserveDiagnostic(length, out var reservation))
+        {
+            // The operation already failed. Use the bounded message while its caller settles status and cleanup.
+            await ExecuteWriteAsync(descriptor, ShellMemoryRefusalDiagnostic).ConfigureAwait(false);
+            return;
+        }
+
+        using var memory = reservation;
+        using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
+        encoding.GetBytes(prefix.AsSpan(), diagnostic.AppendSpan(prefixLength));
+        if (path != null)
+        {
+            encoding.GetBytes(path.AsSpan(), diagnostic.AppendSpan(pathLength));
+            diagnostic.Append(": "u8);
+        }
+        encoding.GetBytes(error.Message.AsSpan(), diagnostic.AppendSpan(detailLength));
+        await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
+    }
 
     private async Task<EvaluationResult> ApplyCloseErrorAsync(EvaluationResult result, OperationError? error)
     {
@@ -3142,18 +3171,25 @@ public sealed partial class Evaluation : IFileTester
             return;
 
         var length = (long)name.Bytes.Length + message.Bytes.Length + DiagnosticPunctuationBytes;
-        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
-            throw new ByteMemoryBuilder.LimitExceededException();
+        if (!TryReserveDiagnostic(length, out var reservation))
+            throw new MemoryBudgetExceededException();
 
-        // Small diagnostics, including refusal messages, fit within caller headroom.
-        // Reached names and messages can be much larger and must be admitted through the write.
-        using var diagnostic = length <= SmallDiagnosticBytes
-            ? ByteMemoryBuilder.CreateUnaccounted((int)length)
-            : new ByteMemoryBuilder((int)length, Memory.Budget);
+        using var memory = reservation;
+        using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
         diagnostic.Append(name.Bytes).Append(": "u8).Append(message.Bytes).Append((byte)'\n');
         var result = await ExecuteWriteAsync(GetStdErrDescriptor(), diagnostic.ToMemory()).ConfigureAwait(false);
         if (scope != null)
             scope.Result = result;
+    }
+
+    private bool TryReserveDiagnostic(long length, out IMemoryReservation? reservation)
+    {
+        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        // Small diagnostics, including refusal messages, fit within caller headroom.
+        reservation = null;
+        return length <= SmallDiagnosticBytes || Memory.Budget.TryReserve(length, out reservation);
     }
 
     internal bool HasPendingExpansionError => _state.HasPendingExpansionError;
@@ -3504,7 +3540,7 @@ public sealed partial class Evaluation : IFileTester
 
             if (closeError is { } closeFailure)
             {
-                await ExecuteWriteAsync(GetStdErrDescriptor(), Utf8Text.Encode($"shell: {path}: {closeFailure.Message}")).ConfigureAwait(false);
+                await WriteOperationDiagnosticAsync(GetStdErrDescriptor(), "shell: ", path, closeFailure).ConfigureAwait(false);
                 return EvaluationResult.FromExitCode(1);
             }
             if (input is BoundedReadResult.Failed)
