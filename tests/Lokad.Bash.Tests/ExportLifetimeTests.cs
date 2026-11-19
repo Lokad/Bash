@@ -70,7 +70,13 @@ public sealed class ExportLifetimeTests
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         };
         var source = $"f(){{ :; }}; export -f f; i=0; while ((i<{Count})); do {body} || break; ((i+=1)); done; unset -f f; printf '%s' \"$i\"";
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var idleLimit = TimeSpan.FromSeconds(10);
+        using var cancellation = new CancellationTokenSource(idleLimit);
+        host.BeforeCommand = _ =>
+        {
+            Assert.True(host.Calls < Count, "The export loop dispatched more commands than expected.");
+            cancellation.CancelAfter(idleLimit);
+        };
         var result = prepared
             ? await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, cancellation.Token)
             : await BashScript.RunAsync(host, source, EvaluationOptions.Default, cancellation.Token);
