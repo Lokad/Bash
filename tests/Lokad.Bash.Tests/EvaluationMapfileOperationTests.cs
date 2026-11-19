@@ -13,7 +13,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_ReadsAllLinesInBatches()
     {
-        var script = Parser.Parse(Utf8("mapfile arr"));
+        var script = Parser.Parse("mapfile arr");
         var state = new Eval(script);
 
         var firstRead = await NextReadAsync(state);
@@ -35,7 +35,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_CountBoundsTheFinalBatchWithoutAnEofRead()
     {
-        var state = new Eval(Parser.Parse(Utf8("arr=([0]=keep); mapfile -tn129 -O2 arr")));
+        var state = new Eval(Parser.Parse("arr=([0]=keep); mapfile -tn129 -O2 arr"));
         var first = await NextReadAsync(state);
         Assert.Equal(128, first.Limit);
         first.SetResult(ReadResult.Success(Utf8Bytes(new string('\n', 128)),
@@ -143,7 +143,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_PropagatesReadFailureWithoutReplacingArray()
     {
-        var script = Parser.Parse(Utf8("arr=(old); mapfile arr"));
+        var script = Parser.Parse("arr=(old); mapfile arr");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
@@ -159,7 +159,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_PartialContentThenFailureDoesNotReplaceArray()
     {
-        var script = Parser.Parse(Utf8("arr=(old); mapfile arr"));
+        var script = Parser.Parse("arr=(old); mapfile arr");
         var state = new Eval(script);
 
         var content = await NextReadAsync(state);
@@ -178,7 +178,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_CancellationDoesNotReplaceArray()
     {
-        var script = Parser.Parse(Utf8("arr=(old); mapfile arr"));
+        var script = Parser.Parse("arr=(old); mapfile arr");
         var state = new Eval(script);
         var read = await NextReadAsync(state);
         var visitor = new TestOperationVisitor([]);
@@ -196,7 +196,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReadarrayBuiltin_TrimRemovesOnlyNewlineDelimiter()
     {
-        var script = Parser.Parse(Utf8("readarray -t arr"));
+        var script = Parser.Parse("readarray -t arr");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
@@ -214,7 +214,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_ReadsCustomRecordBatchesBeforePublishing()
     {
-        var state = new Eval(Parser.Parse(Utf8("arr=(old); mapfile -td: arr")));
+        var state = new Eval(Parser.Parse("arr=(old); mapfile -td: arr"));
 
         var first = Assert.IsType<ReadRecordBatchOperation>(await NextStepAsync(state));
         Assert.Equal(FileDescriptor.StdIn, first.Descriptor);
@@ -235,7 +235,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_SettlesPendingBoundedBatchBeforeCancellation()
     {
-        var state = new Eval(Parser.Parse(Utf8("arr=(old); mapfile -td: -n2 -O0 arr")));
+        var state = new Eval(Parser.Parse("arr=(old); mapfile -td: -n2 -O0 arr"));
         using var cancellation = new CancellationTokenSource();
         var evaluation = state.EnsureRunning(cancellation.Token);
 
@@ -259,7 +259,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_EmptyInputClearsArrayAndSucceeds()
     {
-        var script = Parser.Parse(Utf8("arr=(old); mapfile arr"));
+        var script = Parser.Parse("arr=(old); mapfile arr");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
@@ -273,7 +273,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_RejectsAssociativeArrayBeforeReading()
     {
-        var script = Parser.Parse(Utf8("declare -A arr; arr[key]=old; mapfile arr"));
+        var script = Parser.Parse("declare -A arr; arr[key]=old; mapfile arr");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -294,7 +294,7 @@ public partial class EvaluationTests
     [InlineData("mapfile -x arr")]
     public async Task Evaluation_MapfileBuiltin_RejectsUnsupportedShapeBeforeReading(string command)
     {
-        var script = Parser.Parse(Utf8($"arr=(old); {command}"));
+        var script = Parser.Parse($"arr=(old); {command}");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -317,7 +317,7 @@ public partial class EvaluationTests
     [InlineData("readarray -tO", "readarray", "-O")]
     public async Task Evaluation_MapfileBuiltin_RejectsMissingOptionOperandBeforeReading(string command, string builtin, string option)
     {
-        var state = new Eval(Parser.Parse(Utf8($"arr=(old); {command}")));
+        var state = new Eval(Parser.Parse($"arr=(old); {command}"));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
         Assert.Equal($"{builtin}: {option}: option requires an argument\n{builtin}: usage: {builtin} [-t] [-d delim] [-n count] [-O origin] [--] [array]\n",
@@ -334,7 +334,7 @@ public partial class EvaluationTests
     [InlineData("readarray -O4294967296", "readarray: 4294967296: invalid array origin\n")]
     public async Task Evaluation_MapfileBuiltin_RejectsInvalidNumbersBeforeReading(string command, string error)
     {
-        var state = new Eval(Parser.Parse(Utf8($"arr=(old); {command} arr")));
+        var state = new Eval(Parser.Parse($"arr=(old); {command} arr"));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
         Assert.Equal(error, Text(diagnostic.Content));

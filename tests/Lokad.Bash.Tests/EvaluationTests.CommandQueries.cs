@@ -33,7 +33,7 @@ public partial class EvaluationTests
     public async Task Evaluation_CommandQueries_ContinueOrderedOutputAfterWriteFailures(
         string command, bool appendFailed, int expectedExitCode)
     {
-        var state = new Eval(Parser.Parse(Utf8(command + " echo missing : absent")));
+        var state = new Eval(Parser.Parse(command + " echo missing : absent"));
         var lookup = await NextResolveCommandsAsync(state);
         Assert.Equal(["missing", "absent"], lookup.CommandNames);
         lookup.SetResult([new CommandLookupResult.Missing(), new CommandLookupResult.Missing()]);
@@ -74,7 +74,7 @@ public partial class EvaluationTests
     public async Task Evaluation_CommandQueries_CheckTheSharedBudgetBeforeEitherChannel(
         string command, string builtin)
     {
-        var state = new Eval(Parser.Parse(Utf8(command + " echo missing enormous")));
+        var state = new Eval(Parser.Parse(command + " echo missing enormous"));
         const int MemoryBudgetBytes = 16 * 1024;
         state.Memory.Budget = new Lokad.Bash.Memory.MemoryGovernor(MemoryBudgetBytes);
         var lookup = await NextResolveCommandsAsync(state);

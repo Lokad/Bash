@@ -62,7 +62,7 @@ public partial class EvaluationTests
         table.Set(LogicalDescriptor.StdErr, errorHandle);
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [inputHandle, errorHandle]);
         var command = logicalNumber == 0 ? "read value" : "read -u3 value";
-        var state = new Eval(Parser.Parse(Utf8("value=old; " + command)), descriptors,
+        var state = new Eval(Parser.Parse("value=old; " + command), descriptors,
             publishNextStep: null, onComplete: null, EvaluationOptions.Default, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var firstRead = await NextReadAsync(state);
@@ -80,7 +80,7 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
-        Assert.Equal("old", Text(GetVariable(state, "value")));
+        Assert.Equal("old", GetVariable(state, "value"));
         Assert.Equal(inputHandle, table.Resolve(new LogicalDescriptor(logicalNumber)));
         Assert.Empty(state.GetDescriptorsForCleanup());
     }

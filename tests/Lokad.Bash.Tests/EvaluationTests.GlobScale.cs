@@ -133,7 +133,7 @@ public partial class EvaluationTests
     {
         const int Count = 10_000;
         var entries = Enumerable.Range(0, Count)
-            .Select(index => new DirectoryEntry(Utf8($"value_{index:D5}"), FilePathKind.File))
+            .Select(index => new DirectoryEntry($"value_{index:D5}", FilePathKind.File))
             .ToArray();
         var state = new Eval(Parser.Parse("cmd *"));
         var listing = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));

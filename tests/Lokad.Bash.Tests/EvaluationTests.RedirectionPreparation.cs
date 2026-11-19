@@ -53,7 +53,7 @@ public partial class EvaluationTests
     [InlineData("cat {fd}< missing 2>&1; printf after >&2", 2)]
     public async Task Evaluation_Redirection_RoutesReportedOpenFailureBeforeLaterMappings(string script, int errorDescriptor)
     {
-        var state = new Eval(Parser.Parse(Utf8(script)));
+        var state = new Eval(Parser.Parse(script));
         var open = await NextOpenFileAsync(state);
         Assert.Equal("/missing", open.Path.Path);
         open.SetResult(FileOpenResult.Failed(new OperationError("reported failure\n")));
@@ -77,7 +77,7 @@ public partial class EvaluationTests
     [InlineData("cat 2>&- {fd}< missing; printf after >&2")]
     public async Task Evaluation_Redirection_ClosedErrorStreamSuppressesReportedOpenFailure(string script)
     {
-        var state = new Eval(Parser.Parse(Utf8(script)));
+        var state = new Eval(Parser.Parse(script));
         var open = await NextOpenFileAsync(state);
         open.SetResult(FileOpenResult.Failed(new OperationError("reported failure\n")));
 
@@ -93,7 +93,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_ClosesOpenedDescriptorAfterExpansionFailure()
     {
-        var state = new Eval(Parser.Parse(Utf8("cat 2>/error <<< \"${missing:?stop}\"; printf after >&2")));
+        var state = new Eval(Parser.Parse("cat 2>/error <<< \"${missing:?stop}\"; printf after >&2"));
         var open = await NextOpenFileAsync(state);
         Assert.Equal("/error", open.Path.Path);
         open.SetResult(FileOpenResult.Opened(10, readSize: null));

@@ -32,29 +32,29 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_AssignmentPrefix_EvalCommitsNonPrefixedSideEffects()
     {
-        var script = Parser.Parse(Utf8("x=1 eval 'y=$x'"));
+        var script = Parser.Parse("x=1 eval 'y=$x'");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("x")));
+        Assert.False(state.Variables.ContainsKey("x"));
         Assert.Equal("1", GetVariable(state, "y"));
     }
 
     [Fact]
     public async Task Evaluation_AssignmentPrefix_FunctionCommitsNonPrefixedSideEffects()
     {
-        var script = Parser.Parse(Utf8("f() { y=$x; x=2; }; x=1 f"));
+        var script = Parser.Parse("f() { y=$x; x=2; }; x=1 f");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("x")));
+        Assert.False(state.Variables.ContainsKey("x"));
         Assert.Equal("1", GetVariable(state, "y"));
     }
 
     [Fact]
     public async Task Evaluation_AssignmentPrefix_ExportPromotesDeclaredPrefixedName()
     {
-        var script = Parser.Parse(Utf8("x=1 export x"));
+        var script = Parser.Parse("x=1 export x");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -65,11 +65,11 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_AssignmentPrefix_SetCommitsPositionalSideEffects()
     {
-        var script = Parser.Parse(Utf8("x=1 set -- a b"));
+        var script = Parser.Parse("x=1 set -- a b");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("x")));
+        Assert.False(state.Variables.ContainsKey("x"));
         Assert.Equal(2, state.PositionalParameters.Count);
         Assert.Equal(ShellValue.FromText("a"), state.PositionalParameters[0]);
         Assert.Equal(ShellValue.FromText("b"), state.PositionalParameters[1]);
@@ -78,18 +78,18 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_AssignmentPrefix_LetReadsTemporaryScopeAndCommitsSideEffects()
     {
-        var script = Parser.Parse(Utf8("x=1 let 'y=x+1'"));
+        var script = Parser.Parse("x=1 let 'y=x+1'");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("x")));
+        Assert.False(state.Variables.ContainsKey("x"));
         Assert.Equal("2", GetVariable(state, "y"));
     }
 
     [Fact]
     public async Task Evaluation_AssignmentPrefix_FunctionAttributesPromoteResolvedNamerefTargets()
     {
-        var script = Parser.Parse(Utf8("declare -n export_ref=export_target; declare -n readonly_ref=readonly_target; export_target=outer; readonly_target=outer; f() { export export_ref=exported; readonly readonly_ref=locked; }; export_ref=temp readonly_ref=temp f"));
+        var script = Parser.Parse("declare -n export_ref=export_target; declare -n readonly_ref=readonly_target; export_target=outer; readonly_target=outer; f() { export export_ref=exported; readonly readonly_ref=locked; }; export_ref=temp readonly_ref=temp f");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -102,24 +102,24 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_YieldsRunCommandOperation()
     {
-        var script = Parser.Parse(Utf8("cmd hi"));
+        var script = Parser.Parse("cmd hi");
         var state = new Eval(script);
 
         var operation = await NextStepAsync(state);
         Assert.NotNull(operation);
         var runCommand = Assert.IsType<RunCommand>(operation);
         var command = runCommand.Command;
-        Assert.Equal("cmd", Text(command.CommandName));
+        Assert.Equal("cmd", command.CommandName);
 
         var arguments = command.Arguments.ToList();
         Assert.Single(arguments);
-        Assert.Equal("hi", Text(arguments[0].ToUtf8String()));
+        Assert.Equal("hi", arguments[0].ToUtf8String());
     }
 
     [Fact]
     public async Task Evaluation_CompletesAfterResult()
     {
-        var script = Parser.Parse(Utf8("cmd hi"));
+        var script = Parser.Parse("cmd hi");
         var state = new Eval(script);
 
         var operation = await NextStepAsync(state);
@@ -152,7 +152,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BuiltinColon_ReturnsSuccessWithoutOperation()
     {
-        var script = Parser.Parse(Utf8(":"));
+        var script = Parser.Parse(":");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -162,7 +162,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BuiltinTrue_ReturnsSuccessWithoutOperation()
     {
-        var script = Parser.Parse(Utf8("true"));
+        var script = Parser.Parse("true");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -172,7 +172,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BuiltinFalse_ReturnsFailureWithoutOperation()
     {
-        var script = Parser.Parse(Utf8("false"));
+        var script = Parser.Parse("false");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -182,7 +182,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ExitBuiltin_TerminatesScript()
     {
-        var script = Parser.Parse(Utf8("exit; cmd later"));
+        var script = Parser.Parse("exit; cmd later");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -192,7 +192,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ExitBuiltin_UsesProvidedStatus()
     {
-        var script = Parser.Parse(Utf8("exit 7; cmd later"));
+        var script = Parser.Parse("exit 7; cmd later");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -218,7 +218,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ListAnd_ExecutesRightOnSuccess()
     {
-        var script = Parser.Parse(Utf8("first && second"));
+        var script = Parser.Parse("first && second");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -233,7 +233,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ListAnd_SkipsRightOnFailure()
     {
-        var script = Parser.Parse(Utf8("first && second"));
+        var script = Parser.Parse("first && second");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -246,7 +246,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ListOr_SkipsRightOnSuccess()
     {
-        var script = Parser.Parse(Utf8("first || second"));
+        var script = Parser.Parse("first || second");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -259,7 +259,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ListSequence_AlwaysExecutesRight()
     {
-        var script = Parser.Parse(Utf8("first; second"));
+        var script = Parser.Parse("first; second");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -274,7 +274,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ListLeftAssociativity_RespectsExitStatus()
     {
-        var script = Parser.Parse(Utf8("first && second || third"));
+        var script = Parser.Parse("first && second || third");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -289,7 +289,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Pipeline_CreatesPipeAndExecutesSegments()
     {
-        var script = Parser.Parse(Utf8("left | right"));
+        var script = Parser.Parse("left | right");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -317,7 +317,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Pipeline_PipeAndError_UsesStdErr()
     {
-        var script = Parser.Parse(Utf8("left |& right"));
+        var script = Parser.Parse("left |& right");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -345,7 +345,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Pipeline_BuiltinStageUsesIsolatedEvaluator()
     {
-        var script = Parser.Parse(Utf8("printf x | cat"));
+        var script = Parser.Parse("printf x | cat");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -374,7 +374,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Pipeline_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! left | right"));
+        var script = Parser.Parse("! left | right");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -390,7 +390,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FatalForItemExpansion_DoesNotAssignTheLoopVariableOrCreatePipes()
     {
-        var state = new Eval(Parser.Parse(Utf8("i=before; for i in ok ${MISSING:?bad}; do printf changed | cat; done")));
+        var state = new Eval(Parser.Parse("i=before; for i in ok ${MISSING:?bad}; do printf changed | cat; done"));
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
@@ -399,13 +399,13 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
-        Assert.Equal("before", Text(GetVariable(state, "i")));
+        Assert.Equal("before", GetVariable(state, "i"));
     }
 
     [Fact]
     public async Task Evaluation_Pipeline_ReadonlyPrefixClosesStageRedirection()
     {
-        var script = Parser.Parse(Utf8("readonly X; X=1 left > out | right"));
+        var script = Parser.Parse("readonly X; X=1 left > out | right");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -445,7 +445,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Pipeline_ReadonlyPrefixClosesStageHereStringDescriptor()
     {
-        var script = Parser.Parse(Utf8("readonly X; X=1 left <<< value | right"));
+        var script = Parser.Parse("readonly X; X=1 left <<< value | right");
         var state = new Eval(script);
 
         var pipelinePipe = await NextPipeAsync(state);
@@ -485,7 +485,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_NegatedCommand_InvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! left"));
+        var script = Parser.Parse("! left");
         var state = new Eval(script);
 
         var left = await NextCommandAsync(state, "left");
@@ -498,7 +498,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_GroupCommand_ExecutesBodyInOrder()
     {
-        var script = Parser.Parse(Utf8("{ first; second; }"));
+        var script = Parser.Parse("{ first; second; }");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -514,7 +514,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_GroupCommand_UsesExitStatusForAndList()
     {
-        var script = Parser.Parse(Utf8("{ first; } && second"));
+        var script = Parser.Parse("{ first; } && second");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -529,7 +529,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_GroupCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! { first; }"));
+        var script = Parser.Parse("! { first; }");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -542,7 +542,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SubshellCommand_ExecutesBodyInOrder()
     {
-        var script = Parser.Parse(Utf8("( first; second; )"));
+        var script = Parser.Parse("( first; second; )");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -558,7 +558,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SubshellCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! ( first; )"));
+        var script = Parser.Parse("! ( first; )");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -571,7 +571,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_IfCommand_ExecutesThenBranch()
     {
-        var script = Parser.Parse(Utf8("if cond; then yes; else no; fi"));
+        var script = Parser.Parse("if cond; then yes; else no; fi");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -586,7 +586,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_IfCommand_ExecutesElseBranch()
     {
-        var script = Parser.Parse(Utf8("if cond; then yes; else no; fi"));
+        var script = Parser.Parse("if cond; then yes; else no; fi");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -601,7 +601,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_IfCommand_ExecutesElifBranch()
     {
-        var script = Parser.Parse(Utf8("if c1; then a; elif c2; then b; else c; fi"));
+        var script = Parser.Parse("if c1; then a; elif c2; then b; else c; fi");
         var state = new Eval(script);
 
         var c1 = await NextCommandAsync(state, "c1");
@@ -619,7 +619,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_IfCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! if cond; then yes; fi"));
+        var script = Parser.Parse("! if cond; then yes; fi");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -635,7 +635,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WhileCommand_ExecutesSingleIteration()
     {
-        var script = Parser.Parse(Utf8("while cond; do body; done"));
+        var script = Parser.Parse("while cond; do body; done");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -654,7 +654,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WhileCommand_BreakExitsLoop()
     {
-        var script = Parser.Parse(Utf8("while cond; do break; done"));
+        var script = Parser.Parse("while cond; do break; done");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -667,7 +667,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WhileCommand_ContinueSkipsBody()
     {
-        var script = Parser.Parse(Utf8("while cond; do continue; done"));
+        var script = Parser.Parse("while cond; do continue; done");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -683,7 +683,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WhileCommand_BreakInvalidArgumentReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("while cond; do break nope; done"));
+        var script = Parser.Parse("while cond; do break nope; done");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -700,7 +700,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WhileCommand_AllowsZeroIterations()
     {
-        var script = Parser.Parse(Utf8("while cond; do body; done"));
+        var script = Parser.Parse("while cond; do body; done");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -713,7 +713,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_UntilCommand_ExecutesSingleIteration()
     {
-        var script = Parser.Parse(Utf8("until cond; do body; done"));
+        var script = Parser.Parse("until cond; do body; done");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -732,7 +732,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WhileCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! while cond; do body; done"));
+        var script = Parser.Parse("! while cond; do body; done");
         var state = new Eval(script);
 
         var cond = await NextCommandAsync(state, "cond");
@@ -751,7 +751,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ForCommand_ExecutesBodyForEachItem()
     {
-        var script = Parser.Parse(Utf8("for i in a b; do body; done"));
+        var script = Parser.Parse("for i in a b; do body; done");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "body");
@@ -767,7 +767,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ForCommand_EmptyListReturnsZero()
     {
-        var script = Parser.Parse(Utf8("for i in; do body; done"));
+        var script = Parser.Parse("for i in; do body; done");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -777,7 +777,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ForCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! for i in a; do body; done"));
+        var script = Parser.Parse("! for i in a; do body; done");
         var state = new Eval(script);
 
         var body = await NextCommandAsync(state, "body");
@@ -790,7 +790,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FunctionDefinition_DoesNotEmitOperations()
     {
-        var script = Parser.Parse(Utf8("foo() { cmd hi; }"));
+        var script = Parser.Parse("foo() { cmd hi; }");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -800,7 +800,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FunctionDefinition_AllowsFollowingCommands()
     {
-        var script = Parser.Parse(Utf8("foo() { cmd hi; }; cmd there"));
+        var script = Parser.Parse("foo() { cmd hi; }; cmd there");
         var state = new Eval(script);
 
         var cmd = await NextCommandAsync(state, "cmd");
@@ -812,7 +812,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FunctionDefinition_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! foo() { cmd hi; }"));
+        var script = Parser.Parse("! foo() { cmd hi; }");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -822,7 +822,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FunctionInvocation_ExecutesBodyCommands()
     {
-        var script = Parser.Parse(Utf8("foo() { first; second; }; foo; third"));
+        var script = Parser.Parse("foo() { first; second; }; foo; third");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -841,7 +841,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FunctionInvocation_UsesLastBodyExitStatus()
     {
-        var script = Parser.Parse(Utf8("foo() { first; second; }; foo && after"));
+        var script = Parser.Parse("foo() { first; second; }; foo && after");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -857,7 +857,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReturnBuiltin_ExitsFunctionWithStatus()
     {
-        var script = Parser.Parse(Utf8("foo() { first; return 7; second; }; foo"));
+        var script = Parser.Parse("foo() { first; return 7; second; }; foo");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -870,7 +870,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReturnBuiltin_UsesLastExitStatusWhenOmitted()
     {
-        var script = Parser.Parse(Utf8("foo() { first; return; second; }; foo"));
+        var script = Parser.Parse("foo() { first; return; second; }; foo");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -883,7 +883,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FunctionInvocation_SetsAndRestoresPositionalParameters()
     {
-        var script = Parser.Parse(Utf8("foo() { shift; command echo hi; }; foo a b"));
+        var script = Parser.Parse("foo() { shift; command echo hi; }; foo a b");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("outer")]);
 
@@ -900,7 +900,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_FunctionInvocation_ReturnRestoresPositionalParameters()
     {
-        var script = Parser.Parse(Utf8("foo() { return 0; command echo hi; }; foo a"));
+        var script = Parser.Parse("foo() { return 0; command echo hi; }; foo a");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("outer")]);
 
@@ -913,35 +913,35 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_LocalBuiltin_AssignsAndClearsVariable()
     {
-        var script = Parser.Parse(Utf8("foo() { local bar=baz; command echo hi; }; foo"));
+        var script = Parser.Parse("foo() { local bar=baz; command echo hi; }; foo");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
-        Assert.Equal("baz", Text(GetVariable(state, "bar")));
+        Assert.Equal("baz", GetVariable(state, "bar"));
         append.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("bar")));
+        Assert.False(state.Variables.ContainsKey("bar"));
     }
 
     [Fact]
     public async Task Evaluation_LocalBuiltin_RestoresPreviousValue()
     {
-        var script = Parser.Parse(Utf8("declare bar=old; foo() { local bar=new; command echo hi; }; foo"));
+        var script = Parser.Parse("declare bar=old; foo() { local bar=new; command echo hi; }; foo");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
-        Assert.Equal("new", Text(GetVariable(state, "bar")));
+        Assert.Equal("new", GetVariable(state, "bar"));
         append.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("old", Text(GetVariable(state, "bar")));
+        Assert.Equal("old", GetVariable(state, "bar"));
     }
 
     [Fact]
     public async Task Evaluation_LocalBuiltin_OutsideFunctionReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("local foo"));
+        var script = Parser.Parse("local foo");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -956,7 +956,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CallerBuiltin_ReportsFunctionName()
     {
-        var script = Parser.Parse(Utf8("foo() { caller; }; foo"));
+        var script = Parser.Parse("foo() { caller; }; foo");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -970,7 +970,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CallerBuiltin_OutsideFunctionReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("caller"));
+        var script = Parser.Parse("caller");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -980,7 +980,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SourceBuiltin_EvaluatesReadContent()
     {
-        var script = Parser.Parse(Utf8("source file; echo after"));
+        var script = Parser.Parse("source file; echo after");
         var state = new Eval(script);
 
         var openFile = await NextOpenFileAsync(state);
@@ -1011,7 +1011,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_DotBuiltin_EvaluatesReadContent()
     {
-        var script = Parser.Parse(Utf8(". file"));
+        var script = Parser.Parse(". file");
         var state = new Eval(script);
 
         var openFile = await NextOpenFileAsync(state);
@@ -1038,7 +1038,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SourceBuiltin_UsageErrorDoesNotOpenAFile()
     {
-        var script = Parser.Parse(Utf8("source --"));
+        var script = Parser.Parse("source --");
         var state = new Eval(script);
 
         var error = await NextWriteAsync(state);
@@ -1058,7 +1058,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EvalBuiltin_ExecutesParsedContent()
     {
-        var script = Parser.Parse(Utf8("eval echo hi"));
+        var script = Parser.Parse("eval echo hi");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -1072,7 +1072,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EvalBuiltin_NoArgumentsReturnsSuccess()
     {
-        var script = Parser.Parse(Utf8("eval"));
+        var script = Parser.Parse("eval");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -1082,7 +1082,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EvalBuiltin_SyntaxErrorReturnsUsageError()
     {
-        var script = Parser.Parse(Utf8("eval if"));
+        var script = Parser.Parse("eval if");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -1097,32 +1097,32 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_GetoptsBuiltin_ParsesOptionsAndUpdatesOptind()
     {
-        var script = Parser.Parse(Utf8("getopts ab opt; getopts ab opt"));
+        var script = Parser.Parse("getopts ab opt; getopts ab opt");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("-a"), ShellValue.FromText("-b")]);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
-        Assert.Equal("b", Text(GetVariable(state, "opt")));
-        Assert.Equal("3", Text(GetVariable(state, "OPTIND")));
+        Assert.Equal("b", GetVariable(state, "opt"));
+        Assert.Equal("3", GetVariable(state, "OPTIND"));
     }
 
     [Fact]
     public async Task Evaluation_GetoptsBuiltin_NoOptionsReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("getopts ab opt"));
+        var script = Parser.Parse("getopts ab opt");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
-        Assert.Equal("?", Text(GetVariable(state, "opt")));
-        Assert.Equal("1", Text(GetVariable(state, "OPTIND")));
+        Assert.Equal("?", GetVariable(state, "opt"));
+        Assert.Equal("1", GetVariable(state, "OPTIND"));
     }
 
     [Fact]
     public async Task Evaluation_GetoptsBuiltin_MissingArgumentsReportsUsage()
     {
-        var script = Parser.Parse(Utf8("getopts"));
+        var script = Parser.Parse("getopts");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -1136,12 +1136,12 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_AssignmentOnlyCommand_AssignsVariable()
     {
-        var script = Parser.Parse(Utf8("FOO=bar"));
+        var script = Parser.Parse("FOO=bar");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
-        Assert.Equal("bar", Text(GetVariable(state, "FOO")));
+        Assert.Equal("bar", GetVariable(state, "FOO"));
     }
 
     [Theory]
@@ -1150,7 +1150,7 @@ public partial class EvaluationTests
     [InlineData("readonly FOO=bar; declare -n reference=FOO; declare -n indirect=reference; before=old after=old; before=new indirect=baz after=new; printf should-not-run")]
     public async Task Evaluation_AssignmentOnlyCommand_ReadonlyReturnsFailure(string source)
     {
-        var script = Parser.Parse(Utf8(source));
+        var script = Parser.Parse(source);
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -1160,15 +1160,15 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
-        Assert.Equal("bar", Text(GetVariable(state, "FOO")));
-        Assert.Equal("new", Text(GetVariable(state, "before")));
-        Assert.Equal("old", Text(GetVariable(state, "after")));
+        Assert.Equal("bar", GetVariable(state, "FOO"));
+        Assert.Equal("new", GetVariable(state, "before"));
+        Assert.Equal("old", GetVariable(state, "after"));
     }
 
     [Fact]
     public async Task Evaluation_LetBuiltin_ReturnsSuccessForNonZero()
     {
-        var script = Parser.Parse(Utf8("let 1"));
+        var script = Parser.Parse("let 1");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -1178,7 +1178,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_LetBuiltin_ReturnsFailureForZero()
     {
-        var script = Parser.Parse(Utf8("let 0"));
+        var script = Parser.Parse("let 0");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -1188,7 +1188,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_LetBuiltin_UsesLastArgumentResult()
     {
-        var script = Parser.Parse(Utf8("let 1 0"));
+        var script = Parser.Parse("let 1 0");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -1198,7 +1198,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_TestBuiltin_EvaluatesStringPredicate()
     {
-        var script = Parser.Parse(Utf8("test foo"));
+        var script = Parser.Parse("test foo");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -1208,7 +1208,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_TestBuiltin_FalseReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("test \"\""));
+        var script = Parser.Parse("test \"\"");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -1218,7 +1218,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BracketBuiltin_StripsClosingBracket()
     {
-        var script = Parser.Parse(Utf8("[ foo ]"));
+        var script = Parser.Parse("[ foo ]");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -1228,7 +1228,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BracketBuiltin_MissingClosingBracketReturnsUsageError()
     {
-        var script = Parser.Parse(Utf8("[ foo"));
+        var script = Parser.Parse("[ foo");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -1242,7 +1242,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_PwdBuiltin_EmitsWriteOperation()
     {
-        var script = Parser.Parse(Utf8("pwd"));
+        var script = Parser.Parse("pwd");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1257,7 +1257,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_PwdBuiltin_ReturnsFailureForRejectedOutput()
     {
-        var script = Parser.Parse(Utf8("pwd"));
+        var script = Parser.Parse("pwd");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1275,7 +1275,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_PwdVariable_Initialized()
     {
-        var script = Parser.Parse(Utf8("echo $PWD"));
+        var script = Parser.Parse("echo $PWD");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -1289,7 +1289,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CdBuiltin_UpdatesCurrentDirectory()
     {
-        var script = Parser.Parse(Utf8("cd target"));
+        var script = Parser.Parse("cd target");
         var state = new Eval(script);
 
         var operation = await NextPathKindsAsync(state);
@@ -1305,7 +1305,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CdBuiltin_UpdatesPwdVariables()
     {
-        var script = Parser.Parse(Utf8("cd target; echo $PWD $OLDPWD"));
+        var script = Parser.Parse("cd target; echo $PWD $OLDPWD");
         var state = new Eval(script);
 
         var operation = await NextPathKindsAsync(state);
@@ -1322,7 +1322,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CdBuiltin_FailureDoesNotUpdateDirectory()
     {
-        var script = Parser.Parse(Utf8("cd target"));
+        var script = Parser.Parse("cd target");
         var state = new Eval(script);
         var initialDirectory = state.CurrentDirectory;
 
@@ -1342,7 +1342,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CdBuiltin_NoArgumentsReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("unset HOME; cd"));
+        var script = Parser.Parse("unset HOME; cd");
         var state = new Eval(script);
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
@@ -1379,7 +1379,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_EmitsWriteOperation()
     {
-        var script = Parser.Parse(Utf8("echo a b"));
+        var script = Parser.Parse("echo a b");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1394,7 +1394,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_AllowsNoArguments()
     {
-        var script = Parser.Parse(Utf8("echo"));
+        var script = Parser.Parse("echo");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1409,7 +1409,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_LeadingDashN_SuppressesTrailingNewline()
     {
-        var script = Parser.Parse(Utf8("echo -n a b"));
+        var script = Parser.Parse("echo -n a b");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1424,7 +1424,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsLastExitStatus()
     {
-        var script = Parser.Parse(Utf8("false; echo $?"));
+        var script = Parser.Parse("false; echo $?");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1439,7 +1439,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsPositionalParameters()
     {
-        var script = Parser.Parse(Utf8("echo $1 $#"));
+        var script = Parser.Parse("echo $1 $#");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("alpha"), ShellValue.FromText("beta")]);
 
@@ -1454,7 +1454,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsNamedVariables()
     {
-        var script = Parser.Parse(Utf8("FOO=bar; echo ${FOO}"));
+        var script = Parser.Parse("FOO=bar; echo ${FOO}");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1468,7 +1468,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_SingleQuotedIsLiteral()
     {
-        var script = Parser.Parse(Utf8("echo '$1'"));
+        var script = Parser.Parse("echo '$1'");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1482,7 +1482,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_SingleQuotedGlobIsLiteral()
     {
-        var script = Parser.Parse(Utf8("echo '*.txt'"));
+        var script = Parser.Parse("echo '*.txt'");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1496,7 +1496,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_DoubleQuotedGlobIsLiteral()
     {
-        var script = Parser.Parse(Utf8("echo \"*.txt\""));
+        var script = Parser.Parse("echo \"*.txt\"");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1510,7 +1510,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_MixedQuotedGlobIsLiteral()
     {
-        var script = Parser.Parse(Utf8("echo a'*'.txt"));
+        var script = Parser.Parse("echo a'*'.txt");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1524,7 +1524,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_GlobExpansion_RespectsQuotedBracketSegment()
     {
-        var script = Parser.Parse(Utf8("echo a*'[bc]'"));
+        var script = Parser.Parse("echo a*'[bc]'");
         var state = new Eval(script);
 
         var list = await NextStepAsync(state);
@@ -1532,9 +1532,9 @@ public partial class EvaluationTests
         var dirList = Assert.IsType<ListDirectoryOperation>(list);
         Assert.Equal("/", dirList.Path.Path);
         dirList.SetResult(DirectoryListingResult.Success([
-            new DirectoryEntry(Utf8("ax[bc]"), FilePathKind.File),
-            new DirectoryEntry(Utf8("axb"), FilePathKind.File),
-            new DirectoryEntry(Utf8("axc"), FilePathKind.File)
+            new DirectoryEntry("ax[bc]", FilePathKind.File),
+            new DirectoryEntry("axb", FilePathKind.File),
+            new DirectoryEntry("axc", FilePathKind.File)
         ]));
 
         var append = await NextWriteAsync(state);
@@ -1548,7 +1548,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsArithmeticLiteral()
     {
-        var script = Parser.Parse(Utf8("echo $((42))"));
+        var script = Parser.Parse("echo $((42))");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1562,7 +1562,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsArithmeticShift()
     {
-        var script = Parser.Parse(Utf8("echo $(( 1 << 3 ))"));
+        var script = Parser.Parse("echo $(( 1 << 3 ))");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1576,7 +1576,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsArithmeticVariable()
     {
-        var script = Parser.Parse(Utf8("FOO=7; echo $(( ${FOO} ))"));
+        var script = Parser.Parse("FOO=7; echo $(( ${FOO} ))");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1590,7 +1590,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsNestedArithmetic()
     {
-        var script = Parser.Parse(Utf8("echo $(( $((3)) ))"));
+        var script = Parser.Parse("echo $(( $((3)) ))");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1604,7 +1604,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsHomeTilde()
     {
-        var script = Parser.Parse(Utf8("HOME=/home; echo ~"));
+        var script = Parser.Parse("HOME=/home; echo ~");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1618,7 +1618,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsHomeTildeWithPath()
     {
-        var script = Parser.Parse(Utf8("HOME=/home; echo ~/src"));
+        var script = Parser.Parse("HOME=/home; echo ~/src");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1632,7 +1632,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsOldPwdTilde()
     {
-        var script = Parser.Parse(Utf8("OLDPWD=/prev; echo ~-"));
+        var script = Parser.Parse("OLDPWD=/prev; echo ~-");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1646,7 +1646,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_TildeQuotedIsLiteral()
     {
-        var script = Parser.Parse(Utf8("echo \"~\""));
+        var script = Parser.Parse("echo \"~\"");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1660,7 +1660,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsNamedVariableWithoutBraces()
     {
-        var script = Parser.Parse(Utf8("FOO=bar; echo $FOO"));
+        var script = Parser.Parse("FOO=bar; echo $FOO");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1674,7 +1674,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsNamedVariableInDoubleQuotes()
     {
-        var script = Parser.Parse(Utf8("FOO=bar; echo \"$FOO\""));
+        var script = Parser.Parse("FOO=bar; echo \"$FOO\"");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1688,7 +1688,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsBraceList()
     {
-        var script = Parser.Parse(Utf8("echo a{b,c}d"));
+        var script = Parser.Parse("echo a{b,c}d");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1702,7 +1702,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsBraceSequence()
     {
-        var script = Parser.Parse(Utf8("echo {1..3}"));
+        var script = Parser.Parse("echo {1..3}");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1716,7 +1716,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_LeavesQuotedBracesLiteral()
     {
-        var script = Parser.Parse(Utf8("echo \"{a,b}\""));
+        var script = Parser.Parse("echo \"{a,b}\"");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -1730,7 +1730,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_OpensOutputFileForEcho()
     {
-        var script = Parser.Parse(Utf8("echo hi > out"));
+        var script = Parser.Parse("echo hi > out");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -1754,7 +1754,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_OrdersDuplicateBeforeOpen()
     {
-        var script = Parser.Parse(Utf8("cmd 2>&1 > out"));
+        var script = Parser.Parse("cmd 2>&1 > out");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -1778,7 +1778,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_AssignsStdInAndStdOut()
     {
-        var script = Parser.Parse(Utf8("cmd < in > out"));
+        var script = Parser.Parse("cmd < in > out");
         var state = new Eval(script);
 
         var openIn = await NextOpenFileAsync(state);
@@ -1811,7 +1811,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_OutputAndError()
     {
-        var script = Parser.Parse(Utf8("cmd &> out"));
+        var script = Parser.Parse("cmd &> out");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -1835,7 +1835,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_OutputAndErrorAppend()
     {
-        var script = Parser.Parse(Utf8("cmd &>> out"));
+        var script = Parser.Parse("cmd &>> out");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -1859,7 +1859,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_DuplicateOutputNonNumericRedirectsBoth()
     {
-        var script = Parser.Parse(Utf8("cmd >& out"));
+        var script = Parser.Parse("cmd >& out");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -1883,7 +1883,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_DuplicatesInputDescriptor()
     {
-        var script = Parser.Parse(Utf8("cmd <&3"));
+        var script = Parser.Parse("cmd <&3");
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(3), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
@@ -1900,7 +1900,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_DuplicatesNonStandardInputDescriptor()
     {
-        var script = Parser.Parse(Utf8("cmd 5<&0"));
+        var script = Parser.Parse("cmd 5<&0");
         var state = new Eval(script);
 
         var run = await NextCommandAsync(state, "cmd");
@@ -1914,7 +1914,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_BorrowsExplicitlyBoundDescriptor()
     {
-        var script = Parser.Parse(Utf8("first >&9; second >&9"));
+        var script = Parser.Parse("first >&9; second >&9");
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(9), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
@@ -1937,7 +1937,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_HereStringCreatesPipe()
     {
-        var script = Parser.Parse(Utf8("cmd <<< value"));
+        var script = Parser.Parse("cmd <<< value");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -1960,7 +1960,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_FatalHereStringExpansionSkipsPipe()
     {
-        var script = Parser.Parse(Utf8("cmd <<< ${MISSING:?failed}"));
+        var script = Parser.Parse("cmd <<< ${MISSING:?failed}");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -1975,7 +1975,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_HereDocumentCreatesPipe()
     {
-        var script = Parser.Parse(Utf8("cmd <<EOF\nline1\nline2\nEOF\n"));
+        var script = Parser.Parse("cmd <<EOF\nline1\nline2\nEOF\n");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -1998,7 +1998,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_HereDocumentStripsTabs()
     {
-        var script = Parser.Parse(Utf8("cmd <<-EOF\n\tline1\n\t\tline2\n\tEOF\n"));
+        var script = Parser.Parse("cmd <<-EOF\n\tline1\n\t\tline2\n\tEOF\n");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -2021,7 +2021,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_HereDocumentExpandsWhenUnquoted()
     {
-        var script = Parser.Parse(Utf8("FOO=bar; cmd <<EOF\n$FOO\nEOF\n"));
+        var script = Parser.Parse("FOO=bar; cmd <<EOF\n$FOO\nEOF\n");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -2044,7 +2044,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_HereDocumentSkipsExpansionWhenQuoted()
     {
-        var script = Parser.Parse(Utf8("FOO=bar; cmd <<'EOF'\n$FOO\nEOF\n"));
+        var script = Parser.Parse("FOO=bar; cmd <<'EOF'\n$FOO\nEOF\n");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -2067,7 +2067,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_CommandAfterHereDocumentIsStillInvoked()
     {
-        var script = Parser.Parse(Utf8("cat > /out << 'EOF'\nhi\nEOF\ncat /out"));
+        var script = Parser.Parse("cat > /out << 'EOF'\nhi\nEOF\ncat /out");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -2095,7 +2095,7 @@ public partial class EvaluationTests
         closeFile.SetResult(null);
 
         var second = await NextCommandAsync(state, "cat");
-        Assert.Equal("/out", Text(second.Command.Arguments.Single().ToUtf8String()));
+        Assert.Equal("/out", second.Command.Arguments.Single().ToUtf8String());
         Assert.Equal(FileDescriptor.StdOut, second.Command.StdOut);
         second.SetResult(new CommandExecutionResult.Completed(0));
 
@@ -2121,7 +2121,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_AllocatesOutputDescriptor()
     {
-        var script = Parser.Parse(Utf8("cmd {fd}> out >&$fd"));
+        var script = Parser.Parse("cmd {fd}> out >&$fd");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -2145,7 +2145,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Redirection_AllocatesInputDescriptor()
     {
-        var script = Parser.Parse(Utf8("cmd {fd}< in <&$fd"));
+        var script = Parser.Parse("cmd {fd}< in <&$fd");
         var state = new Eval(script);
 
         var open = await NextOpenFileAsync(state);
@@ -2169,7 +2169,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayElement()
     {
-        var script = Parser.Parse(Utf8("arr=(zero one two); echo ${arr[1]}"));
+        var script = Parser.Parse("arr=(zero one two); echo ${arr[1]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2183,7 +2183,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Assignment_AssignsIndexedArrayElement()
     {
-        var script = Parser.Parse(Utf8("arr[1]=one; echo ${arr[1]}"));
+        var script = Parser.Parse("arr[1]=one; echo ${arr[1]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2197,7 +2197,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Assignment_AssignsAssociativeArrayElement()
     {
-        var script = Parser.Parse(Utf8("map[key]=value; echo ${map[key]}"));
+        var script = Parser.Parse("map[key]=value; echo ${map[key]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2211,7 +2211,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Assignment_CompoundArrayAssignment()
     {
-        var script = Parser.Parse(Utf8("arr=(a b); echo ${arr[1]}"));
+        var script = Parser.Parse("arr=(a b); echo ${arr[1]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2225,7 +2225,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Assignment_CompoundArrayAssignmentWithIndices()
     {
-        var script = Parser.Parse(Utf8("arr=([2]=two [0]=zero); echo ${arr[2]}"));
+        var script = Parser.Parse("arr=([2]=two [0]=zero); echo ${arr[2]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2239,7 +2239,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Assignment_AssociativeCompoundKeyValuePairs()
     {
-        var script = Parser.Parse(Utf8("declare -A map; map=(one 1 two 2); echo ${map[two]}"));
+        var script = Parser.Parse("declare -A map; map=(one 1 two 2); echo ${map[two]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2253,7 +2253,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_Assignment_AssociativeCompoundKeyWithMissingValue()
     {
-        var script = Parser.Parse(Utf8("declare -A map; map=(alpha); echo ${map[alpha]}"));
+        var script = Parser.Parse("declare -A map; map=(alpha); echo ${map[alpha]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2267,7 +2267,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsAssociativeArrayElement()
     {
-        var script = Parser.Parse(Utf8("declare -A map; map[key]=value; echo ${map[key]}"));
+        var script = Parser.Parse("declare -A map; map[key]=value; echo ${map[key]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2281,7 +2281,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayAllElements()
     {
-        var script = Parser.Parse(Utf8("arr=(zero one); echo ${arr[@]}"));
+        var script = Parser.Parse("arr=(zero one); echo ${arr[@]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2295,7 +2295,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayStar()
     {
-        var script = Parser.Parse(Utf8("arr=(zero one); echo ${arr[*]}"));
+        var script = Parser.Parse("arr=(zero one); echo ${arr[*]}");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2309,7 +2309,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayStarQuoted()
     {
-        var script = Parser.Parse(Utf8("arr=(zero one); echo \"${arr[*]}\""));
+        var script = Parser.Parse("arr=(zero one); echo \"${arr[*]}\"");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2323,7 +2323,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_ExpandsQuotedIndexedArrayAtAsSeparateArguments()
     {
-        var script = Parser.Parse(Utf8("arr=(\"a b\" c); cmd \"${arr[@]}\""));
+        var script = Parser.Parse("arr=(\"a b\" c); cmd \"${arr[@]}\"");
         var state = new Eval(script);
 
         var run = await NextCommandAsync(state, "cmd");
@@ -2337,7 +2337,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_ExpandsQuotedIndexedArrayAtWithAffixes()
     {
-        var script = Parser.Parse(Utf8("arr=(a b); cmd pre\"${arr[@]}\"post"));
+        var script = Parser.Parse("arr=(a b); cmd pre\"${arr[@]}\"post");
         var state = new Eval(script);
 
         var run = await NextCommandAsync(state, "cmd");
@@ -2351,7 +2351,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayStarQuotedWithFirstIfsCharacter()
     {
-        var script = Parser.Parse(Utf8("arr=(a b c); IFS=,; echo \"${arr[*]}\""));
+        var script = Parser.Parse("arr=(a b c); IFS=,; echo \"${arr[*]}\"");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2365,7 +2365,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsAtUnquoted()
     {
-        var script = Parser.Parse(Utf8("echo $@"));
+        var script = Parser.Parse("echo $@");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("first"), ShellValue.FromText("second")]);
 
@@ -2380,7 +2380,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsAtQuoted()
     {
-        var script = Parser.Parse(Utf8("echo \"$@\""));
+        var script = Parser.Parse("echo \"$@\"");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("first"), ShellValue.FromText("second")]);
 
@@ -2395,7 +2395,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_UnquotedUnsetScalarDoesNotEmitEmptyArgument()
     {
-        var script = Parser.Parse(Utf8("cmd $MISSING"));
+        var script = Parser.Parse("cmd $MISSING");
         var state = new Eval(script);
 
         var run = await NextCommandAsync(state, "cmd");
@@ -2409,7 +2409,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_ExpandsQuotedAtAsSeparateArguments()
     {
-        var script = Parser.Parse(Utf8("cmd \"$@\""));
+        var script = Parser.Parse("cmd \"$@\"");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a b"), ShellValue.FromText("c")]);
 
@@ -2424,7 +2424,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_ExpandsQuotedAtWithAffixes()
     {
-        var script = Parser.Parse(Utf8("cmd pre\"$@\"post"));
+        var script = Parser.Parse("cmd pre\"$@\"post");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a"), ShellValue.FromText("b")]);
 
@@ -2439,7 +2439,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsStarUnquoted()
     {
-        var script = Parser.Parse(Utf8("echo $*"));
+        var script = Parser.Parse("echo $*");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("first"), ShellValue.FromText("second")]);
 
@@ -2454,7 +2454,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsStarQuotedWithFirstIfsCharacter()
     {
-        var script = Parser.Parse(Utf8("IFS=,; echo \"$*\""));
+        var script = Parser.Parse("IFS=,; echo \"$*\"");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a"), ShellValue.FromText("b"), ShellValue.FromText("c")]);
 
@@ -2469,7 +2469,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsStarQuoted()
     {
-        var script = Parser.Parse(Utf8("echo \"$*\""));
+        var script = Parser.Parse("echo \"$*\"");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("first"), ShellValue.FromText("second")]);
 
@@ -2484,7 +2484,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsDefaultWhenUnset()
     {
-        var script = Parser.Parse(Utf8("echo ${FOO:-fallback}"));
+        var script = Parser.Parse("echo ${FOO:-fallback}");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -2498,7 +2498,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsDefaultWhenEmpty()
     {
-        var script = Parser.Parse(Utf8("FOO=; echo ${FOO:-fallback}"));
+        var script = Parser.Parse("FOO=; echo ${FOO:-fallback}");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -2512,7 +2512,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsAlternateWhenSet()
     {
-        var script = Parser.Parse(Utf8("FOO=bar; echo ${FOO:+alt}"));
+        var script = Parser.Parse("FOO=bar; echo ${FOO:+alt}");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -2526,7 +2526,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_AssignsDefaultWhenUnset()
     {
-        var script = Parser.Parse(Utf8("echo ${FOO:=bar}; echo $FOO"));
+        var script = Parser.Parse("echo ${FOO:=bar}; echo $FOO");
         var state = new Eval(script);
 
         var first = await NextWriteAsync(state);
@@ -2544,7 +2544,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_AssignsDefaultWhenEmpty()
     {
-        var script = Parser.Parse(Utf8("FOO=; echo ${FOO:=bar}; echo $FOO"));
+        var script = Parser.Parse("FOO=; echo ${FOO:=bar}; echo $FOO");
         var state = new Eval(script);
 
         var first = await NextWriteAsync(state);
@@ -2562,7 +2562,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ErrorOnUnsetWithMessage()
     {
-        var script = Parser.Parse(Utf8("echo ${FOO:?missing}"));
+        var script = Parser.Parse("echo ${FOO:?missing}");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -2577,7 +2577,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_NoAssignWhenEmptyWithoutColon()
     {
-        var script = Parser.Parse(Utf8("FOO=; echo ${FOO=bar}; echo $FOO"));
+        var script = Parser.Parse("FOO=; echo ${FOO=bar}; echo $FOO");
         var state = new Eval(script);
 
         var first = await NextWriteAsync(state);
@@ -2595,7 +2595,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_AssignsWhenUnsetWithoutColon()
     {
-        var script = Parser.Parse(Utf8("echo ${FOO=bar}; echo $FOO"));
+        var script = Parser.Parse("echo ${FOO=bar}; echo $FOO");
         var state = new Eval(script);
 
         var first = await NextWriteAsync(state);
@@ -2613,7 +2613,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_NoErrorWhenEmptyWithoutColon()
     {
-        var script = Parser.Parse(Utf8("FOO=; echo ${FOO?missing}"));
+        var script = Parser.Parse("FOO=; echo ${FOO?missing}");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -2627,7 +2627,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_EchoBuiltin_ErrorWhenUnsetWithoutColon()
     {
-        var script = Parser.Parse(Utf8("echo ${FOO?missing}"));
+        var script = Parser.Parse("echo ${FOO?missing}");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -2642,7 +2642,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandSubstitution_UsesCapturedOutput()
     {
-        var script = Parser.Parse(Utf8("echo $(cmd)"));
+        var script = Parser.Parse("echo $(cmd)");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -2651,7 +2651,7 @@ public partial class EvaluationTests
         var capture = Assert.IsType<RunCapturedEvaluation>(await NextStepAsync(state));
         Assert.Equal(10, capture.Input.Id);
         var run = await NextCommandAsync(capture.Stage.Evaluation);
-        Assert.Equal("cmd", Text(run.Command.CommandName));
+        Assert.Equal("cmd", run.Command.CommandName);
         Assert.Equal(11, run.Command.StdOut.Id);
         run.SetResult(new CommandExecutionResult.Completed(0));
         Assert.Null(await NextStepAsync(capture.Stage.Evaluation));
@@ -2672,7 +2672,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandSubstitution_StripsTrailingNewlines()
     {
-        var script = Parser.Parse(Utf8("echo $(cmd)"));
+        var script = Parser.Parse("echo $(cmd)");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -2681,7 +2681,7 @@ public partial class EvaluationTests
         var capture = Assert.IsType<RunCapturedEvaluation>(await NextStepAsync(state));
         Assert.Equal(12, capture.Input.Id);
         var run = await NextCommandAsync(capture.Stage.Evaluation);
-        Assert.Equal("cmd", Text(run.Command.CommandName));
+        Assert.Equal("cmd", run.Command.CommandName);
         Assert.Equal(13, run.Command.StdOut.Id);
         run.SetResult(new CommandExecutionResult.Completed(0));
         Assert.Null(await NextStepAsync(capture.Stage.Evaluation));
@@ -2702,7 +2702,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandSubstitution_SplitsUnquotedOutput()
     {
-        var script = Parser.Parse(Utf8("printf %s-%s $(cmd)"));
+        var script = Parser.Parse("printf %s-%s $(cmd)");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -2711,7 +2711,7 @@ public partial class EvaluationTests
         var capture = Assert.IsType<RunCapturedEvaluation>(await NextStepAsync(state));
         Assert.Equal(14, capture.Input.Id);
         var run = await NextCommandAsync(capture.Stage.Evaluation);
-        Assert.Equal("cmd", Text(run.Command.CommandName));
+        Assert.Equal("cmd", run.Command.CommandName);
         Assert.Equal(15, run.Command.StdOut.Id);
         run.SetResult(new CommandExecutionResult.Completed(0));
         Assert.Null(await NextStepAsync(capture.Stage.Evaluation));
@@ -2732,7 +2732,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandSubstitution_SkipsSplitInDoubleQuotes()
     {
-        var script = Parser.Parse(Utf8("printf %s-%s \"$(cmd)\""));
+        var script = Parser.Parse("printf %s-%s \"$(cmd)\"");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -2741,7 +2741,7 @@ public partial class EvaluationTests
         var capture = Assert.IsType<RunCapturedEvaluation>(await NextStepAsync(state));
         Assert.Equal(16, capture.Input.Id);
         var run = await NextCommandAsync(capture.Stage.Evaluation);
-        Assert.Equal("cmd", Text(run.Command.CommandName));
+        Assert.Equal("cmd", run.Command.CommandName);
         Assert.Equal(17, run.Command.StdOut.Id);
         run.SetResult(new CommandExecutionResult.Completed(0));
         Assert.Null(await NextStepAsync(capture.Stage.Evaluation));
@@ -2762,7 +2762,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WordSplitting_UsesDefaultIfs()
     {
-        var script = Parser.Parse(Utf8("var=\"a b\"; printf '%s|%s' $var"));
+        var script = Parser.Parse("var=\"a b\"; printf '%s|%s' $var");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2776,7 +2776,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WordSplitting_UsesCustomIfs()
     {
-        var script = Parser.Parse(Utf8("IFS=,; var=\"a,b,c\"; printf '%s|%s|%s' $var"));
+        var script = Parser.Parse("IFS=,; var=\"a,b,c\"; printf '%s|%s|%s' $var");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2790,7 +2790,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WordSplitting_PreservesEmptyFieldsForNonWhitespaceIfs()
     {
-        var script = Parser.Parse(Utf8("IFS=,; var=\"a,,b,\"; printf '%s|%s|%s|%s' $var"));
+        var script = Parser.Parse("IFS=,; var=\"a,,b,\"; printf '%s|%s|%s|%s' $var");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2804,7 +2804,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_WordSplitting_RespectsEmptyIfs()
     {
-        var script = Parser.Parse(Utf8("IFS=; var=\"a b\"; printf '%s|%s' $var"));
+        var script = Parser.Parse("IFS=; var=\"a b\"; printf '%s|%s' $var");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -2818,7 +2818,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_GlobExpansion_RequestsDirectoryListing()
     {
-        var script = Parser.Parse(Utf8("echo *.txt"));
+        var script = Parser.Parse("echo *.txt");
         var state = new Eval(script);
 
         var operation = await NextStepAsync(state);
@@ -2831,7 +2831,7 @@ public partial class EvaluationTests
     [InlineData("Permission denied\n")]
     public async Task Evaluation_GlobExpansion_ListingFailureLeavesPatternLiteralWithoutDiagnostic(string message)
     {
-        var state = new Eval(Parser.Parse(Utf8("echo /dir/*.txt")));
+        var state = new Eval(Parser.Parse("echo /dir/*.txt"));
         var listing = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
         listing.SetResult(DirectoryListingResult.Failure(new OperationError(message)));
 
@@ -2847,7 +2847,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_GlobExpansion_RecursesSegments()
     {
-        var script = Parser.Parse(Utf8("echo a/*/c"));
+        var script = Parser.Parse("echo a/*/c");
         var state = new Eval(script);
 
         var listA = await NextStepAsync(state);
@@ -2855,18 +2855,18 @@ public partial class EvaluationTests
         var aList = Assert.IsType<ListDirectoryOperation>(listA);
         Assert.Equal("/a", aList.Path.Path);
         aList.SetResult(DirectoryListingResult.Success([
-            new DirectoryEntry(Utf8("x"), FilePathKind.Directory),
-            new DirectoryEntry(Utf8("y"), FilePathKind.Directory),
-            new DirectoryEntry(Utf8("file"), FilePathKind.File)
+            new DirectoryEntry("x", FilePathKind.Directory),
+            new DirectoryEntry("y", FilePathKind.Directory),
+            new DirectoryEntry("file", FilePathKind.File)
         ]));
 
         var listX = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
         Assert.Equal("/a/x", listX.Path.Path);
-        listX.SetResult(DirectoryListingResult.Success([new DirectoryEntry(Utf8("c"), FilePathKind.File)]));
+        listX.SetResult(DirectoryListingResult.Success([new DirectoryEntry("c", FilePathKind.File)]));
 
         var listY = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
         Assert.Equal("/a/y", listY.Path.Path);
-        listY.SetResult(DirectoryListingResult.Success([new DirectoryEntry(Utf8("c"), FilePathKind.File)]));
+        listY.SetResult(DirectoryListingResult.Success([new DirectoryEntry("c", FilePathKind.File)]));
 
         var append = await NextWriteAsync(state);
         Assert.Equal("a/x/c a/y/c\n", Text(append.Content));
@@ -2879,7 +2879,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_PrintfBuiltin_EmitsWriteOperation()
     {
-        var script = Parser.Parse(Utf8("printf %s a"));
+        var script = Parser.Parse("printf %s a");
         var state = new Eval(script);
 
         var operation = await NextWriteAsync(state);
@@ -2894,7 +2894,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_PrintfBuiltin_AllowsOnlyFormatWithoutEmptyHostWrites()
     {
-        var script = Parser.Parse(Utf8("printf %s"));
+        var script = Parser.Parse("printf %s");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -2904,7 +2904,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReadBuiltin_EmitsReadLineOperation()
     {
-        var script = Parser.Parse(Utf8("read name"));
+        var script = Parser.Parse("read name");
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
@@ -2914,29 +2914,29 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReadBuiltin_AssignsVariables()
     {
-        var script = Parser.Parse(Utf8("read first second"));
+        var script = Parser.Parse("read first second");
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
         operation.SetResult(ReadResult.Success(Utf8Bytes("a b c\n"), [], reachedEoF: false));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("a", Text(GetVariable(state, "first")));
-        Assert.Equal("b c", Text(GetVariable(state, "second")));
+        Assert.Equal("a", GetVariable(state, "first"));
+        Assert.Equal("b c", GetVariable(state, "second"));
     }
 
     [Fact]
     public async Task Evaluation_ReadBuiltin_UsesAssignmentPrefixIfs()
     {
-        var script = Parser.Parse(Utf8("IFS=, read first second"));
+        var script = Parser.Parse("IFS=, read first second");
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
         operation.SetResult(ReadResult.Success(Utf8Bytes("a,b,c\n"), [], reachedEoF: false));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("a", Text(GetVariable(state, "first")));
-        Assert.Equal("b,c", Text(GetVariable(state, "second")));
+        Assert.Equal("a", GetVariable(state, "first"));
+        Assert.Equal("b,c", GetVariable(state, "second"));
     }
 
     [Theory]
@@ -2944,20 +2944,20 @@ public partial class EvaluationTests
     [InlineData("read -r value", "a\\b")]
     public async Task Evaluation_ReadBuiltin_ControlsBackslashEscaping(string command, string expected)
     {
-        var script = Parser.Parse(Utf8(command));
+        var script = Parser.Parse(command);
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
         operation.SetResult(ReadResult.Success(Utf8Bytes("a\\b\n"), [], reachedEoF: false));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal(expected, Text(GetVariable(state, "value")));
+        Assert.Equal(expected, GetVariable(state, "value"));
     }
 
     [Fact]
     public async Task Evaluation_ReadBuiltin_ContinuesEscapedPhysicalLines()
     {
-        var script = Parser.Parse(Utf8("read value"));
+        var script = Parser.Parse("read value");
         var state = new Eval(script);
 
         var first = await NextReadAsync(state);
@@ -2966,13 +2966,13 @@ public partial class EvaluationTests
         second.SetResult(ReadResult.Success(Utf8Bytes("b\n"), [], reachedEoF: false));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("ab", Text(GetVariable(state, "value")));
+        Assert.Equal("ab", GetVariable(state, "value"));
     }
 
     [Fact]
     public async Task Evaluation_ReadBuiltin_UnterminatedContinuationAssignsAndReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("read value"));
+        var script = Parser.Parse("read value");
         var state = new Eval(script);
 
         var first = await NextReadAsync(state);
@@ -2981,55 +2981,55 @@ public partial class EvaluationTests
         second.SetResult(ReadResult.Success(Utf8Bytes("b"), [], reachedEoF: true));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("ab", Text(GetVariable(state, "value")));
+        Assert.Equal("ab", GetVariable(state, "value"));
         Assert.Equal(1, state.LastExitCode);
     }
 
     [Fact]
     public async Task Evaluation_ReadBuiltin_UnterminatedTrailingBackslashIsConsumed()
     {
-        var script = Parser.Parse(Utf8("read value"));
+        var script = Parser.Parse("read value");
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
         operation.SetResult(ReadResult.Success(Utf8Bytes("a\\"), [], reachedEoF: true));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("a", Text(GetVariable(state, "value")));
+        Assert.Equal("a", GetVariable(state, "value"));
         Assert.Equal(1, state.LastExitCode);
     }
 
     [Fact]
     public async Task Evaluation_ReadBuiltin_TrimsEscapedIfsWhitespaceFromFinalRemainder()
     {
-        var script = Parser.Parse(Utf8("IFS=' ,' read first rest"));
+        var script = Parser.Parse("IFS=' ,' read first rest");
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
         operation.SetResult(ReadResult.Success(Utf8Bytes("a,b,c\\ \n"), [], reachedEoF: false));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("a", Text(GetVariable(state, "first")));
-        Assert.Equal("b,c", Text(GetVariable(state, "rest")));
+        Assert.Equal("a", GetVariable(state, "first"));
+        Assert.Equal("b,c", GetVariable(state, "rest"));
     }
 
     [Fact]
     public async Task Evaluation_ReadBuiltin_DefaultReplyPreservesWhitespace()
     {
-        var script = Parser.Parse(Utf8("read"));
+        var script = Parser.Parse("read");
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
         operation.SetResult(ReadResult.Success(Utf8Bytes("  a   b  \n"), [], reachedEoF: false));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("  a   b  ", Text(GetVariable(state, "REPLY")));
+        Assert.Equal("  a   b  ", GetVariable(state, "REPLY"));
     }
 
     [Fact]
     public async Task Evaluation_ReadBuiltin_InvalidOptionDoesNotRead()
     {
-        var script = Parser.Parse(Utf8("read -z value"));
+        var script = Parser.Parse("read -z value");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -3045,9 +3045,9 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReadBuiltin_FailureDoesNotAssign()
     {
-        var script = Parser.Parse(Utf8("read value"));
+        var script = Parser.Parse("read value");
         var state = new Eval(script);
-        state.Variables.TryGetValue(Utf8("value"), out var initialValue);
+        state.Variables.TryGetValue("value", out var initialValue);
 
         var operation = await NextReadAsync(state);
         operation.SetResult(ReadResult.Failure(error: new OperationError("read error\n")));
@@ -3065,7 +3065,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReadBuiltin_EmptyEofClearsTarget()
     {
-        var script = Parser.Parse(Utf8("value=old; read value"));
+        var script = Parser.Parse("value=old; read value");
         var state = new Eval(script);
 
         var operation = await NextReadAsync(state);
@@ -3079,21 +3079,21 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_UnsetBuiltin_RemovesVariable()
     {
-        var script = Parser.Parse(Utf8("read name; unset name"));
+        var script = Parser.Parse("read name; unset name");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
         read.SetResult(ReadResult.Success(Utf8Bytes("value\n"), [], reachedEoF: false));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("name")));
+        Assert.False(state.Variables.ContainsKey("name"));
         Assert.Equal(0, state.LastExitCode);
     }
 
     [Fact]
     public async Task Evaluation_UnsetBuiltin_MissingVariableReturnsSuccess()
     {
-        var script = Parser.Parse(Utf8("unset missing"));
+        var script = Parser.Parse("unset missing");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3103,7 +3103,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_DirsBuiltin_EmitsWriteOperation()
     {
-        var script = Parser.Parse(Utf8("dirs"));
+        var script = Parser.Parse("dirs");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3118,7 +3118,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_DirsClearOption_ResetsStack()
     {
-        var script = Parser.Parse(Utf8("pushd target; dirs -c; dirs"));
+        var script = Parser.Parse("pushd target; dirs -c; dirs");
         var state = new Eval(script);
 
         var pushTests = await NextPathKindsAsync(state);
@@ -3137,7 +3137,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_MapfileBuiltin_EmitsReadLineOperation()
     {
-        var script = Parser.Parse(Utf8("mapfile arr"));
+        var script = Parser.Parse("mapfile arr");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
@@ -3154,7 +3154,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReadarrayBuiltin_EmitsReadLineOperation()
     {
-        var script = Parser.Parse(Utf8("readarray arr"));
+        var script = Parser.Parse("readarray arr");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
@@ -3170,7 +3170,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_HashBuiltin_ReturnsSuccess()
     {
-        var script = Parser.Parse(Utf8("hash"));
+        var script = Parser.Parse("hash");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3180,7 +3180,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ShiftBuiltin_RemovesFirstParameter()
     {
-        var script = Parser.Parse(Utf8("shift"));
+        var script = Parser.Parse("shift");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a"), ShellValue.FromText("b")]);
 
@@ -3192,7 +3192,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ShiftBuiltin_RemovesExplicitCount()
     {
-        var script = Parser.Parse(Utf8("shift 2"));
+        var script = Parser.Parse("shift 2");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a"), ShellValue.FromText("b"), ShellValue.FromText("c")]);
 
@@ -3204,7 +3204,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ShiftBuiltin_TooLargeReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("shift 3"));
+        var script = Parser.Parse("shift 3");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a"), ShellValue.FromText("b")]);
 
@@ -3216,7 +3216,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ShiftBuiltin_InvalidCountReportsErrorAndPreservesPositionals()
     {
-        var script = Parser.Parse(Utf8("shift nope"));
+        var script = Parser.Parse("shift nope");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("kept")]);
 
@@ -3233,7 +3233,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SetBuiltin_ReplacesPositionalParameters()
     {
-        var script = Parser.Parse(Utf8("set a b"));
+        var script = Parser.Parse("set a b");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("x")]);
 
@@ -3247,7 +3247,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SetBuiltin_DoubleDashClearsParameters()
     {
-        var script = Parser.Parse(Utf8("set --"));
+        var script = Parser.Parse("set --");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a"), ShellValue.FromText("b")]);
 
@@ -3259,7 +3259,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SetBuiltin_DoubleDashKeepsLeadingDashArgument()
     {
-        var script = Parser.Parse(Utf8("set -- -x"));
+        var script = Parser.Parse("set -- -x");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3271,7 +3271,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SetBuiltin_DoubleDashKeepsQuotedAtArgumentsSeparate()
     {
-        var script = Parser.Parse(Utf8("set -- \"$@\""));
+        var script = Parser.Parse("set -- \"$@\"");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a b"), ShellValue.FromText("c")]);
 
@@ -3285,7 +3285,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SetBuiltin_SingleDashLeavesParametersUnchanged()
     {
-        var script = Parser.Parse(Utf8("set -"));
+        var script = Parser.Parse("set -");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a")]);
 
@@ -3298,7 +3298,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_SetBuiltin_InvalidOptionReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("set -x"));
+        var script = Parser.Parse("set -x");
         var state = new Eval(script);
         state.ReplacePositionalParameters([ShellValue.FromText("a")]);
 
@@ -3315,7 +3315,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandBuiltin_ReentersBuiltinDispatch()
     {
-        var script = Parser.Parse(Utf8("command echo hi"));
+        var script = Parser.Parse("command echo hi");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3329,12 +3329,12 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandBuiltin_DoubleDashAllowsLeadingDashArgs()
     {
-        var script = Parser.Parse(Utf8("command -- basename -n"));
+        var script = Parser.Parse("command -- basename -n");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "basename");
         Assert.Single(runCommand.Command.Arguments);
-        Assert.Equal("-n", Text(runCommand.Command.Arguments[0].ToUtf8String()));
+        Assert.Equal("-n", runCommand.Command.Arguments[0].ToUtf8String());
         runCommand.SetResult(new CommandExecutionResult.Completed(0));
 
         Assert.Null(await NextStepAsync(state));
@@ -3344,7 +3344,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandBuiltin_NoArgumentsReturnsSuccess()
     {
-        var script = Parser.Parse(Utf8("command"));
+        var script = Parser.Parse("command");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3354,7 +3354,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandBuiltin_InvalidOptionReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("command -x echo"));
+        var script = Parser.Parse("command -x echo");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3369,7 +3369,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandBuiltin_QueryReportsBuiltin()
     {
-        var script = Parser.Parse(Utf8("command -v echo"));
+        var script = Parser.Parse("command -v echo");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3383,7 +3383,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandBuiltin_QueryUsesHostResolution()
     {
-        var script = Parser.Parse(Utf8("command -v cat"));
+        var script = Parser.Parse("command -v cat");
         var state = new Eval(script);
 
         var lookup = await NextResolveCommandsAsync(state);
@@ -3444,7 +3444,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandBuiltin_QueryContinuesAfterReadonlyPrefix()
     {
-        var script = Parser.Parse(Utf8("readonly VALUE; VALUE=changed command -v cat"));
+        var script = Parser.Parse("readonly VALUE; VALUE=changed command -v cat");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -3468,8 +3468,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandQueries_ReportSymbolicKeywords()
     {
-        var script = Parser.Parse(Utf8(
-            "command -v '!' '{' '}' '[[' ']]'; type -t '!' '{' '}' '[[' ']]'"));
+        var script = Parser.Parse(            "command -v '!' '{' '}' '[[' ']]'; type -t '!' '{' '}' '[[' ']]'");
         var state = new Eval(script);
 
         var commandOutput = await NextWriteAsync(state);
@@ -3487,7 +3486,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_TypeBuiltin_ReportsFunction()
     {
-        var script = Parser.Parse(Utf8("foo() { :; }; type foo"));
+        var script = Parser.Parse("foo() { :; }; type foo");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3501,7 +3500,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_TypeBuiltin_ReportsBuiltin()
     {
-        var script = Parser.Parse(Utf8("type echo"));
+        var script = Parser.Parse("type echo");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3515,7 +3514,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_TypeBuiltin_ReportsNotFound()
     {
-        var script = Parser.Parse(Utf8("type missing"));
+        var script = Parser.Parse("type missing");
         var state = new Eval(script);
 
         var lookup = await NextResolveCommandsAsync(state);
@@ -3534,7 +3533,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_TypeBuiltin_CompactReportsResolutionKinds()
     {
-        var script = Parser.Parse(Utf8("f() { :; }; type -t echo f if cat missing"));
+        var script = Parser.Parse("f() { :; }; type -t echo f if cat missing");
         var state = new Eval(script);
 
         var lookup = await NextResolveCommandsAsync(state);
@@ -3593,7 +3592,7 @@ public partial class EvaluationTests
     [InlineData("type -t --")]
     public async Task Evaluation_TypeBuiltin_CompactWithoutNamesReturnsSuccess(string scriptText)
     {
-        var script = Parser.Parse(Utf8(scriptText));
+        var script = Parser.Parse(scriptText);
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3603,7 +3602,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_TypeBuiltin_NoArgumentsReturnsSuccess()
     {
-        var script = Parser.Parse(Utf8("type"));
+        var script = Parser.Parse("type");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3613,7 +3612,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BuiltinBuiltin_UsesBuiltinEvenWhenFunctionExists()
     {
-        var script = Parser.Parse(Utf8("echo() { command echo nope; }; builtin echo hi"));
+        var script = Parser.Parse("echo() { command echo nope; }; builtin echo hi");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3627,7 +3626,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BuiltinBuiltin_ReportsSuccessForColon()
     {
-        var script = Parser.Parse(Utf8("builtin :"));
+        var script = Parser.Parse("builtin :");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3637,7 +3636,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BuiltinBuiltin_ReportsFailureForUnknownName()
     {
-        var script = Parser.Parse(Utf8("builtin missing"));
+        var script = Parser.Parse("builtin missing");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3652,7 +3651,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_BuiltinBuiltin_NoArgumentsReturnsSuccess()
     {
-        var script = Parser.Parse(Utf8("builtin"));
+        var script = Parser.Parse("builtin");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3662,7 +3661,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ExecBuiltin_TerminatesAfterCommand()
     {
-        var script = Parser.Parse(Utf8("exec first; second"));
+        var script = Parser.Parse("exec first; second");
         var state = new Eval(script);
 
         var first = await NextCommandAsync(state, "first");
@@ -3675,7 +3674,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ExecBuiltin_NoArgumentsReturnsSuccess()
     {
-        var script = Parser.Parse(Utf8("exec"));
+        var script = Parser.Parse("exec");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -3685,41 +3684,41 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_DeclareBuiltin_AssignsVariable()
     {
-        var script = Parser.Parse(Utf8("declare foo=bar"));
+        var script = Parser.Parse("declare foo=bar");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
-        Assert.Equal("bar", Text(GetVariable(state, "foo")));
+        Assert.Equal("bar", GetVariable(state, "foo"));
     }
 
     [Fact]
     public async Task Evaluation_TypesetBuiltin_DeclaresUnsetVariable()
     {
-        var script = Parser.Parse(Utf8("typeset foo"));
+        var script = Parser.Parse("typeset foo");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
-        Assert.False(state.Variables.ContainsKey(Utf8("foo")));
+        Assert.False(state.Variables.ContainsKey("foo"));
     }
 
     [Fact]
     public async Task Evaluation_DeclareBuiltin_AppliesExportAttribute()
     {
-        var script = Parser.Parse(Utf8("declare -x foo"));
+        var script = Parser.Parse("declare -x foo");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
         Assert.True(HasExported(state, "foo"));
-        Assert.False(state.Variables.ContainsKey(Utf8("foo")));
+        Assert.False(state.Variables.ContainsKey("foo"));
     }
 
     [Fact]
     public async Task Evaluation_DeclareBuiltin_RejectsInvalidName()
     {
-        var script = Parser.Parse(Utf8("declare 1bad"));
+        var script = Parser.Parse("declare 1bad");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -3734,20 +3733,20 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_DeclareBuiltin_CreatesArrayDeclarations()
     {
-        var script = Parser.Parse(Utf8("declare -a arr; declare -A map"));
+        var script = Parser.Parse("declare -a arr; declare -A map");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
 
-        Assert.True(state.IndexedArrays.ContainsKey(Utf8("arr")));
-        Assert.True(state.AssociativeArrays.ContainsKey(Utf8("map")));
+        Assert.True(state.IndexedArrays.ContainsKey("arr"));
+        Assert.True(state.AssociativeArrays.ContainsKey("map"));
     }
 
     [Fact]
     public async Task Evaluation_DeclareBuiltin_IgnoresIndexedArraySubscript()
     {
-        var script = Parser.Parse(Utf8("declare -a arr[1]"));
+        var script = Parser.Parse("declare -a arr[1]");
         var state = new Eval(script);
 
         var listing = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
@@ -3756,13 +3755,13 @@ public partial class EvaluationTests
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
 
-        Assert.True(state.IndexedArrays.ContainsKey(Utf8("arr")));
+        Assert.True(state.IndexedArrays.ContainsKey("arr"));
     }
 
     [Fact]
     public async Task Evaluation_DeclareBuiltin_IgnoresAssociativeArraySubscript()
     {
-        var script = Parser.Parse(Utf8("declare -A map[key]"));
+        var script = Parser.Parse("declare -A map[key]");
         var state = new Eval(script);
 
         var listing = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
@@ -3771,13 +3770,13 @@ public partial class EvaluationTests
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
 
-        Assert.True(state.AssociativeArrays.ContainsKey(Utf8("map")));
+        Assert.True(state.AssociativeArrays.ContainsKey("map"));
     }
 
     [Fact]
     public async Task Evaluation_DeclareBuiltin_NamerefExpandsTarget()
     {
-        var script = Parser.Parse(Utf8("declare -n ref=target; target=value; echo $ref"));
+        var script = Parser.Parse("declare -n ref=target; target=value; echo $ref");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3791,7 +3790,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_DeclareBuiltin_NamerefAssignsThrough()
     {
-        var script = Parser.Parse(Utf8("declare -n ref=target; ref=value; echo $target"));
+        var script = Parser.Parse("declare -n ref=target; ref=value; echo $target");
         var state = new Eval(script);
 
         var append = await NextWriteAsync(state);
@@ -3805,19 +3804,19 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_DeclareBuiltin_NamerefUnsetRemovesReferent()
     {
-        var script = Parser.Parse(Utf8("target=value; declare -n ref=target; unset ref"));
+        var script = Parser.Parse("target=value; declare -n ref=target; unset ref");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
-        Assert.Equal("target", state.Namerefs[Utf8("ref")].ToUtf8String());
-        Assert.False(state.Variables.ContainsKey(Utf8("target")));
+        Assert.Equal("target", state.Namerefs["ref"].ToUtf8String());
+        Assert.False(state.Variables.ContainsKey("target"));
     }
 
     [Fact]
     public async Task Evaluation_PushdBuiltin_UpdatesStackAndOutputs()
     {
-        var script = Parser.Parse(Utf8("pushd target"));
+        var script = Parser.Parse("pushd target");
         var state = new Eval(script);
 
         var fileTests = await NextPathKindsAsync(state);
@@ -3836,7 +3835,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_PopdBuiltin_UpdatesStackAndOutputs()
     {
-        var script = Parser.Parse(Utf8("pushd target; popd"));
+        var script = Parser.Parse("pushd target; popd");
         var state = new Eval(script);
 
         var pushTests = await NextPathKindsAsync(state);
@@ -3860,7 +3859,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_PopdBuiltin_EmptyStackReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("popd"));
+        var script = Parser.Parse("popd");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -3875,7 +3874,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ExportBuiltin_MarksExistingVariable()
     {
-        var script = Parser.Parse(Utf8("read name; export name"));
+        var script = Parser.Parse("read name; export name");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
@@ -3888,22 +3887,22 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ExportBuiltin_AssignsAndMarksVariable()
     {
-        var script = Parser.Parse(Utf8("export foo=bar"));
+        var script = Parser.Parse("export foo=bar");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("bar", Text(GetVariable(state, "foo")));
+        Assert.Equal("bar", GetVariable(state, "foo"));
         Assert.True(HasExported(state, "foo"));
     }
 
     [Fact]
     public async Task Evaluation_ExportBuiltin_MissingVariableRemainsUnset()
     {
-        var script = Parser.Parse(Utf8("export missing"));
+        var script = Parser.Parse("export missing");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("missing")));
+        Assert.False(state.Variables.ContainsKey("missing"));
         Assert.True(HasExported(state, "missing"));
     }
 
@@ -3913,7 +3912,7 @@ public partial class EvaluationTests
     [InlineData("bad-name")]
     public async Task Evaluation_ExportBuiltin_RejectsInvalidBareNames(string name)
     {
-        var state = new Eval(Parser.Parse(Utf8("export '" + name + "'")));
+        var state = new Eval(Parser.Parse("export '" + name + "'"));
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
@@ -3922,14 +3921,14 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
-        Assert.False(state.Variables.ContainsKey(Utf8(name)));
+        Assert.False(state.Variables.ContainsKey(name));
         Assert.False(HasExported(state, name));
     }
 
     [Fact]
     public async Task Evaluation_CommandInvocation_IncludesExportedEnvironment()
     {
-        var script = Parser.Parse(Utf8("export FOO=bar; cmd"));
+        var script = Parser.Parse("export FOO=bar; cmd");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -3943,7 +3942,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_ExcludesUnexportedVariables()
     {
-        var script = Parser.Parse(Utf8("declare FOO=bar; cmd"));
+        var script = Parser.Parse("declare FOO=bar; cmd");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -3957,7 +3956,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_IncludesAssignmentPrefixes()
     {
-        var script = Parser.Parse(Utf8("FOO=bar cmd"));
+        var script = Parser.Parse("FOO=bar cmd");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -3965,13 +3964,13 @@ public partial class EvaluationTests
         runCommand.SetResult(new CommandExecutionResult.Completed(0));
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("FOO")));
+        Assert.False(state.Variables.ContainsKey("FOO"));
     }
 
     [Fact]
     public async Task Evaluation_AssignmentPrefix_DoesNotAffectCommandArguments()
     {
-        var script = Parser.Parse(Utf8("FOO=outer; FOO=bar cmd $FOO"));
+        var script = Parser.Parse("FOO=outer; FOO=bar cmd $FOO");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -3986,7 +3985,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_AssignmentPrefix_DoesNotAffectCommandBuiltinArguments()
     {
-        var script = Parser.Parse(Utf8("FOO=outer; FOO=bar command cmd $FOO"));
+        var script = Parser.Parse("FOO=outer; FOO=bar command cmd $FOO");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -4001,7 +4000,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_AssignmentPrefix_CommandSubstitutionUsesEarlierPrefixAssignments()
     {
-        var script = Parser.Parse(Utf8("FOO=outer; FOO=bar BAZ=$(command echo $FOO) cmd"));
+        var script = Parser.Parse("FOO=outer; FOO=bar BAZ=$(command echo $FOO) cmd");
         var state = new Eval(script);
 
         var pipe = await NextPipeAsync(state);
@@ -4032,7 +4031,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_EnvironmentReflectsCommandNameExpansionAssignments()
     {
-        var script = Parser.Parse(Utf8("export FOO; ${FOO:=cmd}"));
+        var script = Parser.Parse("export FOO; ${FOO:=cmd}");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -4046,7 +4045,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_EnvironmentReflectsArgumentExpansionAssignments()
     {
-        var script = Parser.Parse(Utf8("export FOO; cmd ${FOO:=bar}"));
+        var script = Parser.Parse("export FOO; cmd ${FOO:=bar}");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -4061,7 +4060,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_AssignmentPrefix_EnvironmentReflectsAssignmentValueExpansionAssignments()
     {
-        var script = Parser.Parse(Utf8("export FOO; X=${FOO:=bar} cmd"));
+        var script = Parser.Parse("export FOO; X=${FOO:=bar} cmd");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -4071,13 +4070,13 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal("bar", GetVariable(state, "FOO"));
-        Assert.False(state.Variables.ContainsKey(Utf8("X")));
+        Assert.False(state.Variables.ContainsKey("X"));
     }
 
     [Fact]
     public async Task Evaluation_AssignmentPrefix_SeesArgumentExpansionAssignments()
     {
-        var script = Parser.Parse(Utf8("export X; X=$FOO cmd ${FOO:=bar}"));
+        var script = Parser.Parse("export X; X=$FOO cmd ${FOO:=bar}");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -4088,13 +4087,13 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal("bar", GetVariable(state, "FOO"));
-        Assert.False(state.Variables.ContainsKey(Utf8("X")));
+        Assert.False(state.Variables.ContainsKey("X"));
     }
 
     [Fact]
     public async Task Evaluation_CommandInvocation_AssignmentPrefixOverridesExpansionEnvironment()
     {
-        var script = Parser.Parse(Utf8("export FOO; FOO=prefix cmd ${FOO:=bar}"));
+        var script = Parser.Parse("export FOO; FOO=prefix cmd ${FOO:=bar}");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -4109,7 +4108,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CommandInvocation_AssignmentPrefixThroughNamerefExportsResolvedName()
     {
-        var script = Parser.Parse(Utf8("declare -n ref=target; target=outer; ref=temp cmd"));
+        var script = Parser.Parse("declare -n ref=target; target=outer; ref=temp cmd");
         var state = new Eval(script);
 
         var runCommand = await NextCommandAsync(state, "cmd");
@@ -4124,29 +4123,29 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_UnsetBuiltin_RemovesExportMarker()
     {
-        var script = Parser.Parse(Utf8("export foo=bar; unset foo"));
+        var script = Parser.Parse("export foo=bar; unset foo");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("foo")));
+        Assert.False(state.Variables.ContainsKey("foo"));
         Assert.False(HasExported(state, "foo"));
     }
 
     [Fact]
     public async Task Evaluation_ReadonlyBuiltin_AssignsAndMarksVariable()
     {
-        var script = Parser.Parse(Utf8("readonly foo=bar"));
+        var script = Parser.Parse("readonly foo=bar");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("bar", Text(GetVariable(state, "foo")));
+        Assert.Equal("bar", GetVariable(state, "foo"));
         Assert.True(HasReadonly(state, "foo"));
     }
 
     [Fact]
     public async Task Evaluation_ReadonlyBuiltin_PreventsUnset()
     {
-        var script = Parser.Parse(Utf8("readonly foo=bar; unset foo"));
+        var script = Parser.Parse("readonly foo=bar; unset foo");
         var state = new Eval(script);
 
         var diagnostic = await NextWriteAsync(state);
@@ -4155,7 +4154,7 @@ public partial class EvaluationTests
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
-        Assert.Equal("bar", Text(GetVariable(state, "foo")));
+        Assert.Equal("bar", GetVariable(state, "foo"));
         Assert.True(HasReadonly(state, "foo"));
         Assert.Equal(1, state.LastExitCode);
     }
@@ -4163,7 +4162,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ReadonlyBuiltin_PreventsReadAssignment()
     {
-        var script = Parser.Parse(Utf8("readonly foo; read foo"));
+        var script = Parser.Parse("readonly foo; read foo");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
@@ -4173,7 +4172,7 @@ public partial class EvaluationTests
         Assert.Equal("foo: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
-        Assert.False(state.Variables.ContainsKey(Utf8("foo")));
+        Assert.False(state.Variables.ContainsKey("foo"));
         Assert.True(HasReadonly(state, "foo"));
         Assert.Equal(1, state.LastExitCode);
     }
@@ -4181,7 +4180,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ArithmeticCommand_YieldsOperation()
     {
-        var script = Parser.Parse(Utf8("((1))"));
+        var script = Parser.Parse("((1))");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4191,7 +4190,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ArithmeticCommand_ZeroResultReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("((0))"));
+        var script = Parser.Parse("((0))");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4201,7 +4200,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ConditionalCommand_EvaluatesExpression()
     {
-        var script = Parser.Parse(Utf8("[[ -n 1 ]]"));
+        var script = Parser.Parse("[[ -n 1 ]]");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4211,7 +4210,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ConditionalCommand_FalseReturnsFailure()
     {
-        var script = Parser.Parse(Utf8("[[ -n \"\" ]]"));
+        var script = Parser.Parse("[[ -n \"\" ]]");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4221,7 +4220,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ConditionalCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! [[ -n 1 ]]"));
+        var script = Parser.Parse("! [[ -n 1 ]]");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4231,7 +4230,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ConditionalCommand_UsesPathInfosOperation()
     {
-        var script = Parser.Parse(Utf8("[[ -d target ]]"));
+        var script = Parser.Parse("[[ -d target ]]");
         var state = new Eval(script);
 
         var operation = await NextPathKindsAsync(state);
@@ -4246,7 +4245,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CaseCommand_SelectsMatchingItem()
     {
-        var script = Parser.Parse(Utf8("case foo in bar) first ;; foo) second ;; esac"));
+        var script = Parser.Parse("case foo in bar) first ;; foo) second ;; esac");
         var state = new Eval(script);
 
         var second = await NextCommandAsync(state, "second");
@@ -4259,7 +4258,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CaseCommand_NoMatchReturnsZero()
     {
-        var script = Parser.Parse(Utf8("case foo in bar) first ;; esac"));
+        var script = Parser.Parse("case foo in bar) first ;; esac");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4269,7 +4268,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CaseCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! case foo in bar) first ;; esac"));
+        var script = Parser.Parse("! case foo in bar) first ;; esac");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4279,7 +4278,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ArithmeticForCommand_ExecutesSingleIteration()
     {
-        var script = Parser.Parse(Utf8("for ((1; 1; 0)); do body; break; done"));
+        var script = Parser.Parse("for ((1; 1; 0)); do body; break; done");
         var state = new Eval(script);
 
         var body = await NextCommandAsync(state, "body");
@@ -4292,7 +4291,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ArithmeticForCommand_AllowsZeroIterations()
     {
-        var script = Parser.Parse(Utf8("for ((1; 0; 0)); do body; done"));
+        var script = Parser.Parse("for ((1; 0; 0)); do body; done");
         var state = new Eval(script);
 
         Assert.Null(await NextStepAsync(state));
@@ -4302,7 +4301,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_ArithmeticForCommand_NegationInvertsExitStatus()
     {
-        var script = Parser.Parse(Utf8("! for ((1; 1; 0)); do body; break; done"));
+        var script = Parser.Parse("! for ((1; 1; 0)); do body; break; done");
         var state = new Eval(script);
 
         var body = await NextCommandAsync(state, "body");
@@ -4311,11 +4310,6 @@ public partial class EvaluationTests
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
     }
-
-    /// <summary>
-    /// Passes through a string value for test inputs.
-    /// </summary>
-    private static string Utf8(string value) => value;
 
     /// <summary>
     /// Encodes a string as UTF-8 bytes for content inputs.
@@ -4355,7 +4349,7 @@ public partial class EvaluationTests
         Assert.NotNull(operation);
 
         var runCommand = Assert.IsType<RunCommand>(operation);
-        Assert.Equal(expectedName, Text(runCommand.Command.CommandName));
+        Assert.Equal(expectedName, runCommand.Command.CommandName);
         return runCommand;
     }
 
@@ -4524,11 +4518,6 @@ public partial class EvaluationTests
 
         return false;
     }
-
-    /// <summary>
-    /// Passes through a string value for test assertions.
-    /// </summary>
-    private static string Text(string content) => content;
 
     /// <summary>
     /// Returns the path string from a ShellPath for test assertions.

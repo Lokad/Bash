@@ -21,7 +21,7 @@ public partial class EvaluationTests
     public async Task Evaluation_NullDevice_PreservesAccessWithoutOpeningOrOwningResources(
         string script, FileOpenMode mode)
     {
-        var state = new Eval(Parser.Parse(Utf8(script)));
+        var state = new Eval(Parser.Parse(script));
 
         var run = await NextCommandAsync(state, "cmd");
         var invocation = run.Command;
@@ -37,7 +37,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_NullDevice_CombinedOutputSharesOneWriteOnlyMapping()
     {
-        var state = new Eval(Parser.Parse(Utf8("cmd &>/dev/null")));
+        var state = new Eval(Parser.Parse("cmd &>/dev/null"));
 
         var run = await NextCommandAsync(state, "cmd");
         var invocation = run.Command;

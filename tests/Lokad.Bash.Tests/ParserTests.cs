@@ -416,7 +416,7 @@ public class ParserTests
     [Fact]
     public void Parse_SimpleWords_AreCaptured()
     {
-        var script = Parser.Parse(Utf8("echo hello world"));
+        var script = Parser.Parse("echo hello world");
 
         var command = AssertSingleCommand(script);
         Assert.Empty(command.Assignments);
@@ -430,7 +430,7 @@ public class ParserTests
     [Fact]
     public void Parse_LeadingAssignments_AreCaptured()
     {
-        var script = Parser.Parse(Utf8("A=1 B='2 3' echo hi"));
+        var script = Parser.Parse("A=1 B='2 3' echo hi");
 
         var command = AssertSingleCommand(script);
         Assert.Equal(2, command.Assignments.Count);
@@ -446,7 +446,7 @@ public class ParserTests
     [Fact]
     public void Parse_Redirections_AreCaptured()
     {
-        var script = Parser.Parse(Utf8("cat < input > output"));
+        var script = Parser.Parse("cat < input > output");
 
         var command = AssertSingleCommand(script);
         Assert.Equal(2, command.Redirections.Count);
@@ -459,7 +459,7 @@ public class ParserTests
     [Fact]
     public void Parse_Comments_AreIgnored()
     {
-        var script = Parser.Parse(Utf8("echo hi # c\nwho"));
+        var script = Parser.Parse("echo hi # c\nwho");
 
         Assert.Single(script.Commands);
         var list = AssertListOperator(script.Commands[0], ListOperator.Sequence);
@@ -475,7 +475,7 @@ public class ParserTests
     [Fact]
     public void Parse_QuotedWords_KeepQuoteKinds()
     {
-        var script = Parser.Parse(Utf8("echo 'a b' \"c d\""));
+        var script = Parser.Parse("echo 'a b' \"c d\"");
 
         var command = AssertSingleCommand(script);
         Assert.Equal(3, command.Words.Count);
@@ -487,7 +487,7 @@ public class ParserTests
     [Fact]
     public void Parse_SingleQuotedGlob_IsSingleQuotedWordPart()
     {
-        var script = Parser.Parse(Utf8("rg -g '*.txt' hello /"));
+        var script = Parser.Parse("rg -g '*.txt' hello /");
 
         var command = AssertSingleCommand(script);
         Assert.Equal(5, command.Words.Count);
@@ -501,7 +501,7 @@ public class ParserTests
     [Fact]
     public void Parse_LineContinuations_AreRemoved()
     {
-        var script = Parser.Parse(Utf8("echo a\\\n b"));
+        var script = Parser.Parse("echo a\\\n b");
 
         var command = AssertSingleCommand(script);
         Assert.Equal(3, command.Words.Count);
@@ -513,7 +513,7 @@ public class ParserTests
     [Fact]
     public void Parse_ListSequence_SemicolonBuildsList()
     {
-        var script = Parser.Parse(Utf8("echo a; echo b"));
+        var script = Parser.Parse("echo a; echo b");
 
         Assert.Single(script.Commands);
         AssertListOperator(script.Commands[0], ListOperator.Sequence);
@@ -522,7 +522,7 @@ public class ParserTests
     [Fact]
     public void Parse_ListSequence_NewlineBuildsList()
     {
-        var script = Parser.Parse(Utf8("echo a\n echo b"));
+        var script = Parser.Parse("echo a\n echo b");
 
         Assert.Single(script.Commands);
         AssertListOperator(script.Commands[0], ListOperator.Sequence);
@@ -531,7 +531,7 @@ public class ParserTests
     [Fact]
     public void Parse_ListLeftAssociativity_ForAndOr()
     {
-        var script = Parser.Parse(Utf8("echo a && echo b || echo c"));
+        var script = Parser.Parse("echo a && echo b || echo c");
 
         Assert.Single(script.Commands);
         var root = AssertListOperator(script.Commands[0], ListOperator.Or);
@@ -544,7 +544,7 @@ public class ParserTests
     [Fact]
     public void Parse_Pipeline_BasicPipe()
     {
-        var script = Parser.Parse(Utf8("echo a | cat"));
+        var script = Parser.Parse("echo a | cat");
 
         Assert.Single(script.Commands);
         var pipeline = AssertPipelineOperator(script.Commands[0], PipelineOperator.Pipe, false);
@@ -555,7 +555,7 @@ public class ParserTests
     [Fact]
     public void Parse_Pipeline_PipeAndError()
     {
-        var script = Parser.Parse(Utf8("echo a |& cat"));
+        var script = Parser.Parse("echo a |& cat");
 
         Assert.Single(script.Commands);
         var pipeline = AssertPipelineOperator(script.Commands[0], PipelineOperator.PipeAndError, false);
@@ -566,7 +566,7 @@ public class ParserTests
     [Fact]
     public void Parse_Pipeline_Negated()
     {
-        var script = Parser.Parse(Utf8("! echo a | cat"));
+        var script = Parser.Parse("! echo a | cat");
 
         Assert.Single(script.Commands);
         AssertPipelineOperator(script.Commands[0], PipelineOperator.Pipe, true);
@@ -575,7 +575,7 @@ public class ParserTests
     [Fact]
     public void Parse_Pipeline_LeftAssociativity()
     {
-        var script = Parser.Parse(Utf8("echo a | cat | wc"));
+        var script = Parser.Parse("echo a | cat | wc");
 
         Assert.Single(script.Commands);
         var root = AssertPipelineOperator(script.Commands[0], PipelineOperator.Pipe, false);
@@ -588,7 +588,7 @@ public class ParserTests
     [Fact]
     public void Parse_Subshell_WrapsCommand()
     {
-        var script = Parser.Parse(Utf8("(echo a)"));
+        var script = Parser.Parse("(echo a)");
 
         Assert.Single(script.Commands);
         var subshell = AssertCompoundCommand<SubshellCommand>(script.Commands[0]);
@@ -692,7 +692,7 @@ public class ParserTests
     [Fact]
     public void Parse_Subshell_ListBody()
     {
-        var script = Parser.Parse(Utf8("(echo a; echo b)"));
+        var script = Parser.Parse("(echo a; echo b)");
 
         Assert.Single(script.Commands);
         var subshell = AssertCompoundCommand<SubshellCommand>(script.Commands[0]);
@@ -702,7 +702,7 @@ public class ParserTests
     [Fact]
     public void Parse_Group_ListBody()
     {
-        var script = Parser.Parse(Utf8("{ echo a\n echo b; }"));
+        var script = Parser.Parse("{ echo a\n echo b; }");
 
         Assert.Single(script.Commands);
         var group = AssertCompoundCommand<GroupCommand>(script.Commands[0]);
@@ -712,7 +712,7 @@ public class ParserTests
     [Fact]
     public void Parse_If_Basic()
     {
-        var script = Parser.Parse(Utf8("if echo a; then echo b; fi"));
+        var script = Parser.Parse("if echo a; then echo b; fi");
 
         Assert.Single(script.Commands);
         var ifCommand = AssertIfCommand(script.Commands[0], expectedElifCount: 0, expectElse: false);
@@ -723,7 +723,7 @@ public class ParserTests
     [Fact]
     public void Parse_If_WithElse()
     {
-        var script = Parser.Parse(Utf8("if echo a; then echo b; else echo c; fi"));
+        var script = Parser.Parse("if echo a; then echo b; else echo c; fi");
 
         Assert.Single(script.Commands);
         var ifCommand = AssertIfCommand(script.Commands[0], expectedElifCount: 0, expectElse: true);
@@ -735,7 +735,7 @@ public class ParserTests
     [Fact]
     public void Parse_If_WithElif()
     {
-        var script = Parser.Parse(Utf8("if echo a; then echo b; elif echo c; then echo d; fi"));
+        var script = Parser.Parse("if echo a; then echo b; elif echo c; then echo d; fi");
 
         Assert.Single(script.Commands);
         var ifCommand = AssertIfCommand(script.Commands[0], expectedElifCount: 1, expectElse: false);
@@ -747,7 +747,7 @@ public class ParserTests
     [Fact]
     public void Parse_While_Basic()
     {
-        var script = Parser.Parse(Utf8("while echo a; do echo b; done"));
+        var script = Parser.Parse("while echo a; do echo b; done");
 
         Assert.Single(script.Commands);
         var loop = AssertLoopCommand<WhileCommand>(script.Commands[0]);
@@ -758,7 +758,7 @@ public class ParserTests
     [Fact]
     public void Parse_Until_Basic()
     {
-        var script = Parser.Parse(Utf8("until echo a; do echo b; done"));
+        var script = Parser.Parse("until echo a; do echo b; done");
 
         Assert.Single(script.Commands);
         var loop = AssertLoopCommand<UntilCommand>(script.Commands[0]);
@@ -769,7 +769,7 @@ public class ParserTests
     [Fact]
     public void Parse_While_BodyList()
     {
-        var script = Parser.Parse(Utf8("while echo a; do echo b; echo c; done"));
+        var script = Parser.Parse("while echo a; do echo b; echo c; done");
 
         Assert.Single(script.Commands);
         var loop = AssertLoopCommand<WhileCommand>(script.Commands[0]);
@@ -779,11 +779,11 @@ public class ParserTests
     [Fact]
     public void Parse_For_Basic()
     {
-        var script = Parser.Parse(Utf8("for x in a b; do echo $x; done"));
+        var script = Parser.Parse("for x in a b; do echo $x; done");
 
         Assert.Single(script.Commands);
         var loop = AssertForCommand(script.Commands[0]);
-        Assert.Equal("x", Text(loop.Name));
+        Assert.Equal("x", loop.Name);
         Assert.Equal(2, loop.Items.Count);
         Assert.Equal("a", WordText(loop.Items[0]));
         Assert.Equal("b", WordText(loop.Items[1]));
@@ -793,18 +793,18 @@ public class ParserTests
     [Fact]
     public void Parse_For_BodyList()
     {
-        var script = Parser.Parse(Utf8("for name in one; do echo $name; echo ok; done"));
+        var script = Parser.Parse("for name in one; do echo $name; echo ok; done");
 
         Assert.Single(script.Commands);
         var loop = AssertForCommand(script.Commands[0]);
-        Assert.Equal("name", Text(loop.Name));
+        Assert.Equal("name", loop.Name);
         AssertListOperator(loop.Body, ListOperator.Sequence);
     }
 
     [Fact]
     public void Parse_For_WithGlobbedItemsAndIfBody()
     {
-        var script = Parser.Parse(Utf8("for d in */ .*/; do if [ -d \"$d\" ]; then echo \"$d\"; fi; done"));
+        var script = Parser.Parse("for d in */ .*/; do if [ -d \"$d\" ]; then echo \"$d\"; fi; done");
 
         Assert.NotEmpty(script.Commands);
     }
@@ -812,7 +812,7 @@ public class ParserTests
     [Fact]
     public void Parse_ForWithNestedIfAndFor_BasenameSuffixScenario()
     {
-        var script = Parser.Parse(Utf8("for d in clean/tmp1/sales-snapshots/2019/2019-10-*; do if [ -d \"$d\" ]; then date=$(basename \"$d\"); for f in \"$d\"/*.cfg; do [ -e \"$f\" ] || continue; base=$(basename \"$f\" .cfg); mv \"$f\" \"clean/tmp1/sales-snapshots/2019/${base}_${date}.cfg\"; done; fi; done"));
+        var script = Parser.Parse("for d in clean/tmp1/sales-snapshots/2019/2019-10-*; do if [ -d \"$d\" ]; then date=$(basename \"$d\"); for f in \"$d\"/*.cfg; do [ -e \"$f\" ] || continue; base=$(basename \"$f\" .cfg); mv \"$f\" \"clean/tmp1/sales-snapshots/2019/${base}_${date}.cfg\"; done; fi; done");
 
         Assert.NotEmpty(script.Commands);
     }
@@ -820,7 +820,7 @@ public class ParserTests
     [Fact]
     public void Parse_ArithmeticCommand_Basic()
     {
-        var script = Parser.Parse(Utf8("((1+2))"));
+        var script = Parser.Parse("((1+2))");
 
         Assert.Single(script.Commands);
         var arithmetic = AssertArithmeticCommand(script.Commands[0]);
@@ -830,7 +830,7 @@ public class ParserTests
     [Fact]
     public void Parse_ArithmeticCommand_PreservesWhitespace()
     {
-        var script = Parser.Parse(Utf8("((a + b))"));
+        var script = Parser.Parse("((a + b))");
 
         Assert.Single(script.Commands);
         var arithmetic = AssertArithmeticCommand(script.Commands[0]);
@@ -840,7 +840,7 @@ public class ParserTests
     [Fact]
     public void Parse_ConditionalCommand_Basic()
     {
-        var script = Parser.Parse(Utf8("[[ -f file ]]"));
+        var script = Parser.Parse("[[ -f file ]]");
 
         Assert.Single(script.Commands);
         var conditional = AssertConditionalCommand(script.Commands[0]);
@@ -850,7 +850,7 @@ public class ParserTests
     [Fact]
     public void Parse_ConditionalCommand_PreservesWhitespace()
     {
-        var script = Parser.Parse(Utf8("[[ a == b ]]"));
+        var script = Parser.Parse("[[ a == b ]]");
 
         Assert.Single(script.Commands);
         var conditional = AssertConditionalCommand(script.Commands[0]);
@@ -860,22 +860,22 @@ public class ParserTests
     [Fact]
     public void Parse_FunctionDefinition_NameParenForm()
     {
-        var script = Parser.Parse(Utf8("myfunc () { echo hi; }"));
+        var script = Parser.Parse("myfunc () { echo hi; }");
 
         Assert.Single(script.Commands);
         var function = AssertFunctionDefinition(script.Commands[0]);
-        Assert.Equal("myfunc", Text(function.Name.Value.ToUtf8String()));
+        Assert.Equal("myfunc", function.Name.Value.ToUtf8String());
         Assert.IsType<GroupCommand>(function.Body);
     }
 
     [Fact]
     public void Parse_FunctionDefinition_FunctionKeywordForm()
     {
-        var script = Parser.Parse(Utf8("function other { echo hi; }"));
+        var script = Parser.Parse("function other { echo hi; }");
 
         Assert.Single(script.Commands);
         var function = AssertFunctionDefinition(script.Commands[0]);
-        Assert.Equal("other", Text(function.Name.Value.ToUtf8String()));
+        Assert.Equal("other", function.Name.Value.ToUtf8String());
         Assert.IsType<GroupCommand>(function.Body);
     }
 
@@ -931,7 +931,7 @@ public class ParserTests
     [Fact]
     public void Parse_ArithmeticForCommand_Basic()
     {
-        var script = Parser.Parse(Utf8("for ((i=0;i<3;i++)); do echo $i; done"));
+        var script = Parser.Parse("for ((i=0;i<3;i++)); do echo $i; done");
 
         Assert.Single(script.Commands);
         var loop = AssertArithmeticForCommand(script.Commands[0]);
@@ -942,7 +942,7 @@ public class ParserTests
     [Fact]
     public void Parse_CaseCommand_SinglePattern()
     {
-        var script = Parser.Parse(Utf8("case $x in a) echo a ;; esac"));
+        var script = Parser.Parse("case $x in a) echo a ;; esac");
 
         Assert.Single(script.Commands);
         var caseCommand = AssertCaseCommand(script.Commands[0]);
@@ -956,7 +956,7 @@ public class ParserTests
     [Fact]
     public void Parse_CaseCommand_MultiplePatterns()
     {
-        var script = Parser.Parse(Utf8("case $x in a|b) echo ok ;; esac"));
+        var script = Parser.Parse("case $x in a|b) echo ok ;; esac");
 
         Assert.Single(script.Commands);
         var caseCommand = AssertCaseCommand(script.Commands[0]);
@@ -1019,7 +1019,7 @@ public class ParserTests
     [Fact]
     public void Parse_Redirection_ForceOutput()
     {
-        var script = Parser.Parse(Utf8("echo hi >| out"));
+        var script = Parser.Parse("echo hi >| out");
 
         var command = AssertSingleCommand(script);
         Assert.Single(command.Redirections);
@@ -1030,7 +1030,7 @@ public class ParserTests
     [Fact]
     public void Parse_Redirection_DuplicateOutput()
     {
-        var script = Parser.Parse(Utf8("echo hi 2>&1"));
+        var script = Parser.Parse("echo hi 2>&1");
 
         var command = AssertSingleCommand(script);
         Assert.Single(command.Redirections);
@@ -1100,7 +1100,7 @@ public class ParserTests
     [Fact]
     public void Parse_Redirection_OutputAndError()
     {
-        var script = Parser.Parse(Utf8("echo hi &> out"));
+        var script = Parser.Parse("echo hi &> out");
 
         var command = AssertSingleCommand(script);
         Assert.Single(command.Redirections);
@@ -1111,7 +1111,7 @@ public class ParserTests
     [Fact]
     public void Parse_Redirection_CloseInput()
     {
-        var script = Parser.Parse(Utf8("echo hi 3<&-"));
+        var script = Parser.Parse("echo hi 3<&-");
 
         var command = AssertSingleCommand(script);
         Assert.Single(command.Redirections);
@@ -1123,23 +1123,23 @@ public class ParserTests
     [Fact]
     public void Parse_Redirection_AllocateOutput()
     {
-        var script = Parser.Parse(Utf8("echo hi {fd}> out"));
+        var script = Parser.Parse("echo hi {fd}> out");
 
         var command = AssertSingleCommand(script);
         Assert.Single(command.Redirections);
         Assert.Equal(RedirectionKind.AllocateOutput, command.Redirections[0].Kind);
-        Assert.Equal("fd", Text(ReadVariableName(command.Redirections[0])));
+        Assert.Equal("fd", ReadVariableName(command.Redirections[0]));
     }
 
     [Fact]
     public void Parse_Redirection_AllocateInput()
     {
-        var script = Parser.Parse(Utf8("echo hi {in}< input"));
+        var script = Parser.Parse("echo hi {in}< input");
 
         var command = AssertSingleCommand(script);
         Assert.Single(command.Redirections);
         Assert.Equal(RedirectionKind.AllocateInput, command.Redirections[0].Kind);
-        Assert.Equal("in", Text(ReadVariableName(command.Redirections[0])));
+        Assert.Equal("in", ReadVariableName(command.Redirections[0]));
     }
 
     [Theory]
@@ -1195,16 +1195,11 @@ public class ParserTests
     [InlineData("while read f; do echo \"$f\"; done < <(find / -type f)", 35)]
     public void Parse_ProcessSubstitution_ReportsUnsupportedConstruct(string command, int offset)
     {
-        var error = Assert.Throws<SyntaxException>(() => Parser.Parse(Utf8(command)));
+        var error = Assert.Throws<SyntaxException>(() => Parser.Parse(command));
 
         Assert.Equal("process substitution is not supported", error.Message);
         Assert.Equal(offset, error.Offset);
     }
-
-    /// <summary>
-    /// Passes through a string value for parser inputs.
-    /// </summary>
-    private static string Utf8(string value) => value;
 
     /// <summary>
     /// Asserts the script has a single command and returns it as a simple command.
@@ -1338,7 +1333,7 @@ public class ParserTests
         var builder = new StringBuilder();
         foreach (var part in word.Parts)
         {
-            builder.Append(Text(part.GetUtf8Text()));
+            builder.Append(part.GetUtf8Text());
         }
         return builder.ToString();
     }
@@ -1350,11 +1345,6 @@ public class ParserTests
     {
         Assert.Single(word.Parts);
         Assert.Equal(kind, word.Parts[0].Kind);
-        Assert.Equal(content, Text(word.Parts[0].GetUtf8Text()));
+        Assert.Equal(content, word.Parts[0].GetUtf8Text());
     }
-
-    /// <summary>
-    /// Passes through a string value for assertions.
-    /// </summary>
-    private static string Text(string content) => content;
 }

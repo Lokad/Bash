@@ -18,7 +18,7 @@ public partial class EvaluationTests
         var handle = new FileDescriptor(9);
         table.Set(new LogicalDescriptor(logicalDescriptor), handle);
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
-        var state = new Eval(Parser.Parse(Utf8($"read -u{logicalDescriptor} value")), descriptors,
+        var state = new Eval(Parser.Parse($"read -u{logicalDescriptor} value"), descriptors,
             publishNextStep: null, onComplete: null, EvaluationOptions.Default, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var read = await NextReadAsync(state);
@@ -27,7 +27,7 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
-        Assert.Equal("selected", Text(GetVariable(state, "value")));
+        Assert.Equal("selected", GetVariable(state, "value"));
         Assert.Equal(handle, table.Resolve(new LogicalDescriptor(logicalDescriptor)));
         Assert.Empty(state.GetDescriptorsForCleanup());
     }
@@ -43,7 +43,7 @@ public partial class EvaluationTests
         if (explicitlyClosed)
             table.Set(new LogicalDescriptor(9), FileDescriptor.Closed);
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
-        var state = new Eval(Parser.Parse(Utf8("value=old; read -u9 value")), descriptors,
+        var state = new Eval(Parser.Parse("value=old; read -u9 value"), descriptors,
             publishNextStep: null, onComplete: null, EvaluationOptions.Default, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var diagnostic = await NextWriteAsync(state);
@@ -53,7 +53,7 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
-        Assert.Equal("old", Text(GetVariable(state, "value")));
+        Assert.Equal("old", GetVariable(state, "value"));
         Assert.Equal(explicitlyClosed, table.HasMapping(new LogicalDescriptor(9)));
         Assert.Equal(handle, table.Resolve(new LogicalDescriptor(3)));
         Assert.Empty(state.GetDescriptorsForCleanup());
@@ -66,7 +66,7 @@ public partial class EvaluationTests
         var handle = new FileDescriptor(9);
         table.Set(new LogicalDescriptor(3), handle);
         var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
-        var state = new Eval(Parser.Parse(Utf8("value=old; read -u3 value")), descriptors,
+        var state = new Eval(Parser.Parse("value=old; read -u3 value"), descriptors,
             publishNextStep: null, onComplete: null, EvaluationOptions.Default, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var read = await NextReadAsync(state);
@@ -80,7 +80,7 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
-        Assert.Equal("old", Text(GetVariable(state, "value")));
+        Assert.Equal("old", GetVariable(state, "value"));
         Assert.Equal(handle, table.Resolve(new LogicalDescriptor(3)));
         Assert.Empty(state.GetDescriptorsForCleanup());
     }
