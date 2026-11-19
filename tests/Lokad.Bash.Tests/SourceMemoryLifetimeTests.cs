@@ -108,6 +108,44 @@ public sealed class SourceMemoryLifetimeTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EvalRetainsOnlyTheCopiedSourceUntilFunctionRetirement(bool multipleOperands)
+    {
+        const string definition = "f(){ printf active; }\n#";
+        const int sourceLength = PaddingBytes + 1;
+        var payload = new string('x', sourceLength - definition.Length - (multipleOperands ? 2 : 0));
+        var evalOperands = multipleOperands ? """ "$definition" '' "$payload" """ : """ "$script" """;
+        var evaluation = new Eval(Parser.Parse("eval --" + evalOperands + "; printf loaded; f; unset -f f; printf retired"));
+        if (multipleOperands)
+        {
+            evaluation.SetVariable("definition", ShellValue.FromText(definition));
+            evaluation.SetVariable("payload", ShellValue.FromText(payload));
+        }
+        else
+            evaluation.SetVariable("script", ShellValue.FromText(definition + payload));
+
+        var governor = new MemoryGovernor(1024 * 1024);
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        using var owner = budget.CreateScope();
+        await using var host = new TestHost { MemoryBudget = budget };
+        var observed = new List<long>();
+        host.BeforeAppend = (_, _, _) => observed.Add(scopes.Where(scope => scope.Depth > 1 && scope.OwnBytes >= sourceLength)
+            .Sum(scope => scope.OwnBytes));
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("loadedactiveretired", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(new long[] { sourceLength, sourceLength, 0 }, observed);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false, "plain")]
     [InlineData(true, "plain")]
     [InlineData(false, "replace")]

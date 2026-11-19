@@ -272,8 +272,9 @@ function namespace retains its definitions, and through active function preparat
 execution and cleanup. Shared definitions and attribute copies share this coarse
 source owner. Replacement, unset and settled temporary namespaces release their
 references; the last user refunds the scope. Prepared root namespaces remain owned
-by the caller's evaluation scope. Copied eval and trap source do not retain an
-unrelated enclosing source-file owner. Each command unit has a coarse syntax owner
+by the caller's evaluation scope. Eval and trap admit one exact-sized backing
+buffer from the expanded operand bytes and separators. The copy has its own
+independent source owner. Each command unit has a coarse syntax owner
 retaining its input owner. Completed units refund their metadata unless surviving
 definitions or active users retain it; one early definition does not keep every
 later unit's scratch alive. Reached backtick substitutions in stable source

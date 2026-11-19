@@ -129,10 +129,21 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateCopiedCommandUnitsAsync(
         IReadOnlyList<ShellValue> words, int start, ScopedEvaluation scope, ScriptExecutionKind kind)
     {
+        // Expansion is complete. Include a space between every pair of operands,
+        // including empty ones, and admit the final backing before copying.
+        long length = Math.Max(0, words.Count - start - 1);
+        for (var index = start; index < words.Count; index++)
+        {
+            CheckCancellation();
+            length += words[index].Bytes.Length;
+        }
+        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
         var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
         try
         {
-            using var builder = new ByteMemoryBuilder(0, sourceMemory.Budget);
+            using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
             for (var index = start; index < words.Count; index++)
             {
                 CheckCancellation();
