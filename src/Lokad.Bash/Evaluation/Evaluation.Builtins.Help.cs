@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
 
@@ -91,7 +90,7 @@ public sealed partial class Evaluation
                         found = true;
                         var (name, kind) = registration;
                         var documentation = BuiltinDocumentation.For(kind);
-                        var synopsis = documentation.Synopsis(name);
+                        var synopsis = format == BuiltinHelpFormat.Description ? name : documentation.Synopsis(name);
                         Append(format switch
                         {
                             BuiltinHelpFormat.Description => name + " - " + documentation.Summary + "\n",
@@ -124,8 +123,9 @@ public sealed partial class Evaluation
 
         void Append(string text)
         {
-            Memory.Charge(checked(4L * (Encoding.UTF8.GetByteCount(text))));
-            output.Append(Utf8Text.Encode(text));
+            var encoding = Utf8Text.StrictUtf8;
+            var byteCount = encoding.GetByteCount(text);
+            encoding.GetBytes(text.AsSpan(), output.AppendSpan(byteCount));
         }
     }
 }
