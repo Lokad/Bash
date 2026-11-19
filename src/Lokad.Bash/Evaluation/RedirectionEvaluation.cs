@@ -461,7 +461,8 @@ internal sealed class RedirectionEvaluation
             else
             {
                 using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-                if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.CancellationToken))
+                if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.Memory.Budget,
+                        scope.Effects.CancellationToken))
                     throw new ByteMemoryBuilder.LimitExceededException();
 
                 await scope.Effects.ExecuteWriteAsync(standardError, diagnostic.Append(": ambiguous redirect\n"u8).ToMemory())

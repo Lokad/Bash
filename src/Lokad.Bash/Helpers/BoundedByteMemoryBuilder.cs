@@ -49,6 +49,8 @@ public sealed class BoundedByteMemoryBuilder : IDisposable, IByteMemoryWriter
     /// <summary>Gets the number of bytes that can still be appended.</summary>
     public int RemainingLength => _maximumLength - Length;
 
+    internal IMemoryBudget? Budget => _builder.Budget;
+
     /// <summary>Attempts to append one byte without exceeding the configured maximum.</summary>
     public bool TryAppend(byte value) => CanAppend(1) && _builder.TryAppend(value);
 

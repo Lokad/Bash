@@ -107,6 +107,11 @@ Builtin operation errors share this formatter. The host detail stays borrowed
 and is encoded directly into the admitted output buffer. The builtin retains
 its own diagnostic destination, status and refusal handling.
 
+Function definition rendering admits its pending work records, borrowed
+here-document references and reusable long UTF-8 fragment buffer as scratch.
+Scratch is refunded when rendering returns. The output owner retains the
+rendered bytes through display, export or reparsing.
+
 Do not recover by retrying, waiting, spilling, switching to streaming, evicting caches
 or dropping optional storage. Failed allocation releases unused admission. Refusal
 is distinct from cancellation and `OutOfMemoryException`; earlier effects remain,

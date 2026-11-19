@@ -66,6 +66,8 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     /// <summary>Gets retained backing capacity, including unused space after truncation.</summary>
     public int Capacity => _buffer.Length;
 
+    internal IMemoryBudget? Budget => _memoryBudget ?? _prepaidMemory?.Budget;
+
     /// <summary> Appends a span of bytes to the buffer. </summary>
     /// <param name="bytes">The bytes to append.</param>
     public ByteMemoryBuilder Append(ReadOnlySpan<byte> bytes)

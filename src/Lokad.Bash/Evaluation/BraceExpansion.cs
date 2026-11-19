@@ -399,15 +399,9 @@ internal static class BraceExpansion
             var tailCount = parts.Count - rebuildFrom;
             memory.Charge(checked(128L + 8L * tailCount));
             var tail = new Word(parts.GetRange(rebuildFrom, tailCount));
-            foreach (var part in tail.Parts)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed command })
-                    memory.Charge(checked(256L + 8L * command.Source.Length));
-            }
             var spelling = new ShellScanContext { SyntaxMemory = memory.Workspace }
                 .CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
-            if (!FunctionDefinitionFormatter.TryAppendWordSource(tail, spelling, cancellationToken))
+            if (!FunctionDefinitionFormatter.TryAppendWordSource(tail, spelling, memory.Budget, cancellationToken))
                 throw new ByteMemoryBuilder.LimitExceededException();
             var rebuilt = Tokenizer.ReadBraceExpandedWord(ShellSource.FromBytes(spelling.ToMemory()), memory.Workspace);
             memory.Charge(checked(32L + 8L * rebuilt.Parts.Count));

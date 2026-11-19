@@ -22,6 +22,8 @@ public sealed class MemoryCapacity : IDisposable
     private IMemoryReservation? _reservation;
     private bool _disposed;
 
+    internal IMemoryBudget Budget => _budget;
+
     public MemoryCapacity(IMemoryBudget budget, long bytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);

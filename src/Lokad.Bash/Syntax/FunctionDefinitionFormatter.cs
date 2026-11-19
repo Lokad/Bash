@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -13,29 +14,26 @@ internal static class FunctionDefinitionFormatter
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppend(FunctionDefinition definition, ByteMemoryBuilder output) =>
-        TryAppend(definition, output, Format.Display);
+        TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.Display, CancellationToken.None);
 
     /// <summary>Omits presentation-only tokens, indentation and wrapper groups before child parsing.</summary>
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppendExport(FunctionDefinition definition, BoundedByteMemoryBuilder output) =>
-        TryAppend(definition, output, Format.Export);
-
-    private static bool TryAppend(FunctionDefinition definition, IByteMemoryWriter output, Format format)
-        => TryAppend(new Step.Function(definition, 0, Nested: false), output, format, CancellationToken.None);
+        TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.Export, CancellationToken.None);
 
     /// <summary>Renders the word's lexical structure, retaining its quotes and escapes.</summary>
-    internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, CancellationToken cancellationToken) =>
-        TryAppend(new Step.Word(word), output, Format.BraceSource, cancellationToken);
+    internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, IMemoryBudget budget, CancellationToken cancellationToken) =>
+        TryAppend(new Step.Word(word), output, budget, Format.BraceSource, cancellationToken);
 
     internal static bool TryAppendSubstitutionSource(
-        CommandSubstitutionSyntax substitution, IByteMemoryWriter output, CancellationToken cancellationToken)
+        CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget, CancellationToken cancellationToken)
     {
         if (substitution is CommandSubstitutionSyntax.Legacy legacy)
             return output.TryAppend(legacy.Spelling.AsSpan());
         if (substitution is CommandSubstitutionSyntax.Parsed
             { Failure: SubstitutionSyntaxFailure.None, PreserveAdjacentOpening: false } parsed)
             return output.TryAppend(StartsWithParenthesis(parsed.Script) ? "$( "u8 : "$("u8)
-                && TryAppend(new Step.Script(parsed.Script), output, Format.BraceSource, cancellationToken)
+                && TryAppend(new Step.Script(parsed.Script), output, budget, Format.BraceSource, cancellationToken)
                 && output.TryAppend((byte)')');
         return output.TryAppend("$("u8) && output.TryAppend(substitution.Source.AsSpan()) && output.TryAppend((byte)')');
 
@@ -59,13 +57,20 @@ internal static class FunctionDefinitionFormatter
         }
     }
 
-    private static bool TryAppend(Step initial, IByteMemoryWriter output, Format format, CancellationToken cancellationToken)
+    private static bool TryAppend(Step initial, IByteMemoryWriter output, IMemoryBudget? budget, Format format,
+        CancellationToken cancellationToken)
     {
         var display = format == Format.Display;
         var braceSource = format == Format.BraceSource;
         // Explicit work items keep long left-associated lists off the CLR call stack.
+        using var workMemory = budget == null ? null : new MemoryCapacity(budget, 0);
+        using var documentMemory = budget == null ? null : new MemoryCapacity(budget, 0);
         var work = new Stack<Step>();
         var hereDocuments = new Queue<Redirection>();
+        var workCapacity = 0;
+        var documentCapacity = 0;
+        byte[] encodedFragment = [];
+        PrepareWork(braceSource ? 1 : 2);
         if (!braceSource)
             work.Push(new Step.Layout(0));
         work.Push(initial);
@@ -82,7 +87,7 @@ internal static class FunctionDefinitionFormatter
                     break;
                 case Step.Layout(var indent):
                     if (display || braceSource || hereDocuments.Count != 0)
-                        work.Push(new Step.Line(indent, Terminate: false));
+                        PushStep(new Step.Line(indent, Terminate: false));
                     else if (!Append(" ")) return false;
                     break;
                 case Step.Line(var indent, var terminate):
@@ -99,6 +104,7 @@ internal static class FunctionDefinitionFormatter
                     var doubleQuoted = false;
                     foreach (var part in word.Parts)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         var content = part.GetUnexpandedValue().Bytes.Span;
                         var quotedPart = part.IsDoubleQuoted;
                         if (doubleQuoted && quotedPart && part.DoubleQuote != DoubleQuoteBoundary.Continuation
@@ -118,7 +124,7 @@ internal static class FunctionDefinitionFormatter
                                 when part is CommandSubstitutionWordPart command
                                     && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy
                                         or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }) =>
-                                TryAppendSubstitutionSource(command.Substitution, output, cancellationToken),
+                                TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
                                 AppendCommandSubstitution(content),
                             _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
@@ -128,6 +134,7 @@ internal static class FunctionDefinitionFormatter
                     if (doubleQuoted && !Append("\"")) return false;
                     break;
                 case Step.Script(var script):
+                    PrepareWork(Math.Max(0, checked(2 * script.Commands.Count - 1)));
                     for (var index = script.Commands.Count - 1; index >= 0; index--)
                     {
                         work.Push(new Step.Command(script.Commands[index], 0));
@@ -154,6 +161,7 @@ internal static class FunctionDefinitionFormatter
                     if (!output.TryAppend(assignment.Target.AsSpan()) || !Append(assignment.Operator == AssignmentOperator.Append ? "+=" : "=")) return false;
                     if (assignment.ArrayValues is { } values)
                     {
+                        PrepareWork(Math.Max(1, checked(2 * values.Count)));
                         work.Push(new Step.Text(")"));
                         for (var index = values.Count - 1; index >= 0; index--)
                         {
@@ -162,9 +170,10 @@ internal static class FunctionDefinitionFormatter
                         }
                         if (!Append("(")) return false;
                     }
-                    else work.Push(new Step.Word(assignment.Value));
+                    else PushStep(new Step.Word(assignment.Value));
                     break;
                 case Step.Redirections(var redirections):
+                    PrepareWork(redirections.Count);
                     for (var index = redirections.Count - 1; index >= 0; index--)
                         work.Push(new Step.Redirection(redirections[index]));
                     break;
@@ -205,12 +214,12 @@ internal static class FunctionDefinitionFormatter
                     if (!Append(redirectionOperator)) return false;
                     if (redirection.HereDocumentDelimiter is { } delimiterWord)
                     {
-                        hereDocuments.Enqueue(redirection);
-                        work.Push(redirection.DelimiterSyntax is { } syntax
+                        QueueDocument(redirection);
+                        PushStep(redirection.DelimiterSyntax is { } syntax
                             ? new Step.Source(syntax.Spelling)
                             : new Step.Word(delimiterWord));
                     }
-                    else work.Push(new Step.Word(redirection.Target));
+                    else PushStep(new Step.Word(redirection.Target));
                     break;
                 case Step.Function(var function, var indent, var nested):
                     // Keep keyword-only names reparsable, even when Bash's printed assignment-like name is not.
@@ -223,11 +232,11 @@ internal static class FunctionDefinitionFormatter
                 case Step.IfArm(var conditional, var arm, var indent):
                     var condition = arm < 0 ? conditional.Condition : conditional.ElifClauses[arm].Condition;
                     var thenBody = arm < 0 ? conditional.ThenBody : conditional.ElifClauses[arm].Body;
-                    if (arm < 0) work.Push(new Step.Text("fi"));
+                    if (arm < 0) PushStep(new Step.Text("fi"));
                     if (arm + 1 < conditional.ElifClauses.Count)
                     {
                         // Keep flat chains flat: extra nesting can make a valid definition fail to import.
-                        work.Push(new Step.IfArm(conditional, arm + 1, indent));
+                        PushStep(new Step.IfArm(conditional, arm + 1, indent));
                     }
                     else if (conditional.ElseBody is { } elseBody)
                     {
@@ -242,6 +251,7 @@ internal static class FunctionDefinitionFormatter
                     switch (command)
                     {
                         case SimpleCommand simple:
+                            PrepareWork(Math.Max(1, checked(2 * (simple.Words.Count + simple.Assignments.Count))));
                             work.Push(new Step.Redirections(simple.Redirections));
                             for (var index = simple.Words.Count - 1; index >= 0; index--)
                             {
@@ -283,7 +293,7 @@ internal static class FunctionDefinitionFormatter
                                 new Step.Command(pipeline.Right, indent));
                             break;
                         case IfCommand conditional:
-                            work.Push(new Step.IfArm(conditional, -1, indent));
+                            PushStep(new Step.IfArm(conditional, -1, indent));
                             break;
                         case WhileCommand loop:
                             ScheduleLoop("while", loop.Condition, loop.Body, indent);
@@ -295,6 +305,7 @@ internal static class FunctionDefinitionFormatter
                             Push(new Step.Text(";"), new Step.Layout(indent), new Step.Text("do"),
                                 new Step.Layout(indent + 4), new Step.Command(loop.Body, indent + 4),
                                 new Step.Line(indent, Terminate: true), new Step.Text("done"));
+                            PrepareWork(Math.Max(0, checked(2 * loop.Items.Count - 1)));
                             for (var index = loop.Items.Count - 1; index >= 0; index--)
                             {
                                 work.Push(new Step.Word(loop.Items[index]));
@@ -318,10 +329,11 @@ internal static class FunctionDefinitionFormatter
                             Push(new Step.Text("[[ "), new Step.Source(conditional.Spelling), new Step.Text(" ]]"));
                             break;
                         case CaseCommand selection:
-                            work.Push(new Step.Text("esac"));
+                            PushStep(new Step.Text("esac"));
                             for (var index = selection.Items.Count - 1; index >= 0; index--)
                             {
                                 var item = selection.Items[index];
+                                PrepareWork(checked(7 + Math.Max(0, 2 * item.Patterns.Count - 1)));
                                 Push(new Step.Text(")"), new Step.Layout(indent + 8), new Step.Command(item.Body, indent + 8),
                                     new Step.Layout(indent + 4), new Step.Text(";;"), new Step.Layout(indent));
                                 for (var pattern = item.Patterns.Count - 1; pattern >= 0; pattern--)
@@ -336,7 +348,7 @@ internal static class FunctionDefinitionFormatter
                             Push(new Step.Text("case "), new Step.Word(selection.Subject), new Step.Text(" in "), new Step.Layout(indent));
                             break;
                         case FunctionDefinition function:
-                            work.Push(new Step.Function(function, indent, Nested: true));
+                            PushStep(new Step.Function(function, indent, Nested: true));
                             break;
                         default:
                             throw new NotSupportedException($"Cannot render command kind {command.GetType().Name}.");
@@ -351,7 +363,20 @@ internal static class FunctionDefinitionFormatter
             const int shortFragmentLength = 64;
             var characters = text.AsSpan();
             if (characters.Length > shortFragmentLength)
-                return output.TryAppend(Utf8Text.Encode(text).Span);
+            {
+                var required = Utf8Text.StrictUtf8.GetByteCount(characters);
+                if (required > encodedFragment.Length)
+                {
+                    var previous = encodedFragment.Length;
+                    var next = NextCapacity(previous, required);
+                    workMemory?.Grow(MemoryCapacity.ArrayBackingBytes<byte>(next));
+                    encodedFragment = new byte[next];
+                    workMemory?.Resize(workMemory.Bytes - MemoryCapacity.ArrayBackingBytes<byte>(previous));
+                }
+
+                Utf8Text.StrictUtf8.GetBytes(characters, encodedFragment);
+                return output.TryAppend(encodedFragment.AsSpan(0, required));
+            }
 
             // A UTF-16 code unit needs at most three UTF-8 bytes, including pairs.
             Span<byte> bytes = stackalloc byte[3 * shortFragmentLength];
@@ -385,8 +410,47 @@ internal static class FunctionDefinitionFormatter
 
         void Push(params Step[] steps)
         {
+            PrepareWork(steps.Length);
             for (var index = steps.Length - 1; index >= 0; index--) work.Push(steps[index]);
         }
+
+        void PushStep(Step step)
+        {
+            PrepareWork(1);
+            work.Push(step);
+        }
+
+        void PrepareWork(int additional)
+        {
+            var required = checked(work.Count + additional);
+            if (required <= workCapacity)
+                return;
+
+            // Each slot can retain a work record as well as its reference. Only
+            // the backing arrays overlap during growth; they share the records.
+            const long workItemBytes = 32;
+            var next = NextCapacity(workCapacity, required);
+            workMemory?.Grow(MemoryCapacity.ArrayBackingBytes<Step>(next) + workItemBytes * (next - workCapacity));
+            work.EnsureCapacity(next);
+            workMemory?.Resize(workMemory.Bytes - MemoryCapacity.ArrayBackingBytes<Step>(workCapacity));
+            workCapacity = next;
+        }
+
+        void QueueDocument(Redirection redirection)
+        {
+            if (hereDocuments.Count == documentCapacity)
+            {
+                var next = NextCapacity(documentCapacity, checked(hereDocuments.Count + 1));
+                documentMemory?.Grow(MemoryCapacity.ArrayBackingBytes<Redirection>(next));
+                hereDocuments.EnsureCapacity(next);
+                documentMemory?.Resize(documentMemory.Bytes - MemoryCapacity.ArrayBackingBytes<Redirection>(documentCapacity));
+                documentCapacity = next;
+            }
+            hereDocuments.Enqueue(redirection);
+        }
+
+        static int NextCapacity(int previous, int required) =>
+            (int)Math.Max(required, Math.Min(Array.MaxLength, Math.Max(4L, 2L * previous)));
 
         void ScheduleLoop(string keyword, ICommand condition, ICommand body, int indent) =>
             Push(new Step.Text(keyword + " "), new Step.Command(condition, indent), new Step.Text("; do"),

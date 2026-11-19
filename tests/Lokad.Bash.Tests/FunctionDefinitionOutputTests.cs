@@ -65,6 +65,70 @@ public sealed class FunctionDefinitionOutputTests
         Assert.EndsWith("    cat <<END\nbody\nEND\n\n}\n", Utf8Text.Decode(output.ToMemory()));
     }
 
+    [Fact]
+    public void WideDefinitionAdmitsTraversalBeforeSchedulingItsOperands()
+    {
+        const int bufferSize = 4096;
+        var operands = string.Concat(Enumerable.Repeat(" data", 512));
+        var words = "f(){ :" + operands + "; }";
+        var literal = "f(){ : '" + operands[3..] + "'; }";
+        Assert.Equal(words.Length, literal.Length);
+        var wide = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(words).Commands));
+        var narrow = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(literal).Commands));
+        var governor = new MemoryGovernor(2 * bufferSize);
+        using var output = new ByteMemoryBuilder(bufferSize, governor);
+
+        Assert.Throws<MemoryBudgetExceededException>(() => FunctionDefinitionFormatter.TryAppend(wide, output));
+        Assert.Equal(bufferSize, governor.ReservedBytes);
+
+        output.Truncate(0);
+        Assert.True(FunctionDefinitionFormatter.TryAppend(narrow, output));
+        Assert.Equal(bufferSize, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void ExportAdmitsPendingHereDocumentsSeparatelyFromRedirectionWork()
+    {
+        const int bufferSize = 2048;
+        const int documents = 64;
+        var ordinary = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :"
+            + string.Concat(Enumerable.Repeat(" <Mark", documents)) + "; }").Commands));
+        var bodies = string.Concat(Enumerable.Range(0, documents).Select(index => $"line{index}\nMark\n"));
+        var queued = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :"
+            + string.Concat(Enumerable.Repeat(" <<Mark", documents)) + "\n" + bodies + "}\n").Commands));
+        var governor = new MemoryGovernor(TestMemoryBudget.FunctionFormattingBytes);
+        using (var export = new BoundedByteMemoryBuilder(bufferSize, bufferSize, governor))
+        {
+            Assert.True(FunctionDefinitionFormatter.TryAppendExport(ordinary, export));
+            Assert.Equal(bufferSize, governor.ReservedBytes);
+        }
+
+        var limited = new MemoryGovernor(governor.PeakBytes);
+        using (var export = new BoundedByteMemoryBuilder(bufferSize, bufferSize, limited))
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => FunctionDefinitionFormatter.TryAppendExport(queued, export));
+            Assert.Equal(bufferSize, limited.ReservedBytes);
+        }
+
+        using var admitted = new BoundedByteMemoryBuilder(bufferSize, bufferSize, governor);
+        Assert.True(FunctionDefinitionFormatter.TryAppendExport(queued, admitted));
+        Assert.Contains(bodies, Utf8Text.Decode(admitted.ToMemory()), StringComparison.Ordinal);
+        Assert.Equal(bufferSize, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void LongDescriptorNameEncodingReleasesItsScratchOnRefusal()
+    {
+        const int bufferSize = 2048;
+        var name = new string('n', 1024);
+        var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ {" + name + "}>out; }").Commands));
+        var governor = new MemoryGovernor(bufferSize + 1024);
+        using var output = new ByteMemoryBuilder(bufferSize, governor);
+
+        Assert.Throws<MemoryBudgetExceededException>(() => FunctionDefinitionFormatter.TryAppend(definition, output));
+        Assert.Equal(bufferSize, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(64)]
     [InlineData(65)]

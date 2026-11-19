@@ -870,7 +870,8 @@ internal static partial class WordExpansion
         if (scope.PreserveCommandSubstitutionSpelling)
         {
             using var spelling = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-            if (!FunctionDefinitionFormatter.TryAppendSubstitutionSource(script, spelling, scope.Effects.CancellationToken))
+            if (!FunctionDefinitionFormatter.TryAppendSubstitutionSource(script, spelling, scope.Effects.Memory.Budget,
+                    scope.Effects.CancellationToken))
                 throw new ByteMemoryBuilder.LimitExceededException();
             output.AppendExpansion(ShellValue.FromBytes(spelling.ToMemory()), allowWordSplitting, globQuoted);
             return;
