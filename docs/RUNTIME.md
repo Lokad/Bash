@@ -55,6 +55,13 @@ after a successful host lookup and before directory-variable bookkeeping. The
 existing write and cleanup path retains the output through completion. A
 reported write failure keeps the completed navigation and fails the command.
 
+Stack-only edits preserve the current directory and skip directory-variable
+assignment. Deferred entries own their literal bytes and child stacks borrow
+that backing while their parent is live. Selecting one for navigation then
+uses ordinary path decoding, host lookup, and directory bookkeeping. Successful
+push and pop operations report a failed listing write through active stderr
+while keeping the completed stack change and its status.
+
 Nameref declaration validation precedes replacement of values and attributes.
 Circular local references reuse scope ownership to select a global fallback;
 selected reads retain that store through value consumption. Declaration metadata

@@ -190,7 +190,7 @@ public sealed class CollectionOwnershipTests
             var child = Fork(memory);
             Assert.Equal(513, child.DirectoryStackCount);
             Assert.Same(target, child.CurrentDirectory);
-            Assert.Same(previous, child.GetDirectoryStackPath(1));
+            Assert.Same(previous, child.GetDirectoryStackEntry(1).Path);
             Assert.True(budget.ReservedBytes >= child.RetainedDirectoryStackBytes);
             child.ResetDirectoryStack();
             Assert.Equal(1, child.DirectoryStackCount);

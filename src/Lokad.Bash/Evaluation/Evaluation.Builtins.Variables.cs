@@ -284,7 +284,7 @@ public sealed partial class Evaluation
                     var inspection = enabled
                         ? "errexit\t" + (_state.ErrexitEnabled ? "on\n" : "off\n")
                         : "set " + (_state.ErrexitEnabled ? "-o" : "+o") + " errexit\n";
-                    var written = await ExecuteWriteAsync(GetStdOutDescriptor(), Utf8Text.Encode(inspection)).ConfigureAwait(false);
+                    var written = await WriteBuiltinOutputAsync(ShellValue.FromText("set"), Utf8Text.Encode(inspection)).ConfigureAwait(false);
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(written.IsError ? 1 : 0), negated).ConfigureAwait(false);
                 }
                 if (!words[index].Bytes.Span.SequenceEqual("errexit"u8))

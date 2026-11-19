@@ -485,7 +485,13 @@ internal static partial class WordExpansion
             if (position == 0)
                 return scope.Variables.TryGetExpansionValue("PWD", out expanded);
 
-            var path = scope.Effects.GetDirectoryStackPath(position).Path;
+            var entry = scope.Effects.GetDirectoryStackEntry(position);
+            if (entry.Path is not { } resolved)
+            {
+                expanded = entry.DeferredPath;
+                return true;
+            }
+            var path = resolved.Path;
             scope.Effects.Memory.Charge(checked(24L + 3L * path.Length));
             scope.Effects.CancellationToken.ThrowIfCancellationRequested();
             expanded = ShellValue.FromText(path);

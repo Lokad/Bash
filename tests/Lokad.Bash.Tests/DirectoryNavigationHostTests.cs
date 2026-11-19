@@ -271,12 +271,73 @@ public sealed class DirectoryNavigationHostTests
         using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var result = await new Engine().RunAsync(evaluation, host, owner, cancel.Token);
 
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(0, result.ExitCode);
         Assert.Equal(destination, result.CurrentDirectory.Path);
         Assert.Equal(ShellValue.FromText(destination), evaluation.Variables["PWD"]);
         Assert.Equal(ShellValue.FromText("/b"), evaluation.Variables["OLDPWD"]);
         Assert.Equal(0, host.OpenFileCount);
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("pushd -n ../missing 1>&-", "0:/a:sentinel\n/a ../missing\n", "pushd")]
+    [InlineData("pushd -n ../b >/dev/null; popd -n +1 1>&-", "0:/a:sentinel\n/a\n", "popd")]
+    [InlineData("pushd -n ../b >/dev/null; popd 1>&-", "0:/b:/a\n/b\n", "popd")]
+    public async Task StackOnlyEditsKeepWorkingDirectoryAndTheDeferredPath(
+        string command, string output, string diagnosticName)
+    {
+        await using var host = new TestHost();
+        host.AddDirectory("/a");
+        host.AddDirectory("/b");
+        var result = await host.RunAsync("cd /a; OLDPWD=sentinel; " + command
+            + """; printf '%s:%s:%s\n' "$?" "$PWD" "$OLDPWD"; dirs""", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(diagnosticName + ": write error: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("pushd +1 1>&-", "0:/b\n/b /a /c\n", "pushd: write error: Bad file descriptor\n")]
+    [InlineData("pushd -n +1 1>&-", "0:/c\n/c /a /c\n", "")]
+    [InlineData("popd -0 1>&-", "0:/c\n/c /b\n", "popd: write error: Bad file descriptor\n")]
+    public async Task DirectoryStackIndicesSelectFromEitherEnd(string command, string output, string error)
+    {
+        await using var host = new TestHost();
+        host.AddDirectory("/a");
+        host.AddDirectory("/b");
+        host.AddDirectory("/c");
+        var result = await host.RunAsync("cd /a; pushd /b >/dev/null; pushd /c >/dev/null; " + command
+            + """; printf '%s:%s\n' "$?" "$PWD"; dirs""", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task DirectoryStackIndexFailureKeepsTheEmptyStackDiagnostic()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("pushd +1 1>&-", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("pushd: directory stack empty\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task DeferredStackEntryRetainsByteValuesAcrossForkAndTildeSelection()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            """pushd -n $'\377' >/dev/null; (dirs; printf '<%s>' ~+1); popd -n >/dev/null; dirs""",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString("2F20FF0A3CFF3E2F0A"), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
     }
 }

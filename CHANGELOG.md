@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Report builtin listing write failures through the active stderr. Preserve
+  successful directory-stack edits and caller selections when output fails.
+  Support stack-only `pushd` and `popd` edits and signed stack indices.
+
 - Publish foreground `PIPESTATUS` with Bash's binding, temporary-scope and
   negation rules.
 

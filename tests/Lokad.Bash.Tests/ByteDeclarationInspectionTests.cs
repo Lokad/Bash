@@ -94,14 +94,22 @@ public sealed class ByteDeclarationInspectionTests
     public async Task InspectionStopsAfterAnOutputFailureWithoutChangingBindings()
     {
         var state = new Eval(Parser.Parse("x=one; y=two; declare -p x y"));
-        var host = new TestOperationVisitor([]);
-        host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("Write failed\n"))); // A second row would exhaust the host's queue.
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("Write failed\n")));
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
 
         await new Engine().RunAsync(state, host, CancellationToken.None);
 
         Assert.Equal(1, state.LastExitCode);
         Assert.Equal(ShellValue.FromText("one"), state.Variables["x"]);
         Assert.Equal(ShellValue.FromText("two"), state.Variables["y"]);
+        Assert.Collection(host.Appends,
+            first => Assert.Equal(FileDescriptor.StdOut, first.Descriptor),
+            diagnostic =>
+            {
+                Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
+                Assert.Equal("declare: write error: Write failed\n"u8.ToArray(), diagnostic.Content);
+            });
         Assert.Empty(host.ClosedDescriptors);
     }
 }

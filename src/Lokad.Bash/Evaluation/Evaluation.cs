@@ -211,7 +211,7 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Borrowed by word expansion on this evaluator's serialized execution path.</summary>
     internal int DirectoryStackCount => _state.DirectoryStackCount;
-    internal ShellPath GetDirectoryStackPath(int index) => _state.GetDirectoryStackPath(index);
+    internal EvaluationState.DirectoryStackEntry GetDirectoryStackEntry(int index) => _state.GetDirectoryStackEntry(index);
 
     /// <summary> Gets the current variable assignments. </summary>
     public IReadOnlyDictionary<BindingName, ShellValue> Variables => _vars.Scalars;
@@ -1033,6 +1033,7 @@ public sealed partial class Evaluation : IFileTester
                         or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
                         or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
                         or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd or BuiltinKind.Shift
+                        or BuiltinKind.Pushd or BuiltinKind.Popd or BuiltinKind.Caller
                 })
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
@@ -1354,6 +1355,12 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Getopts => await AwaitWordExpansionAsync(EvaluateBuiltinGetoptsAsync(
                         byteOperands, builtinScope with { Variables = commandVars }, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
+                        .ConfigureAwait(false),
+                    BuiltinKind.Pushd => await EvaluateBuiltinPushdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
+                        .ConfigureAwait(false),
+                    BuiltinKind.Popd => await EvaluateBuiltinPopdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
+                        .ConfigureAwait(false),
+                    BuiltinKind.Caller => await EvaluateBuiltinCallerAsync(byteOperands, builtinScope.Context, false)
                         .ConfigureAwait(false),
                     BuiltinKind.Shift => await AwaitWordExpansionAsync(EvaluateBuiltinShiftAsync(
                         byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
@@ -1698,8 +1705,8 @@ public sealed partial class Evaluation : IFileTester
             var lastTextOperandIndex = builtin.Kind switch
             {
                 BuiltinKind.Colon or BuiltinKind.True or BuiltinKind.False
-                    or BuiltinKind.Pwd or BuiltinKind.Popd or BuiltinKind.Caller => 0,
-                BuiltinKind.Dirs or BuiltinKind.Pushd => 1,
+                    or BuiltinKind.Pwd => 0,
+                BuiltinKind.Dirs => 1,
                 _ => words.Count - 1
             };
 
@@ -1786,7 +1793,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (output.Length == 0)
                         continue;
-                    var result = await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
+                    var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
                     if (!result.CanAcceptMore)
                     {
                         printStatus = result.IsError ? 1 : 0;
@@ -1922,7 +1929,7 @@ public sealed partial class Evaluation : IFileTester
                         await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("output limit exceeded")).ConfigureAwait(false);
                         return 1;
                     }
-                    var result = await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
+                    var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
                     if (!result.CanAcceptMore)
                         return result.IsError ? 1 : functionStatus;
                 }
@@ -2647,13 +2654,6 @@ public sealed partial class Evaluation : IFileTester
             case BuiltinKind.Dirs:
                 return await EvaluateBuiltinDirsAsync(words, negated)
                     .ConfigureAwait(false);
-            case BuiltinKind.Pushd:
-                return await EvaluateBuiltinPushdAsync(words, commandVars, bindings, scope.Context, negated)
-                    .ConfigureAwait(false);
-            case BuiltinKind.Popd:
-                return await EvaluateBuiltinPopdAsync(commandVars, bindings, scope.Context, negated).ConfigureAwait(false);
-            case BuiltinKind.Caller:
-                return await EvaluateBuiltinCallerAsync(scope.Context, negated).ConfigureAwait(false);
             case BuiltinKind.Colon:
             case BuiltinKind.True:
             case BuiltinKind.False:
@@ -2665,6 +2665,9 @@ public sealed partial class Evaluation : IFileTester
 
                 throw new InvalidOperationException($"Builtin '{commandName}' has no fixed exit code.");
             case BuiltinKind.Echo:
+            case BuiltinKind.Pushd:
+            case BuiltinKind.Popd:
+            case BuiltinKind.Caller:
             case BuiltinKind.Help:
             case BuiltinKind.Printf:
             case BuiltinKind.Read:

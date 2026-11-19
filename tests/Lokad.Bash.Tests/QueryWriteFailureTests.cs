@@ -25,6 +25,42 @@ public sealed class QueryWriteFailureTests
     }
 
     [Theory]
+    [InlineData("pwd", "pwd")]
+    [InlineData("dirs", "dirs")]
+    [InlineData("label=sample; declare -p label", "declare")]
+    [InlineData("f(){ :; }; declare -f f", "declare")]
+    [InlineData("export label=sample; export -p", "export")]
+    [InlineData("readonly label=sample; readonly -p", "readonly")]
+    [InlineData("set -o", "set")]
+    [InlineData("set +o", "set")]
+    public async Task ListingsReportClosedOutputThroughTheReachedErrorDescriptor(string script, string name)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script + " 1>&- 2>errors", CancellationToken.None);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(name + ": write error: Bad file descriptor\n", host.ReadFile("/errors"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("f(){ caller 1>&-; }; f", 0)]
+    [InlineData("f(){ caller 8 1>&-; }; f", 1)]
+    [InlineData("f(){ caller 0 1>&-; }; f", 1)]
+    [InlineData("g(){ caller 0 1>&-; }; f(){ g; }; f", 0)]
+    [InlineData("f(){ x=value eval 'caller 1>&-'; }; f", 0)]
+    [InlineData("caller 1>&-", 1)]
+    public async Task CallerStatusDependsOnFrameSelection(string script, int status)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+        Assert.Equal(status, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
     [InlineData("printf '' 1>&-")]
     [InlineData("echo -n 1>&-")]
     [InlineData("echo -nn -n 1>&-")]

@@ -11,6 +11,13 @@ public sealed partial class Evaluation
 
     internal bool BuiltinDiagnosticsOpen => _builtinDiagnostics?.Result.CanAcceptMore != false;
 
+    private async Task<DescriptorWriteResult> WriteBuiltinOutputAsync(ShellValue name, ReadOnlyMemory<byte> content)
+    {
+        var result = await ExecuteWriteAsync(GetStdOutDescriptor(), content).ConfigureAwait(false);
+        await ReportBuiltinWriteFailureAsync(name, result).ConfigureAwait(false);
+        return result;
+    }
+
     /// <summary>Reports a known output failure through the builtin's current stderr mapping.</summary>
     private Task ReportBuiltinWriteFailureAsync(ShellValue name, DescriptorWriteResult result) =>
         result.Error is { } cause && !GetStdErrDescriptor().IsClosed

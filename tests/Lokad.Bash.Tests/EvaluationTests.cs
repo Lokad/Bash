@@ -1263,6 +1263,11 @@ public partial class EvaluationTests
         var operation = await NextWriteAsync(state);
         operation.SetResult(DescriptorWriteResult.Failure(new OperationError("Write failed\n")));
 
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("pwd: write error: Write failed\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
     }

@@ -35,15 +35,12 @@ public sealed class EvaluationDirectoryTestsEndToEnd
     [Fact]
     public async Task Evaluation_PwdBuiltin_UsesExitCode()
     {
-        // This test verifies that "pwd" returns a failure exit code when stdout is closed.
-        // The script "pwd >&-" closes stdout; a correct implementation must emit no output and
-        // return exit code 1.
-        // If write failures are ignored, the exit code would be 0.
+        // The failure goes to stderr while stdout is closed.
         var script = @"pwd >&-";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("pwd: write error: Bad file descriptor\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -53,7 +50,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("pwd >&-; echo after");
 
         Assert.Equal("after\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("pwd: write error: Bad file descriptor\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

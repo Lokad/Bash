@@ -24,5 +24,6 @@ internal enum DirectoryChangeKind
     ChangeDirectory,
     PushDirectory,
     SwapDirectories,
+    RotateDirectories,
     PopDirectory
 }

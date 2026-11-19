@@ -13,19 +13,36 @@ public sealed partial class Evaluation
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
     private async Task<EvaluationResult> EvaluateBuiltinCallerAsync(
+        IReadOnlyList<ShellValue> words,
         EvaluationContext context,
         bool negated)
     {
-        if (context.FunctionContext == null)
+        var frame = SkipScriptPrefixes(context.FunctionContext);
+        var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
+        if (first < words.Count && TryParseControlNumber(words[first], out var index))
+        {
+            if (index < 0)
+                frame = null;
+            while (frame != null && index-- >= 0)
+            {
+                CheckCancellation();
+                frame = SkipScriptPrefixes(frame.Enclosing);
+            }
+        }
+        if (frame == null)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
 
-        var functionName = context.FunctionContext.FunctionName;
         using var output = new ByteMemoryBuilder(0, Memory.Budget);
-        output.Append("0 "u8).Append(functionName.Bytes).Append((byte)'\n');
-        var exitCode = (await ExecuteWriteAsync(
-            GetStdOutDescriptor(),
-            output.ToMemory()).ConfigureAwait(false)).IsError ? 1 : 0;
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+        output.Append("0 "u8).Append(frame.FunctionName.Bytes).Append((byte)'\n');
+        await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
+
+        static FunctionContext? SkipScriptPrefixes(FunctionContext? frame)
+        {
+            while (frame?.Locals.IsTemporaryPrefixScope == true)
+                frame = frame.Enclosing;
+            return frame;
+        }
     }
 
     /// <summary>
