@@ -15,6 +15,8 @@ internal enum ExpansionFailureKind
     /// <summary>A generated word fails substitution parsing and discards its command unit.</summary>
     WordSyntax,
     Parameter,
+    /// <summary>A reached error-if-unset parameter expansion.</summary>
+    RequiredParameter,
     /// <summary>An errexit-enabled file substitution could not open its input.</summary>
     InputSubstitution,
     Assignment,
@@ -209,6 +211,7 @@ internal sealed class EvaluationState
 
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
     public bool ErrexitEnabled { get; set; }
+    internal bool KeepsLocalsOnErrexit { get; private init; }
 
     /// <summary>
     /// Last substitution in the current simple command; null means none ran.
@@ -313,6 +316,7 @@ internal sealed class EvaluationState
         {
             LastExitCode = LastExitCode,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
+            KeepsLocalsOnErrexit = kind != ShellForkKind.CommandSubstitution,
             Traps = Traps?.Fork(kind)
         };
 

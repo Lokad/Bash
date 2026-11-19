@@ -170,6 +170,177 @@ public sealed class ErrexitTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("f(){ local x=inner; false; }; f callee", 1, "1:callee:outer")]
+    [InlineData("g(){ local x=deep; false; }; f(){ local x=inner; g nested; }; f callee", 1, "1:nested:outer")]
+    [InlineData("f(){ false; }; x=prefix f callee", 1, "1:callee:outer")]
+    [InlineData("f(){ local x=inner; eval 'false'; }; f callee", 1, "1:callee:outer")]
+    [InlineData("f(){ local x=inner; source ./unit sourced; }; f callee", 1, "1:sourced:outer")]
+    [InlineData("f(){ local x=inner; return 7; }; f callee", 7, "7:caller:outer")]
+    [InlineData("f(){ local x=inner; false; }; f callee || printf handled", 0, "handled0:caller:outer")]
+    public async Task ErrexitExitTrapUsesTheReachedArgumentsAfterLocalRestoration(string body, int exitCode, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "false\n");
+        var result = await host.RunAsync(
+            """set -- caller; x=outer; set -e; trap 'printf "%s:%s:%s" "$?" "$1" "$x"' EXIT; """
+            + body, CancellationToken.None);
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ErrexitUnwindsOnlyTheNearestActiveSimpleCallRedirection()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            set -- caller
+            x=outer
+            set -e
+            trap 'printf "%s:%s:%s" "$?" "$1" "$x"' EXIT
+            g(){ local x=deep; false >direct; }
+            f(){ local x=inner; g nested >inner; }
+            f callee >outer
+            """, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Empty(host.ReadFileBytes("/direct"));
+        Assert.Empty(host.ReadFileBytes("/inner"));
+        Assert.Equal("1:callee:outer", host.ReadFile("/outer"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("((0))")]
+    [InlineData("false | true")]
+    [InlineData("(false)")]
+    public async Task CompoundErrexitRunsTheExitActionInsideTheCallRedirection(string failure)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            """set -- caller; x=outer; set -e; trap 'printf "%s:%s:%s" "$?" "$1" "$x"' EXIT; """
+            + "f(){ local x=inner; " + failure + "; }; f callee >out", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("1:callee:outer", host.ReadFile("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ErrexitReportsActiveTimingBeforeTheExitAction()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            set -- caller
+            set -e
+            TIMEFORMAT=timed
+            trap 'printf "trap:%s:%s" "$?" "$1" >&2' EXIT
+            f(){ time { false; } 2>err; }
+            f callee
+            """, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("timed\ntrap:1:callee", host.ReadFile("/err"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("-e", "callee:inner")]
+    [InlineData("+e", "caller:outer")]
+    public async Task RequiredParameterExitKeepsItsOwnScopePolicy(string option, string output)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "set -- caller; x=outer; set " + option
+            + """; trap 'printf "%s:%s" "$1" "$x"' EXIT; f(){ local x=inner; : ${missing?required}; }; f callee""",
+            CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal("missing: required\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("false", "callee:inner")]
+    [InlineData("eval 'false'", "callee:outer")]
+    [InlineData("source ./unit sourced", "sourced:outer")]
+    public async Task SubshellErrexitUsesTheReachedExecutionBoundary(string failure, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "false\n");
+        var result = await host.RunAsync(
+            """set -- caller; x=outer; set -e; (trap 'printf "%s:%s" "$1" "$x"' EXIT; f(){ local x=inner; """
+            + failure + "; }; f callee)", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ErrexitExitActionRetainsTheReturnTarget()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            set -e
+            trap 'printf "%s:%s" "$?" "$1"; return 9; printf wrong' EXIT
+            f(){ false; }
+            f callee
+            """, CancellationToken.None);
+
+        Assert.Equal(9, result.ExitCode);
+        Assert.Equal("1:callee", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task ErrexitKeepsTheCompoundDescriptorThroughTheActionAndAwaitsItsClose()
+    {
+        var memory = new MemoryGovernor(128 * 1024);
+        var closeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = new TestOperationVisitor([])
+        {
+            MemoryBudget = memory,
+            RecordAppends = true,
+            BeforeDescriptorClose = _ => closeEntered.TrySetResult()
+        };
+        host.EnqueueOpenFileDescriptor(9);
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueueCloseDescriptorTask(releaseClose.Task);
+        var running = BashScript.RunAsync(host,
+            """set -e; set -- caller; trap 'printf "%s:%s" "$?" "$1"' EXIT; f(){ { false; } >out; }; f callee""",
+            EvaluationOptions.Default, CancellationToken.None);
+        try
+        {
+            await closeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(running.IsCompleted);
+            Assert.True(memory.ReservedBytes > 0);
+            var output = Assert.Single(host.Appends);
+            Assert.Equal(new FileDescriptor(9), output.Descriptor);
+            Assert.Equal("1:callee"u8.ToArray(), output.Content);
+        }
+        finally
+        {
+            releaseClose.TrySetResult();
+        }
+
+        Assert.Equal(1, (await running.WaitAsync(TimeSpan.FromSeconds(5))).ExitCode);
+        Assert.Equal(new FileDescriptor(9), Assert.Single(host.ClosedDescriptors));
+        Assert.Single(host.Appends);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
     [Fact]
     public async Task ErrexitWaitsForDescriptorCleanupAndRunsExitTrapOnce()
     {

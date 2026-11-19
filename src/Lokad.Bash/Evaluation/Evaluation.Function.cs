@@ -75,6 +75,8 @@ public sealed partial class Evaluation
         Variables variables,
         Variables.CommandBindings? bindings)
     {
+        if (completed.BindingsRestoredForExit)
+            return;
         foreach (var name in completed.PromotedNames)
         {
             var isPrefix = bindings?.Contains(name) == true;

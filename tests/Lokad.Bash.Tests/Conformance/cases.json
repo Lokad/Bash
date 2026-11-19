@@ -988,8 +988,8 @@
     },
     {
       "id": "errexit-group-exit-trap-descriptor",
-      "classification": "supported",
-      "reason": "",
+      "classification": "deviation",
+      "reason": "Incremental script execution follows the pinned Bash script-reader result. The command-string verifier uses bash -c, which restores the outer group descriptor before EXIT in this case.",
       "locale": "C",
       "script": "set -e; trap 'printf \"trap:%s\" \"$?\" 2>/dev/null >&3' EXIT; { false; } 3>out; printf wrong",
       "scriptSha256": "252f886d20446a5707da6abad2a1948f36923f3bb62a5beb6dd5580280081221",
@@ -1003,7 +1003,18 @@
       ],
       "exitCode": 1,
       "stdoutHex": "",
-      "stderrHex": ""
+      "stderrHex": "",
+      "managedExpectation": {
+        "exitCode": 1,
+        "stdoutHex": "",
+        "stderrHex": "",
+        "fileEffects": [
+          {
+            "path": "out",
+            "contentHex": "747261703a31"
+          }
+        ]
+      }
     },
     {
       "id": "arithmetic-value-expression",

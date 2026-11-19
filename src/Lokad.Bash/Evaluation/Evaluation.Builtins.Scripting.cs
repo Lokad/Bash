@@ -134,6 +134,8 @@ public sealed partial class Evaluation
         // independently of the caller's function/eval execution depth.
         if (kind != ScriptExecutionKind.Root)
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        if (kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval)
+            scope = scope with { InNestedCommandUnits = true };
 
         var result = EvaluationResult.FromExitCode(0);
         var scanContext = new ShellScanContext();

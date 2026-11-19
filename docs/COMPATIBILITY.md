@@ -336,6 +336,16 @@ builtin's usage and returns 2. Later fields are ordinary operands.
 parameters for that file. The filename must be valid UTF-8 for the host path
 boundary. Script content and positional parameters retain their byte values.
 
+An unhandled errexit status runs EXIT with the reached positional parameters and
+loop or return target. An ordinary failure restores function locals and temporary
+prefixes before the action. Subshell and pipeline child execution can keep those
+bindings until it leaves the child scope. A simple failure restores the nearest
+active simple invocation's redirections before EXIT. Compound command failures can
+leave the reached redirection active. Timed failures report their timing before
+the action. For a failing top-level brace group with a redirection, incremental
+execution follows the pinned Bash script reader. Bash command-string invocation
+can restore that mapping before EXIT.
+
 EXIT actions preserve the triggering status on ordinary completion and parse failure
 without errexit. Explicit return/exit and errexit failures can replace that status.
 Arithmetic/default expansion failures end their unit; assignment-target and parameter

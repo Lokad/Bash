@@ -20,6 +20,9 @@ internal sealed class ShellTraps
 
     public int? ExitTrapStatus { get; private set; }
 
+    internal bool HasPendingExitAction =>
+        !_exitHandled && _handlers.TryGetValue(TrapCondition.Exit, out var action) && !action.IsEmpty;
+
     public IReadOnlyDictionary<TrapCondition, ShellValue> ListedHandlers => _inheritedForListing ?? _handlers;
 
     // At most four registrations. Shared actions are conservatively counted per condition.

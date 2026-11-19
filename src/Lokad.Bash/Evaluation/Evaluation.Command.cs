@@ -48,12 +48,30 @@ public sealed partial class Evaluation
         // fresh status. Compound commands retain the tested origin of their final status.
         if (command is SimpleCommand)
             result = result.WithTestedStatus(false);
+        var hasExitAction = !_state.ExitedThroughExec && _state.Traps?.HasPendingExitAction == true;
+        if (hasExitAction)
+        {
+            if (result.DeferredErrexit is { IsActive: false })
+                return await RunExitTrapAsync(scope, result.WithDeferredErrexit(null), ExitTrapKind.Errexit).ConfigureAwait(false);
+            if (result.Flow == FlowControlKind.Exit && _state.ErrexitEnabled
+                && _state.FatalExpansion is { Kind: ExpansionFailureKind.RequiredParameter })
+                return await RunExitTrapAsync(scope, result, ExitTrapKind.Expansion).ConfigureAwait(false);
+        }
         if (result.Flow == FlowControlKind.None && result.ExitCode != 0)
         {
             if (scope.Context.ErrexitIgnored)
                 result = result.WithTestedStatus(true);
             else if (_state.ErrexitEnabled && !result.TestedStatus)
+            {
                 result = EvaluationResult.Exit(result.ExitCode);
+                if (hasExitAction)
+                {
+                    // Simple failures restore the nearest saved invocation before EXIT.
+                    if (command is SimpleCommand && scope.ErrexitRedirections is { IsActive: true } pending)
+                        return result.WithDeferredErrexit(pending);
+                    return await RunExitTrapAsync(scope, result, ExitTrapKind.Errexit).ConfigureAwait(false);
+                }
+            }
         }
         return result;
 
@@ -145,26 +163,13 @@ public sealed partial class Evaluation
 
             async Task<EvaluationResult> EvaluateTimedCommandAsync(TimedCommand timed)
             {
+                Memory.Charge(128);
                 var started = await AwaitOperationAsync(ReadTimingOperation.AsTask(PublishOperation)).ConfigureAwait(false);
-                var result = await EvaluateCommandAsync(timed.Inner, scope, negated).ConfigureAwait(false);
+                var timing = new ActiveTiming(started, timed.Portable, scope.Variables, scope.Timing);
+                var result = await EvaluateCommandAsync(timed.Inner, scope with { Timing = timing }, negated).ConfigureAwait(false);
                 // Bash's return unwinds past the timer; the calling function's timer still reports.
-                if (_state.ExitedThroughExec || result.Flow == FlowControlKind.Return)
-                    return result;
-                var ended = await AwaitOperationAsync(ReadTimingOperation.AsTask(PublishOperation)).ConfigureAwait(false);
-                var format = timed.Portable
-                    ? ShellTimeFormatting.PortableFormat
-                    : scope.Variables.TryGetExpansionValue("TIMEFORMAT", out var value)
-                        ? value
-                        : ShellTimeFormatting.DefaultFormat;
-                using var outputMemory = Memory.Budget.CreateScope();
-                if (ShellTimeFormatting.TryFormat(format, ended - started, out var output, out var error, outputMemory))
-                {
-                    if (!output.IsEmpty)
-                        await ExecuteWriteAsync(GetStdErrDescriptor(), output).ConfigureAwait(false);
-                }
-                else
-                    await ExecuteWriteAsync(GetStdErrDescriptor(), error).ConfigureAwait(false);
-
+                if (!_state.ExitedThroughExec && result.Flow != FlowControlKind.Return)
+                    await ReportTimingAsync(timing).ConfigureAwait(false);
                 // Ordinary formatting diagnostics preserve status; memory refusal reaches the command boundary.
                 return result;
             }
@@ -196,6 +201,37 @@ public sealed partial class Evaluation
                 return ApplyNegation(result, listNegated);
             }
         }
+    }
+
+    internal sealed class ActiveTiming(
+        ShellTimingSnapshot started, bool portable, Variables variables, ActiveTiming? enclosing)
+    {
+        internal ShellTimingSnapshot Started { get; } = started;
+        internal bool Portable { get; } = portable;
+        internal Variables Variables { get; } = variables;
+        internal ActiveTiming? Enclosing { get; } = enclosing;
+        internal bool Reported { get; set; }
+    }
+
+    private async ValueTask ReportTimingAsync(ActiveTiming timing)
+    {
+        if (timing.Reported)
+            return;
+        timing.Reported = true;
+        var ended = await AwaitOperationAsync(ReadTimingOperation.AsTask(PublishOperation)).ConfigureAwait(false);
+        var format = timing.Portable
+            ? ShellTimeFormatting.PortableFormat
+            : timing.Variables.TryGetExpansionValue("TIMEFORMAT", out var value)
+                ? value
+                : ShellTimeFormatting.DefaultFormat;
+        using var outputMemory = Memory.Budget.CreateScope();
+        if (ShellTimeFormatting.TryFormat(format, ended - timing.Started, out var output, out var error, outputMemory))
+        {
+            if (!output.IsEmpty)
+                await ExecuteWriteAsync(GetStdErrDescriptor(), output).ConfigureAwait(false);
+        }
+        else
+            await ExecuteWriteAsync(GetStdErrDescriptor(), error).ConfigureAwait(false);
     }
 
     /// <summary>Admits the replacement binding before foreground execution can publish effects.</summary>

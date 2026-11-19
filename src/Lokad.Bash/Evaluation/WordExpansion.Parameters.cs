@@ -223,7 +223,7 @@ internal static partial class WordExpansion
                         message = messageWord.ToValue(scope.Effects.Memory);
                     }
                     if (scope.CanExpand)
-                        await scope.Effects.ReportFatalExpansionAsync(ParameterSubject(), message, ExpansionFailureKind.Parameter)
+                        await scope.Effects.ReportFatalExpansionAsync(ParameterSubject(), message, ExpansionFailureKind.RequiredParameter)
                             .ConfigureAwait(false);
                 }
                 else

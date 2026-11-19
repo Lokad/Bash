@@ -121,8 +121,13 @@ public sealed partial class Evaluation
         }
     }
 
-    /// <summary>Runs EXIT once, before its shell loses bindings or descriptors. Other registered signals have no host delivery.</summary>
-    private async ValueTask<EvaluationResult> RunExitTrapAsync(ScopedEvaluation scope, EvaluationResult result)
+    private enum ExitTrapKind { Completion, Errexit, Expansion }
+
+    private ValueTask<EvaluationResult> RunExitTrapAsync(ScopedEvaluation scope, EvaluationResult result) =>
+        RunExitTrapAsync(scope, result, ExitTrapKind.Completion);
+
+    /// <summary>Runs EXIT once with the bindings and descriptors selected by the reason for termination.</summary>
+    private async ValueTask<EvaluationResult> RunExitTrapAsync(ScopedEvaluation scope, EvaluationResult result, ExitTrapKind kind)
     {
         if (_state.Traps is not { } traps || _state.ExitedThroughExec || !traps.TryBeginExit(result.ExitCode, out var action))
             return result;
@@ -131,17 +136,27 @@ public sealed partial class Evaluation
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
         _state.LastExitCode = result.ExitCode;
-        // Explicit exits retain their active scope; implicit shell completion runs after unwinding.
         try
         {
+            if (kind != ExitTrapKind.Completion)
+                for (var timing = scope.Timing; timing != null; timing = timing.Enclosing)
+                    await ReportTimingAsync(timing).ConfigureAwait(false);
+
+            var restoreLocals = kind == ExitTrapKind.Errexit && (!_state.KeepsLocalsOnErrexit || scope.InNestedCommandUnits);
+            if (restoreLocals)
+                RestoreErrexitBindings(scope);
+
             // EXIT runs independently of its caller's tested-status suppression. Keep
-            // lexical bindings/flow targets, while copied action bytes own their syntax.
+            // positional and flow targets, while copied action bytes own their syntax.
             var trapScope = scope with
             {
-                Context = new EvaluationContext(scope.Context.LoopDepth, scope.Context.FunctionContext, scope.Context.ReturnTarget)
+                Context = new EvaluationContext(scope.Context.LoopDepth,
+                    restoreLocals ? null : scope.Context.FunctionContext, scope.Context.ReturnTarget)
                 {
-                    GlobalPrefixes = scope.Context.GlobalPrefixes
-                }
+                    GlobalPrefixes = restoreLocals ? null : scope.Context.GlobalPrefixes
+                },
+                Timing = null,
+                ErrexitRedirections = null
             };
             var handler = await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap)
                 .ConfigureAwait(false);
@@ -162,6 +177,30 @@ public sealed partial class Evaluation
             traps.EndExit();
             _state.FatalExpansion = failure;
             _state.LastExitCode = result.ExitCode;
+        }
+
+        void RestoreErrexitBindings(ScopedEvaluation active)
+        {
+            var prefix = active.Context.GlobalPrefixes;
+            for (var function = active.Context.FunctionContext; function != null; function = function.Enclosing)
+            {
+                var temporaryScriptBindings = function.Locals.IsTemporaryPrefixScope;
+                var bindings = temporaryScriptBindings && prefix?.FunctionDepth == function.Depth
+                    ? prefix.Bindings : function.PrefixBindings;
+                CompletePromotions(function, function.Enclosing, active.Variables, bindings);
+                if (!temporaryScriptBindings)
+                    function.Locals.Restore();
+                function.BindingsRestoredForExit = true;
+                function.PrefixBindings?.Dispose();
+
+                while (prefix?.FunctionDepth == function.Depth)
+                {
+                    prefix.Bindings.Dispose();
+                    prefix = prefix.Enclosing;
+                }
+            }
+            for (; prefix != null; prefix = prefix.Enclosing)
+                prefix.Bindings.Dispose();
         }
     }
 }

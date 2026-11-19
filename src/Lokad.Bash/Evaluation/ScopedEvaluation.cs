@@ -26,6 +26,14 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Diagnostic expansion retains command substitution spelling.</summary>
     internal bool PreserveCommandSubstitutionSpelling { get; init; }
 
+    /// <summary>The nearest in-process simple invocation with redirections to restore.</summary>
+    internal Evaluation.RedirectionScope? ErrexitRedirections { get; init; }
+
+    internal Evaluation.ActiveTiming? Timing { get; init; }
+
+    /// <summary>Eval and source use a command-unit boundary even in a child shell.</summary>
+    internal bool InNestedCommandUnits { get; init; }
+
     /// <summary>A builtin's closed diagnostic output stops its expansion without making later commands fatal.</summary>
     internal bool CanExpand => !Effects.HasPendingExpansionError && Effects.BuiltinDiagnosticsOpen;
 

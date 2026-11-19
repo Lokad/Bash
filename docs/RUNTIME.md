@@ -425,4 +425,14 @@ mapping and returns status 1 through ordinary cleanup.
 EXIT actions retain their own flow/status policy: normal completion preserves the
 triggering status, while return/exit and errexit can replace it. They do not inherit
 tested-status suppression from the caller. Explicit exit invokes the action before
-active bindings, loop targets and redirections unwind; arity failure remains distinct.
+active bindings, loop targets and redirections unwind. A required-parameter exit
+under errexit also uses its active lexical frame. Arity and recoverable expansion
+failures retain their existing unwind paths.
+
+An unhandled status retains active positional and control-flow frames for EXIT.
+Simple failures settle the nearest reached simple invocation with restorable
+redirections first. Compound failures run through the reached descriptor mapping.
+Ordinary shell command units restore local and temporary bindings before the action.
+Direct child execution retains them. Eval and source restore bindings at their
+command-unit boundary. Pending timers report once, before the action. The
+enclosing descriptor and command owners still settle before completion returns.

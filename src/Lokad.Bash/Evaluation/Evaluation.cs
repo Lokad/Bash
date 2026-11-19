@@ -680,9 +680,17 @@ public sealed partial class Evaluation : IFileTester
         Exception? failure = null;
         try
         {
-            result = await EvaluateCommandAsync(subshellCommand.Body, scope with { Variables = childVars, Context = childContext }, negated: false)
+            var childScope = scope with
+            {
+                Variables = childVars,
+                Context = childContext,
+                ErrexitRedirections = null,
+                Timing = null,
+                InNestedCommandUnits = false
+            };
+            result = await EvaluateCommandAsync(subshellCommand.Body, childScope, negated: false)
                 .ConfigureAwait(false);
-            result = await RunExitTrapAsync(scope with { Variables = childVars, Context = childContext }, result).ConfigureAwait(false);
+            result = await RunExitTrapAsync(childScope, result).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1222,12 +1230,15 @@ public sealed partial class Evaluation : IFileTester
             // A failed redirection must not change exports or $0.
             ShellValue? argumentZero = executable.ExecutionOptions is { } executionOptions
                 ? PrepareExecArgumentZero(executionOptions, commandName) : null;
+            var invocationScope = commandRedirections is { IsActive: true, HasRestorableMappings: true }
+                ? scope with { ErrexitRedirections = commandRedirections }
+                : scope;
             if (executable.Resolution is CommandResolution.Function function)
             {
                 var functionResult = await EvaluateFunctionAsync(
                         function.Binding,
                         byteOperands,
-                        scope,
+                        invocationScope,
                         commandVars,
                         prefixNames,
                         false)
@@ -1237,11 +1248,11 @@ public sealed partial class Evaluation : IFileTester
 
             if (executable.Resolution is CommandResolution.EvaluatorBuiltin evaluatorBuiltin)
             {
-                var builtinScope = scope;
+                var builtinScope = invocationScope;
                 if (argumentZero is { } builtinName)
                 {
                     // Fork before installing temporary bindings so builtin writes cannot reach the caller's frames.
-                    builtinScope = ForkExecScope(scope, builtinName);
+                    builtinScope = ForkExecScope(invocationScope, builtinName);
                     if (ReferenceEquals(commandVars, scope.Variables))
                         commandVars = builtinScope.Variables;
                     else
@@ -2711,7 +2722,8 @@ public sealed partial class Evaluation : IFileTester
         }
         return new RedirectionScope(this, active: true, releasedDescriptors, evaluation.ConsumedSources)
         {
-            InputOpenFailed = evaluation.InputOpenFailed
+            InputOpenFailed = evaluation.InputOpenFailed,
+            HasRestorableMappings = evaluation.TouchedDescriptors.Count != 0
         };
 
     }
@@ -3883,7 +3895,7 @@ public sealed partial class Evaluation : IFileTester
         Evaluation
     }
 
-    private sealed class RedirectionScope(
+    internal sealed class RedirectionScope(
         Evaluation owner,
         bool active,
         IReadOnlyList<FileDescriptor> descriptorsToReleaseWhenPreserved,
@@ -3891,6 +3903,8 @@ public sealed partial class Evaluation : IFileTester
     {
         private bool _active = active;
 
+        internal bool IsActive => _active;
+        internal bool HasRestorableMappings { get; init; }
         public bool InputOpenFailed { get; init; }
 
         public Task<OperationError?> PreserveAsync()
@@ -4026,6 +4040,7 @@ public sealed partial class Evaluation : IFileTester
 
         public Variables.LocalBindings Locals { get; }
         public Variables.CommandBindings? PrefixBindings { get; init; }
+        internal bool BindingsRestoredForExit { get; set; }
         public IReadOnlySet<BindingName> PrefixNames => PrefixBindings?.PrefixNames ?? NoPrefixNames;
         private static IReadOnlySet<BindingName> NoPrefixNames { get; } = new HashSet<BindingName>();
 

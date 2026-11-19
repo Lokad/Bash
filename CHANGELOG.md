@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve the reached positional and flow context when errexit runs an EXIT
+  action, with Bash's binding, redirection and timing order.
+
 - Use the same escaped-NUL and continuation rules for newline and custom
   delimiters in `read`.
 

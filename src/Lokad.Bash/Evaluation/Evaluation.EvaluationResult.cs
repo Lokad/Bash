@@ -50,11 +50,19 @@ public partial class Evaluation
         /// <summary>A compound command can finish with a failure whose status was already tested.</summary>
         public bool TestedStatus { get; } = testedStatus;
 
-        public EvaluationResult WithExitCode(int exitCode) => new(exitCode, Flow, Level, TestedStatus);
+        public RedirectionScope? DeferredErrexit { get; private init; }
 
-        public EvaluationResult WithLevel(int level) => new(ExitCode, Flow, level, TestedStatus);
+        public EvaluationResult WithExitCode(int exitCode) =>
+            new(exitCode, Flow, Level, TestedStatus) { DeferredErrexit = DeferredErrexit };
 
-        public EvaluationResult WithTestedStatus(bool tested) => new(ExitCode, Flow, Level, tested);
+        public EvaluationResult WithLevel(int level) =>
+            new(ExitCode, Flow, level, TestedStatus) { DeferredErrexit = DeferredErrexit };
+
+        public EvaluationResult WithTestedStatus(bool tested) =>
+            new(ExitCode, Flow, Level, tested) { DeferredErrexit = DeferredErrexit };
+
+        public EvaluationResult WithDeferredErrexit(RedirectionScope? redirections) =>
+            new(ExitCode, Flow, Level, TestedStatus) { DeferredErrexit = redirections };
 
         /// <summary>Propagates return/exit or the remaining levels of loop flow past one loop owner.</summary>
         public bool TryPropagateLoopFlow(out EvaluationResult outward)
