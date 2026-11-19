@@ -1348,7 +1348,7 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Unset => await AwaitWordExpansionAsync(EvaluateBuiltinUnsetAsync(byteOperands, commandVars, builtinScope, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Eval or BuiltinKind.Source => await EvaluateBuiltinScriptingAsync(evaluatorBuiltin.Kind,
                         commandName, byteOperands, builtinScope with { Variables = commandVars }, false).ConfigureAwait(false),
-                    BuiltinKind.Trap => await AwaitWordExpansionAsync(EvaluateBuiltinTrapAsync(byteOperands, builtinScope)).ConfigureAwait(false),
+                    BuiltinKind.Trap => await AwaitWordExpansionAsync(EvaluateBuiltinTrapAsync(byteOperands)).ConfigureAwait(false),
                     BuiltinKind.Return => await AwaitWordExpansionAsync(
                         EvaluateBuiltinReturnAsync(byteOperands, builtinScope, false)).ConfigureAwait(false),
                     BuiltinKind.Let => await EvaluateBuiltinLetAsync(byteOperands, commandVars, bindings, builtinScope.Context, false).ConfigureAwait(false),
@@ -2571,13 +2571,6 @@ public sealed partial class Evaluation : IFileTester
                 if (options.Readonly) variables.SetReadonlyBinding(name);
             }
 
-            ShellValue GetDiagnosticName(BindingName name)
-            {
-                if (name.NeedsValueEncoding)
-                    Memory.Charge(checked(4L * name.ByteLength));
-                return name.ToValue();
-            }
-
             Task ReportDeclarationOperandAsync(ShellValue subject, string message) =>
                 ReportExpansionDiagnosticAsync([ShellValue.FromText(commandName)], [subject, ShellValue.FromText(": " + message)]);
 
@@ -3233,6 +3226,17 @@ public sealed partial class Evaluation : IFileTester
 
     private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
     private const int DiagnosticPunctuationBytes = 3; // Colon, space and LF.
+
+    private ShellValue GetDiagnosticName(BindingName name)
+    {
+        if (name.NeedsValueEncoding)
+            Memory.Charge(checked(4L * name.ByteLength));
+        return name.ToValue();
+    }
+
+    private Task ReportInvalidIdentifierAsync(ShellValue identifier) =>
+        ReportExpansionDiagnosticAsync([ShellValue.FromText("`"), identifier, ShellValue.FromText("'")],
+            [ShellValue.FromText("not a valid identifier")]);
 
     /// <summary>Emits an expansion diagnostic without changing the caller's expansion status.</summary>
     internal Task ReportExpansionDiagnosticAsync(ShellValue name, ShellValue message) =>

@@ -9,6 +9,43 @@ namespace Lokad.Bash.Tests;
 
 public sealed class TrapCommandUnitTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TrapListingReleasesTheFirstRecordBeforeWritingTheSecond(bool manyQuotes)
+    {
+        const int Width = 4096;
+        var action = new byte[Width];
+        action.AsSpan().Fill(manyQuotes ? (byte)'\'' : (byte)'x');
+        action[^1] = 0xff;
+        var printable = new string((char)action[0], Width - 1).Replace("'", "'\\''", StringComparison.Ordinal);
+        byte[] expected = [.. "trap -- '"u8, .. System.Text.Encoding.ASCII.GetBytes(printable), 0xff, .. "' SIGINT\n"u8];
+        var state = new Eval(Parser.Parse("trap \"$1\" INT; trap -p INT INT"));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(action)]);
+        var governor = new MemoryGovernor(512 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var first = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        var beforeFirst = (state.Memory.Workspace.Bytes, governor.ReservedBytes);
+        var firstContent = first.Content.ToArray();
+        first.SetResult(DescriptorWriteResult.Open);
+        var second = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        var beforeSecond = (state.Memory.Workspace.Bytes, governor.ReservedBytes);
+        var secondContent = second.Content.ToArray();
+        second.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(FileDescriptor.StdOut, first.FileDescriptor);
+        Assert.Equal(FileDescriptor.StdOut, second.FileDescriptor);
+        Assert.Equal(expected, firstContent);
+        Assert.Equal(expected, secondContent);
+        Assert.Equal(beforeFirst, beforeSecond);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     // GNU Bash 5.2.21 / 5.2.37, C locale, pipefail. Golden bytes and complete
     // file effects are independent of managed parsing and diagnostic wording.
     public static IEnumerable<object[]> Actions()

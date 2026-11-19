@@ -287,10 +287,12 @@ public sealed partial class Evaluation
         => VariableReference.TryParse(source, Memory, out reference);
 
     internal Task ReportCircularNameReferenceAsync(BindingName name) =>
-        ReportExpansionDiagnosticAsync(ShellValue.FromText("warning"), ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(name.ToValue().Bytes).Append(": circular name reference"u8).ToMemory()));
+        ReportExpansionDiagnosticAsync([ShellValue.FromText("warning")],
+            [GetDiagnosticName(name), ShellValue.FromText(": circular name reference")]);
 
     internal Task ReportRemovingNamerefAsync(BindingName name) =>
-        ReportExpansionDiagnosticAsync(ShellValue.FromText("warning"), ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(name.ToValue().Bytes).Append(": removing nameref attribute"u8).ToMemory()));
+        ReportExpansionDiagnosticAsync([ShellValue.FromText("warning")],
+            [GetDiagnosticName(name), ShellValue.FromText(": removing nameref attribute")]);
 
     private static string ArrayConversionMessage(ArrayKind kind) => kind == ArrayKind.Associative
         ? "cannot convert indexed to associative array" : "cannot convert associative to indexed array";

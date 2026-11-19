@@ -38,21 +38,21 @@ public sealed partial class Evaluation
                 first++;
             else if (operand.Bytes.Span is [(byte)'-', _, ..])
             {
-                var scope = new ScopedEvaluation(this, variables, context);
-                return await FailAsync(WordExpansion.AppendAssignmentValue(
-                    operand, ShellValue.FromText(": invalid option"), scope), 2).ConfigureAwait(false);
+                await ReportExpansionDiagnosticAsync([ShellValue.FromText("cd")],
+                    [operand, ShellValue.FromText(": invalid option")]).ConfigureAwait(false);
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
             }
         }
 
         if (words.Count - first > 1)
-            return await FailAsync(ShellValue.FromText("too many arguments"), 1).ConfigureAwait(false);
+            return await FailAsync("too many arguments").ConfigureAwait(false);
 
         var destination = first < words.Count ? words[first] : ShellValue.Empty;
         var previous = destination.Bytes.Span.SequenceEqual("-"u8);
         if (previous && !variables.TryGetExpansionValue("OLDPWD", out destination))
-            return await FailAsync(ShellValue.FromText("OLDPWD not set"), 1).ConfigureAwait(false);
+            return await FailAsync("OLDPWD not set").ConfigureAwait(false);
         if (first == words.Count && !variables.TryGetExpansionValue("HOME", out destination))
-            return await FailAsync(ShellValue.FromText("HOME not set"), 1).ConfigureAwait(false);
+            return await FailAsync("HOME not set").ConfigureAwait(false);
 
         var target = await DecodeExpandedValueAsync(destination).ConfigureAwait(false);
         if (HasPendingExpansionError)
@@ -66,10 +66,10 @@ public sealed partial class Evaluation
             .ConfigureAwait(false);
         return await FinalizeResultAsync(result, negated).ConfigureAwait(false);
 
-        async Task<EvaluationResult> FailAsync(ShellValue message, int status)
+        async Task<EvaluationResult> FailAsync(string message)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("cd"), message).ConfigureAwait(false);
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText("cd"), ShellValue.FromText(message)).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
     }
 
@@ -217,12 +217,12 @@ public sealed partial class Evaluation
 
     private async Task<EvaluationResult> ReportDirectoryStackIndexAsync(string name, ShellValue operand, bool negated)
     {
-        using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
+        var command = ShellValue.FromText(name);
         if (_state.DirectoryStackCount == 1)
-            diagnostic.Append("directory stack empty"u8);
+            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("directory stack empty")).ConfigureAwait(false);
         else
-            diagnostic.Append(operand.Bytes).Append(": directory stack index out of range"u8);
-        await ReportExpansionDiagnosticAsync(ShellValue.FromText(name), ShellValue.FromBytes(diagnostic.ToMemory())).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(": directory stack index out of range")])
+                .ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
     }
 

@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -19,7 +18,7 @@ public sealed partial class Evaluation
             return await RejectIdentifierAsync(forCommand.InvalidName).ConfigureAwait(false);
         BindingName name = forCommand.Name;
         if (!name.IsIdentifier)
-            return await RejectIdentifierAsync(name.ToValue()).ConfigureAwait(false);
+            return await RejectIdentifierAsync(GetDiagnosticName(name)).ConfigureAwait(false);
 
         var items = new List<ShellValue>();
         foreach (var word in forCommand.Items)
@@ -56,7 +55,7 @@ public sealed partial class Evaluation
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
             if (failure == ForAssignmentFailure.Readonly)
             {
-                await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                await ReportExpansionDiagnosticAsync(GetDiagnosticName(name), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
                 // A readonly loop assignment exits with errexit enabled, even in a tested position.
                 if (_state.ErrexitEnabled)
                     return EvaluationResult.Exit(1);
@@ -77,8 +76,7 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> RejectIdentifierAsync(ShellValue invalid)
         {
-            await ReportExpansionDiagnosticAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(invalid),
-                ShellValue.FromText("not a valid identifier")).ConfigureAwait(false);
+            await ReportInvalidIdentifierAsync(invalid).ConfigureAwait(false);
             // Identifier failures end the loop without triggering errexit at the loop boundary.
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1).WithTestedStatus(true), negated)
                 .ConfigureAwait(false);

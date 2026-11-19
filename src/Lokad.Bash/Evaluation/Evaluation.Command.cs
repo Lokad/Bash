@@ -129,8 +129,7 @@ public sealed partial class Evaluation
                 case FunctionDefinition functionDefinition:
                     if (functionDefinition.Name.Syntax.HasFlag(FunctionNameSyntax.Invalid))
                     {
-                        await ReportExpansionDiagnosticAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(functionDefinition.Name.Value), ShellValue.FromText("not a valid identifier"))
-                            .ConfigureAwait(false);
+                        await ReportInvalidIdentifierAsync(functionDefinition.Name.Value).ConfigureAwait(false);
                         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
                     }
                     if (!_state.TryRegisterFunction(functionDefinition, scope.Context.SourceMemory, Memory))

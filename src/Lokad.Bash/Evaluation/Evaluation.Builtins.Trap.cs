@@ -11,7 +11,7 @@ public sealed partial class Evaluation
 {
     internal long RetainedTrapMemoryBytes => _state.Traps?.EstimatedMemoryBytes ?? 0;
 
-    private async Task<EvaluationResult> EvaluateBuiltinTrapAsync(IReadOnlyList<ShellValue> words, ScopedEvaluation scope)
+    private async Task<EvaluationResult> EvaluateBuiltinTrapAsync(IReadOnlyList<ShellValue> words)
     {
         var index = 1;
         var list = false;
@@ -97,24 +97,24 @@ public sealed partial class Evaluation
             return EvaluationResult.FromExitCode(written.IsError ? 1 : 2);
         }
 
-        async Task InvalidConditionAsync(ShellValue operand) =>
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("trap"),
-                WordExpansion.AppendAssignmentValue(operand, ShellValue.FromText(": invalid signal specification"), scope)).ConfigureAwait(false);
+        Task InvalidConditionAsync(ShellValue operand) =>
+            ReportExpansionDiagnosticAsync([ShellValue.FromText("trap")],
+                [operand, ShellValue.FromText(": invalid signal specification")]);
 
         async Task<bool> PrintAsync(TrapCondition condition)
         {
             if (!traps.ListedHandlers.TryGetValue(condition, out var handler))
                 return true;
-            var name = ShellTraps.GetName(condition);
-            var length = 8L + handler.Bytes.Length + 3L * handler.Bytes.Span.Count((byte)'\'') + 2 + 1 + name.Length + 1;
-            Memory.Charge(checked(4L * length));
+            var name = Utf8Text.Encode(ShellTraps.GetName(condition));
+            var length = "trap -- "u8.Length + ShellArgumentEscaping.GetLiteralSingleQuotedLength(handler.Bytes.Span)
+                + 1 + name.Length + 1;
             if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
-            using var output = new BoundedByteMemoryBuilder(0, (int)length, Memory.Budget);
+            using var output = new BoundedByteMemoryBuilder((int)length, (int)length, Memory.Budget);
             if (!output.TryAppend("trap -- "u8)
                 || !ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, handler.Bytes.Span)
                 || !output.TryAppend((byte)' ')
-                || !output.TryAppend(Utf8Text.Encode(name).Span)
+                || !output.TryAppend(name.Span)
                 || !output.TryAppend((byte)'\n'))
                 throw new InvalidOperationException("Trap listing exceeded its reserved size.");
             return !(await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false)).IsError;

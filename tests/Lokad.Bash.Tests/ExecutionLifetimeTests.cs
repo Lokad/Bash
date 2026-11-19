@@ -32,6 +32,42 @@ public sealed class ExecutionLifetimeTests
         return VerifyPendingWriteAsync($"builtin '{target}' 2>out; after=1", $"builtin: {target}: not a shell builtin\n");
     }
 
+    [Fact]
+    public Task CancelledTrapListingStaysChargedUntilTheHostSettles()
+    {
+        var action = new string('x', 4096);
+        return VerifyPendingWriteAsync($"trap '{action}' INT; trap -p INT >out; after=1", $"trap -- '{action}' SIGINT\n");
+    }
+
+    [Theory]
+    [InlineData("cd \"-$1\"", "cd: -", ": invalid option\n", 2, 56 * 1024)]
+    [InlineData("trap -p \"$1\"", "trap: ", ": invalid signal specification\n", 1, 32 * 1024)]
+    public async Task RejectedOperandFitsWithOneDiagnosticBuffer(
+        string command, string prefix, string suffix, int status, int allowance)
+    {
+        var operand = new byte[4096];
+        operand.AsSpan().Fill((byte)'x');
+        operand[^1] = 0xff;
+        byte[] expected = [.. System.Text.Encoding.ASCII.GetBytes(prefix), .. operand, .. System.Text.Encoding.ASCII.GetBytes(suffix)];
+        var state = new Eval(Parser.Parse(command + " 2>out"));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(operand)]);
+        var governor = new MemoryGovernor(allowance);
+        using var owner = governor.CreateScope();
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueOpenFileDescriptor(9);
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        var write = Assert.Single(host.Appends);
+        Assert.Equal(new FileDescriptor(9), write.Descriptor);
+        Assert.Equal(expected, write.Content);
+        Assert.Equal(new FileDescriptor(9), Assert.Single(host.ClosedDescriptors));
+        Assert.Equal(status, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     private static async Task VerifyPendingWriteAsync(string script, string expected)
     {
         var state = new Eval(Parser.Parse(script));

@@ -124,7 +124,7 @@ public sealed partial class Evaluation
 
         ShellValue QuoteLiteral(ShellValue value)
         {
-            var length = (long)value.Bytes.Length + 2 + 3L * value.Bytes.Span.Count((byte)'\'');
+            var length = ShellArgumentEscaping.GetLiteralSingleQuotedLength(value.Bytes.Span);
             if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
             Memory.Charge(checked(4L * length));

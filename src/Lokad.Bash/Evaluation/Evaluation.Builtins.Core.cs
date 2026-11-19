@@ -59,15 +59,12 @@ public sealed partial class Evaluation
         }
         if (evaluation.HasParseError)
         {
-            using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
+            var name = ShellValue.FromText(commandName);
+            var message = ShellValue.FromText(evaluation.ErrorMessage);
             if (evaluation.ErrorOperand is { } errorOperand)
-            {
-                diagnostic.Append(errorOperand.Bytes);
-                diagnostic.Append(": "u8);
-            }
-            diagnostic.Append(Utf8Text.Encode(evaluation.ErrorMessage));
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromBytes(diagnostic.ToMemory()))
-                .ConfigureAwait(false);
+                await ReportExpansionDiagnosticAsync([name], [errorOperand, ShellValue.FromText(": "), message]).ConfigureAwait(false);
+            else
+                await ReportExpansionDiagnosticAsync(name, message).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
         }
 

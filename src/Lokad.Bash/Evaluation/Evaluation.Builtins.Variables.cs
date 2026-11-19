@@ -315,9 +315,8 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, bool named)
         {
-            using var output = new ByteMemoryBuilder(0, Memory.Budget);
-            output.Append(option.Bytes).Append(named ? ": invalid option name"u8 : ": unsupported option"u8);
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("set"), ShellValue.FromBytes(output.ToMemory())).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync([ShellValue.FromText("set")],
+                [option, ShellValue.FromText(named ? ": invalid option name" : ": unsupported option")]).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
     }

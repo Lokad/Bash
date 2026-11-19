@@ -156,6 +156,9 @@ public static class ShellArgumentEscaping
         }
     }
 
+    internal static long GetLiteralSingleQuotedLength(ReadOnlySpan<byte> literal) =>
+        2L + literal.Length + 3L * literal.Count((byte)'\'');
+
     /// <summary>Quotes literal bytes without introducing ANSI-C syntax; false leaves an incomplete suffix.</summary>
     public static bool TryAppendLiteralSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal)
     {
