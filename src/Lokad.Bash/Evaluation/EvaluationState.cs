@@ -266,9 +266,8 @@ internal sealed class EvaluationState
         {
             var selected = new FunctionBinding[_exportedFunctionCount];
             var index = 0;
-            foreach (var binding in _functions.Values)
-                if (binding.Attributes.HasFlag(FunctionAttributes.Exported))
-                    selected[index++] = binding;
+            foreach (var binding in EnumerateExportedFunctions(CancellationToken.None))
+                selected[index++] = binding;
             _exportedFunctionsMemory = reservation;
             _exportedFunctions = selected;
             return selected;
@@ -278,6 +277,38 @@ internal sealed class EvaluationState
             reservation.Dispose();
             throw;
         }
+    }
+
+    private IEnumerable<FunctionBinding> EnumerateExportedFunctions(CancellationToken cancellationToken)
+    {
+        foreach (var binding in _functions.Values)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (binding.Attributes.HasFlag(FunctionAttributes.Exported))
+                yield return binding;
+        }
+    }
+
+    /// <summary>Prepares the exported subset before changing its attributes and retiring its cached selection.</summary>
+    internal void ClearFunctionExports(EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        if (_exportedFunctionCount == 0)
+            return;
+
+        const int replacementBytes = 64;
+        using var staging = memory.Budget.Reserve(checked(
+            MemoryCapacity.ArrayBackingBytes<FunctionBinding>(_exportedFunctionCount) + (long)replacementBytes * _exportedFunctionCount));
+        var replacements = new FunctionBinding[_exportedFunctionCount];
+        var index = 0;
+        foreach (var binding in _exportedFunctions ?? EnumerateExportedFunctions(cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            replacements[index++] = binding with { Attributes = binding.Attributes & ~FunctionAttributes.Exported };
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var replacement in replacements)
+            SetFunctionBinding(replacement);
     }
 
     internal void ReleaseExportedFunctionSelection()

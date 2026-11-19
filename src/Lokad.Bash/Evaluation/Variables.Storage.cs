@@ -3,6 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Threading;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -94,6 +96,12 @@ public sealed partial class Variables
 
     private void ClearBinding(BindingName name)
     {
+        ClearBindingSlot(name);
+        _exportedIndex.Remove(name);
+    }
+
+    private void ClearBindingSlot(BindingName name)
+    {
         using var memory = TrackBindingMemory(name);
         ResetGetoptsPosition(name);
         if (_commandSource == null)
@@ -103,7 +111,42 @@ public sealed partial class Variables
             _bindings[name] = new MissingSlot();
             _bindingCapacity = Math.Max(_bindingCapacity, _bindings.Count);
         }
-        _exportedIndex.Remove(name);
+    }
+
+    /// <summary>Clears export attributes while preserving the fork's values and other attributes.</summary>
+    internal void ClearExportAttributes(EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        if (_commandSource != null)
+        {
+            // Detaching borrowed bindings changes the export view. Own its keys through mutation.
+            using var scratch = new MemoryCapacity(memory.Budget, 0);
+            var names = new List<BindingName>();
+            foreach (var name in ExportedNames)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                memory.PrepareListCapacity(scratch, names, 1);
+                names.Add(name);
+            }
+            foreach (var name in names)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                SetExported(name, false);
+            }
+            return;
+        }
+
+        if (_exportedIndex.Count != 0)
+            _exportedIndex.RemoveWhere(ClearOwnedExport);
+
+        bool ClearOwnedExport(BindingName name)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var slot = _bindings[name];
+            slot.Attributes &= ~BindingAttributes.Exported;
+            if (slot is AttributeSlot && slot.Attributes == BindingAttributes.None)
+                ClearBindingSlot(name);
+            return true;
+        }
     }
 
     private void DeclareUnassigned(BindingName name)

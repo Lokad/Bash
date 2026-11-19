@@ -1,6 +1,8 @@
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Tree;
 using Lokad.Bash.Syntax;
 using ShellEvaluation = Lokad.Bash.Evaluation.Evaluation;
@@ -9,6 +11,34 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class ExportDeclarationEffectsTestsEndToEnd
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClearingVariableExportsPreservesValuesAndOtherAttributes(bool borrowed)
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var caller = Variables.CreateEmpty();
+        Assert.True(caller.TrySetScalar("valued", ShellValue.FromText("payload")));
+        caller.SetExported("valued", true);
+        caller.SetReadonly("valued");
+        caller.SetExported("declared", true);
+        var fork = borrowed ? Variables.CreateCommandScope(caller, memory, CancellationToken.None) : caller.Clone();
+
+        fork.ClearExportAttributes(memory, CancellationToken.None);
+
+        Assert.Empty(fork.ExportedNames);
+        Assert.True(fork.TryGetScalar("valued", out var value));
+        Assert.Equal(ShellValue.FromText("payload"), value);
+        Assert.True(fork.IsReadonly("valued"));
+        Assert.False(fork.TryGetScalar("declared", out _));
+        Assert.True(caller.IsExported("valued"));
+        Assert.True(caller.IsExported("declared"));
+        fork.SetExported("valued", true);
+        Assert.Single(fork.ExportedNames);
+    }
+
     [Theory]
     [InlineData("eval", "unset x; local -a x; x=(inner)", "unset")]
     [InlineData("eval", "unset x; local -A x=([key]=inner)", "unset")]

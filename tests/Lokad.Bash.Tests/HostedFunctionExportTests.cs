@@ -81,6 +81,38 @@ public sealed class HostedFunctionExportTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClearingFunctionExportsAdmitsReplacementsBeforeChangingTheNamespace(bool warm)
+    {
+        var governor = new MemoryGovernor(4096);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ :; }").Commands));
+        var binding = new FunctionBinding(definition, FunctionAttributes.Readonly | FunctionAttributes.Exported,
+            sourceMemory: null, memory);
+        state.SetFunctionBinding(binding);
+        if (warm)
+            Assert.Same(binding, state.GetExportedFunctions(memory)[0]);
+
+        var before = governor.ReservedBytes;
+        using (governor.Reserve(governor.LimitBytes - before))
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => state.ClearFunctionExports(memory, CancellationToken.None));
+            Assert.Same(binding, state.Functions[definition.Name.Value]);
+        }
+        Assert.Equal(before, governor.ReservedBytes);
+
+        state.ClearFunctionExports(memory, CancellationToken.None);
+        Assert.Same(definition, state.Functions[definition.Name.Value].Definition);
+        Assert.Equal(FunctionAttributes.Readonly, state.Functions[definition.Name.Value].Attributes);
+        Assert.True(state.GetExportedFunctions(memory).IsEmpty);
+        Assert.Equal(0, governor.ReservedBytes);
+        state.ReleaseFunctions();
+    }
+
+    [Theory]
     [InlineData(0, 17000)]
     [InlineData(55, 20000)]
     public async Task ExportLayoutDoesNotExhaustTheChildParsersTokenOrByteLimit(int depth, int commands)

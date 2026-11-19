@@ -1471,9 +1471,7 @@ public sealed partial class Evaluation : IFileTester
 
         void ClearExecExports(ScopedEvaluation executionScope, Variables commandVariables)
         {
-            foreach (var binding in _state.Functions.Values.ToArray())
-                if (binding.Attributes.HasFlag(FunctionAttributes.Exported))
-                    _state.SetFunctionBinding(binding with { Attributes = binding.Attributes & ~FunctionAttributes.Exported });
+            // Prepare the fork's visible and saved bindings before updating the function namespace.
             ClearExports(commandVariables);
             if (!ReferenceEquals(commandVariables, executionScope.Variables))
                 ClearExports(executionScope.Variables);
@@ -1487,12 +1485,9 @@ public sealed partial class Evaluation : IFileTester
                     ClearExports(functionBindings.SavedVariables);
             }
 
-            // Clear only the fork: hidden exports must not reappear, nor change a substitution's caller.
-            static void ClearExports(Variables variables)
-            {
-                foreach (var name in new List<BindingName>(variables.ExportedNames))
-                    variables.SetExported(name, false);
-            }
+            _state.ClearFunctionExports(Memory, _cancellationToken);
+
+            void ClearExports(Variables variables) => variables.ClearExportAttributes(Memory, _cancellationToken);
         }
 
         bool TryBuildFunctionExports(out IReadOnlyList<ExportedFunction> exports)

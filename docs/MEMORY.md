@@ -297,6 +297,11 @@ The function namespace admits its ordered export selection on first use. It
 borrows the selected bindings and refunds the selection when an exported binding
 changes or the namespace settles. Each host invocation retains its own selected
 bindings through dispatch and cleanup.
+In-process `exec -c` clears owned variable exports through the fork's export
+index. An overlay admits a temporary snapshot of the visible export names before
+detaching any borrowed slots. Function export clearing admits the exported
+replacements as one batch before publishing their attributes and retiring the
+cached selection.
 Runtime environment snapshots admit selected-name scratch and result backing
 before growth. Scratch retires before host dispatch, and the result stays
 admitted through completion while borrowing the original name and value bytes.
