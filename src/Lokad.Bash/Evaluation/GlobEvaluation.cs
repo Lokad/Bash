@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -156,15 +155,20 @@ internal sealed class GlobEvaluation
             if (!hasNext)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                // Admit the projected paths, stable-order indexes and result array during the sort.
-                _memory.Grow(128L + 48L * candidates.Count);
-                var result = candidates.Select(static candidate => candidate.OutputPath).Order(OutputPathOrder).ToArray();
-                _cancellationToken.ThrowIfCancellationRequested();
+                var resultBytes = MemoryCapacity.ArrayBackingBytes<string>(candidates.Count);
+                _memory.Grow(resultBytes);
+                var result = new string[candidates.Count];
                 long outputPathBytes = 0;
-                foreach (var path in result)
+                for (var index = 0; index < candidates.Count; index++)
+                {
+                    var path = candidates[index].OutputPath;
+                    result[index] = path;
                     outputPathBytes = checked(outputPathBytes + TextBytes(path.Length));
+                }
+                Array.Sort(result, OutputPathOrder);
+                _cancellationToken.ThrowIfCancellationRequested();
                 ReleaseCandidateLists();
-                _memory.Resize(checked(baseline + outputPathBytes + MemoryCapacity.ArrayBackingBytes<string>(result.Length)));
+                _memory.Resize(checked(baseline + outputPathBytes + resultBytes));
                 _memory.ReleaseUnusedCapacity();
                 return result;
             }

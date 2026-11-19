@@ -130,8 +130,10 @@ public sealed class GlobPatternTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    [Fact]
-    public async Task GlobSortReservesScratchAfterAllCandidatesAreAdmitted()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GlobSortAdmitsItsResultArrayAfterAllCandidates(bool canAdmitResult)
     {
         var governor = new MemoryGovernor(4 * 1024 * 1024);
         using var scope = governor.CreateScope();
@@ -144,9 +146,21 @@ public sealed class GlobPatternTests
             .Reverse().Select(index => new DirectoryEntry($"entry_{index:D4}", FilePathKind.File)).ToArray();
         using var held = governor.Reserve(0);
         var observed = new CompletedListing(entries, () =>
-            held.Resize(governor.LimitBytes - governor.ReservedBytes - 4096));
+        {
+            globMemory.ReleaseUnusedCapacity();
+            // Leave room for the result and one prepaid growth increment in the success case.
+            var allowance = canAdmitResult ? 96 * 1024 : 4096;
+            held.Resize(governor.LimitBytes - governor.ReservedBytes - allowance);
+        });
 
-        await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => glob.EvaluateAsync(new GlobListing(_ => observed)));
+        var listing = new GlobListing(_ => observed);
+        if (canAdmitResult)
+        {
+            var paths = await glob.EvaluateAsync(listing);
+            Assert.Equal(entries.Reverse().Select(entry => entry.Name), paths);
+        }
+        else
+            await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => glob.EvaluateAsync(listing));
         Assert.True(held.Bytes > 0);
         globMemory.Dispose();
         budget.Finish(retainVariables: false);
