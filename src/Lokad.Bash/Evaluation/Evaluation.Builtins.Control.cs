@@ -23,13 +23,7 @@ public sealed partial class Evaluation
         bool negated)
     {
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
-        {
-            var documentation = BuiltinDocumentation.For(BuiltinKind.Return);
-            await ExecuteWriteAsync(GetStdOutDescriptor(),
-                Utf8Text.Encode("return: " + documentation.Synopsis("return") + "\n" + documentation.Description + "\n"))
-                .ConfigureAwait(false);
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
-        }
+            return await WriteControlHelpAsync(BuiltinKind.Return, negated).ConfigureAwait(false);
 
         var exitCode = _state.Traps?.ExitTrapStatus ?? _state.LastExitCode ?? 0;
         var firstOperand = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
@@ -39,8 +33,8 @@ public sealed partial class Evaluation
             // Bash accepts leading C whitespace, but only space/tab after the number.
             if (!TryParseControlNumber(operand, out var status))
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText("return"),
-                    WordExpansion.AppendAssignmentValue(operand, ShellValue.FromText(": numeric argument required"), scope))
+                await ReportExpansionDiagnosticAsync([ShellValue.FromText("return")],
+                    [operand, ShellValue.FromText(": numeric argument required")])
                     .ConfigureAwait(false);
                 exitCode = 2;
             }
@@ -85,8 +79,7 @@ public sealed partial class Evaluation
         {
             if (!TryParseControlNumber(words[first], out count))
             {
-                await ReportExpansionDiagnosticAsync(name,
-                    WordExpansion.AppendAssignmentValue(words[first], ShellValue.FromText(": numeric argument required"), scope))
+                await ReportExpansionDiagnosticAsync([name], [words[first], ShellValue.FromText(": numeric argument required")])
                     .ConfigureAwait(false);
                 return EvaluationResult.Exit(128);
             }
@@ -97,8 +90,7 @@ public sealed partial class Evaluation
             }
             if (count <= 0)
             {
-                await ReportExpansionDiagnosticAsync(name,
-                    WordExpansion.AppendAssignmentValue(words[first], ShellValue.FromText(": loop count out of range"), scope))
+                await ReportExpansionDiagnosticAsync([name], [words[first], ShellValue.FromText(": loop count out of range")])
                     .ConfigureAwait(false);
                 // Both builtins abandon every active loop after a nonpositive count.
                 return await FinalizeResultAsync(EvaluationResult.Break(scope.Context.LoopDepth, 1), negated).ConfigureAwait(false);
@@ -121,8 +113,8 @@ public sealed partial class Evaluation
         {
             if (!TryParseControlNumber(words[first], out var status))
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText("exit"),
-                    WordExpansion.AppendAssignmentValue(words[first], ShellValue.FromText(": numeric argument required"), scope))
+                await ReportExpansionDiagnosticAsync([ShellValue.FromText("exit")],
+                    [words[first], ShellValue.FromText(": numeric argument required")])
                     .ConfigureAwait(false);
                 return await CompleteExitAsync(2).ConfigureAwait(false);
             }
@@ -156,6 +148,7 @@ public sealed partial class Evaluation
             BuiltinKind.Break => "break",
             BuiltinKind.Continue => "continue",
             BuiltinKind.Exit => "exit",
+            BuiltinKind.Return => "return",
             BuiltinKind.Shift => "shift",
             BuiltinKind.Getopts => "getopts",
             _ => throw new ArgumentOutOfRangeException(nameof(builtin))

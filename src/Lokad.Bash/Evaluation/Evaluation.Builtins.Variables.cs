@@ -239,8 +239,8 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> ReportCountErrorAsync(ShellValue operand, string message)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("shift"),
-                WordExpansion.AppendAssignmentValue(operand, ShellValue.FromText(message), scope)).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync([ShellValue.FromText("shift")],
+                [operand, ShellValue.FromText(message)]).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
     }

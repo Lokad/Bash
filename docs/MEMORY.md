@@ -84,6 +84,10 @@ than 256 bytes through stderr write completion. Short messages fit in caller
 headroom. Expansion and builtin invocation errors can supply borrowed name
 and message fragments. The formatter copies them directly into the admitted
 record and returns the write result to callers that select their status from it.
+Prepared terminal messages admit their final buffer in the command workspace,
+which holds it through later expansion, redirection setup and host writes.
+The builtin wrapper checks the target in the byte registry and decodes names
+only after the registry accepts them.
 If the host error output cannot be admitted, the evaluator reports a
 short memory refusal through the reached stderr and continues the original
 failure's status and cleanup path. A refusal uses the name `shell` when the

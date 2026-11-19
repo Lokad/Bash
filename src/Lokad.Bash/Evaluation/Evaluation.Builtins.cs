@@ -61,17 +61,16 @@ public sealed partial class Evaluation
 
                 if (next is not { } name)
                     return Terminal(0, ShellValue.Empty, CommandMessageChannel.StandardError, builtinKind);
-                Memory.Charge(checked(4L * name.Bytes.Length));
-                if (!name.TryGetUtf8Text(out var builtinName)
-                    || !BuiltinClassification.TryResolve(builtinName.AsSpan(), out _))
+                if (!BuiltinClassification.TryResolve(name.Bytes.Span, out _))
                 {
-                    Memory.Charge(checked(4L * ("builtin: "u8.Length + (long)name.Bytes.Length + ": not a shell builtin\n"u8.Length)));
-                    return Terminal(1, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                        .Append("builtin: "u8).Append(name.Bytes).Append(": not a shell builtin\n"u8).ToMemory()),
+                    return Terminal(1, BuildTerminalMessage(
+                        [ShellValue.FromText("builtin: "), name, ShellValue.FromText(": not a shell builtin\n")]),
                         CommandMessageChannel.StandardError, builtinKind);
                 }
 
-                commandName = builtinName;
+                // The registry only accepts short ASCII names.
+                Memory.Charge(checked(4L * name.Bytes.Length));
+                commandName = name.ToUtf8String();
                 commandValue = name;
                 lookupMode = CommandLookupMode.BuiltinOnly;
                 continue;
@@ -124,7 +123,7 @@ public sealed partial class Evaluation
 
                             argumentZero = await ReadFieldAsync().ConfigureAwait(false);
                             if (!argumentZero.HasValue)
-                                return OptionFailure(builtinKind, ShellValue.FromText("-a: option requires an argument"));
+                                return OptionFailure(builtinKind, ShellValue.FromText("-a"), ": option requires an argument");
                             break;
                         default:
                             return InvalidOption(builtinKind, flag);
@@ -209,18 +208,15 @@ public sealed partial class Evaluation
             RedirectionLifetime.Command);
 
         PreparedCommand.Terminal InvalidOption(BuiltinKind kind, byte option) =>
-            OptionFailure(kind, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(32)
-                .Append((byte)'-').Append(option).Append(": invalid option"u8).ToMemory()));
+            OptionFailure(kind, ShellValue.FromBytes(new[] { (byte)'-', option }), ": invalid option");
 
-        PreparedCommand.Terminal OptionFailure(BuiltinKind kind, ShellValue message)
+        PreparedCommand.Terminal OptionFailure(BuiltinKind kind, ShellValue option, string reason)
         {
-            var usageBytes = Utf8Text.Encode(BuiltinDocumentation.For(kind).Synopsis(commandName));
-            Memory.Charge(checked(4L * (2L * commandName.Length + message.Bytes.Length + usageBytes.Length
-                + ": "u8.Length + ": usage: "u8.Length + 2)));
-            var output = ByteMemoryBuilder.CreateUnaccounted(0);
-            output.Append(Utf8Text.Encode(commandName)).Append(": "u8).Append(message.Bytes).Append((byte)'\n')
-                .Append(Utf8Text.Encode(commandName)).Append(": usage: "u8).Append(usageBytes).Append((byte)'\n');
-            return Terminal(2, ShellValue.FromBytes(output.ToMemory()), CommandMessageChannel.StandardError, kind);
+            var usage = ShellValue.FromText(BuiltinDocumentation.For(kind).Synopsis(commandName));
+            var newline = ShellValue.FromText("\n");
+            var output = BuildTerminalMessage([commandValue, ShellValue.FromText(": "), option, ShellValue.FromText(reason),
+                newline, commandValue, ShellValue.FromText(": usage: "), usage, newline]);
+            return Terminal(2, output, CommandMessageChannel.StandardError, kind);
         }
 
         PreparedCommand.Terminal Help(BuiltinKind kind)
@@ -228,9 +224,27 @@ public sealed partial class Evaluation
             // Describe the hosted subset; do not promise Bash process replacement or execfail support.
             var documentation = BuiltinDocumentation.For(kind);
             var message = ShellValue.FromText($": {documentation.Synopsis(commandName)}\n    {documentation.Description}\n");
-            Memory.Charge(checked(4L * ((long)commandName.Length + message.Bytes.Length)));
-            return Terminal(2, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(128).Append(Utf8Text.Encode(commandName))
-                .Append(message.Bytes).ToMemory()), CommandMessageChannel.StandardOutput, kind);
+            return Terminal(2, BuildTerminalMessage([commandValue, message]), CommandMessageChannel.StandardOutput, kind);
+        }
+
+        ShellValue BuildTerminalMessage(ReadOnlySpan<ShellValue> parts)
+        {
+            long length = 0;
+            foreach (var part in parts)
+                length += part.Bytes.Length;
+            if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                throw new ByteMemoryBuilder.LimitExceededException();
+
+            // The prepared command keeps the record through later expansion, redirections and host writes.
+            Memory.Charge(length);
+            var output = new byte[(int)length];
+            Span<byte> remaining = output;
+            foreach (var part in parts)
+            {
+                part.Bytes.Span.CopyTo(remaining);
+                remaining = remaining[part.Bytes.Length..];
+            }
+            return ShellValue.FromBytes(output);
         }
 
         PreparedCommand.Terminal Terminal(int exitCode, ShellValue message, CommandMessageChannel channel, BuiltinKind kind) =>

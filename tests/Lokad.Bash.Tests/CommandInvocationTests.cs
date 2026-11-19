@@ -15,6 +15,33 @@ namespace Lokad.Bash.Tests;
 public sealed class CommandInvocationTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnknownBuiltinWritesItsFullNameWithoutTextAdmission(bool malformed)
+    {
+        var name = new byte[16 * 1024];
+        name.AsSpan().Fill((byte)'x');
+        if (malformed)
+            name[^1] = 0xff;
+        var state = new ShellEvaluation(Parser.Parse("builtin \"$1\""));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(name)]);
+        var governor = new MemoryGovernor(160 * 1024);
+        using var owner = governor.CreateScope();
+        var host = new TestOperationVisitor([]) { MemoryBudget = governor, RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        var write = Assert.Single(host.Appends);
+        Assert.Equal(FileDescriptor.StdErr, write.Descriptor);
+        byte[] expected = [.. "builtin: "u8, .. name, .. ": not a shell builtin\n"u8];
+        Assert.Equal(expected, write.Content);
+        Assert.Equal(1, result.ExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("x", 16, true)]
     [InlineData("x", 4096, false)]
     [InlineData("π", 120, false)]

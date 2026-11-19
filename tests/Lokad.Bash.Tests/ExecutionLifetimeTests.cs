@@ -25,6 +25,13 @@ public sealed class ExecutionLifetimeTests
         return VerifyPendingWriteAsync("{ : \"" + subject + "\"; } 2>out; after=1", subject + ": bad substitution\n");
     }
 
+    [Fact]
+    public Task CancelledPreparedTerminalDiagnosticStaysChargedUntilTheHostSettles()
+    {
+        var target = new string('x', 4096);
+        return VerifyPendingWriteAsync($"builtin '{target}' 2>out; after=1", $"builtin: {target}: not a shell builtin\n");
+    }
+
     private static async Task VerifyPendingWriteAsync(string script, string expected)
     {
         var state = new Eval(Parser.Parse(script));
