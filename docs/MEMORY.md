@@ -81,9 +81,10 @@ relinquished storage. Retained storage stays charged.
 
 Expansion diagnostics and direct host error diagnostics admit buffers larger
 than 256 bytes through stderr write completion. Short messages fit in caller
-headroom. Expansion errors can supply borrowed name and message fragments.
-The formatter copies them directly into the admitted record. If the host
-error output cannot be admitted, the evaluator reports a
+headroom. Expansion and builtin invocation errors can supply borrowed name
+and message fragments. The formatter copies them directly into the admitted
+record and returns the write result to callers that select their status from it.
+If the host error output cannot be admitted, the evaluator reports a
 short memory refusal through the reached stderr and continues the original
 failure's status and cleanup path. A refusal uses the name `shell` when the
 command name would make the short message exceed the bound.

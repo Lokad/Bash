@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Lokad.Bash.Files;
 using Lokad.Bash.Formatting;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -21,7 +22,7 @@ public sealed partial class Evaluation
         EvaluationContext context,
         bool negated)
     {
-        static string Usage() => "printf: usage: " + BuiltinDocumentation.For(BuiltinKind.Printf).Synopsis("printf") + "\n";
+        static string Usage() => "usage: " + BuiltinDocumentation.For(BuiltinKind.Printf).Synopsis("printf");
 
         VariableReference? outputReference = null;
         var operandIndex = 0;
@@ -50,9 +51,9 @@ public sealed partial class Evaluation
             }
 
             if (optionBytes.Span[1] != (byte)'v')
-                return await FailAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                    .Append("printf: -"u8).Append(optionBytes.Slice(1, 1))
-                    .Append(Utf8Text.Encode(": invalid option\n" + Usage())).ToMemory()), 2).ConfigureAwait(false);
+                return await FinishInvalidInvocationAsync(WriteDiagnosticAsync([ShellValue.FromText("printf")],
+                    [ShellValue.FromText("-"), ShellValue.FromBytes(optionBytes.Slice(1, 1)),
+                        ShellValue.FromText(": invalid option\nprintf: " + Usage())], scope: null)).ConfigureAwait(false);
 
             ShellValue outputVariable;
             if (optionBytes.Length > 2)
@@ -61,22 +62,21 @@ public sealed partial class Evaluation
             {
                 operandIndex++;
                 if (operandIndex >= operands.Count)
-                    return await FailAsync(ShellValue.FromText(Usage()), 2).ConfigureAwait(false);
+                    return await ReportUsageAsync().ConfigureAwait(false);
                 outputVariable = operands[operandIndex];
             }
 
             if (!VariableReference.TryParse(ShellSource.FromBytes(outputVariable.Bytes), Memory, out var reference)
                 || reference.Kind != VariableReferenceKind.Name && reference.Subscript.IsEmpty)
-                return await FailAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                    .Append("printf: "u8).Append(ShellArgumentEscaping.QuoteDiagnosticOperand(outputVariable).Bytes)
-                    .Append(": not a valid identifier\n"u8).ToMemory()), 2).ConfigureAwait(false);
+                return await FinishInvalidInvocationAsync(
+                    WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("printf"), outputVariable, scope: null)).ConfigureAwait(false);
 
             outputReference = reference;
             operandIndex++;
         }
 
         if (operandIndex >= operands.Count)
-            return await FailAsync(ShellValue.FromText(Usage()), 2).ConfigureAwait(false);
+            return await ReportUsageAsync().ConfigureAwait(false);
 
         var format = operands[operandIndex++];
         var arguments = new List<ShellValue>(operands.Count - operandIndex);
@@ -148,14 +148,13 @@ public sealed partial class Evaluation
             return diagnostics.Result.CanAcceptMore;
         }
 
-        async Task<EvaluationResult> FailAsync(ShellValue message, int failureExitCode)
+        Task<EvaluationResult> ReportUsageAsync() => FinishInvalidInvocationAsync(
+            WriteDiagnosticAsync([ShellValue.FromText("printf")], [ShellValue.FromText(Usage())], scope: null));
+
+        async Task<EvaluationResult> FinishInvalidInvocationAsync(Task<DescriptorWriteResult> diagnostic)
         {
-            var appendExitCode = (await ExecuteWriteAsync(GetStdErrDescriptor(), message.Bytes)
-                .ConfigureAwait(false)).IsError ? 1 : 0;
-            return await FinalizeResultAsync(
-                    EvaluationResult.FromExitCode(appendExitCode == 0 ? failureExitCode : appendExitCode),
-                    negated)
-                .ConfigureAwait(false);
+            var result = await diagnostic.ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 2), negated).ConfigureAwait(false);
         }
 
     }

@@ -48,13 +48,13 @@ public sealed partial class Evaluation
                 }
                 var option = item.Kind == CommandLineOptionKind.ShortOption
                     ? ShellValue.FromBytes(new byte[] { (byte)'-', item.ShortName }) : ShellValue.FromText("--");
-                return await FailAsync(WordExpansion.AppendAssignmentValue(option,
-                    ShellValue.FromText(": invalid option\nunset: usage: " + BuiltinDocumentation.For(BuiltinKind.Unset).Synopsis("unset")), scope), 2)
+                return await FailAsync([option,
+                    ShellValue.FromText(": invalid option\nunset: usage: " + BuiltinDocumentation.For(BuiltinKind.Unset).Synopsis("unset"))], 2)
                     .ConfigureAwait(false);
             }
         }
         if (functions && variables)
-            return await FailAsync(ShellValue.FromText("cannot simultaneously unset a function and a variable"), 1).ConfigureAwait(false);
+            return await FailAsync([ShellValue.FromText("cannot simultaneously unset a function and a variable")], 1).ConfigureAwait(false);
 
         var exitCode = 0;
         for (var index = argumentIndex; index < words.Count; index++)
@@ -79,8 +79,8 @@ public sealed partial class Evaluation
                 if (!_state.TryUnsetFunction(nameValue))
                 {
                     exitCode = 1;
-                    await ReportExpansionDiagnosticAsync(ShellValue.FromText("unset"),
-                        WordExpansion.AppendAssignmentValue(nameValue, ShellValue.FromText(": cannot unset: readonly function"), scope)).ConfigureAwait(false);
+                    await ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
+                        [nameValue, ShellValue.FromText(": cannot unset: readonly function")]).ConfigureAwait(false);
                 }
                 continue;
             }
@@ -89,9 +89,8 @@ public sealed partial class Evaluation
                 if (variables && !name.IsIdentifier)
                 {
                     exitCode = 1;
-                    await ReportExpansionDiagnosticAsync(ShellValue.FromText("unset"),
-                        WordExpansion.AppendAssignmentValue(ShellArgumentEscaping.QuoteDiagnosticOperand(nameValue),
-                            ShellValue.FromText(": not a valid identifier"), scope)).ConfigureAwait(false);
+                    await WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("unset"), nameValue, _builtinDiagnostics)
+                        .ConfigureAwait(false);
                 }
                 continue;
             }
@@ -118,8 +117,8 @@ public sealed partial class Evaluation
             {
                 exitCode = 1;
                 if (namerefs || commandVars.IsReadonly(name))
-                    await ReportExpansionDiagnosticAsync(ShellValue.FromText("unset"),
-                        WordExpansion.AppendAssignmentValue(removedName.ToValue(), ShellValue.FromText(": cannot unset: readonly variable"), scope)).ConfigureAwait(false);
+                    await ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
+                        [removedName.ToValue(), ShellValue.FromText(": cannot unset: readonly variable")]).ConfigureAwait(false);
                 continue;
             }
 
@@ -138,9 +137,12 @@ public sealed partial class Evaluation
 
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
 
-        async Task<EvaluationResult> FailAsync(ShellValue message, int status)
+        Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message, int status) =>
+            FinishFailureAsync(ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")], message), status);
+
+        async Task<EvaluationResult> FinishFailureAsync(Task diagnostic, int status)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("unset"), message).ConfigureAwait(false);
+            await diagnostic.ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated);
         }
 
@@ -478,8 +480,7 @@ public sealed partial class Evaluation
         if (failure != NamerefAssignmentFailure.None)
         {
             if (failure == NamerefAssignmentFailure.InvalidTarget && kind != BuiltinAssignmentKind.Getopts)
-                await ReportExpansionDiagnosticAsync(command, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                    .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(value.GetValueOrDefault()).Bytes).Append(": not a valid identifier"u8).ToMemory())).ConfigureAwait(false);
+                await WriteInvalidIdentifierDiagnosticAsync(command, value.GetValueOrDefault(), _builtinDiagnostics).ConfigureAwait(false);
             return kind == BuiltinAssignmentKind.Directory ? BuiltinAssignmentResult.NoWrite : BuiltinAssignmentResult.Failed;
         }
         var writeScope = scope with

@@ -47,15 +47,14 @@ public sealed partial class Evaluation
                         continue;
                     }
                     if (option is not ((byte)'d' or (byte)'n' or (byte)'O'))
-                        return await InvalidArgumentsAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                            .Append((byte)'-').Append(option).Append(": invalid option"u8).ToMemory())).ConfigureAwait(false);
+                        return await InvalidArgumentsAsync(argument.Bytes.Slice(optionIndex, 1), ": invalid option")
+                            .ConfigureAwait(false);
 
                     var operand = argument.Bytes[(optionIndex + 1)..];
                     if (operand.IsEmpty)
                     {
                         if (++argumentIndex == arguments.Count)
-                            return await InvalidArgumentsAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                                .Append((byte)'-').Append(option).Append(": option requires an argument"u8).ToMemory()))
+                            return await InvalidArgumentsAsync(argument.Bytes.Slice(optionIndex, 1), ": option requires an argument")
                                 .ConfigureAwait(false);
                         operand = arguments[argumentIndex].Bytes;
                     }
@@ -212,23 +211,21 @@ public sealed partial class Evaluation
             return await FinishAsync(2).ConfigureAwait(false);
         }
 
-        async Task<EvaluationResult> InvalidArgumentsAsync(ShellValue detail)
+        async Task<EvaluationResult> InvalidArgumentsAsync(ReadOnlyMemory<byte> option, string detail)
         {
             // Advertise the supported subset, not Bash options whose behavior is intentionally absent.
             var commandName = arguments[0];
-            var message = ByteMemoryBuilder.CreateUnaccounted(0).Append(commandName.Bytes).Append(": "u8).Append(detail.Bytes)
-                .Append((byte)'\n').Append(commandName.Bytes).Append(": usage: "u8)
-                .Append(commandName.Bytes).Append((byte)' ')
-                .Append(Utf8Text.Encode(BuiltinDocumentation.For(BuiltinKind.Mapfile).Arguments)).Append((byte)'\n');
-            var failure = (await ExecuteWriteAsync(GetStdErrDescriptor(), message.ToMemory()).ConfigureAwait(false)).IsError ? 1 : 0;
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(failure == 0 ? 2 : failure), negated).ConfigureAwait(false);
+            var result = await WriteDiagnosticAsync([commandName],
+                [ShellValue.FromText("-"), ShellValue.FromBytes(option), ShellValue.FromText(detail + "\n"),
+                    commandName, ShellValue.FromText(": usage: "), commandName,
+                    ShellValue.FromText(" " + BuiltinDocumentation.For(BuiltinKind.Mapfile).Arguments)], scope: null).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 2), negated).ConfigureAwait(false);
         }
 
         async Task<EvaluationResult> InvalidNumberAsync(ReadOnlyMemory<byte> operand, byte option)
         {
-            using var detail = new ByteMemoryBuilder(0, Memory.Workspace);
-            detail.Append(operand).Append(option == (byte)'n' ? ": invalid line count"u8 : ": invalid array origin"u8);
-            await ReportExpansionDiagnosticAsync(arguments[0], ShellValue.FromBytes(detail.ToMemory())).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync([arguments[0]], [ShellValue.FromBytes(operand),
+                ShellValue.FromText(option == (byte)'n' ? ": invalid line count" : ": invalid array origin")]).ConfigureAwait(false);
             return await FinishAsync(1).ConfigureAwait(false);
         }
     }
@@ -318,9 +315,8 @@ public sealed partial class Evaluation
         }
         if (variables.AssociativeArrays.ContainsKey(resolved))
         {
-            await ReportExpansionDiagnosticAsync(command,
-                ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(operand.Bytes)
-                    .Append(": not an indexed array"u8).ToMemory())).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync([command],
+                [operand, ShellValue.FromText(": not an indexed array")]).ConfigureAwait(false);
             return (null, 1);
         }
 
@@ -328,8 +324,7 @@ public sealed partial class Evaluation
 
         async Task<(IndexedInputTarget?, int)> InvalidTargetAsync(ShellValue name)
         {
-            await ReportExpansionDiagnosticAsync(command, ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(name).Bytes).Append(": not a valid identifier"u8).ToMemory())).ConfigureAwait(false);
+            await WriteInvalidIdentifierDiagnosticAsync(command, name, _builtinDiagnostics).ConfigureAwait(false);
             return (null, 1);
         }
     }

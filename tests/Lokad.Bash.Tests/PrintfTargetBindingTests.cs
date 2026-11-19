@@ -1,9 +1,93 @@
+using System.Diagnostics.CodeAnalysis;
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class PrintfTargetBindingTests
 {
+    [Theory]
+    [InlineData(32, true, false, 2)]
+    [InlineData(4096, false, false, 2)]
+    [InlineData(4096, false, true, 1)]
+    [InlineData(4096, true, false, 1)]
+    public async Task InvalidTargetDiagnosticAdmitsThePendingRecord(int nameBytes, bool refuseRecord, bool failWrite, int status)
+    {
+        var name = new byte[nameBytes];
+        name.AsSpan().Fill((byte)'x');
+        name[0] = (byte)'-';
+        // Keep target validation separate from admission of the full diagnostic.
+        name[1] = (byte)'[';
+        name[^1] = 0xff;
+        byte[] expected = [.. "printf: `"u8, .. name, .. "': not a valid identifier\n"u8];
+        var state = new Eval(Parser.Parse("printf -v \"$1\" '%s' sample 2>errors"));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(name)]);
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        var budget = new DiagnosticBudget(owner, expected.Length, refuseRecord);
+        state.Memory.Budget = budget;
+
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        var descriptor = new FileDescriptor(17);
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        var pending = budget.Diagnostic?.Bytes;
+        Assert.Equal(descriptor, write.FileDescriptor);
+        var actual = write.Content.ToArray();
+        write.SetResult(failWrite ? DescriptorWriteResult.Failure(new OperationError("Synthetic write failure\n"))
+            : DescriptorWriteResult.Open);
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(status, state.LastExitCode);
+
+        Assert.Equal(nameBytes == 4096, budget.Attempted);
+        if (refuseRecord && nameBytes == 4096)
+        {
+            Assert.Equal("printf: shared memory budget exhausted\n"u8.ToArray(), actual);
+            Assert.Null(pending);
+            return;
+        }
+
+        Assert.Equal(expected, actual);
+        if (nameBytes == 4096)
+        {
+            Assert.Equal(expected.Length, pending);
+            Assert.Equal(0, budget.Diagnostic?.Bytes);
+        }
+        else
+        {
+            Assert.Null(pending);
+        }
+    }
+
+    // Observe only the final record, independently of command workspace growth.
+    private sealed class DiagnosticBudget(IMemoryBudget owner, long length, bool refuseRecord) : IMemoryBudget
+    {
+        public bool Attempted { get; private set; }
+        public IMemoryReservation? Diagnostic { get; private set; }
+
+        public IMemoryScope CreateScope() => owner.CreateScope();
+
+        public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation)
+        {
+            if (bytes != length)
+                return owner.TryReserve(bytes, out reservation);
+            Attempted = true;
+            reservation = null;
+            if (refuseRecord || !owner.TryReserve(bytes, out reservation))
+                return false;
+            Diagnostic = reservation;
+            return true;
+        }
+    }
+
     // Bash 5.2.37, LC_ALL=C: global aliases and explicit element writes remain within the prefix.
     [Theory]
     [InlineData("a=9; declare -n r=a; a=0 printf -v 'b[r++]' x; printf '<%s>' \"$a\" \"${!b[@]}\"", "<9><0>")]

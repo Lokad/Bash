@@ -71,9 +71,8 @@ public sealed partial class Evaluation
                 }
                 var flag = option.Span[index];
                 if (flag is not ((byte)'u' or (byte)'d' or (byte)'a'))
-                    return await FailAsync(
-                        ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append("-"u8).Append(option.Slice(index, 1))
-                            .Append(Utf8Text.Encode(": invalid option\n" + Usage())).ToMemory()), 2).ConfigureAwait(false);
+                    return await FailAsync([ShellValue.FromText("-"), ShellValue.FromBytes(option.Slice(index, 1)),
+                        ShellValue.FromText(": invalid option\n" + Usage())], 2).ConfigureAwait(false);
 
                 ShellValue operand;
                 if (index + 1 < option.Length)
@@ -81,7 +80,7 @@ public sealed partial class Evaluation
                 else if (++argumentIndex < words.Count)
                     operand = words[argumentIndex];
                 else
-                    return await FailAsync(ShellValue.FromText($"-{(char)flag}: option requires an argument\n" + Usage()), 2)
+                    return await FailAsync([ShellValue.FromText($"-{(char)flag}: option requires an argument\n" + Usage())], 2)
                         .ConfigureAwait(false);
 
                 if (flag == (byte)'d')
@@ -100,8 +99,7 @@ public sealed partial class Evaluation
                 if (!Integers.TryParseNumber(
                         operand.Bytes.Span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8), out var number)
                     || number is < 0 or > int.MaxValue)
-                    return await FailAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(operand.Bytes)
-                        .Append(": invalid file descriptor specification"u8).ToMemory()), 1)
+                    return await FailAsync([operand, ShellValue.FromText(": invalid file descriptor specification")], 1)
                         .ConfigureAwait(false);
 
                 // Borrow the existing mapping; a logical number never exposes an opaque host handle.
@@ -109,8 +107,8 @@ public sealed partial class Evaluation
                 inputDescriptor = _state.CurrentRedirectionTable?.Resolve(inputNumber)
                     ?? CaptureDescriptorBindings().Resolve(inputNumber);
                 if (inputDescriptor.IsClosed)
-                    return await FailAsync(ShellValue.FromText(inputNumber
-                        + ": invalid file descriptor: Bad file descriptor"), 1).ConfigureAwait(false);
+                    return await FailAsync([ShellValue.FromText(inputNumber
+                        + ": invalid file descriptor: Bad file descriptor")], 1).ConfigureAwait(false);
                 break;
             }
             argumentIndex++;
@@ -217,9 +215,12 @@ public sealed partial class Evaluation
         Task<EvaluationResult> FinishAsync(int status) => FinalizeResultAsync(
             EvaluationResult.FromExitCode(diagnostics.Result.IsError ? 1 : status), negated);
 
-        async Task<EvaluationResult> FailAsync(ShellValue message, int status)
+        Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message, int status) =>
+            FinishFailureAsync(ReportExpansionDiagnosticAsync([ShellValue.FromText("read")], message), status);
+
+        async Task<EvaluationResult> FinishFailureAsync(Task diagnostic, int status)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("read"), message).ConfigureAwait(false);
+            await diagnostic.ConfigureAwait(false);
             return await FinishAsync(status).ConfigureAwait(false);
         }
 
@@ -227,12 +228,8 @@ public sealed partial class Evaluation
             VariableReference.TryParse(ShellSource.FromBytes(name.Bytes), Memory, out reference)
             && (reference.Kind == VariableReferenceKind.Name || !reference.Subscript.IsEmpty);
 
-        async Task<EvaluationResult> InvalidTargetAsync(ShellValue name)
-        {
-            return await FailAsync(ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(name).Bytes)
-                .Append(": not a valid identifier"u8).ToMemory()), 1).ConfigureAwait(false);
-        }
+        Task<EvaluationResult> InvalidTargetAsync(ShellValue name) =>
+            FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("read"), name, diagnostics), 1);
 
         async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectInputAsync()
         {

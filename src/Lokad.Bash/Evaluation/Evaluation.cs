@@ -3214,11 +3214,14 @@ public sealed partial class Evaluation : IFileTester
         ReportExpansionDiagnosticAsync([name], [message]);
 
     /// <summary>Writes one admitted record from borrowed fragments of the name and message.</summary>
-    internal Task ReportExpansionDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message)
+    internal Task ReportExpansionDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message) =>
+        WriteDiagnosticAsync(name, message, _builtinDiagnostics);
+
+    private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        BuiltinDiagnosticScope? scope)
     {
-        var scope = _builtinDiagnostics;
         if (scope is { Result.CanAcceptMore: false })
-            return Task.CompletedTask;
+            return Task.FromResult(scope.Result);
 
         var length = (long)DiagnosticPunctuationBytes;
         foreach (var part in name)
@@ -3245,12 +3248,14 @@ public sealed partial class Evaluation : IFileTester
             throw;
         }
 
-        async Task WriteAsync(ReadOnlyMemory<byte> bytes, BuiltinDiagnosticScope? scope, IMemoryReservation? reservation)
+        async Task<DescriptorWriteResult> WriteAsync(ReadOnlyMemory<byte> bytes, BuiltinDiagnosticScope? scope,
+            IMemoryReservation? reservation)
         {
             using var memory = reservation;
             var result = await ExecuteWriteAsync(GetStdErrDescriptor(), bytes).ConfigureAwait(false);
             if (scope != null)
                 scope.Result = result;
+            return result;
         }
     }
 

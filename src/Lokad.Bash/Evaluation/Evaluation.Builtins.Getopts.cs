@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -23,8 +22,8 @@ public sealed partial class Evaluation
                 operand++;
             else if (first.Length > 1 && first.Span[0] == (byte)'-')
             {
-                var message = ByteMemoryBuilder.CreateUnaccounted(0).Append(first[..2]).Append(": invalid option"u8);
-                await ReportExpansionDiagnosticAsync(command, ShellValue.FromBytes(message.ToMemory())).ConfigureAwait(false);
+                await ReportExpansionDiagnosticAsync([command],
+                    [ShellValue.FromBytes(first[..2]), ShellValue.FromText(": invalid option")]).ConfigureAwait(false);
                 return await UsageAsync().ConfigureAwait(false);
             }
         }
@@ -47,11 +46,9 @@ public sealed partial class Evaluation
         var option = Scan(optionSpec.Span, arguments, start, ref cursor);
         if (option.Diagnostic && !silent && variables.GetoptsDiagnosticsEnabled)
         {
-            var diagnostic = ByteMemoryBuilder.CreateUnaccounted(0)
-                .Append(option.Outcome == GetoptsOutcome.Missing ? "option requires an argument -- "u8 : "illegal option -- "u8)
-                .Append(option.Flag);
-            await ReportExpansionDiagnosticAsync(variables.ArgumentZero.IsEmpty ? command : variables.ArgumentZero,
-                ShellValue.FromBytes(diagnostic.ToMemory())).ConfigureAwait(false);
+            var text = option.Outcome == GetoptsOutcome.Missing ? "option requires an argument -- " : "illegal option -- ";
+            await ReportExpansionDiagnosticAsync([variables.ArgumentZero.IsEmpty ? command : variables.ArgumentZero],
+                [ShellValue.FromText(text), ByteValue(option.Flag)]).ConfigureAwait(false);
         }
 
         int status;
@@ -106,9 +103,7 @@ public sealed partial class Evaluation
         {
             if (!target.IsIdentifier)
             {
-                var diagnostic = ByteMemoryBuilder.CreateUnaccounted(0)
-                    .Append(ShellArgumentEscaping.QuoteDiagnosticOperand(name).Bytes).Append(": not a valid identifier"u8);
-                await ReportExpansionDiagnosticAsync(command, ShellValue.FromBytes(diagnostic.ToMemory())).ConfigureAwait(false);
+                await WriteInvalidIdentifierDiagnosticAsync(command, name, diagnostics).ConfigureAwait(false);
                 return 1;
             }
             var assigned = await AssignAsync(target, ByteValue(optionByte)).ConfigureAwait(false);
