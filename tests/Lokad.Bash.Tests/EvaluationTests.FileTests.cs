@@ -82,6 +82,25 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
     }
 
+    [Fact]
+    public async Task MixedTestRunsParsedPredicatesBeforeReportingASyntaxError()
+    {
+        var state = new Eval(Parser.Parse("a=([3]=present); i=3; test -e first -a -v 'a[i++]' -a"));
+        var first = await NextPathKindsAsync(state);
+        Assert.Equal("/first", Assert.Single(first.Paths).Path);
+        Assert.Equal(ShellValue.FromText("3"), state.Variables["i"]);
+        first.SetResult([PathKindResult(FilePathKind.File)]);
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(ShellValue.FromText("4"), state.Variables["i"]);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("test: argument expected\n"u8.ToArray(), diagnostic.Content.ToArray());
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(2, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData("test -t invalid", 1)]
     [InlineData("test -t -1", 1)]

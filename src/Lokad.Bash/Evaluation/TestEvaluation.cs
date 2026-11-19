@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
@@ -20,6 +21,8 @@ public sealed class TestEvaluation
     private readonly List<UnresolvedFileTest> _files = [];
     private int _index;
     private int _end;
+    private int _stackDepth;
+    private int _maximumStackDepth;
 
     private TestEvaluation(IReadOnlyList<ShellValue> arguments, int firstArgument, int argumentLimit,
         CancellationToken cancellationToken, bool errexitEnabled, EvaluationMemory? memory)
@@ -67,42 +70,15 @@ public sealed class TestEvaluation
     public bool CompleteFileTests(IReadOnlyList<bool> fileResults)
     {
         ArgumentNullException.ThrowIfNull(fileResults);
-        return CompletePredicates(fileResults, []);
+        return CompletePredicates(fileResults);
     }
 
-    /// <summary>Evaluates reached leaves in argument order, including both sides of -a and -o.</summary>
-    internal async Task<bool> EvaluateVariablePredicatesAsync(
-        ScopedEvaluation scope, Func<UnresolvedFileTest, Task<bool>> testFile)
-    {
-        var fileResults = new bool[_files.Count];
-        // Variable predicate steps retain absolute indices in the borrowed operand list.
-        var variableResults = new bool[_end];
-        foreach (var step in _steps)
-        {
-            _cancellationToken.ThrowIfCancellationRequested();
-            if (!scope.CanExpand)
-                return false;
-            switch (step.Kind)
-            {
-                case StepKind.File:
-                    fileResults[step.Value] = await testFile(_files[step.Value]).ConfigureAwait(false);
-                    break;
-                case StepKind.VariableIsSet:
-                case StepKind.NamerefIsSet:
-                    var kind = step.Kind == StepKind.VariableIsSet ? UnaryPredicateKind.VariableIsSet : UnaryPredicateKind.NamerefIsSet;
-                    variableResults[step.Value] = await WordExpansion.TestVariableAsync(kind, _arguments[step.Value], scope)
-                        .ConfigureAwait(false);
-                    break;
-            }
-        }
-        return CompletePredicates(fileResults, variableResults);
-    }
-
-    private bool CompletePredicates(IReadOnlyList<bool> fileResults, ReadOnlySpan<bool> variableResults)
+    private bool CompletePredicates(IReadOnlyList<bool> fileResults)
     {
         if (HasParseError)
             return false;
-        var values = new bool[_steps.Count];
+
+        var values = new bool[_maximumStackDepth];
         var count = 0;
         foreach (var step in _steps)
         {
@@ -111,18 +87,69 @@ public sealed class TestEvaluation
             {
                 case StepKind.Constant: values[count++] = step.Value != 0; break;
                 case StepKind.File: values[count++] = fileResults[step.Value]; break;
-                case StepKind.VariableIsSet:
-                case StepKind.NamerefIsSet: values[count++] = variableResults[step.Value]; break;
-                case StepKind.Not: values[count - 1] = !values[count - 1]; break;
+                case StepKind.Not: Negate(values, count); break;
                 case StepKind.And:
-                case StepKind.Or:
-                    var right = values[--count];
-                    values[count - 1] = step.Kind == StepKind.And
-                        ? values[count - 1] && right : values[count - 1] || right;
-                    break;
+                case StepKind.Or: Combine(values, --count, step.Kind == StepKind.And); break;
             }
         }
         return count == 1 && values[0];
+    }
+
+    /// <summary>Evaluates reached leaves in argument order, including both sides of -a and -o.</summary>
+    internal async Task<bool> EvaluateVariablePredicatesAsync(
+        ScopedEvaluation scope, Func<UnresolvedFileTest, Task<bool>> testFile)
+    {
+        // A parse error still allows earlier parsed predicates to run. Its partial
+        // step sequence can contain operators without all their operands.
+        var reduce = !HasParseError;
+        var values = reduce ? new bool[_maximumStackDepth] : [];
+        var count = 0;
+        foreach (var step in _steps)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (!scope.CanExpand)
+                return false;
+            bool value;
+            switch (step.Kind)
+            {
+                case StepKind.Constant:
+                    value = step.Value != 0;
+                    break;
+                case StepKind.File:
+                    value = await testFile(_files[step.Value]).ConfigureAwait(false);
+                    break;
+                case StepKind.VariableIsSet:
+                case StepKind.NamerefIsSet:
+                    var kind = step.Kind == StepKind.VariableIsSet ? UnaryPredicateKind.VariableIsSet : UnaryPredicateKind.NamerefIsSet;
+                    value = await WordExpansion.TestVariableAsync(kind, _arguments[step.Value], scope)
+                        .ConfigureAwait(false);
+                    break;
+                case StepKind.Not:
+                    if (reduce)
+                        Negate(values, count);
+                    continue;
+                case StepKind.And:
+                case StepKind.Or:
+                    if (reduce)
+                        Combine(values, --count, step.Kind == StepKind.And);
+                    continue;
+                default: throw new InvalidOperationException("Unsupported test predicate step.");
+            }
+            if (reduce)
+                values[count++] = value;
+        }
+        if (reduce)
+            _cancellationToken.ThrowIfCancellationRequested();
+        return count == 1 && values[0];
+    }
+
+    private static void Negate(bool[] values, int count) => values[count - 1] = !values[count - 1];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Combine(bool[] values, int rightIndex, bool conjunction)
+    {
+        var right = values[rightIndex];
+        values[rightIndex - 1] = conjunction ? values[rightIndex - 1] && right : values[rightIndex - 1] || right;
     }
 
     // The zero-to-four argument rules precede the ordinary -a/-o expression grammar.
@@ -191,7 +218,7 @@ public sealed class TestEvaluation
         while (!HasParseError && Consume("-o"u8))
         {
             ParseAnd(depth);
-            _steps.Add(new(StepKind.Or, 0));
+            AppendBinaryOperator(StepKind.Or);
         }
     }
 
@@ -201,7 +228,7 @@ public sealed class TestEvaluation
         while (!HasParseError && Consume("-a"u8))
         {
             ParseTerm(depth);
-            _steps.Add(new(StepKind.And, 0));
+            AppendBinaryOperator(StepKind.And);
         }
     }
 
@@ -259,8 +286,8 @@ public sealed class TestEvaluation
         else if (predicate.IsVariablePredicate)
         {
             HasVariablePredicates = true;
-            _steps.Add(new(predicate.Operator == UnaryPredicateKind.VariableIsSet ? StepKind.VariableIsSet : StepKind.NamerefIsSet,
-                operandIndex));
+            AppendPredicate(predicate.Operator == UnaryPredicateKind.VariableIsSet ? StepKind.VariableIsSet : StepKind.NamerefIsSet,
+                operandIndex);
         }
         else
             Constant(predicate.Operator == UnaryPredicateKind.StringLengthZero ? operand.IsEmpty : !operand.IsEmpty);
@@ -325,7 +352,7 @@ public sealed class TestEvaluation
             Fail(right.Value, "file operand is not valid UTF-8");
             return;
         }
-        _steps.Add(new(StepKind.File, _files.Count));
+        AppendPredicate(StepKind.File, _files.Count);
         _files.Add(new(kind, path, otherPath));
     }
 
@@ -345,7 +372,19 @@ public sealed class TestEvaluation
         _index++;
         return true;
     }
-    private void Constant(bool value) => _steps.Add(new(StepKind.Constant, value ? 1 : 0));
+    private void Constant(bool value) => AppendPredicate(StepKind.Constant, value ? 1 : 0);
+
+    private void AppendPredicate(StepKind kind, int operand)
+    {
+        _steps.Add(new(kind, operand));
+        _maximumStackDepth = Math.Max(_maximumStackDepth, ++_stackDepth);
+    }
+
+    private void AppendBinaryOperator(StepKind kind)
+    {
+        _steps.Add(new(kind, 0));
+        _stackDepth--;
+    }
     private void Fail(ShellValue? operand, string message)
     {
         if (HasParseError)
