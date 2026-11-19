@@ -352,6 +352,11 @@ The public script runner, `source`, `eval` and reached EXIT actions execute comp
 they are parsed. Earlier units retain their effects before later syntax failure;
 the failing unit executes no partial command list. Explicit whole-script parsing
 remains available for callers that require validation before execution.
+Recoverable expansion failures discard the rest of their unit and expose the
+failure status to the next unit. Readonly assignment failures and malformed
+generated words stop execution when errexit applies at the script boundary.
+The root policy also applies to failing commands in tested positions within a unit.
+A tested `eval` or `source` invocation can recover within its nested units.
 An invalid variable name in a complete for-in loop reports status 1 when the
 loop is reached, before expanding its items. Prepared scripts use the same
 execution rule. Missing loop syntax still fails during parsing.

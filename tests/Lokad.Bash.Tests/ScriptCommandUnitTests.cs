@@ -42,6 +42,32 @@ public sealed class ScriptCommandUnitTests
     public Task EvalSharesTheCommandUnitPath(string source, string output, int status, bool syntaxError) =>
         AssertUnitsAsync("eval '" + source.Replace("'", "'\\''", StringComparison.Ordinal) + "'", output, status, syntaxError);
 
+    [Theory]
+    [InlineData("readonly value=old\nvalue=$(exit 7); printf wrong >skipped\n", "1:old", 0, "readonly variable")]
+    [InlineData("set -e\nreadonly value=old\nvalue=new || printf wrong >skipped\n", "", 1, "readonly variable")]
+    [InlineData("set -e\nreadonly value=old\neval 'value=new; printf wrong >skipped\n:' || printf wrong >skipped\n", "0:old", 0, "readonly variable")]
+    [InlineData("set -e\nvalue=$((1/0)); printf wrong >skipped\n", "1:unset", 0, "division by 0")]
+    [InlineData("set -e\nprintf '%s' p{Z..a}s; printf wrong >skipped\n", "", 1, "bad substitution")]
+    [InlineData("declare -n ref\n: ${ref:=bad name}; printf wrong >skipped\n", "2:unset", 0, "not a valid identifier")]
+    public async Task ExpansionFailuresResumeOnlyAtTheirNextAllowedUnit(
+        string prefix, string expectedOutput, int expectedStatus, string diagnostic)
+    {
+        const string tail = "printf '%s:%s' \"$?\" \"${value-unset}\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(prefix + tail, host)).ExitCode
+                : (await host.RunAsync(prefix + tail, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(expectedStatus, status);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Contains(diagnostic, host.StandardError.TextContent, StringComparison.Ordinal);
+            Assert.False(host.FileExists("/skipped"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     private static async Task AssertUnitsAsync(string source, string output, int status, bool syntaxError)
     {
         await using var host = new TestHost();

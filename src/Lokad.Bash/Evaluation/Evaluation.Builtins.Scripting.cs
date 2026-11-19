@@ -191,7 +191,8 @@ public sealed partial class Evaluation
                 {
                     // Recover only the expansion failures that end the current command unit.
                     // Explicit exit, errexit and unrecoverable expansion failures still terminate.
-                    result = await FinalizeResultAsync(RecoverScriptExpansionFailure(result, kind), negated: false).ConfigureAwait(false);
+                    result = await FinalizeResultAsync(RecoverScriptExpansionFailure(result, kind, scope.Context), negated: false)
+                        .ConfigureAwait(false);
                     if (result.Flow == FlowControlKind.Exit)
                         return result;
                 }
@@ -202,26 +203,30 @@ public sealed partial class Evaluation
                 unitMemory.Release();
             }
         }
-        return RecoverScriptExpansionFailure(result, kind);
+        return RecoverScriptExpansionFailure(result, kind, scope.Context);
     }
 
     /// <summary>Recovers unit-scoped expansion failures while preserving root versus nested status rules.</summary>
-    private EvaluationResult RecoverScriptExpansionFailure(EvaluationResult result, ScriptExecutionKind kind)
+    private EvaluationResult RecoverScriptExpansionFailure(
+        EvaluationResult result, ScriptExecutionKind kind, EvaluationContext context) =>
+        GetRecoverableScriptExpansionStatus(kind, context) is { } status ? RecoverExpansionFailure(status) : result;
+
+    private int? GetRecoverableScriptExpansionStatus(ScriptExecutionKind kind, EvaluationContext context)
     {
         if (CanRecoverCommandSubstitutionSyntax)
-            return RecoverExpansionFailure(1);
+            return 1;
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
                 or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
-            return result;
+            return null;
 
-        // Recoverable expansion failures end their current unit even under errexit.
-        // A reached assignment-target failure terminates an errexit-enabled EXIT action.
-        if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && failure.Kind == ExpansionFailureKind.AssignmentTarget)
-            return result;
+        // Recovery uses the caller's errexit state, including for tested commands within the unit.
+        if (_state.ErrexitEnabled && !context.ErrexitIgnored
+            && failure.Kind is ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.WordSyntax)
+            return null;
 
         // Nameref defaults fail with 1 at script boundaries, but with 2 at the root.
-        return RecoverExpansionFailure(failure.Kind == ExpansionFailureKind.NamerefDefault && kind != ScriptExecutionKind.Root ? 1 : failure.ExitCode);
+        return failure.Kind == ExpansionFailureKind.NamerefDefault && kind != ScriptExecutionKind.Root ? 1 : failure.ExitCode;
     }
 
     private bool CanRecoverCommandSubstitutionSyntax =>

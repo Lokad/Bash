@@ -191,13 +191,17 @@ public sealed partial class Evaluation
                             result = await EvaluateCommandAsync(execute.Command, currentScope, negated: false).ConfigureAwait(false);
                             if (result.Flow != FlowControlKind.None)
                             {
-                                if (result.Flow != FlowControlKind.Exit || !CanRecoverCommandSubstitutionSyntax)
+                                if (result.Flow != FlowControlKind.Exit
+                                    || GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope.Context) is not { } recoveryStatus)
                                     return ApplyNegation(result, listNegated);
                                 while (index + 1 < traversal.Count && traversal[index + 1] is not ListTraversal.Step.Execute { StartsCommandUnit: true })
+                                {
+                                    CheckCancellation();
                                     index++;
+                                }
                                 if (index + 1 == traversal.Count)
                                     return ApplyNegation(result, listNegated);
-                                result = RecoverExpansionFailure(1);
+                                result = ApplyNegation(RecoverExpansionFailure(recoveryStatus), negated: false);
                             }
                             break;
                         case ListTraversal.Step.Select select when !EvaluationRules.ShouldExecuteRight(select.Operator, result.ExitCode):
