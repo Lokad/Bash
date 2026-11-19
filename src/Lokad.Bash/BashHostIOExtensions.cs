@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -22,32 +21,23 @@ namespace Lokad.Bash;
 public static class BashHostIOExtensions
 {
     /// <summary>
-    /// Writes a line of text to a descriptor, ensuring it ends with a newline.
+    /// Writes UTF-8 text followed by LF, replacing invalid UTF-16 with the replacement character.
     /// </summary>
     /// <param name="host">The shell host.</param>
     /// <param name="descriptor">The descriptor to write to.</param>
     /// <param name="line">The line of text to write.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The write result, preserving downstream closure separately from failure.</returns>
+    /// <exception cref="MemoryBudgetExceededException">The host budget refused the encoded buffer.</exception>
     public static async ValueTask<DescriptorWriteResult> WriteLineAsync(
         this IBashHost host,
         FileDescriptor descriptor,
         string line,
         CancellationToken cancellationToken)
     {
-        // If the string is small (majority case), over-allocate to avoid traversing string twice
-        var maxByteCount = (line.Length > 10240 ? Encoding.UTF8.GetByteCount(line) : line.Length * 4) + 1;
-        var bytes = ArrayPool<byte>.Shared.Rent(maxByteCount);
-        try
-        {
-            var byteCount = Encoding.UTF8.GetBytes(line, bytes);
-            bytes[byteCount] = (byte)'\n'; // WriteLine includes its LF terminator.
-            return await host.WriteAsync(descriptor, bytes[..(byteCount + 1)], cancellationToken);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(bytes);
-        }
+        ArgumentNullException.ThrowIfNull(line);
+        return await WriteTextAsync(host, descriptor, line.AsSpan(), Encoding.UTF8, appendLf: true, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Inspects one preserved lookup with explicit information detail and final-link policy.</summary>
@@ -222,15 +212,46 @@ public static class BashHostIOExtensions
         CancellationToken cancellationToken) =>
         host.ReadLinesAsync(fileDescriptor, 1, cancellationToken);
 
-    /// <summary>
-    /// Writes UTF-8 text to a descriptor.
-    /// </summary>
+    /// <summary>Writes UTF-8 text to a descriptor with strict encoding.</summary>
+    /// <exception cref="MemoryBudgetExceededException">The host budget refused the encoded buffer.</exception>
     public static ValueTask<DescriptorWriteResult> WriteAsync(
         this IBashHost host,
         FileDescriptor fileDescriptor,
         string content,
         CancellationToken cancellationToken) =>
-        host.WriteAsync(fileDescriptor, Utf8Text.Encode(content), cancellationToken);
+        WriteTextAsync(host, fileDescriptor, content.AsSpan(), Utf8Text.StrictUtf8, appendLf: false, cancellationToken);
+
+    private static ValueTask<DescriptorWriteResult> WriteTextAsync(IBashHost host, FileDescriptor descriptor,
+        ReadOnlySpan<char> text, Encoding encoding, bool appendLf, CancellationToken cancellationToken)
+    {
+        var length = (long)encoding.GetByteCount(text) + (appendLf ? 1 : 0);
+        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        // Short records, including pre-evaluation refusal diagnostics, use headroom.
+        var reservation = length > ByteMemoryBuilder.DefaultCapacity ? host.MemoryBudget.Reserve(length) : null;
+        try
+        {
+            var bytes = length == 0 ? Array.Empty<byte>() : new byte[(int)length];
+            encoding.GetBytes(text, bytes);
+            if (appendLf)
+                bytes[^1] = (byte)'\n';
+            var write = host.WriteAsync(descriptor, bytes, cancellationToken);
+            return reservation is null ? write : CompleteWriteAsync(write, reservation);
+        }
+        catch
+        {
+            reservation?.Dispose();
+            throw;
+        }
+
+        static async ValueTask<DescriptorWriteResult> CompleteWriteAsync(ValueTask<DescriptorWriteResult> write,
+            IMemoryReservation reservation)
+        {
+            using var memory = reservation;
+            return await write.ConfigureAwait(false);
+        }
+    }
 
     /// <summary>Reads the remaining descriptor bytes using the shared memory allowance.</summary>
     /// <remarks>The caller retains descriptor ownership. Failures discard partial output.</remarks>
