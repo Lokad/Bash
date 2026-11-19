@@ -1,12 +1,87 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ByteValuedWordTests
 {
+    [Fact]
+    public async Task QuotedParameterRetainsItsBytesAcrossBindingReplacement()
+    {
+        var governor = new MemoryGovernor(2 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        var evaluation = new Eval(Parser.Parse(string.Empty));
+        evaluation.Memory.Budget = owner;
+        var backing = new byte[16 * 1024];
+        Array.Fill(backing, (byte)'x');
+        backing[0] = 0xff;
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("x", ShellValue.FromBytes(backing)));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        var tokenizer = new Tokenizer(ShellSource.FromText("\"$x\""));
+        Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+        var word = Assert.IsType<WordToken>(token).Word;
+
+        using (evaluation.Memory.BeginCommand(scope))
+        {
+            var initial = evaluation.Memory.Workspace.Bytes;
+            var expanded = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
+            var delta = evaluation.Memory.Workspace.Bytes - initial;
+            Assert.True(expanded.Bytes.Equals(backing.AsMemory()));
+            Assert.InRange(delta, backing.Length, backing.Length + 4096L);
+
+            using (evaluation.Memory.BeginCommand(scope))
+                Assert.True(variables.TrySetScalar("x", ShellValue.FromText("new")));
+
+            Assert.Equal(0xff, expanded.Bytes.Span[0]);
+            Assert.True(evaluation.Memory.Workspace.Bytes - variables.EstimatedMemoryBytes >= backing.Length);
+        }
+
+        evaluation.Memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task SmallExpandedSliceKeepsIndependentBacking()
+    {
+        var backing = new byte[32 * 1024];
+        var input = backing.AsMemory(1, 3);
+        input.Span[0] = 0xff;
+        input.Span[1] = (byte)'a';
+        input.Span[2] = 0x0d;
+        var evaluation = new Eval(Parser.Parse(string.Empty));
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("x", ShellValue.FromBytes(input)));
+        var tokenizer = new Tokenizer(ShellSource.FromText("\"$x\""));
+        Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+
+        var result = await WordExpansion.ExpandAsync(Assert.IsType<WordToken>(token).Word,
+            new ScopedEvaluation(evaluation, variables, default), ExpansionPurpose.Scalar);
+
+        Assert.Equal(new byte[] { 0xff, 0x61, 0x0d }, result.Bytes.ToArray());
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(result.Bytes, out var slice));
+        Assert.NotNull(slice.Array);
+        Assert.InRange(slice.Array.Length, result.Bytes.Length, 2 * result.Bytes.Length);
+    }
+
+    [Fact]
+    public async Task SplitFieldsKeepTheirBytesAfterThePendingBufferIsReused()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("x=$'alpha \\377omega'; y='beta zeta'; printf '<%s>' $x\"/\"$y",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        byte[] expected = [.. "<alpha><"u8, 0xff, .. "omega/beta><zeta>"u8];
+        Assert.Equal(expected, host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task PathnameGlobRejectsNonUtf8ThroughTheExpansionErrorPath()
     {

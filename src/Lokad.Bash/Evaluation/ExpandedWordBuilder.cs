@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -376,7 +377,7 @@ internal sealed class ExpandedWordBuilder
             {
                 if (field.Count == 0 || field[^1].IsGlobQuoted != globQuoted)
                     field.Add(new SegmentBuilder(globQuoted, _memory));
-                field[^1].AppendValue(ShellValue.FromBytes(bytes));
+                field[^1].AppendCopy(bytes.Span);
             }
 
             void FlushExpansion()
@@ -514,8 +515,9 @@ internal sealed class ExpandedWordBuilder
     private sealed class SegmentBuilder
     {
         private readonly StringBuilder _text = new();
-        private readonly ByteMemoryBuilder _bytes = ByteMemoryBuilder.CreateUnaccounted(0);
         private readonly EvaluationMemory _memory;
+        private ShellValue _retained;
+        private ByteMemoryBuilder? _bytes;
 
         public SegmentBuilder(bool isGlobQuoted, EvaluationMemory memory)
         {
@@ -535,23 +537,52 @@ internal sealed class ExpandedWordBuilder
         public void AppendValue(ShellValue value)
         {
             FlushText();
-            _memory.Charge(checked(4L * value.Bytes.Length));
             if (value.IsEmpty)
                 return;
+            if (_bytes == null && _retained.IsEmpty
+                && MemoryMarshal.TryGetArray(value.Bytes, out var slice)
+                && slice.Array is { } array && array.Length <= 2L * value.Bytes.Length
+                && value.Bytes.Equals((ReadOnlyMemory<byte>)slice.AsMemory()))
+            {
+                // The command retains the array even when its producer gives up its charge.
+                _memory.Charge(32L + array.Length);
+                _retained = value;
+                return;
+            }
             AppendBytes(value.Bytes.Span);
+        }
+
+        public void AppendCopy(ReadOnlySpan<byte> bytes)
+        {
+            FlushText();
+            AppendBytes(bytes);
         }
 
         public ShellValue ToValue()
         {
             FlushText();
-            return ShellValue.FromBytes(_bytes.ToCompactMemory(_memory.Workspace));
+            return _bytes == null ? _retained : ShellValue.FromBytes(_bytes.ToCompactMemory(_memory.Workspace));
         }
 
         private void AppendBytes(ReadOnlySpan<byte> bytes)
         {
-            // The enclosing command admits segment storage before appending; its
-            // coarse estimate includes geometric capacity and overlapping copies.
-            _bytes.Append(bytes);
+            if (bytes.IsEmpty)
+                return;
+            if (_bytes != null)
+            {
+                _bytes.Append(bytes);
+                return;
+            }
+
+            var prefix = _retained.Bytes.Span;
+            if (bytes.Length > int.MaxValue - prefix.Length)
+                throw new ByteMemoryBuilder.LimitExceededException();
+            var buffer = new ByteMemoryBuilder(0, _memory.Workspace);
+            var destination = buffer.AppendSpan(prefix.Length + bytes.Length);
+            prefix.CopyTo(destination);
+            bytes.CopyTo(destination[prefix.Length..]);
+            _bytes = buffer;
+            _retained = ShellValue.Empty;
         }
 
         private void FlushText()
@@ -565,7 +596,6 @@ internal sealed class ExpandedWordBuilder
 
             bool AppendEncoded(ReadOnlySpan<byte> bytes)
             {
-                _memory.Charge(checked(4L * bytes.Length));
                 AppendBytes(bytes);
                 return true;
             }

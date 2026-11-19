@@ -128,14 +128,12 @@ internal static partial class WordExpansion
 
         IEnumerable<ShellValue> QuoteFields(IEnumerable<ShellValue> fields)
         {
-            using var rendered = new ByteMemoryBuilder(0, budget);
             foreach (var field in fields)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                rendered.Truncate(0);
+                using var rendered = new ByteMemoryBuilder(0, scope.Effects.Memory.Workspace);
                 AppendQuoted(rendered, field, ShellQuoteStyle.SingleQuoted);
-                // The word builder copies each field before requesting the next.
-                yield return ShellValue.FromBytes(rendered.ToMemory());
+                yield return ShellValue.FromBytes(rendered.DetachSnapshot());
             }
         }
 

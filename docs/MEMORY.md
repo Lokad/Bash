@@ -200,7 +200,12 @@ current backing charged through command completion. Byte consumers append
 reached fields directly to that list.
 Field splitting owns one reusable scratch buffer for pending bytes and one
 quote-run list. It completes fields at their boundaries and reuses the segment
-builder list. Non-scalar brace expansion appends directly to the word's result.
+builder list. Word assembly can retain a compact immutable segment with a
+command charge for its backing array, including when a binding is replaced.
+Concatenation admits its new backing. Field splitting copies bytes out of its
+reused scratch before publishing fields. Positional serialization publishes
+a separate admitted snapshot for each quoted field. Non-scalar brace expansion
+appends directly to the word's result.
 Caller-prepared syntax remains
 caller-owned. Runtime parsing supplies coarse admission to source copies, command-unit
 tokens/parts and payload buffers, arithmetic/conditional metadata and reached deferred
