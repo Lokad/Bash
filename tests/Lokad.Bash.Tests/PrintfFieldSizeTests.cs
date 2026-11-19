@@ -236,6 +236,61 @@ public sealed class PrintfFieldSizeTests
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
         CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
 
+    // GNU Bash 5.2.21 Linux, LC_ALL=C. Diagnostic executable and line prefixes are omitted.
+    private static readonly object[][] WidthOverflowSamples =
+    [
+        ["dynamic-count-2147483647", "printf 'A%*n%nZ' '2147483647' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", ""],
+        ["dynamic-count-2147483648", "printf 'A%*n%nZ' '2147483648' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count--2147483649", "printf 'A%*n%nZ' '-2147483649' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count-2147483648tail", "printf 'A%*n%nZ' '2147483648tail' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C313E3C313E", "7072696E74663A20323134373438333634387461696C3A20696E76616C6964206E756D6265720A7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count-9223372036854775808", "printf 'A%*n%nZ' '9223372036854775808' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A20393232333337323033363835343737353830383A204E756D65726963616C20726573756C74206F7574206F662072616E67650A7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count-0x80000000", "printf 'A%*n%nZ' '0x80000000' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["literal-count-2147483648", "printf 'A%2147483648n%nZ' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", ""],
+        ["literal-count-18446744073709551620", "printf 'A%18446744073709551620n%nZ' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", ""],
+        ["finite-left-d", "printf 'A%*d%nZ' -6 3 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "413320202020205A7C303A3C373E3C3E", ""],
+        ["wrapped-width-b", "printf 'A%18446744073709551622b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41202020610A625A7C303A3C373E3C3E", ""],
+        ["wrapped-left-width-q", "printf 'A%-18446744073709551622q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41615C206220205A7C303A3C373E3C3E", ""],
+        ["wrapped-width-Q", "printf 'A%18446744073709551622Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020615C20625A7C303A3C373E3C3E", ""],
+        ["wrapped-width-(%Y)T", "printf 'A%18446744073709551622(%Y)T%nZ' 0 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020313937305A7C303A3C373E3C3E", ""],
+        ["wrapped-q-with-precision", "printf 'A%18446744073709551622.1q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020202020615A7C303A3C373E3C3E", ""],
+        ["wrapped-Q-with-precision", "printf 'A%18446744073709551622.1Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020202020615A7C303A3C373E3C3E", ""],
+        ["wrapped-width-stop-escape", "printf 'A%18446744073709551622b%nZ' 'a\\cb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020202020617C303A3C3E3C3E", ""],
+        ["overflow-invalid-conversion", "printf 'A%2147483648Z%nZ' unused mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C313A3C3E3C3E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
+        ["incomplete-overflow", "printf 'A%2147483648' unused; printf '|%s' \"$?\"", 0, "417C31", "7072696E74663A20602532313437343833363438273A206D697373696E6720666F726D6174206368617261637465720A"],
+        ["literal-overflow-s", "printf 'A%2147483648s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
+        ["literal-overflow-c", "printf 'A%2147483648c%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
+        ["literal-overflow-d", "printf 'A%2147483648d%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C303E3C3E", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["literal-overflow-f", "printf 'A%2147483648f%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C303E3C3E", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["literal-wrap-s", "printf 'A%18446744073709551622s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
+        ["literal-overflow-signed-precision", "printf 'A%2147483648.-1s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
+        ["literal-overflow-both-fields", "printf 'A%2147483648.2147483648s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
+        ["literal-overflow-v", "printf -v saved 'A%2147483648s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$saved\" \"$mark\"", 0, "7C303A3C5A3E3C303E", ""],
+        ["literal-overflow-cycle", "printf 'A%2147483648s%nZ' first a second b; printf '|%s:<%s><%s>' \"$?\" \"$a\" \"$b\"", 0, "415A415A7C303A3C303E3C303E", ""],
+        ["literal-overflow-stacked-count", "printf '%2147483648s%2147483648c%nZ' text ch mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "5A7C303A3C2D323E", ""],
+        ["minimum-1", "printf 'A%*s%nZ' -2147483648 '' mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", ""],
+        ["minimum-3", "printf 'A%*b%nZ' -2147483648 '' mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", ""],
+        ["minimum-9", "printf 'A%*.0s%nZ' -2147483648 text mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", ""],
+        ["minimum-10", "printf 'A%*.0d%nZ' -2147483648 0 mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", ""],
+        ["minimum-11", "printf 'A%*.-1s%nZ' -2147483648 text mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "41252D31383434363734343037313536323036373936382E302D31735A7C303A3C32383E", ""],
+        ["minimum-13", "printf 'A%*.-1q%nZ' -2147483648 'a b' mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", ""],
+        ["field-order-0", "printf 'A%*.*s%nZ' -2147483649 0 text mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", "7072696E74663A207761726E696E673A20303A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["field-order-1", "printf 'A%*sZ' 2147483648; printf '|%s' \"$?\"", 0, "415A7C30", ""],
+        ["field-order-2", "printf 'A%*sZ' 4294967297; printf '|%s' \"$?\"", 0, "41205A7C30", ""],
+    ];
+
+    public static IEnumerable<object[]> WidthOverflowCases()
+    {
+        foreach (var prepared in new[] { false, true })
+        foreach (var row in WidthOverflowSamples)
+            yield return [prepared, ..row];
+    }
+
+    [Theory]
+    [MemberData(nameof(WidthOverflowCases))]
+    public Task FieldWidthPreservesConversionPolicy(
+        bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
+        CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
+
     private static async Task CheckAsync(
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex)
     {
@@ -270,6 +325,39 @@ public sealed class PrintfFieldSizeTests
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.Output.ToArray());
         Assert.Contains("output exceeds", Assert.Single(result.Diagnostics).ToUtf8String());
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("A%n%*s%n", new[] { "before", "2147483648", "data", "after" }, true)]
+    [InlineData("A%n%*s%n", new[] { "before", "-2147483648", "data", "after" }, false)]
+    [InlineData("A%n%2147483648b%n", new[] { "before", "data", "after" }, false)]
+    [InlineData("A%n%18446744073709551615q%n", new[] { "before", "data", "after" }, false)]
+    public async Task UnrepresentableFieldWidthKeepsEarlierCountAndRejectsPadding(
+        string format, string[] arguments, bool hasRangeWarning)
+    {
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var diagnostics = new List<PrintfFormatting.Diagnostic>();
+
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText(format), arguments.Select(ShellValue.FromText).ToArray(), DateTimeOffset.UnixEpoch,
+            assignOutput: false, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            diagnostic => { diagnostics.Add(diagnostic); return ValueTask.FromResult(true); }, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("A"u8.ToArray(), result.Output.ToArray());
+        Assert.Equal(new PrintfVariableAssignment("before", 1), Assert.Single(counts));
+        Assert.Equal(hasRangeWarning ? 2 : 1, diagnostics.Count);
+        if (hasRangeWarning)
+        {
+            Assert.Equal("warning: ", diagnostics[0].Prefix);
+            Assert.Equal(ShellValue.FromText("data"), diagnostics[0].Operand);
+        }
+        Assert.StartsWith("output exceeds ", diagnostics[^1].Suffix, StringComparison.Ordinal);
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);
     }
@@ -334,15 +422,16 @@ public sealed class PrintfFieldSizeTests
     [Fact]
     public void ReturnedFormatDiagnosticsKeepTheirOwnByteReservation()
     {
-        var format = "%" + new string('9', 4096);
+        var incomplete = "%" + new string('9', 4096);
+        var invalid = "1" + new string('x', 4096);
         var memory = new MemoryGovernor(64 * 1024);
         using var owner = memory.CreateScope();
 
-        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText(format), [], owner);
+        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText("%d" + incomplete), [ShellValue.FromText(invalid)], owner);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Empty(result.Output.ToArray());
-        Assert.Equal([format + ": numerical result out of range", format + ": missing format character"],
+        Assert.Equal("1"u8.ToArray(), result.Output.ToArray());
+        Assert.Equal([invalid + ": invalid number", "`" + incomplete + "': missing format character"],
             result.Diagnostics.Select(diagnostic => diagnostic.ToUtf8String()));
         Assert.True(memory.ReservedBytes >= result.Diagnostics.Sum(diagnostic => diagnostic.Bytes.Length));
         owner.Dispose();

@@ -440,19 +440,22 @@ limits. The deterministic Linux profile includes the alternate-form decimal poin
 for hexadecimal zero and discarded fractional zeros when a general-format carry
 changes fixed notation to scientific notation.
 
-For dynamic precision, Bash's field-range warning can name the following
+For dynamic width and precision, Bash's field-range warning can name the following
 operand. Range alone preserves successful status. An invalid numeric suffix
-still retains its consumed prefix and returns status 1. For positive literal
-precision overflow, the Linux profile consumes the argument for ordinary
-character, string and numeric conversions, emits no bytes for that conversion,
+still retains its consumed prefix and returns status 1. For literal width
+overflow or positive literal precision overflow, the Linux profile consumes the
+argument for ordinary character, string and numeric conversions, emits no bytes for that conversion,
 and subtracts one from the current format cycle's `%n` count. With `-v`, it
 also removes the last buffered byte when one exists. Bash-specific conversions
 use their own precision rules. In the Linux profile, a literal minus after the
 precision dot produces a canonicalized format spelling for ordinary
 conversions. The operand is consumed and numeric operand diagnostics still
 apply. For Bash-specific text conversions that spelling selects zero
-precision. Their positive literal precision accumulates with signed 64-bit
-wrapping. `%Q` uses a signed 32-bit accumulator before quoting.
+precision. Their literal width and positive literal precision accumulate with
+signed 64-bit wrapping. `%Q` uses a signed 32-bit precision accumulator before
+quoting. The minimum dynamic width leaves empty formatted values unpadded.
+Padding for nonempty values is subject to the ordinary output representation
+and budget limits.
 
 Printf time-format literals preserve bytes, including malformed UTF-8. Directives
 and widths use ASCII grammar with invariant date text; unknown directives follow

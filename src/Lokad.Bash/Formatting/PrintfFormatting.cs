@@ -155,12 +155,6 @@ public static partial class PrintfFormatting
 
         private void AddWarning(string message) => AddDiagnostic(Diagnostic.FromText(message));
 
-        private void AddConversionDiagnostic(Diagnostic diagnostic)
-        {
-            AddDiagnostic(diagnostic);
-            _conversionError = true;
-        }
-
         private void AddFatalDiagnostic(string message) => AddFatalDiagnostic(Diagnostic.FromText(message));
 
         private void AddFatalDiagnostic(Diagnostic diagnostic)

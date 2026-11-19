@@ -133,23 +133,23 @@ public static partial class PrintfFormatting
                     flags &= ~FormatFlags.ZeroPad;
 
                 var width = 0;
+                var literalWidthOverflow = false;
+                long literalWidth = 0;
                 if (index < format.Length && (char)format.Span[index] == '*')
                 {
                     index++;
-                    width = ReadDynamicWidth();
+                    width = ReadDynamicField();
                     if (width < 0)
                     {
                         flags |= FormatFlags.LeftJustify;
-                        width = width == int.MinValue ? int.MaxValue : -width;
+                        if (width != int.MinValue)
+                            width = -width;
                     }
                 }
-                else if (TryReadDecimal(format, ref index, out var literalWidth))
+                else if (TryReadDecimal(format, ref index, out literalWidth))
                     width = (int)literalWidth;
                 else
-                {
-                    AddConversionDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..index]),
-                        ": numerical result out of range"));
-                }
+                    literalWidthOverflow = true;
 
                 int? precision = null;
                 long literalPrecision = 0;
@@ -161,7 +161,7 @@ public static partial class PrintfFormatting
                     if (index < format.Length && (char)format.Span[index] == '*')
                     {
                         index++;
-                        var dynamicPrecision = ReadDynamicPrecision();
+                        var dynamicPrecision = ReadDynamicField();
                         if (dynamicPrecision >= 0)
                             precision = dynamicPrecision;
                     }
@@ -191,7 +191,7 @@ public static partial class PrintfFormatting
                 if (index >= format.Length)
                 {
                     var incomplete = ShellValue.FromBytes(format[specificationStart..]);
-                    AddFatalDiagnostic(literalPrecisionOverflow || !signedLiteralPrecision.IsEmpty
+                    AddFatalDiagnostic(literalWidthOverflow || literalPrecisionOverflow || !signedLiteralPrecision.IsEmpty
                         ? new Diagnostic("`", incomplete, "': missing format character")
                         : new Diagnostic(string.Empty, incomplete, ": missing format character"));
                     specification = default;
@@ -227,12 +227,14 @@ public static partial class PrintfFormatting
                     conversion = 'T';
                 }
 
-                var suppressOutput = literalPrecisionOverflow && UsesSystemConversion(conversion);
+                var suppressOutput = (literalWidthOverflow || literalPrecisionOverflow) && UsesSystemConversion(conversion);
+                if (literalWidthOverflow && !suppressOutput)
+                    width = ClampWrappedField(literalWidth);
                 if (literalPrecisionOverflow && !suppressOutput)
                 {
                     // %Q wraps at 32 bits before quoting. The outer text formatter wraps at 64 bits.
                     var wrapped = conversion == 'Q' ? unchecked((int)literalPrecision) : literalPrecision;
-                    precision = wrapped is >= 0 and <= int.MaxValue ? (int)wrapped : int.MaxValue;
+                    precision = ClampWrappedField(wrapped);
                 }
 
                 specification = new FormatSpecification(
@@ -245,22 +247,7 @@ public static partial class PrintfFormatting
                     signedLiteralPrecision);
                 return true;
 
-                int ReadDynamicWidth()
-                {
-                    if (!TryGetArgument(out var argument))
-                        return 0;
-
-                    var value = ParseSigned(argument);
-                    if (value is < int.MinValue or > int.MaxValue)
-                    {
-                        AddNumericDiagnostic(argument, ": field width out of range", warning: false);
-                        return 0;
-                    }
-
-                    return (int)value;
-                }
-
-                int ReadDynamicPrecision()
+                int ReadDynamicField()
                 {
                     if (!TryGetArgument(out var argument))
                         return 0;
@@ -271,10 +258,12 @@ public static partial class PrintfFormatting
 
                     if (_argumentIndex == arguments.Count)
                         return unchecked((int)value);
-                    // The Bash field parser reports the operand following the precision.
+                    // The Bash field parser reports the next operand after consuming the width or precision.
                     AddNumericDiagnostic(arguments[_argumentIndex], ": Numerical result out of range", warning: true);
                     return value > 0 ? int.MaxValue : int.MinValue;
                 }
+
+                static int ClampWrappedField(long field) => field is >= 0 and <= int.MaxValue ? (int)field : int.MaxValue;
 
                 bool TryReadDecimal(ReadOnlyMemory<byte> source, ref int cursor, out long value)
                 {
@@ -601,7 +590,7 @@ public static partial class PrintfFormatting
                     ReadOnlyMemory<byte> bytes,
                     bool ignorePrecision)
                 {
-                    if (ApplyLiteralPrecisionOverride(textSpecification))
+                    if (ApplyFieldOverride(textSpecification))
                         return;
 
                     if (!ignorePrecision
@@ -611,26 +600,18 @@ public static partial class PrintfFormatting
                         bytes = bytes[..precision];
                     }
 
-                    AppendLeadingTextPadding(textSpecification, bytes.Length);
-                    TryAppendBytes(_output, bytes.Span);
-                    AppendTrailingTextPadding(textSpecification, bytes.Length);
-                }
-
-                void AppendLeadingTextPadding(
-                    FormatSpecification textSpecification,
-                    int textWidth)
-                {
-                    var padding = Math.Max(0, textSpecification.Width - textWidth);
-                    if (!textSpecification.Flags.HasFlag(FormatFlags.LeftJustify))
+                    var paddedLength = Math.Max(bytes.Length, GetFieldWidth(textSpecification.Width, bytes.Length));
+                    if (paddedLength > _output.RemainingLength)
+                    {
+                        FailOutputLimit();
+                        return;
+                    }
+                    var padding = (int)(paddedLength - bytes.Length);
+                    var left = textSpecification.Flags.HasFlag(FormatFlags.LeftJustify);
+                    if (!left)
                         AppendPadding(padding, (byte)' ');
-                }
-
-                void AppendTrailingTextPadding(
-                    FormatSpecification textSpecification,
-                    int textWidth)
-                {
-                    var padding = Math.Max(0, textSpecification.Width - textWidth);
-                    if (textSpecification.Flags.HasFlag(FormatFlags.LeftJustify))
+                    TryAppendBytes(_output, bytes.Span);
+                    if (left)
                         AppendPadding(padding, (byte)' ');
                 }
 
@@ -638,7 +619,7 @@ public static partial class PrintfFormatting
                     FormatSpecification numberSpecification,
                     FormattedNumber number)
                 {
-                    if (ApplyLiteralPrecisionOverride(numberSpecification))
+                    if (ApplyFieldOverride(numberSpecification))
                         return;
 
                     var sign = number.Sign switch
@@ -651,7 +632,7 @@ public static partial class PrintfFormatting
                         _ => string.Empty
                     };
                     var length = sign.Length + number.Prefix.Length + number.Text.Length;
-                    var paddingLength = Math.Max(0L, numberSpecification.Width - length);
+                    var paddingLength = Math.Max(0L, GetFieldWidth(numberSpecification.Width, length) - length);
                     if (length + paddingLength > _output.RemainingLength)
                     {
                         FailOutputLimit();
@@ -678,7 +659,15 @@ public static partial class PrintfFormatting
                         AppendPadding(padding, (byte)' ');
                 }
 
-                bool ApplyLiteralPrecisionOverride(FormatSpecification field)
+                static long GetFieldWidth(int width, long contentLength)
+                {
+                    // Bash's text output skips padding at the minimum signed width when the value is empty.
+                    if (width == int.MinValue)
+                        return contentLength == 0 ? 0 : -(long)width;
+                    return width;
+                }
+
+                bool ApplyFieldOverride(FormatSpecification field)
                 {
                     if (field.SuppressOutput)
                     {
@@ -702,7 +691,10 @@ public static partial class PrintfFormatting
                     else if (field.Flags.HasFlag(FormatFlags.SpaceSign)) AppendByte((byte)' ');
                     if (field.Flags.HasFlag(FormatFlags.LeftJustify)) AppendByte((byte)'-');
                     if (field.Flags.HasFlag(FormatFlags.ZeroPad)) AppendByte((byte)'0');
-                    if (field.Width != 0) AppendText(field.Width.ToString(Culture));
+                    if (field.Width != 0)
+                        AppendText(field.Width == int.MinValue
+                            ? unchecked((ulong)(long)field.Width).ToString(Culture)
+                            : field.Width.ToString(Culture));
                     TryAppendBytes(_output, ".0"u8);
                     TryAppendBytes(_output, field.SignedLiteralPrecision.Span);
                     if (field.Conversion is 'd' or 'i' or 'o' or 'u' or 'x' or 'X')
