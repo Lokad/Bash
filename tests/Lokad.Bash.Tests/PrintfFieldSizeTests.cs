@@ -183,6 +183,59 @@ public sealed class PrintfFieldSizeTests
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
         CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
 
+    // GNU Bash 5.2.21 Linux, LC_ALL=C. Diagnostic executable and line prefixes are omitted.
+    private static readonly object[][] PrecisionSpellingSamples =
+    [
+        ["signed-s--1", "printf 'A%.-1s%nZ' 'text' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D31735A7C303A3C373E3C3E", ""],
+        ["signed-s--9223372036854775808", "printf 'A%.-9223372036854775808s%nZ' 'text' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D39323233333732303336383534373735383038735A7C303A3C32353E3C3E", ""],
+        ["signed-c--1", "printf 'A%.-1c%nZ' 'text' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D31635A7C303A3C373E3C3E", ""],
+        ["signed-d--1", "printf 'A%.-1d%nZ' 7 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D316C645A7C303A3C383E3C3E", ""],
+        ["signed-u--1", "printf 'A%.-1u%nZ' 7 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D316C755A7C303A3C383E3C3E", ""],
+        ["signed-f--1", "printf 'A%.-1f%nZ' 1.25 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D314C665A7C303A3C383E3C3E", ""],
+        ["signed-b--1", "printf 'A%.-1b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C3E", ""],
+        ["signed-b--9223372036854775808", "printf 'A%.-9223372036854775808b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C3E", ""],
+        ["signed-q--1", "printf 'A%.-1q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C3E", ""],
+        ["signed-Q--1", "printf 'A%.-1Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C3E", ""],
+        ["signed-(%s)T--1", "printf 'A%.-1(%s)T%nZ' 0 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C3E", ""],
+        ["signed-n--1", "printf 'A%.-1n%nZ' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", ""],
+        ["form-0", "printf 'A%.-0s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D30735A7C303A3C373E3C3E", ""],
+        ["form-2", "printf 'A%.-s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D735A7C303A3C363E3C3E", ""],
+        ["form-4", "printf 'A%+-#05.-1s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4125232B2D352E302D31735A7C303A3C31313E3C3E", ""],
+        ["form-8", "printf 'A%*.-1s%nZ' 5bad text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4125352E302D31735A7C313A3C383E3C3E", "7072696E74663A20356261643A20696E76616C6964206E756D6265720A"],
+        ["form-9", "printf 'A%0*.-1s%nZ' -5 text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252D30352E302D31735A7C303A3C31303E3C3E", ""],
+        ["form-11", "printf 'A%05.-1Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4120202020205A7C303A3C363E3C3E", ""],
+        ["form-14", "printf 'A%.-1lld%nZ' 7 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D316C645A7C303A3C383E3C3E", ""],
+        ["form-16", "printf 'A%.-1d%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D316C645A7C313A3C383E3C3E", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["form-19", "printf 'A%.-1b%nZ' '\\x\\c tail' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C303A3C3E3C3E", "7072696E74663A206D697373696E672068657820646967697420666F72205C780A"],
+        ["form-20", "printf 'A%.-1Z%nZ' unused mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C313A3C3E3C3E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
+        ["form-21", "printf 'A%.-1' unused; printf '|%s' \"$?\"", 0, "417C31", "7072696E74663A2060252E2D31273A206D697373696E6720666F726D6174206368617261637465720A"],
+        ["form-23", "printf 'A%.18446744073709551617b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41615A7C303A3C323E3C3E", ""],
+        ["form-24", "printf 'A%.18446744073709551618b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41610A5A7C303A3C333E3C3E", ""],
+        ["form-25", "printf 'A%.18446744073709551616q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C3E", ""],
+        ["form-26", "printf 'A%.18446744073709551617q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41615A7C303A3C323E3C3E", ""],
+        ["form-27", "printf 'A%.18446744073709551616Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4127275A7C303A3C333E3C3E", ""],
+        ["form-28", "printf 'A%.18446744073709551617Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41615A7C303A3C323E3C3E", ""],
+        ["form-29", "printf 'A%.18446744073709551617(%Y)T%nZ' 0 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41315A7C303A3C323E3C3E", ""],
+        ["form-30", "printf 'A%.18446744073709551615b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41610A625A7C303A3C343E3C3E", ""],
+        ["signed-v", "printf -v saved 'A%.-1s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$saved\" \"$mark\"", 0, "7C303A3C41252E302D31735A3E3C373E", ""],
+        ["signed-count-cycle", "printf 'A%.-1s%nZ' first a second b; printf '|%s:<%s><%s>' \"$?\" \"$a\" \"$b\"", 0, "41252E302D31735A41252E302D31735A7C303A3C373E3C373E", ""],
+        ["signed-v-b-stop", "printf -v saved 'A%.-1b%nZ' 'a\\cb' mark; printf '|%s:<%s><%s>' \"$?\" \"$saved\" \"$mark\" ", 0, "7C303A3C413E3C3E", ""],
+        ["signed-no-conversion-operand", "printf 'A%.-1sZ'; printf '|%s' \"$?\"", 0, "41252E302D31735A7C30", ""],
+    ];
+
+    public static IEnumerable<object[]> PrecisionSpellingCases()
+    {
+        foreach (var prepared in new[] { false, true })
+        foreach (var row in PrecisionSpellingSamples)
+            yield return [prepared, ..row];
+    }
+
+    [Theory]
+    [MemberData(nameof(PrecisionSpellingCases))]
+    public Task SignedAndWrappedLiteralPrecisionPreserveConversionPolicy(
+        bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
+        CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
+
     private static async Task CheckAsync(
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex)
     {

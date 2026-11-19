@@ -129,6 +129,8 @@ public static partial class PrintfFormatting
                     flags |= flag;
                     index++;
                 }
+                if (flags.HasFlag(FormatFlags.LeftJustify))
+                    flags &= ~FormatFlags.ZeroPad;
 
                 var width = 0;
                 if (index < format.Length && (char)format.Span[index] == '*')
@@ -141,15 +143,18 @@ public static partial class PrintfFormatting
                         width = width == int.MinValue ? int.MaxValue : -width;
                     }
                 }
-                else if (!TryReadDecimal(format, ref index, out width))
+                else if (TryReadDecimal(format, ref index, out var literalWidth))
+                    width = (int)literalWidth;
+                else
                 {
                     AddConversionDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..index]),
                         ": numerical result out of range"));
-                    width = 0;
                 }
 
                 int? precision = null;
+                long literalPrecision = 0;
                 var literalPrecisionOverflow = false;
+                ReadOnlyMemory<byte> signedLiteralPrecision = default;
                 if (index < format.Length && (char)format.Span[index] == '.')
                 {
                     index++;
@@ -162,25 +167,21 @@ public static partial class PrintfFormatting
                     }
                     else
                     {
-                        var negative = index < format.Length && (char)format.Span[index] == '-';
-                        if (negative)
+                        var precisionStart = index;
+                        var signed = index < format.Length && format.Span[index] == (byte)'-';
+                        if (signed)
                             index++;
 
-                        if (!TryReadDecimal(format, ref index, out var parsedPrecision))
+                        var fits = TryReadDecimal(format, ref index, out literalPrecision);
+                        if (signed)
                         {
-                            if (negative)
-                                AddConversionDiagnostic(new Diagnostic(string.Empty, ShellValue.FromBytes(format[specificationStart..index]),
-                                    ": numerical result out of range"));
-                            else
-                            {
-                                literalPrecisionOverflow = true;
-                                precision = parsedPrecision;
-                            }
+                            signedLiteralPrecision = format[precisionStart..index];
+                            precision = 0;
                         }
-                        else if (!negative)
-                        {
-                            precision = parsedPrecision;
-                        }
+                        else if (fits)
+                            precision = (int)literalPrecision;
+                        else
+                            literalPrecisionOverflow = true;
                     }
                 }
 
@@ -190,7 +191,7 @@ public static partial class PrintfFormatting
                 if (index >= format.Length)
                 {
                     var incomplete = ShellValue.FromBytes(format[specificationStart..]);
-                    AddFatalDiagnostic(literalPrecisionOverflow
+                    AddFatalDiagnostic(literalPrecisionOverflow || !signedLiteralPrecision.IsEmpty
                         ? new Diagnostic("`", incomplete, "': missing format character")
                         : new Diagnostic(string.Empty, incomplete, ": missing format character"));
                     specification = default;
@@ -226,14 +227,13 @@ public static partial class PrintfFormatting
                     conversion = 'T';
                 }
 
-                var suppressOutput = literalPrecisionOverflow && conversion is
-                    'c' or 's' or 'd' or 'i' or 'o' or 'u' or 'x' or 'X'
-                    or 'a' or 'A' or 'e' or 'E' or 'f' or 'F' or 'g' or 'G';
-                if (suppressOutput)
-                    precision = null;
-                // %Q uses a signed accumulator for literal precision before quoting.
-                else if (literalPrecisionOverflow && (conversion != 'Q' || precision is < 0))
-                    precision = int.MaxValue;
+                var suppressOutput = literalPrecisionOverflow && UsesSystemConversion(conversion);
+                if (literalPrecisionOverflow && !suppressOutput)
+                {
+                    // %Q wraps at 32 bits before quoting. The outer text formatter wraps at 64 bits.
+                    var wrapped = conversion == 'Q' ? unchecked((int)literalPrecision) : literalPrecision;
+                    precision = wrapped is >= 0 and <= int.MaxValue ? (int)wrapped : int.MaxValue;
+                }
 
                 specification = new FormatSpecification(
                     flags,
@@ -241,7 +241,8 @@ public static partial class PrintfFormatting
                     precision,
                     conversion,
                     timeFormat,
-                    suppressOutput);
+                    suppressOutput,
+                    signedLiteralPrecision);
                 return true;
 
                 int ReadDynamicWidth()
@@ -275,7 +276,7 @@ public static partial class PrintfFormatting
                     return value > 0 ? int.MaxValue : int.MinValue;
                 }
 
-                bool TryReadDecimal(ReadOnlyMemory<byte> source, ref int cursor, out int value)
+                bool TryReadDecimal(ReadOnlyMemory<byte> source, ref int cursor, out long value)
                 {
                     value = 0;
                     var overflow = false;
@@ -557,6 +558,12 @@ public static partial class PrintfFormatting
                 void AppendQuotedString(FormatSpecification quotedSpecification)
                 {
                     var argument = GetValueArgument().Bytes;
+                    if (!quotedSpecification.SignedLiteralPrecision.IsEmpty)
+                    {
+                        ApplyText(quotedSpecification, ReadOnlyMemory<byte>.Empty, ignorePrecision: false);
+                        return;
+                    }
+
                     var rawByteLimit = quotedSpecification.Conversion == 'Q'
                         && quotedSpecification.Precision is { } rawPrecision
                         ? rawPrecision
@@ -594,11 +601,8 @@ public static partial class PrintfFormatting
                     ReadOnlyMemory<byte> bytes,
                     bool ignorePrecision)
                 {
-                    if (textSpecification.SuppressOutput)
-                    {
-                        SkipOverflowedOutput();
+                    if (ApplyLiteralPrecisionOverride(textSpecification))
                         return;
-                    }
 
                     if (!ignorePrecision
                         && textSpecification.Precision is { } precision
@@ -634,11 +638,8 @@ public static partial class PrintfFormatting
                     FormatSpecification numberSpecification,
                     FormattedNumber number)
                 {
-                    if (numberSpecification.SuppressOutput)
-                    {
-                        SkipOverflowedOutput();
+                    if (ApplyLiteralPrecisionOverride(numberSpecification))
                         return;
-                    }
 
                     var sign = number.Sign switch
                     {
@@ -677,14 +678,39 @@ public static partial class PrintfFormatting
                         AppendPadding(padding, (byte)' ');
                 }
 
-                void SkipOverflowedOutput()
+                bool ApplyLiteralPrecisionOverride(FormatSpecification field)
                 {
-                    // The pinned Linux conversion contributes -1 to %n. Its assignment buffer
-                    // also rewinds by one byte when a byte is available to remove.
-                    if (assignOutput && _output.Length > 0)
-                        _output.Truncate(_output.Length - 1);
-                    else
-                        _cycleCountAdjustment--;
+                    if (field.SuppressOutput)
+                    {
+                        // The Linux conversion contributes -1 to %n and can rewind the assignment buffer.
+                        if (assignOutput && _output.Length > 0)
+                            _output.Truncate(_output.Length - 1);
+                        else
+                            _cycleCountAdjustment--;
+                        return true;
+                    }
+
+                    if (field.SignedLiteralPrecision.IsEmpty || !UsesSystemConversion(field.Conversion))
+                        return false;
+
+                    // Bash passes the minus to libc as an unknown conversion after a zero precision.
+                    // Linux canonicalizes the prefix, then writes the rest of the format as text.
+                    AppendByte((byte)'%');
+                    if (field.Flags.HasFlag(FormatFlags.Alternate)) AppendByte((byte)'#');
+                    if (field.Flags.HasFlag(FormatFlags.Grouping)) AppendByte((byte)'\'');
+                    if (field.Flags.HasFlag(FormatFlags.PlusSign)) AppendByte((byte)'+');
+                    else if (field.Flags.HasFlag(FormatFlags.SpaceSign)) AppendByte((byte)' ');
+                    if (field.Flags.HasFlag(FormatFlags.LeftJustify)) AppendByte((byte)'-');
+                    if (field.Flags.HasFlag(FormatFlags.ZeroPad)) AppendByte((byte)'0');
+                    if (field.Width != 0) AppendText(field.Width.ToString(Culture));
+                    TryAppendBytes(_output, ".0"u8);
+                    TryAppendBytes(_output, field.SignedLiteralPrecision.Span);
+                    if (field.Conversion is 'd' or 'i' or 'o' or 'u' or 'x' or 'X')
+                        AppendByte((byte)'l');
+                    else if (field.Conversion is not ('c' or 's'))
+                        AppendByte((byte)'L');
+                    AppendByte((byte)field.Conversion);
+                    return true;
                 }
 
             }
@@ -726,11 +752,16 @@ public static partial class PrintfFormatting
         Grouping = 1 << 5
     }
 
+    private static bool UsesSystemConversion(char conversion) => conversion is
+        'c' or 's' or 'd' or 'i' or 'o' or 'u' or 'x' or 'X'
+        or 'a' or 'A' or 'e' or 'E' or 'f' or 'F' or 'g' or 'G';
+
     private readonly record struct FormatSpecification(
         FormatFlags Flags,
         int Width,
         int? Precision,
         char Conversion,
         ShellValue? TimeFormat,
-        bool SuppressOutput);
+        bool SuppressOutput,
+        ReadOnlyMemory<byte> SignedLiteralPrecision);
 }
