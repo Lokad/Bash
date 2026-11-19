@@ -102,8 +102,6 @@ internal sealed class GlobPattern
             result = null;
             return false;
         }
-        memory.Charge(checked(4L * pattern.Length));
-        // Retain the same conservative reservation when active metadata needs no storage.
         var hasQuotedContent = false;
         for (var index = 0; index < word.Segments.Count; index++)
             if (word.Segments[index].IsGlobQuoted && !word.Segments[index].Content.IsEmpty)
@@ -117,6 +115,7 @@ internal sealed class GlobPattern
             return true;
         }
 
+        memory.Charge(checked(4L * pattern.Length));
         var maskBytes = new byte[pattern.Length];
         var segmentIndex = 0;
         var segmentEnd = word.Segments[0].Content.Bytes.Length;

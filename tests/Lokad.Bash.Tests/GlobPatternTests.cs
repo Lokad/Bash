@@ -34,6 +34,36 @@ public sealed class GlobPatternTests
         Assert.Equal([false, true, true], components.Select(component => IsActive(pattern, component)));
     }
 
+    [Theory]
+    [InlineData("p", false)]
+    [InlineData("p", true)]
+    [InlineData("🙂", false)]
+    [InlineData("🙂", true)]
+    public void PathnameMaskAllowanceFollowsQuotedContent(string scalar, bool quoted)
+    {
+        var prefix = string.Concat(Enumerable.Repeat(scalar, 512));
+        var literal = ShellValue.FromText(prefix + "[x]");
+        var word = new ExpandedWord([
+            new ExpandedSegment(literal, isGlobQuoted: quoted),
+            new ExpandedSegment(ShellValue.Empty, isGlobQuoted: true),
+            new ExpandedSegment(ShellValue.FromText("*"), isGlobQuoted: false)]);
+        var textAllowance = 8L * (literal.Bytes.Length + 1);
+        var maskAllowance = quoted ? 4L * (prefix.Length + "[x]*".Length) : 0;
+        var governor = new MemoryGovernor(quoted ? 2 * textAllowance : textAllowance);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        Assert.True(GlobPattern.RequiresExpansion(word));
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        Assert.Equal(prefix + "[x]*", pattern.Pattern);
+        Assert.Equal(quoted, pattern.IsMatch(prefix + "[x]tail"));
+        Assert.Equal(!quoted, pattern.IsMatch(prefix + "xtail"));
+        Assert.Equal(textAllowance + maskAllowance, memory.Workspace.Bytes);
+
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task GlobExpansionObservesCancellationAfterListing()
     {
