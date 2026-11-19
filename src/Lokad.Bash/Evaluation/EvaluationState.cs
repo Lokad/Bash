@@ -181,6 +181,9 @@ internal sealed class EvaluationState
     /// <summary>One function namespace for invocation, attributes and inspection; independent of variables.</summary>
     private readonly Dictionary<ShellValue, FunctionBinding> _functions = [];
     private int _functionCapacity;
+    private int _exportedFunctionCount;
+    private FunctionBinding[]? _exportedFunctions;
+    private IMemoryReservation? _exportedFunctionsMemory;
 
     // Capacity covers dictionary growth/overlap; live entries cover binding/cache-cell metadata.
     internal long EstimatedFunctionMemoryBytes => 128L * _functionCapacity + 128L * _functions.Count;
@@ -231,6 +234,40 @@ internal sealed class EvaluationState
     private static long EstimateDirectoryStackBytes(int capacity) => 32L + 16L * capacity;
 
     public IReadOnlyDictionary<ShellValue, FunctionBinding> Functions => _functions;
+
+    /// <summary>Borrows the current export selection in function namespace order.</summary>
+    internal ReadOnlySpan<FunctionBinding> GetExportedFunctions(EvaluationMemory memory)
+    {
+        if (_exportedFunctionCount == 0)
+            return [];
+        if (_exportedFunctions is { } cached)
+            return cached;
+
+        var reservation = memory.Budget.Reserve(MemoryCapacity.ArrayBackingBytes<FunctionBinding>(_exportedFunctionCount));
+        try
+        {
+            var selected = new FunctionBinding[_exportedFunctionCount];
+            var index = 0;
+            foreach (var binding in _functions.Values)
+                if (binding.Attributes.HasFlag(FunctionAttributes.Exported))
+                    selected[index++] = binding;
+            _exportedFunctionsMemory = reservation;
+            _exportedFunctions = selected;
+            return selected;
+        }
+        catch
+        {
+            reservation.Dispose();
+            throw;
+        }
+    }
+
+    internal void ReleaseExportedFunctionSelection()
+    {
+        _exportedFunctions = null;
+        _exportedFunctionsMemory?.Dispose();
+        _exportedFunctionsMemory = null;
+    }
 
     public ShellTraps? Traps { get; private set; }
 
@@ -389,6 +426,13 @@ internal sealed class EvaluationState
             _functions.Remove(function.Definition.Name.Value);
         _functions[function.Definition.Name.Value] = function;
         _functionCapacity = Math.Max(_functionCapacity, _functions.Count);
+        var wasExported = previous?.Attributes.HasFlag(FunctionAttributes.Exported) == true;
+        var isExported = function.Attributes.HasFlag(FunctionAttributes.Exported);
+        if (wasExported || isExported)
+        {
+            ReleaseExportedFunctionSelection();
+            _exportedFunctionCount += (isExported ? 1 : 0) - (wasExported ? 1 : 0);
+        }
         // Acquire before retiring the old binding: attribute copies can share this owner.
         function.Retain();
         previous?.Release();
@@ -400,13 +444,22 @@ internal sealed class EvaluationState
         if (_functions.TryGetValue(name, out var function) && function.Attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
         if (_functions.Remove(name, out var removed))
+        {
+            if (removed.Attributes.HasFlag(FunctionAttributes.Exported))
+            {
+                ReleaseExportedFunctionSelection();
+                _exportedFunctionCount--;
+            }
             removed.Release();
+        }
         return true;
     }
 
     /// <summary>Retires a temporary namespace only after its execution and cleanup have settled.</summary>
     public void ReleaseFunctions()
     {
+        ReleaseExportedFunctionSelection();
+        _exportedFunctionCount = 0;
         foreach (var function in _functions.Values)
             function.Release();
         _functions.Clear();

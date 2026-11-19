@@ -483,6 +483,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     ReleaseReadWorkspace();
                     Interlocked.Exchange(ref _preparedSubstitutionMemory, null)?.Release();
+                    _state.ReleaseExportedFunctionSelection();
                     Memory.Finish(_rootFlowHandling == RootFlowHandling.Normalize || _retainCompletedMemory);
                 }
             }
@@ -1482,11 +1483,13 @@ public sealed partial class Evaluation : IFileTester
             exports = [];
             if (preparation is PreparedCommand.Executable { ExecutionOptions.ClearEnvironment: true })
                 return true;
+            var selected = _state.GetExportedFunctions(Memory);
+            if (selected.IsEmpty)
+                return true;
             var result = new List<ExportedFunction>();
             var remaining = ExportedFunction.MaximumSourceBytes;
-            foreach (var function in _state.Functions.Values)
+            foreach (var function in selected)
             {
-                if (!function.Attributes.HasFlag(FunctionAttributes.Exported)) continue;
                 if (exportOwners == null)
                 {
                     Memory.Charge(256); // The two command-local lists and their initial storage.

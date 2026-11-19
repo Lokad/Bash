@@ -227,6 +227,10 @@ refused candidates refund their own storage, and refusal does not retry a winner
 Replacement, unset and settled temporary namespaces retire their references.
 Function calls, queries and host command payloads retain their selected bindings
 through all consumers and descriptor cleanup; only the final owner refunds a cache.
+The function namespace admits its ordered export selection on first use. It
+borrows the selected bindings and refunds the selection when an exported binding
+changes or the namespace settles. Each host invocation retains its own selected
+bindings through dispatch and cleanup.
 Runtime environment snapshots admit selected-name scratch and result backing
 before growth. Scratch retires before host dispatch, and the result stays
 admitted through completion while borrowing the original name and value bytes.

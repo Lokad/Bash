@@ -7,11 +7,79 @@ using Lokad.Bash.Evaluation;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Helpers;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class HostedFunctionExportTests
 {
+    [Fact]
+    public async Task HostedExportSelectionFollowsNamespaceOrderAndBindingChanges()
+    {
+        var state = new Eval(Parser.Parse("""
+            f(){ printf old; }; g(){ :; }; h(){ :; }
+            export -f h f; inspect
+            g(){ printf never; }; inspect
+            export -fn h; export -f g; inspect
+            f(){ printf new; }; inspect
+            unset -f f; f(){ printf fresh; }; inspect
+            export -f f; inspect
+            exec -c inspect
+            """));
+        string[][] expectedNames = [["f", "h"], ["f", "h"], ["f", "g"], ["f", "g"], ["g"], ["f", "g"], []];
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        ReadOnlyMemory<byte> original = default;
+        for (var index = 0; index < expectedNames.Length; index++)
+        {
+            var invocation = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+            Assert.Equal("inspect", invocation.Command.CommandName);
+            var exports = invocation.Command.Functions;
+            Assert.Equal(expectedNames[index], exports.Select(export => Assert.IsType<FunctionDefinition>(
+                Assert.Single(Parser.Parse(export.Source).Commands)).Name.Value.ToUtf8String()));
+            if (index == 0)
+                original = exports[0].Source;
+            if (index == 1)
+                Assert.Equal(original, exports[0].Source);
+            if (index == 3)
+                Assert.Contains("new", Utf8Text.Decode(exports[0].Source));
+            if (index == 5)
+                Assert.Contains("fresh", Utf8Text.Decode(exports[0].Source));
+            invocation.SetResult(new CommandExecutionResult.Completed(0));
+        }
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Fact]
+    public void ExportSelectionReusesAdmissionAcrossUnexportedChanges()
+    {
+        var governor = new MemoryGovernor(4096);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var f = Add("f", FunctionAttributes.Exported);
+        Assert.Same(f, state.GetExportedFunctions(memory)[0]);
+        var admitted = governor.ReservedBytes;
+        Assert.True(admitted > 0);
+        using (governor.Reserve(governor.LimitBytes - admitted))
+        {
+            Add("unexported", FunctionAttributes.None);
+            Assert.Same(f, state.GetExportedFunctions(memory)[0]);
+        }
+        Assert.True(state.TryUnsetFunction(f.Definition.Name.Value));
+        Assert.True(state.GetExportedFunctions(memory).IsEmpty);
+        Assert.Equal(0, governor.ReservedBytes);
+        state.ReleaseFunctions();
+
+        FunctionBinding Add(string name, FunctionAttributes attributes)
+        {
+            var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(name + "(){ :; }").Commands));
+            var binding = new FunctionBinding(definition, attributes, sourceMemory: null, memory);
+            state.SetFunctionBinding(binding);
+            return binding;
+        }
+    }
+
     [Theory]
     [InlineData(0, 17000)]
     [InlineData(55, 20000)]
