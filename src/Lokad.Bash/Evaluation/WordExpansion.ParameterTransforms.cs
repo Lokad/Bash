@@ -22,6 +22,27 @@ internal static partial class WordExpansion
         return ShellValue.FromBytes(rendered.DetachSnapshot());
     }
 
+    /// <summary>Admits projected fields through consumption by the word builder.</summary>
+    private static IEnumerable<ShellValue> ProjectParameterFields(
+        IEnumerable<ShellValue> fields, Func<ShellValue, MemoryCapacity, ShellValue> project, ScopedEvaluation scope)
+    {
+        using var scratch = new MemoryCapacity(scope.Effects.Memory.Budget, 0);
+        var cancellationToken = scope.Effects.CancellationToken;
+        foreach (var field in fields)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var previousBytes = scratch.Bytes;
+            // The builder admits its own backing on append. Keep the previous
+            // field charged until the iterator replaces its Current.
+            yield return project(field, scratch);
+            if (previousBytes != 0)
+            {
+                scratch.Resize(scratch.Bytes - previousBytes);
+                scratch.TrimExcess();
+            }
+        }
+    }
+
     private static void ExpandInspectionTransform(
         byte transform, ParameterValue parameter, ScopedEvaluation scope, ExpandedWordBuilder output,
         bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext)
@@ -135,14 +156,8 @@ internal static partial class WordExpansion
             }
         }
 
-        IEnumerable<ShellValue> QuoteFields(IEnumerable<ShellValue> fields)
-        {
-            foreach (var field in fields)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return QuoteParameterField(field, scope.Effects.Memory.Workspace);
-            }
-        }
+        IEnumerable<ShellValue> QuoteFields(IEnumerable<ShellValue> fields) =>
+            ProjectParameterFields(fields, QuoteParameterField, scope);
 
         void EmitSerializedPairs(IEnumerable<KeyValuePair<ShellValue, ShellValue?>> pairs)
         {

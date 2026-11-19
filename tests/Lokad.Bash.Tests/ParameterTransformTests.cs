@@ -103,15 +103,57 @@ public sealed class ParameterTransformTests
         }
     }
 
-    private static async Task<long> MeasureArrayFieldsAsync(
-        string source, IReadOnlyList<ShellValue> values, Action<IReadOnlyList<ExpandedWord>> check)
+    [Theory]
+    [InlineData("@")]
+    [InlineData("*")]
+    public async Task PositionalAssignmentRetainsOnlyEmittedWorkspace(string aggregate)
+    {
+        const string prefix = "set -- ";
+        var padding = new string('x', 250);
+        var values = Enumerable.Range(0, 128).Select(index => ShellValue.FromText($"{index:D3} {padding}")).ToArray();
+        var rendered = values.Select(value => ShellValue.FromText($"'{value.ToUtf8String()}'")).ToArray();
+        var plain = await MeasureFieldsAsync($"\"$prefix${aggregate}\"", variables =>
+        {
+            variables.PositionalParameters = rendered;
+            Assert.True(variables.TrySetScalar("prefix", ShellValue.FromText(prefix)));
+        }, CheckFields);
+        var converted = await MeasureFieldsAsync($"\"${{{aggregate}@A}}\"", variables => variables.PositionalParameters = values,
+            CheckFields);
+
+        Assert.InRange(converted - plain, 0, 4096);
+
+        void CheckFields(IReadOnlyList<ExpandedWord> words)
+        {
+            if (aggregate == "*")
+            {
+                var segment = Assert.Single(Assert.Single(words).Segments);
+                Assert.True(segment.IsGlobQuoted);
+                Assert.Equal(prefix + string.Join(':', rendered.Select(value => value.ToUtf8String())), segment.Content.ToUtf8String());
+                return;
+            }
+            Assert.Equal(rendered.Length, words.Count);
+            for (var index = 0; index < words.Count; index++)
+            {
+                var segment = Assert.Single(words[index].Segments);
+                Assert.True(segment.IsGlobQuoted);
+                Assert.Equal((index == 0 ? prefix : string.Empty) + rendered[index].ToUtf8String(), segment.Content.ToUtf8String());
+            }
+        }
+    }
+
+    private static Task<long> MeasureArrayFieldsAsync(
+        string source, IReadOnlyList<ShellValue> values, Action<IReadOnlyList<ExpandedWord>> check) =>
+        MeasureFieldsAsync(source, variables => Assert.True(variables.TryAssignArray("items", values, ArrayKind.Indexed)), check);
+
+    private static async Task<long> MeasureFieldsAsync(
+        string source, Action<Variables> prepare, Action<IReadOnlyList<ExpandedWord>> check)
     {
         var governor = new MemoryGovernor(4 * 1024 * 1024);
         using var owner = governor.CreateScope();
         var evaluation = new Eval(Parser.Parse(string.Empty));
         evaluation.Memory.Budget = owner;
         var variables = Variables.CreateEmpty();
-        Assert.True(variables.TryAssignArray("items", values, ArrayKind.Indexed));
+        prepare(variables);
         Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(":")));
         var scope = new ScopedEvaluation(evaluation, variables, default);
         var tokenizer = new Tokenizer(ShellSource.FromText(source));

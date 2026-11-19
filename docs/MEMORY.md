@@ -228,11 +228,11 @@ Changed values join original byte ranges with the converted characters in an
 admitted buffer. Parameter replacement expands both operands before matching. It
 borrows literal replacement bytes and reserves any quoted escape encoding as
 scratch from the first match through the last field. Escape decoding borrows
-inputs with no backslashes. Value transforms and pattern removal stream reached
-fields into the word builder. Their scratch admits generated backing while
-projecting and appending each field. The builder independently admits the compact
-backing it keeps or the buffer it copies into, which keeps emitted bytes charged
-through use.
+inputs with no backslashes. Value transforms, pattern removal and inspection forms
+that quote individual fields stream their results into the word builder. Their
+scratch admits generated backing while projecting and appending each field. The
+builder independently admits the compact backing it keeps or the buffer it copies
+into, which keeps emitted bytes charged through use.
 
 Aggregate operand lists admit replacement backing before growth and keep the
 current backing charged through command completion. Byte consumers append

@@ -635,29 +635,9 @@ internal static partial class WordExpansion
         void Emit(IEnumerable<ShellValue> fields) =>
             AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
 
-        void EmitTransformedFields(Func<ShellValue, MemoryCapacity, ShellValue> project)
-        {
-            using var scratch = new MemoryCapacity(scope.Effects.Memory.Budget, 0);
-            Emit(TransformFields());
-
-            IEnumerable<ShellValue> TransformFields()
-            {
-                // Operand expansion may have changed which values the selected array holds.
-                foreach (var value in parameter.RangeSource?.Fields ?? parameter.Fields)
-                {
-                    scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                    var previousBytes = scratch.Bytes;
-                    // The builder admits its own backing on append. Keep the previous
-                    // field charged until the iterator replaces its Current.
-                    yield return project(value, scratch);
-                    if (previousBytes != 0)
-                    {
-                        scratch.Resize(scratch.Bytes - previousBytes);
-                        scratch.TrimExcess();
-                    }
-                }
-            }
-        }
+        // Operand expansion may have changed which values the selected array holds.
+        void EmitTransformedFields(Func<ShellValue, MemoryCapacity, ShellValue> project) =>
+            Emit(ProjectParameterFields(parameter.RangeSource?.Fields ?? parameter.Fields, project, scope));
 
         async Task EmitValueOperatorAsync()
         {
