@@ -1290,12 +1290,6 @@ public sealed partial class Variables
     }
 
     /// <summary>
-    /// Returns true when a scalar variable exists with the provided name after nameref resolution.
-    /// </summary>
-    internal bool ContainsScalar(BindingName name) =>
-        TryResolveWholeName(name, out var resolved) && Scalars.ContainsKey(resolved);
-
-    /// <summary>
     /// Resolves whole bindings; returns empty for cycles, unset references or elements requiring scoped selection.
     /// </summary>
     internal BindingName ResolveNamerefName(BindingName name)

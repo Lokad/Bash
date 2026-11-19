@@ -61,7 +61,7 @@ public sealed class NestedDescriptorCollectionTests
         using var owner = governor.CreateScope();
         var evaluation = new Eval(Parser.Parse("set -e; " + body + "; printf tail"),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.Standard, borrowed), null, null,
-            EvaluationOptions.Default, [], owner, null);
+            EvaluationOptions.Default, owner, null);
         await using var host = new ObservingHost { MemoryBudget = owner };
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
@@ -89,7 +89,7 @@ public sealed class NestedDescriptorCollectionTests
         using var cancellation = new CancellationTokenSource();
         var evaluation = new Eval(Parser.Parse("(exec 3>out); printf tail"),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.Standard, borrowed), null, null,
-            EvaluationOptions.Default, [], owner, null);
+            EvaluationOptions.Default, owner, null);
         await using var host = new ObservingHost { MemoryBudget = owner, DelayClose = true };
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var running = new Engine().RunAsync(evaluation, host, owner, cancellation.Token);

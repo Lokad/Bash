@@ -173,9 +173,6 @@ public sealed partial class Evaluation
                     if (result.Flow == FlowControlKind.Exit)
                         return result;
                 }
-
-                if (result.Flow == FlowControlKind.None && _state.TryGetStickyExitCode(out var sticky))
-                    result = result.WithExitCode(sticky);
             }
             finally
             {

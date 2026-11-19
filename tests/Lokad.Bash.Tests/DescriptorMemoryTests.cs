@@ -264,7 +264,7 @@ public sealed class DescriptorMemoryTests
         host.BeforeWritableOpen = path => opens.Add(path.Path);
         var evaluation = new Eval(Parser.Parse(Script),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(snapshot), []),
-            null, null, EvaluationOptions.Default, [], owner, null);
+            null, null, EvaluationOptions.Default, owner, null);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var result = await new Engine().RunAsync(evaluation, host, owner, deadline.Token);
@@ -342,7 +342,7 @@ public sealed class DescriptorMemoryTests
         using var owner = governor.CreateScope();
         var evaluation = new Eval(Parser.Parse(Script),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(Bindings(4096).Capture()), []),
-            null, null, EvaluationOptions.Default, [], owner, null);
+            null, null, EvaluationOptions.Default, owner, null);
         await using var host = new RefusingOpenHost(governor, evaluation.Memory) { MemoryBudget = owner };
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var running = new Engine().RunAsync(evaluation, host, owner, deadline.Token);
@@ -384,7 +384,7 @@ public sealed class DescriptorMemoryTests
         using var owner = governor.CreateScope();
         var evaluation = new Eval(Parser.Parse(script),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(Bindings(4096).Capture()), []),
-            null, null, EvaluationOptions.Default, [], owner, null);
+            null, null, EvaluationOptions.Default, owner, null);
         await using var host = new RefusingOpenHost(governor, evaluation.Memory) { MemoryBudget = owner };
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var running = new Engine().RunAsync(evaluation, host, owner, deadline.Token);

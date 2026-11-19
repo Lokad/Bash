@@ -160,11 +160,6 @@ internal sealed class EvaluationState
     /// <summary>An exec invocation ended the shell; cleanup has run or been discarded, and enclosing timers cannot print.</summary>
     public bool ExitedThroughExec { get; set; }
 
-    /// <summary>
-    /// Stores a sticky exit code that should be returned even if later commands succeed.
-    /// </summary>
-    private int? _stickyExitCode;
-
     // Embedded and kept private so mutable scope state cannot escape as a value copy.
     private RedirectionState _redirections;
 
@@ -289,7 +284,6 @@ internal sealed class EvaluationState
         var clone = CloneShellState(Script, _redirections.ForkForSubshell(), ShellForkKind.Subshell);
         clone._pendingExpansionErrorExitCode = _pendingExpansionErrorExitCode;
         clone.FatalExpansion = FatalExpansion;
-        clone._stickyExitCode = _stickyExitCode;
         return clone;
     }
 
@@ -378,26 +372,6 @@ internal sealed class EvaluationState
 
         exitCode = 0;
         return false;
-    }
-
-    public bool TryGetStickyExitCode(out int exitCode)
-    {
-        if (_stickyExitCode.HasValue)
-        {
-            exitCode = _stickyExitCode.Value;
-            return true;
-        }
-
-        exitCode = 0;
-        return false;
-    }
-
-    public void SetStickyExitCode(int exitCode)
-    {
-        if (exitCode == 0)
-            return;
-
-        _stickyExitCode ??= exitCode;
     }
 
     public void SetExpansionError(int exitCode)

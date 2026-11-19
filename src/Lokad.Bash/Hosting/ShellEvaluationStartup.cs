@@ -37,6 +37,5 @@ public static class ShellEvaluationStartup
     internal static ShellEvaluation CreateForNewHost(
         ParsedScript script, EvaluationOptions options, SourceMemory? sourceMemory) =>
         new(script, EvaluationDescriptorSetup.Standard, publishNextStep: null, onComplete: null,
-            options, borrowedDescriptors: [],
-            new MemoryGovernor(long.MaxValue), sourceMemory);
+            options, new MemoryGovernor(long.MaxValue), sourceMemory);
 }

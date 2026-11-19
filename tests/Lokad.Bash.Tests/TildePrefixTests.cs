@@ -161,7 +161,7 @@ public sealed partial class TildePrefixTests
         var governor = new MemoryGovernor(caller.EstimatedMemoryBytes + 16 * 1024);
         using var callerStorage = governor.Reserve(caller.EstimatedMemoryBytes);
         var evaluation = new Eval(Parser.Parse(""), EvaluationDescriptorSetup.Standard,
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], governor, sourceMemory: null);
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
         try
         {
             var variables = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);

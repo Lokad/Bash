@@ -116,7 +116,6 @@ public sealed partial class Evaluation : IFileTester
             publishNextStep,
             onComplete,
             options ?? EvaluationOptions.Default,
-            [],
             new MemoryGovernor(long.MaxValue), sourceMemory: null)
     {
     }
@@ -127,7 +126,6 @@ public sealed partial class Evaluation : IFileTester
         Action<EvaluationOperation?>? publishNextStep,
         Action? onComplete,
         EvaluationOptions options,
-        IReadOnlyList<FileDescriptor> borrowedDescriptors,
         IMemoryBudget memoryBudget,
         SourceMemory? sourceMemory)
         : this(
@@ -136,7 +134,6 @@ public sealed partial class Evaluation : IFileTester
             descriptorSetup,
             options,
             new EvaluationContext(0, null, ReturnTargetKind.None) { SourceMemory = sourceMemory },
-            borrowedDescriptors,
             RootFlowHandling.Normalize,
             publishNextStep,
             onComplete,
@@ -167,7 +164,6 @@ public sealed partial class Evaluation : IFileTester
             descriptors,
             outer.Options with { CurrentDirectory = state.CurrentDirectory },
             context,
-            [], // Descriptor setup already contains the complete, admitted parent/output union.
             RootFlowHandling.Preserve,
             publishNextStep: null,
             onComplete: null,
@@ -181,7 +177,6 @@ public sealed partial class Evaluation : IFileTester
         EvaluationDescriptorSetup descriptorSetup,
         EvaluationOptions options,
         EvaluationContext initialContext,
-        IReadOnlyList<FileDescriptor> borrowedDescriptors,
         RootFlowHandling rootFlowHandling,
         Action<EvaluationOperation?>? publishNextStep,
         Action? onComplete,
@@ -199,24 +194,8 @@ public sealed partial class Evaluation : IFileTester
         _initialContext = initialContext;
         _preparedSyntaxRoot = preparedSyntaxRoot ?? this;
         _rootFlowHandling = rootFlowHandling;
-        _borrowedDescriptors = MergeBorrowedDescriptors(
-            borrowedDescriptors,
-            descriptorSetup.BorrowedDescriptors);
+        _borrowedDescriptors = descriptorSetup.BorrowedDescriptors;
         Memory = new EvaluationMemory(memoryBudget);
-
-        static IReadOnlyList<FileDescriptor> MergeBorrowedDescriptors(
-            IReadOnlyList<FileDescriptor> first,
-            IReadOnlyList<FileDescriptor> second)
-        {
-            if (second.Count == 0)
-                return first;
-            if (first.Count == 0)
-                return second;
-
-            var descriptors = new DescriptorHandleCollector(new List<FileDescriptor>(first));
-            descriptors.AddRange(second);
-            return descriptors.Descriptors;
-        }
     }
 
     /// <summary> Gets evaluation options. </summary>
@@ -610,7 +589,7 @@ public sealed partial class Evaluation : IFileTester
             exitCode = result.ExitCode;
         }
 
-        return EvaluationResult.FromExitCode(_state.TryGetStickyExitCode(out var sticky) ? sticky : exitCode);
+        return EvaluationResult.FromExitCode(exitCode);
     }
 
 
@@ -793,7 +772,7 @@ public sealed partial class Evaluation : IFileTester
                     command = AppendPipeStandardError(command);
                 var script = new ParsedScript([command]);
                 var descriptors = new EvaluationDescriptorSetup(
-                    bindings.WithStandardStreams(stdIn, stdOut, GetStdErrDescriptor()), []);
+                    bindings.WithStandardStreams(stdIn, stdOut, GetStdErrDescriptor()), borrowedDescriptors);
                 var forkKind = command is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
                 var (stageVars, stageContext) = scope.ForkBindings();
                 var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory);
@@ -803,7 +782,6 @@ public sealed partial class Evaluation : IFileTester
                     descriptors,
                     Options with { CurrentDirectory = stageState.CurrentDirectory },
                     stageContext,
-                    borrowedDescriptors,
                     RootFlowHandling.Preserve,
                     publishNextStep: null,
                     onComplete: null,

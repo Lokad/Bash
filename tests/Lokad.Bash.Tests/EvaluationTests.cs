@@ -12,24 +12,21 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Theory]
-    [InlineData(new[] { 7, 7, 9 }, new[] { 9, 11, 11, 7 }, new[] { 7, 9, 11 })]
-    [InlineData(new[] { 7, 9 }, new int[0], new[] { 7, 9 })]
-    [InlineData(new int[0], new[] { 9, 9, 7 }, new[] { 9, 7 })]
-    public void Evaluation_CombinesBorrowedDescriptorSourcesInOrder(
-        int[] firstIds, int[] secondIds, int[] expectedIds)
+    [InlineData(new[] { 7, 7, 9, 9, 11, 11, 7 }, new[] { 7, 9, 11 })]
+    [InlineData(new[] { 2, 9, 9, 7, 0 }, new[] { 9, 7 })]
+    [InlineData(new int[0], new int[0])]
+    public void Evaluation_CollectsBorrowedDescriptorsInFirstEncounterOrder(int[] borrowedIds, int[] expectedIds)
     {
-        var first = firstIds.Select(id => new FileDescriptor(id)).ToArray();
-        var second = secondIds.Select(id => new FileDescriptor(id)).ToArray();
-        var descriptors = new EvaluationDescriptorSetup(DescriptorTable.Snapshot.Standard, second);
+        var borrowed = borrowedIds.Select(id => new FileDescriptor(id)).ToArray();
+        var descriptors = new EvaluationDescriptorSetup(DescriptorTable.Snapshot.Standard, borrowed);
         var state = new Eval(
             Parser.Parse(":"), descriptors, publishNextStep: null, onComplete: null,
-            EvaluationOptions.Default, first, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
+            EvaluationOptions.Default, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         Assert.Equal(
             new[] { 0, 1, 2 }.Concat(expectedIds),
             state.CollectDescriptorsAvailableToNestedEvaluation().Select(descriptor => descriptor.Id));
-        Assert.Equal(firstIds, first.Select(descriptor => descriptor.Id));
-        Assert.Equal(secondIds, second.Select(descriptor => descriptor.Id));
+        Assert.Equal(borrowedIds, borrowed.Select(descriptor => descriptor.Id));
     }
 
     [Fact]
@@ -1885,7 +1882,7 @@ public partial class EvaluationTests
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(3), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var run = await NextCommandAsync(state, "cmd");
         Assert.Equal(900, run.Command.StdIn.Id);
@@ -1916,7 +1913,7 @@ public partial class EvaluationTests
         var bindings = new DescriptorTable();
         bindings.Set(new LogicalDescriptor(9), new FileDescriptor(900));
         var state = new Eval(script, new EvaluationDescriptorSetup(bindings.Capture(), [new FileDescriptor(900)]),
-            publishNextStep: null, onComplete: null, EvaluationOptions.Default, [], new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
 
         var first = await NextCommandAsync(state, "first");
         Assert.Equal(new FileDescriptor(900), first.Command.StdOut);
