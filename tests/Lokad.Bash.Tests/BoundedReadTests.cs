@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
 
@@ -5,6 +6,115 @@ namespace Lokad.Bash.Tests;
 
 public sealed class BoundedReadTests
 {
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(1, false)]
+    public async Task SmallResultsRetainOnlyTheirBytes(int byteCount, bool finalRead)
+    {
+        const int maximumBytes = 8192;
+        var memory = new MemoryGovernor(maximumBytes + byteCount);
+        var host = new TestOperationVisitor([]) { MemoryBudget = memory };
+        byte[] expected = byteCount == 0 ? [] : [0xff];
+        if (byteCount > 0)
+            host.EnqueueByteReadResult(expected, ByteReadResult.Success(byteCount, finalRead));
+        if (byteCount == 0 || !finalRead)
+            host.EnqueueByteReadResult(ReadOnlyMemory<byte>.Empty, ByteReadResult.EndOfFile);
+        var charges = new List<(int Bytes, long Reserved)>();
+
+        using (var destination = memory.CreateScope())
+        {
+            var result = await host.TryReadAllBytesAsync(new(71), maximumBytes,
+                count => charges.Add((count, memory.ReservedBytes)), destination, CancellationToken.None);
+            var content = Assert.IsType<BoundedReadResult.Complete>(result).Content;
+            Assert.Equal(expected, content.ToArray());
+            Assert.True(MemoryMarshal.TryGetArray(content, out var segment));
+            Assert.Equal(byteCount, Assert.IsType<byte[]>(segment.Array).Length);
+            Assert.Equal(byteCount, memory.ReservedBytes);
+        }
+
+        Assert.Equal(finalRead ? [(byteCount, (long)maximumBytes)] : [(1, maximumBytes), (0, maximumBytes)], charges);
+        Assert.Equal(maximumBytes + byteCount, memory.PeakBytes);
+        Assert.Equal(0, memory.ReservedBytes);
+        Assert.Empty(host.ClosedDescriptors);
+    }
+
+    [Fact]
+    public async Task FragmentedInputFitsTheSameAllowanceAsATerminalRead()
+    {
+        const int maximumBytes = 8192;
+        const int resultBytes = 4096;
+        const int chunkBytes = 64;
+        var memory = new MemoryGovernor(maximumBytes + resultBytes);
+        var host = new TestOperationVisitor([]) { MemoryBudget = memory };
+        var input = new byte[resultBytes];
+        for (var offset = 0; offset < input.Length; offset++)
+            input[offset] = (byte)offset;
+        for (var offset = 0; offset < input.Length; offset += chunkBytes)
+            host.EnqueueByteReadResult(input.AsMemory(offset, chunkBytes),
+                ByteReadResult.Success(chunkBytes, offset + chunkBytes == input.Length));
+
+        var charges = new List<int>();
+        using (var destination = memory.CreateScope())
+        {
+            var result = await host.TryReadAllBytesAsync(new(71), maximumBytes, charges.Add, destination, CancellationToken.None);
+            Assert.Equal(input, Assert.IsType<BoundedReadResult.Complete>(result).Content.ToArray());
+            Assert.Equal(resultBytes, memory.ReservedBytes);
+        }
+        Assert.Equal(Enumerable.Repeat(chunkBytes, resultBytes / chunkBytes), charges);
+        Assert.Equal(maximumBytes + resultBytes, memory.PeakBytes);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task OutputGrowthRefusalReleasesBothReadBuffers()
+    {
+        const int readBufferBytes = 8192;
+        const int maximumBytes = 2 * readBufferBytes;
+        var memory = new MemoryGovernor(4 * readBufferBytes - 1);
+        var host = new TestOperationVisitor([]) { MemoryBudget = memory };
+        host.EnqueueByteReadResult(new byte[readBufferBytes], ByteReadResult.Success(readBufferBytes, reachedEoF: false));
+        host.EnqueueByteReadResult("x"u8.ToArray(), ByteReadResult.Success(1, reachedEoF: true));
+        var charges = new List<int>();
+        using var destination = memory.CreateScope();
+
+        // Growth needs the scratch, the existing result and the doubled result at the same time.
+        await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => host.TryReadAllBytesAsync(
+            new(71), maximumBytes, charges.Add, destination, CancellationToken.None).AsTask());
+
+        Assert.Equal([readBufferBytes, 1], charges);
+        Assert.Equal(2 * readBufferBytes, memory.PeakBytes);
+        Assert.Equal(0, memory.ReservedBytes);
+        Assert.Empty(host.ClosedDescriptors);
+    }
+
+    [Fact]
+    public async Task CancellationDuringResultAdmissionPreventsPublication()
+    {
+        const int maximumBytes = 8192;
+        var memory = new MemoryGovernor(16 * 1024);
+        var budget = new CountingMemoryBudget(memory);
+        using var cancellation = new CancellationTokenSource();
+        var host = new TestOperationVisitor([]) { MemoryBudget = budget };
+        host.EnqueueByteReadResult("x"u8.ToArray(), ByteReadResult.Success(1, reachedEoF: true));
+        var readAccounted = false;
+        budget.AdmissionSucceeded += () =>
+        {
+            if (readAccounted)
+                cancellation.Cancel();
+        };
+        using var destination = budget.CreateScope();
+
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => host.TryReadAllBytesAsync(
+            new(71), maximumBytes, _ => readAccounted = true, destination, cancellation.Token).AsTask());
+
+        Assert.Equal(cancellation.Token, canceled.CancellationToken);
+        Assert.True(readAccounted);
+        Assert.Equal(maximumBytes + 1, memory.PeakBytes);
+        Assert.Equal(0, memory.ReservedBytes);
+        Assert.Empty(host.ClosedDescriptors);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

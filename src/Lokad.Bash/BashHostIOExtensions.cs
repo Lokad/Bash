@@ -137,28 +137,50 @@ public static class BashHostIOExtensions
         IMemoryBudget destinationBudget,
         CancellationToken cancellationToken)
     {
-        const int InitialOutputCapacity = 4096;
         const int ReadBufferBytes = 8192;
         cancellationToken.ThrowIfCancellationRequested();
-        using var output = new BoundedByteMemoryBuilder(InitialOutputCapacity, maximumBytes, destinationBudget);
+        if (maximumBytes is < 0 or >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+
         using var scratch = destinationBudget.Reserve(Math.Min(ReadBufferBytes, maximumBytes + 1));
         var buffer = new byte[(int)scratch.Bytes];
-        while (true)
+        ByteMemoryBuilder? output = null;
+        var buffered = 0;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var length = Math.Min(buffer.Length, output.RemainingLength + 1);
-            var read = await host.ReadBytesAsync(descriptor, buffer.AsMemory(0, length), cancellationToken)
-                .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (read.IsError)
-                return new BoundedReadResult.Failed(read);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var remaining = maximumBytes - (output?.Length ?? 0) - buffered;
+                var length = Math.Min(buffer.Length - buffered, remaining + 1);
+                var read = await host.ReadBytesAsync(descriptor, buffer.AsMemory(buffered, length), cancellationToken)
+                    .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (read.IsError)
+                    return new BoundedReadResult.Failed(read);
 
-            chargeRead(read.BytesRead);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!output.TryAppend(buffer.AsSpan(0, read.BytesRead)))
-                return new BoundedReadResult.TooLarge();
-            if (read.ReachedEoF)
-                return new BoundedReadResult.Complete(output.DetachSnapshot());
+                chargeRead(read.BytesRead);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (read.BytesRead > remaining)
+                    return new BoundedReadResult.TooLarge();
+                // Coalesce partial reads in the admitted scratch before allocating or growing the result.
+                buffered += read.BytesRead;
+                if (buffered != 0 && (buffered == buffer.Length || read.ReachedEoF))
+                {
+                    output ??= new ByteMemoryBuilder(buffered, destinationBudget);
+                    output.Append(buffer.AsSpan(0, buffered));
+                    buffered = 0;
+                }
+                if (read.ReachedEoF)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new BoundedReadResult.Complete(output?.DetachSnapshot() ?? ReadOnlyMemory<byte>.Empty);
+                }
+            }
+        }
+        finally
+        {
+            output?.Dispose();
         }
     }
 
