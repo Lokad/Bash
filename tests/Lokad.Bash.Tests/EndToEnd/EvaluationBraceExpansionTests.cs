@@ -290,6 +290,53 @@ public sealed class EvaluationBraceExpansionTests
     }
 
     [Fact]
+    public void LiteralGroupsReleaseScanStorageBeforeReturningTheOriginalWord()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var retained = owner.Reserve(4096);
+        var memory = new EvaluationMemory(owner);
+        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, string.Concat(Enumerable.Repeat("{x}", 128)))]);
+
+        Assert.Same(word, Assert.Single(BraceExpansion.Expand(word, memory, CancellationToken.None)));
+        Assert.True(governor.PeakBytes > 4096);
+        Assert.Equal(4096, governor.ReservedBytes);
+        Assert.Equal(0, memory.Workspace.Bytes);
+    }
+
+    [Fact]
+    public void GeneratedSequenceWordsKeepTheirBytesAfterScratchIsReleased()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var retained = owner.Reserve(4096);
+        var memory = new EvaluationMemory(owner);
+        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, "{01..64}")]);
+
+        var expanded = BraceExpansion.Expand(word, memory, CancellationToken.None);
+
+        Assert.Equal(64, expanded.Count);
+        Assert.Equal("01", Assert.Single(expanded[0].Parts).GetUtf8Text());
+        Assert.Equal("64", Assert.Single(expanded[^1].Parts).GetUtf8Text());
+        Assert.True(governor.ReservedBytes > 4096);
+        Assert.True(governor.ReservedBytes < governor.PeakBytes);
+    }
+
+    [Fact]
+    public void RefusedScanReleasesItsOwnChargeBeforeCallerDisposal()
+    {
+        var governor = new MemoryGovernor(12288);
+        using var owner = governor.CreateScope();
+        using var retained = owner.Reserve(4096);
+        var memory = new EvaluationMemory(owner);
+        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, string.Concat(Enumerable.Repeat("{x}", 128)))]);
+
+        Assert.Throws<MemoryBudgetExceededException>(() => BraceExpansion.Expand(word, memory, CancellationToken.None));
+        Assert.True(governor.PeakBytes > 4096);
+        Assert.Equal(4096, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void ExpansionHonorsCancellation()
     {
         using var cancellation = new CancellationTokenSource();

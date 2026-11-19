@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -63,13 +64,14 @@ internal static class BraceExpansion
         if (!word.Parts.Any(static part => part is SourceWordPart { Kind: WordPartKind.Unquoted } source
             && source.Source.AsSpan().Contains((byte)'{')))
             return [word];
-        var braces = Scan(word.Parts, memory, cancellationToken);
+        using var scratch = new MemoryCapacity(memory.Budget, 0);
+        var braces = Scan(word.Parts, scratch, cancellationToken);
         if (braces.Count == 0)
             return [word];
 
         // Invalid and unclosed groups remain literal. Link around them so their valid
         // descendants can be found without revisiting the enclosing text.
-        memory.Charge(checked(32L + 4L * (braces.Count + 1L)));
+        scratch.Grow(MemoryCapacity.ArrayBackingBytes<int>(braces.Count + 1));
         var nextBrace = new int[braces.Count + 1];
         nextBrace[^1] = braces.Count;
         for (var index = braces.Count - 1; index >= 0; index--)
@@ -110,12 +112,16 @@ internal static class BraceExpansion
 
         memory.Charge(checked(256L * total));
         var result = new List<Word>(total);
-        var pending = new Stack<Branch>();
-        pending.Push(new Branch(new Continuation(wholeWord, null), null));
-        while (pending.TryPop(out var branch))
+        var pending = new List<Branch>();
+        var fragments = Array.Empty<Fragment>();
+        scratch.PrepareListCapacity(pending, 1);
+        scratch.Grow(64);
+        pending.Add(new Branch(new Continuation(wholeWord, null), null));
+        while (pending.Count != 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var (continuation, prefix) = branch;
+            var (continuation, prefix) = pending[^1];
+            pending.RemoveAt(pending.Count - 1);
             while (continuation is { Range: var range, Next: var remainder })
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -132,26 +138,26 @@ internal static class BraceExpansion
                 var suffix = Continue(new(brace.Closing.AfterDelimiter(), range.End), remainder);
                 if (brace.Sequence is { } sequence)
                 {
-                    var values = brace.SequenceValues ??= MaterializeSequence(sequence, memory, cancellationToken);
-                    memory.Charge(checked(32L * sequence.Count));
+                    var values = brace.SequenceValues ??= MaterializeSequence(sequence, memory, scratch, cancellationToken);
+                    scratch.PrepareListCapacity(pending, sequence.Count);
                     for (var value = sequence.Count - 1; value >= 0; value--)
-                        pending.Push(new Branch(suffix, Append(values[value], null, prefix,
+                        pending.Add(new Branch(suffix, Append(values[value], null, prefix,
                             sequence.IsCharacter && values[value][0] is (byte)'\\' or (byte)'`')));
                 }
                 else
                 {
-                    memory.Charge(checked(32L * brace.AlternativeCount));
+                    scratch.PrepareListCapacity(pending, brace.AlternativeCount);
                     for (var alternative = brace.AlternativeCount - 1; alternative >= 0; alternative--)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        pending.Push(new Branch(Continue(brace.Alternative(alternative), suffix), prefix));
+                        pending.Add(new Branch(Continue(brace.Alternative(alternative), suffix), prefix));
                     }
                 }
                 break;
             }
 
             if (continuation == null)
-                result.Add(Materialize(prefix, memory, cancellationToken));
+                result.Add(Materialize(prefix, memory, scratch, ref fragments, cancellationToken));
         }
         return result;
 
@@ -159,7 +165,7 @@ internal static class BraceExpansion
         {
             if (range.Start.Position == range.End.Position)
                 return next;
-            memory.Charge(64);
+            scratch.Grow(64);
             return new Continuation(range, next);
         }
 
@@ -202,16 +208,16 @@ internal static class BraceExpansion
         Fragment Append(ShellSource source, WordPart? opaque, Fragment? prefix, bool generatedPunctuation)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            memory.Charge(64);
+            scratch.Grow(64);
             return new Fragment(source, opaque, prefix, (prefix?.Count ?? 0) + 1, generatedPunctuation);
         }
     }
 
-    private static List<Brace> Scan(IReadOnlyList<WordPart> parts, EvaluationMemory memory, CancellationToken cancellationToken)
+    private static List<Brace> Scan(IReadOnlyList<WordPart> parts, MemoryCapacity scratch, CancellationToken cancellationToken)
     {
         var braces = new List<Brace>();
         var open = new Stack<Brace>();
-        var context = new ShellScanContext { SyntaxMemory = memory.Workspace };
+        var context = new ShellScanContext { SyntaxMemory = scratch };
         var rawCommas = 0;
         var parameterBraces = 0;
         for (var partIndex = 0; partIndex < parts.Count; partIndex++)
@@ -275,13 +281,13 @@ internal static class BraceExpansion
                         {
                             case (byte)'{':
                                 CountRawCommas(bytes, offset, ref rawOffset);
-                                memory.Charge(256);
+                                scratch.Grow(256);
                                 var candidate = new Brace(new(new(partIndex, offset), braces.Count + 1), rawCommas);
                                 braces.Add(candidate);
                                 open.Push(candidate);
                                 break;
                             case (byte)',' when open.TryPeek(out var enclosing):
-                                memory.Charge(64);
+                                scratch.Grow(64);
                                 (enclosing.Commas ??= []).Add(new(new(partIndex, offset), braces.Count));
                                 break;
                             case (byte)'.' when open.TryPeek(out var sequence)
@@ -333,19 +339,28 @@ internal static class BraceExpansion
         }
     }
 
-    private static Word Materialize(Fragment? prefix, EvaluationMemory memory, CancellationToken cancellationToken)
+    private static Word Materialize(Fragment? prefix, EvaluationMemory memory, MemoryCapacity scratch,
+        ref Fragment[] fragmentBuffer, CancellationToken cancellationToken)
     {
         if (prefix == null)
             return new Word([]);
 
-        memory.Charge(checked(32L * prefix.Count));
-        var fragments = new Fragment[prefix.Count];
+        if (prefix.Count > fragmentBuffer.Length)
+        {
+            var previous = fragmentBuffer.Length;
+            var capacity = (int)Math.Max(prefix.Count, Math.Min(Array.MaxLength, 2L * previous));
+            scratch.Grow(MemoryCapacity.ArrayBackingBytes<Fragment>(capacity));
+            fragmentBuffer = new Fragment[capacity];
+            scratch.Resize(scratch.Bytes - MemoryCapacity.ArrayBackingBytes<Fragment>(previous));
+        }
+        var fragments = fragmentBuffer.AsSpan(0, prefix.Count);
         for (var current = prefix; current != null; current = current.Previous)
         {
             cancellationToken.ThrowIfCancellationRequested();
             fragments[current.Count - 1] = current;
         }
 
+        memory.Charge(MemoryCapacity.ArrayBackingBytes<WordPart>(fragments.Length));
         var parts = new List<WordPart>(fragments.Length);
         var rebuildFrom = -1;
         for (var index = 0; index < fragments.Length;)
@@ -392,20 +407,21 @@ internal static class BraceExpansion
             index = end;
         }
 
+        fragments.Clear();
         if (rebuildFrom >= 0)
         {
             // A generated escape or backtick can reinterpret an adjacent lexical part.
             // Re-read only that tail. Earlier parts keep their original expansion syntax.
             var tailCount = parts.Count - rebuildFrom;
-            memory.Charge(checked(128L + 8L * tailCount));
+            scratch.Grow(checked(128L + 8L * tailCount));
             var tail = new Word(parts.GetRange(rebuildFrom, tailCount));
             var spelling = new ShellScanContext { SyntaxMemory = memory.Workspace }
                 .CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
             if (!FunctionDefinitionFormatter.TryAppendWordSource(tail, spelling, memory.Budget, cancellationToken))
                 throw new ByteMemoryBuilder.LimitExceededException();
             var rebuilt = Tokenizer.ReadBraceExpandedWord(ShellSource.FromBytes(spelling.ToMemory()), memory.Workspace);
-            memory.Charge(checked(32L + 8L * rebuilt.Parts.Count));
             parts.RemoveRange(rebuildFrom, tailCount);
+            memory.PrepareListCapacity(parts, rebuilt.Parts.Count);
             parts.AddRange(rebuilt.Parts);
         }
         return new Word(parts);
@@ -487,10 +503,12 @@ internal static class BraceExpansion
     }
 
     private static ShellSource[] MaterializeSequence(
-        Sequence sequence, EvaluationMemory memory, CancellationToken cancellationToken)
+        Sequence sequence, EvaluationMemory memory, MemoryCapacity scratch, CancellationToken cancellationToken)
     {
         var maximumValueBytes = sequence.IsCharacter ? 1 : Math.Max(20, sequence.Width);
-        memory.Charge(checked(sequence.Count * (256L + 4L * maximumValueBytes)));
+        scratch.Grow(MemoryCapacity.ArrayBackingBytes<ShellSource>(sequence.Count));
+        // A generated value can become a returned word's source bytes.
+        memory.Charge(checked(sequence.Count * MemoryCapacity.ArrayBackingBytes<byte>(maximumValueBytes)));
         var values = new ShellSource[sequence.Count];
         for (var index = 0; index < values.Length; index++)
         {

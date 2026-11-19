@@ -234,7 +234,9 @@ command charge for its backing array, including when a binding is replaced.
 Concatenation admits its new backing. Field splitting copies bytes out of its
 reused scratch before publishing fields. Positional serialization publishes
 a separate admitted snapshot for each quoted field. Non-scalar brace expansion
-appends directly to the word's result.
+appends directly to the word's result. Brace scanning and branch materialization
+reuse temporary storage and release it at brace expansion return. Generated word
+parts and sequence bytes remain admitted through the caller's expansion and use.
 Caller-prepared syntax remains
 caller-owned. Runtime parsing supplies coarse admission to source copies, command-unit
 tokens/parts and payload buffers, arithmetic/conditional metadata and reached deferred
