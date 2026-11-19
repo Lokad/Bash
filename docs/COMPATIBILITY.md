@@ -137,6 +137,15 @@ An adjacent subshell opener can begin a command substitution, as in
 `$((printf value);)`. A complete `$((…))` arithmetic shape selects arithmetic
 even when its expression is invalid. The existing command grammar handles the
 subshell form and consumes completed here-documents as part of its body.
+A final bare `time` in an affected parenthesized substitution reports a syntax
+error when the substitution is reached, before executing any of its commands.
+The enclosing command unit ends with status 1 and earlier bindings retain their
+values. The failure ends the script with status 2 under errexit. An invalid nested
+spelling in an ordinary rendered substitution also ends the script with status 2.
+An adjacent subshell opener retains its source separators, and a nested spelling
+failure there ends the unit under ordinary execution. Function display and export
+retain the original timing separator so reparsing a definition preserves the
+point of validation.
 Legacy `$[expression]` uses the same arithmetic evaluation as `$((expression))`,
 with a single closing bracket outside nested brackets. Within a double-quoted
 word, an unescaped inner double quote at that level causes a substitution failure

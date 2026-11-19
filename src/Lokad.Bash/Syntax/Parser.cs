@@ -126,7 +126,7 @@ public static class Parser
         context.LegacyOrigin = LegacySubstitutionOrigin.Script;
         var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context);
         SkipNewlines(tokenizer);
-        var command = ParseList(tokenizer);
+        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, retainUnitBoundaries: true);
         SkipNewlines(tokenizer);
         var trailing = tokenizer.PeekTokenCore();
         if (trailing.Kind != TokenKind.EndOfInput)
@@ -192,9 +192,13 @@ public static class Parser
         ShellSource input,
         int payloadStart,
         out int closingParenthesisIndex,
-        out ParsedScript? parsed)
+        out ParsedScript? parsed,
+        out SubstitutionSyntaxFailure failure,
+        out bool preserveAdjacentOpening)
     {
         parsed = null;
+        failure = SubstitutionSyntaxFailure.None;
+        preserveAdjacentOpening = false;
         closingParenthesisIndex = payloadStart;
         if (payloadStart < 0 || payloadStart > input.Length)
             return ShellScanStatus.NotFound;
@@ -216,6 +220,16 @@ public static class Parser
             return closing.Kind == TokenKind.EndOfInput ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid;
         tokenizer.NextTokenCore();
         closingParenthesisIndex = closing.Source.Start.Value;
+        // Adjacent parentheses retain the outer body's separators. Nested
+        // substitutions still undergo validation when Bash reads that body.
+        var adjacentParenthesis = ShellSourceCursor.TryMatchLogicalText(input.AsSpan(), payloadStart, "(", out _);
+        var nestedFailure = context.SubstitutionFailure != SubstitutionSyntaxFailure.None;
+        var bareTime = tokenizer.HasSubshellEndingInBareTime || EndsInBareTime(command);
+        preserveAdjacentOpening = adjacentParenthesis && (bareTime || nestedFailure);
+        if (nestedFailure)
+            failure = adjacentParenthesis ? SubstitutionSyntaxFailure.MissingTimedCommand : SubstitutionSyntaxFailure.NestedSyntax;
+        else if (!adjacentParenthesis && bareTime)
+            failure = SubstitutionSyntaxFailure.MissingTimedCommand;
         // An unconsumed body historically fails when the substitution executes, not during lookahead.
         if (tokenizer.HereDocuments is not { HasPending: true })
             parsed = command == null ? new ParsedScript([])
@@ -223,13 +237,21 @@ public static class Parser
         return ShellScanStatus.Complete;
     }
 
-    /// <summary>
-    /// Parses a list of commands, returning null for empty input.
-    /// </summary>
-    private static ICommand? ParseList(Tokenizer tokenizer)
+    private static bool EndsInBareTime(ICommand? command)
     {
-        var result = ParseListWithTerminatorInfo(tokenizer, null);
-        return result.Command;
+        while (true)
+        {
+            switch (command)
+            {
+                case ListCommand list: command = list.Right; break;
+                case NegatedCommand negated: command = negated.Inner; break;
+                default:
+                    return command is TimedCommand
+                    {
+                        Inner: SimpleCommand { Words.Count: 0, Assignments.Count: 0, Redirections.Count: 0 }
+                    };
+            }
+        }
     }
 
     /// <summary>
@@ -520,6 +542,7 @@ public static class Parser
         }
 
         tokenizer.NextTokenCore();
+        tokenizer.HasSubshellEndingInBareTime |= EndsInBareTime(result.Command);
         return new SubshellCommand(result.Command);
     }
 
@@ -1462,7 +1485,15 @@ public static class Parser
         Tokenizer tokenizer,
         TokenKind? closingKind,
         string[] endKeywords,
-        TokenKind? endTokenKind)
+        TokenKind? endTokenKind) =>
+        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, retainUnitBoundaries: false);
+
+    private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
+        Tokenizer tokenizer,
+        TokenKind? closingKind,
+        string[] endKeywords,
+        TokenKind? endTokenKind,
+        bool retainUnitBoundaries)
     {
         SkipNewlines(tokenizer);
         if (IsEndKeyword(tokenizer, endKeywords) || IsEndTokenKind(tokenizer, endTokenKind))
@@ -1487,6 +1518,8 @@ public static class Parser
                 break;
 
             tokenizer.NextTokenCore();
+            var startsCommandUnit = retainUnitBoundaries
+                && (token.Kind == TokenKind.Newline || tokenizer.PeekTokenCore().Kind == TokenKind.Newline);
             if (!IsEndTokenKind(tokenizer, endTokenKind))
                 SkipNewlines(tokenizer);
             trailingTerminator = true;
@@ -1501,7 +1534,7 @@ public static class Parser
                 break;
             }
 
-            current = new ListCommand(current, ListOperator.Sequence, right);
+            current = new ListCommand(current, ListOperator.Sequence, right) { StartsCommandUnit = startsCommandUnit };
             trailingTerminator = false;
         }
 

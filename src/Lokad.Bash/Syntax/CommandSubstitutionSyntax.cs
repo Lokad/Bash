@@ -4,7 +4,8 @@ namespace Lokad.Bash.Syntax;
 internal abstract record CommandSubstitutionSyntax(ShellSource Source)
 {
     /// <summary>A parenthesized body parsed by the delimiter grammar, including completed here-documents.</summary>
-    internal sealed record Parsed(ShellSource SourceText, ParsedScript Script)
+    internal sealed record Parsed(ShellSource SourceText, ParsedScript Script, SubstitutionSyntaxFailure Failure,
+        bool PreserveAdjacentOpening)
         : CommandSubstitutionSyntax(SourceText);
 
     /// <summary>Legacy executable bytes and their original delimiters/escapes, validated only when reached.</summary>
@@ -13,6 +14,14 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
 
     /// <summary>Bytes still requiring execution-time parsing, including unfinished here-documents.</summary>
     internal sealed record Deferred(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);
+}
+
+/// <summary>Known syntax failures when Bash rereads the spelling of a parsed substitution.</summary>
+internal enum SubstitutionSyntaxFailure
+{
+    None,
+    MissingTimedCommand,
+    NestedSyntax,
 }
 
 /// <summary>Identifies which legacy bytes can be owned with the surrounding syntax.</summary>

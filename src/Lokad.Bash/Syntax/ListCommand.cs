@@ -12,10 +12,14 @@ public sealed record ListCommand : ICommand
     private ListOperator _operator;
     private ICommand _right;
     private ListTraversal? _traversal;
+    private bool _startsCommandUnit;
 
     public ICommand Left { get => _left; init { _left = value; _traversal = null; } }
     public ListOperator Operator { get => _operator; init { _operator = value; _traversal = null; } }
     public ICommand Right { get => _right; init { _right = value; _traversal = null; } }
+
+    /// <summary>The right operand begins a new complete unit in a prepared root script.</summary>
+    internal bool StartsCommandUnit { get => _startsCommandUnit; init { _startsCommandUnit = value; _traversal = null; } }
 
     public ListCommand(ICommand Left, ListOperator Operator, ICommand Right)
     {

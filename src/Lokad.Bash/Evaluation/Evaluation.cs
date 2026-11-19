@@ -574,6 +574,8 @@ public sealed partial class Evaluation : IFileTester
             var result = await EvaluateCommandAsync(command, scope, negated: false)
                 .ConfigureAwait(false);
 
+            if (result.Flow == FlowControlKind.Exit && CanRecoverCommandSubstitutionSyntax)
+                result = RecoverExpansionFailure(1);
             if (result.Flow == FlowControlKind.Exit)
                 return result;
 
@@ -3219,9 +3221,23 @@ public sealed partial class Evaluation : IFileTester
     }
 
     internal void SetFatalExpansionError(ExpansionFailureKind kind)
+        => SetFatalExpansionError(kind, kind == ExpansionFailureKind.NamerefDefault ? 2 : 1);
+
+    private void SetFatalExpansionError(ExpansionFailureKind kind, int exitCode)
     {
-        _state.FatalExpansion ??= new ExpansionFailure(kind, kind == ExpansionFailureKind.NamerefDefault ? 2 : 1);
+        _state.FatalExpansion ??= new ExpansionFailure(kind, exitCode);
         _state.SetExpansionError(_state.FatalExpansion.Value.ExitCode);
+    }
+
+    internal Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure)
+    {
+        if (_state.FatalExpansion.HasValue)
+            return Task.CompletedTask;
+
+        var exitCode = _state.ErrexitEnabled || failure == SubstitutionSyntaxFailure.NestedSyntax ? 2 : 1;
+        SetFatalExpansionError(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode);
+        _state.LastExitCode = exitCode;
+        return ReportSyntaxErrorAsync(new SyntaxError("Unexpected ')' after a pipeline prefix in command substitution.", 0));
     }
 
     private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;

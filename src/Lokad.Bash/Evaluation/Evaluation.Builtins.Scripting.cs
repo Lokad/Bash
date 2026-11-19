@@ -208,6 +208,8 @@ public sealed partial class Evaluation
     /// <summary>Recovers unit-scoped expansion failures while preserving root versus nested status rules.</summary>
     private EvaluationResult RecoverScriptExpansionFailure(EvaluationResult result, ScriptExecutionKind kind)
     {
+        if (CanRecoverCommandSubstitutionSyntax)
+            return RecoverExpansionFailure(1);
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
                 or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
@@ -218,9 +220,17 @@ public sealed partial class Evaluation
         if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && failure.Kind == ExpansionFailureKind.AssignmentTarget)
             return result;
 
+        // Nameref defaults fail with 1 at script boundaries, but with 2 at the root.
+        return RecoverExpansionFailure(failure.Kind == ExpansionFailureKind.NamerefDefault && kind != ScriptExecutionKind.Root ? 1 : failure.ExitCode);
+    }
+
+    private bool CanRecoverCommandSubstitutionSyntax =>
+        _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1 };
+
+    private EvaluationResult RecoverExpansionFailure(int exitCode)
+    {
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
-        // Nameref defaults fail with 1 at script boundaries, but with 2 at the root.
-        return EvaluationResult.FromExitCode(failure.Kind == ExpansionFailureKind.NamerefDefault && kind != ScriptExecutionKind.Root ? 1 : failure.ExitCode);
+        return EvaluationResult.FromExitCode(exitCode);
     }
 }

@@ -190,7 +190,15 @@ public sealed partial class Evaluation
                                 ? listScope with { Context = listScope.Context.WithErrexitIgnored() } : listScope;
                             result = await EvaluateCommandAsync(execute.Command, currentScope, negated: false).ConfigureAwait(false);
                             if (result.Flow != FlowControlKind.None)
-                                return ApplyNegation(result, listNegated);
+                            {
+                                if (result.Flow != FlowControlKind.Exit || !CanRecoverCommandSubstitutionSyntax)
+                                    return ApplyNegation(result, listNegated);
+                                while (index + 1 < traversal.Count && traversal[index + 1] is not ListTraversal.Step.Execute { StartsCommandUnit: true })
+                                    index++;
+                                if (index + 1 == traversal.Count)
+                                    return ApplyNegation(result, listNegated);
+                                result = RecoverExpansionFailure(1);
+                            }
                             break;
                         case ListTraversal.Step.Select select when !EvaluationRules.ShouldExecuteRight(select.Operator, result.ExitCode):
                             index = select.EndExclusive - 1;

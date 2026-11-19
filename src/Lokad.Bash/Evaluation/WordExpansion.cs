@@ -764,8 +764,9 @@ internal static partial class WordExpansion
 
             if (BracedParameterScanner.HasPrefix(content, index))
             {
+                var parameterScan = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
                 var parameterStatus = BracedParameterScanner.ScanWithPayload(
-                    new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace }, content, index,
+                    parameterScan, content, index,
                     out var closingIndex, out _, out var payload);
                 if (parameterStatus != BracedParameterScanStatus.Found)
                 {
@@ -787,6 +788,13 @@ internal static partial class WordExpansion
                     }
                     output.AppendSource(content.Slice(index, 1), globQuoted);
                     continue;
+                }
+
+                if (parameterScan.SubstitutionFailure != SubstitutionSyntaxFailure.None && !scope.PreserveCommandSubstitutionSpelling)
+                {
+                    await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parameterScan.SubstitutionFailure)
+                        .ConfigureAwait(false);
+                    return null;
                 }
 
                 await ExpandBracedParameterAsync(
@@ -865,6 +873,12 @@ internal static partial class WordExpansion
             if (!FunctionDefinitionFormatter.TryAppendSubstitutionSource(script, spelling, scope.Effects.CancellationToken))
                 throw new ByteMemoryBuilder.LimitExceededException();
             output.AppendExpansion(ShellValue.FromBytes(spelling.ToMemory()), allowWordSplitting, globQuoted);
+            return;
+        }
+
+        if (script is CommandSubstitutionSyntax.Parsed { Failure: not SubstitutionSyntaxFailure.None } parsed)
+        {
+            await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parsed.Failure).ConfigureAwait(false);
             return;
         }
 

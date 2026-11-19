@@ -57,6 +57,9 @@ internal sealed class Tokenizer
     /// <summary>One lexical queue spans pipelines, lists and compound-command redirections.</summary>
     internal HereDocumentReader? HereDocuments { get; set; }
 
+    /// <summary>A parsed subshell whose final bare timer needs a separator before its closer.</summary>
+    internal bool HasSubshellEndingInBareTime { get; set; }
+
     /// <summary>Creates a tokenizer positioned at the beginning of <paramref name="input"/>.</summary>
     public Tokenizer(ShellSource input)
         : this(input, 0, new ShellScanContext())

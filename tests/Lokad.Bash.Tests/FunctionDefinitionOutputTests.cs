@@ -130,6 +130,19 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Equal(0, result.Host.OpenFileCount);
     }
 
+    [Fact]
+    public async Task DefinitionRoundTripsKeepTheAdjacentOpeningOfATimedSubstitution()
+    {
+        const string source = "f(){ TIMEFORMAT=; value=$((time;);); printf '<%s:%s>' \"$?\" \"$value\"; }; "
+            + "f; saved=$(declare -f f); unset -f f; eval \"$saved\"; f; export -f f; bash -c f";
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(source, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:><0:><0:>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     // Git Bash 5.2.37 output, except retained CR, equivalent quoting/substitution delimiters and flat elif chains.
     [Theory]
     // The escaped dollar outside the quotes remains separate from the next quoted group.

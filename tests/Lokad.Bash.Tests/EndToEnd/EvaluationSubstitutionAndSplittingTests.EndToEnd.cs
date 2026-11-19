@@ -7,6 +7,79 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BareTimeSubstitutionPreservesAssignmentAndAbandonsTheCurrentCommandUnit(bool prepared)
+    {
+        const string source = "TIMEFORMAT=\nvalue=seed\n"
+            + "value=$(printf child >effect; time;); printf same;\n"
+            + "printf '<%s:%s>' \"$?\" \"$value\"\n";
+        await using var host = new TestHost();
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+            : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, status);
+        Assert.Equal("<1:seed>", host.StandardOutput.TextContent);
+        Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task NestedBareTimeFailsOnlyWhenTheEnclosingSubstitutionIsReached(bool prepared, bool reached)
+    {
+        var source = "TIMEFORMAT=\nprintf earlier\n" + (reached ? "" : "true || ")
+            + "value=$(printf child >effect; true || inner=$(time;); :)\nprintf later\n";
+        await using var host = new TestHost();
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+            : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(reached ? 2 : 0, status);
+        Assert.Equal(reached ? "earlier" : "earlierlater", host.StandardOutput.TextContent);
+        if (reached)
+            Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+        else
+            Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("$((time;);)", "<0:>", false)]
+    [InlineData("$( (time;);)", "<1:seed>", true)]
+    public async Task AdjacentSubshellOpeningPreservesItsFinalTimingSeparator(string substitution, string expected, bool diagnosed)
+    {
+        var result = await EvaluationTestHelper.RunAsync("TIMEFORMAT=\nvalue=seed\nvalue=" + substitution
+            + "\nprintf '<%s:%s>' \"$?\" \"$value\"\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Equal(diagnosed, result.StdErr.Contains("syntax error:", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BareTimeSubstitutionTerminatesAnErrexitEnabledScriptEvenInATestedGroup(bool prepared)
+    {
+        const string source = "TIMEFORMAT=\nset -e\n{ value=$(time;); printf inside; } || printf fallback\nprintf later\n";
+        await using var host = new TestHost();
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+            : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(2, status);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("printf '%s' \"${missing:-$(cat <<'EOF'\na\\\nb\nEOF\n)}\"", "a\\\nb")]
     [InlineData("printf '%s' \"$\\\n((1+\\\n1))\"", "2")]
     [InlineData("value=2; printf '%s' \"$(( $\\\n{value} + 1 ))\"", "3")]

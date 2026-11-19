@@ -32,7 +32,8 @@ internal static class FunctionDefinitionFormatter
     {
         if (substitution is CommandSubstitutionSyntax.Legacy legacy)
             return output.TryAppend(legacy.Spelling.AsSpan());
-        if (substitution is CommandSubstitutionSyntax.Parsed parsed)
+        if (substitution is CommandSubstitutionSyntax.Parsed
+            { Failure: SubstitutionSyntaxFailure.None, PreserveAdjacentOpening: false } parsed)
             return output.TryAppend(StartsWithParenthesis(parsed.Script) ? "$( "u8 : "$("u8)
                 && TryAppend(new Step.Script(parsed.Script), output, Format.BraceSource, cancellationToken)
                 && output.TryAppend((byte)')');
@@ -115,7 +116,8 @@ internal static class FunctionDefinitionFormatter
                             WordPartKind.Escaped => Append("\\") && output.TryAppend(content),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
                                 when part is CommandSubstitutionWordPart command
-                                    && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy) =>
+                                    && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy
+                                        or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }) =>
                                 TryAppendSubstitutionSource(command.Substitution, output, cancellationToken),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
                                 AppendCommandSubstitution(content),

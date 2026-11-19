@@ -8,7 +8,7 @@ internal sealed class ListTraversal
 {
     internal abstract record Step
     {
-        public sealed record Execute(ICommand Command, bool ErrexitIgnored) : Step;
+        public sealed record Execute(ICommand Command, bool ErrexitIgnored, bool StartsCommandUnit) : Step;
         public sealed record Select(ListOperator Operator, int EndExclusive) : Step;
     }
 
@@ -21,6 +21,7 @@ internal sealed class ListTraversal
         var steps = new List<Step>();
         var pending = new Stack<(ICommand Command, bool Ignored, Preparation Phase, int Branch)>();
         pending.Push((root, false, Preparation.Visit, 0));
+        var startsCommandUnit = false;
         while (pending.TryPop(out var item))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -32,6 +33,7 @@ internal sealed class ListTraversal
             if (item.Phase == Preparation.Right)
             {
                 var list = (ListCommand)item.Command;
+                startsCommandUnit |= list.StartsCommandUnit;
                 if (list.Operator != ListOperator.Sequence)
                 {
                     var branch = steps.Count;
@@ -48,7 +50,10 @@ internal sealed class ListTraversal
                     Preparation.Visit, 0));
             }
             else
-                steps.Add(new Step.Execute(item.Command, item.Ignored));
+            {
+                steps.Add(new Step.Execute(item.Command, item.Ignored, startsCommandUnit));
+                startsCommandUnit = false;
+            }
         }
         Steps = steps.ToArray();
     }

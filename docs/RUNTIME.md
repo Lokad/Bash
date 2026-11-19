@@ -118,6 +118,11 @@ through the host and closes the temporary redirection before value expansion
 resumes. The capture owner stays live until the host read and cleanup settle.
 An open failure under errexit ends the caller's expansion. Ambiguous targets
 return a substitution failure status through the ordinary expansion path.
+The delimiter scanner records syntax failures that would arise from rereading a
+parenthesized substitution's rendered spelling. Reached expansion reports the
+failure before setting up capture descriptors. Prepared top-level lists retain
+complete command-unit boundaries so recoverable substitution errors resume at
+the same boundary as streaming execution.
 
 Printf retains byte numeric operands through prefix validation, range classification
 and diagnostics. Integer accumulation stays bounded after overflow while validity

@@ -14,6 +14,8 @@ internal enum ExpansionFailureKind
     Arithmetic,
     /// <summary>A generated word fails substitution parsing and discards its command unit.</summary>
     WordSyntax,
+    /// <summary>A reached parenthesized substitution has invalid rendered syntax.</summary>
+    CommandSubstitutionSyntax,
     Parameter,
     /// <summary>A reached error-if-unset parameter expansion.</summary>
     RequiredParameter,
