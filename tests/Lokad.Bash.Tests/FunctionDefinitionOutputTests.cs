@@ -65,6 +65,29 @@ public sealed class FunctionDefinitionOutputTests
         Assert.EndsWith("    cat <<END\nbody\nEND\n\n}\n", Utf8Text.Decode(output.ToMemory()));
     }
 
+    [Theory]
+    [InlineData(64)]
+    [InlineData(65)]
+    public void DescriptorNameKeepsItsBytesInDisplayAndExport(int length)
+    {
+        var name = new string('n', length);
+        var source = "f(){ {" + name + "}>out; }";
+        var function = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(source).Commands));
+        var budget = new MemoryGovernor(TestMemoryBudget.FunctionFormattingBytes);
+        using var display = new ByteMemoryBuilder(0, budget);
+        using var export = new BoundedByteMemoryBuilder(0, 1024, budget);
+
+        Assert.True(FunctionDefinitionFormatter.TryAppend(function, display));
+        Assert.True(FunctionDefinitionFormatter.TryAppendExport(function, export));
+        Assert.Equal("f () \n{ \n     {" + name + "}> out\n}\n", Utf8Text.Decode(display.ToMemory()));
+        foreach (var bytes in new[] { display.ToMemory(), export.ToMemory() })
+        {
+            var parsed = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(bytes).Commands));
+            var command = Assert.IsType<SimpleCommand>(Assert.IsType<GroupCommand>(parsed.Body).Body);
+            Assert.Equal(name, Assert.Single(command.Redirections).VariableName);
+        }
+    }
+
     // Git Bash 5.2.37: direct invocation, exported child and replayed inspection keep the same expansion boundaries.
     [Theory]
     [InlineData("\"$x\"\"y\"", "<oney>")]

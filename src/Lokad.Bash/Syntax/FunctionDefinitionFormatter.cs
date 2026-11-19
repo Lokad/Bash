@@ -344,7 +344,18 @@ internal static class FunctionDefinitionFormatter
         }
         return !braceSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
 
-        bool Append(string text) => output.TryAppend(Utf8Text.Encode(text).Span);
+        bool Append(string text)
+        {
+            const int shortFragmentLength = 64;
+            var characters = text.AsSpan();
+            if (characters.Length > shortFragmentLength)
+                return output.TryAppend(Utf8Text.Encode(text).Span);
+
+            // A UTF-16 code unit needs at most three UTF-8 bytes, including pairs.
+            Span<byte> bytes = stackalloc byte[3 * shortFragmentLength];
+            var written = Utf8Text.StrictUtf8.GetBytes(characters, bytes);
+            return output.TryAppend(bytes[..written]);
+        }
 
         bool AppendCommandSubstitution(ReadOnlySpan<byte> source)
         {
