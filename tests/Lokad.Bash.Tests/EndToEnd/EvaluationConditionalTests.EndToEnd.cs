@@ -1,6 +1,8 @@
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Tree;
 using Lokad.Bash.Syntax;
 
@@ -255,6 +257,75 @@ public sealed class EvaluationConditionalTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(false, "'7'", "373A6D697373")]
+    [InlineData(false, "$'\\377'", "FF7C373A6D697373")]
+    [InlineData(true, "'7'", "373A6D697373")]
+    [InlineData(true, "$'\\377'", "FF7C373A6D697373")]
+    public async Task Case_KeepsSubjectBytesAndPublishesPatternEffects(bool prepared, string wanted, string expectedHex)
+    {
+        var script = "subject=$'\\377'; wanted=" + wanted + "\n"
+            + "case \"$subject\" in ${mark:=miss}|$((subject=7))|\"$wanted\") printf '%s|' \"$wanted\";; esac\n"
+            + "printf '%s:%s' \"$subject\" \"$mark\"\n";
+        await using var host = new TestHost();
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, status);
+        Assert.Equal(Convert.FromHexString(expectedHex), host.StandardOutput.Content.ToArray());
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task Case_KeepsTheSubjectAndPendingPatternThroughCancellation()
+    {
+        var governor = new MemoryGovernor(4 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        await using var host = new TestHost { MemoryBudget = owner };
+        host.AddFile("/pattern", "tail\n");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.AfterReadOpen = async path =>
+        {
+            Assert.Equal("/pattern", path.Path);
+            entered.TrySetResult();
+            await release.Task;
+        };
+
+        var state = new Evaluation.Evaluation(Parser.Parse(
+            """case "$subject" in "$prefix$(<pattern)") printf selected;; esac; printf after"""));
+        const int width = 16 * 1024;
+        state.SetVariable("subject", ShellValue.FromText(new string('a', width) + "tail"));
+        state.SetVariable("prefix", ShellValue.FromText(new string('a', width)));
+        var running = new Engine().RunAsync(state, host, owner, cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+            Assert.False(running.IsCompleted);
+            Assert.Equal(1, host.OpenFileCount);
+            var retainedValues = Variables.EstimateValueBytes(width + 4) + Variables.EstimateValueBytes(width);
+            Assert.True(state.Memory.Workspace.Bytes >= retainedValues + 2L * width);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => running.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Theory]

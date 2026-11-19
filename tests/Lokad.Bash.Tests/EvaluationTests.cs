@@ -4,6 +4,7 @@ using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tree;
 
@@ -4253,6 +4254,42 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Theory]
+    [InlineData("hit", "mis")]
+    [InlineData("h[ia]t", "m[io]s")]
+    public async Task Case_ReusesPatternWorkspaceBeforeRunningTheBody(string match, string miss)
+    {
+        var patterns = Enumerable.Repeat(miss, 128).ToArray();
+        patterns[0] = match;
+        var first = await WorkspaceAtBodyAsync(patterns);
+        patterns[0] = miss;
+        patterns[^1] = match;
+        var last = await WorkspaceAtBodyAsync(patterns);
+
+        Assert.Equal(first, last);
+
+        static async Task<(long Workspace, long Peak)> WorkspaceAtBodyAsync(string[] patterns)
+        {
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            var state = new Eval(Parser.Parse($"case hit in {string.Join('|', patterns)}) printf selected;; esac"));
+            state.Memory.Budget = owner;
+
+            var body = await NextWriteAsync(state);
+            Assert.Equal(FileDescriptor.StdOut, body.FileDescriptor);
+            Assert.Equal("selected", Text(body.Content));
+            var workspace = state.Memory.Workspace.Bytes;
+            var peak = governor.PeakBytes;
+            body.SetResult(DescriptorWriteResult.Open);
+            Assert.Null(await NextStepAsync(state));
+            Assert.Equal(0, state.LastExitCode);
+
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return (workspace, peak);
+        }
     }
 
     [Fact]

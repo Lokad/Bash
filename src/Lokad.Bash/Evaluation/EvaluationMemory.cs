@@ -41,7 +41,7 @@ internal sealed class EvaluationMemory
         }
     }
 
-    public IDisposable BeginCommand(ScopedEvaluation scope)
+    internal Command BeginCommand(ScopedEvaluation scope)
     {
         if (_command == null)
         {
@@ -93,23 +93,27 @@ internal sealed class EvaluationMemory
         public long Bytes { get; set; }
     }
 
-    private sealed class Command(EvaluationMemory owner, ScopedEvaluation scope, Command? parent, long baseline) : IDisposable
+    internal sealed class Command(EvaluationMemory owner, ScopedEvaluation scope, Command? parent, long baseline) : IDisposable
     {
+        /// <summary>Reuses the active frame after its temporary results have been consumed.</summary>
+        /// <remarks>Nested frames must have finished before resetting their caller.</remarks>
+        internal void ResetWorkspace()
+        {
+            var retained = RetainedBytes(scope);
+            owner._memory.Resize(checked(baseline + retained));
+            if (owner._refused)
+            {
+                owner._memory.ReleaseUnusedCapacity();
+                owner._refused = false;
+            }
+            else
+                owner._memory.TrimExcess();
+            owner._retainedBytes = retained;
+        }
+
         public void Dispose()
         {
-            try
-            {
-                var retained = RetainedBytes(scope);
-                owner._memory.Resize(checked(baseline + retained));
-                if (owner._refused)
-                {
-                    owner._memory.ReleaseUnusedCapacity();
-                    owner._refused = false;
-                }
-                else
-                    owner._memory.TrimExcess();
-                owner._retainedBytes = retained;
-            }
+            try { ResetWorkspace(); }
             finally { owner._command = parent; }
         }
     }

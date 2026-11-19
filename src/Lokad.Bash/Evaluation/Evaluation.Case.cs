@@ -1,6 +1,4 @@
-using System;
 using System.Threading.Tasks;
-using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -13,29 +11,42 @@ public sealed partial class Evaluation
         ScopedEvaluation scope,
         bool negated)
     {
-        var subjectWord = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
-            caseCommand.Subject, scope, ExpansionPurpose.Scalar, TildeExpansion.Argument)).ConfigureAwait(false);
-        var subject = subjectWord.ToValue(Memory);
-        if (_state.HasPendingExpansionError)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+        var body = await SelectBodyAsync().ConfigureAwait(false);
+        if (body == null)
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(_state.HasPendingExpansionError ? 1 : 0), negated)
+                .ConfigureAwait(false);
 
-        foreach (var item in caseCommand.Items)
+        var result = await EvaluateCommandAsync(body, scope, negated: false).ConfigureAwait(false);
+        return ApplyNegation(result, negated);
+
+        async Task<ICommand?> SelectBodyAsync()
         {
-            foreach (var pattern in item.Patterns)
+            using var subjectMemory = Memory.BeginCommand(scope);
+            var subjectWord = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
+                caseCommand.Subject, scope, ExpansionPurpose.Scalar, TildeExpansion.Argument)).ConfigureAwait(false);
+            var subject = subjectWord.ToValue(Memory);
+            if (_state.HasPendingExpansionError)
+                return null;
+
+            using var patternMemory = Memory.BeginCommand(scope);
+            foreach (var item in caseCommand.Items)
             {
-                var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
-                    pattern, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading)).ConfigureAwait(false);
-                if (_state.HasPendingExpansionError)
-                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
-                var prepared = ShellPattern.FromWord(expanded, Memory, _cancellationToken);
-                if (!prepared.IsMatch(subject.Bytes.Span, _cancellationToken))
-                    continue;
+                foreach (var pattern in item.Patterns)
+                {
+                    var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
+                        pattern, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading)).ConfigureAwait(false);
+                    if (_state.HasPendingExpansionError)
+                        return null;
+                    if (ShellPattern.FromWord(expanded, Memory, _cancellationToken)
+                        .IsMatch(subject.Bytes.Span, _cancellationToken))
+                        return item.Body;
 
-                var result = await EvaluateCommandAsync(item.Body, scope, negated: false).ConfigureAwait(false);
-                return ApplyNegation(result, negated);
+                    // Each alternative consumes its expanded pattern. Binding effects
+                    // and the subject snapshot survive reuse of the pattern workspace.
+                    patternMemory.ResetWorkspace();
+                }
             }
+            return null;
         }
-
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
     }
 }
