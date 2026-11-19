@@ -684,7 +684,9 @@ public class ParserTests
     [Theory]
     [InlineData("( true; ! )")]
     [InlineData("{ true; ! }")]
-    public void Parse_StandaloneNegation_RequiresARealTerminator(string source)
+    [InlineData("( printf inner; time )")]
+    [InlineData("case x in x) printf inner; time ;; esac")]
+    public void Parse_StandalonePipelinePrefix_RequiresARealTerminator(string source)
     {
         Assert.Throws<SyntaxException>(() => Parser.Parse(source));
     }

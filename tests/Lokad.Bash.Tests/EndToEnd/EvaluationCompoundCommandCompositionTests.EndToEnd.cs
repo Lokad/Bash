@@ -20,6 +20,17 @@ public sealed class EvaluationCompoundCommandCompositionTestsEndToEnd
         Assert.Equal(string.Empty, result.StdErr);
     }
 
+    [Fact]
+    public async Task MissingPipelineCommandInSkippedSubstitutionStopsItsCommandUnit()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("printf earlier\ntrue || value=$(time)\nprintf later\n", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("earlier", host.StandardOutput.TextContent);
+        Assert.StartsWith("syntax error:", host.StandardError.TextContent);
+    }
+
     [Theory]
     [InlineData("for ((i=0;i<1;i++)) do printf ok; done")]
     [InlineData("for ((i=0;i<1;i++)); do printf ok; done")]

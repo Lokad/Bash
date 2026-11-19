@@ -323,12 +323,8 @@ public static class Parser
         var first = ParseCommandAtom(tokenizer, afterPipe: false);
         if (first == null)
         {
-            if (negated)
-            {
-                tokenizer.RecordError("Expected command after !.", tokenizer.Position);
-                return null;
-            }
-
+            if (prefixed)
+                tokenizer.RecordError(negated ? "Expected command after !." : "Expected command after pipeline prefix.", tokenizer.Position);
             return null;
         }
 

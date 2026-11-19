@@ -6,6 +6,16 @@ namespace Lokad.Bash.Tests;
 
 public sealed class CommandSubstitutionSyntaxTests
 {
+    [Theory]
+    [InlineData("value=$(time)")]
+    [InlineData("value=\"$(false; time)\"")]
+    [InlineData("value=$(! !)")]
+    [InlineData("value=$(time\\\n)")]
+    public void PipelinePrefixBeforeSubstitutionCloseRequiresATerminator(string source)
+    {
+        Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+    }
+
     [Fact]
     public async Task ReachedLegacyTreesSharePhysicalSyntaxAndRefundAfterLastUser()
     {
