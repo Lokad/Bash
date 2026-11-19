@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Helpers;
@@ -53,8 +52,7 @@ public static class ShellCommandParser
         if (script.Commands.Count != 1)
             return null;
 
-        var stages = new List<(string Name, IReadOnlyList<string> Arguments)>();
-        return TryFlattenPipeline(script.Commands[0], stages) ? stages : null;
+        return TryFlattenPipeline(script.Commands[0]);
     }
 
     /// <summary>
@@ -79,7 +77,7 @@ public static class ShellCommandParser
         var start = 0;
         var requiresCommand = false;
         var pipelines = 0;
-        IReadOnlyList<(string Name, IReadOnlyList<string> Arguments)>? singleStages = null;
+        ICommand? singlePipeline = null;
         while (true)
         {
             if (!tokenizer.TryPeekToken(out var next, out _))
@@ -103,12 +101,7 @@ public static class ShellCommandParser
             if (!Parser.TryParsePipeline(tokenizer, out var command, out _) || command is null)
                 return null;
 
-            pipelines++;
-            if (pipelines == 1)
-            {
-                var stages = new List<(string Name, IReadOnlyList<string> Arguments)>();
-                singleStages = TryFlattenPipeline(command, stages) ? stages : null;
-            }
+            singlePipeline = ++pipelines == 1 ? command : null;
 
             if (!tokenizer.TryPeekToken(out var boundary, out _))
                 return null;
@@ -131,33 +124,36 @@ public static class ShellCommandParser
 
         void AddSegment(int end)
         {
+            // Pending here-documents can make several headers share one source segment.
+            var stages = singlePipeline == null ? null : TryFlattenPipeline(singlePipeline);
             result.Add(new ShellCommandChainSegment(source.Slice(start, end - start).ToUtf8String().Trim(' ', '\t', '\n'),
-                pipelines == 1 ? singleStages : null));
+                stages));
             pipelines = 0;
-            singleStages = null;
+            singlePipeline = null;
         }
     }
 
     /// <summary>
     /// Flattens a left-associative <c>|</c>-pipeline of simple commands into ordered stages.
-    /// Returns false for anything else (negation, <c>|&amp;</c>, subshells, control structures).
+    /// Returns <c>null</c> for anything else (negation, <c>|&amp;</c>, subshells, control structures).
     /// </summary>
-    private static bool TryFlattenPipeline(ICommand command, List<(string Name, IReadOnlyList<string> Arguments)> stages)
+    private static IReadOnlyList<(string Name, IReadOnlyList<string> Arguments)>? TryFlattenPipeline(ICommand command)
     {
         // Parsed pipelines have a left spine; display extraction additionally
         // rejects operators/negation that execution supports.
+        var stages = new List<(string Name, IReadOnlyList<string> Arguments)>();
         while (command is PipelineCommand pipeline)
         {
             if (pipeline is not { Operator: PipelineOperator.Pipe, Negated: false }
                 || !AppendStage(pipeline.Right))
-                return false;
+                return null;
             command = pipeline.Left;
         }
 
         if (!AppendStage(command))
-            return false;
+            return null;
         stages.Reverse();
-        return true;
+        return stages;
 
         bool AppendStage(ICommand item)
         {
@@ -176,13 +172,23 @@ public static class ShellCommandParser
     private static bool TryFlattenSimpleCommand(SimpleCommand simple, out (string Name, IReadOnlyList<string> Arguments) result)
     {
         result = default;
-        if (simple.Words.Count == 0)
+        if (simple.Words.Count == 0 || !TryFlattenCommandWord(simple.Words[0], out var name))
             return false;
 
-        var words = new List<string>(simple.Words.Count);
-        foreach (var word in simple.Words)
+        var arguments = new List<string>(simple.Words.Count - 1);
+        for (var index = 1; index < simple.Words.Count; index++)
         {
-            if (!TryFlattenWord(word, out var text))
+            if (!TryFlattenCommandWord(simple.Words[index], out var argument))
+                return false;
+            arguments.Add(argument);
+        }
+
+        result = (name, arguments);
+        return true;
+
+        bool TryFlattenCommandWord(Word word, out string text)
+        {
+            if (!TryFlattenWord(word, out text))
                 return false;
             if (simple.DeclarationAssignments.TryGetValue(word, out var assignment)
                 && assignment.ArrayValues is { } items)
@@ -197,11 +203,8 @@ public static class ShellCommandParser
                 }
                 text = compound.Append(')').ToString();
             }
-            words.Add(text);
+            return true;
         }
-
-        result = (words[0], words.Skip(1).ToList());
-        return true;
     }
 
     /// <summary>

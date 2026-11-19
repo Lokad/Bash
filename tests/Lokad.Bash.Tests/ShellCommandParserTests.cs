@@ -563,6 +563,26 @@ public class ShellCommandParserTests
     }
 
     [Theory]
+    [InlineData("show 'two words' <<DOC; next")]
+    [InlineData("next <<DOC; show 'two words'")]
+    public void TryParseChain_GroupedHereDocumentRetainsSourceAndNextStage(string header)
+    {
+        var grouped = header + "\nsample\nDOC";
+        var result = ShellCommandParser.TryParseChain(grouped + "\nfinish '' 'two words'");
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Count);
+        Assert.Equal(grouped, result[0].Text);
+        Assert.Null(result[0].Stages);
+        Assert.Equal("finish '' 'two words'", result[1].Text);
+        var stages = result[1].Stages;
+        Assert.NotNull(stages);
+        var stage = Assert.Single(stages);
+        Assert.Equal("finish", stage.Name);
+        Assert.Equal(["", "two words"], stage.Arguments);
+    }
+
+    [Theory]
     [InlineData("cat a &&")]
     [InlineData("cat a &&; ls /")]
     [InlineData("cat a |")]
