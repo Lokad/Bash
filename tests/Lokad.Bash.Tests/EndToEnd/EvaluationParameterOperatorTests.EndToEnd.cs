@@ -38,6 +38,74 @@ public sealed class EvaluationParameterOperatorTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("#", "a[0]=771,a[3]=772", "<71><4><72>")]
+    [InlineData("##", "a[0]=771,a[3]=772", "<><4><>")]
+    [InlineData("%", "a[0]=177,a[3]=277", "<17><4><27>")]
+    [InlineData("%%", "a[0]=177,a[3]=277", "<1><4><2>")]
+    public async Task PatternRemoval_EnumeratesUpdatedArrayAfterExpandingThePatternOnce(
+        string patternOperator, string mutation, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "a=(713 4); p='7*'; n=0; printf '<%s>' \"${a[@]" + patternOperator
+            + "${p:0:$((" + mutation + ",n+=2))}}\"; printf '/%s' \"$n\"");
+
+        Assert.Equal(expected + "/2", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("a=([9]=711); IFS=:", "a[*]", "a[9]=79,a[2]=72", "<2:9>")]
+    [InlineData("a=(711 8); declare -n ref=a", "ref[@]", "a[0]=77,a[3]=79", "<7><8><9>")]
+    [InlineData("a=(711 8); ref='a[@]'", "!ref", "a[0]=77,a[3]=79", "<7><8><9>")]
+    [InlineData("declare -A a=([key]=711)", "a[@]", "a[key]=77,a[new]=77", "<7><7>")]
+    [InlineData("a=711", "a", "a=77", "<11>")]
+    [InlineData("a=711", "a[@]", "a=77", "<11>")]
+    public async Task PatternRemoval_UsesTheSelectedParameterKind(
+        string setup, string parameter, string mutation, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(setup
+            + "; p=7; printf '<%s>' \"${" + parameter + "#${p:0:$((" + mutation + ",1))}}\"");
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("unset a", "a", "<x><><y>", "")]
+    [InlineData("a=", "a", "<x><><y>", "")]
+    [InlineData("a=('')", "a[0]", "<x><><y>", "")]
+    [InlineData("a=('')", "a[@]", "<x><><y>", "pattern")]
+    [InlineData("a=", "a[*]", "<x><><y>", "pattern")]
+    [InlineData("a=()", "a[@]", "<x><y>", "")]
+    [InlineData("unset a", "a[*]", "<x><><y>", "")]
+    [InlineData("declare -A a=()", "a[@]", "<x><y>", "")]
+    [InlineData("set --", "@", "<x><y>", "")]
+    [InlineData("set -- ''", "@", "<x><><y>", "pattern")]
+    public async Task PatternRemoval_SkipsEmptyScalarsAndZeroFieldAggregates(
+        string setup, string parameter, string expectedOutput, string expectedError)
+    {
+        var result = await EvaluationTestHelper.RunAsync(setup
+            + "; printf '<%s>' x \"${" + parameter + "%%$(printf pattern >&2)}\" y");
+
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task PatternRemoval_EmptyArraySkipsAFatalPattern()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            """a=(); unset missing; printf '<%s>' x "${a[@]#${missing:?unreached}}" y""");
+
+        Assert.Equal("<x><y>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("${value:-${inner:-}}", "<x><y>")]
     [InlineData("${value:-${inner:-$missing}}", "<x><y>")]
     [InlineData("${value:-${inner:-\"$@\"}}", "<x><y>")]

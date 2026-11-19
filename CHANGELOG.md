@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Apply parameter pattern removal to array entries after expanding the pattern.
+  Skip the pattern for empty scalar values and aggregates with no fields.
+
 - Preserve the reached positional and flow context when errexit runs an EXIT
   action, with Bash's binding, redirection and timing order.
 

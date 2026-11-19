@@ -18,6 +18,14 @@ internal static partial class WordExpansion
         internal sealed record Associative(AssociativeArray Array) : ParameterSource;
         internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource;
 
+        public int Count => this switch
+        {
+            Indexed indexed => indexed.Array.Count,
+            Associative associative => associative.Array.Count,
+            Positional positional => positional.Arguments.Count,
+            _ => throw new InvalidOperationException("Unknown parameter source.")
+        };
+
         public IEnumerable<ShellValue> Fields => this switch
         {
             Indexed indexed => indexed.Array.PresentValues,
@@ -44,6 +52,9 @@ internal static partial class WordExpansion
         }
         var transform = parsed.Kind == BracedParameterOperatorKind.Transform ? parsed.Word[0] : (byte)0;
         var inspection = transform is (byte)'a' or (byte)'A' or (byte)'K' or (byte)'k';
+        var removesPattern = parsed.Kind is BracedParameterOperatorKind.RemovePrefixShortest
+            or BracedParameterOperatorKind.RemovePrefixLongest or BracedParameterOperatorKind.RemoveSuffixShortest
+            or BracedParameterOperatorKind.RemoveSuffixLongest;
         if (parsed.Kind == BracedParameterOperatorKind.Transform && !inspection && !"QEUuL"u8.Contains(transform))
         {
             await ReportSubstitutionFailureAsync("unsupported parameter operator", ExpansionFailureKind.Parameter)
@@ -237,6 +248,14 @@ internal static partial class WordExpansion
             case BracedParameterOperatorKind.RemoveSuffixShortest:
             case BracedParameterOperatorKind.RemoveSuffixLongest:
             {
+                // Empty scalar values and zero-field aggregates leave the pattern unreached.
+                if (!parameter.IsSet
+                    || (parameter.Kind is not (VariableReferenceKind.At or VariableReferenceKind.Star) && parameter.Value.IsEmpty))
+                {
+                    Emit(parameter.Fields);
+                    return;
+                }
+
                 var words = await ExpandOperatorWordAsync(
                         parsed.Word, scope, ExpansionQuoteContext.Unquoted, ExpansionPurpose.Scalar,
                         ImplicitEmptyPolicy.Preserve, assignmentTildes: false)
@@ -246,9 +265,12 @@ internal static partial class WordExpansion
                 var budget = scope.Effects.Memory;
                 var pattern = ShellPattern.FromWord(ExpandedWord.JoinWithSpaces(words, budget),
                     budget, scope.Effects.CancellationToken);
-                budget.Charge(checked(256L * parameter.Fields.Count));
-                var removed = new List<ShellValue>(parameter.Fields.Count);
-                foreach (var value in parameter.Fields)
+                // Read the reached array after expanding the pattern, whose effects can change its entries.
+                var source = parameter.RangeSource;
+                var count = source?.Count ?? parameter.Fields.Count;
+                budget.Charge(checked(256L * count));
+                var removed = new List<ShellValue>(count);
+                foreach (var value in source?.Fields ?? parameter.Fields)
                 {
                     scope.Effects.CancellationToken.ThrowIfCancellationRequested();
                     var slice = ApplyPatternRemoval(value, pattern, parsed.Kind, scope.Effects.CancellationToken);
@@ -474,9 +496,8 @@ internal static partial class WordExpansion
                 return value;
             if (indirectName != null && value.IsSet && value.Source is { Kind: VariableReferenceKind.Element }
                 && (parsed.Kind == BracedParameterOperatorKind.Substring && !parsed.Word.IsEmpty
-                    || parsed.Kind is BracedParameterOperatorKind.RemovePrefixShortest or BracedParameterOperatorKind.RemovePrefixLongest
-                        or BracedParameterOperatorKind.RemoveSuffixShortest or BracedParameterOperatorKind.RemoveSuffixLongest
-                        or BracedParameterOperatorKind.Replace or BracedParameterOperatorKind.Transform
+                    || removesPattern
+                    || parsed.Kind is BracedParameterOperatorKind.Replace or BracedParameterOperatorKind.Transform
                         or BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll
                         or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll))
             {
@@ -520,14 +541,16 @@ internal static partial class WordExpansion
                     var variables = selected?.Owner ?? scope.Variables;
                     var resolved = selected is { Reference.Kind: VariableReferenceKind.Name } binding
                         ? binding.Name : BindingName.Empty;
+                    var array = variables.IndexedArrays.GetValueOrDefault(resolved);
+                    var map = array == null ? variables.AssociativeArrays.GetValueOrDefault(resolved) : null;
                     IEnumerable<ShellValue> values;
                     int count;
-                    if (variables.IndexedArrays.TryGetValue(resolved, out var array))
+                    if (array != null)
                     {
                         values = modifier == ParameterModifier.Indirect ? array.PresentKeys.Select(EncodeName) : array.PresentValues;
                         count = array.Count;
                     }
-                    else if (variables.AssociativeArrays.TryGetValue(resolved, out var map))
+                    else if (map != null)
                     {
                         values = modifier == ParameterModifier.Indirect ? map.PresentKeys : map.PresentValues;
                         count = map.Count;
@@ -547,16 +570,14 @@ internal static partial class WordExpansion
                         return new ParameterValue(VariableReferenceKind.Name,
                             [ShellValue.FromText(Integers.FormatNumber(count))], true, null, null);
 
-                    if (parsed.Kind is BracedParameterOperatorKind.None or BracedParameterOperatorKind.Substring
+                    if (modifier == ParameterModifier.None
+                        && (removesPattern || parsed.Kind is BracedParameterOperatorKind.None or BracedParameterOperatorKind.Substring
                         or BracedParameterOperatorKind.Replace or BracedParameterOperatorKind.Transform
                         or BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll
-                        or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll
-                        && modifier == ParameterModifier.None)
+                        or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll))
                     {
-                        ParameterSource? source = variables.IndexedArrays.TryGetValue(resolved, out var indexedSource)
-                            ? new ParameterSource.Indexed(indexedSource)
-                            : variables.AssociativeArrays.TryGetValue(resolved, out var associativeSource)
-                                ? new ParameterSource.Associative(associativeSource) : null;
+                        ParameterSource? source = array != null ? new ParameterSource.Indexed(array)
+                            : map != null ? new ParameterSource.Associative(map) : null;
                         return new ParameterValue(reference.Kind, source == null ? values.ToArray() : [], count != 0, reference, null)
                             { RangeSource = source, InspectionBinding = inspection ? selected : null };
                     }

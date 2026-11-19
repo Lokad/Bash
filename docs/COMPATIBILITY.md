@@ -367,6 +367,12 @@ bytes. Key and value aggregates follow that order, and value slices select
 entries in the same order. GNU Bash can enumerate the same keys in a different
 order.
 
+Prefix and suffix removal apply the expanded pattern to the array's current
+entries. The pattern can change or add entries before matching. Scalar values
+are selected before the pattern expands. Empty scalars and aggregates with
+zero fields skip pattern expansion. An aggregate with a supplied empty field
+still expands the pattern.
+
 Parameter transformations include `@a` for binding attributes and `@A` for
 reusable assignments or declarations. Array `@K` produces a quoted key/value
 string, and `@k` supplies keys and values as fields. A quoted `[@]@k` preserves
