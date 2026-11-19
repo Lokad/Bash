@@ -2838,20 +2838,30 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Writes LF-framed host detail through the supplied descriptor, with an optional path.</summary>
     internal async Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, string prefix, string? path, OperationError error)
     {
+        if (await TryWriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, prefix, path, error).ConfigureAwait(false) == null)
+        {
+            // The operation already failed. Keep the bounded message on its status and cleanup path.
+            await ExecuteWriteAsync(descriptor, ShellMemoryRefusalDiagnostic).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Formats directly into the admitted output buffer. A null result means admission refused.</summary>
+    private async Task<DescriptorWriteResult?> TryWriteOperationDiagnosticAsync(
+        FileDescriptor descriptor, ShellValue name, string prefix, string? path, OperationError error)
+    {
         var encoding = Utf8Text.StrictUtf8;
         var prefixLength = encoding.GetByteCount(prefix);
         var pathLength = path is null ? 0 : encoding.GetByteCount(path);
         var detailLength = encoding.GetByteCount(error.Message.AsSpan());
-        var length = (long)prefixLength + pathLength + (path is null ? 0 : 2) + detailLength;
+        var nameLength = name.IsEmpty ? 0 : (long)name.Bytes.Length + 2;
+        var length = nameLength + prefixLength + pathLength + (path is null ? 0 : 2) + detailLength;
         if (!TryReserveDiagnostic(length, out var reservation))
-        {
-            // The operation already failed. Use the bounded message while its caller settles status and cleanup.
-            await ExecuteWriteAsync(descriptor, ShellMemoryRefusalDiagnostic).ConfigureAwait(false);
-            return;
-        }
+            return null;
 
         using var memory = reservation;
         using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
+        if (!name.IsEmpty)
+            diagnostic.Append(name.Bytes).Append(": "u8);
         encoding.GetBytes(prefix.AsSpan(), diagnostic.AppendSpan(prefixLength));
         if (path != null)
         {
@@ -2859,7 +2869,7 @@ public sealed partial class Evaluation : IFileTester
             diagnostic.Append(": "u8);
         }
         encoding.GetBytes(error.Message.AsSpan(), diagnostic.AppendSpan(detailLength));
-        await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
+        return await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
     }
 
     private async Task<EvaluationResult> ApplyCloseErrorAsync(EvaluationResult result, OperationError? error)

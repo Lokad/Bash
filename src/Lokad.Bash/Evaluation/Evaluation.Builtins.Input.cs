@@ -258,13 +258,9 @@ public sealed partial class Evaluation
                         return await RejectInputAsync().ConfigureAwait(false);
                     }
                     if (result.IsError)
-                    {
-                        if (result.Error is { } error)
-                            await ReportExpansionDiagnosticAsync(ShellValue.FromText("read"),
-                                ShellValue.FromText($"read error: {inputNumber}: {error.MessageWithoutTerminator}"))
-                                .ConfigureAwait(false);
-                        return (1, default, true);
-                    }
+                        return result.Error is { } error
+                            ? await ReadFailureAsync(error).ConfigureAwait(false)
+                            : (1, default, true);
 
                     if (result.Content.IsEmpty)
                     {
@@ -410,8 +406,7 @@ public sealed partial class Evaluation
 
             async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> ReadFailureAsync(OperationError error)
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText("read"),
-                    ShellValue.FromText($"read error: {inputNumber}: {error.MessageWithoutTerminator}"))
+                await ReportBuiltinOperationErrorAsync(ShellValue.FromText("read"), $"read error: {inputNumber}: ", path: null, error)
                     .ConfigureAwait(false);
                 return (1, default, true);
             }

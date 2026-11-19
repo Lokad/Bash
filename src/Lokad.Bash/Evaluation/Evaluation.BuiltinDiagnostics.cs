@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -14,8 +15,20 @@ public sealed partial class Evaluation
     private Task ReportBuiltinWriteFailureAsync(ShellValue name, DescriptorWriteResult result) =>
         result.Error is { } cause && !GetStdErrDescriptor().IsClosed
             && GetStdErrDescriptor() != GetStdOutDescriptor()
-            ? ReportExpansionDiagnosticAsync(name, ShellValue.FromText("write error: " + cause.MessageWithoutTerminator))
+            ? ReportBuiltinOperationErrorAsync(name, "write error: ", path: null, cause)
             : Task.CompletedTask;
+
+    private async Task ReportBuiltinOperationErrorAsync(ShellValue name, string prefix, string? path, OperationError error)
+    {
+        var scope = _builtinDiagnostics;
+        if (scope is { Result.CanAcceptMore: false })
+            return;
+
+        var result = await TryWriteOperationDiagnosticAsync(GetStdErrDescriptor(), name, prefix, path, error).ConfigureAwait(false)
+            ?? throw new MemoryBudgetExceededException();
+        if (scope != null)
+            scope.Result = result;
+    }
 
     /// <summary>
     /// Retains the first diagnostic closure or failure within a builtin invocation.

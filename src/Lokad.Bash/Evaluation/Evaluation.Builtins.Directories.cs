@@ -157,8 +157,8 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> InvalidPathAsync()
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)),
-                ShellValue.FromText(target + ": invalid path")).ConfigureAwait(false);
+            await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
+                target, new OperationError("invalid path\n")).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(1);
         }
     }
@@ -178,10 +178,10 @@ public sealed partial class Evaluation
         var previous = _state.ApplyDirectoryLookup(kind, target, succeeded, Memory);
         if (!succeeded)
         {
-            var detail = selected.Error is { } error ? error.MessageWithoutTerminator
-                : selected.Info.Kind == FilePathKind.Missing ? "No such file or directory" : "Not a directory";
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)),
-                ShellValue.FromText(target.Path + ": " + detail)).ConfigureAwait(false);
+            var error = selected.Error ?? new OperationError(
+                selected.Info.Kind == FilePathKind.Missing ? "No such file or directory\n" : "Not a directory\n");
+            await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
+                target.Path, error).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(1);
         }
 
