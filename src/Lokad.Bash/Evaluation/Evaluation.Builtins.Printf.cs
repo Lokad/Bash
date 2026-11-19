@@ -80,19 +80,15 @@ public sealed partial class Evaluation
             return await ReportUsageAsync().ConfigureAwait(false);
 
         var format = operands[operandIndex++];
-        var arguments = new List<ShellValue>(operands.Count - operandIndex);
-        while (operandIndex < operands.Count)
-            arguments.Add(operands[operandIndex++]);
-
         var scope = new ScopedEvaluation(this, targetVars, context) { SelectorBindings = bindings };
         using var diagnostics = new BuiltinDiagnosticScope(this);
         var outputMemory = Memory.Budget.CreateScope();
         IMemoryReservation? truncatedMemory = null;
         try
         {
-            var result = await PrintfFormatting.EvaluateAsync(format, arguments, Options.Timestamp, outputReference.HasValue,
-                outputMemory, AssignCountAsync, GetStdErrDescriptor().IsClosed ? null : ReportDiagnosticAsync,
-                _cancellationToken).ConfigureAwait(false);
+            var result = await PrintfFormatting.EvaluateAsync(format, operands, operandIndex, Options.Timestamp,
+                outputReference.HasValue, outputMemory, AssignCountAsync,
+                GetStdErrDescriptor().IsClosed ? null : ReportDiagnosticAsync, _cancellationToken).ConfigureAwait(false);
             var exitCode = result.ExitCode;
 
             if (outputReference is { } destination && !HasPendingExpansionError && diagnostics.Result.CanAcceptMore)

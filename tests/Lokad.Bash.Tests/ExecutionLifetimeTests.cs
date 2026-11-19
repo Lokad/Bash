@@ -111,7 +111,7 @@ public sealed class ExecutionLifetimeTests
     {
         var firstOperand = MakeOperand((byte)'1', 0xff);
         var secondOperand = MakeOperand((byte)'2', 0xfe);
-        var state = new Eval(Parser.Parse("printf 'ab%n%d%d%n' before \"$1\" \"$2\" after 2>out"));
+        var state = new Eval(Parser.Parse("printf -- 'ab%n%d%d%n' before \"$1\" \"$2\" after 2>out"));
         state.ReplacePositionalParameters([ShellValue.FromBytes(firstOperand), ShellValue.FromBytes(secondOperand)]);
         var governor = new MemoryGovernor(512 * 1024);
         using var owner = governor.CreateScope();

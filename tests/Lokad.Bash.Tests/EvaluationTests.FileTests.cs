@@ -64,6 +64,24 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
     }
 
+    [Fact]
+    public async Task BracketTestResumesWithTheOriginalOperandsAfterAFileLookup()
+    {
+        var state = new Eval(Parser.Parse("a=([3]=present); i=3; [ -e first -a -v 'a[i++]' -a -e last ]"));
+        var first = await NextPathKindsAsync(state);
+        Assert.Equal("/first", Assert.Single(first.Paths).Path);
+        Assert.Equal(ShellValue.FromText("3"), state.Variables["i"]);
+        first.SetResult([PathKindResult(FilePathKind.File)]);
+
+        var last = await NextPathKindsAsync(state);
+        Assert.Equal("/last", Assert.Single(last.Paths).Path);
+        Assert.Equal(ShellValue.FromText("4"), state.Variables["i"]);
+        last.SetResult([PathKindResult(FilePathKind.File)]);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData("test -t invalid", 1)]
     [InlineData("test -t -1", 1)]

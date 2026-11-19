@@ -24,7 +24,7 @@ public static partial class PrintfFormatting
     /// </summary>
     /// <remarks>
     /// This output-only entry point uses the Unix epoch for the special <c>-1</c> and <c>-2</c>
-    /// timestamp arguments. Evaluator callers use <see cref="EvaluateAsync"/> with their configured timestamp.
+    /// timestamp arguments. Shell invocations use the timestamp supplied by the evaluator.
     /// Explicit timestamp operands use the pinned Linux calendar range. An operand
     /// whose calendar year cannot be represented in that profile falls back to the Unix epoch.
     /// </remarks>
@@ -46,7 +46,16 @@ public static partial class PrintfFormatting
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool assignOutput, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
         Func<Diagnostic, ValueTask<bool>>? reportDiagnostic, CancellationToken cancellationToken) =>
-        new Formatter(format, arguments, timestamp, allowAssignments: true, assignOutput, memoryBudget, reportDiagnostic, cancellationToken).RunAsync(assignCount);
+        EvaluateAsync(format, arguments, firstArgument: 0, timestamp, assignOutput, memoryBudget, assignCount,
+            reportDiagnostic, cancellationToken);
+
+    /// <summary>Borrows the expanded operand suffix through conversion and its callbacks.</summary>
+    internal static ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode)> EvaluateAsync(
+        ShellValue format, IReadOnlyList<ShellValue> arguments, int firstArgument, DateTimeOffset timestamp, bool assignOutput,
+        IMemoryBudget memoryBudget, Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
+        Func<Diagnostic, ValueTask<bool>>? reportDiagnostic, CancellationToken cancellationToken) =>
+        new Formatter(format, arguments, firstArgument, timestamp, allowAssignments: true, assignOutput, memoryBudget,
+            reportDiagnostic, cancellationToken).RunAsync(assignCount);
 
     /// <summary>Formats command output, rejecting the shell-only <c>%n</c> assignment.</summary>
     /// <remarks>Like <see cref="Format"/>, uses the Unix epoch for implicit timestamps.</remarks>
@@ -88,8 +97,8 @@ public static partial class PrintfFormatting
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool allowAssignments, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic)
     {
-        var pending = new Formatter(format, arguments, timestamp, allowAssignments, assignOutput: false, memoryBudget, reportDiagnostic, CancellationToken.None)
-            .RunAsync(assignCount);
+        var pending = new Formatter(format, arguments, firstArgument: 0, timestamp, allowAssignments, assignOutput: false,
+            memoryBudget, reportDiagnostic, CancellationToken.None).RunAsync(assignCount);
         // These callbacks never suspend; do not block the synchronous formatting API.
         if (!pending.IsCompleted)
             throw new InvalidOperationException("Synchronous printf callbacks must complete synchronously.");
@@ -121,6 +130,7 @@ public static partial class PrintfFormatting
     private sealed partial class Formatter(
         ShellValue formatValue,
         IReadOnlyList<ShellValue> arguments,
+        int firstArgument,
         DateTimeOffset timestamp,
         bool allowAssignments, bool assignOutput, IMemoryBudget memoryBudget, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic,
         CancellationToken cancellationToken)
@@ -134,7 +144,7 @@ public static partial class PrintfFormatting
         private List<Diagnostic>? _pendingDiagnostics;
         private MemoryCapacity? _diagnosticMemory;
         private BoundedByteMemoryBuilder? _temporaryOutput;
-        private int _argumentIndex;
+        private int _argumentIndex = firstArgument;
         private int _cycleOutputStart;
         private int _cycleCountAdjustment;
         private bool _conversionError;

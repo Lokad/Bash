@@ -44,11 +44,8 @@ public sealed partial class Evaluation
         }
 
         Memory.Charge(checked(128L * argumentLimit));
-        var arguments = new List<ShellValue>(Math.Max(0, argumentLimit - 1));
-        for (var index = 1; index < argumentLimit; index++)
-            arguments.Add(words[index]);
-
-        var evaluation = TestEvaluation.ParseValues(arguments, _cancellationToken, _state.ErrexitEnabled, Memory);
+        var evaluation = TestEvaluation.ParseValues(words, firstArgument: 1, argumentLimit, _cancellationToken,
+            _state.ErrexitEnabled, Memory);
         bool? mixed = null;
         if (evaluation.HasVariablePredicates)
         {

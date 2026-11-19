@@ -21,13 +21,15 @@ public sealed class TestEvaluation
     private int _index;
     private int _end;
 
-    private TestEvaluation(IReadOnlyList<ShellValue> arguments, CancellationToken cancellationToken, bool errexitEnabled, EvaluationMemory? memory)
+    private TestEvaluation(IReadOnlyList<ShellValue> arguments, int firstArgument, int argumentLimit,
+        CancellationToken cancellationToken, bool errexitEnabled, EvaluationMemory? memory)
     {
         _arguments = arguments;
         _cancellationToken = cancellationToken;
         _errexitEnabled = errexitEnabled;
         _memory = memory;
-        _end = arguments.Count;
+        _index = firstArgument;
+        _end = argumentLimit;
         ParseArguments();
         if (!HasParseError && _index != _end)
             Fail(null, "too many arguments");
@@ -46,11 +48,13 @@ public sealed class TestEvaluation
         var values = new ShellValue[arguments.Count];
         for (var index = 0; index < arguments.Count; index++)
             values[index] = ShellValue.FromText(arguments[index]);
-        return new TestEvaluation(values, CancellationToken.None, false, null);
+        return new TestEvaluation(values, firstArgument: 0, values.Length, CancellationToken.None, false, null);
     }
 
-    internal static TestEvaluation ParseValues(IReadOnlyList<ShellValue> arguments, CancellationToken cancellationToken,
-        bool errexitEnabled, EvaluationMemory memory) => new(arguments, cancellationToken, errexitEnabled, memory);
+    /// <summary>Borrows the expanded operands in the given range through predicate evaluation.</summary>
+    internal static TestEvaluation ParseValues(IReadOnlyList<ShellValue> arguments, int firstArgument, int argumentLimit,
+        CancellationToken cancellationToken, bool errexitEnabled, EvaluationMemory memory) =>
+        new(arguments, firstArgument, argumentLimit, cancellationToken, errexitEnabled, memory);
 
     /// <summary>Collects host predicates; pure predicates are already validated during parsing.</summary>
     internal IReadOnlyList<UnresolvedFileTest> CollectFileTests(out bool? result)
@@ -71,7 +75,8 @@ public sealed class TestEvaluation
         ScopedEvaluation scope, Func<UnresolvedFileTest, Task<bool>> testFile)
     {
         var fileResults = new bool[_files.Count];
-        var variableResults = new bool[_arguments.Count];
+        // Variable predicate steps retain absolute indices in the borrowed operand list.
+        var variableResults = new bool[_end];
         foreach (var step in _steps)
         {
             _cancellationToken.ThrowIfCancellationRequested();
