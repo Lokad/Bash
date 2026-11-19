@@ -196,9 +196,11 @@ that operand's profile. Suffix replacement uses the complete operand's profile.
 
 Pipeline status uses fixed `pipefail`: the rightmost failing stage wins. The
 indexed `PIPESTATUS` array exposes individual foreground statuses.
-The array records statuses before pipeline negation; a subsequent command expands
-its operands against the previous array and replaces it when it completes. Empty
-loops and function definitions preserve the previous array.
+Pipelines record stage statuses before negation. A subsequent command expands
+its operands against the previous statuses. Publication preserves scalar,
+associative, and declaration-only bindings. Initialized sparse arrays reuse their
+positions when they fit the incoming status list. Empty loops and function
+definitions preserve the previous array.
 For `|&`, the left stage applies an implicit `2>&1` after its explicit
 redirections. Setup diagnostics use the stderr mapping reached so far.
 After an ambiguous redirection, the evaluator expands the operand again to name

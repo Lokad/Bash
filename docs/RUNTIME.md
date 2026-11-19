@@ -264,12 +264,16 @@ diagnostic and failure status exempt from errexit at the loop boundary. A
 readonly loop binding exits its shell when errexit is enabled, including in a
 tested position.
 
-Foreground commands admit space for `PIPESTATUS` before execution and publish
-their statuses on completion.
-Pipelines publish the settled stage statuses before applying negation; compound
-syntax preserves the last executed command's metadata. Publication follows binding
-ownership in the active shell and uses the command's admitted workspace through
-descriptor cleanup.
+Foreground commands admit space for `PIPESTATUS` before execution. Publication
+uses the command's admitted workspace through descriptor cleanup. It creates
+missing metadata and updates indexed bindings, including reached nameref
+targets. Declaration-only indexed status entries remain hidden until an explicit
+assignment exposes the array. Simple commands and pipelines publish before negation.
+Arithmetic and conditional commands publish the final status when they return
+normally, while most other compound forms keep the last command's metadata.
+Ordinary builtins with a temporary `PIPESTATUS` assignment keep the caller's
+metadata. Functions, eval, source, unset, read and mapfile can publish after
+restoring the caller's scope.
 
 Positional parameters use owned argument frames behind a stable live read-only
 view. Shifting advances a head index and releases consumed value references;

@@ -118,23 +118,25 @@ internal sealed class IndexedArray
     /// <summary>Records an assignment even when a compound append has no elements.</summary>
     public void MarkInitialized() => IsInitialized = true;
 
-    /// <summary>Gets the greatest present position in constant time.</summary>
+    /// <summary>Gets the greatest stored position for arithmetic indexing, including hidden metadata.</summary>
     public long? MaxIndex => _maximumIndex;
 
     /// <summary>Enumerates present values by index without copying; consume before mutating.</summary>
-    public IEnumerable<ShellValue> PresentValues => _positions.Select(position => _elements[position].GetValueOrDefault());
+    public IEnumerable<ShellValue> PresentValues =>
+        IsInitialized ? _positions.Select(position => _elements[position].GetValueOrDefault()) : [];
 
     /// <summary>Enumerates sparse positions and values together, including unassigned positions.</summary>
-    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries =>
-        _positions.Select(position => KeyValuePair.Create(ShellValue.FromText(Integers.FormatNumber(position)), _elements[position]));
+    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => IsInitialized
+        ? _positions.Select(position => KeyValuePair.Create(ShellValue.FromText(Integers.FormatNumber(position)), _elements[position]))
+        : [];
 
-    /// <summary>Gets the number of present entries, excluding holes.</summary>
-    public int Count => _elements.Count;
+    /// <summary>Gets the number of visible entries, excluding holes.</summary>
+    public int Count => IsInitialized ? _elements.Count : 0;
 
     /// <summary>Enumerates at most count present entries starting at an index, without materializing holes.</summary>
     public IEnumerable<ShellValue> ValuesFrom(IndexedArrayIndex first, int count)
     {
-        if (count <= 0 || _maximumIndex is not { } maximum || first.Value > maximum)
+        if (!IsInitialized || count <= 0 || _maximumIndex is not { } maximum || first.Value > maximum)
             yield break;
         // Seek into the existing position tree. Do not ask the subset for Count:
         // that would enumerate its entire range before a small window can be read.
@@ -146,14 +148,14 @@ internal sealed class IndexedArray
         }
     }
     /// <summary>Enumerates index text for shell metadata expansion without a dense view.</summary>
-    public IEnumerable<string> PresentKeys => _positions.Select(Integers.FormatNumber);
+    public IEnumerable<string> PresentKeys => IsInitialized ? _positions.Select(Integers.FormatNumber) : [];
 
     /// <summary>Gets one present position without allocating.</summary>
     public bool TryGet(
         IndexedArrayIndex index,
         out ShellValue value)
     {
-        if (_elements.TryGetValue(index.Value, out var assigned) && assigned is { } stored)
+        if (IsInitialized && _elements.TryGetValue(index.Value, out var assigned) && assigned is { } stored)
         {
             value = stored;
             return true;
@@ -168,9 +170,12 @@ internal sealed class IndexedArray
     internal void Set(IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory) =>
         Set(index, value, memory, prepaidBytes: 0);
 
-    internal void Set(IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
+    internal void Set(IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes) =>
+        Set(index.Value, value, memory, prepaidBytes);
+
+    private void Set(long position, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
     {
-        var present = _elements.TryGetValue(index.Value, out var previous);
+        var present = _elements.TryGetValue(position, out var previous);
         var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
             - Variables.EstimateValueBytes(previous.GetValueOrDefault());
         var valueBytes = checked(_valueBytes + valueDelta);
@@ -187,14 +192,14 @@ internal sealed class IndexedArray
         memory?.Charge(checked(Math.Max(0, growthBytes - prepaidBytes) + overlap));
         if (replacementCapacity != 0)
             _elements.EnsureCapacity(replacementCapacity);
-        _elements[index.Value] = value;
+        _elements[position] = value;
         if (!present)
-            _positions.Add(index.Value);
+            _positions.Add(position);
         _valueBytes = valueBytes;
         _entryCapacity = Math.Max(_entryCapacity, _elements.Count);
         MarkInitialized();
-        if (!_maximumIndex.HasValue || index.Value > _maximumIndex.Value)
-            _maximumIndex = index.Value;
+        if (!_maximumIndex.HasValue || position > _maximumIndex.Value)
+            _maximumIndex = position;
         if (overlap != 0 && memory != null)
             memory.Workspace.Resize(memory.Workspace.Bytes - overlap);
     }
@@ -215,6 +220,31 @@ internal sealed class IndexedArray
     {
         var array = new IndexedArray(isInitialized: true);
         array.SetSequential(0, values, memory: null, CancellationToken.None);
+        return array;
+    }
+
+    /// <summary>Replaces foreground status values using the caller's admitted result backing.</summary>
+    internal static IndexedArray FromForegroundStatuses(
+        IReadOnlyList<ShellValue> values, IndexedArray? previous, CancellationToken cancellationToken)
+    {
+        var array = new IndexedArray(isInitialized: true);
+        var index = 0;
+        // When the old array fits, Bash updates its existing elements in index order before
+        // appending at ordinal positions. A shorter status list rebuilds from position zero.
+        if (previous != null && previous._elements.Count <= values.Count && previous._maximumIndex >= previous._elements.Count)
+        {
+            foreach (var position in previous._positions)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                array.Set(position, values[index++], memory: null, prepaidBytes: 0);
+            }
+        }
+        for (; index < values.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            array.Set(index, values[index], memory: null, prepaidBytes: 0);
+        }
+        array.IsInitialized = previous?.IsInitialized ?? true;
         return array;
     }
 
@@ -283,7 +313,7 @@ internal sealed class IndexedArray
     /// </remarks>
     public List<ShellValue> CaptureDenseValues()
     {
-        if (MaxIndex is not { } maximum)
+        if (!IsInitialized || MaxIndex is not { } maximum)
             return [];
         if (maximum >= int.MaxValue)
         {

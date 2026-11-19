@@ -720,7 +720,7 @@ public sealed partial class Evaluation : IFileTester
         result = await ApplyCloseErrorAsync(result, closeError).ConfigureAwait(false);
         result = EvaluationResult.FromExitCode(result.ExitCode);
 
-        scope.Variables.SetPipelineStatuses([result.ExitCode], _cancellationToken);
+        scope.Variables.SetPipelineStatuses([result.ExitCode], scope.Context, _cancellationToken);
         return ApplyNegation(result, negated);
     }
 
@@ -813,7 +813,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 // The host propagates cancellation to the stages. Await their cleanup before taking ownership.
                 var results = await pipelineTask.ConfigureAwait(false);
-                scope.Variables.SetPipelineStatuses(results, _cancellationToken);
+                scope.Variables.SetPipelineStatuses(results, scope.Context, _cancellationToken);
                 var exitCode = ComputePipelineExitCode(results);
                 var pipelineNegated = pipelineCommand.Negated ^ negated;
                 var result = EvaluationResult.FromExitCode(EvaluationRules.ApplyNegation(exitCode, pipelineNegated));
@@ -944,6 +944,10 @@ public sealed partial class Evaluation : IFileTester
         SimpleCommand simpleCommand,
         ScopedEvaluation scope)
     {
+        var publishStatus = simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0
+            || simpleCommand.Redirections.Count != 0;
+        if (publishStatus)
+            PreparePipelineStatusStorage(1);
         _state.LastCommandSubstitutionExitCode = null;
         PreparedDeclaration? declaration = null;
         if (simpleCommand.DeclarationAssignments.Count > 0)
@@ -954,7 +958,7 @@ public sealed partial class Evaluation : IFileTester
         }
         simpleCommand = await ExpandCommandNameAsync(simpleCommand).ConfigureAwait(false);
         if (_state.HasPendingExpansionError)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false);
+            return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false));
 
         if (simpleCommand.Words.Count == 0)
         {
@@ -964,7 +968,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 var applied = await AwaitWordExpansionAsync(ApplyAssignmentAsync(assignment)).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
-                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false);
+                    return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false));
                 if (!applied)
                     exitCode = 1;
             }
@@ -993,19 +997,19 @@ public sealed partial class Evaluation : IFileTester
                 assignmentCloseError = await redirectionScope.CloseAsync(
                     assignmentFailure != null || assignmentResult.ExitCode != 0).ConfigureAwait(false);
             }
-            return await ApplyCloseErrorAsync(assignmentResult, assignmentCloseError).ConfigureAwait(false);
+            return PublishStatus(await ApplyCloseErrorAsync(assignmentResult, assignmentCloseError).ConfigureAwait(false));
         }
 
         var commandValue = await ExpandWordValueAsync(simpleCommand.Words[0], scope).ConfigureAwait(false);
         var commandName = string.Empty;
         if (_state.TryConsumeExpansionError(out var nameError))
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(nameError), false).ConfigureAwait(false);
+            return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(nameError), false).ConfigureAwait(false));
 
         var preparation = await AwaitWordExpansionAsync(PrepareCommandAsync(simpleCommand, commandValue, scope)).ConfigureAwait(false);
         using var functionBorrow = new FunctionBinding.Borrow(preparation is PreparedCommand.Executable
             { Resolution: CommandResolution.Function selectedFunction } ? selectedFunction.Binding : null);
         if (_state.TryConsumeExpansionError(out var preparationError))
-            return await FailPreparationAsync(preparationError).ConfigureAwait(false);
+            return PublishStatus(await FailPreparationAsync(preparationError).ConfigureAwait(false));
 
         if (declaration == null && preparation is PreparedCommand.Executable
             { Resolution: CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local } } declarationCommand)
@@ -1014,7 +1018,7 @@ public sealed partial class Evaluation : IFileTester
                 .ConfigureAwait(false);
         }
         if (_state.TryConsumeExpansionError(out var declarationError))
-            return await FailPreparationAsync(declarationError).ConfigureAwait(false);
+            return PublishStatus(await FailPreparationAsync(declarationError).ConfigureAwait(false));
 
         // Expand once in the caller scope before redirections and temporary bindings.
         IReadOnlyList<string> arguments = [];
@@ -1057,7 +1061,7 @@ public sealed partial class Evaluation : IFileTester
         }
 
         if (_state.TryConsumeExpansionError(out var argumentError))
-            return await FailPreparationAsync(argumentError).ConfigureAwait(false);
+            return PublishStatus(await FailPreparationAsync(argumentError).ConfigureAwait(false));
 
         // Prepare echo output before prefix assignments and redirections can cause effects.
         ReadOnlyMemory<byte> echoContent = default;
@@ -1073,7 +1077,7 @@ public sealed partial class Evaluation : IFileTester
             catch (MemoryBudgetExceededException)
             {
                 await ReportMemoryRefusalAsync("echo").ConfigureAwait(false);
-                return await FailPreparationAsync(1).ConfigureAwait(false);
+                return PublishStatus(await FailPreparationAsync(1).ConfigureAwait(false));
             }
 
         }
@@ -1083,7 +1087,7 @@ public sealed partial class Evaluation : IFileTester
         var prefixNames = simpleCommand.Assignments.Count == 0 ? null : new HashSet<BindingName>();
         var assignmentError = await AwaitWordExpansionAsync(PrepareAssignmentsAsync()).ConfigureAwait(false);
         if (assignmentError.HasValue)
-            return await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false);
+            return PublishStatus(await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false));
 
         // In-process redirections write both caller bindings and the prepared command scope.
         // Do not infer writes by comparing values: assigning the caller's old value still replaces a prefix.
@@ -1169,7 +1173,14 @@ public sealed partial class Evaluation : IFileTester
                         owner.Release();
             }
         }
-        return await ApplyCloseErrorAsync(preparedResult, commandCloseError).ConfigureAwait(false);
+        return PublishStatus(await ApplyCloseErrorAsync(preparedResult, commandCloseError).ConfigureAwait(false));
+
+        EvaluationResult PublishStatus(EvaluationResult result)
+        {
+            if (publishStatus && result.Flow != FlowControlKind.Exit)
+                scope.Variables.SetPipelineStatuses([result.ExitCode], scope.Context, _cancellationToken);
+            return result;
+        }
 
         async Task<EvaluationResult> ExecuteWithRedirectionsAsync()
         {
@@ -1191,8 +1202,10 @@ public sealed partial class Evaluation : IFileTester
             if (!commandAssignmentsSuccessful)
                 return await FailPreparationAsync(1).ConfigureAwait(false);
 
+            var hasStatusPrefix = prefixNames?.Contains(global::Lokad.Bash.Evaluation.Variables.PipelineStatusName) == true;
             if (preparation is PreparedCommand.Query query)
             {
+                publishStatus &= !hasStatusPrefix;
                 var queryScope = scope with { Variables = commandVars };
                 if (query.ExecutionOptions is { } queryOptions)
                 {
@@ -1217,6 +1230,7 @@ public sealed partial class Evaluation : IFileTester
 
             if (preparation is PreparedCommand.Terminal terminal)
             {
+                publishStatus &= !hasStatusPrefix;
                 // Argument/prefix expansion and redirections can supersede a prepared failure.
                 if (!terminal.Message.IsEmpty)
                     await ExecuteWriteAsync(terminal.Channel == CommandMessageChannel.StandardOutput
@@ -1248,6 +1262,10 @@ public sealed partial class Evaluation : IFileTester
 
             if (executable.Resolution is CommandResolution.EvaluatorBuiltin evaluatorBuiltin)
             {
+                // These builtins publish after their temporary environment has retired.
+                // Other builtins see the temporary scalar when selecting the status array.
+                publishStatus &= !hasStatusPrefix || evaluatorBuiltin.Kind is BuiltinKind.Eval or BuiltinKind.Source
+                    or BuiltinKind.Unset or BuiltinKind.Read or BuiltinKind.Mapfile;
                 var builtinScope = invocationScope;
                 if (argumentZero is { } builtinName)
                 {

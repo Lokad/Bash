@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Publish foreground `PIPESTATUS` with Bash's binding, temporary-scope and
+  negation rules.
+
 - Apply parameter pattern removal to array entries after expanding the pattern.
   Skip the pattern for empty scalar values and aggregates with no fields.
 

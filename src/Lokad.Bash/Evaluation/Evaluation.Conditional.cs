@@ -51,8 +51,6 @@ public sealed partial class Evaluation
                     break;
             }
         }
-        if (_state.FatalExpansion == null)
-            scope.Variables.SetPipelineStatuses([status], _cancellationToken);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated).ConfigureAwait(false);
 
         void Push(ConditionalExpression expression, bool complete)

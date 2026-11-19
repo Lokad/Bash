@@ -1,28 +1,50 @@
 using System.Collections.Generic;
 using System.Threading;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Variables
 {
-    private static readonly BindingName PipelineStatusName = "PIPESTATUS";
+    internal static readonly BindingName PipelineStatusName = "PIPESTATUS";
 
     /// <summary>Publishes completed foreground statuses from the caller's admitted storage.</summary>
-    internal void SetPipelineStatuses(IReadOnlyList<int> statuses, CancellationToken cancellationToken)
+    internal void SetPipelineStatuses(IReadOnlyList<int> statuses, Evaluation.EvaluationContext context, CancellationToken cancellationToken)
     {
-        TryGetBinding(PipelineStatusName, out var slot);
-        // Bash leaves associative replacements alone. An existing initialized indexed
-        // array accepts shell metadata even when readonly; other readonly bindings stay intact.
-        if (slot is AssociativeSlot
-            || IsReadonlyBinding(PipelineStatusName) && slot is not IndexedSlot { Value.IsInitialized: true })
+        var name = PipelineStatusName;
+        var owner = this;
+        TryGetBinding(name, out var slot);
+        if (slot is NamerefSlot)
+        {
+            if (TryResolveBinding(name, selectOwner: null, out var target)
+                && target.Reference.Kind == VariableReferenceKind.Name && target.Owner.TryGetBinding(target.Name, out var resolved))
+            {
+                name = target.Name;
+                owner = target.Owner;
+                slot = resolved;
+            }
+            else
+            {
+                // An unresolved nameref leaves the local alias intact and creates global metadata.
+                owner = context.GetGlobalBindingOwner(name, this);
+                slot = null;
+            }
+        }
+
+        // Indexed arrays accept shell metadata even when readonly. A declaration-only array
+        // retains this backing privately until an explicit assignment makes it visible.
+        if (slot is not (null or IndexedSlot))
             return;
+
         var values = new ShellValue[statuses.Count];
         for (var index = 0; index < statuses.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             values[index] = ShellValue.FromText(Integers.FormatNumber(statuses[index]));
         }
-        ReplaceValue(PipelineStatusName, new IndexedSlot(IndexedArray.FromSequential(values)));
+        var previous = (slot as IndexedSlot)?.Value;
+        var array = IndexedArray.FromForegroundStatuses(values, previous, cancellationToken);
+        owner.StoreBinding(name, new IndexedSlot(array) { Attributes = slot?.Attributes ?? BindingAttributes.None });
     }
 }

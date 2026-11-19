@@ -35,6 +35,11 @@ public sealed partial class Evaluation
         {
             using var memory = Memory.BeginCommand(scope);
             result = await EvaluateCommandCoreAsync(command, scope, negated).ConfigureAwait(false);
+            // These compound forms publish the final (possibly negated) status only
+            // if command execution returns normally to the caller.
+            if (command is ArithmeticCommand or ConditionalCommand && result.Flow == FlowControlKind.None
+                && !ShouldExitForFailure(result))
+                scope.Variables.SetPipelineStatuses([result.ExitCode], scope.Context, _cancellationToken);
         }
         catch (MemoryBudgetExceededException)
         {
@@ -61,7 +66,7 @@ public sealed partial class Evaluation
         {
             if (scope.Context.ErrexitIgnored)
                 result = result.WithTestedStatus(true);
-            else if (_state.ErrexitEnabled && !result.TestedStatus)
+            else if (ShouldExitForFailure(result))
             {
                 result = EvaluationResult.Exit(result.ExitCode);
                 if (hasExitAction)
@@ -74,6 +79,9 @@ public sealed partial class Evaluation
             }
         }
         return result;
+
+        bool ShouldExitForFailure(EvaluationResult status) =>
+            status.ExitCode != 0 && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored && !status.TestedStatus;
 
         async Task<EvaluationResult> EvaluateCommandCoreAsync(
             ICommand command, ScopedEvaluation scope, bool negated)
@@ -140,8 +148,6 @@ public sealed partial class Evaluation
                     var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Syntax, scope)
                         .ConfigureAwait(false);
                     var arithmeticStatus = arithmeticResult is null or 0 ? 1 : 0;
-                    if (_state.FatalExpansion == null)
-                        scope.Variables.SetPipelineStatuses([arithmeticStatus], _cancellationToken);
                     return await FinalizeResultAsync(
                         EvaluationResult.FromExitCode(arithmeticStatus), negated);
                 case ConditionalCommand conditionalCommand:
@@ -149,13 +155,7 @@ public sealed partial class Evaluation
                 case CaseCommand caseCommand:
                     return await EvaluateCaseAsync(caseCommand, scope, negated).ConfigureAwait(false);
                 case SimpleCommand simpleCommand:
-                    var hasStatus = simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0
-                        || simpleCommand.Redirections.Count != 0;
-                    if (hasStatus)
-                        PreparePipelineStatusStorage(1);
                     var simpleResult = await EvaluateSimpleCommandAsync(simpleCommand, scope).ConfigureAwait(false);
-                    if (hasStatus && simpleResult.Flow != FlowControlKind.Exit)
-                        scope.Variables.SetPipelineStatuses([simpleResult.ExitCode], _cancellationToken);
                     return ApplyNegation(simpleResult, negated);
                 default:
                     throw new NotSupportedException("Only simple commands, list control operators, pipelines, groups, subshells, if/elif/else, loops, for-in, arithmetic for, case, function definitions, arithmetic commands, conditional commands, and ! negation are supported in this evaluation stage.");

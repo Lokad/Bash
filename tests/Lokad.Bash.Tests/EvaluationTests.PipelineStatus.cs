@@ -2,12 +2,124 @@ using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
+    [Theory]
+    [InlineData("PIPESTATUS=manual; false", "<1|manual|>")]
+    [InlineData("declare PIPESTATUS; false | true", "<1|unset|>")]
+    [InlineData("declare -a PIPESTATUS; false | true", "<1|unset|a>")]
+    [InlineData("export PIPESTATUS; false", "<1|unset|x>")]
+    [InlineData("PIPESTATUS=(); false | true", "<1|1 0|a>")]
+    [InlineData("f(){ local PIPESTATUS=manual; false; printf '%s:' \"$PIPESTATUS\"; }; f", "manual:<0|0|a>")]
+    public async Task PipelineStatusKeepsUnassignedBindingsInvisible(string setup, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(setup
+            + """; printf '<%s|%s|%s>' "$?" "${PIPESTATUS[*]-unset}" "${PIPESTATUS@a}" """);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("PIPESTATUS=manual false", "<1|7 3>")]
+    [InlineData("PIPESTATUS=manual command -v true", "true\n<0|7 3>")]
+    [InlineData("PIPESTATUS=manual exec", "<0|7 3>")]
+    [InlineData("PIPESTATUS=manual let 'PIPESTATUS=2'", "<0|2 3>")]
+    [InlineData("PIPESTATUS=manual eval false", "<1|1>")]
+    [InlineData("PIPESTATUS=manual read -a other <<< value", "<0|0>")]
+    [InlineData("PIPESTATUS=manual false 2>/dev/null >missing-parent/out", "<1|1>")]
+    public async Task PipelineStatusSelectsTheBuiltinPublicationPhaseAfterRedirectionSetup(string command, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync("(exit 7) | (exit 3); " + command
+            + """; printf '<%s|%s>' "$?" "${PIPESTATUS[*]-unset}" """);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("PIPESTATUS=([5]=9)", "<0|0|5>")]
+    [InlineData("PIPESTATUS=([5]=9); (exit 7) | (exit 3)", "<3|3 7|1 5>")]
+    [InlineData("PIPESTATUS=([1]=9); (exit 7) | (exit 3)", "<3|3|1>")]
+    [InlineData("PIPESTATUS=([3]=9 [5]=8)", "<0|0|0>")]
+    public async Task PipelineStatusReusesPresentPositionsWhenThePriorArrayFits(string setup, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(setup
+            + """; printf '<%s|%s|%s>' "$?" "${PIPESTATUS[*]}" "${!PIPESTATUS[*]}" """);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("PIPESTATUS[7]=manual", "<0|0|7 3 manual>")]
+    [InlineData("PIPESTATUS+=([7]=manual)", "<0|0|7 3 manual>")]
+    [InlineData("PIPESTATUS=([7]=manual)", "<0|7|manual>")]
+    public async Task PipelineStatusAssignmentRevealsOnlyTheRetainedIndexedValues(string assignment, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "declare -a PIPESTATUS; (exit 7) | (exit 3); " + assignment + """
+             captured="${PIPESTATUS[*]}"; printf '<%s|%s|%s>' "${PIPESTATUS[*]}" "${!PIPESTATUS[*]}" "$captured"
+            """);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("dest=(9 8)", "<3|7 3>:<0>")]
+    [InlineData("dest=scalar", "<3|scalar>:<scalar>")]
+    [InlineData("unset dest", "<3|unset>:<unset>")]
+    public async Task PipelineStatusResolvesTheReachedNamerefBinding(string setup, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(setup + """
+            ; f(){ local -n PIPESTATUS=dest; (exit 7) | (exit 3); printf '<%s|%s>' "$?" "${PIPESTATUS[*]-unset}"; }
+            f
+            printf ':<%s>' "${dest[*]-unset}"
+            """);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("((0))")]
+    [InlineData("[[ x == y ]]")]
+    public async Task PipelineStatusPublishesTheNegatedCompoundStatus(string command)
+    {
+        var result = await EvaluationTestHelper.RunAsync("! " + command
+            + """; printf '<%s|%s>' "$?" "${PIPESTATUS[*]}" """);
+
+        Assert.Equal("<0|0>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("((0))", "<1|0>")]
+    [InlineData("[[ x == y ]]", "<1|0>")]
+    [InlineData("PIPESTATUS=manual false", "<1|0>")]
+    [InlineData("false", "<1|1>")]
+    public async Task PipelineStatusInExitActionUsesTheReachedPublicationPhase(string command, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            """set -e; trap 'printf "<%s|%s>" "$?" "${PIPESTATUS[*]}"' EXIT; """ + command);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(1, result.ExitCode);
+    }
+
     [Theory]
     [InlineData("", 1)]
     [InlineData("! ", 0)]
