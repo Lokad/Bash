@@ -107,6 +107,10 @@ replacements stay charged. These reservations describe live ownership, with no
 lifetime expansion credits. A nested host must receive a memory budget under the
 same root; command inheritance does not copy or create a memory allowance.
 
+Conditional evaluation admits its traversal buffer before growing it, including
+overlap during replacement. Reached predicates reuse the buffer, which stays
+charged through pending operations and is refunded when traversal unwinds.
+
 Command-prefix preparation and isolated external redirection expansion borrow
 the caller's store and positional frame.
 Only reached bindings acquire admitted, independent containers in command

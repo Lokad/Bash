@@ -1,5 +1,6 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 
@@ -79,5 +80,82 @@ public partial class EvaluationTests
         operation.SetResult([SizeInfo(FilePathKind.File, 1)]);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
         Assert.False(state.Variables.ContainsKey("after"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FlatConditionalKeepsItsFramesUntilTheReachedQuerySettles(bool cancel)
+    {
+        var baseline = await MeasureAsync(0, cancel);
+        var wide = await MeasureAsync(1023, cancel);
+        Assert.True(wide.Pending - baseline.Pending >= 1023 * IntPtr.Size);
+        Assert.Equal(baseline.Settled, wide.Settled);
+
+        static async Task<(long Pending, long Settled)> MeasureAsync(int skipped, bool cancel)
+        {
+            var budget = new MemoryGovernor(128 * 1024);
+            using var owner = budget.CreateScope();
+            using var cancellation = new CancellationTokenSource();
+            var tail = string.Concat(Enumerable.Repeat(" || -f skipped", skipped));
+            var state = new Eval(Parser.Parse($"[[ -f first{tail} ]]"));
+            state.Memory.Budget = owner;
+
+            var completion = state.EnsureRunning(cancellation.Token);
+            var first = await NextPathKindsAsync(state);
+            Assert.Equal("/first", Assert.Single(first.Paths).Path);
+            var pending = budget.ReservedBytes;
+            if (cancel)
+            {
+                cancellation.Cancel();
+                Assert.False(completion.IsCompleted);
+                Assert.Equal(pending, budget.ReservedBytes);
+            }
+            first.SetResult([PathKindResult(FilePathKind.File)]);
+
+            if (cancel)
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+            else
+            {
+                Assert.Null(await NextStepAsync(state));
+                Assert.Equal(0, state.LastExitCode);
+            }
+            return (pending, budget.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task BalancedConditionalReusesFramesAcrossReachedOperands()
+    {
+        var budget = new MemoryGovernor(32 * 1024);
+        using var owner = budget.CreateScope();
+        var state = new Eval(Parser.Parse($"[[ {Group(1024, finalEmpty: true)} ]]"));
+        state.Memory.Budget = owner;
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+
+        static string Group(int count, bool finalEmpty) => count == 1
+            ? finalEmpty ? "''" : "x"
+            : $"( {Group(count / 2, finalEmpty: false)} && {Group(count / 2, finalEmpty)} )";
+    }
+
+    [Fact]
+    public async Task RefusedConditionalFramesPreventTheQueryAndLeaveMemoryForTheNextCommand()
+    {
+        var budget = new MemoryGovernor(32 * 1024);
+        using var owner = budget.CreateScope();
+        var tail = string.Concat(Enumerable.Repeat(" || -f skipped", 1023));
+        var state = new Eval(Parser.Parse($"[[ -f first{tail} ]]; after=$?"));
+        state.Memory.Budget = owner;
+
+        var diagnostic = Assert.IsType<WriteOperation>(await NextStepAsync(state));
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("shell: shared memory budget exhausted\n"u8.ToArray(), diagnostic.Content.ToArray());
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(ShellValue.FromText("1"), state.Variables["after"]);
+        Assert.Equal(0, state.LastExitCode);
     }
 }

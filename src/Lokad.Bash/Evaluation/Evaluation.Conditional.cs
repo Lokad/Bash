@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using static Lokad.Bash.Evaluation.ShellPredicates;
 
@@ -16,12 +17,15 @@ public sealed partial class Evaluation
         ConditionalCommand command, ScopedEvaluation scope, bool negated)
     {
         PreparePipelineStatusStorage(1);
-        var work = new Stack<(ConditionalExpression Expression, bool Complete)>();
+        using var workMemory = new MemoryCapacity(Memory.Budget, 0);
+        var work = new List<(ConditionalExpression Expression, bool Complete)>();
         Push(command.Condition, false);
         var status = 1;
-        while (work.TryPop(out var frame))
+        while (work.Count > 0)
         {
             _cancellationToken.ThrowIfCancellationRequested();
+            var frame = work[^1];
+            work.RemoveAt(work.Count - 1);
             if (frame.Complete)
             {
                 if (_state.HasPendingExpansionError)
@@ -55,8 +59,8 @@ public sealed partial class Evaluation
 
         void Push(ConditionalExpression expression, bool complete)
         {
-            Memory.Charge(128);
-            work.Push((expression, complete));
+            Memory.PrepareListCapacity(workMemory, work, 1);
+            work.Add((expression, complete));
         }
 
         async Task<ExpandedWord> ExpandAsync(Word word) => await WordExpansion.ExpandUnsplitWordAsync(
