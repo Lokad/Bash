@@ -102,6 +102,12 @@ public sealed partial class Evaluation
                     var predicate = binary.Predicate;
                     if (predicate.Operator == BinaryPredicateKind.RegexMatch)
                         return await MatchRegexAsync(left, rightWord).ConfigureAwait(false);
+                    if (predicate.Operator is BinaryPredicateKind.StringEqual or BinaryPredicateKind.StringNotEqual)
+                    {
+                        var matched = ShellPattern.FromWord(rightWord, Memory, _cancellationToken)
+                            .IsMatch(left.Bytes.Span, _cancellationToken);
+                        return matched == (predicate.Operator == BinaryPredicateKind.StringEqual) ? 0 : 1;
+                    }
                     var right = rightWord.ToValue(Memory);
                     if (predicate.IsFilePredicate)
                         return await FileAsync(predicate.FileKind, left, right).ConfigureAwait(false);
@@ -115,12 +121,6 @@ public sealed partial class Evaluation
                         var r = await WordExpansion.EvaluateArithmeticAsync(ArithmeticOperand.FromValue(right), scope,
                             WordExpansion.ArithmeticFailureMode.Diagnostic).ConfigureAwait(false);
                         return !r.HasValue ? 1 : CompareNumbers(predicate.Operator, l.Value, r.Value) ? 0 : 1;
-                    }
-                    if (predicate.Operator is BinaryPredicateKind.StringEqual or BinaryPredicateKind.StringNotEqual)
-                    {
-                        var matched = ShellPattern.FromWord(rightWord, Memory, _cancellationToken)
-                            .IsMatch(left.Bytes.Span, _cancellationToken);
-                        return matched == (predicate.Operator == BinaryPredicateKind.StringEqual) ? 0 : 1;
                     }
                     var comparison = ShellValue.ByteOrder.Compare(left, right);
                     return (predicate.Operator == BinaryPredicateKind.StringLess ? comparison < 0 : comparison > 0) ? 0 : 1;

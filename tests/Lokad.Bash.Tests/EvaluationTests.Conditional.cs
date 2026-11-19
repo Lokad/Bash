@@ -2,12 +2,33 @@ using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
+    [Theory]
+    [InlineData("! % == \"$1\"$2", 255, "a", 8 * 1024)]
+    [InlineData("% != \"$1\"$2", 1022, "\\*", 32 * 1024)]
+    public async Task ConditionalPatternJoinsMultipartOperandWithinAllowance(
+        string predicate, int prefixLength, string suffix, int allowance)
+    {
+        var prefix = new string('a', prefixLength);
+        var state = new Eval(Parser.Parse($"set -- '{prefix}' '{suffix}'; [[ {predicate} ]]"));
+        var budget = new MemoryGovernor(allowance);
+        await using var host = new TestHost { MemoryBudget = budget };
+        using var owner = budget.CreateScope();
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
     [Fact]
     public async Task ReachedFileChecksObserveTheHostAtEachPredicate()
     {
