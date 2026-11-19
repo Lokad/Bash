@@ -1269,6 +1269,40 @@
       "stderrHex": ""
     },
     {
+      "id": "case-parenthesized-esac-pattern",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "case esac in (esac) printf hit;; esac\n",
+      "scriptSha256": "8ac399dbb786a3b443f0a3edc98d9c0c7cffcef4872e86ce84b16942ebe9c03d",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "686974",
+      "stderrHex": ""
+    },
+    {
+      "id": "case-parenthesized-esac-pattern-in-substitution",
+      "classification": "deviation",
+      "reason": "Lokad.Bash matches the unquoted parenthesized esac pattern and captures the selected arm output and status. Both Bash pins emit the arm source text in this substitution.",
+      "locale": "C",
+      "script": "value=$(case esac in (esac) printf hit; false;; esac); printf \"<%s:%s>\" \"$?\" \"$value\"\n",
+      "scriptSha256": "914cf4f9a32d6af237478ac766495786c9440a83d19c8e8a4cd212b7ab48f08e",
+      "stdinHex": "",
+      "files": [],
+      "fileEffects": [],
+      "exitCode": 0,
+      "stdoutHex": "3c303a0a20202020202020207072696e7466206869743b2066616c73650a202020203b3b0a65736163293e",
+      "stderrHex": "",
+      "managedExpectation": {
+        "fileEffects": [],
+        "exitCode": 0,
+        "stdoutHex": "3c313a6869743e",
+        "stderrHex": ""
+      }
+    },
+    {
       "id": "case-quoted-literal",
       "classification": "supported",
       "reason": "",

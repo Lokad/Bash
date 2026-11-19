@@ -314,7 +314,10 @@ Extended shell patterns `?(...)`, `*(...)`, `+(...)`, `@(...)` and `!(...)` are
 unsupported in `[[`, case arms and parameter pattern operators. Case allows line
 breaks between the subject and `in`, an optional opening `(` before each arm's
 patterns and the `;;` terminator. Fallthrough `;&` and retesting `;;&` remain
-unsupported.
+unsupported. Inside an explicitly parenthesized arm, an unquoted `esac` can be
+a literal pattern. Lokad.Bash applies that grammar inside command substitutions
+and captures the selected arm's output and status. In the recorded conformance
+case, both GNU Bash pins produce text from the arm's source inside the capture.
 
 Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
 A word loop needs a semicolon or line break before the opening brace. An
