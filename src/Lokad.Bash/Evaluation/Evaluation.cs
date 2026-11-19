@@ -3215,13 +3215,20 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Writes one admitted record from borrowed fragments of the name and message.</summary>
     internal Task ReportExpansionDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message) =>
-        WriteDiagnosticAsync(name, message, _builtinDiagnostics);
+        WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite);
 
     private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
-        BuiltinDiagnosticScope? scope)
+        BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr)
     {
         if (scope is { Result.CanAcceptMore: false })
             return Task.FromResult(scope.Result);
+
+        var descriptor = GetStdErrDescriptor();
+        if (closedStderr == ClosedStderrHandling.Discard && descriptor.IsClosed)
+        {
+            CheckCancellation();
+            return Task.FromResult(DescriptorWriteResult.Closed);
+        }
 
         var length = (long)DiagnosticPunctuationBytes;
         foreach (var part in name)
@@ -3240,7 +3247,7 @@ public sealed partial class Evaluation : IFileTester
             foreach (var part in message)
                 diagnostic.Append(part.Bytes);
             diagnostic.Append((byte)'\n');
-            return WriteAsync(diagnostic.ToMemory(), scope, reservation);
+            return WriteAsync(descriptor, diagnostic.ToMemory(), scope, reservation);
         }
         catch
         {
@@ -3248,11 +3255,11 @@ public sealed partial class Evaluation : IFileTester
             throw;
         }
 
-        async Task<DescriptorWriteResult> WriteAsync(ReadOnlyMemory<byte> bytes, BuiltinDiagnosticScope? scope,
+        async Task<DescriptorWriteResult> WriteAsync(FileDescriptor descriptor, ReadOnlyMemory<byte> bytes, BuiltinDiagnosticScope? scope,
             IMemoryReservation? reservation)
         {
             using var memory = reservation;
-            var result = await ExecuteWriteAsync(GetStdErrDescriptor(), bytes).ConfigureAwait(false);
+            var result = await ExecuteWriteAsync(descriptor, bytes).ConfigureAwait(false);
             if (scope != null)
                 scope.Result = result;
             return result;

@@ -10,6 +10,36 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationGetoptsTestsEndToEnd
 {
     [Theory]
+    [InlineData("a", "-x")]
+    [InlineData("a:", "-a")]
+    public async Task ShellClosedStderrKeepsOptionWarningAssignments(string options, string operand)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"OPTARG=old; getopts '{options}' pick {operand} 2>&-; "
+            + "printf '<%s><%s><%s><%s>' \"$?\" \"${pick-unset}\" \"$OPTIND\" \"${OPTARG-unset}\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><?><2><unset>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task HostOptionWarningFailureStillPreventsAssignments()
+    {
+        var state = new Evaluation.Evaluation(Parser.Parse("OPTARG=old; getopts a pick -x"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("Synthetic write failure\n")));
+
+        await new Engine().RunAsync(state, host);
+
+        Assert.Equal(1, state.LastExitCode);
+        Assert.False(state.Variables.ContainsKey("pick"));
+        Assert.Equal(ShellValue.FromText("1"), state.Variables["OPTIND"]);
+        Assert.Equal(ShellValue.FromText("old"), state.Variables["OPTARG"]);
+        Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
+    }
+
+    [Theory]
     [InlineData(16, false)]
     [InlineData(16, true)]
     [InlineData(4096, false)]

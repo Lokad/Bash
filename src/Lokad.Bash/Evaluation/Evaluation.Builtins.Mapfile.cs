@@ -215,7 +215,7 @@ public sealed partial class Evaluation
         {
             // Advertise the supported subset, not Bash options whose behavior is intentionally absent.
             var commandName = arguments[0];
-            var result = await WriteDiagnosticAsync([commandName],
+            var result = await WriteDiagnosticUnlessStderrClosedAsync([commandName],
                 [ShellValue.FromText("-"), ShellValue.FromBytes(option), ShellValue.FromText(detail + "\n"),
                     commandName, ShellValue.FromText(": usage: "), commandName,
                     ShellValue.FromText(" " + BuiltinDocumentation.For(BuiltinKind.Mapfile).Arguments)], scope: null).ConfigureAwait(false);
@@ -324,7 +324,8 @@ public sealed partial class Evaluation
 
         async Task<(IndexedInputTarget?, int)> InvalidTargetAsync(ShellValue name)
         {
-            await WriteInvalidIdentifierDiagnosticAsync(command, name, _builtinDiagnostics).ConfigureAwait(false);
+            await WriteInvalidIdentifierDiagnosticAsync(command, name, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite)
+                .ConfigureAwait(false);
             return (null, 1);
         }
     }

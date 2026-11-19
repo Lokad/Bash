@@ -11,9 +11,16 @@ public sealed partial class Evaluation
 
     internal bool BuiltinDiagnosticsOpen => _builtinDiagnostics?.Result.CanAcceptMore != false;
 
-    private Task<DescriptorWriteResult> WriteInvalidIdentifierDiagnosticAsync(ShellValue command, ShellValue operand,
+    private enum ClosedStderrHandling { AttemptWrite, Discard }
+
+    private Task<DescriptorWriteResult> WriteDiagnosticUnlessStderrClosedAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope) =>
-        WriteDiagnosticAsync([command], [ShellValue.FromText("`"), operand, ShellValue.FromText("': not a valid identifier")], scope);
+        WriteDiagnosticAsync(name, message, scope, ClosedStderrHandling.Discard);
+
+    private Task<DescriptorWriteResult> WriteInvalidIdentifierDiagnosticAsync(ShellValue command, ShellValue operand,
+        BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
+        WriteDiagnosticAsync([command], [ShellValue.FromText("`"), operand, ShellValue.FromText("': not a valid identifier")],
+            scope, closedStderr);
 
     private async Task<DescriptorWriteResult> WriteBuiltinOutputAsync(ShellValue name, ReadOnlyMemory<byte> content)
     {

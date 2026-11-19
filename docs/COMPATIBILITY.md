@@ -425,6 +425,13 @@ do not produce range warnings. A shell-closed stderr discards conversion diagnos
 without suppressing stdout; host-reported diagnostic failures retain their ordinary
 stop policy. Numeric parsing observes cancellation and shared workspace admission.
 
+Usage failures from `printf`, `mapfile`, `readarray`, `read` and
+`getopts` retain status 2 when stderr is explicitly closed by shell
+redirection. The shell discards those diagnostics before reserving a record.
+Closing stderr also suppresses `getopts` option warnings while the scan still
+updates its option variables.
+Write failures reported by the host still follow the builtin's status policy.
+
 Printf width and precision have no independent 1 MiB quota. A large precision that
 only truncates a short string or leaves a short general-format result does not
 require proportionally large workspace. Actual output, replacement overlap and

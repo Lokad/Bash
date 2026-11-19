@@ -19,7 +19,7 @@ public sealed class EvaluationMapfileOptionTests
     [InlineData("arr=(old); arr=temporary mapfile -x arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "mapfile: -x: invalid option\nmapfile: usage: mapfile [-t] [-d delim] [-n count] [-O origin] [--] [array]\n")]
     [InlineData("! mapfile -x arr; printf '<%s>' \"$?\"", 0, "<0>", "mapfile: -x: invalid option\nmapfile: usage: mapfile [-t] [-d delim] [-n count] [-O origin] [--] [array]\n")]
     [InlineData("readarray -x 2>&1; printf '<%s>' \"$?\"", 0, "readarray: -x: invalid option\nreadarray: usage: readarray [-t] [-d delim] [-n count] [-O origin] [--] [array]\n<2>", "")]
-    [InlineData("mapfile -x 2>&-; printf '<%s>' \"$?\"", 0, "<1>", "")]
+    [InlineData("mapfile -x 2>&-; printf '<%s>' \"$?\"", 0, "<2>", "")]
     [InlineData("mapfile -x \"$(printf expanded >&2)\"; printf '<%s>' \"$?\"", 0, "<2>", "expandedmapfile: -x: invalid option\nmapfile: usage: mapfile [-t] [-d delim] [-n count] [-O origin] [--] [array]\n")]
     [InlineData("readonly arr; mapfile -x arr; printf '<%s>' \"$?\"", 0, "<2>", "mapfile: -x: invalid option\nmapfile: usage: mapfile [-t] [-d delim] [-n count] [-O origin] [--] [array]\n")]
     [InlineData("mapfile -x bad-name; printf '<%s>' \"$?\"", 0, "<2>", "mapfile: -x: invalid option\nmapfile: usage: mapfile [-t] [-d delim] [-n count] [-O origin] [--] [array]\n")]

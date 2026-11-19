@@ -71,8 +71,8 @@ public sealed partial class Evaluation
                 }
                 var flag = option.Span[index];
                 if (flag is not ((byte)'u' or (byte)'d' or (byte)'a'))
-                    return await FailAsync([ShellValue.FromText("-"), ShellValue.FromBytes(option.Slice(index, 1)),
-                        ShellValue.FromText(": invalid option\n" + Usage())], 2).ConfigureAwait(false);
+                    return await FailUsageAsync([ShellValue.FromText("-"), ShellValue.FromBytes(option.Slice(index, 1)),
+                        ShellValue.FromText(": invalid option\n" + Usage())]).ConfigureAwait(false);
 
                 ShellValue operand;
                 if (index + 1 < option.Length)
@@ -80,7 +80,7 @@ public sealed partial class Evaluation
                 else if (++argumentIndex < words.Count)
                     operand = words[argumentIndex];
                 else
-                    return await FailAsync([ShellValue.FromText($"-{(char)flag}: option requires an argument\n" + Usage())], 2)
+                    return await FailUsageAsync([ShellValue.FromText($"-{(char)flag}: option requires an argument\n" + Usage())])
                         .ConfigureAwait(false);
 
                 if (flag == (byte)'d')
@@ -99,7 +99,7 @@ public sealed partial class Evaluation
                 if (!Integers.TryParseNumber(
                         operand.Bytes.Span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8), out var number)
                     || number is < 0 or > int.MaxValue)
-                    return await FailAsync([operand, ShellValue.FromText(": invalid file descriptor specification")], 1)
+                    return await FailAsync([operand, ShellValue.FromText(": invalid file descriptor specification")])
                         .ConfigureAwait(false);
 
                 // Borrow the existing mapping; a logical number never exposes an opaque host handle.
@@ -108,7 +108,7 @@ public sealed partial class Evaluation
                     ?? CaptureDescriptorBindings().Resolve(inputNumber);
                 if (inputDescriptor.IsClosed)
                     return await FailAsync([ShellValue.FromText(inputNumber
-                        + ": invalid file descriptor: Bad file descriptor")], 1).ConfigureAwait(false);
+                        + ": invalid file descriptor: Bad file descriptor")]).ConfigureAwait(false);
                 break;
             }
             argumentIndex++;
@@ -215,8 +215,11 @@ public sealed partial class Evaluation
         Task<EvaluationResult> FinishAsync(int status) => FinalizeResultAsync(
             EvaluationResult.FromExitCode(diagnostics.Result.IsError ? 1 : status), negated);
 
-        Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message, int status) =>
-            FinishFailureAsync(ReportExpansionDiagnosticAsync([ShellValue.FromText("read")], message), status);
+        Task<EvaluationResult> FailUsageAsync(ReadOnlySpan<ShellValue> message) =>
+            FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("read")], message, diagnostics), 2);
+
+        Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message) =>
+            FinishFailureAsync(ReportExpansionDiagnosticAsync([ShellValue.FromText("read")], message), 1);
 
         async Task<EvaluationResult> FinishFailureAsync(Task diagnostic, int status)
         {
@@ -229,7 +232,8 @@ public sealed partial class Evaluation
             && (reference.Kind == VariableReferenceKind.Name || !reference.Subscript.IsEmpty);
 
         Task<EvaluationResult> InvalidTargetAsync(ShellValue name) =>
-            FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("read"), name, diagnostics), 1);
+            FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("read"), name,
+                diagnostics, ClosedStderrHandling.AttemptWrite), 1);
 
         async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectInputAsync()
         {

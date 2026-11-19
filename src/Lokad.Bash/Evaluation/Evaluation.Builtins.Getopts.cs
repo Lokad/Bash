@@ -22,8 +22,8 @@ public sealed partial class Evaluation
                 operand++;
             else if (first.Length > 1 && first.Span[0] == (byte)'-')
             {
-                await ReportExpansionDiagnosticAsync([command],
-                    [ShellValue.FromBytes(first[..2]), ShellValue.FromText(": invalid option")]).ConfigureAwait(false);
+                await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromBytes(first[..2]), ShellValue.FromText(": invalid option")],
+                    diagnostics).ConfigureAwait(false);
                 return await UsageAsync().ConfigureAwait(false);
             }
         }
@@ -47,8 +47,8 @@ public sealed partial class Evaluation
         if (option.Diagnostic && !silent && variables.GetoptsDiagnosticsEnabled)
         {
             var text = option.Outcome == GetoptsOutcome.Missing ? "option requires an argument -- " : "illegal option -- ";
-            await ReportExpansionDiagnosticAsync([variables.ArgumentZero.IsEmpty ? command : variables.ArgumentZero],
-                [ShellValue.FromText(text), ByteValue(option.Flag)]).ConfigureAwait(false);
+            await WriteDiagnosticUnlessStderrClosedAsync([variables.ArgumentZero.IsEmpty ? command : variables.ArgumentZero],
+                [ShellValue.FromText(text), ByteValue(option.Flag)], diagnostics).ConfigureAwait(false);
         }
 
         int status;
@@ -88,7 +88,7 @@ public sealed partial class Evaluation
         async Task<EvaluationResult> UsageAsync()
         {
             var usage = BuiltinDocumentation.For(BuiltinKind.Getopts).Synopsis("getopts");
-            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("usage: " + usage)).ConfigureAwait(false);
+            await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: " + usage)], diagnostics).ConfigureAwait(false);
             return await FinishAsync(2).ConfigureAwait(false);
         }
 
@@ -103,7 +103,8 @@ public sealed partial class Evaluation
         {
             if (!target.IsIdentifier)
             {
-                await WriteInvalidIdentifierDiagnosticAsync(command, name, diagnostics).ConfigureAwait(false);
+                await WriteInvalidIdentifierDiagnosticAsync(command, name, diagnostics, ClosedStderrHandling.AttemptWrite)
+                    .ConfigureAwait(false);
                 return 1;
             }
             var assigned = await AssignAsync(target, ByteValue(optionByte)).ConfigureAwait(false);

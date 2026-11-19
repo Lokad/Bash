@@ -89,7 +89,8 @@ public sealed partial class Evaluation
                 if (variables && !name.IsIdentifier)
                 {
                     exitCode = 1;
-                    await WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("unset"), nameValue, _builtinDiagnostics)
+                    await WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("unset"), nameValue,
+                        _builtinDiagnostics, ClosedStderrHandling.AttemptWrite)
                         .ConfigureAwait(false);
                 }
                 continue;
@@ -480,7 +481,8 @@ public sealed partial class Evaluation
         if (failure != NamerefAssignmentFailure.None)
         {
             if (failure == NamerefAssignmentFailure.InvalidTarget && kind != BuiltinAssignmentKind.Getopts)
-                await WriteInvalidIdentifierDiagnosticAsync(command, value.GetValueOrDefault(), _builtinDiagnostics).ConfigureAwait(false);
+                await WriteInvalidIdentifierDiagnosticAsync(command, value.GetValueOrDefault(), _builtinDiagnostics,
+                    ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
             return kind == BuiltinAssignmentKind.Directory ? BuiltinAssignmentResult.NoWrite : BuiltinAssignmentResult.Failed;
         }
         var writeScope = scope with

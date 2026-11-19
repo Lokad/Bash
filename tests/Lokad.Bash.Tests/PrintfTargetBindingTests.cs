@@ -67,6 +67,29 @@ public sealed class PrintfTargetBindingTests
         }
     }
 
+    [Fact]
+    public async Task ShellClosedStderrDiscardsTheUsageRecordBeforeAdmission()
+    {
+        var name = "-[" + new string('x', 4094);
+        var length = "printf: `"u8.Length + name.Length + "': not a valid identifier\n"u8.Length;
+        var state = new Eval(Parser.Parse("printf -v \"$1\" '%s' sample 2>&-"));
+        state.ReplacePositionalParameters([ShellValue.FromText(name)]);
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        var budget = new DiagnosticBudget(owner, length, refuseRecord: true);
+        state.Memory.Budget = budget;
+
+        var operation = await state.GetNextStep();
+        if (operation is WriteOperation discarded)
+        {
+            discarded.SetResult(DescriptorWriteResult.WriteFailure);
+            Assert.Null(await state.GetNextStep());
+        }
+        Assert.Null(operation);
+        Assert.Equal(2, state.LastExitCode);
+        Assert.False(budget.Attempted);
+    }
+
     // Observe only the final record, independently of command workspace growth.
     private sealed class DiagnosticBudget(IMemoryBudget owner, long length, bool refuseRecord) : IMemoryBudget
     {

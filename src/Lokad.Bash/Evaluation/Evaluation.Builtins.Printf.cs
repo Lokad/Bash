@@ -51,7 +51,7 @@ public sealed partial class Evaluation
             }
 
             if (optionBytes.Span[1] != (byte)'v')
-                return await FinishInvalidInvocationAsync(WriteDiagnosticAsync([ShellValue.FromText("printf")],
+                return await FinishInvalidInvocationAsync(WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("printf")],
                     [ShellValue.FromText("-"), ShellValue.FromBytes(optionBytes.Slice(1, 1)),
                         ShellValue.FromText(": invalid option\nprintf: " + Usage())], scope: null)).ConfigureAwait(false);
 
@@ -69,7 +69,8 @@ public sealed partial class Evaluation
             if (!VariableReference.TryParse(ShellSource.FromBytes(outputVariable.Bytes), Memory, out var reference)
                 || reference.Kind != VariableReferenceKind.Name && reference.Subscript.IsEmpty)
                 return await FinishInvalidInvocationAsync(
-                    WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("printf"), outputVariable, scope: null)).ConfigureAwait(false);
+                    WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("printf"), outputVariable,
+                        scope: null, ClosedStderrHandling.Discard)).ConfigureAwait(false);
 
             outputReference = reference;
             operandIndex++;
@@ -149,7 +150,7 @@ public sealed partial class Evaluation
         }
 
         Task<EvaluationResult> ReportUsageAsync() => FinishInvalidInvocationAsync(
-            WriteDiagnosticAsync([ShellValue.FromText("printf")], [ShellValue.FromText(Usage())], scope: null));
+            WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("printf")], [ShellValue.FromText(Usage())], scope: null));
 
         async Task<EvaluationResult> FinishInvalidInvocationAsync(Task<DescriptorWriteResult> diagnostic)
         {
