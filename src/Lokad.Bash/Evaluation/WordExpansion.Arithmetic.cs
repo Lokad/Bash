@@ -27,10 +27,10 @@ internal static partial class WordExpansion
             return direct;
         if (source.Length == 0)
             return ArithmeticOperand.FromValue(ShellValue.Empty);
-        var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), scope.Effects.Memory.Workspace);
-        var bytes = ByteMemoryBuilder.CreateUnaccounted(0);
-        var subscripts = new Dictionary<int, ArithmeticOperand.Subscript>();
         var budget = scope.Effects.Memory;
+        var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), budget.Workspace);
+        using var bytes = new ByteMemoryBuilder(0, budget.Workspace);
+        var subscripts = new Dictionary<int, ArithmeticOperand.Subscript>();
         var firstPart = 0;
         for (var partIndex = 0; partIndex < word.Parts.Count && scope.CanExpand; partIndex++)
         {
@@ -53,7 +53,7 @@ internal static partial class WordExpansion
                 break;
             var expanded = ExpandedWord.JoinWithSpaces(builder.Build(), budget).ToValue(budget);
             var brackets = !associative && builder.HasExpansion ? ArithmeticBracketMode.Literal : ArithmeticBracketMode.References;
-            budget.Charge(checked(256L + 4L * (expanded.Bytes.Length + 2L)));
+            budget.Charge(256);
             subscripts.Add(bytes.Length, new ArithmeticOperand.Subscript(subscript, new ExpandedArraySubscript(expanded, brackets)));
             bytes.Append((byte)'[').Append(expanded.Bytes).Append((byte)']');
         }
@@ -61,7 +61,7 @@ internal static partial class WordExpansion
             await FlushAsync(word.Parts.Count).ConfigureAwait(false);
         if (!scope.CanExpand)
             return null;
-        var value = ShellValue.FromBytes(bytes.ToMemory());
+        var value = ShellValue.FromBytes(bytes.DetachSnapshot());
         var lexical = syntax?.Syntax != null && value.Bytes.Span.SequenceEqual(source.AsSpan()) ? syntax.Syntax : null;
         return new ArithmeticOperand(value, subscripts, ArithmeticBracketMode.References, lexical);
 
@@ -70,9 +70,32 @@ internal static partial class WordExpansion
             if (firstPart == endPart)
                 return;
             var builder = await ExpandAsync(word, purpose, firstPart, endPart).ConfigureAwait(false);
-            var value = ExpandedWord.JoinWithSpaces(builder.Build(), budget).ToValue(budget);
-            budget.Charge(checked(4L * value.Bytes.Length));
-            bytes.Append(value.Bytes);
+            var fields = builder.Build();
+            if (fields.Count == 0)
+                return;
+
+            long length = fields.Count - 1;
+            foreach (var field in fields)
+                foreach (var segment in field.Segments)
+                    length += segment.Content.Bytes.Length;
+            if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes || length > int.MaxValue - bytes.Length)
+                throw new ByteMemoryBuilder.LimitExceededException();
+
+            var destination = bytes.AppendSpan((int)length);
+            for (var index = 0; index < fields.Count; index++)
+            {
+                if (index > 0)
+                {
+                    destination[0] = (byte)' ';
+                    destination = destination[1..];
+                }
+                foreach (var segment in fields[index].Segments)
+                {
+                    var content = segment.Content.Bytes.Span;
+                    content.CopyTo(destination);
+                    destination = destination[content.Length..];
+                }
+            }
         }
 
         async Task<ExpandedWordBuilder> ExpandAsync(Word operand, ExpansionPurpose operandPurpose, int start, int end)

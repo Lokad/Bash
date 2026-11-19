@@ -189,9 +189,12 @@ until the caller finishes encoding them.
 Immutable arithmetic metadata, literal word fields and prepared list navigation
 belong to the syntax and are shared across executions. Stable operands and literal
 fields borrow its bytes; runtime-expanded operands, selectors and argument
-collections retain command workspace admission. Aggregate operand lists admit
-replacement backing before growth and keep the current backing charged through
-command completion. Byte consumers append reached fields directly to that list.
+collections retain command workspace admission. Dynamic arithmetic copies joined
+fields directly into admitted operand backing. Growth accounts for replacement
+overlap and the operand keeps its charge through numeric evaluation.
+Aggregate operand lists admit replacement backing before growth and keep the
+current backing charged through command completion. Byte consumers append
+reached fields directly to that list.
 Field splitting owns one reusable scratch buffer for pending bytes and one
 quote-run list. It completes fields at their boundaries and reuses the segment
 builder list. Non-scalar brace expansion appends directly to the word's result.

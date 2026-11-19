@@ -1,10 +1,67 @@
+using System.Runtime.InteropServices;
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ArithmeticOperandTests
 {
+    [Fact]
+    public async Task PreparingAnExpandedOperandKeepsItsBackingChargedToTheCommand()
+    {
+        var governor = new MemoryGovernor(4 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        var evaluation = new Eval(Parser.Parse(":"));
+        evaluation.Memory.Budget = owner;
+        var variables = Variables.CreateEmpty();
+        var padding = new string(' ', 16 * 1024);
+        Assert.True(variables.TrySetScalar("pad", ShellValue.FromText(padding)));
+        Assert.True(variables.TrySetScalar("k", ShellValue.FromText("0")));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        var memory = evaluation.Memory.Workspace;
+        long otherRetained;
+
+        using (evaluation.Memory.BeginCommand(scope))
+        {
+            var before = memory.Bytes;
+            otherRetained = before - variables.EstimatedMemoryBytes;
+            var operand = Assert.IsType<ArithmeticOperand>(await WordExpansion.PrepareArithmeticAsync(
+                ShellSource.FromText("\"${pad}\"1+a[$k]+\"${pad}\"2"), scope, ExpansionPurpose.ArithmeticSource));
+
+            Assert.Equal($"{padding}1+a[0]+{padding}2", operand.Value.ToUtf8String());
+            var selector = Assert.Single(operand.Subscripts);
+            Assert.Equal(padding.Length + 3, selector.Key);
+            Assert.Equal(ShellValue.FromText("0"), selector.Value.Expansion.Value);
+            Assert.True(MemoryMarshal.TryGetArray(operand.Value.Bytes, out var detached));
+            Assert.NotNull(detached.Array);
+            Assert.InRange(memory.Bytes - before, detached.Array.Length, 8L * operand.Value.Bytes.Length);
+        }
+
+        Assert.Equal(otherRetained + variables.EstimatedMemoryBytes, memory.Bytes);
+        evaluation.Memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task PreparingAnAggregateOperandRetainsTheSeparatorsAroundEmptyFields()
+    {
+        var evaluation = new Eval(Parser.Parse(":"));
+        var variables = Variables.CreateEmpty();
+        variables.ReplacePositionalParameters([ShellValue.FromText("1"), ShellValue.Empty,
+            ShellValue.FromText("+"), ShellValue.FromBytes(new byte[] { 0xff })]);
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        using var command = evaluation.Memory.BeginCommand(scope);
+
+        var operand = Assert.IsType<ArithmeticOperand>(await WordExpansion.PrepareArithmeticAsync(
+            ShellSource.FromText("\"$@\""), scope, ExpansionPurpose.ArithmeticSource));
+
+        byte[] expected = [.. "1  + "u8, 0xff];
+        Assert.Equal(expected, operand.Value.Bytes.ToArray());
+    }
+
     // Bash 5.2.21: unquoted source arithmetic retains ANSI-C quotes, including nested indices/bounds.
     [Theory]
     [InlineData("let x=$'2'; printf '%s/%s' \"$?\" \"$x\"", "0/2", "", 0)]
