@@ -1,8 +1,11 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
+using System.Numerics;
 using System.Text;
 using System.Threading;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Helpers;
 
@@ -25,34 +28,39 @@ public static class TextGlobMatcher
     public static GlobMatchResult MatchUtf8(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
         bool requireEnd, CancellationToken cancellationToken, out int length) =>
-        MatchUtf8(pattern, in mask, text, requireEnd,
-            !System.Text.Unicode.Utf8.IsValid(pattern) || !System.Text.Unicode.Utf8.IsValid(text), cancellationToken, out length);
+        MatchUtf8(pattern, in mask, text, requireEnd, memory: null, cancellationToken, out length);
 
     internal static GlobMatchResult MatchUtf8(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
-        bool requireEnd, bool byteCharacters, CancellationToken cancellationToken, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward),
+        bool requireEnd, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
+        MatchUtf8(pattern, in mask, text, requireEnd,
+            !System.Text.Unicode.Utf8.IsValid(pattern) || !System.Text.Unicode.Utf8.IsValid(text), memory, cancellationToken, out length);
+
+    internal static GlobMatchResult MatchUtf8(
+        ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
+        bool requireEnd, bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward, memory),
             new GlobInput(text, byteCharacters, reverse: false), requireEnd, shortestPrefix: false, cancellationToken, out _, out length);
 
     /// <summary>Finds a character-aligned prefix without rescanning every candidate length.</summary>
     internal static GlobMatchResult MatchUtf8Prefix(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
-        bool shortest, bool byteCharacters, CancellationToken cancellationToken, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward),
+        bool shortest, bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward, memory),
             new GlobInput(text, byteCharacters, reverse: false), requireEnd: false, shortest, cancellationToken, out _, out length);
 
     /// <summary>Finds the leftmost, longest match in one shared search, using an implicit leading wildcard.</summary>
     internal static GlobMatchResult FindUtf8(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
-        bool byteCharacters, CancellationToken cancellationToken, out int start, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Search),
+        bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int start, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Search, memory),
             new GlobInput(text, byteCharacters, reverse: false), requireEnd: false, shortestPrefix: false, cancellationToken, out start, out length);
 
     /// <summary>Matches a suffix by reading pattern atoms and text characters in reverse.</summary>
     internal static GlobMatchResult MatchUtf8Suffix(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<int> atoms, ReadOnlySpan<byte> text,
-        bool shortest, bool byteCharacters, CancellationToken cancellationToken, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, atoms, PatternTraversal.Reverse),
+        bool shortest, bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, atoms, PatternTraversal.Reverse, memory),
             new GlobInput(text, byteCharacters, reverse: true), requireEnd: false, shortest, cancellationToken, out _, out length);
 
     /// <summary>Prepares original atom offsets once, retaining bracket expressions as indivisible atoms.</summary>
@@ -85,7 +93,10 @@ public static class TextGlobMatcher
             cancellationToken.ThrowIfCancellationRequested();
             var end = position;
             if (mask[position] == GlobMask.Active && input[position] == '[')
-                _ = TryMatchBracket(input, in mask, ref end, -1, ref scan, cancellationToken);
+            {
+                var members = new BracketMembership(-1, default);
+                _ = TryReadBracket(input, in mask, ref end, ref members, ref scan, cancellationToken);
+            }
             return end == position ? position + input.Width(position) : end;
         }
     }
@@ -94,20 +105,30 @@ public static class TextGlobMatcher
     public static GlobMatchResult MatchText(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
         CancellationToken cancellationToken) =>
-        MatchText(pattern, in mask, text, scalarCharacters: false, cancellationToken);
+        MatchText(pattern, in mask, text, scalarCharacters: false, memory: null, cancellationToken);
 
     internal static bool MatchesPathComponent(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> name,
-        CancellationToken cancellationToken) =>
-        MatchText(pattern, in mask, name, scalarCharacters: true, cancellationToken) == GlobMatchResult.Match;
+        MemoryCapacity memory, CancellationToken cancellationToken) =>
+        MatchText(pattern, in mask, name, scalarCharacters: true, memory, cancellationToken) == GlobMatchResult.Match;
 
     private static GlobMatchResult MatchText(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
-        bool scalarCharacters, CancellationToken cancellationToken) =>
-        Match(new PatternInput(new GlobInput(pattern, scalarCharacters), mask, default, PatternTraversal.Forward),
+        bool scalarCharacters, MemoryCapacity? memory, CancellationToken cancellationToken) =>
+        Match(new PatternInput(new GlobInput(pattern, scalarCharacters), mask, default, PatternTraversal.Forward, memory),
             new GlobInput(text, scalarCharacters), requireEnd: true, shortestPrefix: false, cancellationToken, out _, out _);
 
     private static GlobMatchResult Match(PatternInput pattern, GlobInput text, bool requireEnd,
+        bool shortestPrefix, CancellationToken cancellationToken, out int start, out int length)
+    {
+        try
+        {
+            return MatchCore(ref pattern, text, requireEnd, shortestPrefix, cancellationToken, out start, out length);
+        }
+        finally { pattern.ReleaseBracketMemory(); }
+    }
+
+    private static GlobMatchResult MatchCore(ref PatternInput pattern, GlobInput text, bool requireEnd,
         bool shortestPrefix, CancellationToken cancellationToken, out int start, out int length)
     {
         start = -1;
@@ -145,7 +166,7 @@ public static class TextGlobMatcher
             if (p < pattern.Length && pattern.IsActive(p, '['))
             {
                 var bracketEnd = p;
-                if (pattern.MatchBracket(ref bracketEnd, text[t], cancellationToken))
+                if (pattern.MatchBracket(ref bracketEnd, text[t], star >= 0, cancellationToken))
                 {
                     p = bracketEnd;
                     t += text.Width(t);
@@ -153,7 +174,7 @@ public static class TextGlobMatcher
                 }
                 if (bracketEnd != p)
                 {
-                    if (!TryAdvanceStar(ref p, ref t, star, ref match, ref origin, pattern, text, length >= 0))
+                    if (!TryAdvanceStar(ref p, ref t, star, ref match, ref origin, ref pattern, text, length >= 0))
                         break;
                     continue;
                 }
@@ -164,7 +185,7 @@ public static class TextGlobMatcher
                 t += text.Width(t);
                 continue;
             }
-            if (TryAdvanceStar(ref p, ref t, star, ref match, ref origin, pattern, text, length >= 0))
+            if (TryAdvanceStar(ref p, ref t, star, ref match, ref origin, ref pattern, text, length >= 0))
                 continue;
             break;
         }
@@ -181,7 +202,7 @@ public static class TextGlobMatcher
         return length >= 0 ? GlobMatchResult.Match : GlobMatchResult.NoMatch;
 
         static bool TryAdvanceStar(ref int p, ref int t, int star, ref int match, ref int origin,
-            PatternInput pattern, GlobInput text, bool found)
+            ref PatternInput pattern, GlobInput text, bool found)
         {
             // Once a search matches, keep its leftmost start while extending its own stars.
             if (star < 0 || match == text.Length || found && pattern.IsSearchStar(star))
@@ -196,8 +217,8 @@ public static class TextGlobMatcher
     }
 
     // A valid but nonmatching class must not fall back to matching its opening bracket literally.
-    static bool TryMatchBracket(GlobInput pattern, in GlobMaskSpan mask, ref int position, int value,
-        ref BracketScan scan, CancellationToken cancellationToken)
+    private static bool TryReadBracket(GlobInput pattern, in GlobMaskSpan mask, ref int position,
+        scoped ref BracketMembership members, ref BracketScan scan, CancellationToken cancellationToken)
     {
         if (!scan.HasFollowingClose(pattern, in mask, position, cancellationToken))
             return false;
@@ -209,14 +230,12 @@ public static class TextGlobMatcher
             return false;
         }
 
-        var negate = false;
         if (mask[position] == GlobMask.Active && pattern[position] is '!' or '^')
         {
-            negate = true;
+            members.Negate = true;
             position++;
         }
 
-        var matched = false;
         // A closing bracket is a literal member when it is first, including after negation.
         var firstMember = position;
         for (; position < pattern.Length
@@ -243,11 +262,14 @@ public static class TextGlobMatcher
                     position = start;
                     return false;
                 }
-                matched |= member.Value >= 0 && last.Value >= 0 && value >= member.Value && value <= last.Value;
+                members.AddRange(member.Value, last.Value);
                 position = last.End;
                 continue;
             }
-            matched |= member.Value >= 0 ? member.Value == value : ShellCharacterClass.Matches(member.Class, value);
+            if (member.Value >= 0)
+                members.AddRange(member.Value, member.Value);
+            else
+                members.AddClass(member.Class);
             position = next;
         }
 
@@ -258,7 +280,7 @@ public static class TextGlobMatcher
         }
 
         position++;
-        return negate ? !matched : matched;
+        return true;
 
         static bool ReadMember(GlobInput pattern, in GlobMaskSpan mask, int start, ref BracketScan scan,
             CancellationToken cancellationToken, out BracketMember member)
@@ -333,6 +355,63 @@ public static class TextGlobMatcher
 
     private readonly record struct BracketMember(int End, int Value, ShellCharacterClass.Kind Class, bool IsSet);
 
+    private ref struct BracketMembership(int value, Span<ulong> ranges)
+    {
+        private readonly Span<ulong> _ranges = ranges;
+        public int RangeCount { get; private set; }
+        public uint Classes { get; private set; }
+        public bool Negate { get; set; }
+        public bool Matched { get; private set; }
+
+        public void AddRange(int lower, int upper)
+        {
+            if (lower < 0 || upper < lower)
+                return;
+            Matched |= value >= lower && value <= upper;
+            if (!_ranges.IsEmpty)
+                _ranges[RangeCount] = PackRange(lower, upper);
+            RangeCount++;
+        }
+
+        public void AddClass(ShellCharacterClass.Kind kind)
+        {
+            Matched |= ShellCharacterClass.Matches(kind, value);
+            if (kind != ShellCharacterClass.Kind.None)
+                Classes |= 1u << (int)kind;
+        }
+    }
+
+    private static ulong PackRange(int lower, int upper) => ((ulong)(uint)lower << 32) | (uint)upper;
+    private static int LowerBound(ulong range) => (int)(range >> 32);
+    private static int UpperBound(ulong range) => (int)(uint)range;
+
+    private readonly record struct PreparedBracket(int End, ReadOnlyMemory<ulong> Ranges, uint Classes, bool Negate)
+    {
+        public bool Matches(int value)
+        {
+            var ranges = Ranges.Span;
+            var first = 0;
+            var last = ranges.Length;
+            while (first < last)
+            {
+                var middle = first + (last - first) / 2;
+                var range = ranges[middle];
+                if (value < LowerBound(range))
+                    last = middle;
+                else if (value > UpperBound(range))
+                    first = middle + 1;
+                else
+                    return !Negate;
+            }
+
+            if (value <= 127)
+                for (var classes = Classes; classes != 0; classes &= classes - 1)
+                    if (ShellCharacterClass.Matches((ShellCharacterClass.Kind)BitOperations.TrailingZeroCount(classes), value))
+                        return !Negate;
+            return Negate;
+        }
+    }
+
     /// <summary>Reuses terminal lookahead while literal fallback advances through overlapping candidates.</summary>
     private struct BracketScan
     {
@@ -387,21 +466,29 @@ public static class TextGlobMatcher
     /// <summary>Maps traversal positions to original pattern atoms and their quoting metadata.</summary>
     private ref struct PatternInput
     {
+        private const int PrepareBracketThreshold = 16;
         private readonly GlobInput _source;
         private readonly GlobMaskSpan _mask;
         private readonly ReadOnlySpan<int> _atoms;
         private readonly PatternTraversal _traversal;
+        private readonly MemoryCapacity? _memory;
         private BracketScan _bracketScan;
+        private int _furthestBracket;
+        private Dictionary<int, PreparedBracket>? _preparedBrackets;
+        private long _bracketBytes;
         private bool Reverse => _traversal == PatternTraversal.Reverse;
         private bool Search => _traversal == PatternTraversal.Search;
 
-        public PatternInput(GlobInput source, GlobMaskSpan mask, ReadOnlySpan<int> atoms, PatternTraversal traversal)
+        public PatternInput(GlobInput source, GlobMaskSpan mask, ReadOnlySpan<int> atoms,
+            PatternTraversal traversal, MemoryCapacity? memory)
         {
             _source = source;
             _mask = mask;
             _atoms = atoms;
             _traversal = traversal;
+            _memory = memory;
             _bracketScan = default;
+            _furthestBracket = -1;
         }
         public int Length => (Reverse ? _atoms.Length : _source.Length) + (Search ? 1 : 0);
         public bool IsSearchStar(int position) => Search && position == 0;
@@ -412,8 +499,14 @@ public static class TextGlobMatcher
             && (IsSearchStar(position) || _mask[Original(position)] == GlobMask.Active);
         public int Next(int position) => Reverse || IsSearchStar(position) ? position + 1
             : position + _source.Width(Original(position));
-        public bool MatchBracket(ref int position, int value, CancellationToken cancellationToken)
+        public bool MatchBracket(ref int position, int value, bool mayRetry, CancellationToken cancellationToken)
         {
+            if (_preparedBrackets is { } brackets && brackets.TryGetValue(position, out var prepared))
+            {
+                position = prepared.End;
+                return prepared.Matches(value);
+            }
+
             var original = Original(position);
             if (Reverse)
             {
@@ -423,10 +516,95 @@ public static class TextGlobMatcher
                     return false; // Atom preparation already established a literal '['.
             }
             var end = original;
-            var matched = TryMatchBracket(_source, in _mask, ref end, value, ref _bracketScan, cancellationToken);
-            if (end != original)
-                position = Reverse ? position + 1 : end + (Search ? 1 : 0);
-            return matched;
+            var members = new BracketMembership(value, default);
+            if (!TryReadBracket(_source, in _mask, ref end, ref members, ref _bracketScan, cancellationToken))
+                return false;
+
+            var endPosition = Reverse ? position + 1 : end + (Search ? 1 : 0);
+            // A retry is the only way to reach a previous traversal position. Keep
+            // small and unrevisited brackets allocation-free.
+            if (mayRetry && end - original >= PrepareBracketThreshold)
+            {
+                if (position <= _furthestBracket)
+                    PrepareBracket(position, original, endPosition, members.RangeCount, members.Classes,
+                        members.Negate, cancellationToken);
+                else
+                    _furthestBracket = position;
+            }
+            position = endPosition;
+            return members.Matched != members.Negate;
+        }
+
+        private void PrepareBracket(int position, int original, int end, int rangeCount, uint classes, bool negate,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReadOnlyMemory<ulong> normalized = default;
+            if (rangeCount > 0)
+            {
+                ChargeBracketMemory(MemoryCapacity.ArrayBackingBytes<ulong>(rangeCount));
+                cancellationToken.ThrowIfCancellationRequested();
+                var ranges = new ulong[rangeCount];
+                var members = new BracketMembership(-1, ranges);
+                _ = TryReadBracket(_source, in _mask, ref original, ref members, ref _bracketScan, cancellationToken);
+                ranges.AsSpan().Sort();
+                var used = 0;
+                // Disjoint intervals allow membership queries even when source ranges overlap.
+                foreach (var range in ranges)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (used == 0 || LowerBound(range) > UpperBound(ranges[used - 1]) + 1)
+                    {
+                        ranges[used++] = range;
+                        continue;
+                    }
+                    var previous = ranges[used - 1];
+                    ranges[used - 1] = PackRange(LowerBound(previous), Math.Max(UpperBound(previous), UpperBound(range)));
+                }
+                normalized = ranges.AsMemory(0, used);
+            }
+
+            if (_preparedBrackets == null)
+            {
+                ChargeBracketMemory(128);
+                cancellationToken.ThrowIfCancellationRequested();
+                _preparedBrackets = new Dictionary<int, PreparedBracket>();
+            }
+            var capacity = _preparedBrackets.EnsureCapacity(0);
+            if (_preparedBrackets.Count == capacity)
+            {
+                var target = checked(Math.Max(4, capacity * 2));
+                const int entryBytes = 64;
+                var replacementBytes = 128 + entryBytes * (2L * target + 1);
+                ChargeBracketMemory(replacementBytes);
+                cancellationToken.ThrowIfCancellationRequested();
+                var actual = _preparedBrackets.EnsureCapacity(target);
+                var retired = capacity == 0 ? 0 : 128L + entryBytes * capacity;
+                RefundBracketMemory(replacementBytes + retired - (128L + entryBytes * actual));
+            }
+            _preparedBrackets.Add(position, new PreparedBracket(end, normalized, classes, negate));
+        }
+
+        private void ChargeBracketMemory(long bytes)
+        {
+            if (_memory == null)
+                return;
+            _memory.Grow(bytes);
+            _bracketBytes += bytes;
+        }
+
+        private void RefundBracketMemory(long bytes)
+        {
+            if (_memory == null || bytes == 0)
+                return;
+            _memory.Resize(_memory.Bytes - bytes);
+            _bracketBytes -= bytes;
+        }
+
+        public void ReleaseBracketMemory()
+        {
+            _preparedBrackets = null;
+            RefundBracketMemory(_bracketBytes);
         }
     }
 

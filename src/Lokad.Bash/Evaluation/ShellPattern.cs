@@ -57,7 +57,7 @@ internal sealed class ShellPattern
         if (_literal) return text.SequenceEqual(_value.Bytes.Span);
         var mask = _mask.AsSpan();
         return TextGlobMatcher.MatchUtf8(_value.Bytes.Span, in mask, text,
-            requireEnd: true, UsesByteCharacters(text), cancellationToken, out _) == GlobMatchResult.Match;
+            requireEnd: true, UsesByteCharacters(text), _memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
     }
 
     public bool TryMatchPrefix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int length) =>
@@ -73,7 +73,7 @@ internal sealed class ShellPattern
         }
         var mask = _mask.AsSpan();
         return TextGlobMatcher.MatchUtf8Prefix(_value.Bytes.Span, in mask, text,
-            shortest, byteCharacters, cancellationToken, out length) == GlobMatchResult.Match;
+            shortest, byteCharacters, _memory.Workspace, cancellationToken, out length) == GlobMatchResult.Match;
     }
 
     public bool TryFind(ReadOnlySpan<byte> text, bool byteCharacters, CancellationToken cancellationToken, out int start, out int length)
@@ -87,7 +87,7 @@ internal sealed class ShellPattern
         }
         var mask = _mask.AsSpan();
         return TextGlobMatcher.FindUtf8(_value.Bytes.Span, in mask, text,
-            byteCharacters, cancellationToken, out start, out length) == GlobMatchResult.Match;
+            byteCharacters, _memory.Workspace, cancellationToken, out start, out length) == GlobMatchResult.Match;
     }
 
     public bool TryMatchSuffix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int start) =>
@@ -105,7 +105,7 @@ internal sealed class ShellPattern
         var mask = _mask.AsSpan();
         prepared ??= TextGlobMatcher.PrepareUtf8Atoms(_value.Bytes.Span, in mask, byteCharacters, _memory, cancellationToken);
         var matched = TextGlobMatcher.MatchUtf8Suffix(_value.Bytes.Span, in mask, prepared.Value.Span, text,
-            shortest, byteCharacters, cancellationToken, out var length) == GlobMatchResult.Match;
+            shortest, byteCharacters, _memory.Workspace, cancellationToken, out var length) == GlobMatchResult.Match;
         start = matched ? text.Length - length : -1;
         return matched;
     }

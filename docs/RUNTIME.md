@@ -217,9 +217,11 @@ to the current command and are admitted once per reached character profile.
 Named bracket atoms share their decoder with suffix atom preparation. Character
 class names and ASCII membership share internal vocabulary with regex translation,
 while their grammars retain distinct supported profiles. Per-match value state
-reuses terminal lookahead across overlapping literal fallbacks; it adds no global
-cache or subject copy. Repeated valid bracket scans on wildcard retries remain
-separate from this malformed-pattern work.
+reuses terminal lookahead across overlapping literal fallbacks. A wildcard retry
+that revisits a wide, valid bracket prepares its membership for that match.
+Subsequent candidates use the merged intervals and fixed character classes.
+Prepared membership follows the original atom and character profile in every
+traversal. Subjects stay borrowed throughout matching.
 
 Field-separator lookup retains byte-slice identity and resolves current nameref
 targets. First-character joins stay independent of membership preparation. Reached

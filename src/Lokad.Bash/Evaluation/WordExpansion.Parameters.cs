@@ -873,7 +873,7 @@ internal static partial class WordExpansion
             {
                 var mask = pattern.Mask.AsSpan();
                 var matched = TextGlobMatcher.MatchUtf8(pattern.Value.Bytes.Span, in mask, value,
-                    requireEnd, cancellationToken, out var length);
+                    requireEnd, budget.Workspace, cancellationToken, out var length);
                 return matched == GlobMatchResult.Match ? length : -1;
             }
 

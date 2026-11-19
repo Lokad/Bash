@@ -86,7 +86,7 @@ public sealed partial class Evaluation
                     {
                         if (!(prefix ? registration.NameBytes.Span.StartsWith(words[index].Bytes.Span)
                             : TextGlobMatcher.MatchUtf8(pattern.Bytes.Span, in activity, registration.NameBytes.Span,
-                                requireEnd: true, _cancellationToken, out _) == GlobMatchResult.Match))
+                                requireEnd: true, Memory.Workspace, _cancellationToken, out _) == GlobMatchResult.Match))
                             continue;
                         found = true;
                         var (name, kind) = registration;

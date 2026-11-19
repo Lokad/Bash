@@ -50,6 +50,29 @@ public sealed partial class ShellBracketTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task RetriedBracketsSelectTheSameOperandsAndPathnames(bool prepared)
+    {
+        const string source = """
+            pattern='[[:digit:]abcdefghijklmnop]'
+            value='!!!!!!!!!!!!5'
+            tail='5!!!!!!!!!!!!'
+            [[ $value == *$pattern ]] && printf match > effect
+            case "$value" in *$pattern) printf '%s' case;; esac
+            printf '<%s><%s><%s>\n' "${value#*$pattern}" "${tail%$pattern*}" "${value/$pattern/X}"
+            printf '<%s>\n' *[[:digit:]abcdefghijklmnop].txt
+            """;
+        await SharedBracketRolesPreserveNativeBytesAndCompleteEffects(
+            nameof(RetriedBracketsSelectTheSameOperandsAndPathnames), source,
+            Convert.ToHexString("case<><><!!!!!!!!!!!!X>\n<!!!!!!!!!!!!5.txt>\n"u8),
+            """{"!!!!!!!!!!!!5.txt":"selected","!!!!!!!!!!!!Q.txt":"ignored"}""",
+            "[]",
+            """{"!!!!!!!!!!!!5.txt":"File:73656C6563746564","!!!!!!!!!!!!Q.txt":"File:69676E6F726564","effect":"File:6D61746368"}""",
+            prepared);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task ScalarMembershipRetainsTheExplicitFixedClassProfile(bool prepared)
     {
         var governor = new MemoryGovernor(256 * 1024);

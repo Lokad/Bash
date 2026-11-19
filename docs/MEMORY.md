@@ -161,9 +161,11 @@ replacement output own their result bytes. Matching creates no reversed subject
 copy or global pattern cache.
 
 Bracket terminal lookahead is stack-only state for the current match or atom
-preparation pass. Class membership and single-unit symbols add no retained
-containers; suffix offsets retain the same admitted command owner and cancellation
-checks. No failed admission switches to a different matcher or an unowned cache.
+preparation pass. Small and unrevisited valid brackets use stack-only membership.
+Revisited wide brackets prepare normalized membership within the current match.
+The evaluator admits storage through its workspace and retires the temporary usage
+on completion, refusal or cancellation. Suffix offsets retain their existing
+command owner.
 
 Pathname component ranges borrow the admitted pattern and quote mask. The command
 admits the lookup and output forms of the literal prefix before creating them.

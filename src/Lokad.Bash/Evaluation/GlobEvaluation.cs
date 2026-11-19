@@ -125,7 +125,7 @@ internal sealed class GlobEvaluation
                         if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
                             continue;
                         if (!TextGlobMatcher.MatchesPathComponent(name.Span, _pattern.GetMask(component), entryName,
-                                _cancellationToken))
+                                _memory, _cancellationToken))
                             continue;
 
                         var match = AppendComponent(parent, entry.Name, markDirectory);
