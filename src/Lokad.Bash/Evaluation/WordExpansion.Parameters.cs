@@ -720,10 +720,14 @@ internal static partial class WordExpansion
                 var replacement = await ExpandOperandAsync(separator < 0 ? ShellSource.Empty : operand[(separator + 1)..]).ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return [];
-                var template = EncodeReplacement(replacement);
                 var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken) : null;
+                var syntaxStart = replacement.Value.Bytes.Span.IndexOfAny((byte)'&', (byte)'\\');
+                using var encoded = matcher != null && syntaxStart >= 0 && !replacement.Mask.Memory.IsEmpty
+                    ? new ByteMemoryBuilder(0, budget.Budget)
+                    : null;
+                ReadOnlyMemory<byte>? template = null;
                 foreach (var value in ReadFields())
-                    result.Add(matcher == null ? value : Replace(value, matcher, template, mode));
+                    result.Add(matcher == null ? value : Replace(value, matcher, mode));
                 return result;
 
                 int FindReplacementSeparator(ShellSource source, ParameterReplacementMode mode)
@@ -744,26 +748,28 @@ internal static partial class WordExpansion
                     return -1;
                 }
 
-                ShellValue EncodeReplacement(ParameterOperand replacement)
+                ReadOnlyMemory<byte> EncodeReplacement()
                 {
-                    if (replacement.Mask.Memory.IsEmpty)
-                        return replacement.Value;
+                    if (encoded == null)
+                        return replacement.Value.Bytes;
                     var bytes = replacement.Value.Bytes.Span;
                     var mask = replacement.Mask.AsSpan();
-                    budget.Charge(checked(4L * (2L * bytes.Length)));
-                    var builder = ByteMemoryBuilder.CreateUnaccounted(0);
-                    for (var index = 0; index < bytes.Length; index++)
+                    var copiedThrough = 0;
+                    for (var index = syntaxStart; index < bytes.Length; index++)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         // Preserve quoted escapes in one stream: an earlier unquoted backslash can consume them.
-                        if (mask[index] != GlobMask.Active && bytes[index] is (byte)'&' or (byte)'\\')
-                            builder.Append((byte)'\\');
-                        builder.Append(bytes[index]);
+                        if (mask[index] == GlobMask.Active || bytes[index] is not ((byte)'&' or (byte)'\\'))
+                            continue;
+                        encoded.Append(bytes[copiedThrough..index]).Append((byte)'\\');
+                        copiedThrough = index;
                     }
-                    return ShellValue.FromBytes(builder.ToMemory());
+                    return encoded.Length == 0
+                        ? replacement.Value.Bytes
+                        : encoded.Append(bytes[copiedThrough..]).ToMemory();
                 }
 
-                ShellValue Replace(ShellValue value, ShellPattern pattern, ShellValue replacement, ParameterReplacementMode mode)
+                ShellValue Replace(ShellValue value, ShellPattern pattern, ParameterReplacementMode mode)
                 {
                     var bytes = value.Bytes.Span;
                     if (pattern.IsEmpty && mode is ParameterReplacementMode.First or ParameterReplacementMode.All)
@@ -786,7 +792,7 @@ internal static partial class WordExpansion
                         }
                     }
                     var replaced = false;
-                    var builder = ByteMemoryBuilder.CreateUnaccounted(0);
+                    using var builder = new ByteMemoryBuilder(0, budget.Workspace);
                     var position = 0;
                     var copiedThrough = 0;
                     do
@@ -811,25 +817,7 @@ internal static partial class WordExpansion
                         replaced = true;
                         position += offset;
                         Append(bytes[copiedThrough..position]);
-                        var insert = replacement.Bytes.Span;
-                        var literalStart = 0;
-                        for (var index = 0; index < insert.Length; index++)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            if (insert[index] == (byte)'&')
-                            {
-                                Append(insert[literalStart..index]);
-                                Append(bytes.Slice(position, length));
-                                literalStart = index + 1;
-                            }
-                            else if (insert[index] == (byte)'\\' && index + 1 < insert.Length
-                                && insert[index + 1] is (byte)'&' or (byte)'\\')
-                            {
-                                Append(insert[literalStart..index]);
-                                literalStart = ++index;
-                            }
-                        }
-                        Append(insert[literalStart..]);
+                        AppendReplacement(bytes.Slice(position, length));
                         position += length;
                         copiedThrough = position;
                         if (mode != ParameterReplacementMode.All || position == bytes.Length)
@@ -842,12 +830,40 @@ internal static partial class WordExpansion
                     if (!replaced)
                         return value;
                     Append(bytes[copiedThrough..]);
-                    return ShellValue.FromBytes(builder.ToMemory());
+                    return ShellValue.FromBytes(builder.DetachSnapshot());
+
+                    void AppendReplacement(ReadOnlySpan<byte> match)
+                    {
+                        // Operand expansion is eager; template spelling is needed only after a match.
+                        var insert = (template ??= EncodeReplacement()).Span;
+                        if (syntaxStart < 0)
+                        {
+                            Append(insert);
+                            return;
+                        }
+                        var literalStart = 0;
+                        for (var index = syntaxStart; index < insert.Length; index++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            if (insert[index] == (byte)'&')
+                            {
+                                Append(insert[literalStart..index]);
+                                Append(match);
+                                literalStart = index + 1;
+                            }
+                            else if (insert[index] == (byte)'\\' && index + 1 < insert.Length
+                                && insert[index + 1] is (byte)'&' or (byte)'\\')
+                            {
+                                Append(insert[literalStart..index]);
+                                literalStart = ++index;
+                            }
+                        }
+                        Append(insert[literalStart..]);
+                    }
 
                     void Append(ReadOnlySpan<byte> content)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        budget.Charge(checked(4L * content.Length));
                         builder.Append(content);
                     }
                 }
