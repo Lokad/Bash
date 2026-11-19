@@ -3592,42 +3592,6 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>
-    /// Formats an integer exit code as ASCII bytes.
-    /// </summary>
-    private static string FormatExitCode(int value)
-    {
-        if (value == 0)
-            return "0";
-
-        var negative = value < 0;
-        if (value < 0)
-            value = -value;
-
-        Span<char> buffer = stackalloc char[12];
-        var length = 0;
-        while (value > 0)
-        {
-            buffer[length++] = (char)('0' + (value % 10));
-            value /= 10;
-        }
-
-        var totalLength = length + (negative ? 1 : 0);
-        var result = new char[totalLength];
-        var offset = 0;
-        if (negative)
-        {
-            result[offset++] = '-';
-        }
-
-        for (var index = length - 1; index >= 0; index--)
-        {
-            result[offset++] = buffer[index];
-        }
-
-        return new string(result);
-    }
-
-    /// <summary>
     /// Reads bounded source, then executes complete command units in the caller's context.
     /// </summary>
     private async Task<EvaluationResult> ExecuteSourceAsync(string path, ScopedEvaluation scope)

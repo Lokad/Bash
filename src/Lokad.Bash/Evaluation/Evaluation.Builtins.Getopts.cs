@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -54,7 +55,7 @@ public sealed partial class Evaluation
         int status;
         try
         {
-            _ = await AssignAsync("OPTIND", ShellValue.FromText(FormatExitCode(cursor.ArgumentIndex))).ConfigureAwait(false);
+            _ = await AssignAsync("OPTIND", ShellValue.FromBytes(NumberFormatting.FormatNumber(cursor.ArgumentIndex))).ConfigureAwait(false);
             switch (option.Outcome)
             {
                 case GetoptsOutcome.End:

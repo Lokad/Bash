@@ -162,6 +162,23 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Fact]
+    public async Task Getopts_PublishesEveryDigitWhenTheArgumentIndexWidens()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            set -- -a -a -a -a -a -a -a -a -ab -c
+            OPTIND=9
+            for step in 1 2 3 4; do
+                getopts abc opt
+                printf '<%s:%s:%s>' "$?" "$opt" "$OPTIND"
+            done
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:a:9><0:b:10><0:c:11><1:?:11>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Theory]
     [InlineData("", "a", "-x", "<0:?:2:unset>", "getopts: illegal option -- x\n")]
     [InlineData("", ":a", "-x", "<0:?:2:x>", "")]
