@@ -778,10 +778,10 @@ internal static partial class WordExpansion
                     }
                     if (output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)
                     {
-                        var message = ByteMemoryBuilder.CreateUnaccounted(0);
-                        message.Append("no closing `}' in "u8).Append(content.Bytes);
                         await scope.Effects.ReportFatalExpansionAsync(
-                            ShellValue.FromText("bad substitution"), ShellValue.FromBytes(message.ToMemory()), ExpansionFailureKind.Parameter)
+                            [ShellValue.FromText("bad substitution")],
+                            [ShellValue.FromText("no closing `}' in "), ShellValue.FromBytes(content.Bytes)],
+                            ExpansionFailureKind.Parameter)
                             .ConfigureAwait(false);
                         return null;
                     }

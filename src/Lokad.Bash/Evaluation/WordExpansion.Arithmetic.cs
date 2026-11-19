@@ -340,14 +340,13 @@ internal static partial class WordExpansion
 
         Task ReportAsync(ArithmeticError error)
         {
-            var subject = error.Subject;
-            if (!command.IsEmpty)
-                subject = ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0)
-                    .Append(command.Bytes).Append(": "u8).Append(subject.Bytes).ToMemory());
+            ReadOnlySpan<ShellValue> subject = command.IsEmpty
+                ? [error.Subject]
+                : [command, ShellValue.FromText(": "), error.Subject];
             var message = ShellValue.FromText(error.Message);
             return failureMode == ArithmeticFailureMode.Diagnostic
-                ? scope.Effects.ReportExpansionDiagnosticAsync(subject, message)
-                : scope.Effects.ReportFatalExpansionAsync(subject, message,
+                ? scope.Effects.ReportExpansionDiagnosticAsync(subject, [message])
+                : scope.Effects.ReportFatalExpansionAsync(subject, [message],
                     failureMode == ArithmeticFailureMode.Assignment ? ExpansionFailureKind.Assignment : ExpansionFailureKind.Arithmetic);
         }
     }

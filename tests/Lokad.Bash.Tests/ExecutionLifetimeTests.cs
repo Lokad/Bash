@@ -12,10 +12,22 @@ public sealed class ExecutionLifetimeTests
     [Theory]
     [InlineData("echo", "\n")]
     [InlineData("printf '%s'", "")]
-    public async Task CancelledWriteStaysChargedUntilTheHostSettles(string command, string suffix)
+    public Task CancelledWriteStaysChargedUntilTheHostSettles(string command, string suffix)
     {
         var payload = new string('x', 4096);
-        var state = new Eval(Parser.Parse($"{command} '{payload}' >out; after=1"));
+        return VerifyPendingWriteAsync($"{command} '{payload}' >out; after=1", payload + suffix);
+    }
+
+    [Fact]
+    public Task CancelledExpansionDiagnosticStaysChargedUntilTheHostSettles()
+    {
+        var subject = "${" + new string('x', 4096) + " name}";
+        return VerifyPendingWriteAsync("{ : \"" + subject + "\"; } 2>out; after=1", subject + ": bad substitution\n");
+    }
+
+    private static async Task VerifyPendingWriteAsync(string script, string expected)
+    {
+        var state = new Eval(Parser.Parse(script));
         var governor = new MemoryGovernor(128 * 1024);
         using var owner = governor.CreateScope();
         state.Memory.Budget = owner;
@@ -40,7 +52,7 @@ public sealed class ExecutionLifetimeTests
         close.SetResult(null);
         var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal(cancellation.Token, failure.CancellationToken);
-        Assert.Equal(payload + suffix, content);
+        Assert.Equal(expected, content);
         Assert.False(publishedEarly, $"Close was published while the write was pending. Allowance: {before} before cancellation and {pending} while pending.");
         Assert.Equal(before, pending);
         Assert.True(governor.ReservedBytes < pending);

@@ -159,8 +159,9 @@ internal static partial class WordExpansion
         // protection, and a rejected unset does not evaluate its selector.
         if (variables.IsReadonly(name))
         {
-            await scope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("unset"),
-                ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(name.ToValue().Bytes).Append(": cannot unset: readonly variable"u8).ToMemory())).ConfigureAwait(false);
+            await scope.Effects.ReportExpansionDiagnosticAsync(
+                [ShellValue.FromText("unset: "), name.ToValue()],
+                [ShellValue.FromText("cannot unset: readonly variable")]).ConfigureAwait(false);
             return new(false, BindingName.Empty);
         }
         var resolvedName = variables.ResolveNamerefName(name);
@@ -196,8 +197,9 @@ internal static partial class WordExpansion
 
         async Task<ElementUnsetResult> NotAnArrayAsync()
         {
-            await scope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("unset"),
-                AppendAssignmentValue(name.ToValue(), ShellValue.FromText(": not an array variable"), scope)).ConfigureAwait(false);
+            await scope.Effects.ReportExpansionDiagnosticAsync(
+                [ShellValue.FromText("unset: "), name.ToValue()],
+                [ShellValue.FromText("not an array variable")]).ConfigureAwait(false);
             return new(false, BindingName.Empty);
         }
     }
@@ -322,7 +324,9 @@ internal static partial class WordExpansion
         async Task<NamerefAssignmentResult> RejectAssignmentAsync(NamerefAssignmentFailure reason)
         {
             if (reason == NamerefAssignmentFailure.InvalidTarget)
-                await scope.Effects.ReportFatalExpansionAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(value), ShellValue.FromText("not a valid identifier"), failure).ConfigureAwait(false);
+                await scope.Effects.ReportFatalExpansionAsync(
+                    [ShellValue.FromText("`"), value, ShellValue.FromText("'")],
+                    [ShellValue.FromText("not a valid identifier")], failure).ConfigureAwait(false);
             else
                 scope.Effects.SetFatalExpansionError(failure);
             return new(NamerefAssignmentAction.Fail, value);
@@ -532,8 +536,7 @@ internal static partial class WordExpansion
                 return null;
             if (use == ReferenceUse.ArithmeticAssign && selector.Subscript.IsEmpty)
             {
-                await scope.Effects.ReportExpansionDiagnosticAsync(SubscriptDiagnostic(includeName: true),
-                    ShellValue.FromText("not a valid identifier")).ConfigureAwait(false);
+                await ReportSubscriptAsync("not a valid identifier").ConfigureAwait(false);
                 return null;
             }
             await ReportBadSubscriptAsync().ConfigureAwait(false);
@@ -597,30 +600,34 @@ internal static partial class WordExpansion
             await ReportBadSubscriptAsync().ConfigureAwait(false);
         return null;
 
-        ShellValue SubscriptDiagnostic(bool includeName)
-        {
-            var diagnostic = ByteMemoryBuilder.CreateUnaccounted(0);
-            if (includeName)
-                diagnostic.Append(reference.Name.ToValue().Bytes).Append((byte)'[');
-            diagnostic.Append(preparedSubscript is { } prepared ? prepared.Value.Bytes : reference.Subscript.Bytes).Append((byte)']');
-            return ShellValue.FromBytes(diagnostic.ToMemory());
-        }
+        Task ReportBadSubscriptAsync() => ReportSubscriptAsync("bad array subscript");
 
-        Task ReportBadSubscriptAsync() => use switch
+        Task ReportSubscriptAsync(string text)
         {
-            ReferenceUse.Unset => scope.Effects.ReportExpansionDiagnosticAsync(
-                ShellValue.FromText("unset"), ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append(SubscriptDiagnostic(includeName: true).Bytes).Append(": bad array subscript"u8).ToMemory())),
-            ReferenceUse.Read or ReferenceUse.ArithmeticRead or ReferenceUse.Presence => scope.Effects.ReportExpansionDiagnosticAsync(
-                reference.Name.ToValue(), ShellValue.FromText("bad array subscript")),
-            ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign => scope.Effects.ReportExpansionDiagnosticAsync(
-                SubscriptDiagnostic(includeName: true), ShellValue.FromText("bad array subscript")),
-            ReferenceUse.Length => scope.Effects.ReportFatalExpansionAsync(SubscriptDiagnostic(includeName: false), ShellValue.FromText("bad array subscript"), ExpansionFailureKind.Arithmetic),
-            ReferenceUse.Assign => scope.Effects.ReportFatalExpansionAsync(
-                SubscriptDiagnostic(includeName: true), ShellValue.FromText("bad array subscript"), ExpansionFailureKind.Assignment),
-            ReferenceUse.DirectAssign => scope.Effects.ReportFatalExpansionAsync(
-                SubscriptDiagnostic(includeName: true), ShellValue.FromText("bad array subscript"), ExpansionFailureKind.AssignmentTarget),
-            _ => throw new InvalidOperationException("Unknown reference use."),
-        };
+            var message = ShellValue.FromText(text);
+            var referenceName = reference.Name.ToValue();
+            if (use is ReferenceUse.Read or ReferenceUse.ArithmeticRead or ReferenceUse.Presence)
+                return scope.Effects.ReportExpansionDiagnosticAsync(referenceName, message);
+
+            var subscript = preparedSubscript is { } prepared
+                ? prepared.Value
+                : ShellValue.FromBytes(reference.Subscript.Bytes);
+            var closingBracket = ShellValue.FromText("]");
+            if (use == ReferenceUse.Length)
+                return scope.Effects.ReportFatalExpansionAsync([subscript, closingBracket], [message], ExpansionFailureKind.Arithmetic);
+
+            var prefix = use == ReferenceUse.Unset ? ShellValue.FromText("unset: ") : ShellValue.Empty;
+            ReadOnlySpan<ShellValue> subject = [prefix, referenceName, ShellValue.FromText("["), subscript, closingBracket];
+            return use switch
+            {
+                ReferenceUse.Unset or ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign
+                    or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign =>
+                    scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]),
+                ReferenceUse.Assign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.Assignment),
+                ReferenceUse.DirectAssign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.AssignmentTarget),
+                _ => throw new InvalidOperationException("Unknown reference use."),
+            };
+        }
 
         static ResolvedVariableReference ResolveNameReference(BindingName name, Variables variables)
         {

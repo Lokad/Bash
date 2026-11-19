@@ -140,12 +140,10 @@ internal static partial class WordExpansion
                     if (parsed.Modifier == ParameterModifier.None && special != SpecialParameterKind.None
                         || parsed.Modifier == ParameterModifier.Indirect && special is SpecialParameterKind.At or SpecialParameterKind.Star)
                     {
-                        var subject = ByteMemoryBuilder.CreateUnaccounted(0);
-                        subject.Append((byte)'$');
-                        if (parsed.Modifier == ParameterModifier.Indirect)
-                            subject.Append((byte)'!');
-                        subject.Append(parsed.Name.Bytes);
-                        await ReportFatalAsync(ShellValue.FromBytes(subject.ToMemory()), "cannot assign in this way")
+                        var prefix = parsed.Modifier == ParameterModifier.Indirect ? "$!" : "$";
+                        await scope.Effects.ReportFatalExpansionAsync(
+                            [ShellValue.FromText(prefix), parsed.Name.ToValue()],
+                            [ShellValue.FromText("cannot assign in this way")], ExpansionFailureKind.Parameter)
                             .ConfigureAwait(false);
                         return;
                     }
@@ -168,7 +166,7 @@ internal static partial class WordExpansion
                         else
                         {
                             // An empty aggregate has no indirect target, but its assignment RHS still expands.
-                            await ReportFatalAsync(ParameterSubject(), "invalid indirect expansion")
+                            await ReportParameterFailureAsync(ShellValue.FromText("invalid indirect expansion"), ExpansionFailureKind.Parameter)
                                 .ConfigureAwait(false);
                         }
                         return;
@@ -234,7 +232,7 @@ internal static partial class WordExpansion
                         message = messageWord.ToValue(scope.Effects.Memory);
                     }
                     if (scope.CanExpand)
-                        await scope.Effects.ReportFatalExpansionAsync(ParameterSubject(), message, ExpansionFailureKind.RequiredParameter)
+                        await ReportParameterFailureAsync(message, ExpansionFailureKind.RequiredParameter)
                             .ConfigureAwait(false);
                 }
                 else
@@ -292,14 +290,10 @@ internal static partial class WordExpansion
                 throw new InvalidOperationException($"Unexpected braced parameter operator '{parsed.Kind}'.");
         }
 
-        ShellValue ParameterSubject()
-        {
-            if (parsed.Modifier != ParameterModifier.Indirect)
-                return parsed.Name.ToValue();
-            var subject = ByteMemoryBuilder.CreateUnaccounted(0);
-            subject.Append((byte)'!').Append(parsed.Name.Bytes);
-            return ShellValue.FromBytes(subject.ToMemory());
-        }
+        Task ReportParameterFailureAsync(ShellValue message, ExpansionFailureKind kind) =>
+            parsed.Modifier == ParameterModifier.Indirect
+                ? scope.Effects.ReportFatalExpansionAsync([ShellValue.FromText("!"), parsed.Name.ToValue()], [message], kind)
+                : scope.Effects.ReportFatalExpansionAsync(parsed.Name.ToValue(), message, kind);
 
         async Task AppendParameterWordAsync()
         {
@@ -645,12 +639,10 @@ internal static partial class WordExpansion
             }
         }
 
-        Task ReportSubstitutionFailureAsync(string message, ExpansionFailureKind kind)
-        {
-            var subject = ByteMemoryBuilder.CreateUnaccounted(0);
-            subject.Append("${"u8).Append(content.Bytes).Append("}"u8);
-            return scope.Effects.ReportFatalExpansionAsync(ShellValue.FromBytes(subject.ToMemory()), ShellValue.FromText(message), kind);
-        }
+        Task ReportSubstitutionFailureAsync(string message, ExpansionFailureKind kind) =>
+            scope.Effects.ReportFatalExpansionAsync(
+                [ShellValue.FromText("${"), ShellValue.FromBytes(content.Bytes), ShellValue.FromText("}")],
+                [ShellValue.FromText(message)], kind);
 
         Task ReportFatalAsync(ShellValue subject, string message)
         {

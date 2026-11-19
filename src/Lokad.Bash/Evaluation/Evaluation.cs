@@ -3188,13 +3188,16 @@ public sealed partial class Evaluation : IFileTester
         _state.SetExpansionError(exitCode);
 
     /// <summary>Reports the first fatal expansion through the active stderr mapping without decoding message bytes.</summary>
-    internal async Task ReportFatalExpansionAsync(ShellValue name, ShellValue message, ExpansionFailureKind kind)
+    internal Task ReportFatalExpansionAsync(ShellValue name, ShellValue message, ExpansionFailureKind kind) =>
+        ReportFatalExpansionAsync([name], [message], kind);
+
+    internal Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message, ExpansionFailureKind kind)
     {
         if (_state.FatalExpansion.HasValue)
-            return;
+            return Task.CompletedTask;
 
         SetFatalExpansionError(kind);
-        await ReportExpansionDiagnosticAsync(name, message).ConfigureAwait(false);
+        return ReportExpansionDiagnosticAsync(name, message);
     }
 
     internal void SetFatalExpansionError(ExpansionFailureKind kind)
@@ -3207,22 +3210,48 @@ public sealed partial class Evaluation : IFileTester
     private const int DiagnosticPunctuationBytes = 3; // Colon, space and LF.
 
     /// <summary>Emits an expansion diagnostic without changing the caller's expansion status.</summary>
-    internal async Task ReportExpansionDiagnosticAsync(ShellValue name, ShellValue message)
+    internal Task ReportExpansionDiagnosticAsync(ShellValue name, ShellValue message) =>
+        ReportExpansionDiagnosticAsync([name], [message]);
+
+    /// <summary>Writes one admitted record from borrowed fragments of the name and message.</summary>
+    internal Task ReportExpansionDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message)
     {
         var scope = _builtinDiagnostics;
         if (scope is { Result.CanAcceptMore: false })
-            return;
+            return Task.CompletedTask;
 
-        var length = (long)name.Bytes.Length + message.Bytes.Length + DiagnosticPunctuationBytes;
+        var length = (long)DiagnosticPunctuationBytes;
+        foreach (var part in name)
+            length += part.Bytes.Length;
+        foreach (var part in message)
+            length += part.Bytes.Length;
         if (!TryReserveDiagnostic(length, out var reservation))
             throw new MemoryBudgetExceededException();
 
-        using var memory = reservation;
-        using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
-        diagnostic.Append(name.Bytes).Append(": "u8).Append(message.Bytes).Append((byte)'\n');
-        var result = await ExecuteWriteAsync(GetStdErrDescriptor(), diagnostic.ToMemory()).ConfigureAwait(false);
-        if (scope != null)
-            scope.Result = result;
+        try
+        {
+            using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
+            foreach (var part in name)
+                diagnostic.Append(part.Bytes);
+            diagnostic.Append(": "u8);
+            foreach (var part in message)
+                diagnostic.Append(part.Bytes);
+            diagnostic.Append((byte)'\n');
+            return WriteAsync(diagnostic.ToMemory(), scope, reservation);
+        }
+        catch
+        {
+            reservation?.Dispose();
+            throw;
+        }
+
+        async Task WriteAsync(ReadOnlyMemory<byte> bytes, BuiltinDiagnosticScope? scope, IMemoryReservation? reservation)
+        {
+            using var memory = reservation;
+            var result = await ExecuteWriteAsync(GetStdErrDescriptor(), bytes).ConfigureAwait(false);
+            if (scope != null)
+                scope.Result = result;
+        }
     }
 
     private bool TryReserveDiagnostic(long length, out IMemoryReservation? reservation)
