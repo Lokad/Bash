@@ -22,9 +22,10 @@ public sealed partial class Evaluation
         async Task<ICommand?> SelectBodyAsync()
         {
             using var subjectMemory = Memory.BeginCommand(scope);
-            var subjectWord = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
-                caseCommand.Subject, scope, ExpansionPurpose.Scalar, TildeExpansion.Argument)).ConfigureAwait(false);
-            var subject = subjectWord.ToValue(Memory);
+            var fields = await AwaitWordExpansionAsync(WordExpansion.ExpandWithoutBraceAsync(
+                caseCommand.Subject, scope, allowWordSplitting: false, ExpansionPurpose.Scalar, TildeExpansion.Argument))
+                .ConfigureAwait(false);
+            var subject = ExpandedWord.JoinValuesWithSpaces(fields, Memory);
             if (_state.HasPendingExpansionError)
                 return null;
 

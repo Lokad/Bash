@@ -32,11 +32,12 @@ internal static partial class WordExpansion
     private static async Task<ShellValue> ExpandUnsplitValueAsync(
         Word word, ScopedEvaluation scope, ExpansionPurpose purpose, TildeExpansion tildeExpansion)
     {
-        var expanded = await ExpandUnsplitWordAsync(word, scope, purpose, tildeExpansion).ConfigureAwait(false);
-        return expanded.ToValue(scope.Effects.Memory);
+        var fields = await ExpandWithoutBraceAsync(word, scope, allowWordSplitting: false, purpose, tildeExpansion)
+            .ConfigureAwait(false);
+        return scope.CanExpand ? ExpandedWord.JoinValuesWithSpaces(fields, scope.Effects.Memory) : ShellValue.Empty;
     }
 
-    /// <summary>Expands one conditional/case/assignment operand without splitting, globbing or brace generation.</summary>
+    /// <summary>Expands a quote-aware operand without splitting, globbing or brace generation.</summary>
     internal static async Task<ExpandedWord> ExpandUnsplitWordAsync(
         Word word, ScopedEvaluation scope, ExpansionPurpose purpose, TildeExpansion tildeExpansion)
     {

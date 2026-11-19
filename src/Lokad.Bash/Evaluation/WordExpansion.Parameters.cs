@@ -147,7 +147,7 @@ internal static partial class WordExpansion
                         return;
 
                     var budget = scope.Effects.Memory;
-                    var expanded = ExpandedWord.JoinWithSpaces(words, budget).ToValue(budget);
+                    var expanded = ExpandedWord.JoinValuesWithSpaces(words, budget);
                     // Indirect defaults can assign bare names only, after the RHS has expanded.
                     if (parsed.Modifier == ParameterModifier.Indirect
                         && parameter.Source is not { Kind: VariableReferenceKind.Name })
@@ -456,7 +456,7 @@ internal static partial class WordExpansion
                     joined.AppendFields(fields, allowWordSplitting: false, globQuoted: true, ExpansionQuoteContext.DoubleQuoted);
                 else
                     joined.AppendJoinedFields(fields, allowWordSplitting: false, globQuoted: true);
-                name = ShellSource.FromBytes(ExpandedWord.JoinWithSpaces(joined.Build(), budget).ToValue(budget).Bytes);
+                name = ShellSource.FromBytes(ExpandedWord.JoinValuesWithSpaces(joined.Build(), budget).Bytes);
                 indirectName = name;
                 var target = ParseBracedParameterExpression(name);
                 if (target.Kind != BracedParameterOperatorKind.None || target.Modifier != ParameterModifier.None

@@ -45,6 +45,63 @@ public sealed class ByteValuedWordTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AssignmentJoinsAggregateBytesWithoutKeepingAnotherSegmentList(bool empty)
+    {
+        const int count = 128;
+        var value = ShellValue.FromBytes(new byte[] { 0xff, (byte)'x', 0x0d });
+        var values = Enumerable.Range(0, count).Select(index => empty || index % 2 != 0 ? ShellValue.Empty : value).ToArray();
+        var expected = new List<byte> { (byte)'[' };
+        for (var index = 0; index < values.Length; index++)
+        {
+            if (index > 0)
+                expected.Add((byte)' ');
+            expected.AddRange(values[index].Bytes.ToArray());
+        }
+        expected.Add((byte)']');
+
+        var tokenizer = new Tokenizer(ShellSource.FromText("[\"${items[@]}\"]"));
+        Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+        var fieldsWorkspace = await MeasureAsync(join: false);
+        var assignmentWorkspace = await MeasureAsync(join: true);
+
+        Assert.InRange(assignmentWorkspace - fieldsWorkspace, 0, 4L * expected.Count + 1024);
+
+        async Task<long> MeasureAsync(bool join)
+        {
+            var governor = new MemoryGovernor(2 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            var evaluation = new Eval(Parser.Parse(string.Empty));
+            evaluation.Memory.Budget = owner;
+            var variables = Variables.CreateEmpty();
+            Assert.True(variables.TryAssignArray("items", values, ArrayKind.Indexed));
+            Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(":")));
+            var scope = new ScopedEvaluation(evaluation, variables, default);
+            long delta;
+            using (evaluation.Memory.BeginCommand(scope))
+            {
+                var initial = evaluation.Memory.Workspace.Bytes;
+                if (join)
+                {
+                    var joined = await WordExpansion.ExpandAssignmentValueAsync(token.Word, scope);
+                    Assert.Equal(expected.ToArray(), joined.Bytes.ToArray());
+                }
+                else
+                {
+                    var fields = await WordExpansion.ExpandWithoutBraceAsync(token.Word, scope,
+                        allowWordSplitting: false, ExpansionPurpose.Assignment, TildeExpansion.Assignment);
+                    Assert.Equal(count, fields.Count);
+                }
+                delta = evaluation.Memory.Workspace.Bytes - initial;
+            }
+            evaluation.Memory.Finish(retainVariables: false);
+            Assert.Equal(0, governor.ReservedBytes);
+            return delta;
+        }
+    }
+
     [Fact]
     public async Task SmallExpandedSliceKeepsIndependentBacking()
     {

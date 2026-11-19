@@ -220,6 +220,9 @@ fields borrow its bytes; runtime-expanded operands, selectors and argument
 collections retain command workspace admission. Dynamic arithmetic copies joined
 fields directly into admitted operand backing. Growth accounts for replacement
 overlap and the operand keeps its charge through numeric evaluation.
+Scalar assignment and byte-only selectors use the same field join to copy
+expanded bytes and separators into their admitted result. Pattern consumers
+keep the joined segments needed for quoting.
 Parameter case conversion passes unchanged values through to field expansion.
 Changed values join original byte ranges with the converted characters in an
 admitted buffer. Parameter replacement expands both operands before matching. It

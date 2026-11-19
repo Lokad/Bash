@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Lokad.Bash.Helpers;
-using Lokad.Bash.Commands;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -58,18 +57,70 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         if (Segments.Count == 1)
             return Segments[0].Content;
 
-        var length = Segments.Sum(static segment => (long)segment.Content.Bytes.Length);
+        var bytes = AllocateValue(GetValueLength(), memory);
+        CopyValueTo(bytes);
+        return ShellValue.FromBytes(bytes);
+    }
+
+    /// <summary>Joins expanded fields directly for consumers that use only their bytes.</summary>
+    internal static ShellValue JoinValuesWithSpaces(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory)
+    {
+        if (words.Count == 0)
+            return ShellValue.Empty;
+        if (words.Count == 1)
+            return words[0].ToValue(memory);
+
+        var bytes = AllocateValue(GetJoinedValueLength(words), memory);
+        CopyJoinedValueTo(words, bytes);
+        return ShellValue.FromBytes(bytes);
+    }
+
+    internal static long GetJoinedValueLength(IReadOnlyList<ExpandedWord> words)
+    {
+        long length = Math.Max(0, words.Count - 1);
+        for (var index = 0; index < words.Count; index++)
+            length += words[index].GetValueLength();
+        return length;
+    }
+
+    internal static void CopyJoinedValueTo(IReadOnlyList<ExpandedWord> words, Span<byte> destination)
+    {
+        for (var index = 0; index < words.Count; index++)
+        {
+            if (index > 0)
+            {
+                destination[0] = (byte)' ';
+                destination = destination[1..];
+            }
+            destination = words[index].CopyValueTo(destination);
+        }
+    }
+
+    private long GetValueLength()
+    {
+        var length = 0L;
+        for (var index = 0; index < Segments.Count; index++)
+            length += Segments[index].Content.Bytes.Length;
+        return length;
+    }
+
+    private Span<byte> CopyValueTo(Span<byte> destination)
+    {
+        for (var index = 0; index < Segments.Count; index++)
+        {
+            var content = Segments[index].Content.Bytes.Span;
+            content.CopyTo(destination);
+            destination = destination[content.Length..];
+        }
+        return destination;
+    }
+
+    private static byte[] AllocateValue(long length, EvaluationMemory memory)
+    {
         if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
         memory.Charge(checked(4L * length));
-        var bytes = new byte[(int)length];
-        var destination = bytes.AsSpan();
-        foreach (var segment in Segments)
-        {
-            segment.Content.Bytes.Span.CopyTo(destination);
-            destination = destination[segment.Content.Bytes.Length..];
-        }
-        return ShellValue.FromBytes(bytes);
+        return new byte[(int)length];
     }
 
     /// <summary>Retains per-byte quoting for shell-word patterns and replacement operands.</summary>
@@ -77,7 +128,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
     {
         if (!Segments.Any(segment => segment.IsGlobQuoted && !segment.Content.IsEmpty))
             return new GlobMask(ReadOnlyMemory<byte>.Empty);
-        var length = Segments.Sum(segment => (long)segment.Content.Bytes.Length);
+        var length = GetValueLength();
         if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
         memory.Charge(checked(2L * length));

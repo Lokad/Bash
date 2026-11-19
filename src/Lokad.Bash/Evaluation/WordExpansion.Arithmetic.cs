@@ -51,7 +51,7 @@ internal static partial class WordExpansion
                 .ConfigureAwait(false);
             if (!scope.CanExpand)
                 break;
-            var expanded = ExpandedWord.JoinWithSpaces(builder.Build(), budget).ToValue(budget);
+            var expanded = ExpandedWord.JoinValuesWithSpaces(builder.Build(), budget);
             var brackets = !associative && builder.HasExpansion ? ArithmeticBracketMode.Literal : ArithmeticBracketMode.References;
             budget.Charge(256);
             subscripts.Add(bytes.Length, new ArithmeticOperand.Subscript(subscript, new ExpandedArraySubscript(expanded, brackets)));
@@ -74,28 +74,11 @@ internal static partial class WordExpansion
             if (fields.Count == 0)
                 return;
 
-            long length = fields.Count - 1;
-            foreach (var field in fields)
-                foreach (var segment in field.Segments)
-                    length += segment.Content.Bytes.Length;
+            var length = ExpandedWord.GetJoinedValueLength(fields);
             if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes || length > int.MaxValue - bytes.Length)
                 throw new ByteMemoryBuilder.LimitExceededException();
 
-            var destination = bytes.AppendSpan((int)length);
-            for (var index = 0; index < fields.Count; index++)
-            {
-                if (index > 0)
-                {
-                    destination[0] = (byte)' ';
-                    destination = destination[1..];
-                }
-                foreach (var segment in fields[index].Segments)
-                {
-                    var content = segment.Content.Bytes.Span;
-                    content.CopyTo(destination);
-                    destination = destination[content.Length..];
-                }
-            }
+            ExpandedWord.CopyJoinedValueTo(fields, bytes.AppendSpan((int)length));
         }
 
         async Task<ExpandedWordBuilder> ExpandAsync(Word operand, ExpansionPurpose operandPurpose, int start, int end)
