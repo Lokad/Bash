@@ -40,7 +40,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             catch (SyntaxException exception)
             {
                 await outer.ReportSyntaxErrorAsync(exception.Error).ConfigureAwait(false);
-                return new CommandSubstitutionResult(ShellValue.Empty, 2);
+                return new CommandSubstitutionResult(ShellValue.Empty, 2, IgnoredNuls: false);
             }
 
             if (parsed.Commands is [var command])
@@ -63,7 +63,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             if (creation.Descriptors is not { } pipe)
             {
                 await outer.ReportOperationErrorAsync(creation.Error.GetValueOrDefault()).ConfigureAwait(false);
-                return new CommandSubstitutionResult(ShellValue.Empty, 1);
+                return new CommandSubstitutionResult(ShellValue.Empty, 1, IgnoredNuls: false);
             }
             outer.TrackOwnedDescriptor(pipe.Read);
             outer.TrackOwnedDescriptor(pipe.Write);
@@ -99,14 +99,14 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             switch (result.Output)
             {
                 case BoundedReadResult.Complete complete:
-                    outer.Memory.Charge(Variables.EstimateValueBytes(ShellValue.FromBytes(complete.Content)));
+                    var output = CommandSubstitutionResult.FromCapture(complete.Content, result.ExitCode, outer.Memory);
                     var error = await outer.CloseDescriptorsAsync([pipe.Read], operationFailed: result.ExitCode != 0).ConfigureAwait(false);
                     if (error is { } failure)
                     {
                         await outer.ReportOperationErrorAsync(failure).ConfigureAwait(false);
-                        return new CommandSubstitutionResult(ShellValue.FromBytes(complete.Content), 1);
+                        return output with { ExitCode = 1 };
                     }
-                    return new CommandSubstitutionResult(ShellValue.FromBytes(complete.Content), result.ExitCode);
+                    return output;
                 case BoundedReadResult.TooLarge:
                     throw new ByteMemoryBuilder.LimitExceededException();
                 case BoundedReadResult.Failed failed:
@@ -119,5 +119,35 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
     }
 }
 
-/// <summary>Captured bytes and the nested shell's status, independent of the caller's command result.</summary>
-internal readonly record struct CommandSubstitutionResult(ShellValue Output, int ExitCode);
+/// <summary>Normalized capture bytes, the nested shell's status and whether to warn about NULs.</summary>
+internal readonly record struct CommandSubstitutionResult(ShellValue Output, int ExitCode, bool IgnoredNuls)
+{
+    /// <summary>Normalizes while the capture owner is live and admits the result to the caller.</summary>
+    internal static CommandSubstitutionResult FromCapture(ReadOnlyMemory<byte> capture, int exitCode, EvaluationMemory memory)
+    {
+        var bytes = capture.Span;
+        var firstNul = bytes.IndexOf((byte)0);
+        // LFs separated from the end only by NULs are trailing after filtering.
+        var length = bytes.LastIndexOfAnyExcept((byte)0, (byte)'\n') + 1;
+        if (length == 0)
+            return new(ShellValue.Empty, exitCode, firstNul >= 0);
+
+        var trimmed = capture[..length];
+        if (firstNul >= 0 && firstNul < length)
+        {
+            var tail = trimmed[(firstNul + 1)..];
+            var outputLength = length - 1 - tail.Span.Count((byte)0);
+            memory.Charge(Variables.EstimateValueBytes(outputLength));
+            using var filtered = ByteMemoryBuilder.CreateUnaccounted(outputLength);
+            filtered.Append(trimmed[..firstNul]);
+            ShellValue.FromBytes(tail).AppendWithoutNuls(filtered);
+            return new(ShellValue.FromBytes(filtered.ToMemory()), exitCode, IgnoredNuls: true);
+        }
+
+        memory.Charge(Variables.EstimateValueBytes(length));
+        var value = ShellValue.FromBytes(trimmed);
+        if (!value.TryGetCompactArrayCapacity(out _))
+            value = ShellValue.FromBytes(trimmed.ToArray());
+        return new(value, exitCode, firstNul >= 0);
+    }
+}

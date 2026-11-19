@@ -9,8 +9,8 @@ public sealed class BoundedByteMemoryBuilder : IDisposable, IByteMemoryWriter
     private readonly ByteMemoryBuilder _builder;
     private int _maximumLength;
 
-    // TODO: Use the budgeted constructor for parser and diagnostic callers once
-    // they receive a memory budget. The length limit alone does not reserve memory.
+    /// <summary>Creates a length-limited buffer without an internal memory reservation.</summary>
+    /// <remarks>Runtime callers admit the backing storage and any replacement overlap under their own owner.</remarks>
     public static BoundedByteMemoryBuilder CreateUnaccounted(int initialCapacity, int maximumLength) =>
         new(initialCapacity, maximumLength);
 

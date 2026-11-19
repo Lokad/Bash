@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -539,13 +538,10 @@ internal sealed class ExpandedWordBuilder
             FlushText();
             if (value.IsEmpty)
                 return;
-            if (_bytes == null && _retained.IsEmpty
-                && MemoryMarshal.TryGetArray(value.Bytes, out var slice)
-                && slice.Array is { } array && array.Length <= 2L * value.Bytes.Length
-                && value.Bytes.Equals((ReadOnlyMemory<byte>)slice.AsMemory()))
+            if (_bytes == null && _retained.IsEmpty && value.TryGetCompactArrayCapacity(out var capacity))
             {
                 // The command retains the array even when its producer gives up its charge.
-                _memory.Charge(32L + array.Length);
+                _memory.Charge(32L + capacity);
                 _retained = value;
                 return;
             }

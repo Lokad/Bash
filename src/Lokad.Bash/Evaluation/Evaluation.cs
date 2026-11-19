@@ -3810,16 +3810,15 @@ public sealed partial class Evaluation : IFileTester
         using var outputMemory = Memory.Budget.CreateScope();
         var redirectionScope = await OpenRedirectionScopeAsync(redirections, scope, RedirectionPersistence.None, inputSubstitution: true)
             .ConfigureAwait(false);
-        var output = ShellValue.Empty;
-        var status = 1;
+        var result = new CommandSubstitutionResult(ShellValue.Empty, 1, IgnoredNuls: false);
         OperationError? closeError;
         try
         {
             if (_state.FatalExpansion is { } targetFailure)
-                status = targetFailure.ExitCode;
+                result = result with { ExitCode = targetFailure.ExitCode };
             else if (_state.TryConsumeExpansionError(out var redirectionStatus))
             {
-                status = redirectionStatus;
+                result = result with { ExitCode = redirectionStatus };
                 if (redirectionScope.InputOpenFailed && _state.ErrexitEnabled)
                     SetFatalExpansionError(ExpansionFailureKind.InputSubstitution);
             }
@@ -3834,9 +3833,7 @@ public sealed partial class Evaluation : IFileTester
                 switch (read)
                 {
                     case BoundedReadResult.Complete complete:
-                        output = ShellValue.FromBytes(complete.Content);
-                        Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(output));
-                        status = 0;
+                        result = CommandSubstitutionResult.FromCapture(complete.Content, 0, Memory);
                         break;
                     case BoundedReadResult.Failed { Failure.Error: { } error }:
                         await ReportOperationErrorAsync(error).ConfigureAwait(false);
@@ -3850,15 +3847,18 @@ public sealed partial class Evaluation : IFileTester
         }
         finally
         {
-            closeError = await redirectionScope.CloseAsync(operationFailed: status != 0).ConfigureAwait(false);
+            closeError = await redirectionScope.CloseAsync(operationFailed: result.ExitCode != 0).ConfigureAwait(false);
         }
         if (closeError is { } failure)
         {
             await ReportOperationErrorAsync(failure).ConfigureAwait(false);
-            status = 1;
+            return result with { ExitCode = 1 };
         }
-        return new CommandSubstitutionResult(output, status);
+        return result;
     }
+
+    private static readonly ReadOnlyMemory<byte> CommandSubstitutionNulWarning =
+        "warning: command substitution: ignored null byte in input\n"u8.ToArray();
 
     /// <summary>
     /// Returns substitution bytes after discarding NULs and trailing LF bytes, preserving CR.
@@ -3870,22 +3870,9 @@ public sealed partial class Evaluation : IFileTester
         var result = await evaluation.EvaluateAsync(scope).ConfigureAwait(false);
         _state.LastExitCode = result.ExitCode;
         _state.LastCommandSubstitutionExitCode = result.ExitCode;
-        var content = result.Output.Bytes;
-        var nul = content.Span.IndexOf((byte)0);
-        if (nul >= 0)
-        {
-            // Unlike ANSI-C literals and printf assignment, substitution discards every NUL.
-            content = ShellValue.FromBytes(content).WithoutNuls().Bytes;
-            await ExecuteWriteAsync(
-                    GetStdErrDescriptor(),
-                    "warning: command substitution: ignored null byte in input\n"u8.ToArray())
-                .ConfigureAwait(false);
-        }
-
-        var end = content.Length;
-        while (end > 0 && content.Span[end - 1] == (byte)'\n')
-            end--;
-        return ShellValue.FromBytes(content[..end]);
+        if (result.IgnoredNuls)
+            await ExecuteWriteAsync(GetStdErrDescriptor(), CommandSubstitutionNulWarning).ConfigureAwait(false);
+        return result.Output;
     }
 
     /// <summary>

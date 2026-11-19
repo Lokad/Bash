@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Text.Unicode;
 using Lokad.Bash.Helpers;
 
@@ -27,6 +28,19 @@ public readonly struct ShellValue : IEquatable<ShellValue>
 
     /// <summary>Gets whether the value contains no bytes.</summary>
     public bool IsEmpty => _bytes.IsEmpty;
+
+    /// <summary>Gets the backing capacity when a caller can retain this array slice as a compact value.</summary>
+    internal bool TryGetCompactArrayCapacity(out int capacity)
+    {
+        if (MemoryMarshal.TryGetArray(_bytes, out var slice) && slice.Array is { } array
+            && array.Length <= 2L * _bytes.Length && _bytes.Equals((ReadOnlyMemory<byte>)slice.AsMemory()))
+        {
+            capacity = array.Length;
+            return true;
+        }
+        capacity = 0;
+        return false;
+    }
 
     /// <summary>Retains value bytes; the caller must not mutate their storage afterward.</summary>
     public static ShellValue FromBytes(ReadOnlyMemory<byte> bytes) => new(bytes);

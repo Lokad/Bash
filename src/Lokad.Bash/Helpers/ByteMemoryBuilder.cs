@@ -21,12 +21,10 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     private int _length;
 
     /// <summary>
-    /// Creates a buffer whose allocations are accounted by its caller or await migration.
+    /// Creates a buffer without an internal memory reservation.
     /// </summary>
     /// <param name="capacity">Initial capacity for the backing buffer.</param>
-    // TODO: Give parser and word-expansion callers a memory budget for these buffers.
-    // DelimitedRecordReader already prepays its buffer; do not charge it twice.
-    // New execution buffers should use a budgeted constructor.
+    /// <remarks>Runtime callers admit the backing storage and any replacement overlap under their own owner.</remarks>
     public static ByteMemoryBuilder CreateUnaccounted(int capacity) => new(capacity);
 
     private ByteMemoryBuilder(int capacity)

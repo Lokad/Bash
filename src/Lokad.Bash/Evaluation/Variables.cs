@@ -53,8 +53,10 @@ public sealed partial class Variables
 
     // Account bindings as a coarse owner. Shared values can be counted twice; no object identities
     // are registered. Callers keep saved bindings charged through restoration.
-    internal static long EstimateValueBytes(ShellValue value) => value.IsEmpty ? 0
-        : ValueHeaderBytes + (long)ValueCapacityMultiplier * value.Bytes.Length;
+    internal static long EstimateValueBytes(ShellValue value) => EstimateValueBytes(value.Bytes.Length);
+
+    internal static long EstimateValueBytes(int length) => length == 0 ? 0
+        : ValueHeaderBytes + (long)ValueCapacityMultiplier * length;
 
     internal long EstimatedMemoryBytes
     {

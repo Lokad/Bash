@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
@@ -9,6 +10,104 @@ namespace Lokad.Bash.Tests;
 
 public sealed class CommandSubstitutionCaptureTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TrailingLfsAreTrimmedBeforeCaptureTransfer(bool pipe)
+    {
+        var content = new byte[65536];
+        content.AsSpan().Fill((byte)'\n');
+        content[0] = 0xff;
+        var state = new Eval(Parser.Parse(pipe ? "value=$(cmd)" : "value=$(<input)"));
+        var host = QueueCapture(content, pipe);
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        var governor = new MemoryGovernor(192 * 1024);
+        using var budget = governor.CreateScope();
+
+        await new Engine().RunAsync(state, host, budget, CancellationToken.None);
+
+        Assert.Equal(pipe ? 7 : 0, state.LastExitCode);
+        Assert.Equal(new byte[] { 0xff }, state.Variables["value"].Bytes.ToArray());
+        Assert.Empty(host.Appends);
+        Assert.Equal(pipe ? [new FileDescriptor(11), new FileDescriptor(10)] : new[] { new FileDescriptor(10) },
+            host.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        budget.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InteriorNulCaptureOwnsExactlyTheNormalizedBytes(bool pipe)
+    {
+        var content = new byte[4096];
+        content.AsSpan().Fill((byte)'a');
+        content[0] = 0xff;
+        content[128] = 0;
+        "\r\0\n\n"u8.CopyTo(content.AsSpan(content.Length - 4));
+        var state = new Eval(Parser.Parse(pipe ? "value=$(cmd)" : "value=$(<input)"));
+        var host = QueueCapture(content, pipe);
+        var governor = new MemoryGovernor(2 * 1024 * 1024);
+        using var budget = governor.CreateScope();
+        var started = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settle = new TaskCompletionSource<DescriptorWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.BeforeAppend = (_, _) => started.SetResult(governor.ReservedBytes);
+        host.EnqueueAppendTask(settle.Task);
+
+        var execution = new Engine().RunAsync(state, host, budget, CancellationToken.None);
+        try
+        {
+            var reserved = await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(execution.IsCompleted);
+            Assert.Equal(pipe ? [new FileDescriptor(11), new FileDescriptor(10)] : new[] { new FileDescriptor(10) },
+                host.ClosedDescriptors);
+            Assert.False(state.Variables.ContainsKey("value"));
+            Assert.True(reserved >= 4092);
+            Assert.Equal(reserved, governor.ReservedBytes);
+        }
+        finally
+        {
+            settle.SetResult(DescriptorWriteResult.Open);
+            await execution;
+        }
+
+        var expected = Enumerable.Repeat((byte)'a', 4091).Append((byte)'\r').ToArray();
+        expected[0] = 0xff;
+        var result = state.Variables["value"].Bytes;
+        Assert.Equal(expected, result.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(result, out var stored));
+        Assert.Equal(expected.Length, Assert.IsType<byte[]>(stored.Array).Length);
+        Assert.Equal(pipe ? 7 : 0, state.LastExitCode);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        var warning = Assert.Single(host.Appends);
+        Assert.Equal(FileDescriptor.StdErr, warning.Descriptor);
+        Assert.Equal("warning: command substitution: ignored null byte in input\n"u8.ToArray(), warning.Content);
+        budget.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private static TestOperationVisitor QueueCapture(byte[] content, bool pipe)
+    {
+        var host = new TestOperationVisitor(pipe ? [7] : []) { RecordAppends = true };
+        if (pipe)
+        {
+            host.EnqueuePipeDescriptors(new PipeDescriptors(10, 11));
+            host.EnqueueCloseDescriptor();
+            host.EnqueueCloseDescriptor();
+            var starts = Enumerable.Range(1, content.Length - 1)
+                .Where(start => content[start - 1] == (byte)'\n').ToArray();
+            host.EnqueueReadResult(ReadResult.Success(content, starts, reachedEoF: true));
+        }
+        else
+        {
+            host.EnqueueOpenFileDescriptor(10);
+            host.EnqueueCloseDescriptor();
+            host.EnqueueByteReadResult(content, ByteReadResult.Success(content.Length, reachedEoF: true));
+        }
+        return host;
+    }
+
     [Fact]
     public async Task FinalCaptureBytesNeedNoExtraReadAndKeepCommandStatus()
     {
