@@ -179,7 +179,6 @@ public sealed partial class Evaluation
         {
             var resolutions = await ResolveCommandQueriesAsync().ConfigureAwait(false);
             using var output = new ByteMemoryBuilder(0, Memory.Budget);
-            using var encodingMemory = new MemoryCapacity(Memory.Budget, 0);
             try
             {
                 // Build the whole display payload before emitting any channel; endpoints retain operand order.
@@ -198,9 +197,10 @@ public sealed partial class Evaluation
                         var error = (resolution as CommandQueryResolution.Failed)?.Error;
                         lookupFailed |= error.HasValue;
                         if ((error.HasValue || outputMode == CommandQueryOutputMode.TypeDescription)
-                            && (!output.TryAppend(builtinName.Bytes.Span) || !AppendText(": ")
-                                || !output.TryAppend(name.Bytes.Span) || !AppendText(": ")
-                                || !AppendText(error?.Message ?? "not found\n")))
+                            && (!output.TryAppend(builtinName.Bytes.Span) || !output.TryAppend(": "u8)
+                                || !output.TryAppend(name.Bytes.Span) || !output.TryAppend(": "u8)
+                                || !(error?.Message is { } message
+                                    ? AppendText(message) : output.TryAppend("not found\n"u8))))
                             return await OutputLimitAsync().ConfigureAwait(false);
 
                         endOffsets[index] = output.Length;
@@ -219,20 +219,20 @@ public sealed partial class Evaluation
                             resolution is CommandQueryResolution.Host hostCommand
                             ? AppendText(hostCommand.ResolvedName)
                             : output.TryAppend(name.Bytes.Span),
-                        CommandQueryOutputMode.TypeKind => AppendText(resolution switch
+                        CommandQueryOutputMode.TypeKind => output.TryAppend(resolution switch
                             {
-                                CommandQueryResolution.Function => "function",
-                                CommandQueryResolution.Builtin => "builtin",
-                                CommandQueryResolution.Keyword => "keyword",
-                                CommandQueryResolution.Host => "file",
+                                CommandQueryResolution.Function => "function"u8,
+                                CommandQueryResolution.Builtin => "builtin"u8,
+                                CommandQueryResolution.Keyword => "keyword"u8,
+                                CommandQueryResolution.Host => "file"u8,
                                 _ => throw new InvalidOperationException("Missing command reached found query output.")
                             }),
                         CommandQueryOutputMode.TypeDescription => output.TryAppend(name.Bytes.Span) && (resolution switch
                             {
-                                CommandQueryResolution.Function => AppendText(" is a function"),
-                                CommandQueryResolution.Builtin => AppendText(" is a shell builtin"),
-                                CommandQueryResolution.Keyword => AppendText(" is a shell keyword"),
-                                CommandQueryResolution.Host hostDescription => AppendText(" is ") && AppendText(hostDescription.ResolvedName),
+                                CommandQueryResolution.Function => output.TryAppend(" is a function"u8),
+                                CommandQueryResolution.Builtin => output.TryAppend(" is a shell builtin"u8),
+                                CommandQueryResolution.Keyword => output.TryAppend(" is a shell keyword"u8),
+                                CommandQueryResolution.Host hostDescription => output.TryAppend(" is "u8) && AppendText(hostDescription.ResolvedName),
                                 _ => throw new InvalidOperationException("Missing command reached found query output.")
                             }),
                         _ => throw new ArgumentOutOfRangeException(nameof(outputMode))
@@ -293,7 +293,6 @@ public sealed partial class Evaluation
             catch (MemoryBudgetExceededException)
             {
                 output.Dispose();
-                encodingMemory.Dispose();
                 await ReportExpansionDiagnosticAsync(builtinName, ShellValue.FromText("shared memory budget exhausted"))
                     .ConfigureAwait(false);
                 return 1;
@@ -304,12 +303,12 @@ public sealed partial class Evaluation
 
             bool AppendText(string text)
             {
-                var bytes = Encoding.UTF8.GetByteCount(text);
-                if (!output.CanAppend(bytes))
+                // Check the display limit before validating host text during encoding.
+                var byteCount = Encoding.UTF8.GetByteCount(text);
+                if (!output.CanAppend(byteCount))
                     return false;
-                // Encoded fragments are copied immediately; reuse their prepaid allowance.
-                encodingMemory.Resize(bytes);
-                return output.TryAppend(Utf8Text.Encode(text).Span);
+                Utf8Text.StrictUtf8.GetBytes(text.AsSpan(), output.AppendSpan(byteCount));
+                return true;
             }
 
             async Task<int> OutputLimitAsync()

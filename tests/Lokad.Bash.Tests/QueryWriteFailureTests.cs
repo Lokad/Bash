@@ -2,6 +2,7 @@ using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
@@ -228,6 +229,55 @@ public sealed class QueryWriteFailureTests
             Assert.Equal(text, Encoding.UTF8.GetString(operation.Content.Span));
             operation.SetResult(result);
         }
+    }
+
+    [Fact]
+    public async Task QueryKeepsUtf8OutputAdmittedThroughTheWrite()
+    {
+        var state = new Eval(Parser.Parse("type -p demo"));
+        var budget = new MemoryGovernor(24 * 1024);
+        using var owner = budget.CreateScope();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        state.Memory.Budget = owner;
+
+        var resolvedName = "/sample/" + new string('\u00e9', 4096);
+        var expected = Encoding.UTF8.GetBytes(resolvedName + "\n");
+        var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("demo", Assert.Single(lookup.CommandNames));
+        lookup.SetResult([new CommandLookupResult.Found(resolvedName)]);
+
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        var pending = budget.ReservedBytes;
+        try
+        {
+            Assert.True(write.FileDescriptor == FileDescriptor.StdOut, "Expected the admitted query output on stdout.");
+            Assert.Equal(expected, write.Content.ToArray());
+            Assert.False(state.Completion.IsCompleted);
+        }
+        finally
+        {
+            write.SetResult(DescriptorWriteResult.Open);
+            await state.Completion.WaitAsync(deadline.Token);
+        }
+
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.True(pending - budget.ReservedBytes >= expected.Length);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task InvalidHostQueryTextFailsBeforePublishingBufferedOutput()
+    {
+        var state = new Eval(Parser.Parse("type echo demo"));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("demo", Assert.Single(lookup.CommandNames));
+        lookup.SetResult([new CommandLookupResult.Found("/sample/\ud800")]);
+
+        await Assert.ThrowsAsync<EncoderFallbackException>(() => state.GetNextStep(deadline.Token));
+        await Assert.ThrowsAsync<EncoderFallbackException>(() => state.Completion.WaitAsync(deadline.Token));
     }
 
     [Fact]
