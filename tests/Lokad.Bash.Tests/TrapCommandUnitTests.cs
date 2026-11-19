@@ -10,6 +10,23 @@ namespace Lokad.Bash.Tests;
 public sealed class TrapCommandUnitTests
 {
     [Theory]
+    [InlineData("trap -p -- $'\\r+15\\t'", "trap -- 'sample' SIGTERM\n|0|trap -- 'sample' SIGTERM\n", "")]
+    [InlineData("trap -p -- -0", "trap -- '' EXIT\n|0|trap -- 'sample' SIGTERM\n", "")]
+    [InlineData("trap -- ' +15 '", "|0|", "")]
+    [InlineData("trap -- - $'\\v15'", "|0|", "")]
+    [InlineData("trap -- '+15' INT", "|0|trap -- 'sample' SIGTERM\ntrap -- '+15' SIGINT\n", "")]
+    [InlineData("trap -p -- $'15\\n'", "|1|trap -- 'sample' SIGTERM\n", "trap: 15\n: invalid signal specification\n")]
+    public async Task TrapNumericConditionsPreserveActionAndResetClassification(string command, string output, string error)
+    {
+        var script = "trap sample TERM; trap '' EXIT; " + command + "; printf '|%s|' \"$?\"; trap -p TERM INT";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task TrapListingReleasesTheFirstRecordBeforeWritingTheSecond(bool manyQuotes)

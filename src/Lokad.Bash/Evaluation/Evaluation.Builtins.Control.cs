@@ -139,7 +139,7 @@ public sealed partial class Evaluation
     }
 
     private static bool TryParseControlNumber(ShellValue operand, out long status) =>
-        Integers.TryParseNumber(operand.Bytes.Span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8), out status);
+        Integers.TryParseBuiltinNumber(operand.Bytes.Span, out status);
 
     private async Task<EvaluationResult> WriteControlHelpAsync(BuiltinKind builtin, bool negated)
     {

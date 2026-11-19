@@ -94,10 +94,7 @@ public sealed partial class Evaluation
                     break;
                 }
 
-                // Unlike redirection syntax, read accepts a sign and leading ASCII whitespace,
-                // but only space/tab after the decimal descriptor number.
-                if (!Integers.TryParseNumber(
-                        operand.Bytes.Span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8), out var number)
+                if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var number)
                     || number is < 0 or > int.MaxValue)
                     return await FailAsync([operand, ShellValue.FromText(": invalid file descriptor specification")])
                         .ConfigureAwait(false);

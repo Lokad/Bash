@@ -63,10 +63,7 @@ public sealed partial class Evaluation
                         delimiter = operand.IsEmpty ? (byte)0 : operand.Span[0];
                     else
                     {
-                        // Bash's decimal conversion skips C whitespace before the number
-                        // and accepts only a space or tab after it.
-                        var numeric = operand.Span.TrimStart(" \t\n\r\v\f"u8).TrimEnd(" \t"u8);
-                        if (!Integers.TryParseNumber(numeric, out var number) || number is < 0 or > uint.MaxValue)
+                        if (!Integers.TryParseBuiltinNumber(operand.Span, out var number) || number is < 0 or > uint.MaxValue)
                             return await InvalidNumberAsync(operand, option).ConfigureAwait(false);
                         if (option == (byte)'n')
                             count = (uint)number;

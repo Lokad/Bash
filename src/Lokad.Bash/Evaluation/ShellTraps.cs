@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
+using System.Text;
+using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -95,24 +96,22 @@ internal sealed class ShellTraps
     public static bool TryParse(ShellValue value, out TrapCondition condition)
     {
         condition = default;
-        if (!value.TryGetUtf8Text(out var text))
-            return false;
-        var name = text.AsSpan();
-        if (name.Equals("EXIT", StringComparison.OrdinalIgnoreCase))
+        var name = value.Bytes.Span;
+        if (Ascii.EqualsIgnoreCase(name, "EXIT"u8))
             return true;
-        if (int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+        if (Integers.TryParseBuiltinNumber(name, out var number)
             && number is 0 or 1 or 2 or 15)
         {
             condition = (TrapCondition)number;
             return true;
         }
-        if (name.StartsWith("SIG", StringComparison.OrdinalIgnoreCase))
+        if (name.Length >= 3 && Ascii.EqualsIgnoreCase(name[..3], "SIG"u8))
             name = name[3..];
-        if (name.Equals("HUP", StringComparison.OrdinalIgnoreCase))
+        if (Ascii.EqualsIgnoreCase(name, "HUP"u8))
             condition = TrapCondition.Hangup;
-        else if (name.Equals("INT", StringComparison.OrdinalIgnoreCase))
+        else if (Ascii.EqualsIgnoreCase(name, "INT"u8))
             condition = TrapCondition.Interrupt;
-        else if (name.Equals("TERM", StringComparison.OrdinalIgnoreCase))
+        else if (Ascii.EqualsIgnoreCase(name, "TERM"u8))
             condition = TrapCondition.Terminate;
         else
             return false;

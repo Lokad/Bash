@@ -46,7 +46,8 @@ public sealed class ExecutionLifetimeTests
         Assert.Equal(descriptor, write.FileDescriptor);
         Assert.Equal(expected, write.Content.ToArray());
         Assert.True(MemoryMarshal.TryGetArray(write.Content, out var backing));
-        Assert.Equal(expected.Length, backing.Array!.Length);
+        Assert.NotNull(backing.Array);
+        Assert.Equal(expected.Length, backing.Array.Length);
         var pending = governor.ReservedBytes;
         write.SetResult(DescriptorWriteResult.Open);
 

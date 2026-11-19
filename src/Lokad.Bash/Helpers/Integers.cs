@@ -125,6 +125,10 @@ public static class Integers
         return true;
     }
 
+    /// <summary>Parses a builtin decimal operand with leading ASCII whitespace and trailing space or tab.</summary>
+    internal static bool TryParseBuiltinNumber(ReadOnlySpan<byte> span, out long value) =>
+        TryParseNumber(span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8), out value);
+
     /// <summary>
     /// Parses a signed decimal with surrounding ASCII whitespace and an optional
     /// K/M/G binary suffix. Rejects overflow after scaling.
