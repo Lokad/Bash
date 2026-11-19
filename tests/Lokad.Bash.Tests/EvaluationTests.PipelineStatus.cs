@@ -176,6 +176,21 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public void PipelineStatusSharesZeroBytesAcrossPublications()
+    {
+        var variables = Variables.CreateEmpty();
+        variables.SetPipelineStatuses([0, 127, 0, 255], default, CancellationToken.None);
+        var first = variables.IndexedArrays["PIPESTATUS"].PresentValues.ToArray();
+
+        Assert.Equal(["0", "127", "0", "255"], first.Select(status => status.ToUtf8String()));
+        Assert.True(first[0].Bytes.Equals(first[2].Bytes));
+
+        variables.SetPipelineStatuses([0], default, CancellationToken.None);
+        var next = Assert.Single(variables.IndexedArrays["PIPESTATUS"].PresentValues);
+        Assert.True(first[0].Bytes.Equals(next.Bytes));
+    }
+
+    [Fact]
     public async Task PipelineStatusRemainsAvailableUntilTheNextCommandCompletes()
     {
         var state = new Eval(Parser.Parse("false | true; printf '%s' \"${PIPESTATUS[*]}\""));

@@ -41,7 +41,7 @@ public sealed partial class Variables
         for (var index = 0; index < statuses.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            values[index] = ShellValue.FromText(Integers.FormatNumber(statuses[index]));
+            values[index] = ShellValue.FromBytes(NumberFormatting.FormatNumber(statuses[index]));
         }
         var previous = (slot as IndexedSlot)?.Value;
         var array = IndexedArray.FromForegroundStatuses(values, previous, cancellationToken);
