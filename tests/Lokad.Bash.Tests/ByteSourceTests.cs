@@ -10,6 +10,20 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteSourceTests
 {
+    [Fact]
+    public async Task AmbiguousRedirectionRetainsDiagnosticBytes()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "a=('two fields' $'\\377'); i=0; : 2>error >${a[i++]}; printf '%s' \"$i\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("2", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        byte[] expected = [0xff, .. ": ambiguous redirect\n"u8];
+        Assert.Equal(expected, host.ReadFileBytes("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
 
     [Fact]
     public async Task TextConsumerFailure_UsesTheActiveErrorRedirectionOnce()

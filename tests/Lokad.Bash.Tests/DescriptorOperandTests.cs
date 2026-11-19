@@ -57,6 +57,70 @@ public sealed class DescriptorOperandTests
     }
 
     [Theory]
+    [InlineData("$(f)", "bad", "x", "0", "$(f)")]
+    [InlineData("\"$(f)\"", "bad", "x", "0", "$(f)")]
+    [InlineData("\"pre`f`$((i++))\"", "bad", "x", "2", "pre`f`1")]
+    [InlineData("${none:-$(f)}", "bad", "xx", "0", "bad")]
+    [InlineData("out$(( $(f) + i++ ))", "2", "xx", "2", "out3")]
+    public async Task InvalidDescriptorDiagnosticsRetainSubstitutionEffects(
+        string operand, string captured, string calls, string counter, string reported)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            $"f(){{ printf x >>calls; printf '%s' {captured}; }}; i=0; : 2>error 3>&{operand}; printf '<%s><%s>' \"$?\" \"$i\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<1><{counter}>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(calls, host.ReadFile("/calls"));
+        Assert.Equal(reported + ": ambiguous redirect\n", host.ReadFile("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(">&")]
+    [InlineData("<&")]
+    public async Task AmbiguousDuplicationReportsTheOperand(string redirectionOperator)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("x='1 2'; : 2>error 3" + redirectionOperator + "$x", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("$x: ambiguous redirect\n", host.ReadFile("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("\"$x\"")]
+    [InlineData("\"$x\"-")]
+    public async Task EmptyQuotedDescriptorFieldFails(string operand)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("x=; : 3>&" + operand, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("3: Bad file descriptor\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task MoveWithMultipleFieldsClosesAndRestoresTheDestination()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "exec 3>out; x='1 2'; { printf inner >&3; printf '<%s>' \"$?\"; } 2>error 3>&$x-; printf outer >&3",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("3: Bad file descriptor\n", host.ReadFile("/error"));
+        Assert.Equal("outer", host.ReadFile("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("3>&$fd")]
     [InlineData("3<&\"$fd\"")]
     [InlineData("3>&'-'")]

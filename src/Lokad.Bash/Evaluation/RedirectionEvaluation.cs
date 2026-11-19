@@ -239,12 +239,12 @@ internal sealed class RedirectionEvaluation
         }
         var (fieldCount, sourceWord) = await scope.Effects.ExpandRedirectionFieldsAsync(target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
-        if (fieldCount > 1 || fieldCount == 0 && !move)
+        if (fieldCount != 1 && !move)
         {
-            await ReportFailureAsync(scope, new OperationError("ambiguous redirect\n")).ConfigureAwait(false);
+            await ReportAmbiguousRedirectAsync(scope, target).ConfigureAwait(false);
             return RedirectionOutcome.Failure;
         }
-        if (sourceWord == "-" || move && sourceWord.Length == 0)
+        if (sourceWord == "-" || move && fieldCount != 1)
         {
             if (allocate)
                 return await CloseVariableAsync(scope, redirection.VariableName).ConfigureAwait(false);
@@ -260,19 +260,15 @@ internal sealed class RedirectionEvaluation
 
         if (!LogicalDescriptor.TryParse(sourceWord.AsSpan(), out var sourceDescriptor))
         {
-            var numericOverflow = sourceWord.Length > 0 && sourceWord.AsSpan().IndexOfAnyExceptInRange('0', '9') < 0;
-            if (numericOverflow || sourceWord.Length == 0)
+            if (sourceWord.AsSpan().IndexOfAnyExceptInRange('0', '9') < 0)
             {
-                await ReportFailureAsync(scope, new OperationError($"{sourceWord}: Bad file descriptor\n")).ConfigureAwait(false);
+                var name = sourceWord.Length == 0 ? targetDescriptor.ToString() : sourceWord;
+                await ReportFailureAsync(scope, new OperationError($"{name}: Bad file descriptor\n")).ConfigureAwait(false);
                 return RedirectionOutcome.Failure;
             }
             if (move || redirection.Kind != RedirectionKind.DuplicateOutput || targetDescriptor != LogicalDescriptor.StdOut)
             {
-                // GNU expands an invalid word again while forming this diagnostic.
-                // Valid filename fallback deliberately keeps the first expansion only.
-                var diagnostic = await ExpandRedirectionTargetAsync(scope, target).ConfigureAwait(false);
-                if (diagnostic != null)
-                    await ReportFailureAsync(scope, new OperationError($"{diagnostic}: ambiguous redirect\n")).ConfigureAwait(false);
+                await ReportAmbiguousRedirectAsync(scope, target).ConfigureAwait(false);
                 return RedirectionOutcome.Failure;
             }
 
@@ -448,12 +444,26 @@ internal sealed class RedirectionEvaluation
         scope.Effects.SetExpansionError(1);
     }
 
-    /// <summary>Reports a failure through the stderr mapping reached so far, before scope restoration.</summary>
-    private async Task ReportFailureAsync(ScopedEvaluation scope, ReadOnlyMemory<byte> diagnostic)
+    /// <summary>Builds the diagnostic before restoring the redirection frame.</summary>
+    private async Task ReportAmbiguousRedirectAsync(ScopedEvaluation scope, Word target)
     {
+        // The diagnostic pass can repeat arithmetic and parameter effects even with stderr closed.
+        var field = await scope.Effects.ExpandRedirectionDiagnosticAsync(target, scope).ConfigureAwait(false);
+        if (scope.Effects.HasPendingExpansionError)
+            return;
+
         var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
-        if (!diagnostic.IsEmpty && !standardError.IsClosed)
-            await scope.Effects.ExecuteWriteAsync(standardError, diagnostic).ConfigureAwait(false);
+        if (!standardError.IsClosed)
+        {
+            using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+            if (field is { } value)
+                diagnostic.Append(value.Bytes);
+            else if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.CancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+
+            await scope.Effects.ExecuteWriteAsync(standardError, diagnostic.Append(": ambiguous redirect\n"u8).ToMemory())
+                .ConfigureAwait(false);
+        }
         scope.Effects.SetExpansionError(1);
     }
 
@@ -504,15 +514,7 @@ internal sealed class RedirectionEvaluation
 
         if (fieldCount != 1)
         {
-            if (_inputSubstitution)
-            {
-                using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Workspace);
-                if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.CancellationToken))
-                    throw new ByteMemoryBuilder.LimitExceededException();
-                await ReportFailureAsync(scope, diagnostic.Append(": ambiguous redirect\n"u8).ToMemory()).ConfigureAwait(false);
-            }
-            else
-                scope.Effects.SetExpansionError(1);
+            await ReportAmbiguousRedirectAsync(scope, target).ConfigureAwait(false);
             return null;
         }
 

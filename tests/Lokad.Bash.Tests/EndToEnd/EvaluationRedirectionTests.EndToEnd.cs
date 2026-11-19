@@ -11,6 +11,61 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationRedirectionTestsEndToEnd
 {
     [Theory]
+    [InlineData("", "<1>", "$(f): ambiguous redirect\n", null)]
+    [InlineData("2>error", "<1>", "", "$(f): ambiguous redirect\n")]
+    [InlineData("2>&1", "$(f): ambiguous redirect\n<1>", "", null)]
+    [InlineData("2>&-", "<1>", "", null)]
+    public async Task AmbiguousRedirectionUsesReachedErrorMapping(
+        string redirect, string output, string stderr, string? errorFile)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "f(){ printf x >>calls; printf 'a b'; }; printf reached " + redirect +
+            " >$(f) >later; printf '<%s>' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(stderr, host.StandardError.TextContent);
+        Assert.Equal("x", host.ReadFile("/calls"));
+        if (errorFile is not null)
+            Assert.Equal(errorFile, host.ReadFile("/error"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/later"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("unset x; : >$x", "$x", "")]
+    [InlineData("set -- a b; : >\"$@\"", "\"$@\"", "")]
+    [InlineData(": >$(   printf   'a b'   )", "$(printf 'a b')", "")]
+    [InlineData("i=0; : >{a,b}$((i++)); printf '%s' \"$i\"; false", "{a,b}$((i++))", "4")]
+    public async Task AmbiguousRedirectionReportsOperandSpelling(string script, string operand, string output)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(operand + ": ambiguous redirect\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(": >${a[i++]}", "2", "second: ambiguous redirect\n")]
+    [InlineData(": 2>&- >${a[i++]}", "2", "")]
+    [InlineData("printf '<%s>' \"$(<${a[i++]})\"", "<>2", "second: ambiguous redirect\n")]
+    public async Task AmbiguousRedirectionReevaluatesTheDiagnosticOperand(string command, string output, string stderr)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "a=('two fields' second); i=0; " + command + "; printf '%s' \"$i\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(stderr, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("time cat <<END\nbody\nEND\n", "body\n")]
     [InlineData("time ! cat <<END\nbody\nEND\n", "body\n")]
     [InlineData("time { cat <<END; }\nbody\nEND\n", "body\n")]

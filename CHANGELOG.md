@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Report ambiguous redirections through the active stderr mapping and preserve
+  the expansion effects used to form the diagnostic.
+
 - Preserve literal structured here-document delimiters through body collection,
   function display, and export.
 

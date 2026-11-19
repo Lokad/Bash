@@ -2914,19 +2914,35 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Validates redirection fields in order and decodes a single candidate.</summary>
     internal async Task<(int Count, string Value)> ExpandRedirectionFieldsAsync(Word word, ScopedEvaluation scope)
     {
+        var (count, field) = await CollectRedirectionFieldsAsync(word, scope).ConfigureAwait(false);
+        return (count, count == 1 ? await DecodeExpandedValueAsync(field).ConfigureAwait(false) : string.Empty);
+    }
+
+    /// <summary>Expands a diagnostic operand as bytes, preserving command substitution spelling.</summary>
+    internal async Task<ShellValue?> ExpandRedirectionDiagnosticAsync(Word word, ScopedEvaluation scope)
+    {
+        var (count, field) = await CollectRedirectionFieldsAsync(
+            word, scope with { PreserveCommandSubstitutionSpelling = true }).ConfigureAwait(false);
+        return count == 1 ? field : null;
+    }
+
+    private async ValueTask<(int Count, ShellValue Value)> CollectRedirectionFieldsAsync(Word word, ScopedEvaluation scope)
+    {
         if (scope.CanExpand && GetLiteralWithoutGlob(word) is { } literal)
         {
             CheckCancellation();
-            return (1, await DecodeExpandedValueAsync(literal.ToValue(Memory)).ConfigureAwait(false));
+            return (1, literal.ToValue(Memory));
         }
 
         using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
         var values = new List<ShellValue>();
         await AppendOperandValuesAsync(word, scope, values, fieldMemory).ConfigureAwait(false);
         if (_state.HasPendingExpansionError)
-            return (0, string.Empty);
+            return (0, ShellValue.Empty);
         if (values.Count == 1)
-            return (1, await DecodeExpandedValueAsync(values[0]).ConfigureAwait(false));
+            return (1, values[0]);
+        if (scope.PreserveCommandSubstitutionSpelling)
+            return (values.Count, ShellValue.Empty);
 
         foreach (var value in values)
         {
@@ -2934,10 +2950,10 @@ public sealed partial class Evaluation : IFileTester
             if (!System.Text.Unicode.Utf8.IsValid(value.Bytes.Span))
             {
                 await ReportInvalidTextValueAsync().ConfigureAwait(false);
-                return (0, string.Empty);
+                return (0, ShellValue.Empty);
             }
         }
-        return (values.Count, string.Empty);
+        return (values.Count, ShellValue.Empty);
     }
 
     private async Task<string> DecodeExpandedValueAsync(ShellValue value)

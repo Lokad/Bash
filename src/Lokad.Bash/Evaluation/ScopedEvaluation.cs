@@ -23,6 +23,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Retains builtin selector writes that belong to the caller rather than a temporary prefix.</summary>
     internal Variables.CommandBindings? SelectorBindings { get; init; }
 
+    /// <summary>Diagnostic expansion retains command substitution spelling.</summary>
+    internal bool PreserveCommandSubstitutionSpelling { get; init; }
+
     /// <summary>A builtin's closed diagnostic output stops its expansion without making later commands fatal.</summary>
     internal bool CanExpand => !Effects.HasPendingExpansionError && Effects.BuiltinDiagnosticsOpen;
 

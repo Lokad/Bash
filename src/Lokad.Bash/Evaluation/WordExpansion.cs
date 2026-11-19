@@ -640,12 +640,14 @@ internal static partial class WordExpansion
                     return null;
                 }
                 var arithmetic = prepared?.Operand;
+                // Arithmetic and braced parameter operands start their own expansion.
+                var operandScope = scope with { PreserveCommandSubstitutionSpelling = false };
                 long? result;
                 if (arithmetic != null)
-                    result = await ExpandArithmeticOperandAsync(arithmetic, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
+                    result = await ExpandArithmeticOperandAsync(arithmetic, operandScope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
                 else
                 {
-                    result = await ExpandArithmeticOperandAsync(expression, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
+                    result = await ExpandArithmeticOperandAsync(expression, operandScope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
                 }
                 if (result is { } number)
                     AppendNumber(output, number, allowWordSplitting, globQuoted);
@@ -773,7 +775,7 @@ internal static partial class WordExpansion
 
                 await ExpandBracedParameterAsync(
                         payload,
-                        scope,
+                        scope with { PreserveCommandSubstitutionSpelling = false },
                         output,
                         allowWordSplitting,
                         globQuoted,
@@ -841,6 +843,15 @@ internal static partial class WordExpansion
         bool allowWordSplitting,
         bool globQuoted)
     {
+        if (scope.PreserveCommandSubstitutionSpelling)
+        {
+            using var spelling = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+            if (!FunctionDefinitionFormatter.TryAppendSubstitutionSource(script, spelling, scope.Effects.CancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            output.AppendExpansion(ShellValue.FromBytes(spelling.ToMemory()), allowWordSplitting, globQuoted);
+            return;
+        }
+
         var result = await scope.Effects.ExecuteCommandSubstitutionAsync(script, scope).ConfigureAwait(false);
         output.AppendExpansion(result, allowWordSplitting, globQuoted);
     }

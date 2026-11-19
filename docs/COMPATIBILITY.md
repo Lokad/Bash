@@ -194,6 +194,12 @@ its operands against the previous array and replaces it when it completes. Empty
 loops and function definitions preserve the previous array.
 For `|&`, the left stage applies an implicit `2>&1` after its explicit
 redirections. Setup diagnostics use the stderr mapping reached so far.
+After an ambiguous redirection, the evaluator expands the operand again to name
+it in the diagnostic. Direct command substitutions remain text in that pass.
+Arithmetic and braced parameter operands keep their own expansion behavior. If
+the pass produces zero or multiple fields, the diagnostic uses the operand's
+spelling. A descriptor move closes the destination when the operand produces
+zero or multiple fields. A single quoted empty field reports a bad descriptor.
 Function-body redirections apply on invocation inside the completed stage setup.
 Scripts are limited to 4 MiB, with structural syntax/nesting guards and CLR collection-size
 checks. The source bound limits parser input; nesting guards protect recursive

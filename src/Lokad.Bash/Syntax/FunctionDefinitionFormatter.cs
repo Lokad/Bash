@@ -27,6 +27,37 @@ internal static class FunctionDefinitionFormatter
     internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, CancellationToken cancellationToken) =>
         TryAppend(new Step.Word(word), output, Format.BraceSource, cancellationToken);
 
+    internal static bool TryAppendSubstitutionSource(
+        CommandSubstitutionSyntax substitution, IByteMemoryWriter output, CancellationToken cancellationToken)
+    {
+        if (substitution is CommandSubstitutionSyntax.Legacy legacy)
+            return output.TryAppend(legacy.Spelling.AsSpan());
+        if (substitution is CommandSubstitutionSyntax.Parsed parsed)
+            return output.TryAppend(StartsWithParenthesis(parsed.Script) ? "$( "u8 : "$("u8)
+                && TryAppend(new Step.Script(parsed.Script), output, Format.BraceSource, cancellationToken)
+                && output.TryAppend((byte)')');
+        return output.TryAppend("$("u8) && output.TryAppend(substitution.Source.AsSpan()) && output.TryAppend((byte)')');
+
+        static bool StartsWithParenthesis(ParsedScript script)
+        {
+            if (script.Commands.Count == 0)
+                return false;
+            // A leading literal parenthesis after the opener would select arithmetic.
+            var first = script.Commands[0];
+            while (true)
+            {
+                switch (first)
+                {
+                    case SubshellCommand or ArithmeticCommand: return true;
+                    case RedirectedCommand redirected: first = redirected.Body; break;
+                    case ListCommand list: first = list.Left; break;
+                    case PipelineCommand { Negated: false } pipe: first = pipe.Left; break;
+                    default: return false;
+                }
+            }
+        }
+    }
+
     private static bool TryAppend(Step initial, IByteMemoryWriter output, Format format, CancellationToken cancellationToken)
     {
         var display = format == Format.Display;
@@ -83,14 +114,9 @@ internal static class FunctionDefinitionFormatter
                             WordPartKind.DoubleQuoted => output.TryAppend(content),
                             WordPartKind.Escaped => Append("\\") && output.TryAppend(content),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
-                                when part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Legacy legacy } =>
-                                output.TryAppend(legacy.Spelling.AsSpan()),
-                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
-                                when braceSource && part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed parsed } =>
-                                Append(StartsWithParenthesis(parsed.Script) ? "$( " : "$(")
-                                && TryAppend(new Step.Script(parsed.Script), output, format, cancellationToken) && Append(")"),
-                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted when braceSource =>
-                                Append("$(") && output.TryAppend(content) && Append(")"),
+                                when part is CommandSubstitutionWordPart command
+                                    && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy) =>
+                                TryAppendSubstitutionSource(command.Substitution, output, cancellationToken),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
                                 AppendCommandSubstitution(content),
                             _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
@@ -328,25 +354,6 @@ internal static class FunctionDefinitionFormatter
                 && output.TryAppend(source)
                 && (source.EndsWith("\n"u8) || Append("\n"))
                 && Append(")");
-        }
-
-        static bool StartsWithParenthesis(ParsedScript script)
-        {
-            if (script.Commands.Count == 0)
-                return false;
-            // A leading literal parenthesis after the opener would select arithmetic.
-            var first = script.Commands[0];
-            while (true)
-            {
-                switch (first)
-                {
-                    case SubshellCommand or ArithmeticCommand: return true;
-                    case RedirectedCommand redirected: first = redirected.Body; break;
-                    case ListCommand list: first = list.Left; break;
-                    case PipelineCommand { Negated: false } pipe: first = pipe.Left; break;
-                    default: return false;
-                }
-            }
         }
 
         bool FlushHereDocuments()
