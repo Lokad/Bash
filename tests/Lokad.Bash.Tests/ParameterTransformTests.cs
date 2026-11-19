@@ -49,6 +49,87 @@ public sealed class ParameterTransformTests
         }
     }
 
+    [Fact]
+    public async Task UnchangedArrayCaseConversionUsesOrdinaryFieldWorkspace()
+    {
+        var values = Enumerable.Range(0, 512).Select(index => ShellValue.FromText($"ITEM {index}")).ToArray();
+        var plain = await MeasureArrayFieldsAsync("\"${items[@]}\"", values, CheckFields);
+        var converted = await MeasureArrayFieldsAsync("\"${items[@]^^}\"", values, CheckFields);
+
+        Assert.InRange(converted - plain, 0, 4096);
+
+        void CheckFields(IReadOnlyList<ExpandedWord> words)
+        {
+            Assert.Equal(values.Length, words.Count);
+            for (var index = 0; index < values.Length; index++)
+            {
+                var field = Assert.Single(words[index].Segments);
+                Assert.True(field.IsGlobQuoted);
+                Assert.Equal(values[index], field.Content);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task JoinedEscapeConversionRetainsOnlyEmittedWorkspace()
+    {
+        const int count = 128;
+        const int prefixLength = 256;
+        var raw = ShellValue.FromText(new string('A', prefixLength) + @"\377");
+        var decodedBytes = new byte[prefixLength + 1];
+        decodedBytes.AsSpan(0, prefixLength).Fill((byte)'A');
+        decodedBytes[^1] = 0xff;
+        var decoded = ShellValue.FromBytes(decodedBytes);
+        var plain = await MeasureArrayFieldsAsync("\"${items[*]}\"",
+            Enumerable.Repeat(decoded, count).ToArray(), CheckJoined);
+        var converted = await MeasureArrayFieldsAsync("\"${items[*]@E}\"",
+            Enumerable.Repeat(raw, count).ToArray(), CheckJoined);
+
+        Assert.InRange(converted - plain, 0, 4096);
+
+        void CheckJoined(IReadOnlyList<ExpandedWord> words)
+        {
+            var field = Assert.Single(Assert.Single(words).Segments);
+            Assert.True(field.IsGlobQuoted);
+            var bytes = field.Content.Bytes.Span;
+            Assert.Equal(count * (decoded.Bytes.Length + 1) - 1, bytes.Length);
+            for (var index = 0; index < count; index++)
+            {
+                if (index != 0)
+                    Assert.Equal((byte)':', bytes[index * (decoded.Bytes.Length + 1) - 1]);
+                Assert.True(bytes.Slice(index * (decoded.Bytes.Length + 1), decoded.Bytes.Length)
+                    .SequenceEqual(decoded.Bytes.Span));
+            }
+        }
+    }
+
+    private static async Task<long> MeasureArrayFieldsAsync(
+        string source, IReadOnlyList<ShellValue> values, Action<IReadOnlyList<ExpandedWord>> check)
+    {
+        var governor = new MemoryGovernor(4 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        var evaluation = new Eval(Parser.Parse(string.Empty));
+        evaluation.Memory.Budget = owner;
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TryAssignArray("items", values, ArrayKind.Indexed));
+        Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(":")));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        var tokenizer = new Tokenizer(ShellSource.FromText(source));
+        Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+
+        long workspace;
+        using (evaluation.Memory.BeginCommand(scope))
+        {
+            var before = evaluation.Memory.Workspace.Bytes;
+            var words = await WordExpansion.ExpandToWordsAsync(token.Word, scope);
+            workspace = evaluation.Memory.Workspace.Bytes - before;
+            check(words);
+        }
+        evaluation.Memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+        return workspace;
+    }
+
     [Theory]
     [InlineData("""${x//b/"$r"}""", true)]
     [InlineData("""${x//z/"$r"}""", false)]

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -17,14 +18,6 @@ internal static partial class WordExpansion
         internal sealed record Indexed(IndexedArray Array) : ParameterSource;
         internal sealed record Associative(AssociativeArray Array) : ParameterSource;
         internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource;
-
-        public int Count => this switch
-        {
-            Indexed indexed => indexed.Array.Count,
-            Associative associative => associative.Array.Count,
-            Positional positional => positional.Arguments.Count,
-            _ => throw new InvalidOperationException("Unknown parameter source.")
-        };
 
         public IEnumerable<ShellValue> Fields => this switch
         {
@@ -102,9 +95,7 @@ internal static partial class WordExpansion
             case BracedParameterOperatorKind.LowerFirst:
             case BracedParameterOperatorKind.LowerAll:
             case BracedParameterOperatorKind.Transform:
-                var transformed = await ApplyValueOperatorAsync().ConfigureAwait(false);
-                if (scope.CanExpand)
-                    Emit(transformed);
+                await EmitValueOperatorAsync().ConfigureAwait(false);
                 return;
             case BracedParameterOperatorKind.UseDefault:
                 if (!isAvailable)
@@ -263,28 +254,20 @@ internal static partial class WordExpansion
                 var budget = scope.Effects.Memory;
                 var pattern = ShellPattern.FromWord(ExpandedWord.JoinWithSpaces(words, budget),
                     budget, scope.Effects.CancellationToken);
-                // Read the reached array after expanding the pattern, whose effects can change its entries.
-                var source = parameter.RangeSource;
-                var count = source?.Count ?? parameter.Fields.Count;
-                budget.Charge(checked(256L * count));
-                var removed = new List<ShellValue>(count);
-                foreach (var value in source?.Fields ?? parameter.Fields)
+                EmitTransformedFields(RemoveField);
+                return;
+
+                ShellValue RemoveField(ShellValue value, MemoryCapacity scratch)
                 {
-                    scope.Effects.CancellationToken.ThrowIfCancellationRequested();
                     var slice = ApplyPatternRemoval(value, pattern, parsed.Kind, scope.Effects.CancellationToken);
                     if (slice.Length == value.Bytes.Length)
-                        removed.Add(value);
-                    else if (slice.IsEmpty)
-                        removed.Add(ShellValue.Empty);
-                    else
-                    {
-                        // Own the retained result independently of a larger input backing buffer.
-                        budget.Charge(checked(2L * slice.Length));
-                        removed.Add(ShellValue.FromBytes(slice.ToArray()));
-                    }
+                        return value;
+                    if (slice.IsEmpty)
+                        return ShellValue.Empty;
+                    // Own the retained result independently of a larger input backing buffer.
+                    scratch.Grow(MemoryCapacity.ArrayBackingBytes<byte>(slice.Length));
+                    return ShellValue.FromBytes(slice.ToArray());
                 }
-                Emit(removed);
-                return;
             }
             default:
                 throw new InvalidOperationException($"Unexpected braced parameter operator '{parsed.Kind}'.");
@@ -652,34 +635,50 @@ internal static partial class WordExpansion
         void Emit(IEnumerable<ShellValue> fields) =>
             AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
 
-        async Task<IReadOnlyList<ShellValue>> ApplyValueOperatorAsync()
+        void EmitTransformedFields(Func<ShellValue, MemoryCapacity, ShellValue> project)
+        {
+            using var scratch = new MemoryCapacity(scope.Effects.Memory.Budget, 0);
+            Emit(TransformFields());
+
+            IEnumerable<ShellValue> TransformFields()
+            {
+                // Operand expansion may have changed which values the selected array holds.
+                foreach (var value in parameter.RangeSource?.Fields ?? parameter.Fields)
+                {
+                    scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                    var previousBytes = scratch.Bytes;
+                    // The builder admits its own backing on append. Keep the previous
+                    // field charged until the iterator replaces its Current.
+                    yield return project(value, scratch);
+                    if (previousBytes != 0)
+                    {
+                        scratch.Resize(scratch.Bytes - previousBytes);
+                        scratch.TrimExcess();
+                    }
+                }
+            }
+        }
+
+        async Task EmitValueOperatorAsync()
         {
             if (!parameter.IsSet)
-                return parameter.Fields;
+            {
+                Emit(parameter.Fields);
+                return;
+            }
 
             var budget = scope.Effects.Memory;
             var cancellationToken = scope.Effects.CancellationToken;
-            var result = new List<ShellValue>();
             if (parsed.Kind == BracedParameterOperatorKind.Transform)
             {
-                foreach (var value in ReadFields())
+                EmitTransformedFields((value, scratch) => transform switch
                 {
-                    switch (parsed.Word[0])
-                    {
-                        case (byte)'E':
-                            result.Add(value.Bytes.Span.Contains((byte)'\\')
-                                ? ShellEscapeDecoder.DecodeAnsiCValue(value.Bytes.Span, budget.Workspace)
-                                : value);
-                            break;
-                        case (byte)'Q':
-                            result.Add(QuoteParameterField(value, budget.Workspace));
-                            break;
-                        default:
-                            result.Add(ChangeCase(value, parsed.Word[0] != (byte)'L', parsed.Word[0] == (byte)'u', null));
-                            break;
-                    }
-                }
-                return result;
+                    (byte)'E' => value.Bytes.Span.Contains((byte)'\\')
+                        ? ShellEscapeDecoder.DecodeAnsiCValue(value.Bytes.Span, scratch) : value,
+                    (byte)'Q' => QuoteParameterField(value, scratch),
+                    _ => ChangeCase(value, transform != (byte)'L', transform == (byte)'u', null, scratch)
+                });
+                return;
             }
 
             if (parsed.Kind == BracedParameterOperatorKind.Replace)
@@ -694,7 +693,7 @@ internal static partial class WordExpansion
                 var separator = FindReplacementSeparator(operand, mode);
                 var pattern = await ExpandOperandAsync(separator < 0 ? operand : operand[..separator]).ConfigureAwait(false);
                 if (!scope.CanExpand)
-                    return [];
+                    return;
                 // Anchors can come from an expansion, but quoted prefixes and global replacements stay literal.
                 if (mode == ParameterReplacementMode.First && !pattern.Value.IsEmpty
                     && pattern.Mask.AsSpan()[0] == GlobMask.Active && pattern.Value.Bytes.Span[0] is (byte)'#' or (byte)'%')
@@ -706,16 +705,15 @@ internal static partial class WordExpansion
                 var canMatch = TryUnescapePattern(pattern, out pattern);
                 var replacement = await ExpandOperandAsync(separator < 0 ? ShellSource.Empty : operand[(separator + 1)..]).ConfigureAwait(false);
                 if (!scope.CanExpand)
-                    return [];
+                    return;
                 var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken) : null;
                 var syntaxStart = replacement.Value.Bytes.Span.IndexOfAny((byte)'&', (byte)'\\');
                 using var encoded = matcher != null && syntaxStart >= 0 && !replacement.Mask.Memory.IsEmpty
                     ? new ByteMemoryBuilder(0, budget.Budget)
                     : null;
                 ReadOnlyMemory<byte>? template = null;
-                foreach (var value in ReadFields())
-                    result.Add(matcher == null ? value : Replace(value, matcher, mode));
-                return result;
+                EmitTransformedFields((value, scratch) => matcher == null ? value : Replace(value, matcher, mode, scratch));
+                return;
 
                 int FindReplacementSeparator(ShellSource source, ParameterReplacementMode mode)
                 {
@@ -756,7 +754,7 @@ internal static partial class WordExpansion
                         : encoded.Append(bytes[copiedThrough..]).ToMemory();
                 }
 
-                ShellValue Replace(ShellValue value, ShellPattern pattern, ParameterReplacementMode mode)
+                ShellValue Replace(ShellValue value, ShellPattern pattern, ParameterReplacementMode mode, MemoryCapacity scratch)
                 {
                     var bytes = value.Bytes.Span;
                     if (pattern.IsEmpty && mode is ParameterReplacementMode.First or ParameterReplacementMode.All)
@@ -779,7 +777,7 @@ internal static partial class WordExpansion
                         }
                     }
                     var replaced = false;
-                    using var builder = new ByteMemoryBuilder(0, budget.Workspace);
+                    using var builder = new ByteMemoryBuilder(0, scratch);
                     var position = 0;
                     var copiedThrough = 0;
                     do
@@ -858,30 +856,18 @@ internal static partial class WordExpansion
 
             var casePattern = parsed.Word.IsEmpty ? null : await ExpandOperandAsync(parsed.Word).ConfigureAwait(false);
             if (!scope.CanExpand)
-                return [];
+                return;
             var canMatchCase = casePattern == null || TryUnescapePattern(casePattern, out casePattern);
             var upper = parsed.Kind is BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll;
             var firstOnly = parsed.Kind is BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.LowerFirst;
-            foreach (var value in ReadFields())
-                result.Add(canMatchCase ? ChangeCase(value, upper, firstOnly, casePattern) : value);
-            return result;
+            EmitTransformedFields((value, scratch) =>
+                canMatchCase ? ChangeCase(value, upper, firstOnly, casePattern, scratch) : value);
 
             bool TryUnescapePattern(ParameterOperand operand, out ParameterOperand pattern)
             {
                 var success = operand.Mask.TryUnescape(operand.Value, budget, cancellationToken, out var value, out var mask);
                 pattern = new ParameterOperand(value, mask);
                 return success;
-            }
-
-            IEnumerable<ShellValue> ReadFields()
-            {
-                // Array operands can change values or add entries; enumerate and charge only after their effects.
-                foreach (var value in parameter.RangeSource?.Fields ?? parameter.Fields)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    budget.Charge(256);
-                    yield return value;
-                }
             }
 
             async Task<ParameterOperand> ExpandOperandAsync(ShellSource source)
@@ -901,10 +887,10 @@ internal static partial class WordExpansion
                 return matched == GlobMatchResult.Match ? length : -1;
             }
 
-            ShellValue ChangeCase(ShellValue value, bool upper, bool firstOnly, ParameterOperand? pattern)
+            ShellValue ChangeCase(ShellValue value, bool upper, bool firstOnly, ParameterOperand? pattern, MemoryCapacity scratch)
             {
                 var bytes = value.Bytes.Span;
-                using var builder = new ByteMemoryBuilder(0, budget.Workspace);
+                using var builder = new ByteMemoryBuilder(0, scratch);
                 Span<byte> encoded = stackalloc byte[4];
                 var copiedThrough = 0;
                 for (var position = 0; position < bytes.Length;)

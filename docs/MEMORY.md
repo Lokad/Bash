@@ -216,13 +216,15 @@ collections retain command workspace admission. Dynamic arithmetic copies joined
 fields directly into admitted operand backing. Growth accounts for replacement
 overlap and the operand keeps its charge through numeric evaluation.
 Parameter case conversion passes unchanged values through to field expansion.
-Changed values join original byte ranges with the converted characters in
-an admitted command buffer. Parameter replacement expands both operands before
-matching. It borrows literal replacement bytes and reserves any quoted escape
-encoding as scratch from the first match through the last field. Emitted bytes
-remain charged to the command until field expansion and use finish.
-Parameter quoting and escape decoding retain their emitted backing under the
-command owner. Escape decoding borrows inputs with no backslashes.
+Changed values join original byte ranges with the converted characters in an
+admitted buffer. Parameter replacement expands both operands before matching. It
+borrows literal replacement bytes and reserves any quoted escape encoding as
+scratch from the first match through the last field. Escape decoding borrows
+inputs with no backslashes. Value transforms and pattern removal stream reached
+fields into the word builder. Their scratch admits generated backing while
+projecting and appending each field. The builder independently admits the compact
+backing it keeps or the buffer it copies into, which keeps emitted bytes charged
+through use.
 
 Aggregate operand lists admit replacement backing before growth and keep the
 current backing charged through command completion. Byte consumers append
