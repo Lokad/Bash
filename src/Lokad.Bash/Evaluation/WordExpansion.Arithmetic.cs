@@ -30,27 +30,24 @@ internal static partial class WordExpansion
         var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), scope.Effects.Memory.Workspace);
         var bytes = ByteMemoryBuilder.CreateUnaccounted(0);
         var subscripts = new Dictionary<int, ArithmeticOperand.Subscript>();
-        var pending = new List<WordPart>();
         var budget = scope.Effects.Memory;
-        foreach (var part in word.Parts)
+        var firstPart = 0;
+        for (var partIndex = 0; partIndex < word.Parts.Count && scope.CanExpand; partIndex++)
         {
-            if (!scope.CanExpand)
-                break;
-            if (part.Kind != WordPartKind.ArithmeticSubscript)
-            {
-                pending.Add(part);
+            if (word.Parts[partIndex] is not SourceWordPart { Kind: WordPartKind.ArithmeticSubscript } selectorPart)
                 continue;
-            }
 
-            await FlushAsync().ConfigureAwait(false);
+            await FlushAsync(partIndex).ConfigureAwait(false);
             if (!scope.CanExpand)
                 break;
-            var selector = ((SourceWordPart)part).Source;
+            firstPart = partIndex + 1;
+            var selector = selectorPart.Source;
             var subscript = selector.Slice(1, selector.Length - 2);
             var associative = IsAssociativeTarget();
             var selectorPurpose = associative ? ExpansionPurpose.Scalar : purpose;
-            var builder = await ExpandAsync(subscript.Length == 0 ? new Word([])
-                : Tokenizer.ReadExpansionWord(subscript, GetOperandSyntax(selectorPurpose), ShellQuoteKind.None, budget.Workspace), selectorPurpose)
+            var selectorWord = subscript.Length == 0 ? new Word([])
+                : Tokenizer.ReadExpansionWord(subscript, GetOperandSyntax(selectorPurpose), ShellQuoteKind.None, budget.Workspace);
+            var builder = await ExpandAsync(selectorWord, selectorPurpose, 0, selectorWord.Parts.Count)
                 .ConfigureAwait(false);
             if (!scope.CanExpand)
                 break;
@@ -61,28 +58,28 @@ internal static partial class WordExpansion
             bytes.Append((byte)'[').Append(expanded.Bytes).Append((byte)']');
         }
         if (scope.CanExpand)
-            await FlushAsync().ConfigureAwait(false);
+            await FlushAsync(word.Parts.Count).ConfigureAwait(false);
         if (!scope.CanExpand)
             return null;
         var value = ShellValue.FromBytes(bytes.ToMemory());
         var lexical = syntax?.Syntax != null && value.Bytes.Span.SequenceEqual(source.AsSpan()) ? syntax.Syntax : null;
         return new ArithmeticOperand(value, subscripts, ArithmeticBracketMode.References, lexical);
 
-        async Task FlushAsync()
+        async Task FlushAsync(int endPart)
         {
-            if (pending.Count == 0)
+            if (firstPart == endPart)
                 return;
-            var builder = await ExpandAsync(new Word(pending), purpose).ConfigureAwait(false);
+            var builder = await ExpandAsync(word, purpose, firstPart, endPart).ConfigureAwait(false);
             var value = ExpandedWord.JoinWithSpaces(builder.Build(), budget).ToValue(budget);
             budget.Charge(checked(4L * value.Bytes.Length));
             bytes.Append(value.Bytes);
-            pending = [];
         }
 
-        async Task<ExpandedWordBuilder> ExpandAsync(Word operand, ExpansionPurpose operandPurpose)
+        async Task<ExpandedWordBuilder> ExpandAsync(Word operand, ExpansionPurpose operandPurpose, int start, int end)
         {
             var builder = new ExpandedWordBuilder(scope.Variables, budget, operandPurpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
-            await ExpandWordPartsAsync(operand, scope, builder, allowWordSplitting: false, TildeExpansion.None).ConfigureAwait(false);
+            await ExpandWordPartsAsync(operand, scope, builder, allowWordSplitting: false, TildeExpansion.None, start, end)
+                .ConfigureAwait(false);
             return builder;
         }
 

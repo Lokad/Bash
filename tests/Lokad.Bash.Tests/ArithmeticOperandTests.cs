@@ -33,6 +33,7 @@ public sealed class ArithmeticOperandTests
     [InlineData("x=3; ((i=$x+1)); printf 's=%s i=%s x=%s\\n' \"$?\" \"$i\" \"$x\"\n\n", "s=0 i=4 x=3\n", "", 0)]
     [InlineData("unset x; ((i=${x:=2}+1)); printf 's=%s i=%s x=%s\\n' \"$?\" \"$i\" \"$x\"\n\n", "s=0 i=3 x=2\n", "", 0)]
     [InlineData("i=0; ((j=$((i+=2))+i)); printf 's=%s i=%s j=%s\\n' \"$?\" \"$i\" \"$j\"\n\n", "s=0 i=2 j=4\n", "", 0)]
+    [InlineData("a=(4 5); ((total=\"$(printf p >&2; printf 2)\"+a[$(printf i >&2; printf 1)]+\"$(printf q >&2; printf 3)\"+a[$(printf j >&2; printf 0)]+\"$(printf r >&2; printf 1)\")); printf '%s' \"$total\"", "15", "piqjr", 0)]
     [InlineData("i=0; ((0 && $(printf 'effect\\n' >&2; printf 2))); printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=1 i=0\n", "effect\n", 0)]
     [InlineData("false && ((i=$(printf 'bad\\n' >&2; printf 2))); printf 's=%s i=%s\\n' \"$?\" \"${i-unset}\"\n\n", "s=1 i=unset\n", "", 0)]
     [InlineData("((0)); printf 's=%s\\n' \"$?\"\n\n", "s=1\n", "", 0)]
@@ -62,6 +63,22 @@ public sealed class ArithmeticOperandTests
         Assert.Equal(expectedStatus, result.ExitCode);
         Assert.Equal(expectedOutput, result.StdOut);
         Assert.Equal(expectedError, result.StdErr);
+    }
+
+    [Fact]
+    public async Task ArithmeticOperandRetainsEarlierSelectorEffectsWhenExpansionStops()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "a=(4 5); unset missing; ((out=a[$(printf reached >effect; printf 1)]+${missing:?stop}+a[$(printf skipped >unreached; printf 0)]))",
+            CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal("missing: stop\n", host.StandardError.TextContent);
+        Assert.Equal("reached", host.ReadFile("/effect"));
+        Assert.False(host.FileExists("/unreached"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     // Preserve effects and continuation without freezing incomplete arithmetic diagnostic wording.

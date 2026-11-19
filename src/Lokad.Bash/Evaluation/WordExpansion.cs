@@ -169,12 +169,22 @@ internal static partial class WordExpansion
         return destination;
     }
 
+    private static Task ExpandWordPartsAsync(
+        Word word,
+        ScopedEvaluation scope,
+        ExpandedWordBuilder builder,
+        bool allowWordSplitting,
+        TildeExpansion tildeExpansion) =>
+        ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, tildeExpansion, 0, word.Parts.Count);
+
     private static async Task ExpandWordPartsAsync(
         Word word,
         ScopedEvaluation scope,
         ExpandedWordBuilder builder,
         bool allowWordSplitting,
-        TildeExpansion tildeExpansion)
+        TildeExpansion tildeExpansion,
+        int firstPart,
+        int endPart)
     {
         if (!scope.CanExpand)
             return;
@@ -184,11 +194,11 @@ internal static partial class WordExpansion
             ? new AssignmentTildes(word, assignmentEquals, InheritInParameterWords: assignmentValue
                 && builder.Purpose != ExpansionPurpose.IndexedCompound)
             : (AssignmentTildes?)null;
-        var position = new WordPosition(0, 0);
+        var position = new WordPosition(firstPart, 0);
         if (tildeExpansion != TildeExpansion.None
             && TryAppendTildePrefix(word, position, scope, builder, assignment.HasValue, out var suffix))
             position = suffix;
-        while (position.Part < word.Parts.Count && scope.CanExpand)
+        while (position.Part < endPart && scope.CanExpand)
         {
             var part = word.Parts[position.Part];
             if (part is SourceWordPart { Kind: WordPartKind.Unquoted } source)
@@ -210,7 +220,7 @@ internal static partial class WordExpansion
                     await ExpandPartAsync(word.Parts[position.Part], scope, builder, allowWordSplitting)
                         .ConfigureAwait(false);
                     position = new WordPosition(position.Part + 1, 0);
-                } while (scope.CanExpand && position.Part < word.Parts.Count
+                } while (scope.CanExpand && position.Part < endPart
                     && word.Parts[position.Part].DoubleQuote == DoubleQuoteBoundary.Continuation);
                 if (scope.CanExpand)
                     builder.EndDoubleQuote();
