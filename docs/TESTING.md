@@ -77,6 +77,13 @@ visible before close; captured read snapshots retain their original bytes. Fixtu
 content is retained until the fixture is discarded, independently of runtime-value
 admission assertions. Benchmark hosts have their separate ownership controls.
 
+`TestHost` and `ExportTestHost` share child-shell dispatch for script files and
+`-c`. The fixture resolves script files against the invocation directory, preserves
+source and argument bytes, and assigns `$0` according to the launch form. Both forms
+use incremental command units, so effects before a syntax error remain observable.
+Child syntax diagnostics use the evaluator's spelling. `ChildShellLaunchTests`
+covers launch, failure and descriptor cleanup independently of production parsing tests.
+
 Native correctness controls compare exit status, exact stdout/stderr bytes and
 the complete synthetic file tree, including entry names, kinds and file bytes.
 Without `finalEntries`, the expected tree combines initial `files` and declared

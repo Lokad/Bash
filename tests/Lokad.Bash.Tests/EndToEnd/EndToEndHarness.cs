@@ -156,16 +156,7 @@ public class TestHost : MockFileSystem
                 return new CommandExecutionResult.Completed(matched ? 0 : 1);
             }
             if (command.CommandName is "sh" or "bash")
-            {
-                var source = command.Arguments[0].ToUtf8String() == "-c"
-                    ? command.Arguments[1].ToUtf8String() : ReadFile(command.Arguments[0].ToUtf8String());
-                var arguments = command.Arguments.Skip(2).ToArray();
-                var evaluation = ShellEvaluationStartup.CreateInherited(command, Parser.Parse(source),
-                    arguments.Length > 0 ? arguments[0] : command.ArgumentZeroOverride ?? ShellValue.FromText(command.CommandName), arguments.Skip(1).ToArray());
-                foreach (var exported in command.Functions)
-                    if (Parser.Parse(exported.Source).Commands is [FunctionDefinition definition]) evaluation.SetExportedFunction(definition);
-                return new CommandExecutionResult.Completed((await new Engine().RunAsync(evaluation, this, cancel).ConfigureAwait(false)).ExitCode);
-            }
+                return await RunFixtureShellAsync(command, cancel).ConfigureAwait(false);
             if (command.CommandName == "cat")
             {
                 if (command.Arguments.Count == 0)
@@ -209,6 +200,83 @@ public class TestHost : MockFileSystem
                 read.Consume(content.Length);
                 if (!(await WriteAsync(command.StdOut, content, cancel).ConfigureAwait(false)).CanAcceptMore) return;
             }
+        }
+    }
+
+    // The dispatching fixture owns the invocation's descriptors. The child only borrows them.
+    private protected async Task<CommandExecutionResult> RunFixtureShellAsync(CommandInvocation command, CancellationToken cancel)
+    {
+        var arguments = command.Arguments;
+        if (arguments.Count == 0)
+            return await ReportFailureAsync("expected -c or a script file", 2).ConfigureAwait(false);
+
+        using var childMemory = MemoryBudget.CreateScope();
+        ReadOnlyMemory<byte> source;
+        ShellValue argumentZero;
+        int firstArgument;
+        if (arguments[0].Bytes.Span.SequenceEqual("-c"u8))
+        {
+            if (arguments.Count < 2)
+                return await ReportFailureAsync("-c: option requires an argument", 2).ConfigureAwait(false);
+            source = arguments[1].Bytes;
+            argumentZero = arguments.Count > 2 ? arguments[2]
+                : command.ArgumentZeroOverride ?? ShellValue.FromText(command.CommandName);
+            firstArgument = 3;
+        }
+        else
+        {
+            argumentZero = arguments[0];
+            firstArgument = 1;
+            if (!argumentZero.TryGetUtf8Text(out var text) || !RawShellPath.TryParse(text, out var path))
+                return await ReportFailureAsync("invalid script path", 127).ConfigureAwait(false);
+
+            var lookup = new FilePathLookup(path, command.CurrentDirectory, FileLinkFollowing.Follow);
+            var opened = await this.OpenFileAsync(lookup, cancel).ConfigureAwait(false);
+            if (opened.Error is { } error)
+                return await ReportFailureAsync($"{text}: {error.MessageWithoutTerminator}",
+                    error.Kind == OperationErrorKind.NotFound ? 127 : 126).ConfigureAwait(false);
+
+            var descriptor = opened.FileDescriptor.GetValueOrDefault();
+            BoundedReadResult? read = null;
+            OperationError? closeError;
+            try
+            {
+                read = await this.TryReadAllBytesAsync(descriptor, Parser.MaximumScriptBytes,
+                    static _ => { }, childMemory, cancel).ConfigureAwait(false);
+            }
+            finally
+            {
+                closeError = await this.CloseOwnedDescriptorAsync(descriptor,
+                    operationFailed: read is not BoundedReadResult.Complete).ConfigureAwait(false);
+            }
+            if (closeError is { } close)
+                return await ReportFailureAsync($"{text}: {close.MessageWithoutTerminator}", 1).ConfigureAwait(false);
+            if (read is BoundedReadResult.TooLarge)
+                return await ReportFailureAsync(Parser.ScriptSizeLimitMessage, 2).ConfigureAwait(false);
+            if (read is BoundedReadResult.Failed { Failure.Error: { } readError })
+                return await ReportFailureAsync($"{text}: {readError.MessageWithoutTerminator}", 1).ConfigureAwait(false);
+            source = read.GetContentOrThrow();
+        }
+
+        var script = new ParsedScript([new ScriptCommand(ShellSource.FromBytes(source))]);
+        var child = ShellEvaluationStartup.CreateInherited(command, script, argumentZero, arguments.Skip(firstArgument).ToArray());
+        try
+        {
+            foreach (var exported in command.Functions)
+            {
+                if (Parser.Parse(exported.Source).Commands is not [FunctionDefinition definition])
+                    throw new InvalidOperationException("Export did not contain one function definition.");
+                child.SetExportedFunction(definition);
+            }
+            var result = await new Engine().RunAsync(child, this, childMemory, cancel).ConfigureAwait(false);
+            return new CommandExecutionResult.Completed(result.ExitCode);
+        }
+        finally { child.ReleaseFunctions(); }
+
+        async Task<CommandExecutionResult> ReportFailureAsync(string detail, int status)
+        {
+            await this.WriteLineAsync(command.StdErr, $"{command.CommandName}: {detail}", cancel).ConfigureAwait(false);
+            return new CommandExecutionResult.Completed(status);
         }
     }
 

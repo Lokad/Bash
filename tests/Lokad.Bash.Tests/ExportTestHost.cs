@@ -1,7 +1,5 @@
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
-using Lokad.Bash.Memory;
-using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
@@ -32,7 +30,6 @@ internal class ExportTestHost : TestHost
         if (name is not ("true" or "/usr/bin/true" or "bash" or "/usr/bin/bash"))
             return await base.RunCommandAsync(command, reporting, cancellationToken);
 
-        IMemoryScope? childMemory = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -46,31 +43,12 @@ internal class ExportTestHost : TestHost
                 return new CommandExecutionResult.Completed(0);
             }
 
-            // This fixture supports only the explicit -c form exercised by these tests.
-            if (command.Arguments.Count < 2 || !command.Arguments[0].Bytes.Span.SequenceEqual("-c"u8))
-                throw new InvalidOperationException("The export fixture requires bash -c source [zero [arguments]].");
-            var arguments = command.Arguments.Skip(2).ToArray();
-            var child = ShellEvaluationStartup.CreateInherited(command, Parser.Parse(command.Arguments[1].Bytes),
-                arguments.Length > 0 ? arguments[0] : command.ArgumentZeroOverride ?? ShellValue.FromText(name),
-                arguments.Skip(1).ToArray());
-            childMemory = MemoryBudget.CreateScope();
-            foreach (var exported in command.Functions)
-            {
-                if (Parser.Parse(exported.Source).Commands is not [FunctionDefinition definition])
-                    throw new InvalidOperationException("Export did not contain one function definition.");
-                child.SetExportedFunction(definition);
-            }
-            var result = await new Engine().RunAsync(child, this, childMemory, cancellationToken);
-            return new CommandExecutionResult.Completed(result.ExitCode);
+            return await RunFixtureShellAsync(command, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            try
-            {
-                foreach (var descriptor in command.DescriptorsToClose)
-                    await CloseDescriptorAsync(descriptor);
-            }
-            finally { childMemory?.Dispose(); }
+            foreach (var descriptor in command.DescriptorsToClose)
+                await CloseDescriptorAsync(descriptor);
         }
     }
 }
