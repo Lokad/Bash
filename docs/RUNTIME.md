@@ -257,10 +257,12 @@ diagnostic and failure status exempt from errexit at the loop boundary. A
 readonly loop binding exits its shell when errexit is enabled, including in a
 tested position.
 
-Completed foreground commands publish `PIPESTATUS` after their operands expand.
+Foreground commands admit space for `PIPESTATUS` before execution and publish
+their statuses on completion.
 Pipelines publish the settled stage statuses before applying negation; compound
 syntax preserves the last executed command's metadata. Publication follows binding
-ownership in the active shell and uses the command's admitted workspace.
+ownership in the active shell and uses the command's admitted workspace through
+descriptor cleanup.
 
 Positional parameters use owned argument frames behind a stable live read-only
 view. Shifting advances a head index and releases consumed value references;

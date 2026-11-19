@@ -118,11 +118,12 @@ public sealed partial class Evaluation
                 case PipelineCommand pipelineCommand:
                     return await EvaluatePipelineAsync(pipelineCommand, scope, negated).ConfigureAwait(false);
                 case ArithmeticCommand arithmeticCommand:
+                    PreparePipelineStatusStorage(1);
                     var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Syntax, scope)
                         .ConfigureAwait(false);
                     var arithmeticStatus = arithmeticResult is null or 0 ? 1 : 0;
                     if (_state.FatalExpansion == null)
-                        scope.Variables.SetPipelineStatuses([arithmeticStatus], Memory, _cancellationToken);
+                        scope.Variables.SetPipelineStatuses([arithmeticStatus], _cancellationToken);
                     return await FinalizeResultAsync(
                         EvaluationResult.FromExitCode(arithmeticStatus), negated);
                 case ConditionalCommand conditionalCommand:
@@ -130,10 +131,13 @@ public sealed partial class Evaluation
                 case CaseCommand caseCommand:
                     return await EvaluateCaseAsync(caseCommand, scope, negated).ConfigureAwait(false);
                 case SimpleCommand simpleCommand:
+                    var hasStatus = simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0
+                        || simpleCommand.Redirections.Count != 0;
+                    if (hasStatus)
+                        PreparePipelineStatusStorage(1);
                     var simpleResult = await EvaluateSimpleCommandAsync(simpleCommand, scope).ConfigureAwait(false);
-                    if (simpleResult.Flow != FlowControlKind.Exit
-                        && (simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0 || simpleCommand.Redirections.Count != 0))
-                        scope.Variables.SetPipelineStatuses([simpleResult.ExitCode], Memory, _cancellationToken);
+                    if (hasStatus && simpleResult.Flow != FlowControlKind.Exit)
+                        scope.Variables.SetPipelineStatuses([simpleResult.ExitCode], _cancellationToken);
                     return ApplyNegation(simpleResult, negated);
                 default:
                     throw new NotSupportedException("Only simple commands, list control operators, pipelines, groups, subshells, if/elif/else, loops, for-in, arithmetic for, case, function definitions, arithmetic commands, conditional commands, and ! negation are supported in this evaluation stage.");
@@ -192,6 +196,14 @@ public sealed partial class Evaluation
                 return ApplyNegation(result, listNegated);
             }
         }
+    }
+
+    /// <summary>Admits the replacement binding before foreground execution can publish effects.</summary>
+    private void PreparePipelineStatusStorage(int count)
+    {
+        if (count >= Array.MaxLength)
+            throw new ByteMemoryBuilder.LimitExceededException();
+        Memory.Charge(checked(512L + 256L * count));
     }
 
     private const string MemoryRefusalMessage = "shared memory budget exhausted";

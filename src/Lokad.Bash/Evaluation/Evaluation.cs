@@ -670,6 +670,7 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope,
         bool negated)
     {
+        PreparePipelineStatusStorage(1);
         var parentState = _state;
         var parentVars = _vars;
         var available = CollectDescriptorsAvailable();
@@ -731,7 +732,7 @@ public sealed partial class Evaluation : IFileTester
         result = await ApplyCloseErrorAsync(result, closeError).ConfigureAwait(false);
         result = EvaluationResult.FromExitCode(result.ExitCode);
 
-        scope.Variables.SetPipelineStatuses([result.ExitCode], Memory, _cancellationToken);
+        scope.Variables.SetPipelineStatuses([result.ExitCode], _cancellationToken);
         return ApplyNegation(result, negated);
     }
 
@@ -754,6 +755,7 @@ public sealed partial class Evaluation : IFileTester
         var commands = new List<ICommand>();
         var operators = new List<PipelineOperator>();
         FlattenPipeline(pipelineCommand, commands, operators);
+        PreparePipelineStatusStorage(commands.Count);
         // The parent owns the pipe and stage lists, per-stage close lists and the dispatcher
         // task and status arrays through dispatch, status publication and cleanup.
         Memory.Charge(checked(192L + 128L * commands.Count));
@@ -824,7 +826,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 // The host propagates cancellation to the stages. Await their cleanup before taking ownership.
                 var results = await pipelineTask.ConfigureAwait(false);
-                scope.Variables.SetPipelineStatuses(results, Memory, _cancellationToken);
+                scope.Variables.SetPipelineStatuses(results, _cancellationToken);
                 var exitCode = ComputePipelineExitCode(results);
                 var pipelineNegated = pipelineCommand.Negated ^ negated;
                 var result = EvaluationResult.FromExitCode(EvaluationRules.ApplyNegation(exitCode, pipelineNegated));

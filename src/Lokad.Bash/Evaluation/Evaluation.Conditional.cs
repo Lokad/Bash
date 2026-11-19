@@ -15,6 +15,7 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateConditionalCommandAsync(
         ConditionalCommand command, ScopedEvaluation scope, bool negated)
     {
+        PreparePipelineStatusStorage(1);
         var work = new Stack<(ConditionalExpression Expression, bool Complete)>();
         Push(command.Condition, false);
         var status = 1;
@@ -51,7 +52,7 @@ public sealed partial class Evaluation
             }
         }
         if (_state.FatalExpansion == null)
-            scope.Variables.SetPipelineStatuses([status], Memory, _cancellationToken);
+            scope.Variables.SetPipelineStatuses([status], _cancellationToken);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated).ConfigureAwait(false);
 
         void Push(ConditionalExpression expression, bool complete)
