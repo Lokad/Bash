@@ -1746,7 +1746,7 @@ public sealed partial class Evaluation : IFileTester
             var localBuiltinFrame = options.Builtin == BuiltinKind.Local ? functionContext : null;
             if (!options.InvalidOption.IsEmpty)
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), WordExpansion.AppendAssignmentValue(options.InvalidOption, ShellValue.FromText(": invalid option"), declarationScope))
+                await ReportDeclarationOperandAsync(options.InvalidOption, "invalid option")
                     .ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), declarationNegated).ConfigureAwait(false);
             }
@@ -1778,8 +1778,7 @@ public sealed partial class Evaluation : IFileTester
                         || localBuiltinFrame != null && !localBuiltinFrame.Locals.Declares(name)))
                     {
                         printStatus = 1;
-                        await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
-                            WordExpansion.AppendAssignmentValue(nameValue, ShellValue.FromText(": not found"), declarationScope)).ConfigureAwait(false);
+                        await ReportDeclarationOperandAsync(nameValue, "not found").ConfigureAwait(false);
                         continue;
                     }
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
@@ -1852,7 +1851,7 @@ public sealed partial class Evaluation : IFileTester
                 if (!noOperands && !options.Print && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local
                     && options.InvalidFunctionAttribute.Length != 0)
                 {
-                    await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText(options.InvalidFunctionAttribute + ": invalid option"))
+                    await ReportDeclarationOperandAsync(ShellValue.FromText(options.InvalidFunctionAttribute), "invalid option")
                         .ConfigureAwait(false);
                     return 1;
                 }
@@ -1887,9 +1886,9 @@ public sealed partial class Evaluation : IFileTester
                     {
                         functionStatus = 1;
                         if (options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly)
-                            await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), WordExpansion.AppendAssignmentValue(name, ShellValue.FromText(": not a function"), declarationScope)).ConfigureAwait(false);
+                            await ReportDeclarationOperandAsync(name, "not a function").ConfigureAwait(false);
                         else if (options.Print)
-                            await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), WordExpansion.AppendAssignmentValue(name, ShellValue.FromText(": not found"), declarationScope)).ConfigureAwait(false);
+                            await ReportDeclarationOperandAsync(name, "not found").ConfigureAwait(false);
                         continue;
                     }
                     var attributes = function.Attributes;
@@ -1903,13 +1902,13 @@ public sealed partial class Evaluation : IFileTester
                             && !function.Definition.Name.CanExport)
                         {
                             functionStatus = 1;
-                            await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), WordExpansion.AppendAssignmentValue(name, ShellValue.FromText(": cannot export"), declarationScope)).ConfigureAwait(false);
+                            await ReportDeclarationOperandAsync(name, "cannot export").ConfigureAwait(false);
                             continue;
                         }
                         if (options.ReadonlyChange == DeclarationAttributeChange.Clear && attributes.HasFlag(FunctionAttributes.Readonly))
                         {
                             functionStatus = 1;
-                            await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), WordExpansion.AppendAssignmentValue(name, ShellValue.FromText(": readonly function"), declarationScope)).ConfigureAwait(false);
+                            await ReportDeclarationOperandAsync(name, "readonly function").ConfigureAwait(false);
                             continue;
                         }
                         if (options.Readonly) attributes |= FunctionAttributes.Readonly;
@@ -1973,12 +1972,12 @@ public sealed partial class Evaluation : IFileTester
                     var invalidOperand = await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
                     if (HasPendingExpansionError)
                         break;
-                    await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(invalidOperand), "not a valid identifier").ConfigureAwait(false);
+                    await DiagnoseQuotedAsync(invalidOperand, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
                 if (reference.Kind != VariableReferenceKind.Name && options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly)
                 {
-                    await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(operand.Name), "not a valid identifier").ConfigureAwait(false);
+                    await DiagnoseQuotedAsync(operand.Name, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
                 // Bash 5.2 resolves global names but keeps element writes in the active scope.
@@ -2108,12 +2107,12 @@ public sealed partial class Evaluation : IFileTester
                     {
                         if (declarationScope.Context.FunctionContext == null)
                         {
-                            await DiagnoseAsync(name.ToValue(), "nameref variable self references not allowed").ConfigureAwait(false);
+                            await DiagnoseAsync(name, "nameref variable self references not allowed").ConfigureAwait(false);
                             continue;
                         }
-                        await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
-                            ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append("warning: "u8)
-                                .Append(name.ToValue().Bytes).Append(": circular name reference"u8).ToMemory())).ConfigureAwait(false);
+                        await ReportExpansionDiagnosticAsync([ShellValue.FromText(commandName)],
+                            [ShellValue.FromText("warning: "), GetDiagnosticName(name), ShellValue.FromText(": circular name reference")])
+                            .ConfigureAwait(false);
                         selfNameref = true;
                     }
                     ShellValue? previous = null;
@@ -2132,7 +2131,7 @@ public sealed partial class Evaluation : IFileTester
                                 ? targetReference : null;
                         if (namerefReference == null)
                         {
-                            await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(targetValue), operand.Value is { IsEmpty: true }
+                            await DiagnoseQuotedAsync(targetValue, operand.Value is { IsEmpty: true }
                                     ? "not a valid identifier" : "invalid variable name for name reference")
                                 .ConfigureAwait(false);
                             continue;
@@ -2145,7 +2144,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     if (!targetVars.TryRemoveNamerefAttribute(name))
                     {
-                        await DiagnoseAsync(name.ToValue(), "readonly variable").ConfigureAwait(false);
+                        await DiagnoseAsync(name, "readonly variable").ConfigureAwait(false);
                         continue;
                     }
                     await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
@@ -2164,11 +2163,11 @@ public sealed partial class Evaluation : IFileTester
                     {
                         // These builtins apply attributes even when their assignment fails.
                         exitCode = 1;
-                        await ReportExpansionDiagnosticAsync(targetVars.ResolveNamerefName(name).ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                        await ReportExpansionDiagnosticAsync(GetDiagnosticName(targetVars.ResolveNamerefName(name)), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
                         await ApplyAttributesAsync(name, targetVars, global, local).ConfigureAwait(false);
                     }
                     else
-                        await DiagnoseAsync(declarationName.ToValue(), "readonly variable").ConfigureAwait(false);
+                        await DiagnoseAsync(declarationName, "readonly variable").ConfigureAwait(false);
                     continue;
                 }
                 var keepLocalNameref = false;
@@ -2183,7 +2182,7 @@ public sealed partial class Evaluation : IFileTester
                         var retainedTarget = localTarget;
                         if (!targetVars.TryRemoveNamerefAttribute(name))
                         {
-                            await DiagnoseAsync(name.ToValue(), "readonly variable").ConfigureAwait(false);
+                            await DiagnoseAsync(name, "readonly variable").ConfigureAwait(false);
                             continue;
                         }
                         targetVars.TrySetResolvedScalar(name, retainedTarget, Memory);
@@ -2193,7 +2192,7 @@ public sealed partial class Evaluation : IFileTester
                 if (options.Nameref && (!local || existingLocal)
                     && (targetVars.IndexedArrays.ContainsKey(name) || targetVars.AssociativeArrays.ContainsKey(name)))
                 {
-                    await DiagnoseAsync(name.ToValue(), "reference variable cannot be an array").ConfigureAwait(false);
+                    await DiagnoseAsync(name, "reference variable cannot be an array").ConfigureAwait(false);
                     continue;
                 }
                 if (options.NamerefChange == DeclarationAttributeChange.Set && options.ArrayKind != ArrayAssignmentKind.Auto
@@ -2206,7 +2205,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         if (!targetVars.TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.DiscardValue))
                         {
-                            await DiagnoseAsync(name.ToValue(), "invalid local declaration").ConfigureAwait(false);
+                            await DiagnoseAsync(name, "invalid local declaration").ConfigureAwait(false);
                             continue;
                         }
                     }
@@ -2214,7 +2213,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         if (!targetVars.TryRemoveNamerefAttribute(name))
                         {
-                            await DiagnoseAsync(name.ToValue(), "readonly variable").ConfigureAwait(false);
+                            await DiagnoseAsync(name, "readonly variable").ConfigureAwait(false);
                             continue;
                         }
                         targetVars.TrySetResolvedScalar(name, arrayReference, Memory);
@@ -2231,7 +2230,7 @@ public sealed partial class Evaluation : IFileTester
                     var localValue = operand.Value ?? ShellValue.Empty;
                     if (initializingReference && !TryParseDeclarationReference(ShellSource.FromBytes(localValue.Bytes), out _))
                     {
-                        await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(localValue), "invalid variable name for name reference").ConfigureAwait(false);
+                        await DiagnoseQuotedAsync(localValue, "invalid variable name for name reference").ConfigureAwait(false);
                         continue;
                     }
                     var hasReferenceValue = (options.Nameref || initializingReference) && operand.Value != null;
@@ -2245,7 +2244,7 @@ public sealed partial class Evaluation : IFileTester
                             : options.ArrayKind != ArrayAssignmentKind.Auto
                                 ? ArrayConversionMessage(options.ArrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed)
                                 : "invalid local declaration";
-                        await DiagnoseAsync(declarationName.ToValue(), message).ConfigureAwait(false);
+                        await DiagnoseAsync(declarationName, message).ConfigureAwait(false);
                         continue;
                     }
                     localReferenceAssigned = options.Nameref || initializingReference;
@@ -2253,14 +2252,14 @@ public sealed partial class Evaluation : IFileTester
                 if ((options.Nameref || (operand.CompoundApplied || local) && options.NamerefChange == DeclarationAttributeChange.Set)
                     && (targetVars.IndexedArrays.ContainsKey(name) || targetVars.AssociativeArrays.ContainsKey(name)))
                 {
-                    await DiagnoseAsync(name.ToValue(), "reference variable cannot be an array").ConfigureAwait(false);
+                    await DiagnoseAsync(name, "reference variable cannot be an array").ConfigureAwait(false);
                     continue;
                 }
                 var resolvedName = targetVars.ResolveNamerefName(name);
                 if (options.IndexedChange == DeclarationAttributeChange.Clear && targetVars.IndexedArrays.ContainsKey(resolvedName)
                     || options.AssociativeChange == DeclarationAttributeChange.Clear && targetVars.AssociativeArrays.ContainsKey(resolvedName))
                 {
-                    await DiagnoseAsync(name.ToValue(), "cannot destroy array variables in this way").ConfigureAwait(false);
+                    await DiagnoseAsync(name, "cannot destroy array variables in this way").ConfigureAwait(false);
                     continue;
                 }
                 // Global element references and +n keep attribute ownership separate from the active write owner.
@@ -2284,13 +2283,13 @@ public sealed partial class Evaluation : IFileTester
                     var arrayDeclarationBinding = referentAttributes ?? new VariableBinding(VariableReference.ForName(name), targetVars);
                     if (!arrayDeclarationBinding.Owner.TryDeclareArray(arrayDeclarationBinding.Name, kind, ScalarArrayPromotion.RetainValue))
                     {
-                        await DiagnoseAsync((global && reference.Kind == VariableReferenceKind.Name ? sourceName : name).ToValue(), ArrayConversionMessage(kind)).ConfigureAwait(false);
+                        await DiagnoseAsync(global && reference.Kind == VariableReferenceKind.Name ? sourceName : name, ArrayConversionMessage(kind)).ConfigureAwait(false);
                         continue;
                     }
                 }
                 if (options.IndexedChange == DeclarationAttributeChange.Set && options.AssociativeChange == DeclarationAttributeChange.Set)
                 {
-                    await DiagnoseAsync(name.ToValue(), ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
+                    await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
                     continue;
                 }
 
@@ -2324,8 +2323,8 @@ public sealed partial class Evaluation : IFileTester
                             // Bash writes element zero through the active binding here, even if that binding is readonly.
                             if (declarationScope.Variables.ResolveNamerefName(sourceName).IsEmpty)
                             {
-                                await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
-                                    ShellValue.FromText("`': not a valid identifier")).ConfigureAwait(false);
+                                await WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.Empty,
+                                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
                                 continue;
                             }
                             writeReference = VariableReference.ForElement(sourceName, ShellSource.FromText("0"));
@@ -2349,7 +2348,7 @@ public sealed partial class Evaluation : IFileTester
                                 : targetVars.TryResolveBinding(name, selectOwner: null, out binding);
                             if (!resolved)
                             {
-                                await DiagnoseAsync(name.ToValue(), "invalid name reference").ConfigureAwait(false);
+                                await DiagnoseAsync(name, "invalid name reference").ConfigureAwait(false);
                                 continue;
                             }
                             writeReference = binding.Reference;
@@ -2368,13 +2367,13 @@ public sealed partial class Evaluation : IFileTester
                             {
                                 // Declarations recover and visit later operands; indirect unset targets remain unchanged.
                                 if (failure == NamerefAssignmentFailure.InvalidTarget)
-                                    await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(value), "not a valid identifier").ConfigureAwait(false);
+                                    await DiagnoseQuotedAsync(value, "not a valid identifier").ConfigureAwait(false);
                                 if (options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly)
                                 {
                                     // Attribute-setting also diagnoses the unresolved name; export -n only fails.
                                     exitCode = 1;
                                     if (options.ExportChange != DeclarationAttributeChange.Clear)
-                                        await DiagnoseAsync(ShellArgumentEscaping.QuoteDiagnosticOperand(ShellValue.Empty), "not a valid identifier").ConfigureAwait(false);
+                                        await DiagnoseQuotedAsync(ShellValue.Empty, "not a valid identifier").ConfigureAwait(false);
                                 }
                                 continue;
                             }
@@ -2386,7 +2385,7 @@ public sealed partial class Evaluation : IFileTester
                             var kind = targetVars.AssociativeArrays.ContainsKey(attributeName) ? ArrayKind.Associative : ArrayKind.Indexed;
                             if (!targetVars.TryDeclareArray(attributeName, kind, ScalarArrayPromotion.RetainValue))
                             {
-                                await DiagnoseAsync(name.ToValue(), "invalid name reference").ConfigureAwait(false);
+                                await DiagnoseAsync(name, "invalid name reference").ConfigureAwait(false);
                                 continue;
                             }
                             SetAttributes(attributeName, targetVars);
@@ -2424,7 +2423,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     if (!targetVars.TryRemoveNamerefAttribute(name))
                     {
-                        await DiagnoseAsync(declarationName.ToValue(), "readonly variable").ConfigureAwait(false);
+                        await DiagnoseAsync(declarationName, "readonly variable").ConfigureAwait(false);
                         continue;
                     }
                     if (formerTarget.IsEmpty || local) targetVars.TryDeclareName(name);
@@ -2465,7 +2464,7 @@ public sealed partial class Evaluation : IFileTester
                     attributes = attributes with { Owner = bindings.SavedVariables };
                 if (attributes.Owner.IsReadonly(attributes.Name))
                 {
-                    await DiagnoseAsync(attributes.Name.ToValue(), "readonly variable").ConfigureAwait(false);
+                    await DiagnoseAsync(attributes.Name, "readonly variable").ConfigureAwait(false);
                     return true; // Visit later operands, and still detach +n, without evaluating the selector.
                 }
                 SetAttributes(attributes.Name, attributes.Owner);
@@ -2500,11 +2499,11 @@ public sealed partial class Evaluation : IFileTester
                     if (reference.Kind != VariableReferenceKind.Name)
                     {
                         // A newly applied -r rejects the element write but leaves the declaration successful.
-                        await ReportExpansionDiagnosticAsync(diagnosticName.ToValue(), ShellValue.FromText("readonly variable"))
+                        await ReportExpansionDiagnosticAsync(GetDiagnosticName(diagnosticName), ShellValue.FromText("readonly variable"))
                             .ConfigureAwait(false);
                         return true;
                     }
-                    await DiagnoseAsync(diagnosticName.ToValue(), "readonly variable").ConfigureAwait(false);
+                    await DiagnoseAsync(diagnosticName, "readonly variable").ConfigureAwait(false);
                     return false;
                 }
                 if (!target.Name.IsEmpty && options.IntegerChange != DeclarationAttributeChange.Unchanged)
@@ -2522,12 +2521,21 @@ public sealed partial class Evaluation : IFileTester
                     if (options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly
                         && options.ExportChange != DeclarationAttributeChange.Clear)
                     {
-                        var subject = variables.TryResolveBinding(name, selectOwner: null, out var binding)
-                            && binding.Reference.Kind != VariableReferenceKind.Name
-                            ? binding.Reference.ToValue(Memory) : ShellValue.Empty;
-                        await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
-                            WordExpansion.AppendAssignmentValue(ShellArgumentEscaping.QuoteDiagnosticOperand(subject),
-                                ShellValue.FromText(": not a valid identifier"), declarationScope)).ConfigureAwait(false);
+                        var command = ShellValue.FromText(commandName);
+                        if (variables.TryResolveBinding(name, selectOwner: null, out var binding)
+                            && binding.Reference.Kind != VariableReferenceKind.Name)
+                        {
+                            var target = binding.Reference;
+                            await ReportExpansionDiagnosticAsync([command],
+                                [ShellValue.FromText("`"), GetDiagnosticName(target.Name), ShellValue.FromText("["),
+                                    ShellValue.FromBytes(target.Subscript.Bytes), ShellValue.FromText("]': not a valid identifier")])
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await WriteInvalidIdentifierDiagnosticAsync(command, ShellValue.Empty, _builtinDiagnostics,
+                                ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
+                        }
                     }
                     return;
                 }
@@ -2563,10 +2571,27 @@ public sealed partial class Evaluation : IFileTester
                 if (options.Readonly) variables.SetReadonlyBinding(name);
             }
 
-            async Task DiagnoseAsync(ShellValue subject, string message)
+            ShellValue GetDiagnosticName(BindingName name)
+            {
+                if (name.NeedsValueEncoding)
+                    Memory.Charge(checked(4L * name.ByteLength));
+                return name.ToValue();
+            }
+
+            Task ReportDeclarationOperandAsync(ShellValue subject, string message) =>
+                ReportExpansionDiagnosticAsync([ShellValue.FromText(commandName)], [subject, ShellValue.FromText(": " + message)]);
+
+            Task DiagnoseAsync(BindingName subject, string message)
             {
                 exitCode = 1;
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), WordExpansion.AppendAssignmentValue(subject, ShellValue.FromText(": " + message), declarationScope)).ConfigureAwait(false);
+                return ReportDeclarationOperandAsync(GetDiagnosticName(subject), message);
+            }
+
+            Task DiagnoseQuotedAsync(ShellValue subject, string message)
+            {
+                exitCode = 1;
+                return WriteQuotedOperandDiagnosticAsync(ShellValue.FromText(commandName), subject, message,
+                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite);
             }
         }
         async Task<bool> ApplyAssignmentAsync(AssignmentWord assignment)

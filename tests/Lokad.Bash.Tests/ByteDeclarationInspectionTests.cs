@@ -112,4 +112,40 @@ public sealed class ByteDeclarationInspectionTests
             });
         Assert.Empty(host.ClosedDescriptors);
     }
+
+    [Theory]
+    [InlineData("declare -p", "declare: ", ": not found\n", 56 * 1024)]
+    [InlineData("declare -fp", "declare: ", ": not found\n", 32 * 1024)]
+    [InlineData("declare", "declare: `", "': not a valid identifier\n", 56 * 1024)]
+    public async Task DeclarationDiagnosticFitsWithoutAnIntermediateOperandCopy(
+        string command, string prefix, string suffix, int allowance)
+    {
+        var operand = new byte[4096];
+        operand.AsSpan().Fill((byte)'x');
+        operand[^1] = 0xff;
+        byte[] expected = [.. Utf8Text.Encode(prefix).Span, .. operand, .. Utf8Text.Encode(suffix).Span];
+        var state = new Eval(Parser.Parse(command + " \"$1\" 2>errors"));
+        state.ReplacePositionalParameters([ShellValue.FromBytes(operand)]);
+        var governor = new MemoryGovernor(allowance);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var descriptor = new FileDescriptor(9);
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        var writtenDescriptor = write.FileDescriptor;
+        var content = write.Content.ToArray();
+        write.SetResult(DescriptorWriteResult.Open);
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+        Assert.Null(await state.GetNextStep());
+        owner.Dispose();
+
+        Assert.Equal(descriptor, writtenDescriptor);
+        Assert.Equal(expected, content);
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
 }
