@@ -88,11 +88,10 @@ public readonly partial record struct ExtendedFloatingPoint
             // Its terminating decimal coefficient has fewer than 16446 + 20 significant digits.
             var truncated = LimitSignificand(ref whole, ref fraction, ref exponent, maximumDigits: 16_512, exponentStep: 1);
             digits = whole.Length + fraction.Length + (truncated ? 1 : 0);
-            // Cover text copies, BigInteger parsing/arithmetic and fixed extended-precision rounding buffers.
+            // Cover the digit buffer, BigInteger parsing/arithmetic and fixed rounding buffers.
             reserveWorkspace(32L * digits + 256 * 1024);
             cancellationToken.ThrowIfCancellationRequested();
-            var text = string.Concat(Encoding.ASCII.GetString(whole), Encoding.ASCII.GetString(fraction), truncated ? "1" : string.Empty);
-            var numerator = BigInteger.Parse(text, CultureInfo.InvariantCulture);
+            var numerator = ParseSignificand(whole, fraction, truncated, hexadecimal: false);
             var denominator = BigInteger.One;
             if (exponent >= 0)
                 numerator *= BigInteger.Pow(10, (int)exponent);
@@ -149,15 +148,30 @@ public readonly partial record struct ExtendedFloatingPoint
             digits = whole.Length + fraction.Length + (truncated ? 1 : 0);
             reserveWorkspace(32L * digits + 256 * 1024);
             cancellationToken.ThrowIfCancellationRequested();
-            // A leading zero makes BigInteger's hexadecimal parser treat the significand as unsigned.
-            var text = string.Concat("0", Encoding.ASCII.GetString(whole), Encoding.ASCII.GetString(fraction), truncated ? "1" : string.Empty);
-            var numerator = BigInteger.Parse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            var numerator = ParseSignificand(whole, fraction, truncated, hexadecimal: true);
             var denominator = BigInteger.One;
             if (exponent >= 0)
                 numerator <<= (int)exponent;
             else
                 denominator <<= (int)-exponent;
             return ConvertRational(numerator, denominator, negative, consumed);
+        }
+
+        static BigInteger ParseSignificand(ReadOnlySpan<byte> whole, ReadOnlySpan<byte> fraction,
+            bool truncated, bool hexadecimal)
+        {
+            // A leading zero keeps the hexadecimal significand unsigned in BigInteger.
+            var prefixLength = hexadecimal ? 1 : 0;
+            var length = prefixLength + whole.Length + fraction.Length + (truncated ? 1 : 0);
+            Span<char> digits = length <= 256 ? stackalloc char[length] : new char[length];
+            if (hexadecimal)
+                digits[0] = '0';
+            Encoding.ASCII.GetChars(whole, digits[prefixLength..]);
+            Encoding.ASCII.GetChars(fraction, digits[(prefixLength + whole.Length)..]);
+            if (truncated)
+                digits[^1] = '1';
+            var style = hexadecimal ? NumberStyles.HexNumber : NumberStyles.Integer;
+            return BigInteger.Parse(digits, style, CultureInfo.InvariantCulture);
         }
 
         FloatingPointPrefixResult ConvertRational(

@@ -58,6 +58,25 @@ public sealed class ExtendedFloatingPointTests
     }
 
     [Theory]
+    [InlineData(255)]
+    [InlineData(256)]
+    public void ParseGeneral_CombinesWholeAndFractionDigitsAcrossBufferSizes(int fractionLength)
+    {
+        var scale = BigInteger.Pow(10, fractionLength);
+        var expected = ExtendedFloatingPoint.FromRational(11 * scale - 2, 9 * scale, negative: false, out _);
+
+        Assert.Equal(expected, Parse("1." + new string('2', fractionLength)));
+    }
+
+    [Fact]
+    public void ParseGeneral_HexadecimalSignComesFromThePrefix()
+    {
+        var expected = ExtendedFloatingPoint.FromRational(31, 4, negative: true, out _);
+
+        Assert.Equal(expected, Parse("-0xf.8p-1"));
+    }
+
+    [Theory]
     [InlineData("1.25")]
     [InlineData("0x1.4p0")]
     public void ParseGeneral_ObservesCancellationBeforeConversion(string input)
