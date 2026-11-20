@@ -435,7 +435,10 @@ Keep that scope alive as long as retained evaluator data is used.
 `BashScript.RunAsync`, `source`, `eval` and reached EXIT actions parse and execute complete command units
 through the same evaluator. A newline completes a unit only after its compound
 syntax, continuations, quoting and here-documents are complete. Later syntax errors
-retain earlier units' effects; an invalid unit executes none of its commands.
+retain earlier units' effects. A direct double-quoted command substitution with
+a malformed arithmetic `for` header can end the input at that word. The evaluator
+reports the diagnostic and sets the parser status to 2 before running any prefix
+that forms a complete command list there. The prefix supplies the unit's final status.
 `source` and `eval` select operands from completed byte fields after command
 resolution. They validate leading options before performing a file lookup or
 allocating copied script source. `source` decodes its selected filename and

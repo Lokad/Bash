@@ -11,6 +11,8 @@ public sealed class ScriptCommandUnitTests
     {
         yield return ["printf A\n)\n", "A", 2, true];
         yield return ["printf wrong; )\n", "", 2, true];
+        yield return ["printf prefix \"$(for ((i=7)); do :; done)\"\nprintf wrong", "prefix", 0, true];
+        yield return ["printf wrong; true && value=(\"$(for ((i=7)); do :; done)\")", "", 1, true];
         yield return ["printf A;\n)\n", "A", 2, true];
         yield return ["{\nprintf A\n}\n)\n", "A", 2, true];
         yield return ["{\nprintf wrong\n)\n}\n", "", 2, true];
@@ -41,6 +43,44 @@ public sealed class ScriptCommandUnitTests
     [MemberData(nameof(CompleteUnits))]
     public Task EvalSharesTheCommandUnitPath(string source, string output, int status, bool syntaxError) =>
         AssertUnitsAsync("eval '" + source.Replace("'", "'\\''", StringComparison.Ordinal) + "'", output, status, syntaxError);
+
+    [Theory]
+    [InlineData("printf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"; (exit 7); value=", "<2:2>|7:7", 7)]
+    [InlineData("printf discarded; printf unfinished >", "|2:2", 2)]
+    public async Task QuotedSubstitutionFailurePublishesParserStatusBeforeAnyCompletePrefix(
+        string prefix, string output, int status)
+    {
+        var script = "trap 'printf \"|%s:%s\" \"$?\" \"${PIPESTATUS[*]}\"' EXIT\n"
+            + prefix + "\"$(for ((i=7)); do :; done)\"\nprintf discarded";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task QuotedSubstitutionDiagnosticPrecedesPrefixRedirections()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        const string Script = """
+            exec 2>diag; printf prefix >&2; value="$(for ((i=7)); do :; done)"
+            : >discarded
+            """;
+
+        Assert.False(Parser.TryParse(Script, out _, out _));
+        var result = await host.RunAsync(Script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+        Assert.Equal("prefix", host.ReadFile("/diag"));
+        Assert.Equal("diag", Assert.Single(host.CaptureEntries()).Key);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
 
     [Theory]
     [InlineData(true, "value=$(for ((i=7)); do : >body; break; done)", 2, "2:inner:source-arg", "Arithmetic for header")]

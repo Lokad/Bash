@@ -170,7 +170,10 @@ public static class Parser
         }
 
         scanContext.LegacyOrigin = LegacySubstitutionOrigin.Script;
-        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, scanContext);
+        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, scanContext)
+        {
+            EndInputOnQuotedSubstitutionFailure = true
+        };
         while (true)
         {
             tokenizer.BeginCommandUnit();
@@ -180,6 +183,13 @@ public static class Parser
             if (trailing.Kind is not TokenKind.Newline and not TokenKind.EndOfInput)
                 tokenizer.RecordError("Unexpected token after command list.", trailing.Source.Start.Value);
 
+            if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
+            {
+                var prefix = tokenizer.Error == null && command != null && tokenizer.HereDocuments is not { HasPending: true }
+                    ? tokenizer.HereDocuments?.Complete(command) ?? command : null;
+                yield return new CommandUnitParseResult.Failed(quotedFailure) { CompletedPrefix = prefix };
+                yield break;
+            }
             if (tokenizer.Failure is { } failure)
             {
                 yield return new CommandUnitParseResult.Failed(failure);
@@ -1051,7 +1061,7 @@ public static class Parser
             while (true)
             {
                 var token = tokenizer.NextTokenCore();
-                if (tokenizer.Error != null)
+                if (tokenizer.Error != null || tokenizer.QuotedEndOfInputFailure != null)
                 {
                     tokenizer.MarkCompoundArrayFailure();
                     return values;

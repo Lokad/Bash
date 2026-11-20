@@ -182,15 +182,25 @@ public sealed partial class Evaluation
             {
                 if (!commands.MoveNext())
                     break;
-                if (commands.Current is CommandUnitParseResult.Failed failedUnit)
+                var failedUnit = commands.Current as CommandUnitParseResult.Failed;
+                var skipExecution = result.Flow is FlowControlKind.Break or FlowControlKind.Continue;
+                ICommand command;
+                if (failedUnit != null)
                 {
                     await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
-                    if (kind == ScriptExecutionKind.LegacyCapture && failedUnit.Failure.ExitsSubstitution)
-                        return EvaluationResult.Exit(1);
-                    if (kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval)
+                    if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)
                     {
-                        var failure = failedUnit.Failure.Kind;
-                        if (failedUnit.Failure.ExitsSubstitution)
+                        PreparePipelineStatusStorage(1);
+                        scope.Variables.SetPipelineStatuses([2], scope.Context, _cancellationToken);
+                        _state.LastExitCode = 2;
+                    }
+                    if (failedUnit.CompletedPrefix is { } prefix && !skipExecution)
+                        command = prefix;
+                    else
+                    {
+                        if (kind == ScriptExecutionKind.LegacyCapture && failedUnit.Failure.ExitsSubstitution)
+                            return EvaluationResult.Exit(1);
+                        if (kind is (ScriptExecutionKind.Source or ScriptExecutionKind.Eval) && failedUnit.Failure.ExitsSubstitution)
                         {
                             // These child boundaries unwind the builtin before running their EXIT action.
                             if (_state.ForkKind is ShellForkKind.CommandSubstitution or ShellForkKind.PipelineSimpleCommand)
@@ -198,23 +208,26 @@ public sealed partial class Evaluation
 
                             // In the invoking shell, EXIT sees the full parser status and the active
                             // builtin scope. The result crossing the shell boundary uses its low byte.
-                            var status = failure == ParserFailureKind.SubstitutionGrammar ? BuiltinSyntaxErrorStatus : 2;
+                            var status = failedUnit.Failure.Kind == ParserFailureKind.SubstitutionGrammar
+                                ? BuiltinSyntaxErrorStatus : 2;
                             var exit = await RunExitTrapAsync(scope, EvaluationResult.Exit(status)).ConfigureAwait(false);
                             return exit.WithExitCode(exit.ExitCode & byte.MaxValue);
                         }
-                        if (failure == ParserFailureKind.ArrayQuotedSubstitutionForHeader)
+                        if (failedUnit.Failure.Kind == ParserFailureKind.ArrayQuotedSubstitutionForHeader)
                             return result.WithExitCode(1);
+                        if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
+                            return EvaluationResult.Exit(2);
+                        return result.WithExitCode(2);
                     }
-                    if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
-                        return EvaluationResult.Exit(2);
-                    return result.WithExitCode(2);
                 }
+                else
+                    command = ((CommandUnitParseResult.Parsed)commands.Current).Command;
 
                 // Loop flow skips execution but still checks the remaining source/eval syntax.
-                if (result.Flow is FlowControlKind.Break or FlowControlKind.Continue)
+                if (skipExecution)
                     continue;
 
-                result = await EvaluateCommandAsync(((CommandUnitParseResult.Parsed)commands.Current).Command,
+                result = await EvaluateCommandAsync(command,
                     scope with { Context = scope.Context.WithSourceMemory(unitMemory) }, negated: false)
                     .ConfigureAwait(false);
                 if (result.Flow == FlowControlKind.Return)
@@ -228,6 +241,8 @@ public sealed partial class Evaluation
                     if (result.Flow == FlowControlKind.Exit)
                         return result;
                 }
+                if (failedUnit != null)
+                    break;
             }
             finally
             {

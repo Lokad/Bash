@@ -393,9 +393,12 @@ declaration attributes. A nameref contributes its target spelling as scalar
 data unless the new declaration gives the local its own nameref attribute.
 
 The public script runner, `source`, `eval` and reached EXIT actions execute complete command units as
-they are parsed. Earlier units retain their effects before later syntax failure;
-the failing unit executes no partial command list. Explicit whole-script parsing
-remains available for callers that require validation before execution.
+they are parsed. Earlier units retain their effects before later syntax failure.
+A malformed arithmetic `for` header in a direct double-quoted command substitution
+can also leave a complete prefix within the current unit. The shell emits the
+diagnostic, publishes status 2, then executes that prefix and returns its status.
+Explicit whole-script parsing remains available for callers that require validation
+before execution.
 Recoverable expansion failures discard the rest of their unit and expose the
 failure status to the next unit. Readonly assignment failures and malformed
 generated words stop execution when errexit applies at the script boundary.

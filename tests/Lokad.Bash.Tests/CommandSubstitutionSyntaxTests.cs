@@ -139,6 +139,7 @@ public sealed class CommandSubstitutionSyntaxTests
     [InlineData("; ", "for ((i=7)); do : >loop; break; done", "2:/EXIT:2", false)]
     [InlineData("\n", "inner=$(for ((i=7)); do : >loop; break; done)", "1:early/EXIT:1", true)]
     [InlineData("\n", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "2:early/EXIT:2", true)]
+    [InlineData("; ", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "0:early/EXIT:0", true)]
     public async Task FailedBacktickCaptureKeepsEarlierCompleteUnits(
         string separator, string malformed, string output, bool earlierUnit)
     {

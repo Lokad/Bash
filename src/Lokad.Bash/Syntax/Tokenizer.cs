@@ -34,6 +34,10 @@ internal sealed class Tokenizer
         ? new ParserFailure(limit, ParserFailureKind.Limit) : null);
     internal SyntaxError? Error => _failure?.Error ?? _scanContext.LimitError;
 
+    /// <summary>Allows the streaming parser to finish the grammar before a failed word.</summary>
+    internal bool EndInputOnQuotedSubstitutionFailure { get; init; }
+    internal ParserFailure? QuotedEndOfInputFailure { get; private set; }
+
     internal void RecordError(string message, int offset) => RecordError(new SyntaxError(message, offset));
 
     internal void RecordError(SyntaxError error) => RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar));
@@ -48,8 +52,11 @@ internal sealed class Tokenizer
 
     internal void MarkCompoundArrayFailure()
     {
-        if (_failure is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
+        if ((_failure ?? QuotedEndOfInputFailure) is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
+        {
             _failure = failure with { Kind = ParserFailureKind.ArrayQuotedSubstitutionForHeader };
+            QuotedEndOfInputFailure = null;
+        }
     }
 
     private void RecordExpansionFailure(ParserFailure? failure, bool quoted, string missingDelimiter, int start) =>
@@ -369,6 +376,8 @@ internal sealed class Tokenizer
         {
             return _pushback.Pop();
         }
+        if (QuotedEndOfInputFailure != null)
+            return Token.EndOfInput();
 
         var span = _input.AsSpan();
         var start = Position;
@@ -491,7 +500,21 @@ internal sealed class Tokenizer
             return Located(Token.FromWord(ReadWord(span)));
         }
 
-        Token Located(Token token) => (Error == null ? token : Token.EndOfInput()) with { Source = start..Position };
+        Token Located(Token token)
+        {
+            if (Error != null)
+            {
+                token = Token.EndOfInput();
+                if (EndInputOnQuotedSubstitutionFailure && !_scanContext.ParsingLimitExceeded
+                    && _failure is { IsDirectQuotedSubstitutionFailure: true })
+                {
+                    // End the input at the failed word. The grammar can still finish a prefix.
+                    QuotedEndOfInputFailure = _failure;
+                    _failure = null;
+                }
+            }
+            return token with { Source = start..Position };
+        }
     }
 
     public void PushBack(Token token)

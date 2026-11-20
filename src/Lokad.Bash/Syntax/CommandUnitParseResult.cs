@@ -8,9 +8,10 @@ internal abstract record CommandUnitParseResult
     /// <summary>A complete unit whose syntax and here-document bodies have been parsed.</summary>
     internal sealed record Parsed(ICommand Command) : CommandUnitParseResult;
 
-    /// <summary>A syntax error in the next unit; earlier parsed units remain valid.</summary>
+    /// <summary>A terminal syntax diagnostic with any complete prefix recognized at end of input.</summary>
     internal sealed record Failed(ParserFailure Failure) : CommandUnitParseResult
     {
         internal SyntaxError Error => Failure.Error;
+        internal ICommand? CompletedPrefix { get; init; }
     }
 }
