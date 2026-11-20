@@ -480,7 +480,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("x=old; declare -A x+=([key]=new); printf '<%s>:<%s>:<%s>:<%s>\\n' \"$?\" \"${x[0]-unset}\" \"${x[key]}\" \"${#x[@]}\"", "<0>:<old>:<new>:<2>\n", "", 0)]
     [InlineData("x=old; declare -A x=([key]=new); printf '<%s>:<%s>:<%s>:<%s>\\n' \"$?\" \"${x[0]-unset}\" \"${x[key]}\" \"${#x[@]}\"", "<0>:<unset>:<new>:<1>\n", "", 0)]
     [InlineData("readonly x=old; declare -A x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<old>\n", "", 0)]
-    [InlineData("declare +Z x=value; printf '<%s>:<%s>\\n' \"$?\" \"${x+set}\"", "<2>:<>\n", "declare: +Z: invalid option\n", 0)]
+    [InlineData("declare +Z x=value; printf '<%s>:<%s>\\n' \"$?\" \"${x+set}\"", "<2>:<>\n", "declare: +Z: invalid option\n" + EvaluationTestHelper.DeclareUsage, 0)]
     [InlineData("export x=outer; x=temp export -n x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<outer>\n", "", 0)]
     [InlineData("export x=outer; x=temp declare +x x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<outer>\n", "", 0)]
     [InlineData("export x=outer; f() { export -n x; }; x=temp f; printf '<%s>\\n' \"$x\"", "<outer>\n", "", 0)]

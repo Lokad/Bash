@@ -67,11 +67,7 @@ public sealed partial class Evaluation
             else if (option.Span.SequenceEqual("--help"u8))
             {
                 var documentation = BuiltinDocumentation.For(kind);
-                var output = Utf8Text.Encode(commandName + ": " + documentation.Synopsis(commandName)
-                    + "\n    " + documentation.Description + "\n");
-                var write = await ExecuteWriteAsync(GetStdOutDescriptor(), output).ConfigureAwait(false);
-                await ReportBuiltinWriteFailureAsync(command, write).ConfigureAwait(false);
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(write.IsError ? 1 : 2), negated)
+                return await WriteBuiltinHelpAsync(command, documentation.Synopsis(commandName), documentation.Description, negated)
                     .ConfigureAwait(false);
             }
             else if (option.Span is [(byte)'-', _, ..])

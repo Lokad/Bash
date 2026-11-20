@@ -27,8 +27,8 @@ public sealed partial class Evaluation
             if (argument.Bytes.Span.SequenceEqual("--help"u8))
             {
                 var help = BuiltinDocumentation.For(BuiltinKind.Help);
-                return await WriteOutputAsync(
-                    Utf8Text.Encode("help: " + help.Synopsis("help") + "\n    " + help.Description + "\n"), 2).ConfigureAwait(false);
+                return await WriteBuiltinHelpAsync(ShellValue.FromText("help"), help.Synopsis("help"), help.Description, negated)
+                    .ConfigureAwait(false);
             }
             if (argument.Bytes.Length < 2 || argument.Bytes.Span[0] != (byte)'-')
                 break;
@@ -111,15 +111,8 @@ public sealed partial class Evaluation
                 ShellValue.FromText("no help topics match the supplied patterns")).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
-        return await WriteOutputAsync(output.ToMemory(), 0).ConfigureAwait(false);
-
-        async Task<EvaluationResult> WriteOutputAsync(ReadOnlyMemory<byte> content, int exitCode)
-        {
-            var result = await ExecuteWriteAsync(GetStdOutDescriptor(), content).ConfigureAwait(false);
-            await ReportBuiltinWriteFailureAsync(ShellValue.FromText("help"), result).ConfigureAwait(false);
-            return await FinalizeResultAsync(
-                EvaluationResult.FromExitCode(result.IsError ? 1 : exitCode), negated).ConfigureAwait(false);
-        }
+        var result = await WriteBuiltinOutputAsync(ShellValue.FromText("help"), output.ToMemory()).ConfigureAwait(false);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 0), negated).ConfigureAwait(false);
 
         void Append(string text)
         {

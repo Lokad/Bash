@@ -1832,17 +1832,28 @@ public sealed partial class Evaluation : IFileTester
             var functionContext = declarationScope.Context.FunctionContext;
             var localBuiltinFrame = options.Builtin == BuiltinKind.Local ? functionContext : null;
             var skipReadonlyAttribute = options.Builtin == BuiltinKind.Readonly && !options.Readonly;
-            if (!options.InvalidOption.IsEmpty)
+            var missingLocalScope = options.Builtin == BuiltinKind.Local && localBuiltinFrame == null;
+            if (options.Help == DeclarationHelp.FirstField || options.Help == DeclarationHelp.AfterOptions && !missingLocalScope)
             {
-                await ReportDeclarationOperandAsync(options.InvalidOption, "invalid option")
+                if (GetStdOutDescriptor().IsClosed)
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), declarationNegated).ConfigureAwait(false);
+                return await WriteBuiltinHelpAsync(ShellValue.FromText(commandName),
+                    BuiltinDocumentation.DeclarationOptionSynopsis(options.Builtin, commandName),
+                    BuiltinDocumentation.For(options.Builtin).Description, declarationNegated)
                     .ConfigureAwait(false);
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), declarationNegated).ConfigureAwait(false);
             }
-            if (options.Builtin == BuiltinKind.Local && localBuiltinFrame == null)
+            if (missingLocalScope)
             {
                 await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("can only be used in a function"))
                     .ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), declarationNegated).ConfigureAwait(false);
+            }
+            if (!options.InvalidOption.IsEmpty)
+            {
+                await ReportDeclarationOperandAsync(options.InvalidOption, "invalid option").ConfigureAwait(false);
+                await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("usage: "
+                    + BuiltinDocumentation.DeclarationOptionSynopsis(options.Builtin, commandName))).ConfigureAwait(false);
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), declarationNegated).ConfigureAwait(false);
             }
             var listing = declaration.Operands.Count == 0;
             if (options.Functions && (!listing || options.Builtin != BuiltinKind.Local))

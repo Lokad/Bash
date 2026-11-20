@@ -86,6 +86,12 @@ With named operands, `readonly -n` processes assignments and preserves
 existing attributes. It skips adding the readonly attribute. Without operands,
 it lists readonly bindings.
 
+`declare`, `typeset`, `local`, `export`, and `readonly` report usage after an
+unrecognized leading option. A reached `--help` writes the command's synopsis
+and Lokad.Bash's builtin documentation to stdout with status 2. At script
+scope, a leading `local --help` still prints help. Other `local` invocations
+require function context before reporting option errors.
+
 Function display/export preserves legacy backticks and their original escapes.
 Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches

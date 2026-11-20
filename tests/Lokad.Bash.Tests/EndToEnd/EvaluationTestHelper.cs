@@ -5,6 +5,9 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 internal static class EvaluationTestHelper
 {
+    internal const string DeclareUsage =
+        "declare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]\n";
+
     public static async Task<FileDescriptor> ReadTerminalTestDescriptorAsync(global::Lokad.Bash.Evaluation.Evaluation evaluation)
     {
         var operation = Assert.IsType<TerminalStatusesOperation>(await evaluation.GetNextStep(CancellationToken.None));

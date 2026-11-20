@@ -17,6 +17,17 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
     public string Synopsis(string name) => name == "[" ? "[ expression ]"
         : Arguments.Length == 0 ? name : name + " " + Arguments;
 
+    internal static string DeclarationOptionSynopsis(BuiltinKind kind, string name) => kind switch
+    {
+        BuiltinKind.Readonly => "readonly [-aAf] [name[=value] ...] or readonly -p",
+        BuiltinKind.Export => "export [-fn] [name[=value] ...] or export -p",
+        BuiltinKind.Local => "local [option] name[=value] ...",
+        BuiltinKind.Declare => name == "typeset"
+            ? "typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]"
+            : "declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+
     public static BuiltinDocumentation For(BuiltinKind kind) => kind switch
     {
         BuiltinKind.Colon => new("[arguments]", "Expand arguments and redirections, then return success."),
@@ -44,8 +55,8 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Popd => new("[-n] [+N | -N]", "Remove a directory stack entry. The -n option keeps the working directory."),
         BuiltinKind.Export => new("[-aAfnp] [name[=value] ...]",
             "Mark bindings for export, or list exported bindings. -n removes export; -f selects functions; -a/-A select array kinds."),
-        BuiltinKind.Readonly => new("[-aAfp] [name[=value] ...]",
-            "Mark bindings readonly, or list readonly bindings. -f selects functions; -a and -A select indexed and associative arrays."),
+        BuiltinKind.Readonly => new("[-aAfnp] [name[=value] ...]",
+            "Mark bindings readonly, or list readonly bindings. -f selects functions; -a and -A select indexed and associative arrays. With named operands, -n skips adding the readonly attribute and preserves existing attributes."),
         BuiltinKind.Mapfile => new("[-t] [-d delim] [-n count] [-O origin] [--] [array]",
             "Read standard input into an indexed array, defaulting to MAPFILE. -d uses the first delimiter byte, or NUL for an empty delimiter. -t removes each record's trailing delimiter.\n    -n limits records read; zero reads to EOF. -O writes at the supplied starting index and preserves other entries."),
         BuiltinKind.Hash => new("", "Return success without operands; command-path caching is not implemented."),

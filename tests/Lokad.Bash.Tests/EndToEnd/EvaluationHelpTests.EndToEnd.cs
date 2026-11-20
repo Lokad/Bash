@@ -23,6 +23,49 @@ public sealed class EvaluationHelpTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("local --help -q", "local: local [option] name[=value] ...\n")]
+    [InlineData("command typeset --help", "typeset: typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]\n")]
+    [InlineData("f(){ local -x --help; }; f", "local: local [option] name[=value] ...\n")]
+    public async Task DeclarationHelpUsesTheReachedOptionAndCommandName(string source, string synopsis)
+    {
+        var result = await EvaluationTestHelper.RunAsync(source);
+
+        Assert.StartsWith(synopsis + "    ", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(2, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -q", "local: can only be used in a function\n", 1)]
+    [InlineData("readonly -fq --help", "readonly: -q: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\n", 2)]
+    [InlineData("readonly --unknown", "readonly: --: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\n", 2)]
+    [InlineData("readonly -- --help", "readonly: `--help': not a valid identifier\n", 1)]
+    [InlineData("readonly --help >&-", "", 2)]
+    public async Task DeclarationOptionFailuresPreserveTheirStatusAndDescriptor(string source, string error, int status)
+    {
+        var result = await EvaluationTestHelper.RunAsync(source);
+
+        Assert.Empty(result.StdOut);
+        Assert.Equal(error, result.StdErr);
+        Assert.Equal(status, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DeclarationHelpRetainsCompoundAssignmentEffectsAndUsesRedirectedStdout()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "i=0; readonly --help a=($((++i))) >documentation; printf '[%s:%s][%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"${a[0]}\"",
+            CancellationToken.None);
+
+        Assert.Equal("[2:2][1:1]", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.StartsWith("readonly: readonly [-aAf] [name[=value] ...] or readonly -p\n", host.ReadFile("/documentation"));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task HelpKeepsTheAdmittedOutputUntilTheWriteSettles()
     {

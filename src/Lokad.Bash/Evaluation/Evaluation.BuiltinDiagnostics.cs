@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Lokad.Bash.Files;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
@@ -31,6 +32,23 @@ public sealed partial class Evaluation
         var result = await ExecuteWriteAsync(GetStdOutDescriptor(), content).ConfigureAwait(false);
         await ReportBuiltinWriteFailureAsync(name, result).ConfigureAwait(false);
         return result;
+    }
+
+    private async Task<EvaluationResult> WriteBuiltinHelpAsync(ShellValue name, string synopsis, string description, bool negated)
+    {
+        var encoding = Utf8Text.StrictUtf8;
+        var synopsisLength = encoding.GetByteCount(synopsis);
+        var descriptionLength = encoding.GetByteCount(description);
+        using var output = new ByteMemoryBuilder(checked(name.Bytes.Length + synopsisLength + descriptionLength + 8), Memory.Budget);
+        output.Append(name.Bytes);
+        output.Append(": "u8);
+        encoding.GetBytes(synopsis.AsSpan(), output.AppendSpan(synopsisLength));
+        output.Append("\n    "u8);
+        encoding.GetBytes(description.AsSpan(), output.AppendSpan(descriptionLength));
+        output.Append((byte)'\n');
+        var result = await WriteBuiltinOutputAsync(name, output.ToMemory()).ConfigureAwait(false);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 2), negated)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Reports a known output failure through the builtin's current stderr mapping.</summary>

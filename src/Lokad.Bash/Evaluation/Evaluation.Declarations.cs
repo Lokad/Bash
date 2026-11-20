@@ -337,10 +337,13 @@ public sealed partial class Evaluation
         None = 0, Indexed = 1, Associative = 2, Nameref = 4, Exported = 8, Readonly = 16, Integer = 32
     }
 
+    private enum DeclarationHelp { None, FirstField, AfterOptions }
+
     /// <summary>Consumes only the initial option fields; later fields retain their operand meaning.</summary>
     private sealed class DeclarationOptions(BuiltinKind builtin)
     {
         private bool _readingOptions = true;
+        private bool _seenOption;
         public BuiltinKind Builtin { get; } = builtin;
         public DeclarationAttributeChange IndexedChange { get; private set; }
         public DeclarationAttributeChange AssociativeChange { get; private set; }
@@ -369,6 +372,7 @@ public sealed partial class Evaluation
             _ => DeclarationListingAttributes.None
         };
         public ShellValue InvalidOption { get; private set; } = ShellValue.Empty;
+        public DeclarationHelp Help { get; private set; }
 
         public bool IsLocal(ScopedEvaluation scope) => scope.Context.FunctionContext != null
             && (Builtin == BuiltinKind.Local || Builtin == BuiltinKind.Declare && !Global);
@@ -385,12 +389,20 @@ public sealed partial class Evaluation
                 EndOptions();
                 return true;
             }
+            if (bytes.SequenceEqual("--help"u8))
+            {
+                if (Help == DeclarationHelp.None && InvalidOption.IsEmpty)
+                    Help = _seenOption ? DeclarationHelp.AfterOptions : DeclarationHelp.FirstField;
+                _seenOption = true;
+                return true;
+            }
             var remove = bytes.Length > 0 && bytes[0] == (byte)'+' && Builtin is BuiltinKind.Declare or BuiltinKind.Local;
             if (bytes.Length < 2 || bytes[0] != (byte)'-' && !remove)
             {
                 EndOptions();
                 return false;
             }
+            _seenOption = true;
 
             // Reuse grouped-option parsing; only declaration builtins give '+' an option meaning.
             var optionField = field;
@@ -406,7 +418,7 @@ public sealed partial class Evaluation
             {
                 if (item.Kind != CommandLineOptionKind.ShortOption)
                 {
-                    if (InvalidOption.IsEmpty) InvalidOption = field;
+                    if (InvalidOption.IsEmpty) InvalidOption = ShellValue.FromBytes(field.Bytes[..2]);
                     continue;
                 }
                 if (!remove && InvalidFunctionAttribute.Length == 0
