@@ -1,9 +1,25 @@
+using System.Text;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ParserHereDocumentTests
 {
+    [Theory]
+    [InlineData("cat <<END\n", "END\n")]
+    [InlineData("cat <<-END\n", "\tEND\n")]
+    [InlineData("cat <<'END'\n", "END")]
+    public void ContiguousBodyRetainsItsExactSourceSlice(string header, string closing)
+    {
+        byte[] bytes = [.. Encoding.ASCII.GetBytes(header), 0xff, (byte)'\r', (byte)'\n',
+            .. Encoding.ASCII.GetBytes(closing)];
+        var script = Parser.Parse(bytes);
+        var command = Assert.IsType<SimpleCommand>(Assert.Single(script.Commands));
+        var body = Assert.Single(Assert.Single(command.Redirections).Target.Parts).GetUnexpandedValue();
+
+        Assert.True(body.Bytes.Equals((ReadOnlyMemory<byte>)bytes.AsMemory(header.Length, 3)));
+    }
+
     [Theory]
     [InlineData("$(printf 'END')", "$(printf 'END')", true)]
     [InlineData("\"$(printf \"END\")\"", "$(printf END)", false)]

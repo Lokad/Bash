@@ -292,6 +292,8 @@ owner ends. Retained scalar, array, nameref and positional values keep the ordin
 value estimate; syntax slices share immutable arithmetic metadata without reparsing.
 Structured here-document delimiters keep admitted compact spelling and closing
 bytes with the parsed redirection, for collection and later function serialization.
+Contiguous here-document bodies borrow their input source bytes. Tab removal or
+continuation joining uses the existing syntax owner for normalized backing.
 
 A sourced input scope stays admitted while parsing/executing the file, while a
 function namespace retains its definitions, and through active function preparation,

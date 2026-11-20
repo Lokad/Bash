@@ -646,20 +646,23 @@ internal sealed class Tokenizer
         out ShellSource body)
     {
         body = default;
-        var content = _scanContext.CreateByteBuilder(0);
+        ByteMemoryBuilder? content = null;
+        var bodyStart = Position;
         var span = _input.AsSpan();
 
         while (Position < span.Length)
         {
-            var lineStart = content.Length;
-            var runStart = Position;
+            var physicalLineStart = Position;
+            var lineStart = content?.Length ?? 0;
+            var runStart = physicalLineStart;
             while (Position < span.Length && span[Position] != (byte)'\n')
             {
                 if (joinContinuations && span[Position] == (byte)'\\' && Position + 1 < span.Length)
                 {
                     if (span[Position + 1] == (byte)'\n')
                     {
-                        AppendRun(span[runStart..Position]);
+                        content ??= StartContent();
+                        AppendRun(content, span[runStart..Position]);
                         Position += 2;
                         runStart = Position;
                         continue;
@@ -671,30 +674,53 @@ internal sealed class Tokenizer
                     Position++;
             }
 
-            AppendRun(span[runStart..Position]);
+            var run = span[runStart..Position];
+            var line = run;
+            if (content != null)
+            {
+                AppendRun(content, run);
+                line = content.ToMemory().Span[lineStart..];
+            }
+            else if (stripTabs)
+                line = run.TrimStart((byte)'\t');
+
             var newlineLength = Position < span.Length ? 1 : 0;
             Position += newlineLength;
-            if (content.ToMemory().Span[lineStart..].SequenceEqual(delimiter.AsSpan()))
+            if (line.SequenceEqual(delimiter.AsSpan()))
             {
-                content.Truncate(lineStart);
-                body = ShellSource.FromBytes(content.ToMemory());
+                if (content != null)
+                {
+                    content.Truncate(lineStart);
+                    body = ShellSource.FromBytes(content.ToMemory());
+                }
+                else if (physicalLineStart != bodyStart)
+                    body = _input.Slice(bodyStart, physicalLineStart - bodyStart);
                 return true;
             }
 
+            if (content == null && line.Length != run.Length)
+            {
+                // Tabs on the closing marker alone do not change the body.
+                content = StartContent();
+                content.Append(line);
+            }
             if (newlineLength > 0)
-                content.Append((byte)'\n');
+                content?.Append((byte)'\n');
 
-            void AppendRun(ReadOnlySpan<byte> run)
+            ByteMemoryBuilder StartContent()
+            {
+                var builder = _scanContext.CreateByteBuilder(0);
+                // Earlier unedited lines still live on the original source backing.
+                builder.Append(_input.AsSpan(bodyStart, physicalLineStart - bodyStart));
+                lineStart = builder.Length;
+                return builder;
+            }
+
+            void AppendRun(ByteMemoryBuilder builder, ReadOnlySpan<byte> bytes)
             {
                 // Strip only the logical line's leading tabs. A continued physical
                 // line can begin with a tab that belongs inside the body or delimiter.
-                if (stripTabs && content.Length == lineStart)
-                {
-                    var tabs = 0;
-                    while (tabs < run.Length && run[tabs] == (byte)'\t') tabs++;
-                    run = run[tabs..];
-                }
-                content.Append(run);
+                builder.Append(stripTabs && builder.Length == lineStart ? bytes.TrimStart((byte)'\t') : bytes);
             }
         }
 
