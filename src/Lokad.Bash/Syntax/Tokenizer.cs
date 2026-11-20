@@ -1223,7 +1223,8 @@ internal sealed class Tokenizer
             content.Append(payload.Bytes);
             content.Append((byte)'}');
             renderedLineAdjustment += adjustment;
-            if (quoted && subscriptFailure == ParameterSubscriptFailure.None)
+            if (quoted && subscriptFailure == ParameterSubscriptFailure.None
+                && incompleteSubscript is ParameterSubscriptFailure.Direct or ParameterSubscriptFailure.Nested)
                 subscriptFailure = incompleteSubscript;
             Position = endIndex + 1;
             return true;

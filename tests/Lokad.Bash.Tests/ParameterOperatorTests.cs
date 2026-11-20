@@ -43,6 +43,57 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
+    [InlineData("${a[i++}]", 1, "i++}: syntax error: invalid arithmetic operator (error token is \"}\")\n")]
+    [InlineData("\"${a[i++}]\"", 0, "bad substitution: no closing `}' in \"${a[i++}]\"\n")]
+    [InlineData("${a[i++}]suffix", 0, "${a[i++}]suffix: bad substitution\n")]
+    [InlineData("${saved:-${a[i++}]}", 0, "bad substitution: no closing `}' in ${saved:-${a[i++}]}\n")]
+    public async Task LateSubscriptFailureKeepsOnlyTheReachedSelectorEffects(string word, int index, string error)
+    {
+        var script = "a=(one two); i=0; saved=prior\n"
+            + "printf '%s' " + word + "; printf skipped\n"
+            + "printf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"";
+
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal($"[1:1:{index}]", host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("printf '%s' ${m[x}]}", "known", "")]
+    [InlineData("printf '%s' \"${missing:-${m[x}]}}\"", "known", "")]
+    [InlineData("printf '%s' \"${saved:-${#m[x}]}}\"", "prior}", "")]
+    [InlineData("cat <<EOF\n${m[x}]}\nEOF\n", "known\n", "")]
+    [InlineData("printf '%s' ${m[$(printf selector >&2; printf x)}]", "",
+        "selector${m[$(printf selector 1>&2; printf x)}]: bad substitution\n")]
+    [InlineData("printf '%s' ${m[x}]:-$(printf skipped >&2)", "",
+        "bad substitution: no closing `}' in ${m[x}]:-$(printf skipped 1>&2)\n")]
+    public async Task LateAssociativeBracketPreservesBraceOwnershipAndReadOrder(string command, string output, string error)
+    {
+        var script = "declare -A m; m['x}']=known; saved=prior\n" + command + "\nprintf keep\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output + "keep", host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData(":1:2", "bc")]
     [InlineData("#a", "bcdef")]
     [InlineData("##a*", "")]

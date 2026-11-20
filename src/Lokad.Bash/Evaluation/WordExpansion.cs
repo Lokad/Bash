@@ -204,8 +204,13 @@ internal static partial class WordExpansion
             {
                 if (word.Parts[part] is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None } failed)
                 {
-                    await ReportIncompleteParameterSubscriptAsync(word, failed, scope).ConfigureAwait(false);
-                    return;
+                    var failure = FindIncompleteQuotedSubscript(failed.Source, scope);
+                    if (failure != ParameterSubscriptFailure.None)
+                    {
+                        await ReportParameterWordSyntaxAsync(failure == ParameterSubscriptFailure.Direct ? word : null,
+                            failed.Source, missingBrace: true, scope).ConfigureAwait(false);
+                        return;
+                    }
                 }
             }
         }
@@ -225,7 +230,7 @@ internal static partial class WordExpansion
             if (part is SourceWordPart { Kind: WordPartKind.Unquoted } source)
             {
                 var next = await ExpandSegmentAsync(source, scope, builder, allowWordSplitting, globQuoted: false,
-                        ExpansionQuoteContext.Unquoted, position, assignment)
+                        ExpansionQuoteContext.Unquoted, position, assignment, word)
                     .ConfigureAwait(false);
                 if (next is { } selected)
                 {
@@ -253,22 +258,51 @@ internal static partial class WordExpansion
         }
     }
 
-    private static async Task ReportIncompleteParameterSubscriptAsync(Word word, SourceWordPart failed, ScopedEvaluation scope)
+    private static ParameterSubscriptFailure FindIncompleteQuotedSubscript(ShellSource source, ScopedEvaluation scope)
     {
-        // Bash scans the word's double-quoted parameter syntax before applying its expansions.
-        if (failed.ParameterSubscriptFailure == ParameterSubscriptFailure.Nested)
+        // The tokenizer flags the early brace. Check the complete quote segment before applying its expansions.
+        var context = CreateExpansionScanContext(scope);
+        var cursor = new ShellSourceCursor(source, 0, context);
+        while (!cursor.IsAtEnd)
         {
-            await ReportAsync(failed.Source.ToValue()).ConfigureAwait(false);
+            scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+            if (BracedParameterScanner.HasPrefix(source, cursor.Position))
+            {
+                var status = BracedParameterScanner.ScanExpansion(context, source, cursor.Position, capturePayload: false,
+                    out var end, out _, out _, out var failure);
+                if (failure is ParameterSubscriptFailure.Direct or ParameterSubscriptFailure.Nested)
+                    return failure;
+                if (status == BracedParameterScanStatus.Found)
+                {
+                    cursor = new ShellSourceCursor(source, end + 1, context);
+                    continue;
+                }
+            }
+            if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is not ShellNestedExpansionScan.Complete)
+                cursor.Advance();
+        }
+        return ParameterSubscriptFailure.None;
+    }
+
+    private static async Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,
+        ScopedEvaluation scope, ShellScanContext? captures = null)
+    {
+        if (word == null || captures == null && word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted }])
+        {
+            await ReportAsync(segment.ToValue()).ConfigureAwait(false);
             return;
         }
-
         using var source = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-        if (!FunctionDefinitionFormatter.TryAppendWordSource(word, source, scope.Effects.Memory.Budget, scope.Effects.CancellationToken))
+        if (!FunctionDefinitionFormatter.TryAppendWordSource(word, source, scope.Effects.Memory.Budget,
+                scope.Effects.CancellationToken, captures))
             throw new ByteMemoryBuilder.LimitExceededException();
         await ReportAsync(ShellValue.FromBytes(source.ToMemory())).ConfigureAwait(false);
 
-        Task ReportAsync(ShellValue spelling) => scope.Effects.ReportUnitExpansionFailureAsync([ShellValue.FromText("bad substitution")],
-            [ShellValue.FromText("no closing `}' in "), spelling], scope, ExpansionFailureKind.WordSyntax);
+        Task ReportAsync(ShellValue spelling) => missingBrace
+            ? scope.Effects.ReportUnitExpansionFailureAsync([ShellValue.FromText("bad substitution")],
+                [ShellValue.FromText("no closing `}' in "), spelling], scope, ExpansionFailureKind.WordSyntax)
+            : scope.Effects.ReportUnitExpansionFailureAsync([spelling], [ShellValue.FromText("bad substitution")],
+                scope, ExpansionFailureKind.WordSyntax);
     }
 
     // Lexical assignment operands still go through ordinary field processing.
@@ -563,7 +597,7 @@ internal static partial class WordExpansion
         SourceWordPart part, ScopedEvaluation scope, ExpandedWordBuilder output,
         bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext) =>
         ExpandSegmentAsync(part, scope, output, allowWordSplitting, globQuoted, quoteContext,
-            new WordPosition(0, 0), null);
+            new WordPosition(0, 0), null, null);
 
     private static async Task<WordPosition?> ExpandSegmentAsync(
         SourceWordPart syntax,
@@ -573,10 +607,12 @@ internal static partial class WordExpansion
         bool globQuoted,
         ExpansionQuoteContext quoteContext,
         WordPosition start,
-        AssignmentTildes? assignment)
+        AssignmentTildes? assignment,
+        Word? originalWord)
     {
         var content = syntax.Source;
         var length = content.Length;
+        ShellScanContext? parameterScan = null;
         for (var index = start.Offset; index < length; index++)
         {
             if (!scope.CanExpand)
@@ -807,11 +843,27 @@ internal static partial class WordExpansion
 
             if (BracedParameterScanner.HasPrefix(content, index))
             {
-                var parameterScan = CreateExpansionScanContext(scope);
-                var parameterStatus = BracedParameterScanner.ScanWithPayload(
-                    parameterScan, content, index,
-                    out var closingIndex, out _, out var payload, out _, out var parameterError);
-                if (parameterStatus != BracedParameterScanStatus.Found)
+                parameterScan ??= CreateExpansionScanContext(scope);
+                var parameterStatus = BracedParameterScanner.ScanExpansion(parameterScan, content, index, capturePayload: true,
+                    out var closingIndex, out var payload, out var parameterError, out var subscriptFailure);
+                if (subscriptFailure == ParameterSubscriptFailure.Nested)
+                {
+                    await ReportParameterWordSyntaxAsync(originalWord, content, missingBrace: true, scope).ConfigureAwait(false);
+                    return null;
+                }
+                var closure = ParameterClosure.Closed;
+                if (parameterStatus == BracedParameterScanStatus.MissingBraceAfterSelector)
+                {
+                    var hasOperator = closingIndex + 1 < content.Length;
+                    if (subscriptFailure == ParameterSubscriptFailure.Length || quoteContext == ExpansionQuoteContext.DoubleQuoted
+                        || !hasOperator && originalWord != null && start.Part + 1 != originalWord.Parts.Count)
+                    {
+                        await ReportParameterWordSyntaxAsync(originalWord, content, missingBrace: false, scope).ConfigureAwait(false);
+                        return null;
+                    }
+                    closure = hasOperator ? ParameterClosure.MissingAfterOperator : ParameterClosure.Missing;
+                }
+                else if (parameterStatus != BracedParameterScanStatus.Found)
                 {
                     if (quoteContext == ExpansionQuoteContext.HereDocument)
                     {
@@ -849,7 +901,7 @@ internal static partial class WordExpansion
                         globQuoted,
                         quoteContext,
                         assignment?.InheritInParameterWords == true,
-                        content)
+                        content, originalWord, closure)
                     .ConfigureAwait(false);
                 index = closingIndex;
                 continue;

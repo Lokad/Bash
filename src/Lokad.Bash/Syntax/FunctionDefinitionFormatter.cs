@@ -22,8 +22,9 @@ internal static class FunctionDefinitionFormatter
         TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.Export, CancellationToken.None);
 
     /// <summary>Renders the word's lexical structure, retaining its quotes and escapes.</summary>
-    internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, IMemoryBudget budget, CancellationToken cancellationToken) =>
-        TryAppend(new Step.Word(word), output, budget, Format.BraceSource, cancellationToken);
+    internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, IMemoryBudget budget,
+        CancellationToken cancellationToken, ShellScanContext? captures = null) =>
+        TryAppend(new Step.Word(word), output, budget, Format.BraceSource, cancellationToken, captures: captures);
 
     /// <summary>Locates commands in Bash's rendered capture body without materializing or parsing it again.</summary>
     internal static IReadOnlyList<Range>? ProjectCaptureLocations(ParsedScript script, MemoryCapacity? memory,
@@ -74,7 +75,7 @@ internal static class FunctionDefinitionFormatter
     }
 
     private static bool TryAppend(Step initial, IByteMemoryWriter output, IMemoryBudget? budget, Format format,
-        CancellationToken cancellationToken, CommandLocations? locations = null)
+        CancellationToken cancellationToken, CommandLocations? locations = null, ShellScanContext? captures = null)
     {
         var display = format == Format.Display;
         var braceSource = format == Format.BraceSource;
@@ -150,6 +151,8 @@ internal static class FunctionDefinitionFormatter
                         doubleQuoted = quotedPart;
                         var success = part.Kind switch
                         {
+                            WordPartKind.Unquoted or WordPartKind.DoubleQuoted when captures != null && part is SourceWordPart source =>
+                                TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
                             WordPartKind.Unquoted => output.TryAppend(content),
                             // ANSI-C quoting keeps embedded apostrophes in one literal part on import.
                             WordPartKind.SingleQuoted when format == Format.Export && content.Contains((byte)'\'') =>
@@ -603,6 +606,25 @@ internal static class FunctionDefinitionFormatter
             Push(new Step.Text(keyword + " "), new Step.Command(condition, indent), new Step.Text("; do"),
                 new Step.Layout(indent + 4), new Step.Command(body, indent + 4),
                 new Step.Line(indent, Terminate: true), new Step.Text("done"));
+    }
+
+    private static bool TryAppendSourceWithCaptures(ShellSource source, ShellScanContext captures,
+        IByteMemoryWriter output, IMemoryBudget? budget, CancellationToken cancellationToken)
+    {
+        var bytes = source.AsSpan();
+        var written = 0;
+        for (var index = 0; index < bytes.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (bytes[index] != (byte)'$' || !captures.TryGetCommandSubstitution(source, index, out var parsed))
+                continue;
+            if (!output.TryAppend(bytes[written..index])
+                || !TryAppendSubstitutionSource(parsed.Substitution, output, budget, cancellationToken))
+                return false;
+            written = index + parsed.Length;
+            index = written - 1;
+        }
+        return output.TryAppend(bytes[written..]);
     }
 
     private sealed class LineCounter(bool collectOmittedSeparators, MemoryCapacity? memory) : IByteMemoryWriter

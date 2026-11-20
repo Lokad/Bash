@@ -437,6 +437,13 @@ double-quoted word with an incomplete parameter subscript fails before its
 substitutions run, while effects of earlier arguments survive. Source with a
 missing closing brace fails parsing through the ordinary delimiter diagnostic.
 
+A brace inside an array selector can belong to the selector when the same word
+contains its closing bracket. A complete expansion then reads the selector with
+that brace included. An unquoted reference with a complete selector can reach
+the selector read before failing for a missing enclosing brace. Indexed effects
+and selector diagnostics follow the indexed arithmetic recovery rules. A
+parameter operator still requires an enclosing brace before its operand runs.
+
 When arithmetic evaluation of an integer binding's assignment fails, the
 current command unit ends and reached functions, `eval`, and sourced files
 unwind. The script reader resumes at the next unit even under errexit. If the

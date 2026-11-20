@@ -37,13 +37,18 @@ internal static partial class WordExpansion
         bool globQuoted,
         ExpansionQuoteContext quoteContext,
         bool assignmentTildes,
-        ShellSource segment)
+        ShellSource segment,
+        Word? originalWord,
+        ParameterClosure closure)
     {
         var parsed = ParseBracedParameterExpression(content);
         if (parsed.Kind is BracedParameterOperatorKind.Invalid or BracedParameterOperatorKind.IncompleteSubscript)
         {
-            await ReportBadSubstitutionAsync(parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript
-                && quoteContext != ExpansionQuoteContext.DoubleQuoted).ConfigureAwait(false);
+            if (parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript && quoteContext == ExpansionQuoteContext.Unquoted)
+                await ReportParameterWordSyntaxAsync(originalWord, segment, missingBrace: false, scope).ConfigureAwait(false);
+            else
+                await ReportBadSubstitutionAsync(parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript
+                    && quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
             return;
         }
         var transform = parsed.Kind == BracedParameterOperatorKind.Transform ? parsed.Word[0] : (byte)0;
@@ -65,6 +70,13 @@ internal static partial class WordExpansion
         var parameter = await ReadParameterAsync().ConfigureAwait(false);
         if (!scope.CanExpand)
             return;
+        if (closure != ParameterClosure.Closed)
+        {
+            await ReportParameterWordSyntaxAsync(originalWord, segment, closure == ParameterClosure.MissingAfterOperator, scope,
+                    quoteContext == ExpansionQuoteContext.Unquoted ? scanContext : null)
+                .ConfigureAwait(false);
+            return;
+        }
         if (inspection)
         {
             ExpandInspectionTransform(transform, parameter, scope, output, allowWordSplitting, globQuoted, quoteContext);
@@ -310,8 +322,7 @@ internal static partial class WordExpansion
             }
             var end = ReadPrimaryEnd(start);
             if (end < 0)
-                return new(ShellSource.Empty, modifier == ParameterModifier.Length ? BracedParameterOperatorKind.Invalid
-                    : BracedParameterOperatorKind.IncompleteSubscript, ShellSource.Empty, false, modifier);
+                return new(ShellSource.Empty, BracedParameterOperatorKind.IncompleteSubscript, ShellSource.Empty, false, modifier);
             if (end == start)
                 return Invalid();
             if (modifier == ParameterModifier.Indirect
@@ -1105,6 +1116,7 @@ internal static partial class WordExpansion
     }
 
     private enum ParameterModifier { None, Length, Indirect }
+    private enum ParameterClosure { Closed, Missing, MissingAfterOperator }
 
     private enum ParameterReplacementMode { First, All, Prefix, Suffix }
 

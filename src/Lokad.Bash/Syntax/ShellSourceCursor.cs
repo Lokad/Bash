@@ -320,7 +320,11 @@ internal sealed class ShellSourceCursor
     /// Arithmetic commands leave unquoted parameter operands to their own delimiter rules;
     /// those operands are validated only when execution reaches the command.
     /// </summary>
-    public ShellNestedExpansionScan SkipNestedExpansion(BracedParameterRecognition parameters, bool trackRenderedLines = false)
+    public ShellNestedExpansionScan SkipNestedExpansion(BracedParameterRecognition parameters, bool trackRenderedLines = false) =>
+        SkipNestedExpansion(parameters, trackRenderedLines, resolveLateSubscripts: false);
+
+    internal ShellNestedExpansionScan SkipNestedExpansion(BracedParameterRecognition parameters, bool trackRenderedLines,
+        bool resolveLateSubscripts)
     {
         if (_quote is ShellQuoteKind.Single or ShellQuoteKind.AnsiC)
             return ShellNestedExpansionScan.NotFound.Instance;
@@ -362,12 +366,15 @@ internal sealed class ShellSourceCursor
                 out var renderedLineAdjustment,
                 out var error,
                 out var subscriptFailure,
-                trackRenderedLines);
+                out var hasLateSubscript,
+                trackRenderedLines, resolveLateSubscripts);
             if (status != BracedParameterScanStatus.Found)
             {
                 return status is BracedParameterScanStatus.Unterminated
                     or BracedParameterScanStatus.UnterminatedCommandSubstitution
+                    or BracedParameterScanStatus.MissingBraceAfterSelector
                     ? new ShellNestedExpansionScan.Incomplete(ShellNestedExpansionKind.Parameter)
+                        { ParameterSubscriptFailure = subscriptFailure }
                     : new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Parameter, error?.InDoubleQuotes(IsDoubleQuoted));
             }
 
@@ -375,7 +382,7 @@ internal sealed class ShellSourceCursor
             return new ShellNestedExpansionScan.Complete(
                 ShellNestedExpansionKind.Parameter,
                 containsCommandSubstitution,
-                renderedLineAdjustment) { ParameterSubscriptFailure = subscriptFailure };
+                renderedLineAdjustment) { ParameterSubscriptFailure = subscriptFailure, HasLateSubscript = hasLateSubscript };
         }
 
         if (CommandSubstitutionScanner.HasPrefix(_text, start))
@@ -440,6 +447,9 @@ internal sealed class ShellScanContext
     private int _nestedExpansionDepth;
     private ScanDepth _lookaheadPeak;
     private Dictionary<ReadOnlyMemory<byte>, CachedParse>? _commandSubstitutions;
+    private ShellSource _lateSubscriptSource;
+    private int _lastClosingBracket = -1;
+    private ArraySubscriptScanner.Lookahead? _lateSubscripts;
 
     /// <summary>One reached command unit's coarse syntax and payload allowance; null denotes caller-owned parsing.</summary>
     internal MemoryCapacity? SyntaxMemory { get; set; }
@@ -457,6 +467,25 @@ internal sealed class ShellScanContext
 
     // No completed unit can need a later lookup of its consumed source positions.
     internal void ClearCommandUnitLookahead() => _commandSubstitutions = null;
+
+    internal bool TryScanLateSubscript(ShellSource source, int opening, int earlyBrace, out int closing)
+    {
+        if (!source.Bytes.Equals(_lateSubscriptSource.Bytes))
+        {
+            _lateSubscriptSource = source;
+            _lastClosingBracket = source.AsSpan().LastIndexOf((byte)']');
+            _lateSubscripts = null;
+        }
+
+        closing = -1;
+        if (_lastClosingBracket <= earlyBrace)
+            return false;
+        _lateSubscripts ??= new ArraySubscriptScanner.Lookahead(source, this);
+        if (_lateSubscripts.Scan(opening, out var end) != ShellScanStatus.Complete || end <= earlyBrace)
+            return false;
+        closing = end;
+        return true;
+    }
 
     internal bool TryTakeCommandSubstitution(ShellSource source, int startIndex, out CachedParse parsed)
         => TryFindCommandSubstitution(source, startIndex, take: true, out parsed);
@@ -611,10 +640,14 @@ internal abstract record ShellNestedExpansionScan
         int RenderedLineAdjustment = 0) : ShellNestedExpansionScan
     {
         internal ParameterSubscriptFailure ParameterSubscriptFailure { get; init; }
+        internal bool HasLateSubscript { get; init; }
     }
 
     /// <summary>A nested prefix was present but input ended before it closed.</summary>
-    internal sealed record Incomplete(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan;
+    internal sealed record Incomplete(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan
+    {
+        internal ParameterSubscriptFailure ParameterSubscriptFailure { get; init; }
+    }
 
     /// <summary>A nested prefix was present but contained malformed nested syntax.</summary>
     internal sealed record Invalid(ShellNestedExpansionKind Kind, ParserFailure? Failure) : ShellNestedExpansionScan;
