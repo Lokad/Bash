@@ -117,10 +117,22 @@ public static class Parser
     internal static bool TryParse(ReadOnlyMemory<byte> input, ShellScanContext context,
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error)
     {
+        if (!TryParseScript(input, context, out script, out var failure))
+        {
+            error = failure.Error;
+            return false;
+        }
+        error = null;
+        return true;
+    }
+
+    internal static bool TryParseScript(ReadOnlyMemory<byte> input, ShellScanContext context,
+        [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out ParserFailure? failure)
+    {
         script = null;
         if (input.Length > MaximumScriptBytes)
         {
-            error = new SyntaxError(ScriptSizeLimitMessage, 0);
+            failure = new ParserFailure(new SyntaxError(ScriptSizeLimitMessage, 0), ParserFailureKind.Limit);
             return false;
         }
         context.LegacyOrigin = LegacySubstitutionOrigin.Script;
@@ -132,8 +144,8 @@ public static class Parser
         if (trailing.Kind != TokenKind.EndOfInput)
             tokenizer.RecordError("Unexpected token after command list.", trailing.Source.Start.Value);
 
-        error = tokenizer.Error;
-        if (error != null)
+        failure = tokenizer.Failure;
+        if (failure != null)
             return false;
         script = command == null ? new ParsedScript([]) : new ParsedScript([tokenizer.HereDocuments?.Complete(command) ?? command]);
         return true;

@@ -123,7 +123,7 @@ public sealed partial class Evaluation
         }
     }
 
-    private enum ScriptExecutionKind { Root, Source, Eval, Trap }
+    private enum ScriptExecutionKind { Root, LegacyCapture, Source, Eval, Trap }
     private const int BuiltinSyntaxErrorStatus = 257;
 
     /// <summary>Copies eval/trap input into an owner retained by any syntax that survives execution.</summary>
@@ -164,7 +164,7 @@ public sealed partial class Evaluation
     {
         // A reached nested parser needs its own stack headroom for syntax guards,
         // independently of the caller's function/eval execution depth.
-        if (kind != ScriptExecutionKind.Root)
+        if (kind is not (ScriptExecutionKind.Root or ScriptExecutionKind.LegacyCapture))
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         if (kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval)
             scope = scope with { InNestedCommandUnits = true };
@@ -185,10 +185,12 @@ public sealed partial class Evaluation
                 if (commands.Current is CommandUnitParseResult.Failed failedUnit)
                 {
                     await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
+                    if (kind == ScriptExecutionKind.LegacyCapture && failedUnit.Failure.ExitsSubstitution)
+                        return EvaluationResult.Exit(1);
                     if (kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval)
                     {
                         var failure = failedUnit.Failure.Kind;
-                        if (failure is ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader)
+                        if (failedUnit.Failure.ExitsSubstitution)
                         {
                             // These child boundaries unwind the builtin before running their EXIT action.
                             if (_state.ForkKind is ShellForkKind.CommandSubstitution or ShellForkKind.PipelineSimpleCommand)
@@ -256,7 +258,8 @@ public sealed partial class Evaluation
             return null;
 
         // Nameref defaults fail with 1 at script boundaries, but with 2 at the root.
-        return failure.Kind == ExpansionFailureKind.NamerefDefault && kind != ScriptExecutionKind.Root ? 1 : failure.ExitCode;
+        return failure.Kind == ExpansionFailureKind.NamerefDefault
+            && kind is not (ScriptExecutionKind.Root or ScriptExecutionKind.LegacyCapture) ? 1 : failure.ExitCode;
     }
 
     private bool CanRecoverCommandSubstitutionSyntax =>

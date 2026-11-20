@@ -16,6 +16,8 @@ public sealed record SyntaxError(string Message, int Offset)
 /// <summary>Retains the parser's failure class independently of the public diagnostic.</summary>
 internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
+    internal bool ExitsSubstitution => Kind is ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader;
+
     internal ParserFailure InSubstitution() => Kind switch
     {
         ParserFailureKind.Grammar => this with { Kind = ParserFailureKind.SubstitutionGrammar },

@@ -23,18 +23,41 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                     parsed = retained.Script;
                 else if (script is CommandSubstitutionSyntax.AdjacentSubshell adjacent)
                     parsed = new ParsedScript([new ScriptCommand(adjacent.Source)]);
-                else if (script is CommandSubstitutionSyntax.Legacy { Origin: not LegacySubstitutionOrigin.Temporary } legacy)
+                else if (script is CommandSubstitutionSyntax.Legacy legacy)
                 {
-                    var owner = scope.Context.SourceMemory ?? outer.GetPreparedSubstitutionMemory();
-                    if (!owner.TryPrepareLegacy(legacy, outer.CancellationToken, out var prepared, out var error))
-                        throw error.ToException();
-                    parsed = prepared;
-                    scope = scope with { Context = scope.Context.WithSourceMemory(owner) };
+                    var temporary = legacy.Origin == LegacySubstitutionOrigin.Temporary;
+                    var owner = temporary ? (parsedMemory = CreateParseOwner())
+                        : scope.Context.SourceMemory ?? outer.GetPreparedSubstitutionMemory();
+                    ParsedScript? prepared;
+                    ParserFailure? failure;
+                    if (temporary)
+                        Parser.TryParseScript(legacy.Source.Bytes, new ShellScanContext { SyntaxMemory = owner.SyntaxMemory },
+                            out prepared, out failure);
+                    else
+                        owner.TryPrepareLegacy(legacy, outer.CancellationToken, out prepared, out failure);
+
+                    if (prepared != null)
+                    {
+                        parsed = prepared;
+                        scope = scope with { Context = scope.Context.WithSourceMemory(owner) };
+                    }
+                    else
+                    {
+                        parsedMemory?.Release();
+                        parsedMemory = null;
+                        if (failure is { Kind: ParserFailureKind.Limit })
+                        {
+                            await outer.ReportSyntaxErrorAsync(failure.Error).ConfigureAwait(false);
+                            return new CommandSubstitutionResult(ShellValue.Empty, 2, IgnoredNuls: false);
+                        }
+
+                        // A body with a grammar error can still have earlier complete units to execute.
+                        parsed = new ParsedScript([new ScriptCommand(legacy.Source) { IsLegacyCapture = true }]);
+                    }
                 }
                 else
                 {
-                    var parent = scope.Context.SourceMemory;
-                    parsedMemory = new SourceMemory((parent?.Budget ?? outer.Memory.Budget).CreateScope(), parent);
+                    parsedMemory = CreateParseOwner();
                     parsed = Parser.Parse(script.Source.Bytes, new ShellScanContext { SyntaxMemory = parsedMemory.SyntaxMemory });
                     scope = scope with { Context = scope.Context.WithSourceMemory(parsedMemory) };
                 }
@@ -118,6 +141,12 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             throw new InvalidOperationException("Unexpected command substitution capture outcome.");
         }
         finally { parsedMemory?.Release(); }
+
+        SourceMemory CreateParseOwner()
+        {
+            var parent = scope.Context.SourceMemory;
+            return new SourceMemory((parent?.Budget ?? outer.Memory.Budget).CreateScope(), parent);
+        }
     }
 }
 

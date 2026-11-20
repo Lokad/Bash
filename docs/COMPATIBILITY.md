@@ -79,7 +79,11 @@ and raw declaration inspection does not resolve that cycle.
 Function display/export preserves legacy backticks and their original escapes.
 Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches
-that substitution. Parenthesized substitution retains its existing parser rules.
+that substitution. Earlier complete units in a backtick capture can emit output
+or create files before a later syntax failure. Ordinary child syntax failure
+returns status 2. A terminating nested substitution grammar error returns
+status 1. EXIT in the capture sees that status and can override it.
+Parenthesized substitution retains its existing parser rules.
 
 Directory navigation revalidates saved stack paths through the host before
 changing cwd. A rejected pop preserves the stack; a rejected no-argument push

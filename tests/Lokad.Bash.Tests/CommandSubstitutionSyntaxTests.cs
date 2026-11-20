@@ -134,6 +134,67 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.False(Parser.TryParse(source, out _, out _));
     }
 
+    [Theory]
+    [InlineData("\n", "for ((i=7)); do : >loop; break; done", "2:early/EXIT:2", true)]
+    [InlineData("; ", "for ((i=7)); do : >loop; break; done", "2:/EXIT:2", false)]
+    [InlineData("\n", "inner=$(for ((i=7)); do : >loop; break; done)", "1:early/EXIT:1", true)]
+    [InlineData("\n", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "2:early/EXIT:2", true)]
+    public async Task FailedBacktickCaptureKeepsEarlierCompleteUnits(
+        string separator, string malformed, string output, bool earlierUnit)
+    {
+        var script = "value=`trap 'printf \"/EXIT:%s\" \"$?\"' EXIT\nprintf early; : >early"
+            + separator + malformed + "`\nprintf '%s:%s' \"$?\" \"$value\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new EndToEnd.TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse(script)),
+                    host, owner, CancellationToken.None)
+                : await BashScript.RunAsync(host, script, EvaluationOptions.Default, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+            Assert.Equal(earlierUnit ? new[] { "early" } : [], host.CaptureEntries().Keys);
+            Assert.Equal(0, host.OpenFileCount);
+            if (!prepared)
+                Assert.Equal(0, governor.ReservedBytes);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task BacktickExitInAnEarlierUnitSkipsSubsequentSyntaxFailure()
+    {
+        var result = await EndToEnd.EvaluationTestHelper.RunAsync(
+            "value=`printf earlier\nexit 7\nfi`\nprintf '%s:%s' \"$?\" \"$value\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("7:earlier", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task FailedBacktickInHereDocumentKeepsCapturedBytes()
+    {
+        var result = await EndToEnd.EvaluationTestHelper.RunAsync("""
+            IFS= read -r value <<END
+            `printf earlier
+            inner=$(for ((i=7)); do : >loop; break; done)`
+            END
+            printf '%s:%s' "$?" "$value"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0:earlier", result.StdOut);
+        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", result.StdErr);
+        Assert.False(result.Host.FileExists("/loop"));
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ReachedLegacyTreesSharePhysicalSyntaxAndRefundAfterLastUser()
     {

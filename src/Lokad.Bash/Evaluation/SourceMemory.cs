@@ -48,13 +48,13 @@ internal sealed class SourceMemory
     /// <summary>Prepares one reached backtick body under the owner of its original spelling.</summary>
     /// <remarks>The caller holds a live source reference through parsing and consumption.</remarks>
     internal bool TryPrepareLegacy(CommandSubstitutionSyntax.Legacy legacy, CancellationToken cancellationToken,
-        [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error)
+        [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out ParserFailure? failure)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // ReadOnlyMemory equality identifies a physical source slice.
         var key = legacy.Spelling.Bytes;
         var snapshot = Volatile.Read(ref _legacySyntax);
-        error = null;
+        failure = null;
         if (snapshot.TryGetValue(key, out script))
             return true;
 
@@ -70,8 +70,8 @@ internal sealed class SourceMemory
                 syntaxMemory.Grow(32L + input.Length);
                 input = input.ToArray();
             }
-            if (!Parser.TryParse(input, new ShellScanContext { SyntaxMemory = syntaxMemory },
-                    out script, out error))
+            if (!Parser.TryParseScript(input, new ShellScanContext { SyntaxMemory = syntaxMemory },
+                    out script, out failure))
                 return false;
             syntaxMemory.DetachReservation();
 

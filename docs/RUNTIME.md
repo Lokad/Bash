@@ -188,6 +188,11 @@ scanner carries that diagnostic to the enclosing command and retains the source
 offset. Missing closing delimiters keep their own diagnostics. A diagnosed
 substitution in expanded here-document data is reported during redirection
 setup, before the captured body runs.
+Reached backticks reuse successful prepared syntax through the source owner.
+If preparation finds malformed syntax, its speculative storage is refunded
+before the capture reads complete command units. That path can retain earlier
+output and effects while discarding the failed unit. Structural limit failures
+return their diagnostic directly.
 
 Arithmetic commands, arithmetic-for clauses and ordinary word arithmetic
 expansions retain source-owned lexical decisions for stable source. Numeric values,

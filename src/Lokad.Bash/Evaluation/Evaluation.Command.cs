@@ -93,7 +93,8 @@ public sealed partial class Evaluation
             switch (command)
             {
                 case ScriptCommand scriptCommand:
-                    return ApplyNegation(await EvaluateCommandUnitsAsync(scriptCommand.Source, scope, ScriptExecutionKind.Root)
+                    return ApplyNegation(await EvaluateCommandUnitsAsync(scriptCommand.Source, scope,
+                            scriptCommand.IsLegacyCapture ? ScriptExecutionKind.LegacyCapture : ScriptExecutionKind.Root)
                         .ConfigureAwait(false), negated);
                 case ListCommand listCommand:
                     return await EvaluateListAsync(listCommand, scope, negated).ConfigureAwait(false);
