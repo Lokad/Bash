@@ -48,7 +48,7 @@ internal static class GateChecks
             var workload = WorkloadCatalog.Read(catalog).Cases.First(row => row.SkipReason.Length == 0);
             var root = Path.Combine(directory, "gate-checks", Guid.NewGuid().ToString("N"));
             var invocation = new ProbeInvocation(workload, ProbeMode.Public, allocationCounters: false,
-                ProbeInvocation.FindExecutable(), root, captureStderr: false);
+                Path.Combine(root, "synthetic-probe"), root, captureStderr: false);
             var empty = new ContentDigest(0, Blob.Hash([]));
             var output = new ProcessOutput(73, empty, new ContentDigest(5, Blob.Hash("error"u8)));
             var rejected = false;
