@@ -48,6 +48,8 @@ public sealed class RegexCaptureTests
 
     [Theory]
     [InlineData("[[ '😀x' =~ (😀)(.) ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<😀x><😀><x>")]
+    [InlineData("[[ 'é😀漢' =~ (((é)(😀))(漢)) ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"",
+        "<é😀漢><é😀漢><é😀><é><😀><漢>")]
     [InlineData("prefix='\\'; tail='([[:digit:]]+)'; [[ '\\42' =~ \"$prefix\"$tail ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<\\42><42>")]
     public async Task CapturesPreserveSupplementaryValuesAndQuotedPatternBoundaries(string script, string expected)
     {

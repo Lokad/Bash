@@ -177,11 +177,15 @@ public sealed partial class Evaluation
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 var group = groups[index];
-                // .NET matches UTF-16 code units. Never encode an isolated half-surrogate
-                // as shell data; such captures are outside the supported regex profile.
-                if (!ascii && (!IsScalarBoundary(group.Index) || !IsScalarBoundary(group.Index + group.Length)))
-                    return 2;
-                bytes = checked(bytes + (ascii ? group.Length : Encoding.UTF8.GetByteCount(group.ValueSpan)));
+                var length = group.Length;
+                if (!ascii)
+                {
+                    // .NET matches UTF-16 code units. Captures splitting a scalar are unsupported.
+                    if (!IsScalarBoundary(group.Index) || !IsScalarBoundary(group.Index + length))
+                        return 2;
+                    length = length == text.Length ? inputBytes.Length : Encoding.UTF8.GetByteCount(group.ValueSpan);
+                }
+                bytes = checked(bytes + length);
             }
             Memory.Charge(checked(256L * groups.Count + 2L * bytes));
             var captures = new ShellValue[groups.Count];
@@ -191,9 +195,10 @@ public sealed partial class Evaluation
                 var group = groups[index];
                 if (group.Length == 0)
                     continue;
-                if (ascii)
+                if (ascii || group.Length == text.Length)
                 {
-                    captures[index] = ShellValue.FromBytes(inputBytes.Slice(group.Index, group.Length).ToArray());
+                    var original = ascii ? inputBytes.Slice(group.Index, group.Length) : inputBytes;
+                    captures[index] = ShellValue.FromBytes(original.ToArray());
                     continue;
                 }
 
