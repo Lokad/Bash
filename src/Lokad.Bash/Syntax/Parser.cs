@@ -687,18 +687,23 @@ public static class Parser
         if (!TryConsumeKeyword(tokenizer, KeywordFor, "for"))
             return null;
 
-        var next = tokenizer.PeekTokenCore();
-        if (next.Kind == TokenKind.ArithmeticCommand)
+        var nameToken = tokenizer.ReadForHeader(out var separators);
+        if (nameToken.Kind == TokenKind.ArithmeticCommand)
         {
-            tokenizer.NextTokenCore();
             if (tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
                 tokenizer.NextTokenCore();
             var arithmeticBody = ParseBody(acceptsBraces: true);
-            return arithmeticBody == null ? null
-                : new ArithmeticForCommand(next.CommandExpression, arithmeticBody, tokenizer.ScanContext.SyntaxMemory);
+            if (arithmeticBody == null)
+                return null;
+            if (!ArithmeticForSyntax.TryParse(nameToken.CommandExpression, separators, tokenizer.ScanContext.SyntaxMemory,
+                    out var syntax, out var error))
+            {
+                tokenizer.RecordError(error, nameToken.Source.Start.Value);
+                return null;
+            }
+            return new ArithmeticForCommand(syntax, arithmeticBody);
         }
 
-        var nameToken = tokenizer.NextTokenCore();
         if (!tokenizer.TryGetOperandWord(nameToken, out var nameTokenWord))
         {
             tokenizer.RecordError("Expected name after for.", tokenizer.Position);

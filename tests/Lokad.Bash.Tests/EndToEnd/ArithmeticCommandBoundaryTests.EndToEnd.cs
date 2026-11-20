@@ -1,7 +1,6 @@
-using Lokad.Bash.Tests.EndToEnd;
-using Lokad.Bash.Files;
-using Lokad.Bash.Helpers;
-using Lokad.Bash.Tree;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
+
 namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class ArithmeticCommandBoundaryTestsEndToEnd
@@ -39,5 +38,76 @@ public sealed class ArithmeticCommandBoundaryTestsEndToEnd
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("i=7", "\n", "", true)]
+    [InlineData("i=7;1", "; ", "", false)]
+    [InlineData("i=7;0;;i++", "\n", "", true)]
+    [InlineData("i=$(printf 7; :);1", "\n", "", true)]
+    [InlineData("i=\"7;1\";1", "\n", "", true)]
+    [InlineData(@"i=7\;1;1", "\n", "", true)]
+    [InlineData("i=7", "\n", "false && ", true)]
+    [InlineData("a[raw;key]=7;1;", "\n", "", true)]
+    public async Task ArithmeticForRequiresExactlyTwoSourceSeparators(
+        string header, string separator, string prefix, bool earlierUnit)
+    {
+        var script = ": >before" + separator + prefix +
+            $"for (({header})); do : >body; break; done\n: >after";
+        Assert.False(Parser.TryParse(script, out _, out var error));
+        Assert.NotNull(error);
+        Assert.Contains("Arithmetic for header", error.Message);
+        Assert.Equal(script.IndexOf("((", StringComparison.Ordinal), error.Offset);
+
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        var result = await host.RunAsync(script, CancellationToken.None);
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Contains(error.Message, host.StandardError.TextContent);
+        Assert.Equal(earlierUnit ? new[] { "before" } : [], host.CaptureEntries().Keys);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("", "body:0")]
+    [InlineData(" \t ", "body:0")]
+    [InlineData("\n", ":0")]
+    [InlineData(" \n \t ", ":0")]
+    [InlineData("\\\n", "body:0")]
+    [InlineData("$(printf 1; :)", "body:0")]
+    [InlineData("0", ":0")]
+    public async Task ArithmeticForDistinguishesAnOmittedConditionFromAnExplicitZero(string condition, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"for ((;{condition};)); do printf body; break; done; printf ':%s' \"$?\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\\\n")]
+    public async Task ArithmeticForSeparatorScanReusesNestedUpdateLookahead(string continuation)
+    {
+        var script = ": >unreached";
+        for (var depth = 0; depth < 8; depth++)
+            script = $"for ((;0;i=$({script}; printf {continuation}1))); do : >unreached; done";
+        script += "\nprintf tail";
+
+        var governor = new MemoryGovernor(96 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        var result = await host.RunAsync(script, CancellationToken.None);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
     }
 }

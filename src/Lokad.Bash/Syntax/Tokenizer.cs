@@ -340,8 +340,14 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Reads a token without throwing for source errors; EOF also terminates failed reads.</summary>
-    internal Token NextTokenCore()
+    internal Token NextTokenCore() => ReadToken(forHeader: false, out _);
+
+    /// <summary>Reads the next token after a consumed for keyword, identifying arithmetic clause boundaries.</summary>
+    internal Token ReadForHeader(out ArithmeticForSeparators separators) => ReadToken(forHeader: true, out separators);
+
+    private Token ReadToken(bool forHeader, out ArithmeticForSeparators separators)
     {
+        separators = default;
         if (Error != null)
             return Token.EndOfInput();
         if (_pushback.Count > 0)
@@ -398,8 +404,11 @@ internal sealed class Tokenizer
 
             if (current == '(')
             {
-                var status = ArithmeticExpansionScanner.ScanCommand(
-                    _scanContext, _input, Position, out var arithmeticEnd, out var expression);
+                var status = forHeader
+                    ? ArithmeticExpansionScanner.ScanForHeader(_scanContext, _input, Position,
+                        out var arithmeticEnd, out var expression, out separators)
+                    : ArithmeticExpansionScanner.ScanCommand(_scanContext, _input, Position,
+                        out arithmeticEnd, out expression);
                 if (status == ShellScanStatus.Complete)
                 {
                     Position = arithmeticEnd + 1;

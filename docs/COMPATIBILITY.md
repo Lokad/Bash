@@ -336,6 +336,11 @@ contains DEL.
 Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
 A word loop needs a semicolon or line break before the opening brace. An
 arithmetic loop can place the opening brace immediately after `))`.
+An arithmetic `for` header requires exactly two unquoted semicolons outside
+shell expansions. A malformed separator count is a syntax error before any
+clause or loop body runs. An empty condition or one containing only spaces
+and tabs is true. If the condition contains only spaces, tabs and one or
+more physical LFs, it evaluates to zero. Backslash-LF continuations are removed first.
 
 A complete compound command can be followed directly by a closing brace or a
 keyword such as `then`, `do`, `fi`, `done` or `esac`. The last command in a list

@@ -177,17 +177,36 @@ internal sealed class ShellSourceCursor
     }
 
     /// <summary>Normalizes a scanned payload without rebuilding its nested lookahead syntax.</summary>
-    internal static ShellSource RemoveLineContinuations(ShellScanContext context, ShellSource source)
+    internal static ShellSource RemoveLineContinuations(ShellScanContext context, ShellSource source) =>
+        ScanLexicalLayer(context, source, normalize: true, SeparatorScan.None, out _);
+
+    /// <summary>Finds separators while normalizing a loop header on its original source backing.</summary>
+    internal static ShellSource ReadArithmeticForHeader(ShellScanContext context, ShellSource source,
+        out ArithmeticForSeparators separators) =>
+        ScanLexicalLayer(context, source, normalize: true, SeparatorScan.Validate, out separators);
+
+    /// <summary>Finds clause boundaries in the spelling supplied to a caller-created AST.</summary>
+    internal static ArithmeticForSeparators FindArithmeticForSeparators(ShellSource source)
     {
-        if (source.AsSpan().IndexOf("\\\n"u8) < 0)
+        ScanLexicalLayer(new ShellScanContext(), source, normalize: false, SeparatorScan.FirstTwo, out var separators);
+        return separators;
+    }
+
+    private static ShellSource ScanLexicalLayer(ShellScanContext context, ShellSource source,
+        bool normalize, SeparatorScan separatorScan, out ArithmeticForSeparators separators)
+    {
+        separators = default;
+        normalize = normalize && source.AsSpan().IndexOf("\\\n"u8) >= 0;
+        var findSeparators = separatorScan != SeparatorScan.None && source.AsSpan().Contains((byte)';');
+        if (!normalize && !findSeparators)
             return source;
 
-        var result = context.CreateByteBuilder(source.Length);
+        var result = normalize ? context.CreateByteBuilder(source.Length) : null;
         var cursor = new ShellSourceCursor(source, 0, context);
         while (!cursor.IsAtEnd)
         {
             var start = cursor.Position;
-            if (cursor.TrySkipLineContinuations())
+            if (normalize && cursor.TrySkipLineContinuations())
                 continue;
 
             var precedingQuote = cursor._quote;
@@ -196,13 +215,28 @@ internal sealed class ShellSourceCursor
             {
                 cursor.Advance();
             }
+            if (findSeparators && !separators.HasExtra && !cursor.IsQuoted && source[start] == (byte)';')
+            {
+                var offset = result?.Length ?? start;
+                separators = separators.First == null ? separators with { First = offset }
+                    : separators.Second == null ? separators with { Second = offset }
+                    : separators with { HasExtra = true };
+            }
+            if (result == null)
+            {
+                if (separators.HasExtra || (separatorScan == SeparatorScan.FirstTwo && separators.Second.HasValue))
+                    break;
+                continue;
+            }
             if (precedingQuote == ShellQuoteKind.None && cursor._quote == ShellQuoteKind.AnsiC)
                 result.Append("$'"u8);
             else
                 result.Append(source.AsSpan(start, cursor.Position - start));
         }
-        return ShellSource.FromBytes(result.ToMemory());
+        return result == null ? source : ShellSource.FromBytes(result.ToMemory());
     }
+
+    private enum SeparatorScan { None, FirstTwo, Validate }
 
     /// <summary>
     /// Consumes quote syntax, quoted content, or one backslash escape and updates quote
@@ -363,6 +397,9 @@ internal sealed class ShellSourceCursor
     }
 
 }
+
+/// <summary>Lengths before the first two unquoted separators in an arithmetic loop's source.</summary>
+internal readonly record struct ArithmeticForSeparators(int? First, int? Second, bool HasExtra);
 
 /// <summary>Controls whether a delimiter scan consumes unquoted braced parameter operands.</summary>
 internal enum BracedParameterRecognition

@@ -1,6 +1,5 @@
 using System;
 using Lokad.Bash.Evaluation;
-using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -15,13 +14,13 @@ public sealed record ArithmeticForCommand : ICommand
     internal ArithmeticSource Update => _syntax.Update;
 
     /// <summary>Retains loop syntax and splits immutable clauses without executing their expansions.</summary>
-    public ArithmeticForCommand(ShellSource Expression, ICommand Body) : this(Expression, Body, null)
+    public ArithmeticForCommand(ShellSource Expression, ICommand Body) : this(new ArithmeticForSyntax(Expression), Body)
     {
     }
 
-    internal ArithmeticForCommand(ShellSource expression, ICommand body, MemoryCapacity? memory)
+    internal ArithmeticForCommand(ArithmeticForSyntax syntax, ICommand body)
     {
-        _syntax = new ArithmeticForSyntax(expression, memory);
+        _syntax = syntax;
         Body = body;
     }
 

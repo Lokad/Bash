@@ -1,3 +1,5 @@
+using System;
+using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Memory;
 
@@ -36,52 +38,49 @@ internal sealed class ArithmeticForSyntax
     public ArithmeticSource Condition { get; }
     public ArithmeticSource Update { get; }
 
-    public ArithmeticForSyntax(ShellSource source) : this(source, null)
+    public ArithmeticForSyntax(ShellSource source)
+        : this(source, Split(source, ShellSourceCursor.FindArithmeticForSeparators(source), false), null)
     {
     }
 
-    internal ArithmeticForSyntax(ShellSource source, MemoryCapacity? memory)
+    private ArithmeticForSyntax(ShellSource source,
+        (ShellSource Initialization, ShellSource Condition, ShellSource Update) clauses, MemoryCapacity? memory)
     {
         Source = source;
-        Split(source, memory, out var init, out var condition, out var update);
-        Initialization = new ArithmeticSource(init, memory);
-        Condition = new ArithmeticSource(condition, memory);
-        Update = new ArithmeticSource(update, memory);
+        Initialization = new ArithmeticSource(clauses.Initialization, memory);
+        Condition = new ArithmeticSource(clauses.Condition, memory);
+        Update = new ArithmeticSource(clauses.Update, memory);
+    }
 
-        static void Split(ShellSource expression, MemoryCapacity? memory,
-            out ShellSource init, out ShellSource condition, out ShellSource update)
+    internal static bool TryParse(ShellSource source, ArithmeticForSeparators separators, MemoryCapacity? memory,
+        [NotNullWhen(true)] out ArithmeticForSyntax? syntax, [NotNullWhen(false)] out string? error)
+    {
+        error = separators.Second == null ? "Arithmetic for header requires two semicolons."
+            : separators.HasExtra ? "Arithmetic for header contains an extra semicolon." : null;
+        if (error != null)
         {
-            var cursor = new ShellSourceCursor(expression, 0, new ShellScanContext { SyntaxMemory = memory });
-            var firstSeparator = ReadSeparator();
-            if (firstSeparator < 0)
-            {
-                init = expression.TrimBlanks();
-                condition = ShellSource.Empty;
-                update = ShellSource.Empty;
-                return;
-            }
-            init = expression.Slice(0, firstSeparator).TrimBlanks();
-            var secondSeparator = ReadSeparator();
-            condition = expression.Slice(firstSeparator + 1,
-                (secondSeparator < 0 ? expression.Length : secondSeparator) - firstSeparator - 1).TrimBlanks();
-            update = secondSeparator < 0 ? ShellSource.Empty : expression.Slice(secondSeparator + 1).TrimBlanks();
-
-            int ReadSeparator()
-            {
-                while (!cursor.IsAtEnd)
-                {
-                    // A substitution's command-list semicolons do not separate loop clauses.
-                    if (cursor.TryConsumeQuoteOrEscape()
-                        || cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
-                        continue;
-                    var position = cursor.Position;
-                    var separator = !cursor.IsQuoted && cursor.Current == (byte)';';
-                    cursor.Advance();
-                    if (separator)
-                        return position;
-                }
-                return -1;
-            }
+            syntax = null;
+            return false;
         }
+        syntax = new ArithmeticForSyntax(source, Split(source, separators, true), memory);
+        return true;
+    }
+
+    private static (ShellSource Initialization, ShellSource Condition, ShellSource Update) Split(
+        ShellSource expression, ArithmeticForSeparators separators, bool preserveLineOnlyCondition)
+    {
+        if (separators.First is not int firstSeparator)
+            return (expression.TrimBlanks(), ShellSource.Empty, ShellSource.Empty);
+
+        var init = expression.Slice(0, firstSeparator).TrimBlanks();
+        var conditionEnd = separators.Second ?? expression.Length;
+        var conditionSource = expression.Slice(firstSeparator + 1, conditionEnd - firstSeparator - 1);
+        var condition = conditionSource.TrimBlanks();
+        // A clause consisting of blanks and physical LF still evaluates as an explicit zero.
+        if (preserveLineOnlyCondition && condition.IsEmpty && conditionSource.AsSpan().Contains((byte)'\n'))
+            condition = conditionSource;
+        var update = separators.Second is int secondSeparator
+            ? expression.Slice(secondSeparator + 1).TrimBlanks() : ShellSource.Empty;
+        return (init, condition, update);
     }
 }

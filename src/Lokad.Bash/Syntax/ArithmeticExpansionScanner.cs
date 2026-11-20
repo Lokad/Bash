@@ -56,6 +56,7 @@ internal static class ArithmeticExpansionScanner
             out expression,
             out containsCommandSubstitution,
             out bracketed,
+            out _,
             captureExpression: true,
             form: ArithmeticForm.Expansion);
 
@@ -73,6 +74,7 @@ internal static class ArithmeticExpansionScanner
             out _,
             out containsCommandSubstitution,
             out _,
+            out _,
             captureExpression: false,
             form: ArithmeticForm.Expansion);
 
@@ -86,8 +88,14 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out ShellSource expression) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _,
+        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out _,
             captureExpression: true, form: ArithmeticForm.Command);
+
+    internal static ShellScanStatus ScanForHeader(
+        ShellScanContext context, ShellSource text, int startIndex,
+        out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators) =>
+        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators,
+            captureExpression: true, form: ArithmeticForm.ForHeader);
 
     private static ShellScanStatus ScanCore(
         ShellScanContext context,
@@ -97,6 +105,7 @@ internal static class ArithmeticExpansionScanner
         out ShellSource expression,
         out bool containsCommandSubstitution,
         out bool bracketed,
+        out ArithmeticForSeparators separators,
         bool captureExpression,
         ArithmeticForm form)
     {
@@ -104,11 +113,13 @@ internal static class ArithmeticExpansionScanner
         expression = ShellSource.Empty;
         containsCommandSubstitution = false;
         bracketed = false;
+        separators = default;
         if (startIndex < 0)
             return ShellScanStatus.NotFound;
 
         var span = text.AsSpan();
-        var hasPrefix = form == ArithmeticForm.Command
+        var isCommand = form != ArithmeticForm.Expansion;
+        var hasPrefix = isCommand
             ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "((", out var expressionStart)
             : TryReadExpansionPrefix(span, startIndex, out expressionStart, out bracketed);
         if (!hasPrefix)
@@ -127,7 +138,7 @@ internal static class ArithmeticExpansionScanner
                 if (cursor.TryConsumeQuoteOrEscape())
                     continue;
 
-                var nestedResult = cursor.SkipNestedExpansion(form == ArithmeticForm.Command
+                var nestedResult = cursor.SkipNestedExpansion(isCommand
                     ? BracedParameterRecognition.DoubleQuotedOnly
                     : BracedParameterRecognition.All);
                 if (nestedResult is ShellNestedExpansionScan.Complete nested)
@@ -170,12 +181,12 @@ internal static class ArithmeticExpansionScanner
                 // Brackets use a single closer. Expansion parentheses can cross a
                 // continuation, while arithmetic command closers must be adjacent.
                 var closingEnd = cursor.Position + (bracketed ? 1 : 2);
-                var closed = bracketed || (form == ArithmeticForm.Command
+                var closed = bracketed || (isCommand
                     ? span[cursor.Position..].StartsWith("))"u8)
                     : ShellSourceCursor.TryMatchLogicalText(span, cursor.Position, "))", out closingEnd));
                 if (!closed)
                 {
-                    if (form == ArithmeticForm.Command)
+                    if (isCommand)
                     {
                         // A continued double closer is invalid arithmetic, not a subshell fallback.
                         return ShellSourceCursor.TryMatchLogicalText(span, cursor.Position, "))", out _)
@@ -192,8 +203,12 @@ internal static class ArithmeticExpansionScanner
 
                 endIndex = closingEnd - 1;
                 if (captureExpression)
-                    expression = ShellSourceCursor.RemoveLineContinuations(
-                        context, text.Slice(expressionStart, cursor.Position - expressionStart));
+                {
+                    var source = text.Slice(expressionStart, cursor.Position - expressionStart);
+                    expression = form == ArithmeticForm.ForHeader
+                        ? ShellSourceCursor.ReadArithmeticForHeader(context, source, out separators)
+                        : ShellSourceCursor.RemoveLineContinuations(context, source);
+                }
                 return ShellScanStatus.Complete;
             }
 
@@ -259,5 +274,6 @@ internal static class ArithmeticExpansionScanner
     {
         Expansion,
         Command,
+        ForHeader,
     }
 }

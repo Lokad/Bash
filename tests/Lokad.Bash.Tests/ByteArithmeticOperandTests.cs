@@ -48,7 +48,7 @@ public sealed class ByteArithmeticOperandTests
 
     [Theory]
     [InlineData("((", "))", nameof(ArithmeticCommand))]
-    [InlineData("for ((", ")); do :; done", nameof(ArithmeticForCommand))]
+    [InlineData("for ((", ";;)); do :; done", nameof(ArithmeticForCommand))]
     [InlineData("[[ ", " ]]", nameof(ConditionalCommand))]
     public void Parser_CommandExpressionsRetainRawSource(string prefix, string suffix, string commandKind)
     {
@@ -62,7 +62,8 @@ public sealed class ByteArithmeticOperandTests
             ConditionalCommand conditional => conditional.Expression,
             _ => throw new InvalidOperationException("Unexpected command kind.")
         };
-        Assert.Equal(new byte[] { 0xff }, expression.Bytes.ToArray());
+        var expected = command is ArithmeticForCommand ? new byte[] { 0xff, (byte)';', (byte)';' } : [0xff];
+        Assert.Equal(expected, expression.Bytes.ToArray());
     }
 
     [Fact]
