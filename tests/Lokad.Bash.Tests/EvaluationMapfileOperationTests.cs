@@ -5,6 +5,7 @@ using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
 
@@ -19,10 +20,12 @@ public partial class EvaluationTests
         var firstRead = await NextReadAsync(state);
         Assert.Equal(0, firstRead.FileDescriptor.Id);
         Assert.Equal(128, firstRead.Limit);
+        using var firstMemory = Assert.IsAssignableFrom<IMemoryBudget>(firstRead.DestinationBudget).Reserve(512);
         firstRead.SetResult(ReadResult.Success(Utf8Bytes("a\nb\n"), [2], reachedEoF: false));
 
         var secondRead = await NextReadAsync(state);
         Assert.Equal(128, secondRead.Limit);
+        Assert.Equal(0, firstMemory.Bytes);
         secondRead.SetResult(ReadResult.Success(Utf8Bytes("c"), [], reachedEoF: true));
 
         Assert.Null(await NextStepAsync(state));
@@ -220,16 +223,51 @@ public partial class EvaluationTests
         Assert.Equal(FileDescriptor.StdIn, first.Descriptor);
         Assert.Equal((byte)':', first.Delimiter);
         Assert.Equal(128, first.Limit);
+        using var firstMemory = first.DestinationBudget.Reserve(512);
         var content = Utf8Bytes("a::");
         first.SetResult(new DescriptorRecordBatch(content, [2], ByteReadResult.Success(content.Length, reachedEoF: false)));
 
         var second = Assert.IsType<ReadRecordBatchOperation>(await NextStepAsync(state));
+        Assert.Equal(0, firstMemory.Bytes);
         Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
         second.SetResult(new DescriptorRecordBatch(default, [], ByteReadResult.EndOfFile));
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
         Assert.Equal(new[] { ShellValue.FromText("a"), ShellValue.Empty }, state.IndexedArrays["arr"]);
+        Assert.Equal(ShellValue.Empty.Bytes, state.IndexedArrays["arr"][1].Bytes);
+    }
+
+    [Theory]
+    [InlineData("mapfile -t", '\n', "unset 'arr[0]'", "missing")]
+    [InlineData("readarray -td:", ':', "arr[0]=new", "new")]
+    public async Task MapfileRetiresRecordStorageAfterElementMutation(
+        string command, char delimiter, string mutation, string expected)
+    {
+        var script = Parser.Parse($"{command} arr; {mutation}; printf '%s:%s' \"${{arr[0]-missing}}\" \"${{arr[1]}}\"");
+        var shortRecord = await RunAsync(8);
+        var longRecord = await RunAsync(128 * 1024);
+
+        Assert.Equal(shortRecord, longRecord);
+
+        async Task<long> RunAsync(int recordLength)
+        {
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            await using var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), governor);
+            host.SetStandardInput(new string('x', recordLength) + delimiter + "keep" + delimiter);
+            using var owner = governor.CreateScope();
+            var state = new Eval(script);
+
+            var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(expected + ":keep", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            var retained = governor.ReservedBytes;
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return retained;
+        }
     }
 
     [Fact]
@@ -244,15 +282,19 @@ public partial class EvaluationTests
         first.SetResult(new DescriptorRecordBatch(Utf8Bytes("a:"), [], ByteReadResult.Success(2, reachedEoF: false)));
         var last = Assert.IsType<ReadRecordBatchOperation>(await NextStepAsync(state));
         Assert.Equal(1, last.Limit);
+        using var pendingMemory = last.DestinationBudget.Reserve(512);
 
         cancellation.Cancel();
         var next = state.GetNextStep();
         var completedBeforeRead = await Task.WhenAny(next, Task.Delay(TimeSpan.FromMilliseconds(100))) == next;
+        var reservedBeforeRead = pendingMemory.Bytes;
         last.SetResult(new DescriptorRecordBatch(Utf8Bytes("b:"), [], ByteReadResult.Success(2, reachedEoF: false)));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => next);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
         Assert.False(completedBeforeRead);
+        Assert.Equal(512, reservedBeforeRead);
+        Assert.Equal(0, pendingMemory.Bytes);
         Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
     }
 

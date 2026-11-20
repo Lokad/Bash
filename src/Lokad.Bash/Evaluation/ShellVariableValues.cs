@@ -88,9 +88,7 @@ internal sealed class IndexedArray
     private long _valueBytes;
     private int _entryCapacity;
 
-    // mapfile entries borrow batch slices; removing entries need not release their backing arrays.
-    internal long RetainedBackingBytes { get; set; }
-    internal long EstimatedMemoryBytes => (long)_entryCapacity * ElementMemoryBytes + _valueBytes + RetainedBackingBytes;
+    internal long EstimatedMemoryBytes => (long)_entryCapacity * ElementMemoryBytes + _valueBytes;
 
     /// <summary>Creates an empty array, retaining whether it has received an assignment.</summary>
     public IndexedArray(bool isInitialized)
@@ -339,8 +337,7 @@ internal sealed class IndexedArray
             new SortedSet<long>(_positions), _maximumIndex, IsInitialized)
         {
             _valueBytes = _valueBytes,
-            _entryCapacity = _elements.Count,
-            RetainedBackingBytes = RetainedBackingBytes
+            _entryCapacity = _elements.Count
         };
     }
 }

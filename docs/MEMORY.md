@@ -189,11 +189,14 @@ when its scope ends. Each child context builds its own total from copied stores.
 Ordinary element writes admit added positions and retained payload growth before
 mutating an array. Indexed dictionary replacement admits overlapping backing
 before resizing. Refusal leaves the existing entry or scalar binding intact.
-Record input admits the batch before updating the selected array. Non-integer
-input with an explicit origin admits uncovered dictionary replacement backing
-before applying any record. Integer input admits uncovered growth at each
-reached write, using remaining batch credit and holding the original binding
-through rollback.
+Record input admits storage before updating the selected array. Non-integer
+records own their normalized bytes independently, so replacing or removing an
+entry retires its value estimate. The raw batch and offsets stay charged through
+normalization and are refunded before the next batch. An explicit origin admits
+uncovered dictionary replacement backing before applying any record. Integer
+input retains its raw records through ordered arithmetic assignment and admits
+uncovered growth at each reached write, using remaining batch credit and
+holding the original binding through rollback.
 `read` retains the normalized assignment prefix while consuming the complete
 logical record. The physical read keeps its ordinary admitted buffer lifetime.
 

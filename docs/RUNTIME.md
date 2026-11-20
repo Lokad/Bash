@@ -83,9 +83,9 @@ advance their own cursor. The scanner retains only indexes and an offset.
 `mapfile` and `readarray` validate the target before reading. They collect
 bounded batches from the current stdin descriptor. A positive count caps both
 the total records and the final batch. The target is published after that count
-or successful EOF, once replacement storage is admitted. An explicit origin
-updates existing sparse positions in place and retains compact copies of new
-values. Repeated writes can reclaim those copies as entries are overwritten.
+or successful EOF, once replacement storage is admitted. Ordinary array entries
+receive compact values whose storage can be reclaimed as entries are replaced
+or removed. An explicit origin updates existing sparse positions in place.
 Integer-array input evaluates records in order while the original binding is
 kept for refusal and cancellation. A shell arithmetic error retains preceding
 array writes and their arithmetic effects.

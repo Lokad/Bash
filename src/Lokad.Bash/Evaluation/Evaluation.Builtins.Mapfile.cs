@@ -91,10 +91,12 @@ public sealed partial class Evaluation
         var resolved = target.Name;
 
         var descriptor = GetStdInDescriptor();
-        // Keep one owned copy per batch; array entries borrow slices for the same lifetime.
-        using var valuesMemory = Memory.Budget.CreateScope();
+        var integer = variables.IsIntegerBinding(resolved);
+        // Arithmetic consumes borrowed records after input settles. Ordinary records can
+        // outlive their batch independently after publication.
+        using var integerInputMemory = integer ? Memory.Budget.CreateScope() : null;
         var values = new List<ShellValue>();
-        long backingBytes = 0;
+        long stagedBytes = 0;
         using var inputMemory = Memory.Budget.Reserve(0);
         var assigned = false;
         try
@@ -105,9 +107,11 @@ public sealed partial class Evaluation
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 var limit = count == 0 ? ReadBatchRecords : (int)Math.Min(ReadBatchRecords, count - (uint)values.Count);
+                var readMemory = integerInputMemory ?? Memory.Budget.CreateScope();
+                using var batchMemory = integer ? null : readMemory;
                 if (delimiter == (byte)'\n')
                 {
-                    var batch = await ExecuteReadAsync(descriptor, limit, valuesMemory).ConfigureAwait(false);
+                    var batch = await ExecuteReadAsync(descriptor, limit, readMemory).ConfigureAwait(false);
                     batch.ThrowIfError();
                     AddBatch(batch.Content, batch.LineStartOffsets);
                     reachedEof = batch.ReachedEoF;
@@ -115,7 +119,7 @@ public sealed partial class Evaluation
                 else
                 {
                     var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    PublishOperation(new ReadRecordBatchOperation(completion, descriptor, delimiter, limit, valuesMemory));
+                    PublishOperation(new ReadRecordBatchOperation(completion, descriptor, delimiter, limit, readMemory));
                     var batch = await completion.Task.ConfigureAwait(false);
                     CheckCancellation();
                     batch.Result.ThrowIfError();
@@ -123,31 +127,16 @@ public sealed partial class Evaluation
                     reachedEof = batch.Result.ReachedEoF;
                 }
             }
-            if (variables.IsIntegerBinding(resolved))
+            if (integer)
                 return await FinishAsync(await AssignIntegerIndexedInputAsync(resolved, values, origin, scope, arguments[0])
                     .ConfigureAwait(false) ? 0 : 1).ConfigureAwait(false);
 
-            // Admit both collection representations while building the persistent array.
-            long valueBytes = 0;
-            foreach (var value in values)
-                valueBytes = checked(valueBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
-            var retainedBytes = checked((long)values.Count * IndexedArray.ElementMemoryBytes + backingBytes + valueBytes);
+            // The staged values already have admission. The list and array coexist during publication.
+            var retainedBytes = (long)values.Count * IndexedArray.ElementMemoryBytes;
             if (origin.HasValue && variables.Scalars.ContainsKey(resolved))
                 retainedBytes += IndexedArray.ElementMemoryBytes;
             Memory.Charge(retainedBytes);
-
-            if (origin.HasValue)
-            {
-                // Each replacement owns a compact value. Repeated writes at the same origin
-                // retire the old values without accumulating charges for historic batches.
-                for (var index = 0; index < values.Count; index++)
-                {
-                    _cancellationToken.ThrowIfCancellationRequested();
-                    var value = values[index];
-                    if (!value.IsEmpty)
-                        values[index] = ShellValue.FromBytes(value.Bytes.ToArray());
-                }
-            }
+            stagedBytes += retainedBytes;
 
             _cancellationToken.ThrowIfCancellationRequested();
             // Publish only after the requested records have been read and admitted.
@@ -155,11 +144,7 @@ public sealed partial class Evaluation
             if (origin is { } first)
                 assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values, Memory, _cancellationToken);
             else
-            {
-                var array = IndexedArray.FromSequential(values);
-                array.RetainedBackingBytes = backingBytes;
-                assigned = variables.TryAssignResolvedIndexedArray(resolved, array);
-            }
+                assigned = variables.TryAssignResolvedIndexedArray(resolved, IndexedArray.FromSequential(values));
         }
         catch (ShellDescriptorReadException)
         {
@@ -169,7 +154,11 @@ public sealed partial class Evaluation
         {
             // Refuse before committing any collected records to the target variable.
             values.Clear();
-            valuesMemory.Dispose();
+            values.Capacity = 0;
+            inputMemory.Dispose();
+            integerInputMemory?.Dispose();
+            Memory.Workspace.Resize(Memory.Workspace.Bytes - stagedBytes);
+            Memory.ReleaseUnusedCapacity();
             return await RejectInputAsync().ConfigureAwait(false);
         }
         return await FinishAsync(assigned ? 0 : 1).ConfigureAwait(false);
@@ -179,13 +168,10 @@ public sealed partial class Evaluation
             var start = 0;
             for (var index = 0; start < content.Length; index++)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 var end = index < recordStarts.Count ? recordStarts[index] : content.Length;
                 var record = content[start..end];
                 start = end;
-                // Even a short/NUL-truncated record pins its batch after the staging scope ends.
-                if (!origin.HasValue)
-                    backingBytes = checked(backingBytes + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(
-                        ShellValue.FromBytes(record)));
                 // Admit geometric list growth, including replacement overlap, before allocation.
                 if (values.Count == values.Capacity)
                 {
@@ -195,7 +181,17 @@ public sealed partial class Evaluation
                 }
                 if (trimDelimiter && record.Span[^1] == delimiter)
                     record = record[..^1];
-                values.Add(ShellValue.FromBytes(record).BeforeFirstNul());
+                var value = ShellValue.FromBytes(record).BeforeFirstNul();
+                if (value.IsEmpty)
+                    value = ShellValue.Empty;
+                else if (!integer)
+                {
+                    var bytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value);
+                    Memory.Charge(bytes);
+                    stagedBytes += bytes;
+                    value = ShellValue.FromBytes(value.Bytes.ToArray());
+                }
+                values.Add(value);
             }
         }
 
