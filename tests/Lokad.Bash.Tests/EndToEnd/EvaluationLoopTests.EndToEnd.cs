@@ -9,13 +9,17 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationLoopTestsEndToEnd
 {
     [Theory]
-    [InlineData("break", "x")]
-    [InlineData("continue", "xy")]
-    public async Task SubshellLoopFlowUsesOnlyLoopsEnteredInTheChild(string flow, string innerOutput)
+    [InlineData("break", "x", false)]
+    [InlineData("break", "x", true)]
+    [InlineData("continue", "xy", false)]
+    [InlineData("continue", "xy", true)]
+    public async Task ChildLoopFlowUsesOnlyLoopsEnteredInTheChild(string flow, string innerOutput, bool pipeline)
     {
-        var script = "for outer in a b; do ( " + flow + "; printf 'start'; "
+        var child = flow + "; printf 'start'; "
             + "for inner in x y; do printf '%s' \"$inner\"; " + flow + " 2; printf unexpected; done; "
-            + "printf 'end'; ); printf '<%s:%s>' \"$outer\" \"$?\"; done";
+            + "printf 'end';";
+        var invocation = pipeline ? "{ " + child + " } | { read text; printf '%s' \"$text\"; }" : "( " + child + " )";
+        var script = "for outer in a b; do " + invocation + "; printf '<%s:%s>' \"$outer\" \"$?\"; done";
         var result = await EvaluationTestHelper.RunAsync(script);
         var diagnostic = flow + ": only meaningful in a `for', `while', or `until' loop\n";
 

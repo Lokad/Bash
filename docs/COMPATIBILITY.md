@@ -348,9 +348,9 @@ positional window returns 1 silently. Negative or invalid counts return 1 with
 a diagnostic.
 
 `break` and `continue` select loops in the active shell and function. A
-parenthesized subshell starts with zero active loops. Outside a loop, either
-builtin diagnoses and returns 0. An out-of-range count diagnostic reports the
-first operand, including a leading `--`.
+parenthesized subshell or compound pipeline stage starts with zero active
+loops. Outside a loop, either builtin diagnoses and returns 0. An out-of-range
+count diagnostic reports the first operand, including a leading `--`.
 
 After numeric validation, surplus operands to `exit`, `return`, `shift`,
 `break` or `continue` diagnose and discard the current command unit. The

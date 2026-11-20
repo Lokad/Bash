@@ -829,7 +829,7 @@ public sealed partial class Evaluation : IFileTester
                     stageVars,
                     descriptors,
                     Options with { CurrentDirectory = stageState.CurrentDirectory },
-                    stageContext,
+                    forkKind == ShellForkKind.Subshell ? stageContext.WithLoopDepth(0) : stageContext,
                     RootFlowHandling.Preserve,
                     publishNextStep: null,
                     onComplete: null,
