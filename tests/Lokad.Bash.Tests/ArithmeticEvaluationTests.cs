@@ -285,11 +285,29 @@ public sealed class ArithmeticEvaluationTests
     }
 
     [Theory]
+    [InlineData("0x")]
+    [InlineData("0X")]
+    [InlineData("+0x")]
+    [InlineData("-0X")]
+    public void ArithmeticTreatsABareHexadecimalPrefixAsZero(string literal)
+    {
+        Assert.True(ArithmeticEvaluation.TryParseIntegerLiteral(literal.AsSpan(), out var textValue));
+        Assert.True(ArithmeticEvaluation.TryParseIntegerLiteral(ShellValue.FromText(literal).Bytes.Span, out var byteValue));
+        Assert.Equal(0, textValue);
+        Assert.Equal(0, byteValue);
+        Assert.Equal(2, Eval(literal + " + 2"));
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("+")]
     [InlineData("-")]
     [InlineData(" 1")]
     [InlineData("1x")]
+    [InlineData("02#1")]
+    [InlineData("010#7")]
+    [InlineData("10#")]
+    [InlineData("0x#1")]
     [InlineData("é")]
     public void LiteralParsingRejectsInvalidAsciiNumbers(string text)
     {

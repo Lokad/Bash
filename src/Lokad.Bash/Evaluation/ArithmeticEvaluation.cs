@@ -163,10 +163,20 @@ public static partial class ArithmeticEvaluation
 
         var radix = 10;
         var separator = text.IndexOf(T.CreateChecked('#'));
-        if (separator >= 0)
+        if (text.Length > 1 && text[0] == T.CreateChecked('0'))
+        {
+            if (text[1] == T.CreateChecked('x') || text[1] == T.CreateChecked('X'))
+            {
+                radix = 16;
+                text = text[2..];
+            }
+            else
+                radix = 8;
+        }
+        else if (separator >= 0)
         {
             radix = 0;
-            if (separator == 0)
+            if (separator == 0 || separator == text.Length - 1)
                 return false;
             foreach (var character in text[..separator])
             {
@@ -180,18 +190,6 @@ public static partial class ArithmeticEvaluation
                 return false;
             text = text[(separator + 1)..];
         }
-        else if (text.Length > 1 && text[0] == T.CreateChecked('0'))
-        {
-            if (text[1] == T.CreateChecked('x') || text[1] == T.CreateChecked('X'))
-            {
-                radix = 16;
-                text = text[2..];
-            }
-            else
-                radix = 8;
-        }
-        if (text.IsEmpty)
-            return false;
 
         long number = 0;
         foreach (var character in text)

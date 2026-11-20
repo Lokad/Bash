@@ -471,7 +471,8 @@ failures stop an errexit-enabled action. Pending loop flow skips later execution
 still validating remaining units. Caller tested-status suppression does not apply to EXIT.
 
 Arithmetic uses wrapping signed 64-bit values, with decimal, octal, hexadecimal and
-explicit base-2-through-64 constants. Stored variable/array values are arithmetic
+explicit base-2-through-64 constants. `0x` and `0X` alone represent zero. An explicit
+base has no leading zero. Stored variable/array values are arithmetic
 expressions evaluated against current bindings; they are not re-expanded as shell
 source. Active numeric recursion shares the structural nesting guard and observes
 cancellation. Completed arithmetic work consumes no execution allowance.
