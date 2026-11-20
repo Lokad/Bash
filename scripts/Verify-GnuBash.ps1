@@ -52,8 +52,8 @@ function Invoke-Reference([string[]]$Arguments, [string]$Locale, [byte[]]$InputB
         $process.StandardInput.BaseStream.Write($InputBytes)
         $process.StandardInput.Close()
         if (-not $process.WaitForExit(30000)) { throw 'GNU correctness case exceeded its deadline.' }
-        $copyOut.GetAwaiter().GetResult()
-        $copyError.GetAwaiter().GetResult()
+        [void]$copyOut.GetAwaiter().GetResult()
+        [void]$copyError.GetAwaiter().GetResult()
         return [pscustomobject]@{
             exitCode = $process.ExitCode
             stdoutHex = [Convert]::ToHexString($stdout.ToArray()).ToLowerInvariant()
