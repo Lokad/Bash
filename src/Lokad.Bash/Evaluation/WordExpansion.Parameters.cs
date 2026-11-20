@@ -1007,8 +1007,8 @@ internal static partial class WordExpansion
                 var words = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
                     ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, assignmentTildes: false, hereDocumentParent: null).ConfigureAwait(false);
                 var word = ExpandedWord.JoinWithSpaces(words, budget);
-                var value = word.ToValue(budget);
-                return new ParameterOperand(value, word.GetGlobMask(budget));
+                var (value, mask) = word.ToPatternOperand(budget);
+                return new ParameterOperand(value, mask);
             }
 
             ShellValue ChangeCase(ShellValue value, bool upper, bool firstOnly, ParameterOperand? pattern, MemoryCapacity scratch)

@@ -358,7 +358,9 @@ public sealed class CollectionOwnershipTests
         var word = new ExpandedWord(segments);
 
         Assert.Same(segments, word.Segments);
-        Assert.Equal("first", word.ToText(new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes))));
+        var memory = new EvaluationMemory(new MemoryGovernor(TestMemoryBudget.EvaluationBytes));
+        try { Assert.Equal(segments[0].Content, word.ToValue(memory)); }
+        finally { memory.Finish(retainVariables: false); }
         Assert.False(word.Segments[0].IsGlobQuoted);
     }
 }

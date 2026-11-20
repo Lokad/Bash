@@ -27,8 +27,7 @@ internal sealed class ShellPattern
 
     public static ShellPattern FromWord(ExpandedWord word, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var value = word.ToValue(memory);
-        var mask = word.GetGlobMask(memory);
+        var (value, mask) = word.ToPatternOperand(memory);
         _ = mask.TryUnescape(value, memory, cancellationToken, out value, out mask);
         return FromUnescaped(value, mask, memory, cancellationToken);
     }

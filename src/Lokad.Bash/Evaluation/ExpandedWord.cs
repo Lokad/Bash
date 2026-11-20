@@ -124,34 +124,37 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         return new byte[(int)length];
     }
 
-    /// <summary>Retains per-byte quoting for shell-word patterns and replacement operands.</summary>
-    public GlobMask GetGlobMask(EvaluationMemory memory)
+    /// <summary>Projects a shell-word pattern or replacement operand and its per-byte quoting.</summary>
+    internal (ShellValue Value, GlobMask Mask) ToPatternOperand(EvaluationMemory memory)
     {
-        if (!Segments.Any(segment => segment.IsGlobQuoted && !segment.Content.IsEmpty))
-            return new GlobMask(ReadOnlyMemory<byte>.Empty);
-        var length = GetValueLength();
+        var value = ToValue(memory);
+        var firstQuoted = 0;
+        var position = 0;
+        for (; firstQuoted < Segments.Count; firstQuoted++)
+        {
+            var segment = Segments[firstQuoted];
+            if (segment.IsGlobQuoted && !segment.Content.IsEmpty)
+                break;
+            position += segment.Content.Bytes.Length;
+        }
+        if (firstQuoted == Segments.Count)
+            return (value, new GlobMask(ReadOnlyMemory<byte>.Empty));
+
+        var length = value.Bytes.Length;
         if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
         memory.Charge(checked(2L * length));
-        var mask = new byte[(int)length];
-        var position = 0;
-        foreach (var segment in Segments)
+        var mask = new byte[length];
+        mask.AsSpan(0, position).Fill(GlobMask.Active);
+        for (var index = firstQuoted; index < Segments.Count; index++)
         {
+            var segment = Segments[index];
             var count = segment.Content.Bytes.Length;
             if (!segment.IsGlobQuoted)
                 mask.AsSpan(position, count).Fill(GlobMask.Active);
             position += count;
         }
-        return new GlobMask(mask);
-    }
-
-    /// <summary>Decodes the joined value only at a text-only consumer boundary.</summary>
-    public string ToText(EvaluationMemory memory)
-    {
-        var value = ToValue(memory);
-        // UTF-16 output cannot exceed the UTF-8 byte count; reserve before decoding.
-        memory.Charge(checked(4L * value.Bytes.Length));
-        return value.ToUtf8String();
+        return (value, new GlobMask(mask));
     }
 }
 

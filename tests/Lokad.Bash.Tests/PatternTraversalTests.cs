@@ -9,6 +9,29 @@ namespace Lokad.Bash.Tests;
 public sealed class PatternTraversalTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PatternProjectionPreservesByteActivityAcrossSegments(bool quotedContent)
+    {
+        var word = new ExpandedWord([
+            new(ShellValue.FromBytes(new byte[] { 0xc3 }), isGlobQuoted: false),
+            new(ShellValue.Empty, isGlobQuoted: true),
+            new(ShellValue.FromBytes(new byte[] { 0xa9, (byte)'*' }), isGlobQuoted: quotedContent),
+            new(ShellValue.FromBytes(new byte[] { 0xff, (byte)'?' }), isGlobQuoted: false)
+        ]);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var (value, mask) = word.ToPatternOperand(memory);
+            Assert.Equal<byte>([0xc3, 0xa9, (byte)'*', 0xff, (byte)'?'], value.Bytes.ToArray());
+            Assert.Equal<byte>(quotedContent ? [1, 0, 0, 1, 1] : [], mask.Memory.ToArray());
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("[[:digit:]]tail", new[] { 0, 11, 12, 13, 14 })]
     [InlineData("[[:digit:][:alpha:]]z", new[] { 0, 20 })]
     [InlineData("[[.a.]-[.c.]]x", new[] { 0, 13 })]
