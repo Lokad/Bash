@@ -12,6 +12,8 @@ public partial class Evaluation
         Exit
     }
 
+    private enum ExitCause { Completion, ExtraArguments, InvalidLoopCount }
+
     /// <summary> Represents the exit code and flow-control outcome of evaluating a node. </summary>
     private readonly struct EvaluationResult(int exitCode, FlowControlKind flow, int level, bool testedStatus)
     {
@@ -52,8 +54,13 @@ public partial class Evaluation
 
         public RedirectionScope? DeferredErrexit { get; private init; }
 
+        private ExitCause Cause { get; init; }
+
         /// <summary>Unwinds through the active command unit to its outer script reader.</summary>
-        public bool DiscardsCommandUnit { get; private init; }
+        public bool DiscardsCommandUnit => Cause == ExitCause.ExtraArguments;
+
+        /// <summary>Restores a function's saved options before reaching the EXIT action.</summary>
+        public bool RestoresLocalOptions => Cause is ExitCause.ExtraArguments or ExitCause.InvalidLoopCount;
 
         public EvaluationResult WithExitCode(int exitCode) =>
             this with { ExitCode = exitCode };
@@ -101,7 +108,10 @@ public partial class Evaluation
         public static EvaluationResult Exit(int exitCode) => new(exitCode, FlowControlKind.Exit, 0, false);
 
         public static EvaluationResult DiscardCommandUnit() =>
-            new(1, FlowControlKind.Exit, 0, false) { DiscardsCommandUnit = true };
+            Exit(1) with { Cause = ExitCause.ExtraArguments };
+
+        public static EvaluationResult InvalidLoopCount(int exitCode) =>
+            Exit(exitCode) with { Cause = ExitCause.InvalidLoopCount };
     }
 
 }

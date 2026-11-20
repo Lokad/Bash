@@ -351,6 +351,10 @@ a diagnostic.
 parenthesized subshell or compound pipeline stage starts with zero active
 loops. Outside a loop, either builtin diagnoses and returns 0. An out-of-range
 count diagnostic reports the first operand, including a leading `--`.
+An invalid numeric count terminates the current shell. It sets the high
+bit of the status current after operand expansion and publishes that value
+to `PIPESTATUS` in the reached scope before unwinding. Function-local option
+snapshots restore before the EXIT action runs.
 
 After numeric validation, surplus operands to `exit`, `return`, `shift`,
 `break` or `continue` diagnose and discard the current command unit. The
@@ -361,6 +365,10 @@ a preceding success it publishes status 1. A subshell or compound pipeline
 stage terminates on discard with the preceding nonzero status or 1. A direct
 builtin pipeline stage or command substitution reports 1. A discard inside
 an EXIT action ends the action and preserves the pending exit status.
+
+Inside an EXIT action, bare `exit` uses the saved status that started the
+action. `exit --` uses the status current inside the action. An explicit
+numeric operand selects its low byte.
 
 `echo` consumes leading arguments made of a dash followed by one or more `n`,
 `e` or `E` bytes. Any consumed `n` omits the final LF. Backslashes are literal

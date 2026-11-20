@@ -40,6 +40,66 @@ public sealed class ControlBuiltinStatusTests
     }
 
     [Theory]
+    [InlineData("break", ":", "bad", 128, false)]
+    [InlineData("continue", "false", "-- bad extra", 129, true)]
+    [InlineData("break", ": | (exit 7)", "bad", 135, true)]
+    [InlineData("continue", "(exit 201)", "bad", 201, false)]
+    [InlineData("break", "(exit 7)", "\"$(printf bad; exit 11)\"", 139, false)]
+    public async Task InvalidLoopCountPublishesTheReachedFailure(
+        string command, string preceding, string operand, int status, bool prepared)
+    {
+        var script = "trap 'printf \"<%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"' EXIT\n"
+            + "for n in one; do " + preceding + "; " + command + " " + operand + "; printf unexpected; done\n"
+            + "printf unexpected\n";
+        await using var host = new TestHost();
+        var result = prepared
+            ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, CancellationToken.None)
+            : await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal($"<{status}:{status}>", host.StandardOutput.TextContent);
+        Assert.Equal($"{command}: bad: numeric argument required\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("local -; ", "off")]
+    [InlineData("", "on")]
+    public async Task InvalidLoopCountRestoresOnlySavedOptionsBeforeExitAction(string saveOptions, string flag)
+    {
+        var script = """
+            trap 'status=$? pipes="${PIPESTATUS[*]}"; case $- in *e*) flag=on;; *) flag=off;; esac; printf "<%s:%s:%s>" "$status" "$pipes" "$flag"' EXIT
+            """ + "\nf(){ " + saveOptions
+            + "set -e; for n in one; do (exit 7) || eval 'break bad'; done; }\nf 2>errors\nprintf unexpected";
+        var governor = new MemoryGovernor(1024 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(135, result.ExitCode);
+        Assert.Equal($"<135:135:{flag}>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("break: bad: numeric argument required\n", host.ReadFile("/errors"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("false", "exit", 7)]
+    [InlineData("true", "exit --", 0)]
+    [InlineData("false", "exit --", 1)]
+    [InlineData("(exit 5)", "exit --", 5)]
+    [InlineData("false", "exit -- 4", 4)]
+    public async Task ExitActionSelectsTheStatusForTheReachedExitForm(string preceding, string command, int status)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "trap '" + preceding + "; " + command + "; printf unexpected' EXIT\nexit 7", CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
     [InlineData("return 1 2", "return", false)]
     [InlineData("return 1 2", "return", true)]
     [InlineData("exit 1 2", "exit", false)]

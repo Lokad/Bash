@@ -51,9 +51,9 @@ public sealed partial class Evaluation
                 .ConfigureAwait(false);
 
             // A terminating exit or errexit leaves the active options visible to EXIT.
-            // Discarded units and expansion errors restore local options as they unwind.
+            // Control-operand and expansion errors restore local options as they unwind.
             preserveExitOptions = functionResult.Flow == FlowControlKind.Exit
-                && !functionResult.DiscardsCommandUnit && _state.FatalExpansion == null;
+                && !functionResult.RestoresLocalOptions && _state.FatalExpansion == null;
             CompletePromotions(functionContext, scope.Context.FunctionContext, scope.Variables, bindings);
         }
         finally

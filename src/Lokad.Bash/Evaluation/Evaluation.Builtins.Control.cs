@@ -75,9 +75,12 @@ public sealed partial class Evaluation
         {
             if (!TryParseControlNumber(words[first], out count))
             {
+                var status = (_state.LastExitCode ?? 0) | 128;
                 await ReportExpansionDiagnosticAsync([name], [words[first], ShellValue.FromText(": numeric argument required")])
                     .ConfigureAwait(false);
-                return EvaluationResult.Exit(128);
+                // Use the reached binding and the simple command's admitted status storage.
+                scope.Variables.SetPipelineStatuses([status], scope.Context, _cancellationToken);
+                return EvaluationResult.InvalidLoopCount(status);
             }
             if (words.Count - first > 1)
                 return await DiscardForExtraControlArgumentsAsync(name).ConfigureAwait(false);
@@ -101,7 +104,7 @@ public sealed partial class Evaluation
     {
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
             return await WriteControlHelpAsync(BuiltinKind.Exit, false).ConfigureAwait(false);
-        var exitCode = _state.Traps?.ExitTrapStatus ?? _state.LastExitCode ?? 0;
+        var exitCode = (words.Count == 1 ? _state.Traps?.ExitTrapStatus : null) ?? _state.LastExitCode ?? 0;
         var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
         if (first < words.Count)
         {
