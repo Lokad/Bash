@@ -339,13 +339,8 @@ public sealed partial class Evaluation
             if (option.SequenceEqual("--"u8))
                 first++;
             else if (option.SequenceEqual("--help"u8))
-            {
-                if (GetStdOutDescriptor().IsClosed)
-                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
-                var documentation = BuiltinDocumentation.For(BuiltinKind.Let);
-                return await WriteBuiltinHelpAsync(words[0], documentation.Synopsis("let"), documentation.Description, negated)
+                return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Let, "let", negated)
                     .ConfigureAwait(false);
-            }
         }
 
         if (first == words.Count)

@@ -34,6 +34,15 @@ public sealed partial class Evaluation
         return result;
     }
 
+    private Task<EvaluationResult> WriteBuiltinHelpUnlessStdoutClosedAsync(
+        ShellValue name, BuiltinKind kind, string commandName, bool negated)
+    {
+        if (GetStdOutDescriptor().IsClosed)
+            return FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
+        var documentation = BuiltinDocumentation.For(kind);
+        return WriteBuiltinHelpAsync(name, documentation.Synopsis(commandName), documentation.Description, negated);
+    }
+
     private async Task<EvaluationResult> WriteBuiltinHelpAsync(ShellValue name, string synopsis, string description, bool negated)
     {
         var encoding = Utf8Text.StrictUtf8;

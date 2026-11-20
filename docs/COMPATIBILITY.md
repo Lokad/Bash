@@ -138,8 +138,13 @@ until a later navigation resolves the path through the host.
 Successful stack edits retain success if the
 listing write fails, and the write cause is reported through active stderr.
 `pwd`, `dirs`, and declaration and option listings report write failures
-and return failure. `caller` uses a compact function-context display and
-returns the frame selection status even if the output write fails.
+and return failure. `caller` uses a compact function-context display for
+unnamed script input. An explicit index selects an enclosing function
+starting at zero. A leading `--` ends option scanning. Invalid options
+and malformed indices report usage and return 2, while a valid index beyond the
+available frames returns 1. A leading `--help` requests help and returns
+2 even with closed stdout. Frame output returns its selection status even
+if the write fails.
 
 `cd` accepts at most one expanded directory field after an optional `--`. Word
 splitting and pathname expansion apply as for ordinary arguments. With no

@@ -18,25 +18,53 @@ public sealed partial class Evaluation
         EvaluationContext context,
         bool negated)
     {
-        var frame = SkipScriptPrefixes(context.FunctionContext);
-        var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
-        if (first < words.Count && TryParseControlNumber(words[first], out var index))
+        var command = words[0];
+        var first = 1;
+        if (first < words.Count)
         {
+            var option = words[first].Bytes;
+            if (option.Span.SequenceEqual("--"u8))
+                first++;
+            else if (option.Span.SequenceEqual("--help"u8))
+                return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Caller, "caller", negated)
+                    .ConfigureAwait(false);
+            else if (option.Span is [(byte)'-', _, ..])
+                return await ReportUsageAsync(ShellValue.FromBytes(option[..2]), ": invalid option").ConfigureAwait(false);
+        }
+
+        var index = -1L;
+        if (first < words.Count)
+        {
+            var operand = words[first];
+            if (!TryParseControlNumber(operand, out index))
+                return await ReportUsageAsync(operand, operand.Bytes.Span.StartsWith("0x"u8)
+                    ? ": invalid hex number" : ": invalid number").ConfigureAwait(false);
             if (index < 0)
-                frame = null;
-            while (frame != null && index-- >= 0)
-            {
-                CheckCancellation();
-                frame = SkipScriptPrefixes(frame.Enclosing);
-            }
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+        }
+        var frame = SkipScriptPrefixes(context.FunctionContext);
+        while (frame != null && index-- >= 0)
+        {
+            CheckCancellation();
+            frame = SkipScriptPrefixes(frame.Enclosing);
         }
         if (frame == null)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
         using var output = new ByteMemoryBuilder(0, Memory.Budget);
         output.Append("0 "u8).Append(frame.FunctionName.Bytes).Append((byte)'\n');
         await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
+
+        async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
+        {
+            await ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(reason)])
+                .ConfigureAwait(false);
+            var synopsis = BuiltinDocumentation.For(BuiltinKind.Caller).Synopsis("caller");
+            await ReportExpansionDiagnosticAsync([command], [ShellValue.FromText("usage: "), ShellValue.FromText(synopsis)])
+                .ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+        }
 
         static FunctionContext? SkipScriptPrefixes(FunctionContext? frame)
         {

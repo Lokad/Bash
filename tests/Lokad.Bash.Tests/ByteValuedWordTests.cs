@@ -157,7 +157,7 @@ public sealed class ByteValuedWordTests
     [InlineData("command true $'\\377'; printf after", "after", "")]
     [InlineData("x=0; : \"$((x+=1))\" \"$(printf side >&2; printf '\\377')\"; printf '%s' \"$x\"", "1", "side")]
     [InlineData("pwd $'\\377'", "/\n", "")]
-    [InlineData("f() { caller $'\\377'; }; f", "0 f\n", "")]
+    [InlineData("f() { caller 0 $'\\377'; }; g() { f; }; g", "0 g\n", "")]
     [InlineData("pushd /tmp >/dev/null; popd -- $'\\377'", "/\n", "")]
     [InlineData("hash $'\\377'; printf '%s/after' \"$?\"", "1/after", "")]
     [InlineData("A=1 builtin hash \"$(printf '\\377')\"; printf '%s/after' \"$?\"", "1/after", "")]
@@ -230,6 +230,17 @@ public sealed class ByteValuedWordTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("2:/tmp\n/tmp /\n", result.StdOut);
+        Assert.Equal(expected, result.Host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task CallerReportsTheOriginalBytesOfAnInvalidIndex()
+    {
+        var result = await EndToEndHarness.RunScriptAsync("f() { caller $'\\377'; }; f", new TestHost());
+        byte[] expected = [.. "caller: "u8, 0xff, .. ": invalid number\ncaller: usage: caller [expr]\n"u8];
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.Host.StandardOutput.Content.ToArray());
         Assert.Equal(expected, result.Host.StandardError.Content.ToArray());
     }
 

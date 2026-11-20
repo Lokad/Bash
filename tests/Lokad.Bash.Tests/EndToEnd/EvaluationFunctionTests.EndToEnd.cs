@@ -547,4 +547,57 @@ public sealed class EvaluationFunctionTestsEndToEnd
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
+
+    [Theory]
+    [InlineData("caller -abc", "-a: invalid option")]
+    [InlineData("caller 0x1", "0x1: invalid hex number")]
+    [InlineData("caller -- --help", "--help: invalid number")]
+    [InlineData("caller ''", ": invalid number")]
+    public async Task CallerValidatesOperandsBeforeLookingForAFrame(string script, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal($"caller: {diagnostic}\ncaller: usage: caller [expr]\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task CallerSelectsEnclosingFunctionsThroughAnEvalPrefix()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            inner() {
+                unset missing
+                caller $missing
+                prefix=value eval 'caller -- +0'
+                caller ' 1 '
+                caller -- -1
+                printf 'negative:%s\n' "$?"
+                caller 2
+                printf 'past-end:%s\n' "$?"
+            }
+            middle() { inner; }
+            outer() { middle; }
+            outer
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0 inner\n0 middle\n0 outer\nnegative:1\npast-end:1\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("1>&-")]
+    public async Task CallerHelpCanBeRequestedWithoutAFunctionFrame(string redirection)
+    {
+        var result = await EvaluationTestHelper.RunAsync("builtin caller --help " + redirection);
+
+        Assert.Equal(2, result.ExitCode);
+        if (redirection.Length == 0)
+            Assert.StartsWith("caller: caller [expr]\n", result.StdOut);
+        else
+            Assert.Empty(result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
 }
