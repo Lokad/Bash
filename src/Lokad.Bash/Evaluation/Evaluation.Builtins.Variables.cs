@@ -23,41 +23,28 @@ public sealed partial class Evaluation
         var functions = false;
         var variables = false;
         var namerefs = false;
-        var argumentIndex = 1;
-        for (; argumentIndex < words.Count; argumentIndex++)
+        var options = new ShortOptionCursor(words);
+        while (options.TryReadFlag(out var flag))
         {
-            var argument = words[argumentIndex];
-            if (argument.Bytes.Span.SequenceEqual("--"u8))
+            switch (flag.Span[0])
             {
-                argumentIndex++;
-                break;
+                case (byte)'f': functions = true; continue;
+                case (byte)'v': variables = true; continue;
+                case (byte)'n': namerefs = true; continue;
             }
-            if (argument.Bytes.Length < 2 || argument.Bytes.Span[0] != (byte)'-')
-                break;
-            var parser = new CommandLineOptionParser([argument], allowSingleDashLongOptions: false);
-            while (parser.TryRead(out var item))
-            {
-                if (item.Kind == CommandLineOptionKind.ShortOption)
-                {
-                    switch (item.ShortName)
-                    {
-                        case (byte)'f': functions = true; continue;
-                        case (byte)'v': variables = true; continue;
-                        case (byte)'n': namerefs = true; continue;
-                    }
-                }
-                var option = item.Kind == CommandLineOptionKind.ShortOption
-                    ? ShellValue.FromBytes(new byte[] { (byte)'-', item.ShortName }) : ShellValue.FromText("--");
-                return await FailAsync([option,
-                    ShellValue.FromText(": invalid option\nunset: usage: " + BuiltinDocumentation.For(BuiltinKind.Unset).Synopsis("unset"))], 2)
-                    .ConfigureAwait(false);
-            }
+
+            return await FailAsync([ShellValue.FromText("-"), ShellValue.FromBytes(flag),
+                ShellValue.FromText(": invalid option\nunset: usage: " + BuiltinDocumentation.For(BuiltinKind.Unset).Synopsis("unset"))], 2)
+                .ConfigureAwait(false);
         }
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Unset, "unset", negated)
+                .ConfigureAwait(false);
         if (functions && variables)
             return await FailAsync([ShellValue.FromText("cannot simultaneously unset a function and a variable")], 1).ConfigureAwait(false);
 
         var exitCode = 0;
-        for (var index = argumentIndex; index < words.Count; index++)
+        for (var index = options.ArgumentIndex; index < words.Count; index++)
         {
             var nameValue = words[index];
             var name = BindingNameExpansion.FromValue(nameValue, Memory);

@@ -693,6 +693,10 @@ options. Help describes the supported options and returns status 2, including
 when the shell has closed stdout. An option that expects an argument consumes
 its next field before the scan can reach help.
 
+`unset` follows the same help status and output rules. Leading option groups
+are scanned in order. An earlier invalid option reports usage, and `--`
+ends the option scan. Reached help preserves the operand bindings.
+
 `help --help` uses the same output and status rules. A list of topics succeeds
 when any topic matches. If all topics miss, status 1 accompanies a diagnostic
 on stderr that preserves the final topic's bytes. The topic catalog and help

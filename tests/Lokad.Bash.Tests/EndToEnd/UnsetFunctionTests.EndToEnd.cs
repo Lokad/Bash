@@ -6,6 +6,36 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class UnsetFunctionTestsEndToEnd
 {
+    [Theory]
+    [InlineData("unset --help value -q")]
+    [InlineData("command unset -fv --help value")]
+    public async Task ReachedHelpPreservesTheOperandAndReturnsUsageStatus(string invocation)
+    {
+        var result = await EvaluationTestHelper.RunAsync("value=keep; " + invocation
+            + "; printf '<%s><%s>' \"$?\" \"$value\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.StartsWith("unset: unset [-f] [-v] [-n] [name ...]\n", result.StdOut);
+        Assert.EndsWith("<2><keep>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("unset -v --help value >&-", "<2><keep>", "")]
+    [InlineData("unset -vq --help value", "<2><keep>",
+        "unset: -q: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n")]
+    [InlineData("unset -- --help value", "<0><>", "")]
+    public async Task HelpRespectsLeadingOptionsAndTheOutputDescriptor(
+        string invocation, string expectedOutput, string expectedError)
+    {
+        var result = await EvaluationTestHelper.RunAsync("value=keep; " + invocation
+            + "; printf '<%s><%s>' \"$?\" \"$value\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+    }
+
     // Git Bash 5.2.37, isolated environment; omit only script-path/line diagnostic prefixes.
     [Theory]
     [InlineData("x=global; f(){ local x=local; unset 'x[0]'; export x; printf '<%s>\\n' \"${x-unset}\"; }; x=prefix f; declare -p x", "<unset>\ndeclare -- x=\"global\"\n", "", 0)]
