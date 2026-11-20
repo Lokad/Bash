@@ -24,6 +24,7 @@ public sealed partial class Evaluation
         var delimiter = (byte)'\n';
         var trimDelimiter = false;
         uint count = 0;
+        uint skip = 0;
         uint? origin = null;
         var targetSeen = false;
         var parseOptions = true;
@@ -47,7 +48,7 @@ public sealed partial class Evaluation
                         trimDelimiter = true;
                         continue;
                     }
-                    if (option is not ((byte)'d' or (byte)'n' or (byte)'O' or (byte)'u'))
+                    if (option is not ((byte)'d' or (byte)'n' or (byte)'O' or (byte)'s' or (byte)'u'))
                         return await InvalidArgumentsAsync(argument.Bytes.Slice(optionIndex, 1), ": invalid option")
                             .ConfigureAwait(false);
 
@@ -79,6 +80,8 @@ public sealed partial class Evaluation
                             return await InvalidNumberAsync(operand, option).ConfigureAwait(false);
                         if (option == (byte)'n')
                             count = (uint)number;
+                        else if (option == (byte)'s')
+                            skip = (uint)number;
                         else
                             origin = (uint)number;
                     }
@@ -119,14 +122,18 @@ public sealed partial class Evaluation
             while (!reachedEof && (count == 0 || (uint)values.Count < count))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                var limit = count == 0 ? ReadBatchRecords : (int)Math.Min(ReadBatchRecords, count - (uint)values.Count);
-                var readMemory = integerInputMemory ?? Memory.Budget.CreateScope();
-                using var batchMemory = integer ? null : readMemory;
+                var skipping = skip != 0;
+                var remaining = count == 0 ? ReadBatchRecords : count - (uint)values.Count;
+                var limit = (int)Math.Min(ReadBatchRecords, skipping ? skip : remaining);
+                // A skipped batch never reaches arithmetic or array publication.
+                var retainedInput = skipping ? null : integerInputMemory;
+                var readMemory = retainedInput ?? Memory.Budget.CreateScope();
+                using var batchMemory = retainedInput == null ? readMemory : null;
                 if (delimiter == (byte)'\n')
                 {
                     var batch = await ExecuteReadAsync(descriptor, limit, readMemory).ConfigureAwait(false);
                     batch.ThrowIfError();
-                    AddBatch(batch.Content, batch.LineStartOffsets);
+                    AcceptBatch(batch.Content, batch.LineStartOffsets);
                     reachedEof = batch.ReachedEoF;
                 }
                 else
@@ -136,7 +143,7 @@ public sealed partial class Evaluation
                     var batch = await completion.Task.ConfigureAwait(false);
                     CheckCancellation();
                     batch.Result.ThrowIfError();
-                    AddBatch(batch.Content, batch.RecordStartOffsets);
+                    AcceptBatch(batch.Content, batch.RecordStartOffsets);
                     reachedEof = batch.Result.ReachedEoF;
                 }
             }
@@ -176,8 +183,15 @@ public sealed partial class Evaluation
         }
         return await FinishAsync(assigned ? 0 : 1).ConfigureAwait(false);
 
-        void AddBatch(ReadOnlyMemory<byte> content, IReadOnlyList<int> recordStarts)
+        void AcceptBatch(ReadOnlyMemory<byte> content, IReadOnlyList<int> recordStarts)
         {
+            if (skip != 0)
+            {
+                if (!content.IsEmpty)
+                    skip = checked(skip - (uint)recordStarts.Count - 1);
+                return;
+            }
+
             var start = 0;
             for (var index = 0; start < content.Length; index++)
             {
@@ -248,7 +262,7 @@ public sealed partial class Evaluation
         async Task<EvaluationResult> InvalidNumberAsync(ReadOnlyMemory<byte> operand, byte option)
         {
             await ReportExpansionDiagnosticAsync([arguments[0]], [ShellValue.FromBytes(operand),
-                ShellValue.FromText(option == (byte)'n' ? ": invalid line count" : ": invalid array origin")]).ConfigureAwait(false);
+                ShellValue.FromText(option == (byte)'O' ? ": invalid array origin" : ": invalid line count")]).ConfigureAwait(false);
             return await FinishAsync(1).ConfigureAwait(false);
         }
     }

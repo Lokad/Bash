@@ -14,6 +14,8 @@ public sealed class EvaluationMapfileByteTests
     [Theory]
     [InlineData("mapfile -n1 -tu3 records", "read -ru3 next", "first\nsecond\n")]
     [InlineData("readarray -td: -n1 -u 3 records", "read -ru3 -d : next", "first:second:")]
+    [InlineData("mapfile -s1 -n1 -tu3 records", "read -ru3 next", "discard\nfirst\nsecond\n")]
+    [InlineData("readarray -td: -s1 -n1 -u 3 records", "read -ru3 -d : next", "discard:first:second:")]
     public async Task SelectedDescriptorRetainsUnreadRecordsAndLeavesStdinAvailable(
         string command, string nextRead, string input)
     {

@@ -9,7 +9,7 @@ namespace Lokad.Bash.Tests;
 
 public sealed class EvaluationMapfileOptionTests
 {
-    private const string UsageArguments = "[-t] [-d delim] [-n count] [-O origin] [-u fd] [--] [array]";
+    private const string UsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [--] [array]";
 
     // Usage intentionally advertises the supported subset; native comparisons retain the full Bash text.
     [Theory]

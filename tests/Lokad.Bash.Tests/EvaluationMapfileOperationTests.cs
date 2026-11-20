@@ -11,7 +11,7 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
-    private const string MapfileUsageArguments = "[-t] [-d delim] [-n count] [-O origin] [-u fd] [--] [array]";
+    private const string MapfileUsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [--] [array]";
 
     [Fact]
     public async Task Evaluation_MapfileBuiltin_ReadsAllLinesInBatches()
@@ -56,6 +56,52 @@ public partial class EvaluationTests
         Assert.Equal(131, state.IndexedArrays["arr"].Count);
         Assert.Equal(ShellValue.FromText("keep"), state.IndexedArrays["arr"][0]);
         Assert.Equal(ShellValue.FromText("last"), state.IndexedArrays["arr"][130]);
+    }
+
+    [Theory]
+    [InlineData("arr=(old)", "old")]
+    [InlineData("declare -ai arr=(99)", "99")]
+    public async Task Evaluation_MapfileBuiltin_RefundsSkippedBatchesBeforeCollecting(string setup, string previous)
+    {
+        var state = new Eval(Parser.Parse($"counter=0; {setup}; mapfile -ts129 -n1 arr"));
+
+        var firstSkip = await NextReadAsync(state);
+        Assert.Equal(128, firstSkip.Limit);
+        using var firstMemory = Assert.IsAssignableFrom<IMemoryBudget>(firstSkip.DestinationBudget).Reserve(512);
+        firstSkip.SetResult(ReadResult.Success(Utf8Bytes(new string('\n', 128)),
+            Enumerable.Range(1, 127).ToArray(), reachedEoF: false));
+
+        var finalSkip = await NextReadAsync(state);
+        Assert.Equal(1, finalSkip.Limit);
+        Assert.Equal(0, firstMemory.Bytes);
+        using var finalMemory = Assert.IsAssignableFrom<IMemoryBudget>(finalSkip.DestinationBudget).Reserve(512);
+        finalSkip.SetResult(ReadResult.Success(Utf8Bytes("counter++\n"), [], reachedEoF: false));
+
+        var retained = await NextReadAsync(state);
+        Assert.Equal(1, retained.Limit);
+        Assert.Equal(0, finalMemory.Bytes);
+        Assert.Equal(ShellValue.FromText(previous), Assert.Single(state.IndexedArrays["arr"]));
+        retained.SetResult(ReadResult.Success(Utf8Bytes("7\n"), [], reachedEoF: false));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("7"), Assert.Single(state.IndexedArrays["arr"]));
+        Assert.Equal("0", GetVariable(state, "counter"));
+    }
+
+    [Fact]
+    public async Task Evaluation_MapfileBuiltin_PreservesTheArrayWhenReadingTheSkipPrefixFails()
+    {
+        var state = new Eval(Parser.Parse("arr=(old); mapfile -ts2 -n1 arr"));
+        var skip = await NextReadAsync(state);
+        Assert.Equal(2, skip.Limit);
+        using var memory = Assert.IsAssignableFrom<IMemoryBudget>(skip.DestinationBudget).Reserve(512);
+        skip.SetResult(ReadResult.Failure(new OperationError("input failed\n")));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+        Assert.Equal(0, memory.Bytes);
     }
 
     [Theory]
@@ -272,10 +318,12 @@ public partial class EvaluationTests
         }
     }
 
-    [Fact]
-    public async Task Evaluation_MapfileBuiltin_SettlesPendingBoundedBatchBeforeCancellation()
+    [Theory]
+    [InlineData("")]
+    [InlineData(" -s2")]
+    public async Task Evaluation_MapfileBuiltin_SettlesPendingBoundedBatchBeforeCancellation(string skip)
     {
-        var state = new Eval(Parser.Parse("arr=(old); mapfile -td: -n2 -O0 arr"));
+        var state = new Eval(Parser.Parse($"arr=(old); mapfile -td: -n2 -O0{skip} arr"));
         using var cancellation = new CancellationTokenSource();
         var evaluation = state.EnsureRunning(cancellation.Token);
 
@@ -331,7 +379,6 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("mapfile -s 1 arr")]
     [InlineData("mapfile -C callback arr")]
     [InlineData("mapfile -c 1 arr")]
     [InlineData("mapfile -x arr")]
@@ -410,6 +457,7 @@ public partial class EvaluationTests
     [InlineData("mapfile -n", "mapfile", "-n")]
     [InlineData("readarray -tO", "readarray", "-O")]
     [InlineData("mapfile -u", "mapfile", "-u")]
+    [InlineData("mapfile -s", "mapfile", "-s")]
     public async Task Evaluation_MapfileBuiltin_RejectsMissingOptionOperandBeforeReading(string command, string builtin, string option)
     {
         var state = new Eval(Parser.Parse($"arr=(old); {command}"));
@@ -427,6 +475,7 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("mapfile -n -1", "mapfile: -1: invalid line count\n")]
     [InlineData("readarray -O4294967296", "readarray: 4294967296: invalid array origin\n")]
+    [InlineData("readarray -s-1", "readarray: -1: invalid line count\n")]
     public async Task Evaluation_MapfileBuiltin_RejectsInvalidNumbersBeforeReading(string command, string error)
     {
         var state = new Eval(Parser.Parse($"arr=(old); {command} arr"));

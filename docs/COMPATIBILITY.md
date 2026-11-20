@@ -23,11 +23,13 @@ input. The command borrows the selected handle. `-d delim`
 uses the first byte of `delim`, with an empty operand selecting NUL. `-t`
 removes a record's final delimiter when present. Array values end at the first
 NUL byte, including when NUL is the delimiter.
-`-n count` reads at most that many records and leaves the next record on the
-descriptor. Zero reads to EOF. `-O origin` overwrites consecutive entries
-starting at the supplied index and preserves the other entries. Both operands
-accept unsigned 32-bit decimal values. Destination indices continue from zero
-after index 4294967295.
+`-s count` skips records using the selected delimiter before `-n count`
+limits how many records are retained. Zero skip leaves the input position
+as is, and zero retained count reads to EOF. A reached limit leaves the next
+record on the descriptor. EOF during skipping supplies empty input.
+`-O origin` overwrites consecutive entries starting at the supplied index and
+preserves the other entries. These three operands accept unsigned 32-bit
+decimal values. Destination indices continue from zero after index 4294967295.
 
 `read -a array` replaces an indexed array with all fields from one logical
 record using IFS and the ordinary delimiter and escape rules. It assigns an
