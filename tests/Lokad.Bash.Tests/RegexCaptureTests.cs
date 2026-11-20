@@ -59,6 +59,34 @@ public sealed class RegexCaptureTests
     }
 
     [Theory]
+    [InlineData("prefix", "bb")]
+    [InlineData("é😀", "é😀")]
+    public async Task CapturesKeepCompactBytesAtNonzeroOffsets(string prefix, string captured)
+    {
+        var source = $"subject=$'{prefix}:{captured}\\rtail'; pattern=$':([^:]+)(z)?(\\r)()'; [[ $subject =~ $pattern ]]";
+        var evaluation = new Eval(Parser.Parse(source));
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        await using var host = new TestHost { MemoryBudget = governor };
+        using var owner = governor.CreateScope();
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        var values = evaluation.IndexedArrays["BASH_REMATCH"];
+        Assert.Equal<ShellValue>(
+            [ShellValue.FromText($":{captured}\r"), ShellValue.FromText(captured), ShellValue.Empty,
+                ShellValue.FromText("\r"), ShellValue.Empty], values);
+        foreach (var value in values.Where(value => !value.IsEmpty))
+        {
+            Assert.True(value.TryGetCompactArrayCapacity(out var capacity));
+            Assert.Equal(value.Bytes.Length, capacity);
+        }
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:unknown:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:ascii:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:word:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]

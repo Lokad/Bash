@@ -166,25 +166,38 @@ public sealed partial class Evaluation
                 owner.SetRegexCaptures([]);
                 return 1;
             }
-            if (match.Groups.Count >= Array.MaxLength)
+            var groups = match.Groups;
+            if (groups.Count >= Array.MaxLength)
                 throw new ByteMemoryBuilder.LimitExceededException();
+            var inputBytes = input.Bytes;
+            // Valid UTF-8 has one byte per UTF-16 code unit only for ASCII.
+            var ascii = inputBytes.Length == text.Length;
             var bytes = 0L;
-            for (var index = 0; index < match.Groups.Count; index++)
+            for (var index = 0; index < groups.Count; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                var group = match.Groups[index];
+                var group = groups[index];
                 // .NET matches UTF-16 code units. Never encode an isolated half-surrogate
                 // as shell data; such captures are outside the supported regex profile.
-                if (!IsScalarBoundary(group.Index) || !IsScalarBoundary(group.Index + group.Length))
+                if (!ascii && (!IsScalarBoundary(group.Index) || !IsScalarBoundary(group.Index + group.Length)))
                     return 2;
-                bytes = checked(bytes + Encoding.UTF8.GetByteCount(group.ValueSpan));
+                bytes = checked(bytes + (ascii ? group.Length : Encoding.UTF8.GetByteCount(group.ValueSpan)));
             }
-            Memory.Charge(checked(256L * match.Groups.Count + 2L * bytes));
-            var captures = new ShellValue[match.Groups.Count];
+            Memory.Charge(checked(256L * groups.Count + 2L * bytes));
+            var captures = new ShellValue[groups.Count];
             for (var index = 0; index < captures.Length; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                var value = match.Groups[index].ValueSpan;
+                var group = groups[index];
+                if (group.Length == 0)
+                    continue;
+                if (ascii)
+                {
+                    captures[index] = ShellValue.FromBytes(inputBytes.Slice(group.Index, group.Length).ToArray());
+                    continue;
+                }
+
+                var value = group.ValueSpan;
                 var content = new byte[Encoding.UTF8.GetByteCount(value)];
                 Encoding.UTF8.GetBytes(value, content);
                 captures[index] = ShellValue.FromBytes(content);
