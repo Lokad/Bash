@@ -6,7 +6,7 @@ admission through `IBashHost`. The runtime has no third-party runtime dependenci
 and does not supply a filesystem or process host.
 
 This checkout prepares version 0.2.0, including the public API migrations in
-[the changelog](CHANGELOG.md). Build the package locally and point your consumer's
+[the changelog][changelog]. Build the package locally and point your consumer's
 NuGet source to the resulting `artifacts/nuget/` directory; publication is separate.
 
 ```powershell
@@ -26,8 +26,7 @@ Console.WriteLine(result.ExitCode);
 ```
 
 `ApplicationBashHost` is application code. The test suite's
-[small host](tests/Lokad.Bash.Tests/EndToEnd/EndToEndHarness.cs) and
-[filesystem fixture](tests/Lokad.Bash.Tests/MockFileSystem.cs) illustrate the
+[small host][test-host] and [filesystem fixture][test-filesystem] illustrate the
 contract. They are test fixtures and are not included in the package.
 
 For syntax inspection, use `Syntax.Parser.TryParse` or
@@ -37,10 +36,9 @@ source bytes immutable and retain their storage through all users.
 
 This is a Bash subset. It deliberately excludes interactive sessions, job control,
 OS signals, startup files and ambient machine access. Shell utilities are supplied
-by the host. See [compatibility](docs/COMPATIBILITY.md),
-[runtime contracts](docs/RUNTIME.md) and [memory design](docs/MEMORY.md) for exact
-boundaries. Cancellation and memory admission are cooperative; this library is
-not an OS isolation boundary.
+by the host. See [compatibility], [runtime contracts][runtime] and
+[memory design][memory] for exact boundaries. Cancellation and memory admission
+are cooperative; this library is not an OS isolation boundary.
 
 ## Build
 
@@ -58,7 +56,7 @@ dotnet pack src/Lokad.Bash/Lokad.Bash.csproj -c Release --no-restore
 Language and evaluator-contract regressions use in-memory `IBashHost` fixtures.
 Their small command stubs support language assertions; utility implementations,
 storage systems and application command-adapter policies are tested by their hosts.
-See [test ownership](docs/TESTING.md) for boundary responsibilities and qualification.
+See [test ownership][testing] for boundary responsibilities and qualification.
 
 CI runs on Windows and Linux. Packages go to `artifacts/nuget/` as
 `Lokad.Bash.0.2.0.nupkg` and `Lokad.Bash.0.2.0.snupkg`. The installed consumer
@@ -93,4 +91,12 @@ The verifier rejects an unexpected reference binary and writes results under
 `artifacts/conformance/`. These are correctness controls, not a conformance score
 or performance measurements. The MSYS reference covers byte/C-locale controls;
 Linux `C.utf8` is the character-semantics reference. Broader compatibility gaps
-remain documented in [compatibility](docs/COMPATIBILITY.md).
+remain documented in [compatibility].
+
+[changelog]: https://github.com/Lokad/Bash/blob/master/CHANGELOG.md
+[test-host]: https://github.com/Lokad/Bash/blob/master/tests/Lokad.Bash.Tests/EndToEnd/EndToEndHarness.cs
+[test-filesystem]: https://github.com/Lokad/Bash/blob/master/tests/Lokad.Bash.Tests/MockFileSystem.cs
+[compatibility]: https://github.com/Lokad/Bash/blob/master/docs/COMPATIBILITY.md
+[runtime]: https://github.com/Lokad/Bash/blob/master/docs/RUNTIME.md
+[memory]: https://github.com/Lokad/Bash/blob/master/docs/MEMORY.md
+[testing]: https://github.com/Lokad/Bash/blob/master/docs/TESTING.md

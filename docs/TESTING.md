@@ -22,8 +22,9 @@ quota-only assertions and allocation counters attached to a caller thread.
 
 `TildePrefixTests` keeps lexical part boundaries, field bytes and complete trees
 separate from its delayed write/close assertions. Native CR-source controls use
-the pinned Linux reference: MSYS strips those source bytes. Missing-variable and
-unimplemented colon/stack tilde profiles retain their separate compatibility gates.
+the pinned Linux reference: MSYS strips those source bytes. Missing-variable
+outcomes, colon-delimited assignment prefixes and numeric directory-stack forms
+have separate compatibility controls.
 
 `ConditionalParserTests` owns physical offsets, quote metadata, replay spelling and
 structural limits. `ConditionalLexingTests` separates valid comment/regex contexts,

@@ -22,13 +22,15 @@ per-object reservations or reference-graph tracking.
 
 ## Contract
 
-The hooks live in [`Lokad.Bash.Memory`](../src/Lokad.Bash/Memory/IMemoryBudget.cs):
+The [`Lokad.Bash.Memory` interfaces][memory-interfaces] define these responsibilities.
 
 | Contract | Responsibility |
 | --- | --- |
 | `IMemoryBudget` | Admit estimates and create empty scopes sharing the root allowance. |
 | `IMemoryScope` | Own reservations and child scopes; disposal refunds and invalidates its subtree. |
 | `IMemoryReservation` | Hold an estimate in `Bytes`; `TryResize` replaces it atomically on success. |
+
+[memory-interfaces]: https://github.com/Lokad/Bash/blob/master/src/Lokad.Bash/Memory/IMemoryBudget.cs
 
 Scopes reserve nothing on creation and have no independent cap. Admission is
 thread-safe, immediate and non-waiting. Refusal changes no accounting; failed
