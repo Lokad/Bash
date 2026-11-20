@@ -121,6 +121,9 @@ public sealed partial class Evaluation
                 nameIndex++;
                 break;
             }
+            if (operand.Span.SequenceEqual("--help"u8))
+                return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Type, "type", negated)
+                    .ConfigureAwait(false);
             for (var optionIndex = 1; optionIndex < operand.Length; optionIndex++)
             {
                 switch (operand.Span[optionIndex])

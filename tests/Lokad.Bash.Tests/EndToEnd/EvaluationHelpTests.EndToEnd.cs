@@ -8,6 +8,42 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationHelpTestsEndToEnd
 {
+    private const string TypeDocumentation = "type: type [-ftpP] [--] [name ...]\n"
+        + "    Describe how names resolve. -t prints the kind. -p prints the path of an external command."
+        + " -P forces host lookup. -f skips shell functions.\n";
+
+    [Theory]
+    [InlineData("type --help")]
+    [InlineData("command type -ftP --help -z")]
+    public async Task TypeHelpPrintsTheSynopsisAtTheReachedOption(string source)
+    {
+        var result = await EvaluationTestHelper.RunAsync(source);
+
+        Assert.Equal(TypeDocumentation, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(2, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(">documentation")]
+    [InlineData("1>&-")]
+    public async Task TypeHelpPreservesOperandEffectsAndTheSelectedOutput(string redirection)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"""
+            builtin type $omitted --help "$(printf reached >effect; printf missing)" {redirection}
+            printf '<%s:%s>' "$?" "$_"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2:missing>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("reached", host.ReadFile("/effect"));
+        if (redirection == ">documentation")
+            Assert.Equal(TypeDocumentation, host.ReadFile("/documentation"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("help true", "true: true\n    Return success.\n")]
     [InlineData("help -d true tru", "true - Return success.\ntrue - Return success.\n")]
