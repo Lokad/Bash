@@ -450,11 +450,12 @@ the selector read before failing for a missing enclosing brace. Indexed effects
 and selector diagnostics follow the indexed arithmetic recovery rules. A
 parameter operator still requires an enclosing brace before its operand runs.
 
-A rejected indexed aggregate default assignment retains the effects of its
-reached operand. With errexit disabled, the root reader continues at the next
-command unit with status 2. The failure publishes `PIPESTATUS=(2)` in the
-reached binding scope. In-process `eval` and `source` publish status 1 at their
-own unit boundary. A command capture retains earlier bytes when it stops and
+A rejected parameter-default write to a readonly binding or with a bad array
+subscript retains the effects of its reached operand. With errexit disabled,
+the root reader continues at the next command unit with status 2. The failure
+publishes `PIPESTATUS=(2)` in the reached binding scope. In-process `eval`
+and `source` publish status 1 at their own unit boundary. A command capture
+retains earlier bytes when it stops and
 returns status 1 with errexit disabled. An errexit unwind preserves a prior
 nonzero status and otherwise returns 1.
 

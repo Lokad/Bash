@@ -276,11 +276,11 @@ public sealed partial class Evaluation
             return 1;
         if (kind == ScriptExecutionKind.Root && RecoverableRootExpansionStatus is { } status)
             return status;
-        if (_state.FatalExpansion is { Kind: ExpansionFailureKind.IndexedAggregateDefaultAssignment } aggregateFailure)
+        if (_state.FatalExpansion is { Kind: ExpansionFailureKind.ParameterDefaultAssignment } defaultFailure)
         {
             // Loaded units recover at the invoking reader, including when it was tested.
             return _state.ForkKind == null && kind is (ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap)
-                && (aggregateFailure.CanResumeUntestedUnit || context.ErrexitIgnored) ? 1 : null;
+                && (defaultFailure.CanResumeUntestedUnit || context.ErrexitIgnored) ? 1 : null;
         }
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
@@ -303,14 +303,14 @@ public sealed partial class Evaluation
     private int? RecoverableRootExpansionStatus => _state.ForkKind != null ? null : _state.FatalExpansion switch
     {
         { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex, ExitCode: var status } => status,
-        { Kind: ExpansionFailureKind.IndexedAggregateDefaultAssignment, ExitCode: 2 } => 2,
+        { Kind: ExpansionFailureKind.ParameterDefaultAssignment, ExitCode: 2 } => 2,
         _ => null
     };
 
     private async ValueTask<EvaluationResult> RecoverExpansionFailureAsync(int exitCode, ScopedEvaluation scope)
     {
         var kind = _state.FatalExpansion?.Kind;
-        var publishLoadedAssignment = kind == ExpansionFailureKind.IndexedAggregateDefaultAssignment && exitCode == 1;
+        var publishLoadedAssignment = kind == ExpansionFailureKind.ParameterDefaultAssignment && exitCode == 1;
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
 

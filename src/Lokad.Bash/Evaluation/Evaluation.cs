@@ -3351,7 +3351,7 @@ public sealed partial class Evaluation : IFileTester
         return ReportExpansionDiagnosticAsync(subject, message);
     }
 
-    internal Task ReportIndexedAggregateDefaultFailureAsync(
+    internal Task ReportParameterDefaultFailureAsync(
         ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope)
     {
         if (_state.FatalExpansion.HasValue)
@@ -3375,7 +3375,7 @@ public sealed partial class Evaluation : IFileTester
         {
             exitCode = loadedUnits || _state.ForkKind == ShellForkKind.CommandSubstitution ? 1 : 2;
         }
-        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.IndexedAggregateDefaultAssignment, exitCode)
+        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.ParameterDefaultAssignment, exitCode)
             { CanResumeUntestedUnit = canResume });
         // Publish in the reached bindings before a function can restore its locals.
         // An in-process loaded reader publishes its own status after unwinding.

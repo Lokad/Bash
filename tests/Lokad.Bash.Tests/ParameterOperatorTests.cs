@@ -50,6 +50,33 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
+    [InlineData("readonly v=\"\"; i=0\nsaved=prior\nsaved=${v:=$((++i))}; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"; printf \"|%s\" \"$saved\"",
+        "[2:2:1]|prior", "v: readonly variable\n")]
+    [InlineData("a=(); i=0\nprintf \"%s\" \"${a[-2]:=$((++i))}\"; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        "[2:2:1]", "a: bad array subscript\na[-2]: bad array subscript\n")]
+    [InlineData("declare -A a=(); key=\"\"; i=0\nprintf \"%s\" \"${a[$key]:=$((++i))}\"; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        "[2:2:1]", "a: bad array subscript\na[$key]: bad array subscript\n")]
+    [InlineData("a=(); i=0\nprintf \"<%s>\" \"${a[-2]:=$((++i, a[2]=8, i))}\"\nprintf \"|%s\" \"${a[1]}\"; printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        "<1>|1[0:0:1]", "a: bad array subscript\n")]
+    [InlineData("readonly v=; i=0; declare -n r=v\n: \"${r:=$((++i))}\"; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        "[2:2:1]", "v: readonly variable\n")]
+    public async Task DefaultAssignmentSelectsTheWriteTargetAfterItsRightHandSide(string script, string output, string error)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var result = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, result);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData(false, "+")]
     [InlineData(false, ":+")]
     [InlineData(true, ":+")]

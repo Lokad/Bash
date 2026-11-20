@@ -164,7 +164,7 @@ public sealed partial class Evaluation
                 && (_state.FatalExpansion == null
                     || _state.ErrexitEnabled && _state.FatalExpansion is not
                     { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex
-                        or ExpansionFailureKind.IndexedAggregateDefaultAssignment }))
+                        or ExpansionFailureKind.ParameterDefaultAssignment }))
                 result = result.WithExitCode(handler.ExitCode);
             return result;
         }

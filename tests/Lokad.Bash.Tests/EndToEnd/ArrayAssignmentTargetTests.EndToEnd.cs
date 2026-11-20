@@ -15,7 +15,7 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [InlineData("readonly arr; arr=x", "arr: readonly variable\n", true)]
     [InlineData("declare -A arr; key=; arr[$key]=x", "arr[$key]: bad array subscript\n", true)]
     [InlineData("arr[${missing:?bad}]=x", "missing: bad\n", false)]
-    [InlineData("readonly arr; : ${arr:=x}", "arr: readonly variable\n", false)]
+    [InlineData("readonly arr; : ${arr:=x}", "arr: readonly variable\n", true)]
     public async Task Evaluation_AssignmentFailures_RespectEvalAndSourceBoundaries(
         string assignment, string expectedError, bool recoverable)
     {

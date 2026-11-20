@@ -27,7 +27,7 @@ internal enum ExpansionFailureKind
     /// <summary>Arithmetic selection of an indexed array element failed.</summary>
     ArrayIndex,
     /// <summary>An indexed aggregate rejected a reached parameter-default write.</summary>
-    IndexedAggregateDefaultAssignment,
+    ParameterDefaultAssignment,
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>
     NamerefDefault,
     /// <summary>A direct write failed; eval/source can return control to their caller.</summary>

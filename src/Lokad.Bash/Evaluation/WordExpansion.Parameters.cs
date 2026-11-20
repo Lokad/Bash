@@ -220,7 +220,8 @@ internal static partial class WordExpansion
                     }
                     else if (scope.CanExpand)
                     {
-                        await scope.Effects.ReportFatalExpansionAsync((target == null ? parsed.Name.ToValue() : target.Name.ToValue()), ShellValue.FromText("readonly variable"), ExpansionFailureKind.Assignment)
+                        var subject = target == null ? parsed.Name.ToValue() : target.Name.ToValue();
+                        await scope.Effects.ReportParameterDefaultFailureAsync([subject], [ShellValue.FromText("readonly variable")], scope)
                             .ConfigureAwait(false);
                     }
                 }

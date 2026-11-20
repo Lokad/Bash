@@ -241,7 +241,7 @@ public sealed class EvaluationParameterOperatorTestsEndToEnd
     [InlineData("count=0; unset value; printf '<%s>:<%s>:<%s>\\n' \"${value:=$((count+=1))}\" \"$value\" \"$count\"", "<1>:<1>:<1>\n", "", 0)]
     [InlineData("unset value; printf '<%s>\\n' \"${value:-$(printf once >&2; printf 'two words')}\"", "<two words>\n", "once", 0)]
     [InlineData("value=set; printf '<%s>\\n' \"${value:-$(printf unused >&2; printf 'two words')}\"", "<set>\n", "", 0)]
-    [InlineData("readonly value=; printf '<%s>\\n' \"${value:=assigned}\"; printf continued", "", "value: readonly variable\n", 1)]
+    [InlineData("readonly value=; printf '<%s>\\n' \"${value:=assigned}\"; printf continued", "", "value: readonly variable\n", 2)]
     [InlineData("unset value inner; printf '%s' \"${value:=${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
     [InlineData("unset value inner; printf '%s' \"${value:-${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
     [InlineData("unset inner; printf '%s' \"$((${inner:?missing} + 1))$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
