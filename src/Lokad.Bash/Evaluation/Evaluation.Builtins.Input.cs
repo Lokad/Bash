@@ -21,6 +21,7 @@ public sealed partial class Evaluation
         private bool _finished;
 
         public int ArgumentIndex { get; private set; } = 1;
+        public bool RequestedHelp { get; private set; }
 
         public bool TryReadFlag(out ReadOnlyMemory<byte> flag)
         {
@@ -36,10 +37,14 @@ public sealed partial class Evaluation
                     return false;
                 }
                 ArgumentIndex++;
-                if (bytes.Span.SequenceEqual("--"u8))
+                if (bytes.Span[1] == (byte)'-')
                 {
-                    _finished = true;
-                    return false;
+                    RequestedHelp = bytes.Span.SequenceEqual("--help"u8);
+                    if (RequestedHelp || bytes.Length == 2)
+                    {
+                        _finished = true;
+                        return false;
+                    }
                 }
                 _group = bytes[1..];
             }
@@ -151,6 +156,9 @@ public sealed partial class Evaluation
             inputNumber = logical;
             inputDescriptor = descriptor;
         }
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Read, "read", negated)
+                .ConfigureAwait(false);
 
         var argumentIndex = options.ArgumentIndex;
         var hasPositionals = argumentIndex < words.Count;

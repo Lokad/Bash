@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Files;
 using Lokad.Bash.Formatting;
-using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
@@ -39,16 +38,8 @@ public sealed partial class Evaluation
             }
 
             if (optionBytes.Span.SequenceEqual("--help"u8))
-            {
-                var documentation = BuiltinDocumentation.For(BuiltinKind.Printf);
-                var helpWrite = await ExecuteWriteAsync(GetStdOutDescriptor(),
-                        Utf8Text.Encode("printf: " + documentation.Synopsis("printf") + "\n    " + documentation.Description + "\n"))
-                    .ConfigureAwait(false);
-                if (helpWrite.IsError)
-                    await ReportBuiltinWriteFailureAsync(ShellValue.FromText("printf"), helpWrite).ConfigureAwait(false);
-                var helpExitCode = helpWrite.IsError ? 1 : 0;
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(helpExitCode), negated);
-            }
+                return await WriteBuiltinHelpUnlessStdoutClosedAsync(ShellValue.FromText("printf"), BuiltinKind.Printf,
+                    "printf", negated).ConfigureAwait(false);
 
             if (optionBytes.Span[1] != (byte)'v')
                 return await FinishInvalidInvocationAsync(WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("printf")],

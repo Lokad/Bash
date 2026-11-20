@@ -78,10 +78,27 @@ public sealed class QueryWriteFailureTests
     }
 
     [Theory]
+    [InlineData("printf")]
+    [InlineData("read")]
+    [InlineData("mapfile")]
+    [InlineData("readarray")]
+    public async Task BuiltinHelpKeepsUsageStatusWithShellClosedStdout(string name)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(name + " --help 1>&-", CancellationToken.None);
+        Assert.Equal(2, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
+    [Theory]
     [InlineData("printf x")]
     [InlineData("echo x")]
     [InlineData("printf --help")]
-    public async Task FormattingWriteFailureKeepsTheHostCause(string script)
+    [InlineData("read --help")]
+    [InlineData("mapfile --help")]
+    [InlineData("readarray --help")]
+    public async Task BuiltinOutputFailureKeepsTheHostCause(string script)
     {
         var host = new TestOperationVisitor([]) { RecordAppends = true };
         host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("reported output failure\n")));

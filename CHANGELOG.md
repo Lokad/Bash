@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Use the shared help writer for `printf`, `read`, `mapfile` and `readarray`.
+  Reached `--help` returns status 2, including with shell-closed stdout.
+
 - Preserve Bash's DEL byte for later empty quoted aggregate fields in
   parameter replacement text.
 

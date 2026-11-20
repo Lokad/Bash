@@ -688,6 +688,11 @@ Closing stderr also suppresses `getopts` option warnings while the scan still
 updates its option variables.
 Write failures reported by the host still follow the builtin's status policy.
 
+`printf`, `read`, `mapfile` and `readarray` accept `--help` while scanning
+options. Help describes the supported options and returns status 2, including
+when the shell has closed stdout. An option that expects an argument consumes
+its next field before the scan can reach help.
+
 Printf width and precision have no independent 1 MiB quota. A large precision that
 only truncates a short string or leaves a short general-format result does not
 require proportionally large workspace. Actual output, replacement overlap and

@@ -8,6 +8,34 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationInputBuiltinsTestsEndToEnd
 {
     [Theory]
+    [InlineData("read -ra values", "read")]
+    [InlineData("mapfile -n1", "mapfile")]
+    [InlineData("readarray -t", "readarray")]
+    public async Task InputBuiltinHelpStopsBeforeReadingOrAssigning(string invocation, string name)
+    {
+        var script = "values=(old); option=--help; " + invocation + " \"$option\" -z; status=$?; "
+            + "read -r next; printf '<%s><%s><%s>' \"$status\" \"${values[0]}\" \"$next\"";
+        var result = await EvaluationTestHelper.RunAsync(script, standardInput: "first\nsecond\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.StartsWith(name + ": " + name + " ", result.StdOut);
+        Assert.EndsWith("<2><old><first>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task PrintfHelpReportsUsageStatusWithoutAssigningTheDestination()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "value=old; printf -v value --help -z; printf '<%s><%s>' \"$?\" \"$value\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.StartsWith("printf: printf [-v var] format [arguments]\n", result.StdOut);
+        Assert.EndsWith("<2><old>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("a=(outer tail); a=temp printf -v \"a[0]\" %s body; printf \"%s:%s\" \"${a[0]}\" \"${a[1]}\"", "body:tail")]
     [InlineData("a=(outer tail); a=temp printf -v \"a[2]\" %s body; printf \"%s:%s:%s\" \"${a[0]}\" \"${a[1]}\" \"${a[2]}\"", "outer:tail:body")]
     [InlineData("a=(outer tail); a=temp printf -v a %s body; printf \"%s:%s\" \"${a[0]}\" \"${a[1]}\"", "body:tail")]

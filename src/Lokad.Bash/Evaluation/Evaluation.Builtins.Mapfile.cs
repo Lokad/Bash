@@ -63,6 +63,12 @@ public sealed partial class Evaluation
                     origin = (uint)number;
             }
         }
+        if (options.RequestedHelp)
+        {
+            var name = arguments[0].Bytes.Span.SequenceEqual("readarray"u8) ? "readarray" : "mapfile";
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(arguments[0], BuiltinKind.Mapfile, name, negated)
+                .ConfigureAwait(false);
+        }
 
         var targetValue = options.ArgumentIndex < arguments.Count ? arguments[options.ArgumentIndex] : ShellValue.FromText("MAPFILE");
         var (selected, targetStatus) = await SelectIndexedInputTargetAsync(arguments[0], targetValue, variables, warn: true)
