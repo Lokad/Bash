@@ -268,6 +268,10 @@ public sealed class EvaluationConditionalTestsEndToEnd
     [InlineData("items=(a b)", "\"${items[@]}\"", "a", "a b")]
     [InlineData("set -- a b; unset missing", "${missing:-\"$@\"}", "a", "a b")]
     [InlineData("IFS=:; set -- a b; empty=(); unset missing", "${missing:-$@}\"${empty[@]}\"", "a b", "a")]
+    [InlineData("IFS=:; set -- 'a:b' c; empty=(); unset outer inner",
+        "${outer:-x${inner:-$@}y}\"${empty[@]}\"", "xa:b cy", "xa")]
+    [InlineData("IFS=:; set -- 'a:b' c; empty=(); unset outer inner",
+        "x:${outer:-${inner:-$@}}\"${empty[@]}\"", "x", "x:a:b c")]
     [InlineData("unset IFS; set -- 'a b' c; empty=()", "$@\"${empty[@]}\"", "a", "a b")]
     [InlineData("IFS=:; set -- a b", "x:y\"$@\"", "x", "x:ya")]
     [InlineData("IFS=:; set -- a b", ":\"$@\"", "", "a")]

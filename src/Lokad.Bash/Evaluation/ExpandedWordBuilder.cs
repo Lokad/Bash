@@ -293,7 +293,7 @@ internal sealed class ExpandedWordBuilder
             foreach (var segment in word.Segments)
             {
                 var quoted = globQuoted || segment.IsGlobQuoted;
-                if (word.IsJoinedCasePatternOperand)
+                if (segment.IsCasePatternIfsProtected)
                     AppendValue(segment.Content, quoted);
                 else
                     AppendExpansion(segment.Content, allowWordSplitting && !segment.IsGlobQuoted, quoted);
@@ -409,8 +409,7 @@ internal sealed class ExpandedWordBuilder
         if (_hasQuotedAggregate || fields.Count < 2 || !HasNonSpaceSeparator(FieldSeparators.FromVariables(_variables)))
             return fields;
         // A nested unquoted aggregate uses spaces after expanding with a non-space IFS.
-        var joined = ExpandedWord.JoinWithSpaces(fields, _memory);
-        return [new ExpandedWord(joined.Segments) { IsJoinedCasePatternOperand = true }];
+        return [ExpandedWord.JoinCasePatternOperandWithSpaces(fields, _memory)];
     }
 
     private static bool HasNonSpaceSeparator(FieldSeparators separators) =>
@@ -458,7 +457,8 @@ internal sealed class ExpandedWordBuilder
                 {
                     var part = word.Parts[index];
                     var segment = part.Segment.ToSegment();
-                    segments[index] = segment;
+                    segments[index] = Purpose == ExpansionPurpose.CasePattern && part.Origin == PartOrigin.Protected
+                        ? segment with { IsCasePatternIfsProtected = true } : segment;
                     hasBytes |= !segment.Content.IsEmpty;
                     hasProtectedPart |= part.Origin == PartOrigin.Protected;
                 }

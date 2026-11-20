@@ -20,10 +20,17 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
 
     /// <summary>An empty element that was present in a quoted aggregate before operand splicing.</summary>
     internal bool IsEmptyAggregateField { get; } = isEmptyAggregateField;
-    internal bool IsJoinedCasePatternOperand { get; init; }
 
     /// <summary>Joins scalar or pattern operand fields without losing quote metadata.</summary>
-    public static ExpandedWord JoinWithSpaces(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory)
+    public static ExpandedWord JoinWithSpaces(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory) =>
+        JoinWithSpaces(words, memory, protectCasePatternFields: false);
+
+    internal static ExpandedWord JoinCasePatternOperandWithSpaces(
+        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory) =>
+        JoinWithSpaces(words, memory, protectCasePatternFields: true);
+
+    private static ExpandedWord JoinWithSpaces(
+        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, bool protectCasePatternFields)
     {
         if (words.Count == 0)
             return new ExpandedWord([]);
@@ -39,9 +46,21 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         for (var index = 0; index < words.Count; index++)
         {
             if (index > 0)
-                segments.Add(new ExpandedSegment(separator, isGlobQuoted: false));
+            {
+                segments.Add(new ExpandedSegment(separator, isGlobQuoted: false)
+                {
+                    IsCasePatternIfsProtected = protectCasePatternFields,
+                });
+            }
 
-            segments.AddRange(words[index].Segments);
+            var field = words[index].Segments;
+            if (protectCasePatternFields)
+            {
+                foreach (var segment in field)
+                    segments.Add(segment with { IsCasePatternIfsProtected = true });
+            }
+            else
+                segments.AddRange(field);
         }
 
         return new ExpandedWord(segments);
@@ -188,4 +207,7 @@ internal readonly struct ExpandedSegment(ShellValue content, bool isGlobQuoted)
     /// Gets whether glob metacharacters should be treated literally for this segment.
     /// </summary>
     public bool IsGlobQuoted { get; } = isGlobQuoted;
+
+    /// <summary>Protects this segment's bytes from IFS when splicing a case pattern operand.</summary>
+    internal bool IsCasePatternIfsProtected { get; init; }
 }
