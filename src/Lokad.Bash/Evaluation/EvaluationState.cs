@@ -26,7 +26,7 @@ internal enum ExpansionFailureKind
     IntegerAssignment,
     /// <summary>Arithmetic selection of an indexed array element failed.</summary>
     ArrayIndex,
-    /// <summary>An indexed aggregate rejected a reached parameter-default write.</summary>
+    /// <summary>A reached parameter-default write failed after its operand expanded.</summary>
     ParameterDefaultAssignment,
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>
     NamerefDefault,

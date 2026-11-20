@@ -10,6 +10,30 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationAttributeTestsEndToEnd
 {
     [Theory]
+    [InlineData("readonly -n r=v\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r",
+        "[0:0]declare -- r=\"v\"\n", "")]
+    [InlineData("v=old; declare -n r=v\nreadonly -n r=new\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r v",
+        "[0:0]declare -n r=\"v\"\ndeclare -- v=\"new\"\n", "")]
+    [InlineData("readonly r=old\nreadonly -n r=new new=ok\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r new",
+        "[1:1]declare -r r=\"old\"\ndeclare -- new=\"ok\"\n", "r: readonly variable\n")]
+    [InlineData("readonly -an r=(first second)\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r",
+        "[0:0]declare -a r=([0]=\"first\" [1]=\"second\")\n", "")]
+    [InlineData("f(){ :; }; readonly -f f\nreadonly -fn f\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -pF f",
+        "[0:0]declare -fr f\n", "")]
+    [InlineData("readonly -na missing\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p missing; :",
+        "[0:0]", "declare: missing: not found\n")]
+    [InlineData("a=(old); declare -n r='a[0]'\nreadonly -n r=new\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r a",
+        "[0:0]declare -n r=\"a[0]\"\ndeclare -a a=([0]=\"new\")\n", "")]
+    public async Task ReadonlyDashNAllowsAssignmentsAndPreservesAttributes(string script, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("r", "declare -r", "")]
     [InlineData("r=s s", "declare -r", "")]
     [InlineData("r=s s", "declare -gr", "")]

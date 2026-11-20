@@ -82,6 +82,10 @@ and ordinary writes can select the global binding. A self-element target keeps
 its separate selector semantics. Assigning an unset nameref may create a cycle,
 and raw declaration inspection does not resolve that cycle.
 
+With named operands, `readonly -n` processes assignments and preserves
+existing attributes. It skips adding the readonly attribute. Without operands,
+it lists readonly bindings.
+
 Function display/export preserves legacy backticks and their original escapes.
 Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches

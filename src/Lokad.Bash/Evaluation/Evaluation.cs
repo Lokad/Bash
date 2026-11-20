@@ -1828,6 +1828,7 @@ public sealed partial class Evaluation : IFileTester
             var executionScope = declarationScope with { Variables = commandVars };
             var functionContext = declarationScope.Context.FunctionContext;
             var localBuiltinFrame = options.Builtin == BuiltinKind.Local ? functionContext : null;
+            var skipReadonlyAttribute = options.Builtin == BuiltinKind.Readonly && !options.Readonly;
             if (!options.InvalidOption.IsEmpty)
             {
                 await ReportDeclarationOperandAsync(options.InvalidOption, "invalid option")
@@ -2080,6 +2081,13 @@ public sealed partial class Evaluation : IFileTester
                 if (reference.Kind != VariableReferenceKind.Name && options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly)
                 {
                     await DiagnoseQuotedAsync(operand.Name, "not a valid identifier").ConfigureAwait(false);
+                    continue;
+                }
+                if (skipReadonlyAttribute && !operand.CompoundApplied && operand.Value == null)
+                {
+                    // The flag only looks up a named operand, even with an array option.
+                    if (!commandVars.TryResolveBinding(reference.Name, selectOwner: null, out _))
+                        await ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
                     continue;
                 }
                 // Bash 5.2 resolves global names but keeps element writes in the active scope.
@@ -2616,6 +2624,8 @@ public sealed partial class Evaluation : IFileTester
 
             async Task ApplyAttributesAsync(BindingName name, Variables variables, bool global, bool local)
             {
+                if (skipReadonlyAttribute)
+                    return;
                 var attributeName = options.Nameref || local ? name : variables.ResolveNamerefName(name);
                 if (attributeName.IsEmpty)
                 {

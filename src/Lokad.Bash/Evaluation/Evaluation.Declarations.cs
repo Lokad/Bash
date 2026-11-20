@@ -415,6 +415,10 @@ public sealed partial class Evaluation
                     case (byte)'a': IndexedChange = ReadChange(IndexedChange, DeclarationListingAttributes.Indexed); break;
                     case (byte)'A': AssociativeChange = ReadChange(AssociativeChange, DeclarationListingAttributes.Associative); break;
                     case (byte)'n' when Builtin == BuiltinKind.Export: ExportChange = DeclarationAttributeChange.Clear; break;
+                    case (byte)'n' when Builtin == BuiltinKind.Readonly:
+                        // Preserve existing attributes and the readonly filter for listings without operands.
+                        ReadonlyChange = DeclarationAttributeChange.Unchanged;
+                        break;
                     case (byte)'n' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: NamerefChange = ReadChange(NamerefChange, DeclarationListingAttributes.Nameref); break;
                     case (byte)'r' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: ReadonlyChange = ReadChange(ReadonlyChange, DeclarationListingAttributes.Readonly); break;
                     case (byte)'x' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: ExportChange = ReadChange(ExportChange, DeclarationListingAttributes.Exported); break;
