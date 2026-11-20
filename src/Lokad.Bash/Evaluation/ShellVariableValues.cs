@@ -125,7 +125,7 @@ internal sealed class IndexedArray
 
     /// <summary>Enumerates sparse positions and values together, including unassigned positions.</summary>
     internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => IsInitialized
-        ? _positions.Select(position => KeyValuePair.Create(ShellValue.FromText(Integers.FormatNumber(position)), _elements[position]))
+        ? _positions.Select(position => KeyValuePair.Create(FormatPosition(position), _elements[position]))
         : [];
 
     /// <summary>Gets the number of visible entries, excluding holes.</summary>
@@ -145,8 +145,11 @@ internal sealed class IndexedArray
                 yield break;
         }
     }
-    /// <summary>Enumerates index text for shell metadata expansion without a dense view.</summary>
-    public IEnumerable<string> PresentKeys => IsInitialized ? _positions.Select(Integers.FormatNumber) : [];
+    /// <summary>Enumerates index bytes in numeric order without a dense view.</summary>
+    public IEnumerable<ShellValue> PresentKeys => IsInitialized ? _positions.Select(FormatPosition) : [];
+
+    private static ShellValue FormatPosition(long position) =>
+        ShellValue.FromBytes(NumberFormatting.FormatNumber(position));
 
     /// <summary>Gets one present position without allocating.</summary>
     public bool TryGet(

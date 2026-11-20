@@ -35,7 +35,7 @@ public sealed class IndexedArrayRangeTests
         clone.Remove(maximum);
         clone.Remove(maximum);
         Assert.Equal(5, clone.MaxIndex);
-        Assert.Equal(new[] { "0", "5" }, clone.PresentKeys);
+        Assert.Equal(new[] { ShellValue.FromText("0"), ShellValue.FromText("5") }, clone.PresentKeys);
         Assert.Equal(new[] { ShellValue.FromText("zero"), ShellValue.FromText("five") }, clone.PresentValues);
         clone.Remove(default);
         Assert.Equal(5, clone.MaxIndex);
@@ -48,6 +48,9 @@ public sealed class IndexedArrayRangeTests
         Assert.Single(clone.PresentValues);
         Assert.Equal(long.MaxValue, array.MaxIndex);
         Assert.Equal(3, array.Count);
+        ShellValue[] expectedKeys = [ShellValue.FromText("0"), ShellValue.FromText("5"), ShellValue.FromText("9223372036854775807")];
+        Assert.Equal(expectedKeys, array.PresentKeys);
+        Assert.Equal(expectedKeys, array.Entries.Select(entry => entry.Key));
     }
 
     [Fact]

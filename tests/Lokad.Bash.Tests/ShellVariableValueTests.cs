@@ -64,7 +64,7 @@ public sealed class ShellVariableValueTests
 
         Assert.Equal(2, clone.Count);
         Assert.Equal(12, clone.MaxIndex);
-        Assert.Equal(new[] { "7", "12" }, clone.PresentKeys);
+        Assert.Equal(new[] { ShellValue.FromText("7"), ShellValue.FromText("12") }, clone.PresentKeys);
         Assert.Equal(new ShellValue?[] { null, ShellValue.FromText("kept") }, clone.Entries.Select(entry => entry.Value));
         Assert.False(clone.TryGet(seven, out _));
         Assert.Equal(ShellValue.Empty, clone.CaptureDenseValues()[7]);

@@ -605,10 +605,10 @@ internal static partial class WordExpansion
                             { RangeSource = source, InspectionBinding = inspection ? selected : null };
                     }
 
-                    // Indirect aggregate reads emit the array's keys.
+                    // Admit the key vector and indexed key bytes before enumerating.
                     budget.Charge(checked(256L * count));
-                    IEnumerable<ShellValue> keys = array != null ? array.PresentKeys.Select(EncodeName)
-                        : map != null ? map.PresentKeys : count == 0 ? [] : [ShellValue.FromText("0")];
+                    IEnumerable<ShellValue> keys = array != null ? array.PresentKeys
+                        : map != null ? map.PresentKeys : count == 0 ? [] : [ShellValue.FromBytes(NumberFormatting.FormatNumber(0))];
                     return new ParameterValue(reference.Kind, keys.ToArray(), count != 0, reference, null);
                 }
 
@@ -660,12 +660,6 @@ internal static partial class WordExpansion
                     }
                     return new ParameterValue(VariableReferenceKind.Name, [value], isSet, null, null);
                 }
-            }
-
-            ShellValue EncodeName(string name)
-            {
-                budget.Charge(checked(4L * (3L * name.Length)));
-                return ShellValue.FromText(name);
             }
         }
 
