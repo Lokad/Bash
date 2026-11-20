@@ -88,7 +88,7 @@ public sealed partial class Evaluation
 
             var survives = variables.HasBinding(name);
             // A promoted function-call prefix returns to its caller as an exported binding.
-            if (isPrefix && survives && completed.Locals.ExportSnapshot != null)
+            if (isPrefix && survives && completed.Locals.SavedBindings != null)
                 variables.SetExported(name, true);
             if (survives)
                 bindings?.RetainBinding(name, Memory, _cancellationToken);

@@ -16,7 +16,7 @@ public sealed partial class FunctionPrefixBindingTests
         var variables = Variables.CreateEmpty();
         var outerLocals = SaveLocal("x");
         using var outer = new Eval.FunctionContext(ShellValue.FromText("outer"), outerLocals, enclosing: null);
-        var outerSaved = Assert.IsType<Variables>(outerLocals.ExportSnapshot);
+        var outerSaved = Assert.IsType<Variables>(outerLocals.SavedBindings);
         var innerLocals = SaveLocal("y");
         using var inner = new Eval.FunctionContext(ShellValue.FromText("inner"), innerLocals, outer);
         var total = Assert.IsType<EvaluationMemory.SavedLocalMemory>(innerLocals.SavedMemoryTracker);
@@ -36,7 +36,7 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.Equal(total.Bytes, forkedTotal.Bytes);
 
         var parentBytes = total.Bytes;
-        var forkedSaved = Assert.IsType<Variables>(forkedOuter.Locals.ExportSnapshot);
+        var forkedSaved = Assert.IsType<Variables>(forkedOuter.Locals.SavedBindings);
         Assert.True(forkedSaved.TrySetScalar("x", ShellValue.FromText("child")));
         Assert.Equal(forkedOuter.Locals.SavedMemoryBytes + forkedInner.Locals.SavedMemoryBytes, forkedTotal.Bytes);
         Assert.Equal(parentBytes, total.Bytes);
@@ -271,7 +271,7 @@ public sealed partial class FunctionPrefixBindingTests
             Assert.True(locals.TryDeclare(caller, caller,
                 new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("map"), ShellValue.FromText("local")),
                 prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, memory));
-            var donor = Assert.IsType<Variables>(locals.ExportSnapshot);
+            var donor = Assert.IsType<Variables>(locals.SavedBindings);
             var saved = donor.AssociativeArrays["map"];
 
             locals.Restore();

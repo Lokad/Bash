@@ -413,16 +413,38 @@ internal static partial class WordExpansion
             if (parsed.Kind is BracedParameterOperatorKind.NamesAt or BracedParameterOperatorKind.NamesStar)
             {
                 var prefix = BindingNameExpansion.FromValue(parsed.Name.ToValue(), budget);
-                var names = scope.Variables.AssignedNames.Where(name => name.StartsWith(prefix, budget))
-                    .Select(name =>
-                    {
-                        // Preflight distinct, sort and output entries before materializing them.
-                        budget.Charge(checked(768L + 4L * name.ByteLength));
-                        return name.ToValue();
-                    })
-                    .Distinct().Order(ShellValue.ByteOrder).ToArray();
+                var names = new List<ShellValue>();
+                using var selectionMemory = new MemoryCapacity(budget.Budget, 0);
+                var function = scope.Context.FunctionContext;
+                // The active store has unique names. Saved function scopes can repeat them.
+                var selected = function == null ? null : new HashSet<BindingName>();
+                AddNames(scope.Variables.AssignedNames);
+                for (; function != null; function = function.Enclosing)
+                    if (function.Locals.SavedBindings is { } saved)
+                        AddNames(saved.AssignedNames);
+
+                names.Sort(ShellValue.ByteOrder);
                 return new ParameterValue(parsed.Kind == BracedParameterOperatorKind.NamesAt
-                    ? VariableReferenceKind.At : VariableReferenceKind.Star, names, names.Length != 0, null, null);
+                    ? VariableReferenceKind.At : VariableReferenceKind.Star, names, names.Count != 0, null, null);
+
+                void AddNames(IEnumerable<BindingName> assigned)
+                {
+                    foreach (var name in assigned)
+                    {
+                        scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                        if (selected?.Contains(name) == true || !name.StartsWith(prefix, budget))
+                            continue;
+                        if (selected != null)
+                        {
+                            budget.Charge(selectionMemory, Variables.BindingNameSelectionBytes);
+                            selected.Add(name);
+                        }
+                        budget.PrepareListCapacity(names, 1);
+                        if (name.NeedsValueEncoding)
+                            budget.Charge(MemoryCapacity.ArrayBackingBytes<byte>(name.ByteLength));
+                        names.Add(name.ToValue());
+                    }
+                }
             }
 
             var name = parsed.Name;

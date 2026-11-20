@@ -194,7 +194,7 @@ public sealed partial class Evaluation
                     if (prefix.Names.Contains(name)) return;
                     prefix = prefix.Enclosing;
                 }
-                if (function.Locals.ExportSnapshot is { } saved && function.Locals.SavedNames.Contains(name))
+                if (function.Locals.SavedBindings is { } saved && function.Locals.SavedNames.Contains(name))
                 {
                     // This saved call prefix is discarded on return; outer bindings must retain their exports.
                     if (function.PrefixNames.Contains(name)) saved.SetExported(name, false);

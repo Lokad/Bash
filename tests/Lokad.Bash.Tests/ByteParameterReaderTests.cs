@@ -91,4 +91,42 @@ public sealed class ByteParameterReaderTests
         Assert.Equal(Convert.FromHexString(outputHex), result.Host.StandardOutput.Content.ToArray());
         Assert.Empty(result.StdErr);
     }
+
+    [Theory]
+    [InlineData("p_a=outer; f() { local p_a; printf '<%s>' \"${!p_@}\"; printf '|%s' \"${p_a-unset}\"; }; f", "<p_a>|unset")]
+    [InlineData("p_a=outer; f() { local p_a=inner p_b; printf '<%s>' \"${!p_@}\"; }; f", "<p_a>")]
+    [InlineData("g() { local p_a; printf '<%s>' \"${!p_@}\"; }; f() { local p_a=outer; g; }; f", "<p_a>")]
+    [InlineData("p_a=outer; p_z=last; f() { local p_a; IFS=:; printf '<%s>' \"${!p_*}\"; }; f", "<p_a:p_z>")]
+    [InlineData("p_a=outer; f() { local p_a; out=$(printf '<%s>' \"${!p_@}\"); printf '%s' \"$out\"; }; f", "<p_a>")]
+    public async Task NamePrefixIncludesAssignedNamesFromSavedFunctionBindings(string script, string output)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task NamePrefixPreservesTheRawBytesOfASavedLiteralBinding()
+    {
+        const string script = """
+            declare -A map
+            f() { local -n link=$'map[\377]'; local link=value; g; }
+            g() { local -n second=$'map[\377]'; local second; printf '<%s>' "${!map@}"; }
+            f
+            """;
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString("3C6D61705BFF5D3E"), result.Host.StandardOutput.Content.ToArray());
+        Assert.Empty(result.StdErr);
+    }
 }

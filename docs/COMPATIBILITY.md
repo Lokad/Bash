@@ -70,6 +70,12 @@ If a temporary scalar is converted to an array, a helper's new local inherits th
 structured array value. This deliberately preserves its data and kind where both
 pinned GNU 5.2 references emit a scalar containing byte 01 in that nested case.
 
+Variable-prefix expansions `${!prefix@}` and `${!prefix*}` include assigned
+names from enclosing function scopes. An unassigned local can hide a value
+while the outer assigned name still appears in the listing. Matching names
+appear once in unsigned-byte order. Ordinary parameter reads follow the
+active binding, and quoted `*` uses the ordinary IFS join rules.
+
 Self-referencing nameref declaration initializers fail at script scope without
 replacing the binding. Function declarations warn instead; circular local reads
 and ordinary writes can select the global binding. A self-element target keeps

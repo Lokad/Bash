@@ -35,7 +35,7 @@ public sealed partial class Variables
     private const int BindingOverheadBytes = 128;
     private const int BindingNameSetEntryBytes = 40;
     // Four backing positions per selected name cover hash-table growth and replacement overlap.
-    internal const int ExportSelectionNameBytes = 4 * BindingNameSetEntryBytes;
+    internal const int BindingNameSelectionBytes = 4 * BindingNameSetEntryBytes;
     private const int PositionalEntryBytes = 32;
     internal static readonly BindingName LastArgumentName = "_";
     private static readonly BindingName LineNumberName = "LINENO";
@@ -515,7 +515,7 @@ public sealed partial class Variables
             if (owner.IsScriptPrefix(name)) owner._declaredPrefixes.Add(name);
         }
 
-        internal Variables? ExportSnapshot => _parent == null ? _saved : null;
+        internal Variables? SavedBindings => _parent == null ? _saved : null;
         internal bool IsTemporaryPrefixScope => _parent != null;
         internal IReadOnlySet<BindingName> SavedNames => _names;
         internal IReadOnlySet<BindingName> PromotedPrefixes => _promotedPrefixes;
@@ -1726,7 +1726,7 @@ public sealed partial class Variables
 
         void Select(BindingName name)
         {
-            selectionMemory?.Grow(ExportSelectionNameBytes);
+            selectionMemory?.Grow(BindingNameSelectionBytes);
             selected.Add(name);
         }
     }

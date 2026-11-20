@@ -1551,7 +1551,7 @@ public sealed partial class Evaluation : IFileTester
                 ClearExports(prefix.Saved);
             for (var frame = executionScope.Context.FunctionContext; frame != null; frame = frame.Enclosing)
             {
-                if (frame.Locals.ExportSnapshot is { } locals)
+                if (frame.Locals.SavedBindings is { } locals)
                     ClearExports(locals);
                 if (frame.PrefixBindings is { } functionBindings)
                     ClearExports(functionBindings.SavedVariables);
@@ -3153,7 +3153,7 @@ public sealed partial class Evaluation : IFileTester
                     CheckCancellation();
                     if (functionPrefixes.Contains(name))
                         continue;
-                    selectionMemory.Grow(global::Lokad.Bash.Evaluation.Variables.ExportSelectionNameBytes);
+                    selectionMemory.Grow(global::Lokad.Bash.Evaluation.Variables.BindingNameSelectionBytes);
                     functionPrefixes.Add(name);
                 }
             }
@@ -3167,7 +3167,7 @@ public sealed partial class Evaluation : IFileTester
                         yield return binding;
                     prefix = prefix.Enclosing;
                 }
-                if (function.Locals.ExportSnapshot is { } locals)
+                if (function.Locals.SavedBindings is { } locals)
                     foreach (var binding in Unhide(locals, function.Locals.SavedNames, function.PrefixNames))
                         yield return binding;
                 if (function.PrefixBindings is { } bindings)
@@ -4404,7 +4404,7 @@ public sealed partial class Evaluation : IFileTester
                         if (inherited.IsExported(bindingName))
                             return inherited;
                     }
-                    if (function.Locals.ExportSnapshot != null || function.Locals.BlocksPromotion(bindingName))
+                    if (function.Locals.SavedBindings != null || function.Locals.BlocksPromotion(bindingName))
                         return owner;
                 }
                 while (prefix != null && prefix.FunctionDepth == function.Depth)
