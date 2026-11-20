@@ -1321,9 +1321,14 @@ public sealed partial class Evaluation : IFileTester
             {
                 publishStatus &= !hasStatusPrefix;
                 // Argument/prefix expansion and redirections can supersede a prepared failure.
+                if (terminal.Help is { } help)
+                {
+                    var helpResult = await WriteBuiltinHelpUnlessStdoutClosedAsync(help.Name, help.Kind, help.CommandName,
+                        BuiltinHelpOutput.Prepared, negated: false).ConfigureAwait(false);
+                    return CompleteCommandResult(helpResult, terminal.Completion, commandInvoked: true);
+                }
                 if (!terminal.Message.IsEmpty)
-                    await ExecuteWriteAsync(terminal.Channel == CommandMessageChannel.StandardOutput
-                        ? GetStdOutDescriptor() : GetStdErrDescriptor(), terminal.Message.Bytes).ConfigureAwait(false);
+                    await ExecuteWriteAsync(GetStdErrDescriptor(), terminal.Message.Bytes).ConfigureAwait(false);
                 var terminalResult = await FinalizeResultAsync(terminal.Result, false).ConfigureAwait(false);
                 return CompleteCommandResult(terminalResult, terminal.Completion, commandInvoked: true);
             }
@@ -4150,7 +4155,7 @@ public sealed partial class Evaluation : IFileTester
         public sealed record Terminal(
             EvaluationResult Result,
             ShellValue Message,
-            CommandMessageChannel Channel,
+            PreparedHelp? Help,
             CommandWords Words,
             ShellValue LastReadArgument,
             CommandCompletion Completion,
@@ -4179,11 +4184,7 @@ public sealed partial class Evaluation : IFileTester
 
     private sealed record ExecOptions(ShellValue? ArgumentZero, bool Login, bool ClearEnvironment);
 
-    private enum CommandMessageChannel
-    {
-        StandardOutput,
-        StandardError
-    }
+    private readonly record struct PreparedHelp(ShellValue Name, string CommandName, BuiltinKind Kind);
 
     private enum CommandCompletion
     {

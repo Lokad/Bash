@@ -117,11 +117,10 @@ public sealed partial class Evaluation
         Variables variables,
         bool negated)
     {
-        var command = ShellValue.FromText("dirs");
-        var documentation = BuiltinDocumentation.For(BuiltinKind.Dirs);
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
-            return await WriteBuiltinHelpAsync(command, documentation.Synopsis("dirs"), documentation.Description, negated)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Dirs, "dirs", negated)
                 .ConfigureAwait(false);
+        var documentation = BuiltinDocumentation.For(BuiltinKind.Dirs);
 
         var clear = false;
         var fullPaths = false;
@@ -321,30 +320,28 @@ public sealed partial class Evaluation
         BuiltinKind kind, DirectoryStackOperands operands, IReadOnlyList<ShellValue> words, bool negated)
     {
         var name = kind == BuiltinKind.Pushd ? "pushd" : "popd";
-        var command = ShellValue.FromText(name);
-        var documentation = BuiltinDocumentation.For(kind);
         if (operands.Outcome == DirectoryStackOperandOutcome.Help)
-            return await WriteBuiltinHelpAsync(command, documentation.Synopsis(name), documentation.Description, negated)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], kind, name, negated)
                 .ConfigureAwait(false);
         if (operands.Outcome == DirectoryStackOperandOutcome.TooManyArguments)
         {
-            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("too many arguments")).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync(words[0], ShellValue.FromText("too many arguments")).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
 
         var reason = operands.Outcome == DirectoryStackOperandOutcome.InvalidNumber ? ": invalid number" : ": invalid argument";
-        return await ReportDirectoryStackUsageAsync(name, documentation, words[operands.NextOperand], reason, negated)
-            .ConfigureAwait(false);
+        return await ReportDirectoryStackUsageAsync(name, BuiltinDocumentation.For(kind),
+            words[operands.NextOperand], reason, negated).ConfigureAwait(false);
     }
 
     private async Task<EvaluationResult> ReportDirectoryStackUsageAsync(string name, BuiltinDocumentation documentation,
         ShellValue operand, string reason, bool negated)
     {
         var command = ShellValue.FromText(name);
-        await ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(reason)])
+        await WriteDiagnosticUnlessStderrClosedAsync([command], [operand, ShellValue.FromText(reason)], _builtinDiagnostics)
             .ConfigureAwait(false);
-        await ReportExpansionDiagnosticAsync([command],
-                [ShellValue.FromText("usage: "), ShellValue.FromText(documentation.Synopsis(name))])
+        await WriteDiagnosticUnlessStderrClosedAsync([command],
+                [ShellValue.FromText("usage: "), ShellValue.FromText(documentation.Synopsis(name))], _builtinDiagnostics)
             .ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
     }

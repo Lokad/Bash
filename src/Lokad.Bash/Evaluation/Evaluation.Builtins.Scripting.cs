@@ -109,15 +109,13 @@ public sealed partial class Evaluation
             if (option.Span.SequenceEqual("--"u8))
                 first++;
             else if (option.Span.SequenceEqual("--help"u8))
-            {
-                var documentation = BuiltinDocumentation.For(kind);
-                return await WriteBuiltinHelpAsync(command, documentation.Synopsis(commandName), documentation.Description, negated)
+                return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, kind, commandName, negated)
                     .ConfigureAwait(false);
-            }
             else if (option.Span is [(byte)'-', _, ..])
             {
-                await ReportExpansionDiagnosticAsync([command],
-                    [ShellValue.FromBytes(option[..2]), ShellValue.FromText(": invalid option")]).ConfigureAwait(false);
+                await WriteDiagnosticUnlessStderrClosedAsync([command],
+                    [ShellValue.FromBytes(option[..2]), ShellValue.FromText(": invalid option")], _builtinDiagnostics)
+                    .ConfigureAwait(false);
                 return await FinishUsageErrorAsync().ConfigureAwait(false);
             }
         }
@@ -134,7 +132,8 @@ public sealed partial class Evaluation
 
         if (first == words.Count)
         {
-            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("filename argument required"))
+            await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("filename argument required")],
+                _builtinDiagnostics)
                 .ConfigureAwait(false);
             return await FinishUsageErrorAsync().ConfigureAwait(false);
         }
@@ -162,8 +161,8 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> FinishUsageErrorAsync()
         {
-            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("usage: "
-                + BuiltinDocumentation.For(kind).Synopsis(commandName))).ConfigureAwait(false);
+            await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: "
+                + BuiltinDocumentation.For(kind).Synopsis(commandName))], _builtinDiagnostics).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
     }

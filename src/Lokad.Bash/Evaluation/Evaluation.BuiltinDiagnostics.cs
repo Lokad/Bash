@@ -13,7 +13,7 @@ public sealed partial class Evaluation
     internal bool BuiltinDiagnosticsOpen => _builtinDiagnostics?.Result.CanAcceptMore != false;
 
     private enum ClosedStderrHandling { AttemptWrite, Discard }
-    private enum BuiltinHelpOutput { Standard, Control }
+    private enum BuiltinHelpOutput { Standard, Control, Prepared }
 
     private Task<DescriptorWriteResult> WriteDiagnosticUnlessStderrClosedAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope) =>

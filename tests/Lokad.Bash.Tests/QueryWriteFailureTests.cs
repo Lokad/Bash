@@ -83,6 +83,12 @@ public sealed class QueryWriteFailureTests
     [InlineData("mapfile")]
     [InlineData("readarray")]
     [InlineData("help")]
+    [InlineData("dirs")]
+    [InlineData("pushd")]
+    [InlineData("popd")]
+    [InlineData("eval")]
+    [InlineData("source")]
+    [InlineData(".")]
     public async Task BuiltinHelpKeepsUsageStatusWithShellClosedStdout(string name)
     {
         await using var host = new TestHost();
@@ -99,6 +105,8 @@ public sealed class QueryWriteFailureTests
     [InlineData("read --help")]
     [InlineData("mapfile --help")]
     [InlineData("readarray --help")]
+    [InlineData("dirs --help")]
+    [InlineData("eval --help")]
     public async Task BuiltinOutputFailureKeepsTheHostCause(string script)
     {
         var host = new TestOperationVisitor([]) { RecordAppends = true };
@@ -109,6 +117,52 @@ public sealed class QueryWriteFailureTests
         Assert.Equal(2, host.Appends.Count);
         Assert.Equal(FileDescriptor.StdErr, host.Appends[1].Descriptor);
         Assert.Contains("write error: reported output failure", Encoding.UTF8.GetString(host.Appends[1].Content));
+    }
+
+    [Theory]
+    [InlineData("builtin")]
+    [InlineData("command")]
+    [InlineData("exec")]
+    public async Task PreparedHelpSkipsTheClosedOutputDescriptor(string name)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.WriteFailure);
+
+        var result = await BashScript.RunAsync(host, name + " --help >&-", EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.Appends);
+    }
+
+    [Fact]
+    public async Task PreparedHelpReservesItsRecordAfterRedirectionAndReleasesItBeforeClose()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var state = new Eval(Parser.Parse("command --help >documentation"));
+        state.Memory.Budget = owner;
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep(deadline.Token));
+        var before = governor.ReservedBytes;
+        var descriptor = new FileDescriptor(17);
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        var pending = governor.ReservedBytes;
+        var output = write.Content.ToArray();
+        write.SetResult(DescriptorWriteResult.WriteFailure);
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep(deadline.Token));
+        var after = governor.ReservedBytes;
+        close.SetResult(null);
+
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        Assert.Equal(descriptor, write.FileDescriptor);
+        Assert.Equal(descriptor, close.Descriptor);
+        Assert.StartsWith("command: command [-pVv] command [arg ...]\n", Encoding.UTF8.GetString(output));
+        Assert.Equal(output.Length, pending - before);
+        Assert.Equal(before, after);
+        Assert.Equal(2, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Theory]

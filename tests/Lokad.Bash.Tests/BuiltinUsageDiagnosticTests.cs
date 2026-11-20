@@ -46,6 +46,26 @@ public sealed class BuiltinUsageDiagnosticTests
     }
 
     [Theory]
+    [InlineData("dirs -c stray")]
+    [InlineData("pushd -x")]
+    [InlineData("popd stray")]
+    [InlineData("eval -q")]
+    [InlineData("source -q")]
+    [InlineData(". -q")]
+    [InlineData("source")]
+    public async Task StackAndScriptingUsageSkipShellClosedStderr(string command)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.WriteFailure);
+        host.EnqueueAppendResult(DescriptorWriteResult.WriteFailure);
+
+        var result = await BashScript.RunAsync(host, command + " 2>&-", EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.Appends);
+    }
+
+    [Theory]
     [InlineData("eval", "-", "[--] [arg ...]", false)]
     [InlineData("source", "-", "[--] filename [arguments]", false)]
     [InlineData(".", "-", "[--] filename [arguments]", false)]

@@ -137,6 +137,9 @@ and leaves only the current directory on the stack without writing output.
 retain the working directory and its variables. They finish option validation
 before navigation. Ordinary `pushd` accepts one path, and `popd` rejects stray
 operands before `--`. The terminator ends option scanning.
+A leading `--help` for `dirs`, `pushd` or `popd` returns 2 and leaves the stack
+intact, including when stdout is closed. Usage errors retain status 2 when
+stderr is closed.
 A navigation operand of `-` in `pushd` selects and announces OLDPWD.
 If that announcement fails, the changed directory and its bookkeeping survive
 and the saved stack keeps its existing entries. An empty path revalidates the
@@ -536,7 +539,8 @@ execution rule. Missing loop syntax still fails during parsing.
 
 `eval`, `source` and `.` consume one leading `--` from their expanded fields.
 Other multi-byte dash options report status 2. A leading `--help` prints the
-builtin's usage and returns 2. Later fields are ordinary operands.
+builtin's usage and returns 2, including when stdout is closed. Usage errors
+return 2 when stderr is closed. Later fields are ordinary operands.
 `eval` joins its remaining fields with spaces and succeeds on empty input.
 `source` and `.` require a filename and use any following fields as positional
 parameters for that file. The filename must be valid UTF-8 for the host path

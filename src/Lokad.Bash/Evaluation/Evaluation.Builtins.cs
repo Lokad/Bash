@@ -122,7 +122,7 @@ public sealed partial class Evaluation
             {
                 allowsPersistentRedirections = false;
                 if (next is not { } first)
-                    return Terminal(0, ShellValue.Empty, CommandMessageChannel.StandardError, builtinKind);
+                    return Terminal(0, ShellValue.Empty, help: null, builtinKind);
                 if (first.Bytes.Span.SequenceEqual("--help"u8))
                     return Help(builtinKind);
                 if (first.Bytes.Span.SequenceEqual("--"u8))
@@ -131,12 +131,12 @@ public sealed partial class Evaluation
                     return InvalidOption(builtinKind, first.Bytes.Span[1]);
 
                 if (next is not { } name)
-                    return Terminal(0, ShellValue.Empty, CommandMessageChannel.StandardError, builtinKind);
+                    return Terminal(0, ShellValue.Empty, help: null, builtinKind);
                 if (!BuiltinClassification.TryResolve(name.Bytes.Span, out _))
                 {
                     return Terminal(1, BuildTerminalMessage(
                         [ShellValue.FromText("builtin: "), name, ShellValue.FromText(": not a shell builtin\n")]),
-                        CommandMessageChannel.StandardError, builtinKind);
+                        help: null, builtinKind);
                 }
 
                 // The registry only accepts short ASCII names.
@@ -255,7 +255,7 @@ public sealed partial class Evaluation
             }
 
             if (next is not { } target)
-                return Terminal(0, ShellValue.Empty, CommandMessageChannel.StandardError, builtinKind);
+                return Terminal(0, ShellValue.Empty, help: null, builtinKind);
 
             commandValue = target;
             commandName = await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
@@ -289,16 +289,12 @@ public sealed partial class Evaluation
             var newline = ShellValue.FromText("\n");
             var output = BuildTerminalMessage([commandValue, ShellValue.FromText(": "), option, ShellValue.FromText(reason),
                 newline, commandValue, ShellValue.FromText(": usage: "), usage, newline]);
-            return Terminal(2, output, CommandMessageChannel.StandardError, kind);
+            return Terminal(2, output, help: null, kind);
         }
 
-        PreparedCommand.Terminal Help(BuiltinKind kind)
-        {
-            // Describe the hosted subset; do not promise Bash process replacement or execfail support.
-            var documentation = BuiltinDocumentation.For(kind);
-            var message = ShellValue.FromText($": {documentation.Synopsis(commandName)}\n    {documentation.Description}\n");
-            return Terminal(2, BuildTerminalMessage([commandValue, message]), CommandMessageChannel.StandardOutput, kind);
-        }
+        // Keep help symbolic through argument expansion and descriptor setup.
+        PreparedCommand.Terminal Help(BuiltinKind kind) =>
+            Terminal(2, ShellValue.Empty, new PreparedHelp(commandValue, commandName, kind), kind);
 
         ShellValue BuildTerminalMessage(ReadOnlySpan<ShellValue> parts)
         {
@@ -320,8 +316,8 @@ public sealed partial class Evaluation
             return ShellValue.FromBytes(output);
         }
 
-        PreparedCommand.Terminal Terminal(int exitCode, ShellValue message, CommandMessageChannel channel, BuiltinKind kind) =>
-            new(EvaluationResult.FromExitCode(exitCode), message, channel, RemainingWords(null), lastReadArgument, completion,
+        PreparedCommand.Terminal Terminal(int exitCode, ShellValue message, PreparedHelp? help, BuiltinKind kind) =>
+            new(EvaluationResult.FromExitCode(exitCode), message, help, RemainingWords(null), lastReadArgument, completion,
                 // Direct exec retains redirections even on option failure/help; builtin exec restores them.
                 kind == BuiltinKind.Exec && allowsPersistentRedirections
                     ? RedirectionLifetime.Evaluation : RedirectionLifetime.Command);

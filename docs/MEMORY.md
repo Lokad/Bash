@@ -97,8 +97,10 @@ capacity between conversions. An emitted record stays charged through the
 stderr write. Standalone formatting that returns diagnostics owns their
 materialized bytes under the caller's scope. Output-only formatting and
 shell-closed stderr skip diagnostic storage.
-Prepared terminal messages admit their final buffer in the command workspace,
+Prepared terminal diagnostics admit their final buffer in the command workspace,
 which holds it through later expansion, redirection setup and host writes.
+Prepared help retains the reached builtin and admits its output after
+descriptor setup. Shell-closed stdout bypasses that allocation.
 Command-name and command-control preparation admit captured fields and
 borrow the unexpanded operand tail from its existing source owner.
 The builtin wrapper checks the target in the byte registry and decodes names
