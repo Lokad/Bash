@@ -6,10 +6,10 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Expanded arithmetic bytes with the source boundaries of eagerly prepared selectors.</summary>
 internal sealed class ArithmeticOperand
 {
-    public ArithmeticOperand(ShellValue value, IReadOnlyDictionary<int, Subscript> subscripts, ArithmeticEvaluation.LexicalSyntax? syntax)
+    public ArithmeticOperand(ShellValue value, IReadOnlyDictionary<int, Subscript>? subscripts, ArithmeticEvaluation.LexicalSyntax? syntax)
     {
         Value = value;
-        Subscripts = subscripts;
+        Subscripts = subscripts ?? NoSubscripts;
         Syntax = syntax;
     }
     private static readonly IReadOnlyDictionary<int, Subscript> NoSubscripts = new Dictionary<int, Subscript>();

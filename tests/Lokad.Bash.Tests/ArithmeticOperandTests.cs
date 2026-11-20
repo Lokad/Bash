@@ -46,6 +46,23 @@ public sealed class ArithmeticOperandTests
     }
 
     [Fact]
+    public async Task PreparingASingleSegmentOperandReusesItsRawByteBacking()
+    {
+        var evaluation = new Eval(Parser.Parse(":"));
+        var variables = Variables.CreateEmpty();
+        var value = ShellValue.FromBytes(new byte[] { (byte)'1', 0xff, (byte)'\r' });
+        Assert.True(variables.TrySetScalar("operand", value));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        using var command = evaluation.Memory.BeginCommand(scope);
+
+        var operand = Assert.IsType<ArithmeticOperand>(await WordExpansion.PrepareArithmeticAsync(
+            ShellSource.FromText("\"$operand\""), scope, ExpansionPurpose.ArithmeticSource));
+
+        Assert.True(operand.Value.Bytes.Equals(value.Bytes));
+        Assert.Empty(operand.Subscripts);
+    }
+
+    [Fact]
     public async Task PreparingAnAggregateOperandRetainsTheSeparatorsAroundEmptyFields()
     {
         var evaluation = new Eval(Parser.Parse(":"));

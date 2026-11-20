@@ -33,14 +33,15 @@ internal static partial class WordExpansion
         var scanContext = CreateExpansionScanContext(scope);
         var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), scanContext);
         using var bytes = new ByteMemoryBuilder(0, budget.Workspace);
-        var subscripts = new Dictionary<int, ArithmeticOperand.Subscript>();
+        Dictionary<int, ArithmeticOperand.Subscript>? subscripts = null;
         var firstPart = 0;
         for (var partIndex = 0; partIndex < word.Parts.Count && scope.CanExpand; partIndex++)
         {
             if (word.Parts[partIndex] is not SourceWordPart { Kind: WordPartKind.ArithmeticSubscript } selectorPart)
                 continue;
 
-            await FlushAsync(partIndex).ConfigureAwait(false);
+            if (firstPart != partIndex)
+                AppendFields((await ExpandAsync(word, purpose, firstPart, partIndex).ConfigureAwait(false)).Build());
             if (!scope.CanExpand)
                 break;
             firstPart = partIndex + 1;
@@ -55,24 +56,34 @@ internal static partial class WordExpansion
                 break;
             var expanded = ExpandedWord.JoinValuesWithSpaces(builder.Build(), budget);
             budget.Charge(256);
+            subscripts ??= new Dictionary<int, ArithmeticOperand.Subscript>();
             subscripts.Add(bytes.Length, new ArithmeticOperand.Subscript(subscript,
                 new ExpandedArraySubscript(expanded, QuoteForArithmetic: expandSubscripts)));
             bytes.Append((byte)'[').Append(expanded.Bytes).Append((byte)']');
         }
-        if (scope.CanExpand)
-            await FlushAsync(word.Parts.Count).ConfigureAwait(false);
+        var tail = scope.CanExpand && firstPart != word.Parts.Count
+            ? (await ExpandAsync(word, purpose, firstPart, word.Parts.Count).ConfigureAwait(false)).Build()
+            : [];
         if (!scope.CanExpand)
             return null;
-        var value = ShellValue.FromBytes(bytes.DetachSnapshot());
+        ShellValue value;
+        if (subscripts == null && tail is [{ Segments: [var segment] }])
+        {
+            // The expanded segment already retains its admitted backing.
+            value = segment.Content;
+            if (value.Bytes.Length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                throw new ByteMemoryBuilder.LimitExceededException();
+        }
+        else
+        {
+            AppendFields(tail);
+            value = ShellValue.FromBytes(bytes.DetachSnapshot());
+        }
         var lexical = syntax?.Syntax != null && value.Bytes.Span.SequenceEqual(source.AsSpan()) ? syntax.Syntax : null;
         return new ArithmeticOperand(value, subscripts, lexical);
 
-        async Task FlushAsync(int endPart)
+        void AppendFields(IReadOnlyList<ExpandedWord> fields)
         {
-            if (firstPart == endPart)
-                return;
-            var builder = await ExpandAsync(word, purpose, firstPart, endPart).ConfigureAwait(false);
-            var fields = builder.Build();
             if (fields.Count == 0)
                 return;
 

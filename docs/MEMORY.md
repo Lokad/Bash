@@ -237,9 +237,11 @@ their allowance until the caller finishes encoding them.
 Immutable arithmetic metadata, literal word fields and prepared list navigation
 belong to the syntax and are shared across executions. Stable operands and literal
 fields borrow its bytes; runtime-expanded operands, selectors and argument
-collections retain command workspace admission. Dynamic arithmetic copies joined
-fields directly into admitted operand backing. Growth accounts for replacement
-overlap and the operand keeps its charge through numeric evaluation.
+collections retain command workspace admission. A dynamic operand with a single
+expanded segment and no prepared selectors reuses the segment's admitted bytes.
+Other dynamic operands write joined fields directly into admitted backing.
+Growth accounts for replacement overlap and the operand keeps its charge through
+numeric evaluation.
 Scalar assignment and byte-only selectors use the same field join to copy
 expanded bytes and separators into their admitted result. Shell-pattern
 consumers project bytes and quote masks directly from the fields. Regex pattern
