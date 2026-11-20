@@ -124,6 +124,7 @@ public sealed partial class Evaluation
     }
 
     private enum ScriptExecutionKind { Root, Source, Eval, Trap }
+    private const int BuiltinSyntaxErrorStatus = 257;
 
     /// <summary>Copies eval/trap input into an owner retained by any syntax that survives execution.</summary>
     private async Task<EvaluationResult> EvaluateCopiedCommandUnitsAsync(
@@ -184,6 +185,24 @@ public sealed partial class Evaluation
                 if (commands.Current is CommandUnitParseResult.Failed failedUnit)
                 {
                     await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
+                    if (kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval)
+                    {
+                        var failure = failedUnit.Failure.Kind;
+                        if (failure is ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader)
+                        {
+                            // These child boundaries unwind the builtin before running their EXIT action.
+                            if (_state.ForkKind is ShellForkKind.CommandSubstitution or ShellForkKind.PipelineSimpleCommand)
+                                return EvaluationResult.Exit(1);
+
+                            // In the invoking shell, EXIT sees the full parser status and the active
+                            // builtin scope. The result crossing the shell boundary uses its low byte.
+                            var status = failure == ParserFailureKind.SubstitutionGrammar ? BuiltinSyntaxErrorStatus : 2;
+                            var exit = await RunExitTrapAsync(scope, EvaluationResult.Exit(status)).ConfigureAwait(false);
+                            return exit.WithExitCode(exit.ExitCode & byte.MaxValue);
+                        }
+                        if (failure == ParserFailureKind.ArrayQuotedSubstitutionForHeader)
+                            return result.WithExitCode(1);
+                    }
                     if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
                         return EvaluationResult.Exit(2);
                     return result.WithExitCode(2);

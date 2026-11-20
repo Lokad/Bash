@@ -152,7 +152,8 @@ public static class Parser
     {
         if (input.Length > MaximumScriptBytes)
         {
-            yield return new CommandUnitParseResult.Failed(new SyntaxError(ScriptSizeLimitMessage, 0));
+            yield return new CommandUnitParseResult.Failed(
+                new ParserFailure(new SyntaxError(ScriptSizeLimitMessage, 0), ParserFailureKind.Limit));
             yield break;
         }
 
@@ -167,9 +168,9 @@ public static class Parser
             if (trailing.Kind is not TokenKind.Newline and not TokenKind.EndOfInput)
                 tokenizer.RecordError("Unexpected token after command list.", trailing.Source.Start.Value);
 
-            if (tokenizer.Error is { } error)
+            if (tokenizer.Failure is { } failure)
             {
-                yield return new CommandUnitParseResult.Failed(error);
+                yield return new CommandUnitParseResult.Failed(failure);
                 yield break;
             }
             if (command == null)
@@ -195,7 +196,7 @@ public static class Parser
         out ParsedScript? parsed,
         out SubstitutionSyntaxFailure failure,
         out bool preserveAdjacentOpening,
-        out SyntaxError? syntaxError)
+        out ParserFailure? syntaxError)
     {
         parsed = null;
         failure = SubstitutionSyntaxFailure.None;
@@ -209,11 +210,11 @@ public static class Parser
         SkipNewlines(tokenizer);
         var (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
         SkipNewlines(tokenizer);
-        if (tokenizer.Error is { } error)
+        if (tokenizer.Failure is { } bodyFailure)
         {
-            if (context.ParsingLimitExceeded || error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
+            if (context.ParsingLimitExceeded || bodyFailure.Error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
             {
-                syntaxError = error;
+                syntaxError = bodyFailure.InSubstitution();
                 return ShellScanStatus.Invalid;
             }
 
@@ -703,7 +704,8 @@ public static class Parser
             if (!ArithmeticForSyntax.TryParse(nameToken.CommandExpression, separators, tokenizer.ScanContext.SyntaxMemory,
                     out var syntax, out var error))
             {
-                tokenizer.RecordError(error, nameToken.Source.Start.Value);
+                tokenizer.RecordFailure(new ParserFailure(new SyntaxError(error, nameToken.Source.Start.Value),
+                    ParserFailureKind.ArithmeticForHeader));
                 return null;
             }
             return new ArithmeticForCommand(syntax, arithmeticBody);
@@ -1037,6 +1039,11 @@ public static class Parser
             while (true)
             {
                 var token = tokenizer.NextTokenCore();
+                if (tokenizer.Error != null)
+                {
+                    tokenizer.MarkCompoundArrayFailure();
+                    return values;
+                }
                 switch (token.Kind)
                 {
                     case TokenKind.CloseParen:

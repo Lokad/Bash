@@ -48,7 +48,7 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Equal((ShellScanStatus)expected, CommandSubstitutionScanner.ScanParsedForLaterReuse(
             context, ShellSource.FromText(source), 0, out _, out var rejected, out var error));
         Assert.Null(rejected);
-        Assert.Equal(message, error?.Message);
+        Assert.Equal(message, error?.Error.Message);
 
         Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsed(
             context, ShellSource.FromText("$(printf valid)"), 0, out _, out var accepted, out var laterError));

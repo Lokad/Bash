@@ -141,6 +141,15 @@ If that grammar rejects a balanced adjacent form, the capture reads its source
 in complete units when reached. A failing child unit reports its diagnostic and
 leaves any earlier complete units' output and effects available. A skipped
 capture stays inert.
+A diagnosed command substitution grammar error in `source` or `eval` can
+terminate the invoking shell even in a tested command. A malformed arithmetic
+`for` header in an unquoted substitution terminates with status 2. An enclosing
+double quote makes that header error return from the builtin with status 2,
+or status 1 inside a compound array assignment. For errors such as a pipeline
+with a missing command, EXIT sees parser status 257 and shell completion
+returns its low byte, 1. In a command capture or a simple pipeline stage,
+the child unwinds the builtin and completes with status 1. Ordinary syntax
+errors and incomplete substitutions continue to use the builtin's return path.
 A final bare `time` in an affected parenthesized substitution reports a syntax
 error when the substitution is reached, before executing any of its commands.
 The enclosing command unit ends with status 1 and earlier bindings retain their

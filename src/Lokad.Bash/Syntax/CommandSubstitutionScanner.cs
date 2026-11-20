@@ -60,7 +60,7 @@ internal static class CommandSubstitutionScanner
         int startIndex,
         out int endIndex,
         out CommandSubstitutionSyntax? substitution,
-        out SyntaxError? error) =>
+        out ParserFailure? error) =>
         ScanParsed(context, text, startIndex, context.PreserveDelimiterLookahead, out endIndex, out substitution, out error);
 
     /// <summary>Keeps a structural lookahead result until tokenization reaches the same source position.</summary>
@@ -70,11 +70,11 @@ internal static class CommandSubstitutionScanner
         int startIndex,
         out int endIndex,
         out CommandSubstitutionSyntax? substitution,
-        out SyntaxError? error) =>
+        out ParserFailure? error) =>
         ScanParsed(context, text, startIndex, keepLookahead: true, out endIndex, out substitution, out error);
 
     private static ShellScanStatus ScanParsed(ShellScanContext context, ShellSource text, int startIndex,
-        bool keepLookahead, out int endIndex, out CommandSubstitutionSyntax? substitution, out SyntaxError? error)
+        bool keepLookahead, out int endIndex, out CommandSubstitutionSyntax? substitution, out ParserFailure? error)
     {
         error = null;
         if (keepLookahead ? context.TryGetCommandSubstitution(text, startIndex, out var cached)
@@ -114,7 +114,7 @@ internal static class CommandSubstitutionScanner
         int startIndex,
         out int endIndex,
         out CommandSubstitutionSyntax? substitution,
-        out SyntaxError? error)
+        out ParserFailure? error)
     {
         substitution = null;
         error = null;

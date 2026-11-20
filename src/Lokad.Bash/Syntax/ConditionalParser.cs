@@ -15,7 +15,7 @@ internal sealed class ConditionalParser
     private List<(int Start, int End)>? _ignoredRanges;
     private int _position;
     private Token? _lookahead;
-    private SyntaxError? _error;
+    private ParserFailure? _failure;
 
     private ConditionalParser(ShellSource source, int position, ShellScanContext context, bool command) =>
         (_source, _position, _context, _command) = (source, position, context, command);
@@ -27,8 +27,12 @@ internal sealed class ConditionalParser
     {
         var parser = new ConditionalParser(source, 0, new ShellScanContext(), command: false);
         spelling = default;
-        if (!parser.TryParse(out expression, out error))
+        if (!parser.TryParse(out expression, out var failure))
+        {
+            error = failure.Error;
             return false;
+        }
+        error = null;
         spelling = parser.GetSpelling(0, source.Length);
         return true;
     }
@@ -36,7 +40,7 @@ internal sealed class ConditionalParser
     /// <summary>The operand grammar owns closing-delimiter recognition as well as comments and regex words.</summary>
     internal static bool TryReadCommand(ShellSource source, int start, ShellScanContext context,
         [NotNullWhen(true)] out ConditionalCommand? command, out int end,
-        [NotNullWhen(false)] out SyntaxError? error)
+        [NotNullWhen(false)] out ParserFailure? error)
     {
         var parser = new ConditionalParser(source, start, context, command: true);
         command = null;
@@ -50,18 +54,18 @@ internal sealed class ConditionalParser
     }
 
     private bool TryParse([NotNullWhen(true)] out ConditionalExpression? expression,
-        [NotNullWhen(false)] out SyntaxError? error)
+        [NotNullWhen(false)] out ParserFailure? error)
     {
         expression = ParseOr(0);
         var ending = Peek();
         if (ending.Kind != (_command ? TokenKind.EndCommand : TokenKind.End))
             Fail(ending.Kind == TokenKind.End ? "Unterminated conditional command."
                 : "Unexpected conditional operator or operand.", ending.Offset);
-        error = _context.LimitError ?? _error;
+        error = _context.LimitError is { } limit ? new ParserFailure(limit, ParserFailureKind.Limit) : _failure;
         if (error != null || expression == null)
         {
             expression = null;
-            error ??= new SyntaxError("Conditional operand expected.", _position);
+            error ??= new ParserFailure(new SyntaxError("Conditional operand expected.", _position), ParserFailureKind.Grammar);
             return false;
         }
         return true;
@@ -70,7 +74,7 @@ internal sealed class ConditionalParser
     private ConditionalExpression? ParseOr(int depth)
     {
         var left = ParseAnd(depth);
-        while (_error == null && Consume(TokenKind.Or))
+        while (_failure == null && Consume(TokenKind.Or))
         {
             var right = ParseAnd(depth);
             if (left == null || right == null)
@@ -83,7 +87,7 @@ internal sealed class ConditionalParser
     private ConditionalExpression? ParseAnd(int depth)
     {
         var left = ParseTerm(depth);
-        while (_error == null && Consume(TokenKind.And))
+        while (_failure == null && Consume(TokenKind.And))
         {
             var right = ParseTerm(depth);
             if (left == null || right == null)
@@ -236,7 +240,7 @@ internal sealed class ConditionalParser
         if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, quote, _context,
                 out var word, out var error))
             return word;
-        _error ??= new SyntaxError(error.Message, token.Offset + error.Offset);
+        Fail(error.Message, token.Offset + error.Offset);
         return null;
     }
 
@@ -293,7 +297,7 @@ internal sealed class ConditionalParser
         if (!_context.TryReserveSyntax())
         {
             Fail("Script parsing limit exceeded (too many tokens or word parts).", start);
-            _context.RecordLimitError(_error ?? throw new InvalidOperationException("A refused token requires an error."));
+            _context.RecordLimitError(_failure?.Error ?? throw new InvalidOperationException("A refused token requires an error."));
             return new(TokenKind.Invalid, default, start);
         }
         if (_command && ShellSourceCursor.TryMatchLogicalText(span, start, "]]", out var closing))
@@ -353,9 +357,9 @@ internal sealed class ConditionalParser
             switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
             {
                 case ShellNestedExpansionScan.Complete: continue;
-                case ShellNestedExpansionScan.Invalid { Error: { } error }:
-                    _error ??= error;
-                    return new(TokenKind.Invalid, default, error.Offset);
+                case ShellNestedExpansionScan.Invalid { Failure: { } failure }:
+                    _failure ??= failure;
+                    return new(TokenKind.Invalid, default, failure.Error.Offset);
                 case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid:
                     Fail("Invalid expansion in conditional operand.", cursor.Position);
                     return new(TokenKind.Invalid, default, cursor.Position);
@@ -397,8 +401,9 @@ internal sealed class ConditionalParser
         }
     }
 
-    private void Fail(string message) => _error ??= new(message, _position);
-    private void Fail(string message, int offset) => _error ??= new(message, offset);
+    private void Fail(string message) => Fail(message, _position);
+    private void Fail(string message, int offset) =>
+        _failure ??= new ParserFailure(new SyntaxError(message, offset), ParserFailureKind.Grammar);
 
     private void IgnoreContinuations(int start, int end)
     {

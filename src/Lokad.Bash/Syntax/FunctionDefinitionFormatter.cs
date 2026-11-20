@@ -123,6 +123,7 @@ internal static class FunctionDefinitionFormatter
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
                                 when part is CommandSubstitutionWordPart command
                                     && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy
+                                        or CommandSubstitutionSyntax.AdjacentSubshell
                                         or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }) =>
                                 TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),
                             WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>

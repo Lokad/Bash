@@ -66,7 +66,7 @@ internal static class BracedParameterScanner
         out int endIndex,
         out int errorIndex,
         out bool containsCommandSubstitution,
-        out SyntaxError? error) =>
+        out ParserFailure? error) =>
         ScanCore(
             context,
             text,
@@ -86,7 +86,7 @@ internal static class BracedParameterScanner
         out int endIndex,
         out int errorIndex,
         out ShellSource payload,
-        out SyntaxError? error) =>
+        out ParserFailure? error) =>
         ScanCore(context, text, startIndex, out endIndex, out errorIndex, out payload, out _, out error,
             capturePayload: true);
 
@@ -98,7 +98,7 @@ internal static class BracedParameterScanner
         out int errorIndex,
         out ShellSource payload,
         out bool containsCommandSubstitution,
-        out SyntaxError? error,
+        out ParserFailure? error,
         bool capturePayload)
     {
         endIndex = startIndex;
@@ -138,7 +138,7 @@ internal static class BracedParameterScanner
                 if (nestedResult is ShellNestedExpansionScan.Invalid invalid)
                 {
                     errorIndex = cursor.Position;
-                    error = invalid.Error;
+                    error = invalid.Failure;
                     return BracedParameterScanStatus.InvalidNestedSyntax;
                 }
 

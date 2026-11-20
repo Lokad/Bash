@@ -27,19 +27,34 @@ internal sealed class Tokenizer
         _scanContext.ClearCommandUnitLookahead();
     }
 
-    private SyntaxError? _error;
+    private ParserFailure? _failure;
 
     /// <summary>The first failure; later reads stop without replacing its diagnostic.</summary>
-    internal SyntaxError? Error => _error ?? _scanContext.LimitError;
+    internal ParserFailure? Failure => _failure ?? (_scanContext.LimitError is { } limit
+        ? new ParserFailure(limit, ParserFailureKind.Limit) : null);
+    internal SyntaxError? Error => _failure?.Error ?? _scanContext.LimitError;
 
     internal void RecordError(string message, int offset) => RecordError(new SyntaxError(message, offset));
 
-    internal void RecordError(SyntaxError error)
+    internal void RecordError(SyntaxError error) => RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar));
+
+    internal void RecordFailure(ParserFailure failure)
     {
-        _error ??= _scanContext.LimitError ?? error;
+        _failure ??= _scanContext.ParsingLimitExceeded
+            ? new ParserFailure(_scanContext.LimitError ?? failure.Error, ParserFailureKind.Limit) : failure;
         if (_scanContext.ParsingLimitExceeded)
-            _scanContext.RecordLimitError(_error);
+            _scanContext.RecordLimitError(_failure.Error);
     }
+
+    internal void MarkCompoundArrayFailure()
+    {
+        if (_failure is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
+            _failure = failure with { Kind = ParserFailureKind.ArrayQuotedSubstitutionForHeader };
+    }
+
+    private void RecordExpansionFailure(ParserFailure? failure, bool quoted, string missingDelimiter, int start) =>
+        RecordFailure(failure?.InDoubleQuotes(quoted)
+            ?? new ParserFailure(new SyntaxError(missingDelimiter, start), ParserFailureKind.Delimiter));
 
     private bool TryReserveSyntax()
     {
@@ -417,9 +432,11 @@ internal sealed class Tokenizer
 
                 if (status != ShellScanStatus.NotFound)
                 {
-                    RecordError(error ?? new SyntaxError(status == ShellScanStatus.Incomplete
-                        ? "Unterminated arithmetic command."
-                        : "Invalid arithmetic command.", Position));
+                    if (error != null)
+                        RecordFailure(error);
+                    else
+                        RecordError(status == ShellScanStatus.Incomplete
+                            ? "Unterminated arithmetic command." : "Invalid arithmetic command.", Position);
                     return Located(Token.EndOfInput());
                 }
 
@@ -719,7 +736,7 @@ internal sealed class Tokenizer
         if (!ConditionalParser.TryReadCommand(_input, opening.Source.End.Value, _scanContext,
                 out command, out var end, out var error))
         {
-            RecordError(error);
+            RecordFailure(error);
             return false;
         }
         Position = end;
@@ -852,13 +869,13 @@ internal sealed class Tokenizer
                 AddPart(subscript);
                 continue;
             }
-            if (TryReadBracedParameterExpansion(unquoted))
+            if (TryReadBracedParameterExpansion(unquoted, quotedOperand))
             {
                 continue;
             }
 
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(unquoted))
+                && TryReadArithmeticExpansion(unquoted, quotedOperand))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
@@ -1010,7 +1027,7 @@ internal sealed class Tokenizer
     /// <summary>
     /// Captures canonical arithmetic-expansion syntax while retaining physical cursor offsets.
     /// </summary>
-    private bool TryReadArithmeticExpansion(ByteMemoryBuilder unquoted)
+    private bool TryReadArithmeticExpansion(ByteMemoryBuilder unquoted, bool quoted)
     {
         var start = Position;
         if (_scanContext.TryGetCommandSubstitution(_input, start, out _))
@@ -1021,7 +1038,7 @@ internal sealed class Tokenizer
             return false;
         if (status != ShellScanStatus.Complete)
         {
-            RecordError(error ?? new SyntaxError("Unterminated arithmetic expansion.", start));
+            RecordExpansionFailure(error, quoted, "Unterminated arithmetic expansion.", start);
             return true;
         }
 
@@ -1040,13 +1057,14 @@ internal sealed class Tokenizer
         if (!TryReserveSyntax())
             return null;
         var start = Position;
-        if (CommandSubstitutionScanner.ScanParsed(
+        var status = CommandSubstitutionScanner.ScanParsed(
                 _scanContext,
                 _input,
                 start,
                 out var endIndex,
                 out var payload,
-                out var error) != ShellScanStatus.Complete)
+                out var error);
+        if (status != ShellScanStatus.Complete)
         {
             if (syntax == ExpansionWordSyntax.BraceExpanded && _scanContext.LimitError == null)
             {
@@ -1056,7 +1074,8 @@ internal sealed class Tokenizer
                 return new BraceExpansionFailureWordPart(
                     BraceExpansionFailureWordPart.FormatMissingDelimiter(_input.Slice(start), delimiter, memory));
             }
-            RecordError(error ?? new SyntaxError("Unterminated command substitution.", start));
+            RecordExpansionFailure(error, kind == WordPartKind.CommandSubstitutionQuoted,
+                "Unterminated command substitution.", start);
             return null;
         }
 
@@ -1068,7 +1087,7 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a braced parameter expansion as unexpanded segment bytes.
     /// </summary>
-    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content)
+    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content, bool quoted)
     {
         if (!BracedParameterScanner.HasPrefix(_input, Position))
         {
@@ -1094,10 +1113,10 @@ internal sealed class Tokenizer
         }
 
         if (error != null)
-            RecordError(error);
+            RecordFailure(error.InDoubleQuotes(quoted));
         else if (status == BracedParameterScanStatus.UnterminatedCommandSubstitution)
         {
-            RecordError("Unterminated command substitution.", errorIndex);
+            RecordExpansionFailure(null, quoted, "Unterminated command substitution.", errorIndex);
         }
 
         return false;
@@ -1190,13 +1209,13 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (TryReadBracedParameterExpansion(content))
+            if (TryReadBracedParameterExpansion(content, quoted: true))
             {
                 continue;
             }
 
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(content))
+                && TryReadArithmeticExpansion(content, quoted: true))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)

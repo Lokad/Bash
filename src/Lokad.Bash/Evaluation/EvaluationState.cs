@@ -230,7 +230,8 @@ internal sealed class EvaluationState
 
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
     public bool ErrexitEnabled { get; set; }
-    internal bool KeepsLocalsOnErrexit { get; private init; }
+    internal ShellForkKind? ForkKind { get; private init; }
+    internal bool KeepsLocalsOnErrexit => ForkKind is ShellForkKind.Subshell or ShellForkKind.PipelineSimpleCommand;
 
     /// <summary>
     /// Last substitution in the current simple command; null means none ran.
@@ -423,7 +424,7 @@ internal sealed class EvaluationState
         {
             LastExitCode = LastExitCode,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
-            KeepsLocalsOnErrexit = kind != ShellForkKind.CommandSubstitution,
+            ForkKind = kind,
             Traps = Traps?.Fork(kind)
         };
 

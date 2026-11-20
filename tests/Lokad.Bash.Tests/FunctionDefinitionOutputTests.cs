@@ -207,6 +207,29 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Empty(result.StdErr);
     }
 
+    [Fact]
+    public async Task DefinitionRoundTripsKeepADeferredAdjacentSubstitution()
+    {
+        const string source = """
+            f(){ value=$((for ((i=7)); do : >body; break; done);); printf '<%s:%s>' "$?" "$value"; }
+            saved=$(declare -f f)
+            unset -f f
+            eval "$saved"
+            f
+            export -f f
+            bash -c f
+            """;
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(source, host);
+
+        const string Diagnostic = "syntax error: Arithmetic for header requires two semicolons.\n";
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2:><2:>", result.StdOut);
+        Assert.Equal(Diagnostic + Diagnostic, result.StdErr);
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     // Git Bash 5.2.37 output, except retained CR, equivalent quoting/substitution delimiters and flat elif chains.
     [Theory]
     // The escaped dollar outside the quotes remains separate from the next quoted group.

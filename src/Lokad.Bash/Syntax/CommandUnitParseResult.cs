@@ -9,5 +9,8 @@ internal abstract record CommandUnitParseResult
     internal sealed record Parsed(ICommand Command) : CommandUnitParseResult;
 
     /// <summary>A syntax error in the next unit; earlier parsed units remain valid.</summary>
-    internal sealed record Failed(SyntaxError Error) : CommandUnitParseResult;
+    internal sealed record Failed(ParserFailure Failure) : CommandUnitParseResult
+    {
+        internal SyntaxError Error => Failure.Error;
+    }
 }

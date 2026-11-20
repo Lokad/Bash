@@ -362,7 +362,7 @@ internal sealed class ShellSourceCursor
                 return status is BracedParameterScanStatus.Unterminated
                     or BracedParameterScanStatus.UnterminatedCommandSubstitution
                     ? new ShellNestedExpansionScan.Incomplete(ShellNestedExpansionKind.Parameter)
-                    : new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Parameter, error);
+                    : new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Parameter, error?.InDoubleQuotes(IsDoubleQuoted));
             }
 
             Position = endIndex + 1;
@@ -391,13 +391,13 @@ internal sealed class ShellSourceCursor
 
         return ShellNestedExpansionScan.NotFound.Instance;
 
-        static ShellNestedExpansionScan ToFailure(
+        ShellNestedExpansionScan ToFailure(
             ShellScanStatus status,
             ShellNestedExpansionKind kind,
-            SyntaxError? error) =>
+            ParserFailure? failure) =>
             status == ShellScanStatus.Incomplete
                 ? new ShellNestedExpansionScan.Incomplete(kind)
-                : new ShellNestedExpansionScan.Invalid(kind, error);
+                : new ShellNestedExpansionScan.Invalid(kind, failure?.InDoubleQuotes(IsDoubleQuoted));
     }
 
 }
@@ -597,7 +597,7 @@ internal abstract record ShellNestedExpansionScan
     internal sealed record Incomplete(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan;
 
     /// <summary>A nested prefix was present but contained malformed nested syntax.</summary>
-    internal sealed record Invalid(ShellNestedExpansionKind Kind, SyntaxError? Error) : ShellNestedExpansionScan;
+    internal sealed record Invalid(ShellNestedExpansionKind Kind, ParserFailure? Failure) : ShellNestedExpansionScan;
 }
 
 /// <summary>Reports the four semantic outcomes shared by delimiter scanners.</summary>

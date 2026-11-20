@@ -48,7 +48,7 @@ internal static class ArithmeticExpansionScanner
         out ShellSource expression,
         out bool containsCommandSubstitution,
         out bool bracketed,
-        out SyntaxError? error) =>
+        out ParserFailure? error) =>
         ScanCore(
             context,
             text,
@@ -68,7 +68,7 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out bool containsCommandSubstitution,
-        out SyntaxError? error) =>
+        out ParserFailure? error) =>
         ScanCore(
             context,
             text,
@@ -92,13 +92,13 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out ShellSource expression,
-        out SyntaxError? error) =>
+        out ParserFailure? error) =>
         ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out _, out error,
             captureExpression: true, form: ArithmeticForm.Command);
 
     internal static ShellScanStatus ScanForHeader(
         ShellScanContext context, ShellSource text, int startIndex,
-        out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators, out SyntaxError? error) =>
+        out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators, out ParserFailure? error) =>
         ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators, out error,
             captureExpression: true, form: ArithmeticForm.ForHeader);
 
@@ -117,7 +117,7 @@ internal static class ArithmeticExpansionScanner
         out bool containsCommandSubstitution,
         out bool bracketed,
         out ArithmeticForSeparators separators,
-        out SyntaxError? error,
+        out ParserFailure? error,
         bool captureExpression,
         ArithmeticForm form)
     {
@@ -166,7 +166,7 @@ internal static class ArithmeticExpansionScanner
                     return ShellScanStatus.Incomplete;
                 if (nestedResult is ShellNestedExpansionScan.Invalid invalid)
                 {
-                    error = invalid.Error;
+                    error = invalid.Failure;
                     return ShellScanStatus.Invalid;
                 }
 

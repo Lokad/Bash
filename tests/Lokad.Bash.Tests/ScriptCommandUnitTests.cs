@@ -43,6 +43,83 @@ public sealed class ScriptCommandUnitTests
         AssertUnitsAsync("eval '" + source.Replace("'", "'\\''", StringComparison.Ordinal) + "'", output, status, syntaxError);
 
     [Theory]
+    [InlineData(true, "value=$(for ((i=7)); do : >body; break; done)", 2, "2:inner:source-arg", "Arithmetic for header")]
+    [InlineData(false, "value=\"$(printf hidden |)\"", 1, "257:inner:caller-arg", "Expected command after pipeline operator")]
+    public async Task FatalSubstitutionInsideScriptBuiltinRunsExitWithActiveScope(
+        bool source, string malformed, int status, string trapOutput, string diagnostic)
+    {
+        var inner = "value=inner\n: >completed\n" + malformed + "\n: >inner-after\n";
+        var invoke = source ? "source unit source-arg" : "eval '" + inner + "'";
+        var script = """
+            set -- caller-arg
+            value=outer
+            trap 'printf '%s:%s:%s' "$?" "$value" "$1"' EXIT
+
+            """ + invoke + " >out 2>err || : >fallback\n: >caller-after";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            if (source)
+                host.AddFile("/unit", inner);
+            var actualStatus = prepared
+                ? (await new Engine().RunAsync(new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse(script)),
+                    host, owner, CancellationToken.None)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(status, actualStatus);
+            Assert.Empty(host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal(trapOutput, host.ReadFile("/out"));
+            Assert.Contains(diagnostic, host.ReadFile("/err"), StringComparison.Ordinal);
+            Assert.Equal(source ? new[] { "completed", "err", "out", "unit" } : ["completed", "err", "out"],
+                host.CaptureEntries().Keys.OrderBy(name => name, StringComparer.Ordinal));
+            Assert.Equal(0, host.OpenFileCount);
+            if (!prepared)
+                Assert.Equal(0, governor.ReservedBytes);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
+    [InlineData("for ((i=7)); do :; done", "2")]
+    [InlineData("value=\"$(for ((i=7)); do :; done)\"", "2")]
+    [InlineData("value=(\"$(for ((i=7)); do :; done)\")", "1")]
+    [InlineData("value=$(printf hidden |", "2")]
+    public async Task RecoverableSourceSyntaxFailureReturnsToCaller(string malformed, string builtinStatus)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "printf before\n" + malformed);
+        var result = await host.RunAsync("source unit\nprintf ':%s:after' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:" + builtinStatus + ":after", host.StandardOutput.TextContent);
+        Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("(", ")", "2:source-arg;2")]
+    [InlineData("value=$(", "); printf '%s' \"$value\"", "1:caller-arg;0")]
+    public async Task SourceSyntaxExitStaysAtItsChildShellBoundary(string open, string close, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "value=$(for ((i=7)); do :; done)");
+        var script = "set -- caller-arg\n" + open
+            + " trap 'printf \"%s:%s;\" \"$?\" \"$1\"' EXIT; source unit source-arg; : >child-after " + close
+            + "\nprintf '%s' \"$?\"";
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Contains("Arithmetic for header", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.False(host.FileExists("/child-after"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("readonly value=old\nvalue=$(exit 7); printf wrong >skipped\n", "1:old", 0, "readonly variable")]
     [InlineData("set -e\nreadonly value=old\nvalue=new || printf wrong >skipped\n", "", 1, "readonly variable")]
     [InlineData("set -e\nreadonly value=old\neval 'value=new; printf wrong >skipped\n:' || printf wrong >skipped\n", "0:old", 0, "readonly variable")]

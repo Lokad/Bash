@@ -646,7 +646,7 @@ internal static partial class WordExpansion
             var arithmeticEnd = prepared?.End ?? -1;
             var expression = ShellSource.Empty;
             var arithmeticStatus = ShellScanStatus.Complete;
-            SyntaxError? arithmeticError = null;
+            ParserFailure? arithmeticError = null;
             var invalidQuotedBracket = prepared is { Operand: null };
             if (!prepared.HasValue)
             {
@@ -683,7 +683,7 @@ internal static partial class WordExpansion
             }
 
             CommandSubstitutionSyntax? script = null;
-            SyntaxError? commandError = null;
+            ParserFailure? commandError = null;
             var endIndex = index;
             var commandStatus = arithmeticStatus == ShellScanStatus.NotFound
                 ? ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace,
@@ -846,10 +846,10 @@ internal static partial class WordExpansion
         }
         return null;
 
-        static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, SyntaxError? error)
+        static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, ParserFailure? error)
         {
             await failedScope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("here-document"),
-                ShellValue.FromText(error?.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
+                ShellValue.FromText(error?.Error.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
                     ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
             failedScope.Effects.SetExpansionError(1);
         }
@@ -907,7 +907,7 @@ internal static partial class WordExpansion
         LegacySubstitutionOrigin legacyOrigin,
         out CommandSubstitutionSyntax? script,
         out int endIndex,
-        out SyntaxError? error)
+        out ParserFailure? error)
     {
         var context = new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = legacyOrigin };
         return CommandSubstitutionScanner.ScanParsed(context, content, startIndex, out endIndex, out script, out error);
