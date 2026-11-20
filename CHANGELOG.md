@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve the final unmatched `help` topic and invalid option bytes in
+  diagnostics. Return status 2 from `help --help` with shell-closed stdout.
+
 - Use the shared help writer for `printf`, `read`, `mapfile` and `readarray`.
   Reached `--help` returns status 2, including with shell-closed stdout.
 

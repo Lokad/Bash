@@ -14,65 +14,6 @@ public sealed partial class Evaluation
     private const int ReadScratchRetentionBytes = 64 * 1024;
     private ReadWorkspace? _readWorkspace;
 
-    /// <summary>Scans leading short options and borrows their bytes from the expanded arguments.</summary>
-    private struct InputOptionCursor(IReadOnlyList<ShellValue> arguments)
-    {
-        private ReadOnlyMemory<byte> _group;
-        private bool _finished;
-
-        public int ArgumentIndex { get; private set; } = 1;
-        public bool RequestedHelp { get; private set; }
-
-        public bool TryReadFlag(out ReadOnlyMemory<byte> flag)
-        {
-            flag = default;
-            if (_group.IsEmpty)
-            {
-                if (_finished || ArgumentIndex == arguments.Count)
-                    return false;
-                var bytes = arguments[ArgumentIndex].Bytes;
-                if (bytes.Length < 2 || bytes.Span[0] != (byte)'-')
-                {
-                    _finished = true;
-                    return false;
-                }
-                ArgumentIndex++;
-                if (bytes.Span[1] == (byte)'-')
-                {
-                    RequestedHelp = bytes.Span.SequenceEqual("--help"u8);
-                    if (RequestedHelp || bytes.Length == 2)
-                    {
-                        _finished = true;
-                        return false;
-                    }
-                }
-                _group = bytes[1..];
-            }
-
-            flag = _group[..1];
-            _group = _group[1..];
-            return true;
-        }
-
-        public bool TryReadOperand(out ShellValue operand)
-        {
-            if (!_group.IsEmpty)
-            {
-                operand = ShellValue.FromBytes(_group);
-                _group = default;
-                return true;
-            }
-            if (ArgumentIndex < arguments.Count)
-            {
-                operand = arguments[ArgumentIndex++];
-                return true;
-            }
-
-            operand = default;
-            return false;
-        }
-    }
-
     private (LogicalDescriptor? Number, FileDescriptor Handle) ResolveInputDescriptorOperand(ReadOnlySpan<byte> operand)
     {
         if (!Integers.TryParseBuiltinNumber(operand, out var number) || number is < 0 or > int.MaxValue)
@@ -114,7 +55,7 @@ public sealed partial class Evaluation
     {
         using var diagnostics = new BuiltinDiagnosticScope(this);
         static string Usage() => "read: usage: " + BuiltinDocumentation.For(BuiltinKind.Read).Synopsis("read");
-        var options = new InputOptionCursor(words);
+        var options = new ShortOptionCursor(words);
         var backslashMode = ReadBackslashMode.InterpretEscapes;
         var delimiter = (byte)'\n';
         var inputNumber = LogicalDescriptor.StdIn;

@@ -82,6 +82,7 @@ public sealed class QueryWriteFailureTests
     [InlineData("read")]
     [InlineData("mapfile")]
     [InlineData("readarray")]
+    [InlineData("help")]
     public async Task BuiltinHelpKeepsUsageStatusWithShellClosedStdout(string name)
     {
         await using var host = new TestHost();

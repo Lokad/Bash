@@ -12,46 +12,30 @@ public sealed partial class Evaluation
     /// <summary>Prints builtin documentation through the current command's stdout and redirections.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinHelpAsync(IReadOnlyList<ShellValue> words, bool negated)
     {
+        var command = words[0];
         var descriptions = false;
         var synopses = false;
         var manual = false;
-        var firstPattern = 1;
-        while (firstPattern < words.Count)
+        var options = new ShortOptionCursor(words);
+        while (options.TryReadFlag(out var option))
         {
-            var argument = words[firstPattern];
-            if (argument.Bytes.Span.SequenceEqual("--"u8))
+            switch (option.Span[0])
             {
-                firstPattern++;
-                break;
+                case (byte)'d': descriptions = true; break;
+                case (byte)'s': synopses = true; break;
+                case (byte)'m': manual = true; break;
+                default:
+                    await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("-"),
+                        ShellValue.FromBytes(option), ShellValue.FromText(": invalid option\nhelp: usage: "
+                            + BuiltinDocumentation.For(BuiltinKind.Help).Synopsis("help"))], scope: null).ConfigureAwait(false);
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
             }
-            if (argument.Bytes.Span.SequenceEqual("--help"u8))
-            {
-                var help = BuiltinDocumentation.For(BuiltinKind.Help);
-                return await WriteBuiltinHelpAsync(ShellValue.FromText("help"), help.Synopsis("help"), help.Description, negated)
-                    .ConfigureAwait(false);
-            }
-            if (argument.Bytes.Length < 2 || argument.Bytes.Span[0] != (byte)'-')
-                break;
-
-            var options = new CommandLineOptionParser([argument], allowSingleDashLongOptions: false);
-            while (options.TryRead(out var option))
-            {
-                var flag = option.Kind == CommandLineOptionKind.ShortOption ? option.ShortName : (byte)'-';
-                switch (flag)
-                {
-                    case (byte)'d': descriptions = true; break;
-                    case (byte)'s': synopses = true; break;
-                    case (byte)'m': manual = true; break;
-                    default:
-                        var message = ShellValue.FromText("-" + (char)flag + ": invalid option\nhelp: usage: "
-                            + BuiltinDocumentation.For(BuiltinKind.Help).Synopsis("help"));
-                        await ReportExpansionDiagnosticAsync(ShellValue.FromText("help"), message).ConfigureAwait(false);
-                        return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
-                }
-            }
-            firstPattern++;
         }
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Help, "help", negated)
+                .ConfigureAwait(false);
 
+        var firstPattern = options.ArgumentIndex;
         var format = descriptions ? BuiltinHelpFormat.Description : manual ? BuiltinHelpFormat.Manual
             : synopses ? BuiltinHelpFormat.Synopsis : BuiltinHelpFormat.Detailed;
         using var output = new ByteMemoryBuilder(0, Memory.Budget);
@@ -107,11 +91,13 @@ public sealed partial class Evaluation
 
         if (!matched)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("help"),
-                ShellValue.FromText("no help topics match the supplied patterns")).ConfigureAwait(false);
+            var topic = words[^1];
+            await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("no help topics match `"),
+                topic, ShellValue.FromText("'.  Try `help help' or `man -k "),
+                topic, ShellValue.FromText("' or `info "), topic, ShellValue.FromText("'.")], scope: null).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
-        var result = await WriteBuiltinOutputAsync(ShellValue.FromText("help"), output.ToMemory()).ConfigureAwait(false);
+        var result = await WriteBuiltinOutputAsync(command, output.ToMemory()).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 0), negated).ConfigureAwait(false);
 
         void Append(string text)

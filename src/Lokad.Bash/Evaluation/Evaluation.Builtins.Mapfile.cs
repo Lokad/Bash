@@ -25,7 +25,7 @@ public sealed partial class Evaluation
         uint count = 0;
         uint skip = 0;
         uint? origin = null;
-        var options = new InputOptionCursor(arguments);
+        var options = new ShortOptionCursor(arguments);
         while (options.TryReadFlag(out var flag))
         {
             var option = flag.Span[0];

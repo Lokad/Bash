@@ -693,6 +693,11 @@ options. Help describes the supported options and returns status 2, including
 when the shell has closed stdout. An option that expects an argument consumes
 its next field before the scan can reach help.
 
+`help --help` uses the same output and status rules. A list of topics succeeds
+when any topic matches. If all topics miss, status 1 accompanies a diagnostic
+on stderr that preserves the final topic's bytes. The topic catalog and help
+records describe the builtins supported by Lokad.Bash.
+
 Printf width and precision have no independent 1 MiB quota. A large precision that
 only truncates a short string or leaves a short general-format result does not
 require proportionally large workspace. Actual output, replacement overlap and
