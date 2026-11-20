@@ -8,13 +8,13 @@ internal sealed record ProcessOutput(int ExitCode, ContentDigest Stdout, Content
 internal static class ProcessTransport
 {
     public static async Task<ProcessOutput> RunAsync(ProcessStartInfo start, ReadOnlyMemory<byte> input,
-        bool waitForWslTimeout, CancellationToken token)
+        bool waitForWslTimeout, byte[]? stderrPrefix, CancellationToken token)
     {
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Child process did not start.");
         using var stdout = new Digest();
         using var stderr = new Digest();
-        var output = DrainAsync(process.StandardOutput.BaseStream, stdout, token);
-        var error = DrainAsync(process.StandardError.BaseStream, stderr, token);
+        var output = DrainAsync(process.StandardOutput.BaseStream, stdout, prefix: null, token);
+        var error = DrainAsync(process.StandardError.BaseStream, stderr, stderrPrefix, token);
         try
         {
             await process.StandardInput.BaseStream.WriteAsync(input, token).ConfigureAwait(false);
@@ -34,12 +34,21 @@ internal static class ProcessTransport
             throw;
         }
 
-        static async Task DrainAsync(Stream stream, Digest digest, CancellationToken token)
+        static async Task DrainAsync(Stream stream, Digest digest, byte[]? prefix, CancellationToken token)
         {
             var buffer = new byte[8192];
+            var captured = 0;
             int length;
             while ((length = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) != 0)
+            {
                 digest.Append(buffer.AsSpan(0, length));
+                if (prefix != null && captured < prefix.Length)
+                {
+                    var count = Math.Min(length, prefix.Length - captured);
+                    buffer.AsSpan(0, count).CopyTo(prefix.AsSpan(captured));
+                    captured += count;
+                }
+            }
         }
     }
 }

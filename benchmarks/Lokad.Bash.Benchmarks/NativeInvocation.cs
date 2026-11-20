@@ -43,7 +43,7 @@ internal sealed class NativeInvocation
     }
 
     public Task<ProcessOutput> RunAsync(CancellationToken token) =>
-        ProcessTransport.RunAsync(_start, _input, _wsl, token);
+        ProcessTransport.RunAsync(_start, _input, _wsl, stderrPrefix: null, token);
 
     public IReadOnlyDictionary<string, ContentDigest> ObserveFiles() =>
         Directory.EnumerateFiles(_fixtures, "*", SearchOption.AllDirectories).ToDictionary(

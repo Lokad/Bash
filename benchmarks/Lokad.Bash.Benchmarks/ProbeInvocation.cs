@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 
 namespace Lokad.Bash.Benchmarks;
@@ -9,10 +10,15 @@ internal sealed record ProbeIdentity(string ExecutableSha256, string AssemblySha
 /// <summary>Prepares files outside the measured fresh-process boundary.</summary>
 internal sealed class ProbeInvocation
 {
+    private const int StderrPrefixBytes = 4096;
     private readonly ProcessStartInfo _start;
     private readonly string _resultPath;
-    public ProbeInvocation(Workload workload, ProbeMode mode, bool allocationCounters, string executable, string root)
+    private readonly byte[]? _stderrPrefix;
+
+    public ProbeInvocation(Workload workload, ProbeMode mode, bool allocationCounters, string executable, string root,
+        bool captureStderr)
     {
+        _stderrPrefix = captureStderr ? new byte[StderrPrefixBytes] : null;
         EvidenceFiles.CreateDirectory(root);
         var fixtures = Path.Combine(root, "fixtures");
         Directory.CreateDirectory(fixtures);
@@ -38,10 +44,28 @@ internal sealed class ProbeInvocation
         foreach (var argument in new[] { "../script.bash", "../request.json", "../result.json" }) _start.ArgumentList.Add(argument);
     }
 
-    public Task<ProcessOutput> RunAsync(CancellationToken token) => ProcessTransport.RunAsync(_start, ReadOnlyMemory<byte>.Empty, false, token);
-    public ProbeResult ObserveResult()
+    public Task<ProcessOutput> RunAsync(CancellationToken token) =>
+        ProcessTransport.RunAsync(_start, ReadOnlyMemory<byte>.Empty, waitForWslTimeout: false, _stderrPrefix, token);
+
+    public ProbeResult ObserveResult(ProcessOutput output)
     {
-        var result = JsonSerializer.Deserialize<ProbeResult>(File.ReadAllBytes(_resultPath), WorkloadCatalog.Json)
+        byte[] bytes;
+        try { bytes = File.ReadAllBytes(_resultPath); }
+        catch (FileNotFoundException error)
+        {
+            var message = $"Managed probe exited with status {output.ExitCode} without writing its result. "
+                + $"Stderr contains {output.Stderr.Bytes} bytes (SHA-256 {output.Stderr.Sha256}).";
+            var count = (int)Math.Min(output.Stderr.Bytes, _stderrPrefix?.Length ?? 0);
+            if (_stderrPrefix != null && count > 0)
+            {
+                message += "\n" + Encoding.UTF8.GetString(_stderrPrefix.AsSpan(0, count));
+                if (count < output.Stderr.Bytes)
+                    message += $"\n[stderr preview limited to {count} bytes]";
+            }
+            throw new InvalidDataException(message, error);
+        }
+
+        var result = JsonSerializer.Deserialize<ProbeResult>(bytes, WorkloadCatalog.Json)
             ?? throw new InvalidDataException("Probe did not report completion.");
         if (result.RuntimeMajor != Environment.Version.Major || result.Runtime != System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
             || result.Architecture != System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString())

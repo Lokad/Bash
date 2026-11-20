@@ -60,13 +60,14 @@ if (args[0] == "verify-process")
                 continue;
             }
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(190));
-            var invocation = new ProbeInvocation(workload, ProbeMode.Public, false, executable, Path.Combine(root, workload.Id));
+            var invocation = new ProbeInvocation(workload, ProbeMode.Public, false, executable, Path.Combine(root, workload.Id),
+                captureStderr: true);
             ProcessOutput? output = null;
             ProbeResult? probe = null;
             try
             {
                 output = await invocation.RunAsync(deadline.Token);
-                probe = invocation.ObserveResult();
+                probe = invocation.ObserveResult(output);
                 ManagedInvocation.Verify(workload, output.ExitCode, output.Stdout, output.Stderr, probe.Files);
             }
             catch (Exception error) { rows.Add(new(workload.Id, VerificationLane.ManagedProcess, VerificationStatus.Failed, error.Message, new { output, probe })); throw; }

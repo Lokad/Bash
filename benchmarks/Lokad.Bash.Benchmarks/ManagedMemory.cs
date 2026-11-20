@@ -28,18 +28,21 @@ internal static class ManagedMemory
         var source = MeasurementDispatch.IdentifySource();
         ProcessOutput? output = null;
         ProbeResult? probe = null;
+        string? failure = null;
         var complete = false;
         try
         {
-            var invocation = new ProbeInvocation(workload, mode, true, executable, Path.Combine(root, "child"));
+            var invocation = new ProbeInvocation(workload, mode, true, executable, Path.Combine(root, "child"),
+                captureStderr: true);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(190));
             output = await invocation.RunAsync(deadline.Token);
-            probe = invocation.ObserveResult();
+            probe = invocation.ObserveResult(output);
             if (probe.Mode != mode || probe.Allocations is not { ManagedBytes: >= 0, Gen0: >= 0, Gen1: >= 0, Gen2: >= 0 })
                 throw new InvalidDataException("Probe omitted the requested allocation instrumentation.");
             ManagedInvocation.Verify(workload, output.ExitCode, output.Stdout, output.Stderr, probe.Files);
             complete = true;
         }
+        catch (Exception error) { failure = error.Message; throw; }
         finally { Write(); }
         Console.WriteLine("Isolated allocation/GC invocation verified. No timings collected. Evidence: " + path);
 
@@ -51,7 +54,7 @@ internal static class ManagedMemory
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             catalogSha256 = Blob.Hash(catalog),
             harnessSha256 = Blob.Hash(File.ReadAllBytes(typeof(ManagedMemory).Assembly.Location)),
-            output, probe,
+            output, probe, failure,
             allocationScope = "GC.GetTotalAllocatedBytes(precise: true) across all child managed threads during awaited execution and evaluation cleanup. Source/input/host setup, prepared parsing/evaluator construction, result serialization and final host disposal are excluded. Public invocation includes its own parsing/evaluator construction. Cold single invocation; no steady-state claim.",
             memoryScope = "Estimated peak cooperative live admission includes child source/input/host/evaluation owners. Separate from allocation bytes and process RSS. Parent wrapper allocations are not observed."
         });

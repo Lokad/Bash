@@ -44,6 +44,11 @@ once. A repeated command for the same runtime and transport needs a fresh
 prepared directory. Failed and interrupted attempts keep their report names.
 After the Release build, add `--no-build --no-restore` before `--` in driver commands
 to reuse those binaries throughout qualification.
+For a side-by-side .NET installation, set `DOTNET_ROOT` to the directory containing
+the `dotnet` executable used by the driver. Fresh managed probes inherit this
+setting and must report the same runtime version and architecture as the driver.
+When a probe exits without a result, verification records its exit status, complete
+stderr digest and up to 4 KiB of stderr text. Timed runs use the digest alone.
 
 Run `build-check DIRECTORY` after preparation on each runtime. It generates and
 compiles the five distinct BenchmarkDotNet wrapper types, validates the toolchain,

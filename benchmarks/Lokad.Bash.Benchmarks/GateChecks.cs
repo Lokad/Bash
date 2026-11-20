@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace Lokad.Bash.Benchmarks;
@@ -36,10 +37,37 @@ internal static class GateChecks
             catch (InvalidDataException) { rejected = true; }
             if (!rejected) throw new InvalidOperationException("Unidentified probe was accepted.");
         }
+        CheckProbeResult();
         CheckExclusiveEvidence();
         try { new MeasurementContext(directory, directory, MeasurementLane.Public, [], null, null, null).Validate(true); }
         catch (InvalidDataException) { Console.WriteLine("Verification gates reject stale, partial or duplicate evidence, mismatched outcomes and timing without a quiet VM declaration."); return; }
         throw new InvalidOperationException("Timing without a quiet VM declaration was accepted.");
+
+        void CheckProbeResult()
+        {
+            var workload = WorkloadCatalog.Read(catalog).Cases.First(row => row.SkipReason.Length == 0);
+            var root = Path.Combine(directory, "gate-checks", Guid.NewGuid().ToString("N"));
+            var invocation = new ProbeInvocation(workload, ProbeMode.Public, allocationCounters: false,
+                ProbeInvocation.FindExecutable(), root, captureStderr: false);
+            var empty = new ContentDigest(0, Blob.Hash([]));
+            var output = new ProcessOutput(73, empty, new ContentDigest(5, Blob.Hash("error"u8)));
+            var rejected = false;
+            try { invocation.ObserveResult(output); }
+            catch (InvalidDataException error) when (error.InnerException is FileNotFoundException
+                && error.Message.Contains("status 73", StringComparison.Ordinal)
+                && error.Message.Contains(output.Stderr.Sha256, StringComparison.Ordinal))
+            {
+                rejected = true;
+            }
+            if (!rejected) throw new InvalidOperationException("Missing probe result lost its process outcome.");
+
+            var result = new ProbeResult(Environment.Version.Major, RuntimeInformation.FrameworkDescription,
+                RuntimeInformation.ProcessArchitecture.ToString(), System.Runtime.GCSettings.IsServerGC,
+                ProbeMode.Public, new Dictionary<string, ContentDigest>(), new HostCounts(0, 0, 0, 0, 0, 0), 0, null);
+            EvidenceFiles.WriteJson(Path.Combine(root, "result.json"), result);
+            if (invocation.ObserveResult(output).Mode != ProbeMode.Public)
+                throw new InvalidOperationException("A completed nonzero probe lost its result.");
+        }
 
         void CheckExclusiveEvidence()
         {

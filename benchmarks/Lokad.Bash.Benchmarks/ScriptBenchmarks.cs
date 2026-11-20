@@ -104,7 +104,8 @@ public class ProcessBenchmarks
         var root = Path.Combine(context.OutputDirectory, "invocations", CaseId, Guid.NewGuid().ToString("N"));
         if (context.Lane == MeasurementLane.ManagedProcess)
             _probe = new ProbeInvocation(workload, ProbeMode.Public, false,
-                context.ProbeExecutable ?? throw new InvalidOperationException("Missing frozen managed process probe."), root);
+                context.ProbeExecutable ?? throw new InvalidOperationException("Missing frozen managed process probe."), root,
+                captureStderr: false);
         else _native = new NativeInvocation(workload, context.NativeExecutable ?? throw new InvalidOperationException("Missing native executable."), null, root, null);
         _output = null;
         _deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -123,7 +124,7 @@ public class ProcessBenchmarks
             // BenchmarkDotNet also calls iteration cleanup for its empty overhead action.
             if (_output == null) return;
             var output = _output;
-            var files = _probe != null ? _probe.ObserveResult().Files
+            var files = _probe != null ? _probe.ObserveResult(output).Files
                 : (_native ?? throw new InvalidOperationException("Missing native invocation.")).ObserveFiles();
             ManagedInvocation.Verify(_workload ?? throw new InvalidOperationException("Missing workload."), output.ExitCode, output.Stdout, output.Stderr, files);
         }
