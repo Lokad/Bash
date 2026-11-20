@@ -237,10 +237,35 @@ public sealed partial class Evaluation
         Variables commandVars,
         bool negated)
     {
+        // Validate the leading groups before publishing option changes. A bare
+        // plus ends validation but is skipped when applying the options.
+        for (var candidate = 1; candidate < words.Count; candidate++)
+        {
+            CheckCancellation();
+            var field = words[candidate];
+            var bytes = field.Bytes.Span;
+            if (!IsSetOption(bytes) || bytes.SequenceEqual("--"u8))
+                break;
+            if (bytes.SequenceEqual("--help"u8))
+                return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Set, "set", negated)
+                    .ConfigureAwait(false);
+
+            var firstOtherFlag = bytes[1..].IndexOfAnyExcept((byte)'e') + 1;
+            if (firstOtherFlag == 0)
+                continue;
+            if (bytes[firstOtherFlag] != (byte)'o')
+                return await InvalidOptionAsync(field, ": unsupported option", 2).ConfigureAwait(false);
+            if (firstOtherFlag == bytes.Length - 1 && candidate + 1 < words.Count
+                && !IsSetOption(words[candidate + 1].Bytes.Span))
+                candidate++;
+        }
+
         var index = 1;
         var replacePositionals = false;
+        var status = 0;
         while (index < words.Count)
         {
+            CheckCancellation();
             var option = words[index];
             var bytes = option.Bytes.Span;
             if (bytes.SequenceEqual("--"u8))
@@ -259,32 +284,35 @@ public sealed partial class Evaluation
                 index++;
                 continue;
             }
-            if (bytes.Length < 2 || bytes[0] is not ((byte)'-' or (byte)'+'))
+            if (!IsSetOption(bytes))
                 break;
 
             var enabled = bytes[0] == (byte)'-';
-            if (bytes.Length == 2 && bytes[1] == (byte)'o')
+            for (var flagIndex = 1; flagIndex < option.Bytes.Length; flagIndex++)
             {
-                if (++index == words.Count)
+                var flag = option.Bytes.Span[flagIndex];
+                if (flag == (byte)'e')
                 {
-                    var inspection = enabled
-                        ? "errexit\t" + (_state.ErrexitEnabled ? "on\n" : "off\n")
-                        : "set " + (_state.ErrexitEnabled ? "-o" : "+o") + " errexit\n";
-                    var written = await WriteBuiltinOutputAsync(ShellValue.FromText("set"), Utf8Text.Encode(inspection)).ConfigureAwait(false);
-                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(written.IsError ? 1 : 0), negated).ConfigureAwait(false);
-                }
-                if (!words[index].Bytes.Span.SequenceEqual("errexit"u8))
-                    return await InvalidOptionAsync(words[index], named: true).ConfigureAwait(false);
-                _state.ErrexitEnabled = enabled;
-            }
-            else
-            {
-                foreach (var flag in bytes[1..])
-                {
-                    if (flag != (byte)'e')
-                        return await InvalidOptionAsync(option, named: false).ConfigureAwait(false);
                     _state.ErrexitEnabled = enabled;
+                    continue;
                 }
+                if (flag != (byte)'o')
+                    return await InvalidOptionAsync(option, ": unsupported option", 1).ConfigureAwait(false);
+                if (index + 1 < words.Count && words[index + 1].Bytes.Span is [not ((byte)'-' or (byte)'+'), ..])
+                {
+                    var name = words[++index];
+                    if (!name.Bytes.Span.SequenceEqual("errexit"u8))
+                        return await InvalidOptionAsync(name, ": invalid option name", 2).ConfigureAwait(false);
+                    _state.ErrexitEnabled = enabled;
+                    continue;
+                }
+
+                var inspection = enabled
+                    ? (_state.ErrexitEnabled ? "errexit\ton\n" : "errexit\toff\n")
+                    : (_state.ErrexitEnabled ? "set -o errexit\n" : "set +o errexit\n");
+                var written = await WriteBuiltinOutputAsync(words[0], Utf8Text.Encode(inspection)).ConfigureAwait(false);
+                if (written.IsError)
+                    status = 1;
             }
             index++;
         }
@@ -294,13 +322,15 @@ public sealed partial class Evaluation
             Memory.Charge(checked(32L * (words.Count - index)));
             commandVars.ReplacePositionalParametersFromSet(words, index);
         }
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated).ConfigureAwait(false);
 
-        async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, bool named)
+        static bool IsSetOption(ReadOnlySpan<byte> bytes) =>
+            bytes.Length > 1 && bytes[0] is (byte)'-' or (byte)'+';
+
+        async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, string message, int exitCode)
         {
-            await ReportExpansionDiagnosticAsync([ShellValue.FromText("set")],
-                [option, ShellValue.FromText(named ? ": invalid option name" : ": unsupported option")]).ConfigureAwait(false);
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync([words[0]], [option, ShellValue.FromText(message)]).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
         }
     }
 

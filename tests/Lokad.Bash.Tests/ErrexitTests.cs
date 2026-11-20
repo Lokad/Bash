@@ -38,6 +38,64 @@ public sealed class ErrexitTests
     }
 
     [Theory]
+    [InlineData("+e", "-e --help changed", "off")]
+    [InlineData("-e", "+o errexit --help changed", "on")]
+    [InlineData("+e", "-o --help", "off")]
+    [InlineData("+e", "-o invalid --help", "off")]
+    public async Task SetHelpKeepsEarlierOptionChangesAndPositionalsUnpublished(
+        string initial, string options, string expectedMode)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(ReportOption
+            + $"set -- keep; set {initial}; if set {options}; then status=0; else status=$?; fi; "
+            + "printf '<%s><%s>' \"$status\" \"$1\"; flag", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.StartsWith("set: set [-e|+e]", host.StandardOutput.TextContent);
+        Assert.EndsWith("<2><keep>" + expectedMode, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
+    [Theory]
+    [InlineData("-e -z", "off", "set: -z: unsupported option\n")]
+    [InlineData("-e -o invalid", "on", "set: invalid: invalid option name\n")]
+    public async Task SetSeparatesShortFlagValidationFromApplyingNamedOptions(
+        string options, string expectedMode, string expectedDiagnostic)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(ReportOption
+            + $"if set {options}; then status=0; else status=$?; fi; "
+            + "printf '<%s>' \"$status\"; flag", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2>" + expectedMode, host.StandardOutput.TextContent);
+        Assert.Equal(expectedDiagnostic, host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task SetHelpOnClosedStdoutLeavesErrexitEnabled()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("set -e; set +e --help >&-; printf unreachable", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
+    [Fact]
+    public async Task SetInspectionLeavesTheOptionTerminatorForPositionalReplacement()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("set -- old; set -eo -- new; printf '<%s><%s>' \"$1\" \"$-\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("errexit\ton\n<new><e>", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
+    [Theory]
     [InlineData("+", "|1|<old>off")]
     [InlineData("+ +e", "|1|<old>off")]
     [InlineData("+ --", "|0|<>off")]

@@ -330,6 +330,12 @@ positions and negation suppress it through nested functions/groups and source/ev
 Command substitution clears errexit by default; parenthesized subshells inherit it.
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
+Leading short flags are validated before they can change shell state.
+A reached `set --help` describes the supported options and returns status 2,
+including with shell-closed stdout. It leaves shell options and positional
+parameters in place. A lone `+` ends this validation and is then skipped
+when applying options. After `-`, `--`, or the first positional operand,
+`--help` is a positional argument.
 `$_` holds the last expanded argument of a completed simple command. A command
 without arguments records its name, and a command with only assignments or
 redirections records an empty value. Word and redirection expansion can read the
