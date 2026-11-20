@@ -376,6 +376,9 @@ and preserve existing ownership, including handles borrowed by inline subshells.
 Cleanup transfers into prepared ownership
 and retires the index after its final close attempts; logical mapping retention
 remains independent of host-handle cleanup.
+Preservation observes replaced handles in encounter order directly from the
+setup collection. It checks the preserved table and the remaining owners
+before closing each candidate.
 
 Captured additional bindings share immutable lookup and ordered-slot trees;
 changed mappings copy only affected paths. Standard streams stay inline, explicit

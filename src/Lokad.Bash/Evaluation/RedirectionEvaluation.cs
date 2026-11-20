@@ -23,8 +23,8 @@ internal sealed class RedirectionEvaluation
     private readonly bool _inputSubstitution;
     /// <summary> Stores descriptors opened during redirection evaluation, in open order. </summary>
     private readonly DescriptorHandleOwner _openedDescriptors = new();
-    /// <summary> Stores resolved descriptors hidden by close or replacement redirections. </summary>
-    private readonly OrderedDescriptorSet _releasedDescriptors = new();
+    /// <summary>Stores replaced handles in encounter order when the scope will be preserved.</summary>
+    private readonly OrderedDescriptorSet? _replacedHandles;
     /// <summary> Stores logical descriptors explicitly targeted by the redirections. </summary>
     private readonly HashSet<LogicalDescriptor> _touchedDescriptors = new();
     private OrderedDescriptorSet? _consumedSources;
@@ -35,11 +35,13 @@ internal sealed class RedirectionEvaluation
     public RedirectionEvaluation(
         IReadOnlyList<Redirection> redirections,
         DescriptorTable descriptorTable,
-        bool inputSubstitution)
+        bool inputSubstitution,
+        bool preserveBindings)
     {
         _redirections = redirections;
         _descriptorTable = descriptorTable;
         _inputSubstitution = inputSubstitution;
+        _replacedHandles = preserveBindings ? new OrderedDescriptorSet() : null;
     }
 
     /// <summary>
@@ -52,20 +54,9 @@ internal sealed class RedirectionEvaluation
     public DescriptorHandleOwner OpenedDescriptors => _openedDescriptors;
     /// <summary>Whether opening an input path failed after its target expanded successfully.</summary>
     public bool InputOpenFailed { get; private set; }
-    /// <summary>
-    /// Gets released descriptors that no logical mapping retains after all redirections have been applied.
-    /// </summary>
-    public IReadOnlyList<FileDescriptor> GetDescriptorsToReleaseWhenPreserved(EvaluationMemory memory)
-    {
-        if (_releasedDescriptors.Count == 0)
-            return [];
-        memory.Charge(checked(64L + 4L * _releasedDescriptors.Count));
-        var result = new List<FileDescriptor>(_releasedDescriptors.Count);
-        foreach (var descriptor in _releasedDescriptors)
-            if (!_descriptorTable.References(descriptor))
-                result.Add(descriptor);
-        return result;
-    }
+    /// <summary>Borrows replacement candidates after setup until preservation has settled them.</summary>
+    public IReadOnlyCollection<FileDescriptor> ReplacedHandles =>
+        _replacedHandles is { } replaced ? replaced : Array.Empty<FileDescriptor>();
     /// <summary>
     /// Gets logical descriptors explicitly targeted while evaluating the redirections.
     /// </summary>
@@ -460,16 +451,19 @@ internal sealed class RedirectionEvaluation
     private void SetDescriptor(ScopedEvaluation scope, LogicalDescriptor logicalDescriptor, FileDescriptor resolvedDescriptor)
     {
         AddDescriptorToSet(_touchedDescriptors, logicalDescriptor, scope.Effects.Memory);
-        var previousDescriptor = _descriptorTable.Resolve(logicalDescriptor);
+        var replaced = _replacedHandles;
+        var previousDescriptor = replaced != null ? _descriptorTable.Resolve(logicalDescriptor) : FileDescriptor.Closed;
         _descriptorTable.Set(logicalDescriptor, resolvedDescriptor, scope.Effects.Memory);
-        _releasedDescriptors.Remove(resolvedDescriptor);
+        if (replaced == null)
+            return;
+        replaced.Remove(resolvedDescriptor);
         if (previousDescriptor != resolvedDescriptor
             && !previousDescriptor.IsClosed
             && !_descriptorTable.References(previousDescriptor)
-            && !_releasedDescriptors.Contains(previousDescriptor))
+            && !replaced.Contains(previousDescriptor))
         {
-            _releasedDescriptors.PrepareAdditional(1, scope.Effects.Memory.Workspace);
-            _releasedDescriptors.AddPrepared(previousDescriptor);
+            replaced.PrepareAdditional(1, scope.Effects.Memory.Workspace);
+            replaced.AddPrepared(previousDescriptor);
         }
     }
 

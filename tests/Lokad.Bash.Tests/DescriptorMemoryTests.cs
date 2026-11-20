@@ -373,9 +373,10 @@ public sealed class DescriptorMemoryTests
     [Fact]
     public async Task RefusalAfterAMoveRetainsTheSourceCloseAndRetiresItsHandle()
     {
+        // The open of "two" exhausts the remaining allowance before the here-string is built.
         const string script = """
             exec 3>one
-            : 2>error 4>&3- 3500>two
+            : 2>error 4>&3- 3500>two 5<<<text
             printf '|%s|' "$?"
             printf after >&3
             printf ':%s:' "$?"

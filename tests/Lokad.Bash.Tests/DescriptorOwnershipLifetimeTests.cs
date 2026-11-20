@@ -56,6 +56,40 @@ public sealed class DescriptorOwnershipLifetimeTests
     }
 
     [Theory]
+    [InlineData(": 3>replacement", 1, "body", "")]
+    [InlineData("exec 3>replacement", 0, "", "body")]
+    [InlineData("exec 4>&3; exec 3>replacement; printf retained >&4; exec 4>&-", 0, "retained", "body")]
+    public async Task ReplacingAPersistentBindingClosesOnlyTheHandleThatLosesItsLastReference(
+        string replacement, int firstClosed, string initialContent, string replacementContent)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new RecordingCloseHost { MemoryBudget = owner };
+        FileDescriptor[]? closedBeforeNextOpen = null;
+        host.BeforeWritableOpen = path =>
+        {
+            if (path.Path == "/marker")
+                closedBeforeNextOpen = host.Closed.ToArray();
+        };
+        var source = $"exec 3>initial; {replacement}; printf ready >marker; printf body >&3";
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var result = await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(initialContent, host.ReadFile("/initial"));
+        Assert.Equal(replacementContent, host.ReadFile("/replacement"));
+        Assert.Equal("ready", host.ReadFile("/marker"));
+        Assert.Equal(3, host.Opened.Count);
+        Assert.Equal(new[] { host.Opened[firstClosed] }, closedBeforeNextOpen);
+        Assert.Equal(new[] { host.Opened[firstClosed], host.Opened[2], host.Opened[1 - firstClosed] }, host.Closed);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("", "")]
     [InlineData(" 7>&99", "99: Bad file descriptor\n")]
     public async Task ConsumedHandleClosesBeforeTheNextCommandBegins(string laterRedirection, string error)
