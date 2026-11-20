@@ -131,7 +131,7 @@ public sealed partial class Evaluation
         async ValueTask<bool> AssignCountAsync(PrintfVariableAssignment assignment)
         {
             // A rejected binding is recoverable for %n; an expansion failure stops later conversions.
-            await AssignBuiltinAsync(VariableReference.ForName(assignment.Name), ShellValue.FromText(Integers.FormatNumber(assignment.Count)),
+            await AssignBuiltinAsync(VariableReference.ForName(assignment.Name), ShellValue.FromInteger(assignment.Count),
                 scope, bindings, BuiltinAssignmentKind.PrintfCount, ShellValue.FromText("printf"), expansionWriteTarget: null).ConfigureAwait(false);
             return !HasPendingExpansionError && diagnostics.Result.CanAcceptMore;
         }

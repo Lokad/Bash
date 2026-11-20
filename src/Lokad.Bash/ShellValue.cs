@@ -48,6 +48,8 @@ public readonly struct ShellValue : IEquatable<ShellValue>
     /// <summary>Encodes source or host text as UTF-8 value bytes.</summary>
     public static ShellValue FromText(string text) => new(Utf8Text.Encode(text));
 
+    internal static ShellValue FromInteger(long value) => new(NumberFormatting.FormatNumber(value));
+
     /// <summary>Decodes a value at a text boundary, throwing when its bytes are not valid UTF-8.</summary>
     public string ToUtf8String() => Utf8Text.Decode(_bytes);
 

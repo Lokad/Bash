@@ -109,20 +109,8 @@ internal sealed class ExpandedWordBuilder
     public void AppendSource(ShellSource source, bool globQuoted) =>
         GetPart(globQuoted ? PartOrigin.Protected : PartOrigin.Source, globQuoted).AppendValue(source.ToValue());
 
-    public void AppendText(ReadOnlySpan<char> text, bool globQuoted) =>
-        GetPart(PartOrigin.Protected, globQuoted).AppendText(text);
-
     public void AppendValue(ShellValue value, bool globQuoted) =>
         GetPart(PartOrigin.Protected, globQuoted).AppendValue(value);
-
-    public void AppendTextExpansion(ReadOnlySpan<char> text, bool allowWordSplitting, bool globQuoted)
-    {
-        _current.NeedsSplitting |= allowWordSplitting;
-        if (!text.IsEmpty)
-            GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendText(text);
-        else if (!allowWordSplitting && (globQuoted || _implicitEmptyPolicy == ImplicitEmptyPolicy.Preserve))
-            AppendEmptyExpansion(globQuoted);
-    }
 
     public void AppendExpansion(ShellValue value, bool allowWordSplitting, bool globQuoted)
     {
@@ -131,6 +119,12 @@ internal sealed class ExpandedWordBuilder
             GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendValue(value);
         else if (!allowWordSplitting && (globQuoted || _implicitEmptyPolicy == ImplicitEmptyPolicy.Preserve))
             AppendEmptyExpansion(globQuoted);
+    }
+
+    public void AppendIntegerExpansion(long value, bool allowWordSplitting, bool globQuoted)
+    {
+        _current.NeedsSplitting |= allowWordSplitting;
+        GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendInteger(value);
     }
 
     private void AppendEmptyExpansion(bool globQuoted)
@@ -519,7 +513,6 @@ internal sealed class ExpandedWordBuilder
 
     private sealed class SegmentBuilder
     {
-        private readonly StringBuilder _text = new();
         private readonly EvaluationMemory _memory;
         private readonly MemoryCapacity _storage;
         private ShellValue _retained;
@@ -535,15 +528,8 @@ internal sealed class ExpandedWordBuilder
 
         public bool IsGlobQuoted { get; }
 
-        public void AppendText(ReadOnlySpan<char> text)
-        {
-            _memory.Charge(_storage, checked(4L * text.Length));
-            _text.Append(text);
-        }
-
         public void AppendValue(ShellValue value)
         {
-            FlushText();
             if (value.IsEmpty)
                 return;
             if (_bytes == null && _retained.IsEmpty && value.TryGetCompactArrayCapacity(out var capacity))
@@ -553,22 +539,26 @@ internal sealed class ExpandedWordBuilder
                 _retained = value;
                 return;
             }
-            AppendBytes(value.Bytes.Span);
+            AppendCopy(value.Bytes.Span);
         }
+
+        public void AppendInteger(long value)
+        {
+            // A single result can retain exact-sized backing. Joined results copy digits
+            // from scratch directly into the segment's admitted buffer.
+            if (_bytes == null && _retained.IsEmpty)
+            {
+                AppendValue(ShellValue.FromInteger(value));
+                return;
+            }
+
+            Span<byte> buffer = stackalloc byte[NumberFormatting.MaximumNumberLength];
+            AppendCopy(NumberFormatting.FormatNumber(value, buffer));
+        }
+
+        public ShellValue ToValue() => _bytes == null ? _retained : ShellValue.FromBytes(_bytes.ToCompactMemory(_storage));
 
         public void AppendCopy(ReadOnlySpan<byte> bytes)
-        {
-            FlushText();
-            AppendBytes(bytes);
-        }
-
-        public ShellValue ToValue()
-        {
-            FlushText();
-            return _bytes == null ? _retained : ShellValue.FromBytes(_bytes.ToCompactMemory(_storage));
-        }
-
-        private void AppendBytes(ReadOnlySpan<byte> bytes)
         {
             if (bytes.IsEmpty)
                 return;
@@ -587,22 +577,6 @@ internal sealed class ExpandedWordBuilder
             bytes.CopyTo(destination[prefix.Length..]);
             _bytes = buffer;
             _retained = ShellValue.Empty;
-        }
-
-        private void FlushText()
-        {
-            if (_text.Length == 0)
-                return;
-
-            // Encode text-only consumer runs; raw source and value bytes bypass this buffer.
-            Utf8Text.TryEncode(_text, AppendEncoded);
-            _text.Clear();
-
-            bool AppendEncoded(ReadOnlySpan<byte> bytes)
-            {
-                AppendBytes(bytes);
-                return true;
-            }
         }
     }
 }

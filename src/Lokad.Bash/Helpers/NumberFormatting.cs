@@ -1,12 +1,14 @@
 using System;
+using System.Buffers.Text;
 
 namespace Lokad.Bash.Helpers;
 
 /// <summary>
-/// Formats numeric values as UTF-8 byte sequences for tool output.
+/// Formats integers and sizes as ASCII byte sequences.
 /// </summary>
 public static class NumberFormatting
 {
+    internal const int MaximumNumberLength = 20;
     private static readonly ReadOnlyMemory<byte> Zero = Utf8Text.Encode("0");
 
     /// <summary>
@@ -30,29 +32,15 @@ public static class NumberFormatting
     {
         if (value == 0) return Zero;
 
-        var negative = value < 0;
-        // The positive magnitude of long.MinValue is not representable as a long.
-        var remaining = negative ? (ulong)(-(value + 1)) + 1 : (ulong)value;
-        Span<byte> buffer = stackalloc byte[24];
-        var length = 0;
-        while (remaining > 0)
-        {
-            buffer[length++] = (byte)('0' + (remaining % 10));
-            remaining /= 10;
-        }
+        Span<byte> buffer = stackalloc byte[MaximumNumberLength];
+        return FormatNumber(value, buffer).ToArray();
+    }
 
-        if (negative)
-        {
-            buffer[length++] = (byte)'-';
-        }
-
-        var result = new byte[length];
-        for (var index = 0; index < length; index++)
-        {
-            result[index] = buffer[length - index - 1];
-        }
-
-        return result;
+    internal static ReadOnlySpan<byte> FormatNumber(long value, Span<byte> destination)
+    {
+        if (!Utf8Formatter.TryFormat(value, destination, out var length))
+            throw new ArgumentException("The number does not fit in the destination buffer.", nameof(destination));
+        return destination[..length];
     }
 
     /// <summary>

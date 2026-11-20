@@ -70,12 +70,12 @@ public sealed class ByteFieldBoundaryTests
             new Dictionary<BindingName, ShellValue> { ["IFS"] = ShellValue.FromText("é") }, []);
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
         var builder = new ExpandedWordBuilder(variables, budget, ExpansionPurpose.Normal, ImplicitEmptyPolicy.Preserve);
-        builder.AppendText("pre", globQuoted: false);
+        builder.AppendValue(ShellValue.FromText("pre"), globQuoted: false);
         builder.AppendExpansion(ShellValue.FromBytes(new byte[] { 0xc3 }),
             allowWordSplitting: true, globQuoted: false);
         builder.AppendExpansion(ShellValue.FromBytes(new byte[] { 0xa9 }),
             allowWordSplitting: true, globQuoted: true);
-        builder.AppendText("post", globQuoted: false);
+        builder.AppendValue(ShellValue.FromText("post"), globQuoted: false);
 
         Assert.Equal(new[] { "pre", "post" }, builder.Build().Select(word => word.ToValue(budget).ToUtf8String()));
     }
@@ -116,6 +116,8 @@ public sealed class ByteFieldBoundaryTests
     [InlineData("IFS=é; printf '<%s>' pre$(printf '\\xc3')épost\n", "3C7072653E3CC33E3C706F73743E")]
     [InlineData("IFS=é; printf '<%s>' pre\"$(printf '\\xc3')\"$(printf '\\xa9')post\n", "3C707265C33E3C706F73743E")]
     [InlineData("IFS=é; printf '<%s>' pre$(printf '\\xc3')\"$(printf '\\xa9')\"post\n", "3C7072653E3CA9706F73743E")]
+    [InlineData("IFS=0; printf '[%s]' $((1020)); printf '|[%s]' \"$((1020))\"\n", "5B315D5B325D7C5B313032305D")]
+    [InlineData("printf '[%s]' $'\\377'$((320))$'\\376'\n", "5BFF333230FE5D")]
     public async Task Evaluation_PreservesByteFieldBoundaries(string script, string outputHex)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));

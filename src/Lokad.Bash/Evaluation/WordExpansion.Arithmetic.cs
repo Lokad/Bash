@@ -245,7 +245,7 @@ internal static partial class WordExpansion
                 // A diagnosed invalid write still returns its numeric value without changing storage.
                 if (target == null)
                     return null;
-                var formatted = ShellValue.FromText(Integers.FormatNumber(value));
+                var formatted = ShellValue.FromInteger(value);
                 // Builtin output selects its local fallback before checking that destination's readonly state.
                 if (assignOutput != null && assignOutput(reference, target, formatted))
                     return null;
@@ -298,7 +298,7 @@ internal static partial class WordExpansion
 
                     var writeScope = ReferenceEquals(destination, variables) ? scope
                         : scope with { Variables = destination, ExpansionWriteTarget = null, SelectorBindings = null };
-                    return target.TryPublishValue(writeScope, sourceName, ShellValue.FromText(Integers.FormatNumber(value)))
+                    return target.TryPublishValue(writeScope, sourceName, ShellValue.FromInteger(value))
                         ? null : new ArithmeticError(ArithmeticErrorKind.InvalidTarget, target.Name.ToValue());
                 }
             }

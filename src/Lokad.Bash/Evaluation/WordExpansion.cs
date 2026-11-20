@@ -743,7 +743,7 @@ internal static partial class WordExpansion
                         .ConfigureAwait(false);
                 }
                 if (result is { } number)
-                    AppendNumber(output, number, allowWordSplitting, globQuoted);
+                    output.AppendIntegerExpansion(number, allowWordSplitting, globQuoted);
                 index = arithmeticEnd;
                 continue;
             }
@@ -793,14 +793,14 @@ internal static partial class WordExpansion
 
             if (next == (byte)'?')
             {
-                AppendNumber(output, scope.Effects.LastExitCode ?? 0, allowWordSplitting, globQuoted);
+                output.AppendIntegerExpansion(scope.Effects.LastExitCode ?? 0, allowWordSplitting, globQuoted);
                 index++;
                 continue;
             }
 
             if (next == (byte)'#')
             {
-                AppendNumber(output, scope.Variables.PositionalParameters.Count, allowWordSplitting, globQuoted);
+                output.AppendIntegerExpansion(scope.Variables.PositionalParameters.Count, allowWordSplitting, globQuoted);
                 index++;
                 continue;
             }
@@ -1071,13 +1071,5 @@ internal static partial class WordExpansion
         }
 
         return scope.SetExpansionValueIgnoringReadonly(key, value);
-    }
-
-    /// <summary>
-    /// Appends an integer value to the output as text.
-    /// </summary>
-    private static void AppendNumber(ExpandedWordBuilder output, long value, bool allowWordSplitting, bool globQuoted)
-    {
-        output.AppendTextExpansion(Integers.FormatNumber(value).AsSpan(), allowWordSplitting, globQuoted);
     }
 }

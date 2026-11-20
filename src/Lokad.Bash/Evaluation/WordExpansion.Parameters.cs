@@ -565,7 +565,7 @@ internal static partial class WordExpansion
                     var length = special.Kind is VariableReferenceKind.At or VariableReferenceKind.Star
                         ? special.Fields.Count : CountParameterCharacters(special.Fields[0], scope);
                     return new ParameterValue(VariableReferenceKind.Name,
-                        [ShellValue.FromText(Integers.FormatNumber(length))], true, null, null);
+                        [ShellValue.FromInteger(length)], true, null, null);
                 }
                 if (!VariableReference.TryParse(name, budget, out var reference))
                 {
@@ -595,7 +595,7 @@ internal static partial class WordExpansion
 
                     if (modifier == ParameterModifier.Length)
                         return new ParameterValue(VariableReferenceKind.Name,
-                            [ShellValue.FromText(Integers.FormatNumber(count))], true, null, null);
+                            [ShellValue.FromInteger(count)], true, null, null);
 
                     if (modifier == ParameterModifier.None)
                     {
@@ -619,7 +619,7 @@ internal static partial class WordExpansion
                 var isSet = target != null && target.TryRead(scope.Variables, out value);
                 return modifier == ParameterModifier.Length
                     ? new ParameterValue(VariableReferenceKind.Name,
-                        [ShellValue.FromText(Integers.FormatNumber(CountParameterCharacters(value, scope)))], true, null, null)
+                        [ShellValue.FromInteger(CountParameterCharacters(value, scope))], true, null, null)
                     : new ParameterValue(reference.Kind, [value], isSet, reference, target);
 
                 // Special parameters are values, not assignable variable locations.
@@ -638,10 +638,10 @@ internal static partial class WordExpansion
                     switch (kind)
                     {
                         case SpecialParameterKind.Status:
-                            value = ShellValue.FromText(Integers.FormatNumber(scope.Effects.LastExitCode ?? 0));
+                            value = ShellValue.FromInteger(scope.Effects.LastExitCode ?? 0);
                             break;
                         case SpecialParameterKind.Count:
-                            value = ShellValue.FromText(Integers.FormatNumber(scope.Variables.PositionalParameters.Count));
+                            value = ShellValue.FromInteger(scope.Variables.PositionalParameters.Count);
                             break;
                         case SpecialParameterKind.Flags:
                             value = scope.Effects.ShellOptionFlags;
@@ -1027,7 +1027,7 @@ internal static partial class WordExpansion
                 AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
 
             Task ReportInvalidLengthAsync() => scope.Effects.ReportFatalExpansionAsync(
-                ShellValue.FromText(Integers.FormatNumber(length.GetValueOrDefault())), ShellValue.FromText("substring expression < 0"),
+                ShellValue.FromInteger(length.GetValueOrDefault()), ShellValue.FromText("substring expression < 0"),
                 ExpansionFailureKind.Arithmetic);
 
             int FindSeparator(ShellSource text)

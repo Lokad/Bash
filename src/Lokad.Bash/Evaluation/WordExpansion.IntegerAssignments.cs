@@ -20,7 +20,7 @@ internal static partial class WordExpansion
         var number = await EvaluateAsync(value).ConfigureAwait(false);
         if (!number.HasValue)
             return null;
-        return ShellValue.FromText(Integers.FormatNumber(unchecked(previous + number.Value)));
+        return ShellValue.FromInteger(unchecked(previous + number.Value));
 
         ValueTask<long?> EvaluateAsync(ShellValue operand)
         {
