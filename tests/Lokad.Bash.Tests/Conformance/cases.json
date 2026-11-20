@@ -6346,6 +6346,21 @@
       "stdoutHex": "313a646961676e6f73746963",
       "stderrHex": "",
       "fileEffects": []
+    },
+    {
+      "id": "command-usage-after-inline-stderr",
+      "classification": "supported",
+      "reason": "Preserves preceding stderr bytes when comparing a GNU command-location diagnostic.",
+      "locale": "C",
+      "script": "printf prefix >&2; command -x \"$(printf operand >&2)\"; printf '[%s]' \"$?\"",
+      "scriptSha256": "3d7fe2382fdbf03baa4e144a44a6cd739d908155944a735e624736794eaaf73c",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "5b325d",
+      "stderrHex": "7072656669786f706572616e64636f6d6d616e643a202d783a20696e76616c6964206f7074696f6e0a636f6d6d616e643a2075736167653a20636f6d6d616e64205b2d7056765d20636f6d6d616e64205b617267202e2e2e5d0a",
+      "fileEffects": [],
+      "stderrNormalization": "bash-command-location"
     }
   ]
 }
