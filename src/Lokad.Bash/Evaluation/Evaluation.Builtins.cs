@@ -16,7 +16,7 @@ public sealed partial class Evaluation
     /// Wrapper targets share ordinary command-field selection; lookup, completion and redirection lifetime stay separate.
     /// </remarks>
     private async Task<PreparedCommand> PrepareCommandAsync(
-        SimpleCommand simpleCommand,
+        IReadOnlyList<Word> sourceWords,
         ShellValue commandValue,
         ScopedEvaluation scope)
     {
@@ -31,7 +31,7 @@ public sealed partial class Evaluation
             : await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
         if (!BuiltinClassification.TryResolve(commandName.AsSpan(), out var initialBuiltin)
             || initialBuiltin is not (BuiltinKind.Builtin or BuiltinKind.Command or BuiltinKind.Exec))
-            return Executable(simpleCommand);
+            return Executable(new CommandWords(sourceWords));
 
         using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
         var fields = new List<ShellValue>();
@@ -144,9 +144,9 @@ public sealed partial class Evaluation
                 fields.Clear();
                 fieldMemory.Dispose();
 
-                for (var index = wordIndex; index < simpleCommand.Words.Count && !_state.HasPendingExpansionError; index++)
+                for (var index = wordIndex; index < sourceWords.Count && !_state.HasPendingExpansionError; index++)
                 {
-                    var word = simpleCommand.Words[index];
+                    var word = sourceWords[index];
                     if (word.Parts is [LiteralWordPart { Kind: WordPartKind.SingleQuoted } literal])
                     {
                         AddCapturedName(literal.Value);
@@ -197,10 +197,10 @@ public sealed partial class Evaluation
             }
         }
 
-        return Executable(RemainingCommand(commandValue));
+        return Executable(RemainingWords(commandValue));
 
-        PreparedCommand.Executable Executable(SimpleCommand command) => new(
-            command,
+        PreparedCommand.Executable Executable(CommandWords words) => new(
+            words,
             commandName,
             ResolveCommandName(commandValue, commandName, lookupMode),
             executionOptions,
@@ -248,7 +248,7 @@ public sealed partial class Evaluation
         }
 
         PreparedCommand.Terminal Terminal(int exitCode, ShellValue message, CommandMessageChannel channel, BuiltinKind kind) =>
-            new(EvaluationResult.FromExitCode(exitCode), message, channel, RemainingCommand(null), completion,
+            new(EvaluationResult.FromExitCode(exitCode), message, channel, RemainingWords(null), completion,
                 // Direct exec retains redirections even on option failure/help; builtin exec restores them.
                 kind == BuiltinKind.Exec && allowsPersistentRedirections
                     ? RedirectionLifetime.Evaluation : RedirectionLifetime.Command);
@@ -259,11 +259,11 @@ public sealed partial class Evaluation
             {
                 if (fieldIndex < fields.Count)
                     return fields[fieldIndex++];
-                if (wordIndex >= simpleCommand.Words.Count)
+                if (wordIndex >= sourceWords.Count)
                     break;
                 fields.Clear();
                 fieldIndex = 0;
-                var word = simpleCommand.Words[wordIndex++];
+                var word = sourceWords[wordIndex++];
                 if (word.Parts.Count == 1 && word.Parts[0].Kind == WordPartKind.SingleQuoted)
                     return word.Parts[0].GetUnexpandedValue();
                 await AppendOperandValuesAsync(word, scope, fields, fieldMemory).ConfigureAwait(false);
@@ -273,18 +273,20 @@ public sealed partial class Evaluation
             return null;
         }
 
-        SimpleCommand RemainingCommand(ShellValue? first)
+        CommandWords RemainingWords(ShellValue? first)
         {
-            var words = new List<Word>();
-            Memory.PrepareListCapacity(words, checked((first.HasValue ? 1 : 0)
-                + fields.Count - fieldIndex + simpleCommand.Words.Count - wordIndex));
+            var count = checked(fields.Count - fieldIndex + (first.HasValue ? 1 : 0));
+            if (count == 0)
+                return new CommandWords(sourceWords, wordIndex, []);
+
+            Memory.Charge(MemoryCapacity.ArrayBackingBytes<Word>(count));
+            var captures = new Word[count];
+            var captureIndex = 0;
             if (first is { } value)
-                words.Add(CaptureLiteralWord(value));
+                captures[captureIndex++] = CaptureLiteralWord(value);
             for (var index = fieldIndex; index < fields.Count; index++)
-                words.Add(CaptureLiteralWord(fields[index]));
-            for (var index = wordIndex; index < simpleCommand.Words.Count; index++)
-                words.Add(simpleCommand.Words[index]);
-            return simpleCommand with { Words = words };
+                captures[captureIndex++] = CaptureLiteralWord(fields[index]);
+            return new CommandWords(sourceWords, wordIndex, captures);
         }
     }
 

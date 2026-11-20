@@ -954,7 +954,8 @@ public sealed partial class Evaluation : IFileTester
         PreparedDeclaration? declaration = null;
         if (simpleCommand.DeclarationAssignments.Count > 0)
         {
-            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(simpleCommand, scope, captureCommandWords: true))
+            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(
+                simpleCommand, new CommandWords(simpleCommand.Words), scope, captureCommandWords: true))
                 .ConfigureAwait(false);
             simpleCommand = declaration.Command;
         }
@@ -1007,7 +1008,7 @@ public sealed partial class Evaluation : IFileTester
         if (_state.TryConsumeExpansionError(out var nameError))
             return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(nameError), false).ConfigureAwait(false));
 
-        var preparation = await AwaitWordExpansionAsync(PrepareCommandAsync(simpleCommand, commandValue, scope)).ConfigureAwait(false);
+        var preparation = await AwaitWordExpansionAsync(PrepareCommandAsync(simpleCommand.Words, commandValue, scope)).ConfigureAwait(false);
         using var functionBorrow = new FunctionBinding.Borrow(preparation is PreparedCommand.Executable
             { Resolution: CommandResolution.Function selectedFunction } ? selectedFunction.Binding : null);
         if (_state.TryConsumeExpansionError(out var preparationError))
@@ -1016,7 +1017,8 @@ public sealed partial class Evaluation : IFileTester
         if (declaration == null && preparation is PreparedCommand.Executable
             { Resolution: CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local } } declarationCommand)
         {
-            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(declarationCommand.SimpleCommand, scope, captureCommandWords: false))
+            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(
+                simpleCommand, declarationCommand.Words, scope, captureCommandWords: false))
                 .ConfigureAwait(false);
         }
         if (_state.TryConsumeExpansionError(out var declarationError))
@@ -1042,12 +1044,13 @@ public sealed partial class Evaluation : IFileTester
                 var operands = new List<ShellValue>();
                 if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo and not BuiltinKind.Hash)
                     AddOperand(operands, ShellValue.FromText(command.CommandName));
-                for (var index = 1; (declaration == null || kind is not (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)) && index < command.SimpleCommand.Words.Count; index++)
+                var words = command.Words;
+                for (var index = 1; (declaration == null || kind is not (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)) && index < words.Count; index++)
                 {
                     if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)
-                        AddOperand(operands, await ExpandWordValueAsync(command.SimpleCommand.Words[index], scope).ConfigureAwait(false));
+                        AddOperand(operands, await ExpandWordValueAsync(words[index], scope).ConfigureAwait(false));
                     else
-                        await AppendOperandValuesAsync(command.SimpleCommand.Words[index], scope, operands).ConfigureAwait(false);
+                        await AppendOperandValuesAsync(words[index], scope, operands).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         break;
                 }
@@ -1060,7 +1063,7 @@ public sealed partial class Evaluation : IFileTester
         }
         else if (preparation is PreparedCommand.Terminal terminalArguments)
         {
-            await ExpandUnusedOperandsAsync(terminalArguments.SimpleCommand.Words, 0).ConfigureAwait(false);
+            await ExpandUnusedOperandsAsync(terminalArguments.Words, 0).ConfigureAwait(false);
         }
 
         if (_state.TryConsumeExpansionError(out var argumentError))
@@ -1690,7 +1693,7 @@ public sealed partial class Evaluation : IFileTester
         async Task<IReadOnlyList<string>> ExpandArgumentsAsync(PreparedCommand.Executable command)
         {
             var builtin = (CommandResolution.EvaluatorBuiltin)command.Resolution;
-            var words = command.SimpleCommand.Words;
+            var words = command.Words;
             var expanded = new List<string>();
             AddOperand(expanded, command.CommandName);
             // Match existing consumer arity; unused operands still expand for effects and limits.
@@ -1712,7 +1715,7 @@ public sealed partial class Evaluation : IFileTester
             return expanded;
         }
 
-        async Task ExpandUnusedOperandsAsync(IReadOnlyList<Word> words, int start)
+        async Task ExpandUnusedOperandsAsync(CommandWords words, int start)
         {
             if (start >= words.Count)
                 return;
@@ -3901,6 +3904,17 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
+    /// <summary>Reads captured fields followed by a borrowed range of immutable source words.</summary>
+    private readonly struct CommandWords(IReadOnlyList<Word> source, int start, Word[] captures)
+    {
+        public CommandWords(IReadOnlyList<Word> source) : this(source, 0, []) { }
+
+        public int Count => checked(captures.Length + (source.Count - start));
+
+        public Word this[int index] => index < captures.Length
+            ? captures[index] : source[start + (index - captures.Length)];
+    }
+
     /// <summary>Captures resolved command dispatch and completion semantics.</summary>
     private abstract record PreparedCommand(
         CommandCompletion Completion,
@@ -3910,7 +3924,7 @@ public sealed partial class Evaluation : IFileTester
             EvaluationResult Result,
             ShellValue Message,
             CommandMessageChannel Channel,
-            SimpleCommand SimpleCommand,
+            CommandWords Words,
             CommandCompletion Completion,
             RedirectionLifetime RedirectionLifetime)
             : PreparedCommand(Completion, RedirectionLifetime);
@@ -3924,7 +3938,7 @@ public sealed partial class Evaluation : IFileTester
             : PreparedCommand(Completion, RedirectionLifetime);
 
         public sealed record Executable(
-            SimpleCommand SimpleCommand,
+            CommandWords Words,
             string CommandName,
             CommandResolution Resolution,
             ExecOptions? ExecutionOptions,

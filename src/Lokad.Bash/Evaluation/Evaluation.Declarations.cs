@@ -12,9 +12,9 @@ public sealed partial class Evaluation
 {
     /// <summary>Prepares declaration fields once; compound writes precede dispatch and later operand expansion.</summary>
     private async Task<PreparedDeclaration> PrepareDeclarationAsync(
-        SimpleCommand command, ScopedEvaluation scope, bool captureCommandWords)
+        SimpleCommand command, CommandWords sourceWords, ScopedEvaluation scope, bool captureCommandWords)
     {
-        var commandName = command.Words[0].Parts[0].GetUtf8Text();
+        var commandName = sourceWords[0].Parts[0].GetUtf8Text();
         if (!BuiltinClassification.TryResolve(commandName.AsSpan(), out var builtin))
             throw new InvalidOperationException("A declaration requires a declaration command name.");
 
@@ -22,12 +22,12 @@ public sealed partial class Evaluation
         // Parser-recognized assignments run before resolution. A shadowing function can still receive the words.
         var words = captureCommandWords ? new List<Word>() : null;
         if (words != null)
-            AddOperand(words, command.Words[0]);
+            AddOperand(words, sourceWords[0]);
         var operands = new List<PreparedDeclarationOperand>();
         var fields = new List<ShellValue>();
-        for (var index = 1; index < command.Words.Count; index++)
+        for (var index = 1; index < sourceWords.Count; index++)
         {
-            var word = command.Words[index];
+            var word = sourceWords[index];
             if (command.DeclarationAssignments.TryGetValue(word, out var assignment))
             {
                 options.EndOptions();
