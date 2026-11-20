@@ -345,8 +345,22 @@ with `-p` or `-t`. The last `-p` or `-t` selects the output mode.
 one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII
 whitespace and trailing space or tab. A count larger than the remaining
 positional window returns 1 silently. Negative or invalid counts return 1 with
-a diagnostic. A valid count followed by any surplus field diagnoses the arity
-error and exits the current shell evaluation with status 1.
+a diagnostic.
+
+`break` and `continue` select loops in the active shell and function. A
+parenthesized subshell starts with zero active loops. Outside a loop, either
+builtin diagnoses and returns 0. An out-of-range count diagnostic reports the
+first operand, including a leading `--`.
+
+After numeric validation, surplus operands to `exit`, `return`, `shift`,
+`break` or `continue` diagnose and discard the current command unit. The
+outer script reader advances to the next complete unit, including under
+errexit, after unwinding function calls and loaded `eval` or `source` input.
+It preserves a nonzero preceding status and its pipeline statuses. After
+a preceding success it publishes status 1. A subshell or compound pipeline
+stage terminates on discard with the preceding nonzero status or 1. A direct
+builtin pipeline stage or command substitution reports 1. A discard inside
+an EXIT action ends the action and preserves the pending exit status.
 
 `echo` consumes leading arguments made of a dash followed by one or more `n`,
 `e` or `E` bytes. Any consumed `n` omits the final LF. Backslashes are literal

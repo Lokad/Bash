@@ -51,8 +51,9 @@ public sealed partial class Evaluation
                 .ConfigureAwait(false);
 
             // A terminating exit or errexit leaves the active options visible to EXIT.
-            // Expansion errors unwind the function before the script handles the failure.
-            preserveExitOptions = functionResult.Flow == FlowControlKind.Exit && _state.FatalExpansion == null;
+            // Discarded units and expansion errors restore local options as they unwind.
+            preserveExitOptions = functionResult.Flow == FlowControlKind.Exit
+                && !functionResult.DiscardsCommandUnit && _state.FatalExpansion == null;
             CompletePromotions(functionContext, scope.Context.FunctionContext, scope.Variables, bindings);
         }
         finally
@@ -66,6 +67,10 @@ public sealed partial class Evaluation
         {
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(functionResult.ExitCode), negated).ConfigureAwait(false);
         }
+
+        // A function entered as a pipeline command uses the compound child boundary.
+        if (_state.ForkKind == ShellForkKind.PipelineSimpleCommand && !scope.InNestedCommandUnits)
+            functionResult = CompleteDiscardInChild(functionResult);
 
         return ApplyNegation(functionResult, negated);
     }

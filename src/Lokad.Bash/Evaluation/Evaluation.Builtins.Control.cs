@@ -39,11 +39,7 @@ public sealed partial class Evaluation
                 exitCode = 2;
             }
             else if (words.Count - firstOperand > 1)
-            {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText("return"),
-                    ShellValue.FromText("too many arguments")).ConfigureAwait(false);
-                return EvaluationResult.Exit(1);
-            }
+                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("return")).ConfigureAwait(false);
             else
             {
                 exitCode = (int)(status & 255);
@@ -84,13 +80,11 @@ public sealed partial class Evaluation
                 return EvaluationResult.Exit(128);
             }
             if (words.Count - first > 1)
-            {
-                await ReportExpansionDiagnosticAsync(name, ShellValue.FromText("too many arguments")).ConfigureAwait(false);
-                return EvaluationResult.Exit(1);
-            }
+                return await DiscardForExtraControlArgumentsAsync(name).ConfigureAwait(false);
             if (count <= 0)
             {
-                await ReportExpansionDiagnosticAsync([name], [words[first], ShellValue.FromText(": loop count out of range")])
+                // Bash reports the first operand, including a leading option terminator.
+                await ReportExpansionDiagnosticAsync([name], [words[1], ShellValue.FromText(": loop count out of range")])
                     .ConfigureAwait(false);
                 // Both builtins abandon every active loop after a nonpositive count.
                 return await FinalizeResultAsync(EvaluationResult.Break(scope.Context.LoopDepth, 1), negated).ConfigureAwait(false);
@@ -119,11 +113,7 @@ public sealed partial class Evaluation
                 return await CompleteExitAsync(2).ConfigureAwait(false);
             }
             if (words.Count - first > 1)
-            {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText("exit"), ShellValue.FromText("too many arguments"))
-                    .ConfigureAwait(false);
-                return EvaluationResult.Exit(1);
-            }
+                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("exit")).ConfigureAwait(false);
             exitCode = (int)(status & 255);
         }
         return await CompleteExitAsync(exitCode).ConfigureAwait(false);
@@ -136,6 +126,12 @@ public sealed partial class Evaluation
             return completion != CommandCompletion.ExitEvaluation
                 ? await RunExitTrapAsync(scope, result).ConfigureAwait(false) : result;
         }
+    }
+
+    private async Task<EvaluationResult> DiscardForExtraControlArgumentsAsync(ShellValue command)
+    {
+        await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("too many arguments")).ConfigureAwait(false);
+        return EvaluationResult.DiscardCommandUnit();
     }
 
     private static bool TryParseControlNumber(ShellValue operand, out long status) =>

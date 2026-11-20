@@ -287,7 +287,9 @@ public sealed partial class Evaluation
                     .ConfigureAwait(false);
                 if (result.Flow == FlowControlKind.Return)
                     return kind == ScriptExecutionKind.Source ? EvaluationResult.FromExitCode(result.ExitCode) : result;
-                if (result.Flow == FlowControlKind.Exit)
+                if (result.DiscardsCommandUnit && kind == ScriptExecutionKind.Root && _state.ForkKind == null)
+                    result = await RecoverDiscardedCommandUnitAsync(scope).ConfigureAwait(false);
+                else if (result.Flow == FlowControlKind.Exit)
                 {
                     // Recover only the expansion failures that end the current command unit.
                     // Explicit exit, errexit and unrecoverable expansion failures still terminate.
@@ -363,6 +365,22 @@ public sealed partial class Evaluation
         _ => null
     };
 
+    private async ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(ScopedEvaluation scope)
+    {
+        // The reader keeps a previous failure and its pipeline statuses.
+        var status = _state.LastExitCode.GetValueOrDefault();
+        if (status != 0)
+            return EvaluationResult.FromExitCode(status);
+
+        await PublishRecoveredPipelineStatusAsync(1, scope).ConfigureAwait(false);
+        _state.LastExitCode = 1;
+        return EvaluationResult.FromExitCode(1);
+    }
+
+    private EvaluationResult CompleteDiscardInChild(EvaluationResult result) =>
+        result.DiscardsCommandUnit && _state.LastExitCode is { } previous && previous != 0
+            ? result.WithExitCode(previous) : result;
+
     private async ValueTask<EvaluationResult> RecoverExpansionFailureAsync(int exitCode, ScopedEvaluation scope, bool loadedReader)
     {
         var kind = _state.FatalExpansion?.Kind;
@@ -376,20 +394,23 @@ public sealed partial class Evaluation
             // The caller's bindings and descriptors are visible again. Integer assignments
             // replace PIPESTATUS only after a previous success.
             if (publishLoadedAssignment || _state.LastExitCode.GetValueOrDefault() == 0)
-            {
-                try
-                {
-                    using var memory = Memory.BeginCommand(scope);
-                    PublishExpansionPipelineStatus(exitCode, scope);
-                }
-                catch (MemoryBudgetExceededException)
-                {
-                    Memory.ReleaseUnusedCapacity();
-                    await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
-                }
-            }
+                await PublishRecoveredPipelineStatusAsync(exitCode, scope).ConfigureAwait(false);
             _state.LastExitCode = exitCode;
         }
         return EvaluationResult.FromExitCode(exitCode);
+    }
+
+    private async ValueTask PublishRecoveredPipelineStatusAsync(int exitCode, ScopedEvaluation scope)
+    {
+        try
+        {
+            using var memory = Memory.BeginCommand(scope);
+            PublishExpansionPipelineStatus(exitCode, scope);
+        }
+        catch (MemoryBudgetExceededException)
+        {
+            Memory.ReleaseUnusedCapacity();
+            await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
+        }
     }
 }

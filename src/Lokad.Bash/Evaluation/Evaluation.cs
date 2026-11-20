@@ -449,6 +449,8 @@ public sealed partial class Evaluation : IFileTester
             try
             {
                 result = await EvaluateScriptAsync(new ScopedEvaluation(this, _vars, _initialContext), _rootFlowHandling).ConfigureAwait(false);
+                if (_state.ForkKind == ShellForkKind.Subshell)
+                    result = CompleteDiscardInChild(result);
                 result = await RunExitTrapAsync(new ScopedEvaluation(this, _vars, _initialContext), result).ConfigureAwait(false);
             }
             catch (ByteMemoryBuilder.LimitExceededException)
@@ -585,7 +587,9 @@ public sealed partial class Evaluation : IFileTester
             var result = await EvaluateCommandAsync(command, scope, negated: false)
                 .ConfigureAwait(false);
 
-            if (result.Flow == FlowControlKind.Exit)
+            if (result.DiscardsCommandUnit && rootFlowHandling == RootFlowHandling.Normalize)
+                result = await RecoverDiscardedCommandUnitAsync(scope).ConfigureAwait(false);
+            else if (result.Flow == FlowControlKind.Exit)
             {
                 var recoveryStatus = CanRecoverCommandSubstitutionSyntax ? 1 : RecoverableRootExpansionStatus;
                 if (recoveryStatus is not { } status)
@@ -700,13 +704,14 @@ public sealed partial class Evaluation : IFileTester
             var childScope = scope with
             {
                 Variables = childVars,
-                Context = childContext,
+                Context = childContext.WithLoopDepth(0),
                 ErrexitRedirections = null,
                 Timing = null,
                 InNestedCommandUnits = false
             };
             result = await EvaluateCommandAsync(subshellCommand.Body, childScope, negated: false)
                 .ConfigureAwait(false);
+            result = CompleteDiscardInChild(result);
             result = await RunExitTrapAsync(childScope, result).ConfigureAwait(false);
         }
         catch (Exception ex)

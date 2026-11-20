@@ -207,8 +207,10 @@ public sealed partial class Evaluation
                     result = await EvaluateCommandAsync(step.Command, currentScope, negated: false).ConfigureAwait(false);
                     if (result.Flow != FlowControlKind.None)
                     {
-                        if (result.Flow != FlowControlKind.Exit
-                            || GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope) is not { } recoveryStatus)
+                        var recoveryStatus = result.Flow == FlowControlKind.Exit && !result.DiscardsCommandUnit
+                            ? GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope) : null;
+                        var resumeDiscard = result.DiscardsCommandUnit && _state.ForkKind == null;
+                        if (recoveryStatus == null && !resumeDiscard)
                             return ApplyNegation(result, listNegated);
                         while (index + 1 < traversal.Count && !traversal[index + 1].StartsCommandUnit)
                         {
@@ -217,8 +219,10 @@ public sealed partial class Evaluation
                         }
                         if (index + 1 == traversal.Count)
                             return ApplyNegation(result, listNegated);
-                        result = ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus, listScope, loadedReader: false)
-                            .ConfigureAwait(false), negated: false);
+                        result = resumeDiscard
+                            ? await RecoverDiscardedCommandUnitAsync(listScope).ConfigureAwait(false)
+                            : ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus.GetValueOrDefault(), listScope,
+                                loadedReader: false).ConfigureAwait(false), negated: false);
                     }
                 }
                 return ApplyNegation(result, listNegated);

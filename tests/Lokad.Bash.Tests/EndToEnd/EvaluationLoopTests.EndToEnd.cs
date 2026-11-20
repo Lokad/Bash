@@ -8,6 +8,22 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationLoopTestsEndToEnd
 {
+    [Theory]
+    [InlineData("break", "x")]
+    [InlineData("continue", "xy")]
+    public async Task SubshellLoopFlowUsesOnlyLoopsEnteredInTheChild(string flow, string innerOutput)
+    {
+        var script = "for outer in a b; do ( " + flow + "; printf 'start'; "
+            + "for inner in x y; do printf '%s' \"$inner\"; " + flow + " 2; printf unexpected; done; "
+            + "printf 'end'; ); printf '<%s:%s>' \"$outer\" \"$?\"; done";
+        var result = await EvaluationTestHelper.RunAsync(script);
+        var diagnostic = flow + ": only meaningful in a `for', `while', or `until' loop\n";
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"start{innerOutput}end<a:0>start{innerOutput}end<b:0>", result.StdOut);
+        Assert.Equal(diagnostic + diagnostic, result.StdErr);
+    }
+
     public static IEnumerable<object[]> ConditionRoutes()
     {
         foreach (var kind in new[] { "while", "until" })

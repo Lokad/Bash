@@ -161,7 +161,8 @@ public sealed partial class Evaluation
             };
             var handler = await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap)
                 .ConfigureAwait(false);
-            if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
+            // A discarded action leaves the pending exit status in effect.
+            if (!handler.DiscardsCommandUnit && (handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
                 && (_state.FatalExpansion == null
                     || _state.ErrexitEnabled && _state.FatalExpansion is not
                     { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex

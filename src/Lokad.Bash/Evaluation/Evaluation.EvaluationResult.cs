@@ -15,7 +15,7 @@ public partial class Evaluation
     /// <summary> Represents the exit code and flow-control outcome of evaluating a node. </summary>
     private readonly struct EvaluationResult(int exitCode, FlowControlKind flow, int level, bool testedStatus)
     {
-        public int ExitCode { get; } = exitCode;
+        public int ExitCode { get; private init; } = exitCode;
 
         /// <summary>
         /// Gets the flow-control outcome emitted by the evaluated node.
@@ -45,24 +45,27 @@ public partial class Evaluation
         /// than 1 indicates the flow must propagate outward to enclosing loops; a value of 0 is used for
         /// non-loop flow kinds (return/exit/none).
         /// </remarks>
-        public int Level { get; } = level;
+        public int Level { get; private init; } = level;
 
         /// <summary>A compound command can finish with a failure whose status was already tested.</summary>
-        public bool TestedStatus { get; } = testedStatus;
+        public bool TestedStatus { get; private init; } = testedStatus;
 
         public RedirectionScope? DeferredErrexit { get; private init; }
 
+        /// <summary>Unwinds through the active command unit to its outer script reader.</summary>
+        public bool DiscardsCommandUnit { get; private init; }
+
         public EvaluationResult WithExitCode(int exitCode) =>
-            new(exitCode, Flow, Level, TestedStatus) { DeferredErrexit = DeferredErrexit };
+            this with { ExitCode = exitCode };
 
         public EvaluationResult WithLevel(int level) =>
-            new(ExitCode, Flow, level, TestedStatus) { DeferredErrexit = DeferredErrexit };
+            this with { Level = level };
 
         public EvaluationResult WithTestedStatus(bool tested) =>
-            new(ExitCode, Flow, Level, tested) { DeferredErrexit = DeferredErrexit };
+            this with { TestedStatus = tested };
 
         public EvaluationResult WithDeferredErrexit(RedirectionScope? redirections) =>
-            new(ExitCode, Flow, Level, TestedStatus) { DeferredErrexit = redirections };
+            this with { DeferredErrexit = redirections };
 
         /// <summary>Propagates return/exit or the remaining levels of loop flow past one loop owner.</summary>
         public bool TryPropagateLoopFlow(out EvaluationResult outward)
@@ -96,6 +99,9 @@ public partial class Evaluation
         public static EvaluationResult Return(int exitCode) => new(exitCode, FlowControlKind.Return, 0, false);
 
         public static EvaluationResult Exit(int exitCode) => new(exitCode, FlowControlKind.Exit, 0, false);
+
+        public static EvaluationResult DiscardCommandUnit() =>
+            new(1, FlowControlKind.Exit, 0, false) { DiscardsCommandUnit = true };
     }
 
 }
