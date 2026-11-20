@@ -989,11 +989,11 @@ public sealed partial class Evaluation : IFileTester
                 .ConfigureAwait(false);
             simpleCommand = declaration.Command;
         }
-        simpleCommand = await ExpandCommandNameAsync(simpleCommand).ConfigureAwait(false);
+        var commandWords = await ExpandCommandNameAsync(simpleCommand.Words).ConfigureAwait(false);
         if (_state.HasPendingExpansionError)
             return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false));
 
-        if (simpleCommand.Words.Count == 0)
+        if (commandWords.Count == 0)
         {
             // Assignments run in the enclosing descriptor scope, before any command-local redirections.
             var exitCode = 0;
@@ -1037,12 +1037,12 @@ public sealed partial class Evaluation : IFileTester
                 .ConfigureAwait(false);
         }
 
-        var commandValue = await ExpandWordValueAsync(simpleCommand.Words[0], scope).ConfigureAwait(false);
+        var commandValue = await ExpandWordValueAsync(commandWords[0], scope).ConfigureAwait(false);
         var commandName = string.Empty;
         if (_state.TryConsumeExpansionError(out var nameError))
             return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(nameError), false).ConfigureAwait(false));
 
-        var preparation = await AwaitWordExpansionAsync(PrepareCommandAsync(simpleCommand.Words, commandValue, scope)).ConfigureAwait(false);
+        var preparation = await AwaitWordExpansionAsync(PrepareCommandAsync(commandWords, commandValue, scope)).ConfigureAwait(false);
         using var functionBorrow = new FunctionBinding.Borrow(preparation is PreparedCommand.Executable
             { Resolution: CommandResolution.Function selectedFunction } ? selectedFunction.Binding : null);
         if (_state.TryConsumeExpansionError(out var preparationError))
@@ -1517,33 +1517,24 @@ public sealed partial class Evaluation : IFileTester
         }
 
         // Capture the first surviving command field, retaining other fields without replaying their expansion.
-        async Task<SimpleCommand> ExpandCommandNameAsync(SimpleCommand source)
+        async Task<CommandWords> ExpandCommandNameAsync(IReadOnlyList<Word> source)
         {
-            if (source.Words.Count == 0)
-                return source;
-            var first = source.Words[0];
             // A prepared field can stay in its original word unless pathname expansion can replace it.
-            if (GetLiteralWithoutGlob(first) != null)
-                return source;
+            if (source.Count == 0 || GetLiteralWithoutGlob(source[0]) != null)
+                return new CommandWords(source);
 
             using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
             var fields = new List<ShellValue>();
-            var words = new List<Word>();
-            for (var index = 0; index < source.Words.Count; index++)
+            for (var index = 0; index < source.Count; index++)
             {
-                await AppendOperandValuesAsync(source.Words[index], scope, fields, fieldMemory).ConfigureAwait(false);
+                await AppendOperandValuesAsync(source[index], scope, fields, fieldMemory).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     break;
                 if (fields.Count == 0)
                     continue;
-                Memory.PrepareListCapacity(words, checked(fields.Count + source.Words.Count - index - 1));
-                foreach (var field in fields)
-                    words.Add(CaptureLiteralWord(field));
-                for (var remaining = index + 1; remaining < source.Words.Count; remaining++)
-                    words.Add(source.Words[remaining]);
-                break;
+                return new CommandWords(source, index + 1, CaptureLiteralWords(fields, start: 0, first: null));
             }
-            return source with { Words = words };
+            return new CommandWords([]);
         }
 
         ShellValue PrepareExecArgumentZero(ExecOptions options, string defaultName)
@@ -3073,11 +3064,24 @@ public sealed partial class Evaluation : IFileTester
     private static ExpandedWord? GetLiteralWithoutGlob(Word word) => word.LiteralFields is [var literal]
         && (literal.Segments is [{ IsGlobQuoted: true }] || !GlobPattern.RequiresExpansion(literal)) ? literal : null;
 
-    private Word CaptureLiteralWord(ShellValue field)
+    private Word[] CaptureLiteralWords(List<ShellValue> fields, int start, ShellValue? first)
     {
-        // The argument borrows the expanded bytes and owns its syntax and cached expansion.
-        Memory.Charge(256);
-        return new Word([WordPart.FromValue(WordPartKind.SingleQuoted, field)]);
+        var count = checked(fields.Count - start + (first.HasValue ? 1 : 0));
+        Memory.Charge(MemoryCapacity.ArrayBackingBytes<Word>(count));
+        var words = new Word[count];
+        var index = 0;
+        if (first is { } value)
+            words[index++] = Capture(value);
+        for (var field = start; field < fields.Count; field++)
+            words[index++] = Capture(fields[field]);
+        return words;
+
+        Word Capture(ShellValue field)
+        {
+            // The argument borrows the expanded bytes and owns its syntax and cached expansion.
+            Memory.Charge(256);
+            return new Word([WordPart.FromValue(WordPartKind.SingleQuoted, field)]);
+        }
     }
 
     /// <summary>Expands directly into the command's admitted operand list.</summary>
@@ -4142,14 +4146,23 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>Reads captured fields followed by a borrowed range of immutable source words.</summary>
-    private readonly struct CommandWords(IReadOnlyList<Word> source, int start, Word[] captures)
+    private readonly struct CommandWords(IReadOnlyList<Word> source, int start, ReadOnlyMemory<Word> captures)
     {
-        public CommandWords(IReadOnlyList<Word> source) : this(source, 0, []) { }
+        public CommandWords(IReadOnlyList<Word> source) : this(source, 0, ReadOnlyMemory<Word>.Empty) { }
 
+        public int CapturedCount => captures.Length;
         public int Count => checked(captures.Length + (source.Count - start));
 
         public Word this[int index] => index < captures.Length
-            ? captures[index] : source[start + (index - captures.Length)];
+            ? captures.Span[index] : source[start + (index - captures.Length)];
+
+        public CommandWords Slice(int index) => index < captures.Length
+            ? new CommandWords(source, start, captures[index..])
+            : new CommandWords(source, start + (index - captures.Length), ReadOnlyMemory<Word>.Empty);
+
+        /// <summary>Attaches a new prefix after every previous capture has been consumed.</summary>
+        public CommandWords WithCapturedPrefix(int consumed, Word[] prefix) =>
+            new(source, start + (consumed - captures.Length), prefix);
     }
 
     /// <summary>Captures resolved command dispatch and completion semantics.</summary>

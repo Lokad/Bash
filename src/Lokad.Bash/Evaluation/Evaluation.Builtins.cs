@@ -16,7 +16,7 @@ public sealed partial class Evaluation
     /// Wrapper targets share ordinary command-field selection; lookup, completion and redirection lifetime stay separate.
     /// </remarks>
     private async Task<PreparedCommand> PrepareCommandAsync(
-        IReadOnlyList<Word> sourceWords,
+        CommandWords sourceWords,
         ShellValue commandValue,
         ScopedEvaluation scope)
     {
@@ -32,7 +32,7 @@ public sealed partial class Evaluation
             : await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
         if (!BuiltinClassification.TryResolve(commandName.AsSpan(), out var initialBuiltin)
             || initialBuiltin is not (BuiltinKind.Builtin or BuiltinKind.Command or BuiltinKind.Exec))
-            return Executable(new CommandWords(sourceWords));
+            return Executable(sourceWords);
 
         using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
         var fields = new List<ShellValue>();
@@ -278,18 +278,13 @@ public sealed partial class Evaluation
 
         CommandWords RemainingWords(ShellValue? first)
         {
-            var count = checked(fields.Count - fieldIndex + (first.HasValue ? 1 : 0));
-            if (count == 0)
-                return new CommandWords(sourceWords, wordIndex, []);
-
-            Memory.Charge(MemoryCapacity.ArrayBackingBytes<Word>(count));
-            var captures = new Word[count];
-            var captureIndex = 0;
-            if (first is { } value)
-                captures[captureIndex++] = CaptureLiteralWord(value);
-            for (var index = fieldIndex; index < fields.Count; index++)
-                captures[captureIndex++] = CaptureLiteralWord(fields[index]);
-            return new CommandWords(sourceWords, wordIndex, captures);
+            if (!first.HasValue && fieldIndex == fields.Count)
+                return sourceWords.Slice(wordIndex);
+            // A target read from the captured prefix can stay at the head of that range.
+            // Wrapper expansion only fills its own buffer after consuming the prefix.
+            if (wordIndex <= sourceWords.CapturedCount)
+                return sourceWords.Slice(wordIndex - 1);
+            return sourceWords.WithCapturedPrefix(wordIndex, CaptureLiteralWords(fields, fieldIndex, first));
         }
     }
 

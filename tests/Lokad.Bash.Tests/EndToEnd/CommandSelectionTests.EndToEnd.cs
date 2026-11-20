@@ -159,6 +159,31 @@ public sealed class CommandSelectionTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("set -- printf '<%s>\\n' captured", "\"$@\"")]
+    [InlineData("set -- builtin printf '<%s>\\n' captured", "\"$@\"")]
+    [InlineData("set -- builtin command -- printf '<%s>\\n' captured", "\"$@\"")]
+    [InlineData("set -- command; target=(printf '<%s>\\n' captured)", "\"$@\" \"${target[@]}\"")]
+    public async Task Evaluation_ExpandedCommandNameKeepsCapturedFieldsAheadOfSourceTail(
+        string setup, string invocation)
+    {
+        await using var host = new TestHost();
+        var source = $"""
+            {setup}
+            calls=0
+            {invocation} "$((calls++))" >out
+            printf 'state:%s:%s' "$calls" "$_"
+            """;
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<captured>\n<0>\n", host.ReadFile("/out"));
+        Assert.Equal("state:1:0", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("printf")]
     [InlineData("\"printf\"")]
     [InlineData("'printf'")]

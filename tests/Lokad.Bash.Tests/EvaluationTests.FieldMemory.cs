@@ -3,12 +3,50 @@ using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
+    [Fact]
+    public async Task FieldMemory_ExpandedCommandNameBorrowsTheUntouchedArgumentTail()
+    {
+        const string Literal = "printf ";
+        const string Expanded = "${tool}";
+        var tail = string.Concat(Enumerable.Repeat(" tail", 256));
+        var narrowGap = await MeasureAsync(Expanded, "") - await MeasureAsync(Literal, "");
+        var wideGap = await MeasureAsync(Expanded, tail) - await MeasureAsync(Literal, tail);
+
+        Assert.Equal(narrowGap, wideGap);
+
+        async Task<long> MeasureAsync(string name, string words)
+        {
+            var state = new Eval(Parser.Parse($"tool=printf\n{name} body{words} >out"));
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            long? workspaceAtOpen = null;
+            host.BeforeWritableOpen = path =>
+            {
+                if (path.Path == "/out")
+                    workspaceAtOpen = state.Memory.Workspace.Bytes;
+            };
+
+            var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal("body", host.ReadFile("/out"));
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            Assert.NotNull(workspaceAtOpen);
+            return workspaceAtOpen.Value;
+        }
+    }
+
     [Fact]
     public async Task FieldMemory_RetainsExternalArgumentsUntilTheHostSettles()
     {

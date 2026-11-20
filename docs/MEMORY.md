@@ -99,8 +99,8 @@ materialized bytes under the caller's scope. Output-only formatting and
 shell-closed stderr skip diagnostic storage.
 Prepared terminal messages admit their final buffer in the command workspace,
 which holds it through later expansion, redirection setup and host writes.
-Command-control preparation admits the captured fields it still needs and
-borrows the unexpanded operand tail from its existing source owner.
+Command-name and command-control preparation admit captured fields and
+borrow the unexpanded operand tail from its existing source owner.
 The builtin wrapper checks the target in the byte registry and decodes names
 only after the registry accepts them.
 If the host error output cannot be admitted, the evaluator reports a
