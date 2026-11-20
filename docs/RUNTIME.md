@@ -432,6 +432,13 @@ syntax failure on stderr and releases its evaluator memory scope. `Engine.RunAsy
 can instead use a caller-owned evaluation memory scope when state must be retained.
 Keep that scope alive as long as retained evaluator data is used.
 
+The evaluator retains the last byte argument from ordinary argument expansion
+for `$_`. A completed simple command publishes it after invocation and
+redirection cleanup, before an ordinary failure can reach errexit. An explicit
+exit action sees the value from preceding commands. The binding keeps only
+compact backing and uses the existing command allowance to admit retained
+storage after temporary consumers settle.
+
 `BashScript.RunAsync`, `source`, `eval` and reached EXIT actions parse and execute complete command units
 through the same evaluator. A newline completes a unit only after its compound
 syntax, continuations, quoting and here-documents are complete. Later syntax errors

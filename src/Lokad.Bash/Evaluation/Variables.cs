@@ -37,6 +37,7 @@ public sealed partial class Variables
     // Four backing positions per selected name cover hash-table growth and replacement overlap.
     internal const int ExportSelectionNameBytes = 4 * BindingNameSetEntryBytes;
     private const int PositionalEntryBytes = 32;
+    internal static readonly BindingName LastArgumentName = "_";
 
     /// <summary>Retains bytes and parsed selectors; a null reference denotes an unset nameref.</summary>
     private readonly record struct NamerefTarget(ShellValue Value, VariableReference? Reference, BindingName? LiteralName)
@@ -943,6 +944,19 @@ public sealed partial class Variables
         if (NamerefTargets.TryGetValue(name, out var target) && target.IsEmpty)
             return TrySetScalar(name, value, memory);
         SetResolvedScalar(name, value);
+        return true;
+    }
+
+    /// <summary>Records a completed command's argument for ordinary scalar bindings.</summary>
+    internal bool TrySetLastArgumentScalar(ShellValue value)
+    {
+        if (TryGetBinding(LastArgumentName, out var slot)
+            && (slot is IndexedSlot or AssociativeSlot or NamerefSlot
+                || (slot.Attributes & (BindingAttributes.Integer | BindingAttributes.Readonly)) != 0))
+            return false;
+        SetResolvedScalar(LastArgumentName, value);
+        if ((slot?.Attributes & BindingAttributes.Exported) == BindingAttributes.Exported)
+            SetExported(LastArgumentName, false);
         return true;
     }
 

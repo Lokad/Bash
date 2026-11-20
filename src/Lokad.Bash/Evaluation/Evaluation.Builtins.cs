@@ -26,6 +26,7 @@ public sealed partial class Evaluation
         var allowsPersistentRedirections = true;
         // Keep source words and surplus expansion fields separate; wrappers consume them without rebuilding the suffix.
         var wordIndex = 1;
+        var lastReadArgument = commandValue;
         // Byte-valued function names need no text allocation. Other names use the shared decode budget.
         var commandName = _state.Functions.ContainsKey(commandValue) ? string.Empty
             : await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
@@ -164,6 +165,7 @@ public sealed partial class Evaluation
 
                 return new PreparedCommand.Query(
                     names,
+                    names.Count == 0 ? lastReadArgument : names[^1],
                     outputMode.Value,
                     executionOptions,
                     completion,
@@ -201,6 +203,7 @@ public sealed partial class Evaluation
 
         PreparedCommand.Executable Executable(CommandWords words) => new(
             words,
+            commandValue,
             commandName,
             ResolveCommandName(commandValue, commandName, lookupMode),
             executionOptions,
@@ -248,7 +251,7 @@ public sealed partial class Evaluation
         }
 
         PreparedCommand.Terminal Terminal(int exitCode, ShellValue message, CommandMessageChannel channel, BuiltinKind kind) =>
-            new(EvaluationResult.FromExitCode(exitCode), message, channel, RemainingWords(null), completion,
+            new(EvaluationResult.FromExitCode(exitCode), message, channel, RemainingWords(null), lastReadArgument, completion,
                 // Direct exec retains redirections even on option failure/help; builtin exec restores them.
                 kind == BuiltinKind.Exec && allowsPersistentRedirections
                     ? RedirectionLifetime.Evaluation : RedirectionLifetime.Command);
@@ -258,14 +261,14 @@ public sealed partial class Evaluation
             while (!_state.HasPendingExpansionError)
             {
                 if (fieldIndex < fields.Count)
-                    return fields[fieldIndex++];
+                    return lastReadArgument = fields[fieldIndex++];
                 if (wordIndex >= sourceWords.Count)
                     break;
                 fields.Clear();
                 fieldIndex = 0;
                 var word = sourceWords[wordIndex++];
                 if (word.Parts.Count == 1 && word.Parts[0].Kind == WordPartKind.SingleQuoted)
-                    return word.Parts[0].GetUnexpandedValue();
+                    return lastReadArgument = word.Parts[0].GetUnexpandedValue();
                 await AppendOperandValuesAsync(word, scope, fields, fieldMemory).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     fields.Clear();

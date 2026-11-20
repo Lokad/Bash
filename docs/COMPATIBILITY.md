@@ -262,6 +262,13 @@ positions and negation suppress it through nested functions/groups and source/ev
 Command substitution clears errexit by default; parenthesized subshells inherit it.
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
+`$_` holds the last expanded argument of a completed simple command. A command
+without arguments records its name, and a command with only assignments or
+redirections records an empty value. Word and redirection expansion can read the
+previous value. Function calls publish their invocation argument on return.
+Subshell and pipeline commands keep their own updates. The binding preserves
+bytes and follows ordinary variable assignment rules, including readonly
+diagnostics and local bindings.
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the
 pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.

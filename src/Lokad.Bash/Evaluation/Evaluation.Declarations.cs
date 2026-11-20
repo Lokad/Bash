@@ -25,6 +25,8 @@ public sealed partial class Evaluation
             AddOperand(words, sourceWords[0]);
         var operands = new List<PreparedDeclarationOperand>();
         var fields = new List<ShellValue>();
+        ShellValue? lastArgument = null;
+        PreparedDeclarationOperand? lastAssignment = null;
         for (var index = 1; index < sourceWords.Count; index++)
         {
             var word = sourceWords[index];
@@ -241,7 +243,17 @@ public sealed partial class Evaluation
 
         Memory.Workspace.Resize(Memory.Workspace.Bytes - MemoryCapacity.ArrayBackingBytes<ShellValue>(fields.Capacity));
         Memory.Workspace.TrimExcess();
-        return new PreparedDeclaration(words == null ? command : command with { Words = words }, options, operands);
+        if (!HasPendingExpansionError && lastAssignment is { } assignmentArgument)
+        {
+            if (assignmentArgument.Value.HasValue)
+            {
+                Memory.Charge(256);
+                lastArgument = await ExpandWordValueAsync(assignmentArgument.ToWord(), scope).ConfigureAwait(false);
+            }
+            else
+                lastArgument = assignmentArgument.Name;
+        }
+        return new PreparedDeclaration(words == null ? command : command with { Words = words }, options, operands, lastArgument);
 
         PreparedDeclarationOperand PrepareVariableOperand(ShellValue input) =>
             AssignmentWord.TrySplitOperand(ShellSource.FromBytes(input.Bytes), Memory.Workspace, out var name, out var value, out var operation)
@@ -250,6 +262,8 @@ public sealed partial class Evaluation
 
         void AddField(ShellValue field, Word? sourceWord, int remainingFields)
         {
+            lastArgument = field;
+            lastAssignment = null;
             if (words != null)
             {
                 if (sourceWord != null)
@@ -266,6 +280,7 @@ public sealed partial class Evaluation
 
         void AddAssignment(PreparedDeclarationOperand operand)
         {
+            lastAssignment = operand;
             CaptureArgument(operand);
             AddOperand(operands, operand);
         }
@@ -309,7 +324,7 @@ public sealed partial class Evaluation
     }
 
     private sealed record PreparedDeclaration(
-        SimpleCommand Command, DeclarationOptions Options, IReadOnlyList<PreparedDeclarationOperand> Operands);
+        SimpleCommand Command, DeclarationOptions Options, IReadOnlyList<PreparedDeclarationOperand> Operands, ShellValue? LastArgument);
 
     private enum DeclarationAttributeChange { Unchanged, Set, Clear }
 

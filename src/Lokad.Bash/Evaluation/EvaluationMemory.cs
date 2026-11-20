@@ -72,6 +72,15 @@ internal sealed class EvaluationMemory
 
     public void ReleaseUnusedCapacity() => _memory.ReleaseUnusedCapacity();
 
+    /// <summary>Admits retained storage using scratch capacity released at command completion.</summary>
+    internal void PrepareRetainedStorage(long bytes)
+    {
+        if (_command is { } command)
+            command.PrepareRetainedStorage(bytes);
+        else
+            Charge(bytes);
+    }
+
     public void Finish(bool retainVariables)
     {
         if (retainVariables)
@@ -97,6 +106,13 @@ internal sealed class EvaluationMemory
 
     internal sealed class Command(EvaluationMemory owner, ScopedEvaluation scope, Command? parent, long baseline) : IDisposable
     {
+        internal void PrepareRetainedStorage(long bytes)
+        {
+            var required = checked(baseline + RetainedBytes(scope) + bytes);
+            if (required > owner._memory.Bytes)
+                owner.Charge(required - owner._memory.Bytes);
+        }
+
         /// <summary>Reuses the active frame after its temporary results have been consumed.</summary>
         /// <remarks>Nested frames must have finished before resetting their caller.</remarks>
         internal void ResetWorkspace()

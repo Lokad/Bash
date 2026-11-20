@@ -20,7 +20,7 @@ public sealed class DirectoryNavigationHostTests
         foreach (var path in paths)
             host.AddDirectory(path);
         var setup = string.Join('\n', paths.Select(path => "pushd " + path + " >/dev/null"));
-        var evaluation = new Eval(Parser.Parse(setup + "\nprintf @full; dirs; dirs -c; printf @idle"));
+        var evaluation = new Eval(Parser.Parse(setup + "\n: @full; printf @full; dirs; dirs -c; printf @idle"));
         var budget = new MemoryGovernor(1024 * 1024);
         using var owner = budget.CreateScope();
         evaluation.Memory.Budget = owner;

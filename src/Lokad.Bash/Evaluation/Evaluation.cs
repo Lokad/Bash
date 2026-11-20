@@ -946,8 +946,9 @@ public sealed partial class Evaluation : IFileTester
         SimpleCommand simpleCommand,
         ScopedEvaluation scope)
     {
-        var publishStatus = simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0
+        var reachedCommand = simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0
             || simpleCommand.Redirections.Count != 0;
+        var publishStatus = reachedCommand;
         if (publishStatus)
             PreparePipelineStatusStorage(1);
         _state.LastCommandSubstitutionExitCode = null;
@@ -1000,7 +1001,8 @@ public sealed partial class Evaluation : IFileTester
                 assignmentCloseError = await redirectionScope.CloseAsync(
                     assignmentFailure != null || assignmentResult.ExitCode != 0).ConfigureAwait(false);
             }
-            return PublishStatus(await ApplyCloseErrorAsync(assignmentResult, assignmentCloseError).ConfigureAwait(false));
+            return await CompleteSimpleCommandAsync(assignmentResult, assignmentCloseError, ShellValue.Empty)
+                .ConfigureAwait(false);
         }
 
         var commandValue = await ExpandWordValueAsync(simpleCommand.Words[0], scope).ConfigureAwait(false);
@@ -1027,8 +1029,10 @@ public sealed partial class Evaluation : IFileTester
         // Expand once in the caller scope before redirections and temporary bindings.
         IReadOnlyList<string> arguments = [];
         IReadOnlyList<ShellValue> byteOperands = [];
+        var lastArgument = commandValue;
         if (preparation is PreparedCommand.Executable command)
         {
+            lastArgument = command.CommandValue;
             if (command.Resolution is not CommandResolution.EvaluatorBuiltin
                 || command.Resolution is CommandResolution.EvaluatorBuiltin
                 {
@@ -1055,6 +1059,10 @@ public sealed partial class Evaluation : IFileTester
                         break;
                 }
                 byteOperands = operands;
+                if (declaration != null && kind is (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local))
+                    lastArgument = declaration.LastArgument ?? lastArgument;
+                else if (operands.Count != 0)
+                    lastArgument = operands[^1];
             }
             else
             {
@@ -1063,8 +1071,12 @@ public sealed partial class Evaluation : IFileTester
         }
         else if (preparation is PreparedCommand.Terminal terminalArguments)
         {
-            await ExpandUnusedOperandsAsync(terminalArguments.Words, 0).ConfigureAwait(false);
+            lastArgument = terminalArguments.LastReadArgument;
+            await ExpandArgumentTailAsync(terminalArguments.Words, 0, textOperands: null, lastTextOperandIndex: -1)
+                .ConfigureAwait(false);
         }
+        else if (preparation is PreparedCommand.Query queryArguments)
+            lastArgument = queryArguments.LastReadArgument;
 
         if (_state.TryConsumeExpansionError(out var argumentError))
             return PublishStatus(await FailPreparationAsync(argumentError).ConfigureAwait(false));
@@ -1179,7 +1191,50 @@ public sealed partial class Evaluation : IFileTester
                         owner.Release();
             }
         }
-        return PublishStatus(await ApplyCloseErrorAsync(preparedResult, commandCloseError).ConfigureAwait(false));
+        return await CompleteSimpleCommandAsync(preparedResult, commandCloseError, lastArgument).ConfigureAwait(false);
+
+        async Task<EvaluationResult> CompleteSimpleCommandAsync(EvaluationResult result, OperationError? closeError, ShellValue last)
+        {
+            result = await ApplyCloseErrorAsync(result, closeError).ConfigureAwait(false);
+            if (reachedCommand && result.Flow != FlowControlKind.Exit)
+            {
+                CheckCancellation();
+                await BindLastArgumentAsync(last).ConfigureAwait(false);
+                if (_state.TryConsumeExpansionError(out var status))
+                    result = await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false).ConfigureAwait(false);
+            }
+            return PublishStatus(result);
+        }
+
+        async Task BindLastArgumentAsync(ShellValue value)
+        {
+            var variables = scope.Variables;
+            var name = global::Lokad.Bash.Evaluation.Variables.LastArgumentName;
+            if (variables.IsReadonly(name))
+            {
+                var subject = !variables.IsReadonlyBinding(name)
+                    && variables.TryResolveBinding(name, selectOwner: null, out var binding) ? binding.Name : name;
+                await ReportExpansionDiagnosticAsync(GetDiagnosticName(subject), ShellValue.FromText("readonly variable"))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            // The retained value can outlive the command unit and its syntax owner.
+            if (!value.IsEmpty && !value.TryGetCompactArrayCapacity(out _))
+            {
+                Memory.Charge(MemoryCapacity.ArrayBackingBytes<byte>(value.Bytes.Length));
+                value = ShellValue.FromBytes(value.Bytes.ToArray());
+            }
+            Memory.PrepareRetainedStorage(160 + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
+            if (variables.TrySetLastArgumentScalar(value))
+                return;
+
+            var target = await WordExpansion.ResolveBuiltinReferenceAsync(
+                VariableReference.ForName(name), scope, variables, variables).ConfigureAwait(false);
+            if (target != null && await target.AssignValueAsync(scope, name, value, AssignmentOperator.Replace)
+                    .ConfigureAwait(false) is not null)
+                variables.SetExported(target.Name, false);
+        }
 
         EvaluationResult PublishStatus(EvaluationResult result)
         {
@@ -1705,17 +1760,11 @@ public sealed partial class Evaluation : IFileTester
                 _ => words.Count - 1
             };
 
-            for (var index = 1; index <= lastTextOperandIndex && index < words.Count; index++)
-            {
-                AddOperand(expanded, await ExpandWordAsync(words[index], scope).ConfigureAwait(false));
-                if (_state.HasPendingExpansionError)
-                    return expanded;
-            }
-            await ExpandUnusedOperandsAsync(words, lastTextOperandIndex + 1).ConfigureAwait(false);
+            await ExpandArgumentTailAsync(words, 1, expanded, lastTextOperandIndex).ConfigureAwait(false);
             return expanded;
         }
 
-        async Task ExpandUnusedOperandsAsync(CommandWords words, int start)
+        async Task ExpandArgumentTailAsync(CommandWords words, int start, List<string>? textOperands, int lastTextOperandIndex)
         {
             if (start >= words.Count)
                 return;
@@ -1727,6 +1776,17 @@ public sealed partial class Evaluation : IFileTester
                 await AppendOperandValuesAsync(words[index], scope, fields, fieldMemory).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     break;
+                if (fields.Count != 0)
+                {
+                    lastArgument = fields[^1];
+                    if (textOperands != null && index <= lastTextOperandIndex)
+                    {
+                        var text = await DecodeExpandedValueAsync(fields[0]).ConfigureAwait(false);
+                        if (_state.HasPendingExpansionError)
+                            break;
+                        AddOperand(textOperands, text);
+                    }
+                }
                 fields.Clear();
             }
         }
@@ -2948,16 +3008,6 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    /// <summary>Decodes the first unsplit field for existing single-text-field consumers.</summary>
-    internal Task<string> ExpandWordAsync(Word word, ScopedEvaluation scope)
-    {
-        return AwaitWordExpansionAsync(ExpandAndDecodeAsync());
-
-        async Task<string> ExpandAndDecodeAsync() =>
-            await DecodeExpandedValueAsync(await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Normal)
-                .ConfigureAwait(false)).ConfigureAwait(false);
-    }
-
     private static ExpandedWord? GetLiteralWithoutGlob(Word word) => word.LiteralFields is [var literal]
         && (literal.Segments is [{ IsGlobQuoted: true }] || !GlobPattern.RequiresExpansion(literal)) ? literal : null;
 
@@ -3959,12 +4009,14 @@ public sealed partial class Evaluation : IFileTester
             ShellValue Message,
             CommandMessageChannel Channel,
             CommandWords Words,
+            ShellValue LastReadArgument,
             CommandCompletion Completion,
             RedirectionLifetime RedirectionLifetime)
             : PreparedCommand(Completion, RedirectionLifetime);
 
         public sealed record Query(
             IReadOnlyList<ShellValue> Arguments,
+            ShellValue LastReadArgument,
             CommandQueryOutputMode OutputMode,
             ExecOptions? ExecutionOptions,
             CommandCompletion Completion,
@@ -3973,6 +4025,7 @@ public sealed partial class Evaluation : IFileTester
 
         public sealed record Executable(
             CommandWords Words,
+            ShellValue CommandValue,
             string CommandName,
             CommandResolution Resolution,
             ExecOptions? ExecutionOptions,
