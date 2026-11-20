@@ -950,7 +950,7 @@ internal sealed class Tokenizer
     private Word ReadWord(ReadOnlySpan<byte> span, int delimiterStart, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote)
     {
         var parts = new List<WordPart>();
-        var unquoted = _scanContext.CreateByteBuilder(0);
+        var unquoted = new WordPartBuffer(_input, _scanContext);
         var quotedOperand = outerQuote == ShellQuoteKind.Double;
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var arithmetic = syntax is not (ExpansionWordSyntax.Parameter or ExpansionWordSyntax.BraceExpanded);
@@ -978,14 +978,13 @@ internal sealed class Tokenizer
             if (!TryReserveSyntax())
                 return;
             AddPart(new SourceWordPart(
-                quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, ShellSource.FromBytes(unquoted.ToCompactMemory(_scanContext.SyntaxMemory)),
+                quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, unquoted.TakeSource(),
                 _scanContext.SyntaxMemory)
             {
                 IsBraceExpanded = braceExpanded,
                 RenderedLineAdjustment = renderedLineAdjustment,
                 ParameterSubscriptFailure = subscriptFailure
             });
-            unquoted = _scanContext.CreateByteBuilder(0);
             renderedLineAdjustment = 0;
             subscriptFailure = ParameterSubscriptFailure.None;
         }
@@ -999,13 +998,13 @@ internal sealed class Tokenizer
                 AddPart(subscript);
                 continue;
             }
-            if (TryReadBracedParameterExpansion(unquoted, quotedOperand, ref renderedLineAdjustment, ref subscriptFailure))
+            if (TryReadBracedParameterExpansion(ref unquoted, quotedOperand, ref renderedLineAdjustment, ref subscriptFailure))
             {
                 continue;
             }
 
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(unquoted, quotedOperand, ref renderedLineAdjustment))
+                && TryReadArithmeticExpansion(ref unquoted, quotedOperand, ref renderedLineAdjustment))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
@@ -1085,7 +1084,7 @@ internal sealed class Tokenizer
                 if (arithmetic
                     && (Position + 1 >= span.Length || span[Position + 1] is not ((byte)'$' or (byte)'`' or (byte)'"' or (byte)'\\' or (byte)'\n')))
                 {
-                    unquoted.Append(current);
+                    unquoted.AppendSource(Position, 1);
                     Position++;
                     continue;
                 }
@@ -1094,7 +1093,7 @@ internal sealed class Tokenizer
                 {
                     if (braceExpanded)
                     {
-                        unquoted.Append(current);
+                        unquoted.AppendSource(Position - 1, 1);
                         break;
                     }
                     RecordError("Unexpected end of input after escape.", Position);
@@ -1111,7 +1110,7 @@ internal sealed class Tokenizer
                 // A parameter operand also lets backslash protect its closing brace.
                 if (quotedOperand && escaped is not ((byte)'$' or (byte)'`' or (byte)'"' or (byte)'\\' or (byte)'}'))
                 {
-                    unquoted.Append((byte)'\\');
+                    unquoted.AppendSource(Position - 1, 1);
                     continue;
                 }
 
@@ -1125,7 +1124,7 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            unquoted.Append(current);
+            unquoted.AppendSource(Position, 1);
             Position++;
         }
 
@@ -1161,7 +1160,7 @@ internal sealed class Tokenizer
     /// <summary>
     /// Captures canonical arithmetic-expansion syntax while retaining physical cursor offsets.
     /// </summary>
-    private bool TryReadArithmeticExpansion(ByteMemoryBuilder unquoted, bool quoted, ref int renderedLineAdjustment)
+    private bool TryReadArithmeticExpansion(ref WordPartBuffer content, bool quoted, ref int renderedLineAdjustment)
     {
         var start = Position;
         if (_scanContext.TryGetCommandSubstitution(_input, start, out _))
@@ -1179,9 +1178,7 @@ internal sealed class Tokenizer
 
         Position = endIndex + 1;
         renderedLineAdjustment += adjustment;
-        unquoted.Append(bracketed ? "$["u8 : "$(("u8);
-        unquoted.Append(expression.Bytes);
-        unquoted.Append(bracketed ? "]"u8 : "))"u8);
+        content.AppendExpansion(start, Position, bracketed ? "$["u8 : "$(("u8, expression, bracketed ? "]"u8 : "))"u8);
         return true;
     }
 
@@ -1223,7 +1220,7 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a braced parameter expansion as unexpanded segment bytes.
     /// </summary>
-    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content, bool quoted, ref int renderedLineAdjustment,
+    private bool TryReadBracedParameterExpansion(ref WordPartBuffer content, bool quoted, ref int renderedLineAdjustment,
         ref ParameterSubscriptFailure subscriptFailure)
     {
         if (!BracedParameterScanner.HasPrefix(_input, Position))
@@ -1245,9 +1242,7 @@ internal sealed class Tokenizer
             trackRenderedLines: true);
         if (status == BracedParameterScanStatus.Found)
         {
-            content.Append("${"u8);
-            content.Append(payload.Bytes);
-            content.Append((byte)'}');
+            content.AppendExpansion(start, endIndex + 1, "${"u8, payload, "}"u8);
             renderedLineAdjustment += adjustment;
             if (quoted && subscriptFailure == ParameterSubscriptFailure.None
                 && incompleteSubscript is ParameterSubscriptFailure.Direct or ParameterSubscriptFailure.Nested)
@@ -1279,7 +1274,7 @@ internal sealed class Tokenizer
         var parts = new List<WordPart>();
         var renderedLineAdjustment = 0;
         var subscriptFailure = ParameterSubscriptFailure.None;
-        var content = _scanContext.CreateByteBuilder(0);
+        var content = new WordPartBuffer(_input, _scanContext);
 
         void AddPart(WordPart part)
         {
@@ -1303,13 +1298,11 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
-            AddPart(new SourceWordPart(WordPartKind.DoubleQuoted,
-                ShellSource.FromBytes(content.ToCompactMemory(_scanContext.SyntaxMemory)), _scanContext.SyntaxMemory)
+            AddPart(new SourceWordPart(WordPartKind.DoubleQuoted, content.TakeSource(), _scanContext.SyntaxMemory)
             {
                 RenderedLineAdjustment = renderedLineAdjustment,
                 ParameterSubscriptFailure = subscriptFailure
             });
-            content = _scanContext.CreateByteBuilder(0);
             renderedLineAdjustment = 0;
             subscriptFailure = ParameterSubscriptFailure.None;
         }
@@ -1336,7 +1329,7 @@ internal sealed class Tokenizer
                 {
                     if (braceExpanded)
                     {
-                        content.Append(current);
+                        content.AppendSource(Position, 1);
                         Position++;
                         break;
                     }
@@ -1361,18 +1354,18 @@ internal sealed class Tokenizer
                     continue;
                 }
 
-                content.Append((byte)'\\');
+                content.AppendSource(Position, 1);
                 Position++;
                 continue;
             }
 
-            if (TryReadBracedParameterExpansion(content, quoted: true, ref renderedLineAdjustment, ref subscriptFailure))
+            if (TryReadBracedParameterExpansion(ref content, quoted: true, ref renderedLineAdjustment, ref subscriptFailure))
             {
                 continue;
             }
 
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(content, quoted: true, ref renderedLineAdjustment))
+                && TryReadArithmeticExpansion(ref content, quoted: true, ref renderedLineAdjustment))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
@@ -1385,7 +1378,7 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            content.Append(current);
+            content.AppendSource(Position, 1);
             Position++;
         }
 
@@ -1400,6 +1393,71 @@ internal sealed class Tokenizer
         }
         RecordError("Unterminated double-quoted string.", Position);
         return parts;
+    }
+
+    /// <summary>Tracks a contiguous source part until an edit requires independent assembly.</summary>
+    private struct WordPartBuffer(ShellSource source, ShellScanContext context)
+    {
+        private ByteMemoryBuilder? _edited;
+        private int _start;
+        private int _length;
+
+        public readonly int Length => _edited?.Length ?? _length;
+
+        public void AppendSource(int start, int length)
+        {
+            if (_edited != null)
+                _edited.Append(source.AsSpan(start, length));
+            else if (_length == 0)
+            {
+                _start = start;
+                _length = length;
+            }
+            else if (_start + _length == start)
+                _length += length;
+            else
+                GetEdited().Append(source.AsSpan(start, length));
+        }
+
+        public void AppendExpansion(int start, int end, ReadOnlySpan<byte> opening, ShellSource payload, ReadOnlySpan<byte> closing)
+        {
+            // The scanner already recognized the logical delimiters. Their exact
+            // widths and the physical payload slice identify an unedited spelling.
+            if (end - start == opening.Length + payload.Length + closing.Length
+                && source.Bytes.Slice(start + opening.Length, payload.Length).Equals(payload.Bytes))
+            {
+                AppendSource(start, end - start);
+                return;
+            }
+            GetEdited().Append(opening).Append(payload.Bytes).Append(closing);
+        }
+
+        public ShellSource TakeSource()
+        {
+            var memory = context.SyntaxMemory;
+            ReadOnlyMemory<byte> bytes;
+            if (_edited != null)
+                bytes = _edited.ToCompactMemory(memory);
+            else
+            {
+                // Values can outlive the source unit. Keep a compact owned part.
+                memory?.Grow(MemoryCapacity.ArrayBackingBytes<byte>(_length));
+                bytes = source.AsSpan(_start, _length).ToArray();
+            }
+            _edited = null;
+            _length = 0;
+            return ShellSource.FromBytes(bytes);
+        }
+
+        private ByteMemoryBuilder GetEdited()
+        {
+            if (_edited == null)
+            {
+                _edited = context.CreateByteBuilder(0);
+                _edited.Append(source.AsSpan(_start, _length));
+            }
+            return _edited;
+        }
     }
 
     // Like quoted literals, escaped characters can survive the dynamic source that produced them.

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Text;
 using Lokad.Bash.Syntax;
 
@@ -6,6 +7,27 @@ namespace Lokad.Bash.Tests;
 
 public class ParserTests
 {
+    [Theory]
+    [InlineData(false, "")]
+    [InlineData(true, "")]
+    [InlineData(false, "${v:-value}")]
+    [InlineData(true, "$((2+3))")]
+    public void Parse_ContiguousWordPartOwnsExactByteBacking(bool quoted, string expansion)
+    {
+        byte[] expected = [.. Encoding.ASCII.GetBytes(new string('x', 4096) + expansion), 0xff, (byte)'\r'];
+        byte[] source = [.. (quoted ? ": \""u8 : ": "u8), .. expected, .. (quoted ? "\"\n"u8 : "\n"u8)];
+        var command = Assert.IsType<SimpleCommand>(Assert.Single(Parser.Parse(source).Commands));
+        var part = Assert.Single(command.Words[1].Parts);
+
+        Assert.Equal(quoted ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, part.Kind);
+        var bytes = part.GetUnexpandedValue().Bytes;
+        Assert.Equal(expected, bytes.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(bytes, out var backing));
+        Assert.NotNull(backing.Array);
+        Assert.NotSame(source, backing.Array);
+        Assert.Equal(expected.Length, backing.Array.Length);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
