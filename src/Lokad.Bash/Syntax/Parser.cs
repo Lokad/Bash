@@ -595,7 +595,7 @@ public static class Parser
             var redirections = ReadTrailingRedirections(tokenizer);
             if (tokenizer.Error != null)
                 return null;
-            if (redirections.Count == 0)
+            if (redirections == null)
                 return command;
             var redirected = new RedirectedCommand(command, redirections);
             tokenizer.RecordLocation(redirected, startLine, startLine);
@@ -1156,10 +1156,10 @@ public static class Parser
             }
         }
 
-        var assignments = new List<AssignmentWord>();
-        var words = new List<Word>();
+        List<AssignmentWord>? assignments = null;
+        List<Word>? words = null;
         Dictionary<Word, AssignmentWord>? declarationAssignments = null;
-        var redirections = new List<Redirection>();
+        List<Redirection>? redirections = null;
         var allowAssignments = true;
         var allowDeclarationAssignments = false;
         var sawAny = false;
@@ -1220,7 +1220,7 @@ public static class Parser
             {
                 case TokenKind.Redirection:
                     sawAny = true;
-                    ReadRedirection(tokenizer, token, null, string.Empty, redirections);
+                    ReadRedirection(tokenizer, token, null, string.Empty, ref redirections);
                     continue;
                 case TokenKind.Word:
                 case TokenKind.OpenBrace:
@@ -1234,13 +1234,13 @@ public static class Parser
 
                     if (TryGetFileDescriptor(tokenizer, wordToken, out var fileDescriptor, out var redirectionToken))
                     {
-                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, redirections);
+                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, ref redirections);
                         continue;
                     }
 
                     if (TryGetAllocationVariable(tokenizer, wordToken, out var variableName, out var allocationToken))
                     {
-                        ReadRedirection(tokenizer, allocationToken, null, variableName, redirections);
+                        ReadRedirection(tokenizer, allocationToken, null, variableName, ref redirections);
                         continue;
                     }
 
@@ -1297,13 +1297,13 @@ public static class Parser
                         continue;
                     }
 
-                    if (words.Count == 0 && TryGetPlainUnquotedSource(wordToken.Word, out var commandName))
+                    if (words == null && TryGetPlainUnquotedSource(wordToken.Word, out var commandName))
                     {
                         allowDeclarationAssignments = BuiltinClassification.TryResolve(commandName.AsSpan(), out var kind)
                             && kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local;
                     }
                     allowAssignments = false;
-                    words.Add(wordToken.Word);
+                    (words ??= []).Add(wordToken.Word);
                     continue;
                 default:
                     tokenizer.RecordError("Unexpected token while parsing a simple command.", tokenizer.Position);
@@ -1313,7 +1313,10 @@ public static class Parser
 
         SimpleCommand CreateCommand()
         {
-            var command = new SimpleCommand(assignments, words, redirections,
+            var command = new SimpleCommand(
+                assignments is null ? Array.Empty<AssignmentWord>() : assignments,
+                words is null ? Array.Empty<Word>() : words,
+                redirections is null ? Array.Empty<Redirection>() : redirections,
                 declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
             tokenizer.RecordLocation(command, startLine, firstElementEndLine);
             return command;
@@ -1323,12 +1326,12 @@ public static class Parser
         {
             if (allowAssignments)
             {
-                assignments.Add(assignment);
+                (assignments ??= []).Add(assignment);
                 return;
             }
 
             // Word identity survives command-field forwarding; numeric argument indices do not.
-            words.Add(word);
+            (words ??= []).Add(word);
             (declarationAssignments ??= new Dictionary<Word, AssignmentWord>()).Add(word, assignment);
         }
     }
@@ -1404,7 +1407,7 @@ public static class Parser
         Token token,
         int? fileDescriptor,
         string variableName,
-        List<Redirection> redirections)
+        ref List<Redirection>? redirections)
     {
         if (token.RedirectionKind == null)
         {
@@ -1426,6 +1429,7 @@ public static class Parser
             tokenizer.RecordError("Expected a word after redirection operator.", tokenizer.Position);
             return;
         }
+        redirections ??= [];
         if (hereDocument)
         {
             var redirection = new Redirection(kind, fileDescriptor, targetWord.Word, variableName, hereDocumentDelimiter: null)
@@ -1443,16 +1447,18 @@ public static class Parser
         {
             // The source '-' is a close operand; subsequent source remains an ordinary
             // argument, even without whitespace (>&-3). Quoted/expanded '-' stays a word.
-            var remaining = new List<WordPart>();
-            if (first.Source.Length > 1)
-                remaining.Add(first.Slice(1, first.Source.Length - 1, tokenizer.ScanContext.SyntaxMemory));
-            for (var index = 1; index < targetWord.Word.Parts.Count; index++)
-                remaining.Add(targetWord.Word.Parts[index]);
-            if (remaining.Count > 0)
+            if (first.Source.Length > 1 || targetWord.Word.Parts.Count > 1)
+            {
+                var remaining = new List<WordPart>();
+                if (first.Source.Length > 1)
+                    remaining.Add(first.Slice(1, first.Source.Length - 1, tokenizer.ScanContext.SyntaxMemory));
+                for (var index = 1; index < targetWord.Word.Parts.Count; index++)
+                    remaining.Add(targetWord.Word.Parts[index]);
                 tokenizer.PushBack(Token.FromWord(new Word(remaining)) with
                 {
                     Source = (target.Source.Start.Value + 1)..target.Source.End.Value
                 });
+            }
             kind = kind == RedirectionKind.DuplicateOutput
                 ? RedirectionKind.CloseOutput
                 : RedirectionKind.CloseInput;
@@ -1465,9 +1471,9 @@ public static class Parser
             hereDocumentDelimiter: null, tokenizer.ScanContext.SyntaxMemory));
     }
 
-    private static IReadOnlyList<Redirection> ReadTrailingRedirections(Tokenizer tokenizer)
+    private static List<Redirection>? ReadTrailingRedirections(Tokenizer tokenizer)
     {
-        var redirections = new List<Redirection>();
+        List<Redirection>? redirections = null;
 
         while (true)
         {
@@ -1476,7 +1482,7 @@ public static class Parser
             {
                 case TokenKind.Redirection:
                     tokenizer.NextTokenCore();
-                    ReadRedirection(tokenizer, peek, null, string.Empty, redirections);
+                    ReadRedirection(tokenizer, peek, null, string.Empty, ref redirections);
                     continue;
                 case TokenKind.Word:
                     var token = tokenizer.NextTokenCore();
@@ -1488,13 +1494,13 @@ public static class Parser
 
                     if (TryGetFileDescriptor(tokenizer, wordToken, out var fileDescriptor, out var redirectionToken))
                     {
-                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, redirections);
+                        ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, ref redirections);
                         continue;
                     }
 
                     if (TryGetAllocationVariable(tokenizer, wordToken, out var variableName, out var allocationToken))
                     {
-                        ReadRedirection(tokenizer, allocationToken, null, variableName, redirections);
+                        ReadRedirection(tokenizer, allocationToken, null, variableName, ref redirections);
                         continue;
                     }
 

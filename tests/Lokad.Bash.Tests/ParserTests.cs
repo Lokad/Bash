@@ -7,6 +7,39 @@ namespace Lokad.Bash.Tests;
 public class ParserTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Parse_SimpleCommandsShareOnlyTheirAbsentCollections(bool streamed)
+    {
+        var ordinary = Read("printf ordinary");
+        var assignment = Read("value=kept");
+        var redirection = Read(">output");
+        var mixed = Read("value=kept printf ordinary >output");
+
+        Assert.Empty(ordinary.Assignments);
+        Assert.Same(ordinary.Assignments, redirection.Assignments);
+        Assert.Empty(assignment.Words);
+        Assert.Same(assignment.Words, redirection.Words);
+        Assert.Empty(ordinary.Redirections);
+        Assert.Same(ordinary.Redirections, assignment.Redirections);
+
+        Assert.Equal("ordinary", WordText(ordinary.Words[1]));
+        Assert.Equal("value", Assert.Single(assignment.Assignments).Target.ToUtf8String());
+        Assert.Equal("output", WordText(Assert.Single(redirection.Redirections).Target));
+        Assert.Single(mixed.Assignments);
+        Assert.Equal(2, mixed.Words.Count);
+        Assert.Single(mixed.Redirections);
+        Assert.NotSame(ordinary.Words, mixed.Words);
+        Assert.NotSame(assignment.Assignments, mixed.Assignments);
+        Assert.NotSame(redirection.Redirections, mixed.Redirections);
+
+        SimpleCommand Read(string source) => streamed
+            ? Assert.IsType<SimpleCommand>(Assert.IsType<CommandUnitParseResult.Parsed>(
+                Assert.Single(Parser.TryParseCommandUnits(Encoding.UTF8.GetBytes(source)))).Command)
+            : AssertSingleCommand(Parser.Parse(source));
+    }
+
+    [Theory]
     [InlineData("arr= (one two)")]
     [InlineData("declare arr= (one two)")]
     [InlineData("local arr= (one two)")]
