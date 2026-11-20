@@ -119,7 +119,13 @@ Directory navigation revalidates saved stack paths through the host before
 changing cwd. A rejected pop preserves the stack; a rejected no-argument push
 replaces its second entry with the current directory, as in Bash. Failed lookup
 preserves PWD/OLDPWD, and empty-stack operations diagnose failure.
-`dirs -c` leaves only the current directory on the stack and emits no output.
+`dirs` lists paths on one line by default. Separate `-p` and `-v` options
+select one entry per line, with stack indices in verbose mode. The last
+signed selector chooses one entry. `+N` counts from the top and `-N` from
+the bottom, starting at zero. Listing output abbreviates a matching HOME
+path component prefix with `~`, including in `pushd` and `popd` listings.
+`dirs -l` uses the original spelling. `dirs -c` validates its operands
+and leaves only the current directory on the stack without writing output.
 `pushd` and `popd` accept signed stack indices and `-n` for edits that
 retain the working directory and its variables. They finish option validation
 before navigation. Ordinary `pushd` accepts one path, and `popd` rejects stray

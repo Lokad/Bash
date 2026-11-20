@@ -82,10 +82,12 @@ public sealed class DirectoryNavigationHostTests
         VerifyPendingDirectoryWriteAsync(prepared, "OLDPWD=a; cd - >/out; printf tail", "a\n");
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public Task DirectoryStackOutputStaysBorrowedUntilTheHostSettles(bool prepared) =>
-        VerifyPendingDirectoryWriteAsync(prepared, "cd /a; dirs >/out; printf tail", "/a\n");
+    [InlineData(false, "dirs", "/a\n")]
+    [InlineData(true, "dirs", "/a\n")]
+    [InlineData(false, "HOME=/a dirs -v +0", " 0  ~\n")]
+    [InlineData(true, "HOME=/a dirs -v +0", " 0  ~\n")]
+    public Task DirectoryStackOutputStaysBorrowedUntilTheHostSettles(bool prepared, string command, string expected) =>
+        VerifyPendingDirectoryWriteAsync(prepared, "cd /a; " + command + " >/out; printf tail", expected);
 
     private static async Task VerifyPendingDirectoryWriteAsync(bool prepared, string script, string expected)
     {

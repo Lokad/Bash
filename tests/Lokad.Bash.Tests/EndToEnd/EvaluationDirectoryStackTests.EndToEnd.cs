@@ -156,8 +156,8 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
     [InlineData("unset omitted", "dirs $omitted -c", "", 0, "/target")]
     [InlineData("set --", "dirs \"$@\" -c", "", 0, "/target")]
     [InlineData("unset omitted; set -- command dirs", "\"$@\" $omitted -c", " 1>&-", 0, "/target")]
-    [InlineData("omitted=", "dirs \"$omitted\" -c", "", 1, "/target /")]
-    public async Task DirsClearUsesTheFirstProducedArgument(
+    [InlineData("omitted=", "dirs \"$omitted\" -c", "", 2, "/target /")]
+    public async Task DirsClearDistinguishesOmittedAndEmptyFields(
         string setup, string invocation, string redirection, int status, string stack)
     {
         await using var host = new TestHost();
@@ -174,9 +174,55 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal($"status:{status}:-c\n{stack}\n", host.StandardOutput.TextContent);
-        Assert.Empty(host.StandardError.Content.ToArray());
+        if (status == 2)
+            Assert.Equal("dirs: : invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\n", host.StandardError.TextContent);
+        else
+            Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal("reached", host.ReadFile("/target/effect"));
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("-p", "~/leaf\n/targeted\n~\n/\n")]
+    [InlineData("-v -p", " 0  ~/leaf\n 1  /targeted\n 2  ~\n 3  /\n")]
+    [InlineData("-p -v", " 0  ~/leaf\n 1  /targeted\n 2  ~\n 3  /\n")]
+    [InlineData("-l", "/target/leaf /targeted /target /\n")]
+    [InlineData("-v -1", " 2  ~\n")]
+    [InlineData("+99 +1 -- -l", "/targeted\n")]
+    public async Task DirsDisplaysSelectedEntriesWithoutChangingTheStack(string operands, string expected)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/target", "/target/leaf", "/targeted"], []);
+        var result = await host.RunAsync($"""
+            pushd /target >/dev/null
+            pushd /targeted >/dev/null
+            pushd /target/leaf >/dev/null
+            HOME=/target command dirs {operands}
+            printf 'status:%s cwd:%s\n' "$?" "$PWD"
+            dirs -l
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected + "status:0 cwd:/target/leaf\n/target/leaf /targeted /target /\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task DirsClearValidatesAllOperandsBeforeClearing()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            pushd /target >/dev/null
+            dirs -c -z
+            printf 'rejected:%s\n' "$?"
+            dirs -l
+            dirs -c +99 1>&-
+            printf 'cleared:%s\n' "$?"
+            dirs -l
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("rejected:2\n/target /\ncleared:0\n/target\n", result.StdOut);
+        Assert.Equal("dirs: -z: invalid number\ndirs: usage: dirs [-clpv] [+N] [-N]\n", result.StdErr);
     }
 
     [Fact]

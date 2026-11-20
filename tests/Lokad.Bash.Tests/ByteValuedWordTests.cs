@@ -178,7 +178,7 @@ public sealed class ByteValuedWordTests
     [Theory]
     [InlineData("mapfile names $'\\377' </dev/null; printf after", "after", 0)]
     [InlineData("readarray names \"$(printf '\\377')\" </dev/null; printf after", "after", 0)]
-    [InlineData("dirs -c $'\\377' >/dev/null; printf after", "after", 0)]
+    [InlineData("dirs -c -- $'\\377' >/dev/null; printf after", "after", 0)]
     [InlineData("pushd -n /tmp $'\\377' >/dev/null; dirs", "/ /tmp\n", 0)]
     public async Task IgnoredTrailingOperands_DoNotRequireText(string script, string expected, int expectedExitCode)
     {
@@ -231,6 +231,24 @@ public sealed class ByteValuedWordTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("2:/tmp\n/tmp /\n", result.StdOut);
         Assert.Equal(expected, result.Host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task DirsPreservesDeferredPathAndDiagnosticBytes()
+    {
+        var result = await EndToEndHarness.RunScriptAsync("""
+            pushd -n $'home\377/leaf\376' >/dev/null
+            HOME=$'home\377' dirs -p
+            dirs -c $'\377'
+            printf '%s\n' "$?"
+            dirs -l +1
+            """, new TestHost());
+
+        byte[] expectedOutput = [.. "/\n~/leaf"u8, 0xfe, .. "\n2\nhome"u8, 0xff, .. "/leaf"u8, 0xfe, (byte)'\n'];
+        byte[] expectedError = [.. "dirs: "u8, 0xff, .. ": invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\n"u8];
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expectedOutput, result.Host.StandardOutput.Content.ToArray());
+        Assert.Equal(expectedError, result.Host.StandardError.Content.ToArray());
     }
 
     // Bash 5.2.37: ignored mapfile operands still expand once before the builtin reads input.

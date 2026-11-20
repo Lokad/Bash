@@ -1059,7 +1059,6 @@ public sealed partial class Evaluation : IFileTester
             return PublishStatus(await FailPreparationAsync(declarationError).ConfigureAwait(false));
 
         // Expand once in the caller scope before redirections and temporary bindings.
-        string? textOperand = null;
         IReadOnlyList<ShellValue> byteOperands = [];
         var lastArgument = commandValue;
         if (preparation is PreparedCommand.Executable command)
@@ -1073,7 +1072,7 @@ public sealed partial class Evaluation : IFileTester
                         or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
                         or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
                         or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd or BuiltinKind.Shift
-                        or BuiltinKind.Pushd or BuiltinKind.Popd or BuiltinKind.Caller
+                        or BuiltinKind.Dirs or BuiltinKind.Pushd or BuiltinKind.Popd or BuiltinKind.Caller
                 })
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
@@ -1098,16 +1097,13 @@ public sealed partial class Evaluation : IFileTester
             }
             else
             {
-                textOperand = await ExpandArgumentTailAsync(command.Words, 1,
-                        captureFirstOperand: command.Resolution is CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Dirs })
-                    .ConfigureAwait(false);
+                await ExpandArgumentTailAsync(command.Words, 1).ConfigureAwait(false);
             }
         }
         else if (preparation is PreparedCommand.Terminal terminalArguments)
         {
             lastArgument = terminalArguments.LastReadArgument;
-            await ExpandArgumentTailAsync(terminalArguments.Words, 0, captureFirstOperand: false)
-                .ConfigureAwait(false);
+            await ExpandArgumentTailAsync(terminalArguments.Words, 0).ConfigureAwait(false);
         }
         else if (preparation is PreparedCommand.Query queryArguments)
             lastArgument = queryArguments.LastReadArgument;
@@ -1453,6 +1449,7 @@ public sealed partial class Evaluation : IFileTester
                         byteOperands, builtinScope with { Variables = commandVars }, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
+                    BuiltinKind.Dirs => await EvaluateBuiltinDirsAsync(byteOperands, commandVars, false).ConfigureAwait(false),
                     BuiltinKind.Pushd => await EvaluateBuiltinPushdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
                     BuiltinKind.Popd => await EvaluateBuiltinPopdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
@@ -1467,7 +1464,6 @@ public sealed partial class Evaluation : IFileTester
                     _ => await EvaluateBuiltinAsync(
                         evaluatorBuiltin.Kind,
                         commandName,
-                        textOperand,
                         false).ConfigureAwait(false)
                 };
                 if (scriptFunction != null)
@@ -1769,32 +1765,22 @@ public sealed partial class Evaluation : IFileTester
             return CompleteCommandResult(result, preparation.Completion, commandInvoked: false);
         }
 
-        async Task<string?> ExpandArgumentTailAsync(CommandWords words, int start, bool captureFirstOperand)
+        async Task ExpandArgumentTailAsync(CommandWords words, int start)
         {
             if (start >= words.Count)
-                return null;
+                return;
 
             using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
             var fields = new List<ShellValue>();
-            string? firstOperand = null;
             for (var index = start; index < words.Count; index++)
             {
                 await AppendOperandValuesAsync(words[index], scope, fields, fieldMemory).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     break;
                 if (fields.Count != 0)
-                {
                     lastArgument = fields[^1];
-                    if (captureFirstOperand && firstOperand == null)
-                    {
-                        firstOperand = await DecodeExpandedValueAsync(fields[0]).ConfigureAwait(false);
-                        if (_state.HasPendingExpansionError)
-                            break;
-                    }
-                }
                 fields.Clear();
             }
-            return firstOperand;
         }
 
         // Applies or inspects prepared declarations without replaying expansion effects.
@@ -2763,20 +2749,16 @@ public sealed partial class Evaluation : IFileTester
             : new CommandResolution.Host();
     }
 
-    /// <summary>Executes the builtins that take at most one text operand.</summary>
+    /// <summary>Executes the builtins that ignore their expanded operands.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinAsync(
         BuiltinKind builtin,
         string commandName,
-        string? operand,
         bool negated)
     {
         switch (builtin)
         {
             case BuiltinKind.Pwd:
                 return await EvaluateBuiltinPwdAsync(negated).ConfigureAwait(false);
-            case BuiltinKind.Dirs:
-                return await EvaluateBuiltinDirsAsync(operand, negated)
-                    .ConfigureAwait(false);
             case BuiltinKind.Colon:
             case BuiltinKind.True:
             case BuiltinKind.False:
@@ -2788,6 +2770,7 @@ public sealed partial class Evaluation : IFileTester
 
                 throw new InvalidOperationException($"Builtin '{commandName}' has no fixed exit code.");
             case BuiltinKind.Echo:
+            case BuiltinKind.Dirs:
             case BuiltinKind.Pushd:
             case BuiltinKind.Popd:
             case BuiltinKind.Caller:
@@ -2805,7 +2788,7 @@ public sealed partial class Evaluation : IFileTester
             case BuiltinKind.Return:
             case BuiltinKind.Hash:
             case BuiltinKind.Trap:
-                throw new InvalidOperationException("Byte-valued builtin operands reached text dispatch.");
+                throw new InvalidOperationException("Builtin operands reached dispatch that ignores operands.");
             case BuiltinKind.ApplyPatch:
                 throw new InvalidOperationException("Host-backed builtin reached evaluator dispatch.");
             case BuiltinKind.Command:

@@ -278,8 +278,10 @@ public sealed class CollectionOwnershipTests
             parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.CommandSubstitution, owner);
     }
 
-    [Fact]
-    public void RefusedDirectoryOutputLeavesTheBorrowedPathAvailable()
+    [Theory]
+    [InlineData("")]
+    [InlineData("/other")]
+    public void RefusedDirectoryOutputLeavesTheBorrowedPathAvailable(string home)
     {
         var target = new ShellPath("/" + new string('é', 1024));
         var script = Parser.Parse(":");
@@ -290,12 +292,12 @@ public sealed class CollectionOwnershipTests
         try
         {
             Assert.Throws<MemoryBudgetExceededException>(() => state.FormatDirectoryStack(
-                currentOnly: false, memory, CancellationToken.None));
+                null, DirectoryStackLayout.Numbered, ShellValue.FromText(home), memory, CancellationToken.None));
             Assert.Same(target, state.CurrentDirectory);
             Assert.Equal(1, state.DirectoryStackCount);
             Assert.Equal(0, budget.ReservedBytes);
             Assert.Equal("/\n", Utf8Text.Decode(smaller.FormatDirectoryStack(
-                currentOnly: false, memory, CancellationToken.None)));
+                null, DirectoryStackLayout.Compact, ShellValue.Empty, memory, CancellationToken.None)));
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, budget.ReservedBytes);

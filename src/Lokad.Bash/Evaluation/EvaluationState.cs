@@ -1,5 +1,7 @@
 using System;
+using System.Buffers.Text;
 using System.Collections.Generic;
+using System.Text.Unicode;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -679,15 +681,28 @@ internal sealed class EvaluationState
         _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes);
     }
 
-    public ReadOnlyMemory<byte> FormatDirectoryStack(bool currentOnly, EvaluationMemory memory, CancellationToken cancellationToken)
+    public ReadOnlyMemory<byte> FormatDirectoryStack(int? selected, DirectoryStackLayout layout, ShellValue home,
+        EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var count = currentOnly ? 1 : _directoryStack.Count;
-        long bytes = count; // A space after each path except the last, which ends with LF.
-        for (var index = 0; index < count; index++)
+        var start = selected ?? 0;
+        var end = selected.HasValue ? start + 1 : _directoryStack.Count;
+        var homeBytes = home.BeforeFirstNul().Bytes.Span;
+        if (homeBytes.Length <= 1)
+            homeBytes = default;
+        var encoding = Utf8Text.StrictUtf8;
+        var homeText = string.Empty;
+        using var homeMemory = !homeBytes.IsEmpty && Utf8.IsValid(homeBytes) ? new MemoryCapacity(memory.Budget, 0) : null;
+        if (homeMemory != null)
+        {
+            memory.Charge(homeMemory, 32L + 2L * encoding.GetCharCount(homeBytes));
+            homeText = encoding.GetString(homeBytes);
+        }
+
+        long bytes = end - start;
+        for (var index = start; index < end; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = GetDirectoryStackEntry(index);
-            bytes += entry.Path is { } path ? Utf8Text.StrictUtf8.GetByteCount(path.Path) : entry.DeferredPath.Bytes.Length;
+            bytes += FormatEntry(index, homeBytes, default);
         }
         if (bytes >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
@@ -695,19 +710,57 @@ internal sealed class EvaluationState
         memory.Charge(checked(32 + bytes));
         var output = new byte[(int)bytes];
         var offset = 0;
-        for (var index = 0; index < count; index++)
+        for (var index = start; index < end; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = GetDirectoryStackEntry(index);
-            if (entry.Path is { } path)
-                offset += Utf8Text.StrictUtf8.GetBytes(path.Path.AsSpan(), output.AsSpan(offset));
-            else
-            {
-                entry.DeferredPath.Bytes.Span.CopyTo(output.AsSpan(offset));
-                offset += entry.DeferredPath.Bytes.Length;
-            }
-            output[offset++] = index + 1 == count ? (byte)'\n' : (byte)' ';
+            offset += FormatEntry(index, homeBytes, output.AsSpan(offset));
+            output[offset++] = layout == DirectoryStackLayout.Compact && index + 1 < end ? (byte)' ' : (byte)'\n';
         }
         return output;
+
+        int FormatEntry(int index, ReadOnlySpan<byte> homePrefix, Span<byte> destination)
+        {
+            var writing = !destination.IsEmpty;
+            var position = 0;
+            if (layout == DirectoryStackLayout.Numbered)
+            {
+                Span<byte> digits = stackalloc byte[10];
+                if (!Utf8Formatter.TryFormat(index, digits, out var written))
+                    throw new InvalidOperationException("The directory stack index exceeds the decimal buffer.");
+                var padding = written == 1 ? 1 : 0;
+                position = padding + written + 2;
+                if (writing)
+                {
+                    destination[..position].Fill((byte)' ');
+                    digits[..written].CopyTo(destination[padding..]);
+                }
+            }
+
+            var entry = GetDirectoryStackEntry(index);
+            var path = entry.Path?.Path;
+            var text = path.AsSpan();
+            var raw = path == null ? entry.DeferredPath.Bytes.Span : default;
+            var abbreviate = path == null
+                ? MatchesHome(raw, homePrefix, (byte)'/')
+                : MatchesHome(text, homeText.AsSpan(), '/');
+            if (abbreviate)
+            {
+                if (writing)
+                    destination[position] = (byte)'~';
+                position++;
+                if (path == null)
+                    raw = raw[homePrefix.Length..];
+                else
+                    text = text[homeText.Length..];
+            }
+            if (path != null)
+                return checked(position + (writing ? encoding.GetBytes(text, destination[position..]) : encoding.GetByteCount(text)));
+            if (writing)
+                raw.CopyTo(destination[position..]);
+            return checked(position + raw.Length);
+        }
+
+        static bool MatchesHome<T>(ReadOnlySpan<T> path, ReadOnlySpan<T> prefix, T separator) where T : IEquatable<T> =>
+            !prefix.IsEmpty && path.StartsWith(prefix) && (path.Length == prefix.Length || path[prefix.Length].Equals(separator));
     }
 }

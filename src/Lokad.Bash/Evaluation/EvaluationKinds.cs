@@ -27,3 +27,5 @@ internal enum DirectoryChangeKind
     RotateDirectories,
     PopDirectory
 }
+
+internal enum DirectoryStackLayout { Compact, Lines, Numbered }
