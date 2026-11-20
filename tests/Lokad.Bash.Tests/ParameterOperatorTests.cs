@@ -1,9 +1,66 @@
+using Lokad.Bash.Evaluation;
+using Lokad.Bash.Files;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ParameterOperatorTests
 {
+    [Theory]
+    [InlineData(false, "+")]
+    [InlineData(false, ":+")]
+    [InlineData(true, ":+")]
+    public async Task SelectedAggregateAlternateUsesConstantWorkspace(bool associative, string operation)
+    {
+        Assert.Equal(await MeasureAsync(1), await MeasureAsync(1024));
+
+        async Task<long> MeasureAsync(int count)
+        {
+            var entries = Enumerable.Range(0, count).Select(index => associative ? $"[key{index}]=value" : "value");
+            var setup = associative ? "declare -A a=(" : "a=(";
+            var script = setup + string.Join(' ', entries) + "); printf begin; printf '%s' \"${a[@]" + operation + "selected}\"";
+            var evaluation = new Eval(Parser.Parse(script));
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            evaluation.Memory.Budget = owner;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            var marker = Assert.IsType<WriteOperation>(await evaluation.GetNextStep(deadline.Token));
+            Assert.Equal("begin", ShellValue.FromBytes(marker.Content).ToUtf8String());
+            var before = evaluation.Memory.Workspace.Bytes;
+            marker.SetResult(DescriptorWriteResult.Open);
+
+            var output = Assert.IsType<WriteOperation>(await evaluation.GetNextStep(deadline.Token));
+            Assert.Equal("selected", ShellValue.FromBytes(output.Content).ToUtf8String());
+            var additional = evaluation.Memory.Workspace.Bytes - before;
+            output.SetResult(DescriptorWriteResult.Open);
+
+            Assert.Null(await evaluation.GetNextStep(deadline.Token));
+            await evaluation.Completion;
+            Assert.Equal(0, evaluation.LastExitCode);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return additional;
+        }
+    }
+
+    [Theory]
+    [InlineData("a=('' ''); IFS=:; printf '<%s>' \"${a[*]:+selected}\"", "<selected>")]
+    [InlineData("a=('' ''); IFS=; printf '<%s>' \"${a[*]:+selected}\"", "<>")]
+    [InlineData("a=([3]=one [10]='' [90]=last); printf '<%s>' \"${a[@]:-$(printf skipped >&2)}\"", "<one><><last>")]
+    [InlineData("a=(''); i=0; printf '<%s>' \"${a[@]:-$((i++, a[0]=4, i))}\"; printf '|%s:%s' \"$i\" \"${a[0]}\"", "<1>|1:4")]
+    public async Task ConditionalAggregateOperatorsRetainFieldShapeAndSelectedOperandEffects(string script, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Theory]
     [InlineData("printf '%s' \"${a[]}\"", "${a[]}: bad substitution\n")]
     [InlineData("printf '%s' \"${a[1}\"", "bad substitution: no closing `}' in \"${a[1}\"\n")]

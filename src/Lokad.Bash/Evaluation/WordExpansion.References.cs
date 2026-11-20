@@ -705,6 +705,8 @@ internal static partial class WordExpansion
     {
         public ParameterSource? RangeSource { get; init; }
         internal VariableBinding? InspectionBinding { get; init; }
+        public IEnumerable<ShellValue> SelectedFields => RangeSource?.Fields ?? Fields;
+        public int FieldCount => RangeSource?.Count ?? Fields.Count;
         public ShellValue Value => Fields.Count == 0 ? ShellValue.Empty : Fields[0];
     }
 

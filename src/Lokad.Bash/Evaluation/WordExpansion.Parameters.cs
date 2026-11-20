@@ -12,12 +12,20 @@ namespace Lokad.Bash.Evaluation;
 
 internal static partial class WordExpansion
 {
-    // Slices and value transforms retain live arrays through operand effects; scalar values stay selected.
+    // Array sources keep the selected owner. Some operators consume it after applying operand effects.
     private abstract record ParameterSource
     {
         internal sealed record Indexed(IndexedArray Array) : ParameterSource;
         internal sealed record Associative(AssociativeArray Array) : ParameterSource;
         internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource;
+
+        public int Count => this switch
+        {
+            Indexed indexed => indexed.Array.Count,
+            Associative associative => associative.Array.Count,
+            Positional positional => positional.Arguments.Count,
+            _ => throw new InvalidOperationException("Unknown parameter source.")
+        };
 
         public IEnumerable<ShellValue> Fields => this switch
         {
@@ -83,17 +91,12 @@ internal static partial class WordExpansion
             return;
         }
 
-        var separators = FieldSeparators.FromVariables(scope.Variables);
-        var isNonEmpty = parameter.Kind == VariableReferenceKind.Star && globQuoted
-            ? parameter.Fields.Any(field => !field.IsEmpty) || parameter.Fields.Count > 1 && !separators.IsEmpty
-            : parameter.Fields.Count > 1 || parameter.Fields.Count == 1 && !parameter.Fields[0].IsEmpty;
-        var isAvailable = parameter.IsSet && (!parsed.UsesColon || isNonEmpty);
         switch (parsed.Kind)
         {
             case BracedParameterOperatorKind.None:
             case BracedParameterOperatorKind.NamesAt:
             case BracedParameterOperatorKind.NamesStar:
-                Emit(parameter.RangeSource?.Fields ?? parameter.Fields);
+                Emit(parameter.SelectedFields);
                 return;
             case BracedParameterOperatorKind.Substring:
                 if (parsed.Word.IsEmpty)
@@ -115,18 +118,18 @@ internal static partial class WordExpansion
                 await EmitValueOperatorAsync().ConfigureAwait(false);
                 return;
             case BracedParameterOperatorKind.UseDefault:
-                if (!isAvailable)
+                if (!IsAvailable())
                 {
                     await AppendParameterWordAsync().ConfigureAwait(false);
                 }
                 else
                 {
-                    Emit(parameter.Fields);
+                    Emit(parameter.SelectedFields);
                 }
 
                 return;
             case BracedParameterOperatorKind.UseAlternate:
-                if (isAvailable)
+                if (IsAvailable())
                 {
                     await AppendParameterWordAsync().ConfigureAwait(false);
                 }
@@ -134,14 +137,14 @@ internal static partial class WordExpansion
                 {
                     // An unavailable @ aggregate retains zero versus one empty field.
                     if (parameter.Kind == VariableReferenceKind.At)
-                        Emit(parameter.Fields);
+                        Emit(parameter.SelectedFields);
                     else
                         output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
                 }
 
                 return;
             case BracedParameterOperatorKind.AssignDefault:
-                if (!isAvailable)
+                if (!IsAvailable())
                 {
                     // Positional @/* indirection remains non-assignable, even if it names a variable.
                     var special = GetSpecialParameterKind(parsed.Name.AsSpan());
@@ -223,12 +226,12 @@ internal static partial class WordExpansion
                 }
                 else
                 {
-                    Emit(parameter.Fields);
+                    Emit(parameter.SelectedFields);
                 }
 
                 return;
             case BracedParameterOperatorKind.ErrorIfUnset:
-                if (!isAvailable)
+                if (!IsAvailable())
                 {
                     ShellValue message;
                     if (parsed.Word.IsEmpty)
@@ -245,7 +248,7 @@ internal static partial class WordExpansion
                 }
                 else
                 {
-                    Emit(parameter.Fields);
+                    Emit(parameter.SelectedFields);
                 }
 
                 return;
@@ -288,6 +291,29 @@ internal static partial class WordExpansion
             }
             default:
                 throw new InvalidOperationException($"Unexpected braced parameter operator '{parsed.Kind}'.");
+        }
+
+        bool IsAvailable()
+        {
+            if (!parameter.IsSet || !parsed.UsesColon)
+                return parameter.IsSet;
+
+            var count = parameter.FieldCount;
+            if (count == 0)
+                return false;
+            if (count == 1 && parameter.Fields.Count == 1)
+                return !parameter.Fields[0].IsEmpty;
+            if (count > 1 && (parameter.Kind != VariableReferenceKind.Star || !globQuoted
+                || !FieldSeparators.FromVariables(scope.Variables).IsEmpty))
+                return true;
+
+            foreach (var field in parameter.SelectedFields)
+            {
+                scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                if (!field.IsEmpty)
+                    return true;
+            }
+            return false;
         }
 
         Task ReportParameterFailureAsync(ShellValue message, ExpansionFailureKind kind) =>
@@ -490,7 +516,7 @@ internal static partial class WordExpansion
                     return source;
                 }
                 var joined = new ExpandedWordBuilder(scope.Variables, budget, ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
-                var fields = source.RangeSource?.Fields ?? source.Fields;
+                var fields = source.SelectedFields;
                 // Positional @ joins with spaces; array @ also uses spaces when IFS is empty.
                 if (source.Kind == VariableReferenceKind.At
                     && (source.RangeSource is ParameterSource.Positional || FieldSeparators.FromVariables(scope.Variables).IsEmpty))
@@ -561,49 +587,26 @@ internal static partial class WordExpansion
                         ? binding.Name : BindingName.Empty;
                     var array = variables.IndexedArrays.GetValueOrDefault(resolved);
                     var map = array == null ? variables.AssociativeArrays.GetValueOrDefault(resolved) : null;
-                    IEnumerable<ShellValue> values;
-                    int count;
-                    if (array != null)
-                    {
-                        values = modifier == ParameterModifier.Indirect ? array.PresentKeys.Select(EncodeName) : array.PresentValues;
-                        count = array.Count;
-                    }
-                    else if (map != null)
-                    {
-                        values = modifier == ParameterModifier.Indirect ? map.PresentKeys : map.PresentValues;
-                        count = map.Count;
-                    }
-                    else if (variables.TryGetScalar(resolved, out var scalar))
-                    {
-                        values = modifier == ParameterModifier.Indirect ? [ShellValue.FromText("0")] : [scalar];
-                        count = 1;
-                    }
-                    else
-                    {
-                        values = [];
-                        count = 0;
-                    }
+                    var scalar = ShellValue.Empty;
+                    var count = array?.Count ?? map?.Count ?? (variables.TryGetScalar(resolved, out scalar) ? 1 : 0);
 
                     if (modifier == ParameterModifier.Length)
                         return new ParameterValue(VariableReferenceKind.Name,
                             [ShellValue.FromText(Integers.FormatNumber(count))], true, null, null);
 
-                    if (modifier == ParameterModifier.None
-                        && (removesPattern || parsed.Kind is BracedParameterOperatorKind.None or BracedParameterOperatorKind.Substring
-                        or BracedParameterOperatorKind.Replace or BracedParameterOperatorKind.Transform
-                        or BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll
-                        or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll))
+                    if (modifier == ParameterModifier.None)
                     {
                         ParameterSource? source = array != null ? new ParameterSource.Indexed(array)
                             : map != null ? new ParameterSource.Associative(map) : null;
-                        return new ParameterValue(reference.Kind, source == null ? values.ToArray() : [], count != 0, reference, null)
+                        return new ParameterValue(reference.Kind, source == null && count != 0 ? [scalar] : [], count != 0, reference, null)
                             { RangeSource = source, InspectionBinding = inspection ? selected : null };
                     }
 
-                    // Operand expansion can mutate the source array; retain the selected values first.
-                    budget.Charge(checked(256L * (count)));
-                    var fields = values.ToArray();
-                    return new ParameterValue(reference.Kind, fields, fields.Length != 0, reference, null);
+                    // Indirect aggregate reads emit the array's keys.
+                    budget.Charge(checked(256L * count));
+                    IEnumerable<ShellValue> keys = array != null ? array.PresentKeys.Select(EncodeName)
+                        : map != null ? map.PresentKeys : count == 0 ? [] : [ShellValue.FromText("0")];
+                    return new ParameterValue(reference.Kind, keys.ToArray(), count != 0, reference, null);
                 }
 
                 var target = await ResolveReferenceAsync(reference,
@@ -686,7 +689,7 @@ internal static partial class WordExpansion
 
         // Operand expansion may have changed which values the selected array holds.
         void EmitTransformedFields(Func<ShellValue, MemoryCapacity, ShellValue> project) =>
-            Emit(ProjectParameterFields(parameter.RangeSource?.Fields ?? parameter.Fields, project, scope));
+            Emit(ProjectParameterFields(parameter.SelectedFields, project, scope));
 
         async Task EmitValueOperatorAsync()
         {

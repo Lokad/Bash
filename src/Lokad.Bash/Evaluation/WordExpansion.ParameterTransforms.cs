@@ -83,7 +83,7 @@ internal static partial class WordExpansion
                     EmitSerializedPairs(entries);
             }
             else
-                EmitValues(QuoteFields(parameter.RangeSource?.Fields ?? parameter.Fields));
+                EmitValues(QuoteFields(parameter.SelectedFields));
             return;
         }
 
