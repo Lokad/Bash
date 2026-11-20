@@ -1762,7 +1762,7 @@ public sealed partial class Evaluation : IFileTester
                     ? VariableDisplayStyle.Assignment : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationName : VariableDisplayStyle.Declaration;
                 var printStatus = 0;
                 var outputClosed = false;
-                await foreach (var name in GetNamesAsync(listing ? GetListedNames() : [],
+                await foreach (var name in GetNamesAsync(GetListedNames,
                     value => BindingNameExpansion.FromValue(value, Memory)).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError)
@@ -1808,23 +1808,28 @@ public sealed partial class Evaluation : IFileTester
                 Variables SelectVariables(BindingName name) => !listing ? commandVars
                     : bindings?.Contains(name) == true ? bindings.SavedVariables : declarationScope.Variables;
 
-                IEnumerable<BindingName> GetListedNames()
+                IEnumerable<BindingName> GetListedNames(MemoryCapacity listingMemory)
                 {
                     var names = commandVars.BindingNames;
-                    if (bindings != null)
-                        names = names.Concat(bindings.SavedVariables.BindingNames);
-                    var selected = names.Distinct().Where(MatchesFilter);
+                    if (bindings is { } savedBindings)
+                    {
+                        // Each store is unique. A saved prefix replaces the active entry for listing.
+                        names = names.Where(name => !savedBindings.Contains(name))
+                            .Concat(savedBindings.SavedVariables.BindingNames);
+                    }
+                    var selected = names.Where(MatchesFilter);
                     if (listOptionSnapshot)
                         selected = selected.Prepend("-");
-                    return selected.Select(PrepareName).OrderBy(static name => name.ToValue(), ShellValue.ByteOrder);
-
-                    BindingName PrepareName(BindingName name)
+                    var sorted = new List<BindingName>();
+                    foreach (var name in selected)
                     {
-                        Memory.Charge(256);
+                        Memory.PrepareListCapacity(listingMemory, sorted, 1);
                         if (name.NeedsValueEncoding)
-                            Memory.Charge(checked(4L * name.ByteLength));
-                        return name.WithEncodedSpelling();
+                            Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<byte>(name.ByteLength));
+                        sorted.Add(name.WithEncodedSpelling());
                     }
+                    sorted.Sort(static (left, right) => ShellValue.ByteOrder.Compare(left.ToValue(), right.ToValue()));
+                    return sorted;
                 }
 
                 bool MatchesFilter(BindingName name)
@@ -1867,10 +1872,8 @@ public sealed partial class Evaluation : IFileTester
                 var filter = FunctionAttributes.None;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Readonly)) filter |= FunctionAttributes.Readonly;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Exported)) filter |= FunctionAttributes.Exported;
-                IEnumerable<ShellValue> names = noOperands
-                    ? _state.Functions.Keys.Select(CopyName).Order(ShellValue.ByteOrder) : [];
                 var functionStatus = 0;
-                await foreach (var name in GetNamesAsync(names, static value => value).ConfigureAwait(false))
+                await foreach (var name in GetNamesAsync(GetListedFunctionNames, static value => value).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError) break;
                     if (!options.Print && TrySaveLocalOptions(name))
@@ -1935,19 +1938,28 @@ public sealed partial class Evaluation : IFileTester
                 }
                 return functionStatus;
 
-                ShellValue CopyName(ShellValue name)
+                IEnumerable<ShellValue> GetListedFunctionNames(MemoryCapacity listingMemory)
                 {
-                    // A sorted name snapshot can outlive a source-backed binding during host writes.
-                    Memory.Charge(256 + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(name));
-                    return ShellValue.FromBytes(name.Bytes.ToArray());
+                    var sorted = new List<ShellValue>();
+                    Memory.PrepareListCapacity(listingMemory, sorted, _state.Functions.Count);
+                    foreach (var name in _state.Functions.Keys)
+                    {
+                        // A sorted name snapshot can outlive a source-backed binding during host writes.
+                        Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<byte>(name.Bytes.Length));
+                        sorted.Add(ShellValue.FromBytes(name.Bytes.ToArray()));
+                    }
+                    sorted.Sort(ShellValue.ByteOrder);
+                    return sorted;
                 }
             }
 
-            async IAsyncEnumerable<T> GetNamesAsync<T>(IEnumerable<T> listedNames, Func<ShellValue, T> bindOperand)
+            async IAsyncEnumerable<T> GetNamesAsync<T>(Func<MemoryCapacity, IEnumerable<T>> listNames, Func<ShellValue, T> bindOperand)
             {
                 if (declaration.Operands.Count == 0)
                 {
-                    foreach (var name in listedNames)
+                    // Keep the sorted snapshot through each awaited consumer and release it when enumeration ends.
+                    using var listingMemory = new MemoryCapacity(Memory.Budget, 0);
+                    foreach (var name in listNames(listingMemory))
                         yield return name;
                 }
                 else

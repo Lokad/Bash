@@ -141,6 +141,63 @@ public sealed class ByteDeclarationInspectionTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public async Task VariableListingReleasesItsNameSnapshotBeforeWritingFunctions()
+    {
+        var names = Enumerable.Range(0, 128).Select(index => "probe_" + new string('x', 118) + $"{index:D4}");
+        var setup = string.Join(' ', names.Select(name => name + "=value"));
+        var state = new Eval(Parser.Parse(setup + "\nshow_only(){ :; }\ndeclare"));
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = governor };
+        long variableAllowance = 0, functionAllowance = 0;
+        var variableWrites = 0;
+        host.BeforeAppend = (descriptor, content, _) =>
+        {
+            if (descriptor != FileDescriptor.StdOut)
+                return;
+            if (content.Span.StartsWith("probe_"u8))
+            {
+                variableAllowance = governor.ReservedBytes;
+                variableWrites++;
+            }
+            else if (content.Span.StartsWith("show_only "u8))
+                functionAllowance = governor.ReservedBytes;
+        };
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(128, variableWrites);
+        Assert.True(functionAllowance > 0);
+        Assert.True(variableAllowance - functionAllowance >= 16 * 1024,
+            $"Variable write held {variableAllowance} bytes and function write held {functionAllowance} bytes.");
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ExportListingUsesEachSavedPrefixBindingOnce()
+    {
+        var result = await EndToEndHarness.RunScriptAsync("""
+            export probe_z=right probe_a=original
+            probe_a=temp probe_missing=new export -p | fixture-bindings
+            declare -p probe_a
+            """, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("""
+            declare -x probe_a="original"
+            declare -x probe_z="right"
+            declare -x probe_a="original"
+
+            """, result.Host.StandardOutput.TextContent);
+        Assert.Empty(result.Host.StandardError.TextContent);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("declare -p", "declare: ", ": not found\n", 56 * 1024)]
     [InlineData("declare -fp", "declare: ", ": not found\n", 32 * 1024)]
