@@ -20,6 +20,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
 
     /// <summary>An empty element that was present in a quoted aggregate before operand splicing.</summary>
     internal bool IsEmptyAggregateField { get; } = isEmptyAggregateField;
+    internal bool IsJoinedCasePatternOperand { get; init; }
 
     /// <summary>Joins scalar or pattern operand fields without losing quote metadata.</summary>
     public static ExpandedWord JoinWithSpaces(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory)

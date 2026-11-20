@@ -35,7 +35,7 @@ public sealed partial class Evaluation
                 foreach (var pattern in item.Patterns)
                 {
                     var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandWithoutBraceAsync(
-                        pattern, scope, allowWordSplitting: false, ExpansionPurpose.Scalar, TildeExpansion.Leading))
+                        pattern, scope, allowWordSplitting: false, ExpansionPurpose.CasePattern, TildeExpansion.Leading))
                         .ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return null;

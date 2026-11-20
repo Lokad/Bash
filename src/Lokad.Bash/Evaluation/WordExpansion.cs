@@ -162,7 +162,7 @@ internal static partial class WordExpansion
         if (!scope.CanExpand)
             return [];
         if (destination == null)
-            return builder.Build();
+            return purpose == ExpansionPurpose.CasePattern ? builder.BuildCasePattern() : builder.Build();
         builder.AppendTo(destination);
         return destination;
     }
@@ -1034,7 +1034,7 @@ internal static partial class WordExpansion
         ExpansionPurpose purpose,
         ImplicitEmptyPolicy implicitEmptyPolicy,
         bool assignmentTildes,
-        ExpandedWordBuilder? hereDocumentParent)
+        ExpandedWordBuilder? operandParent)
     {
         if (expression.Length == 0)
             return [];
@@ -1045,7 +1045,7 @@ internal static partial class WordExpansion
         var builder = new ExpandedWordBuilder(
             scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken)
         {
-            AssigningHereDocumentOperand = hereDocumentParent != null,
+            AssigningHereDocumentOperand = quoteContext == ExpansionQuoteContext.HereDocument && operandParent != null,
         };
         if (word == null)
         {
@@ -1059,7 +1059,9 @@ internal static partial class WordExpansion
         }
         if (!scope.CanExpand)
             return [];
-        hereDocumentParent?.IncludeHereDocumentAt(builder);
+        operandParent?.IncludeOperand(builder);
+        if (purpose == ExpansionPurpose.CasePattern && quoteContext == ExpansionQuoteContext.Unquoted)
+            return builder.BuildUnquotedCasePatternOperand();
         return builder.Build();
     }
 

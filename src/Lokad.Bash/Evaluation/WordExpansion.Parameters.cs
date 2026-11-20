@@ -273,7 +273,7 @@ internal static partial class WordExpansion
 
                 var words = await ExpandOperatorWordAsync(
                         parsed.Word, scanContext, scope, ExpansionQuoteContext.Unquoted, ExpansionPurpose.Scalar,
-                        ImplicitEmptyPolicy.Preserve, assignmentTildes: false, hereDocumentParent: null)
+                        ImplicitEmptyPolicy.Preserve, assignmentTildes: false, operandParent: null)
                     .ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
@@ -345,9 +345,11 @@ internal static partial class WordExpansion
                 ? ExpansionPurpose.IndexedCompoundOperand : output.Purpose;
             var expanded = await ExpandOperatorWordAsync(
                     parsed.Word, scanContext, scope, quoteContext, purpose,
-                    purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment or ExpansionPurpose.IndexedCompoundOperand
+                    purpose is ExpansionPurpose.Scalar or ExpansionPurpose.CasePattern
+                        or ExpansionPurpose.Assignment or ExpansionPurpose.IndexedCompoundOperand
                         or ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource
-                        ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove, assignmentTildes, hereDocumentParent: null)
+                        ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove, assignmentTildes,
+                    purpose == ExpansionPurpose.CasePattern ? output : null)
                 .ConfigureAwait(false);
             if (scope.CanExpand)
                 output.AppendExpandedWords(expanded, allowWordSplitting, globQuoted);
@@ -1004,7 +1006,7 @@ internal static partial class WordExpansion
             async Task<ParameterOperand> ExpandOperandAsync(ShellSource source)
             {
                 var words = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
-                    ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, assignmentTildes: false, hereDocumentParent: null).ConfigureAwait(false);
+                    ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, assignmentTildes: false, operandParent: null).ConfigureAwait(false);
                 var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, budget);
                 return new ParameterOperand(value, mask);
             }

@@ -454,6 +454,12 @@ remains data. In the recorded multi-field comparisons, both GNU Bash pins
 select the same DEL-containing pattern for an empty field and a field that
 contains DEL.
 
+In a case pattern, quoted `$@` and quoted array `[@]` can produce separate
+fields. The matcher uses the first field, including a supplied empty field,
+after the whole pattern has expanded. With empty IFS, the pattern can retain
+the joined fields. Unquoted `$@` joins with spaces and quoted `$*` uses the
+first IFS character as its separator.
+
 Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
 A word loop needs a semicolon or line break before the opening brace. An
 arithmetic loop can place the opening brace immediately after `))`.

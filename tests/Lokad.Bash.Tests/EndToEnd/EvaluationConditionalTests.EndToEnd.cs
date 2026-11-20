@@ -260,6 +260,61 @@ public sealed class EvaluationConditionalTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("unset IFS; set -- a b", "pre\"$@\"post", "prea", "prea bpost")]
+    [InlineData("IFS=:; set -- '' b", "\"$@\"", "", "b")]
+    [InlineData("IFS=; set -- a b", "\"$@\"", "a b", "a")]
+    [InlineData("IFS=:; set -- a b", "$@", "a b", "a:b")]
+    [InlineData("IFS=:; set -- a b", "\"$*\"", "a:b", "a b")]
+    [InlineData("items=(a b)", "\"${items[@]}\"", "a", "a b")]
+    [InlineData("set -- a b; unset missing", "${missing:-\"$@\"}", "a", "a b")]
+    [InlineData("IFS=:; set -- a b; empty=(); unset missing", "${missing:-$@}\"${empty[@]}\"", "a b", "a")]
+    [InlineData("unset IFS; set -- 'a b' c; empty=()", "$@\"${empty[@]}\"", "a", "a b")]
+    [InlineData("IFS=:; set -- a b", "x:y\"$@\"", "x", "x:ya")]
+    [InlineData("IFS=:; set -- a b", ":\"$@\"", "", "a")]
+    [InlineData("IFS=:; set -- a b", "\"x:y\"\"$@\"", "x:ya", "x")]
+    [InlineData("set -- '*'; extra=(x y)", "\"$@\"${extra[@]}", "*x", "xyz")]
+    [InlineData("IFS=; set -- a b", "${IFS:=:}\"$@\"", ":a:b", "")]
+    [InlineData("IFS=; set -- a b", "\"$@\"${IFS:=:}", "a b:", "a")]
+    [InlineData("unset IFS; set -- a b", "${IFS:=:}\"$@\"", "", ":a")]
+    [InlineData("unset IFS; set -- a b", "\"$@\"${IFS:=:}", "a b", "a b:")]
+    public async Task Case_UsesTheAggregateFieldsForThePatternRole(
+        string setup, string pattern, string match, string miss)
+    {
+        var script = $"for subject in '{match}' '{miss}'; do\n"
+            + setup + "\n"
+            + $"case \"$subject\" in {pattern}) printf match;; *) printf miss;; esac\n"
+            + "done\n";
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("matchmiss", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Case_ExpandsTheCompleteQuotedAggregatePatternBeforeSelectingItsFirstField(bool prepared)
+    {
+        const string script = """
+            set -- a b
+            case 'a b' in
+                "$@"$(printf first >&2)) printf unexpected;;
+                $(printf second >&2; printf 'a b')) printf matched;;
+            esac
+            """;
+        await using var host = new TestHost();
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, status);
+        Assert.Equal("matched"u8.ToArray(), host.StandardOutput.Content.ToArray());
+        Assert.Equal("firstsecond"u8.ToArray(), host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData(false, "'7'", "373A6D697373")]
     [InlineData(false, "$'\\377'", "FF7C373A6D697373")]
     [InlineData(true, "'7'", "373A6D697373")]

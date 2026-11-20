@@ -33,6 +33,7 @@ internal enum ExpansionPurpose
 {
     Normal,
     Scalar,
+    CasePattern,
     Assignment,
     IndexedCompound,
     IndexedCompoundOperand,
@@ -58,10 +59,12 @@ internal sealed class ExpandedWordBuilder
     private readonly MemoryCapacity _storage;
     private readonly CancellationToken _cancellationToken;
     private readonly ImplicitEmptyPolicy _implicitEmptyPolicy;
+    private readonly bool _casePatternStartsWithEmptyIfs;
     private readonly List<InputWord> _words = [];
     private InputWord _current;
     private DoubleQuoteState _doubleQuote;
     private bool _hereDocumentHasAt;
+    private bool _hasQuotedAggregate;
 
     private enum DoubleQuoteState : byte { Outside, Open, EmptyExpansion, EmptyAggregate }
 
@@ -99,6 +102,8 @@ internal sealed class ExpandedWordBuilder
         _memory = memory;
         _storage = storage;
         _implicitEmptyPolicy = implicitEmptyPolicy;
+        _casePatternStartsWithEmptyIfs = purpose == ExpansionPurpose.CasePattern
+            && FieldSeparators.FromVariables(variables).IsEmpty;
         memory.Charge(storage, 256);
         _current = new();
         _words.Add(_current);
@@ -120,7 +125,8 @@ internal sealed class ExpandedWordBuilder
 
     /// <summary>Retains literal-source provenance before field splitting.</summary>
     public void AppendSource(ShellSource source, bool globQuoted) =>
-        GetPart(globQuoted ? PartOrigin.Protected : PartOrigin.Source, globQuoted).AppendValue(source.ToValue());
+        GetPart(globQuoted ? PartOrigin.Protected : Purpose == ExpansionPurpose.CasePattern
+            ? PartOrigin.Expansion : PartOrigin.Source, globQuoted).AppendValue(source.ToValue());
 
     public void AppendValue(ShellValue value, bool globQuoted) =>
         GetPart(PartOrigin.Protected, globQuoted).AppendValue(value);
@@ -129,7 +135,7 @@ internal sealed class ExpandedWordBuilder
     {
         _current.NeedsSplitting |= allowWordSplitting;
         if (!value.IsEmpty)
-            GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendValue(value);
+            GetPart(ExpansionOrigin(allowWordSplitting, globQuoted), globQuoted).AppendValue(value);
         else if (!allowWordSplitting && (globQuoted || _implicitEmptyPolicy == ImplicitEmptyPolicy.Preserve))
             AppendEmptyExpansion(globQuoted);
     }
@@ -137,8 +143,12 @@ internal sealed class ExpandedWordBuilder
     public void AppendIntegerExpansion(long value, bool allowWordSplitting, bool globQuoted)
     {
         _current.NeedsSplitting |= allowWordSplitting;
-        GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendInteger(value);
+        GetPart(ExpansionOrigin(allowWordSplitting, globQuoted), globQuoted).AppendInteger(value);
     }
+
+    private PartOrigin ExpansionOrigin(bool allowWordSplitting, bool globQuoted) =>
+        allowWordSplitting || (Purpose == ExpansionPurpose.CasePattern && !globQuoted)
+            ? PartOrigin.Expansion : PartOrigin.Protected;
 
     private void AppendEmptyExpansion(bool globQuoted)
     {
@@ -150,7 +160,7 @@ internal sealed class ExpandedWordBuilder
                 _doubleQuote = DoubleQuoteState.EmptyExpansion;
         }
         else
-            GetPart(PartOrigin.Protected, globQuoted);
+            GetPart(ExpansionOrigin(allowWordSplitting: false, globQuoted), globQuoted);
     }
 
     public void AppendFields(
@@ -165,6 +175,8 @@ internal sealed class ExpandedWordBuilder
             return;
         }
 
+        _hasQuotedAggregate |= Purpose == ExpansionPurpose.CasePattern
+            && quoteContext == ExpansionQuoteContext.DoubleQuoted;
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (Purpose == ExpansionPurpose.IndexedCompound
             || Purpose == ExpansionPurpose.IndexedCompoundOperand && quoteContext == ExpansionQuoteContext.DoubleQuoted)
@@ -184,12 +196,15 @@ internal sealed class ExpandedWordBuilder
         var protectFields = quoteContext == ExpansionQuoteContext.DoubleQuoted
             || (Purpose == ExpansionPurpose.ErrorMessage && !allowWordSplitting
                 && !fieldSeparators.IsEmpty && fieldSeparators.Bytes.Span[0] != (byte)' ');
+        // Non-space IFS can protect aggregate bytes from field selection while retaining glob activity.
+        var protectCaseFields = Purpose == ExpansionPurpose.CasePattern && HasNonSpaceSeparator(fieldSeparators);
+        var caseSeparator = Purpose == ExpansionPurpose.CasePattern ? CasePatternSeparator(fieldSeparators) : default;
         var first = true;
         foreach (var value in fields)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (!first)
-                StartNewWord();
+                StartNewWord(caseSeparator);
             first = false;
 
             if (protectFields)
@@ -199,6 +214,8 @@ internal sealed class ExpandedWordBuilder
                 else
                     AppendValue(value, globQuoted: true);
             }
+            else if (protectCaseFields)
+                AppendValue(value, globQuoted);
             else
             {
                 AppendExpansion(value, allowWordSplitting, globQuoted);
@@ -234,8 +251,11 @@ internal sealed class ExpandedWordBuilder
         }
     }
 
-    internal void IncludeHereDocumentAt(ExpandedWordBuilder operand) =>
+    internal void IncludeOperand(ExpandedWordBuilder operand)
+    {
         _hereDocumentHasAt |= operand._hereDocumentHasAt;
+        _hasQuotedAggregate |= operand._hasQuotedAggregate;
+    }
 
     internal void AppendHereDocumentUnprotected(ShellValue value) =>
         GetPart(PartOrigin.Expansion, globQuoted: true).AppendValue(value);
@@ -252,11 +272,13 @@ internal sealed class ExpandedWordBuilder
             return;
         }
 
+        var caseSeparator = Purpose == ExpansionPurpose.CasePattern && words.Count > 1
+            ? CasePatternSeparator(FieldSeparators.FromVariables(_variables)) : default;
         for (var index = 0; index < words.Count; index++)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (index > 0)
-                StartNewWord();
+                StartNewWord(caseSeparator);
             var word = words[index];
             if (word.IsEmptyAggregateField)
             {
@@ -266,15 +288,20 @@ internal sealed class ExpandedWordBuilder
             if (word.Segments.Count == 0)
                 MarkCurrentWordForEmission();
             foreach (var segment in word.Segments)
-                AppendExpansion(segment.Content, allowWordSplitting && !segment.IsGlobQuoted,
-                    globQuoted || segment.IsGlobQuoted);
+            {
+                var quoted = globQuoted || segment.IsGlobQuoted;
+                if (word.IsJoinedCasePatternOperand)
+                    AppendValue(segment.Content, quoted);
+                else
+                    AppendExpansion(segment.Content, allowWordSplitting && !segment.IsGlobQuoted, quoted);
+            }
         }
     }
 
-    private void StartNewWord()
+    private void StartNewWord(ShellValue casePatternSeparator)
     {
         _memory.Charge(_storage, 256);
-        _current = new InputWord();
+        _current = new InputWord { CasePatternSeparator = casePatternSeparator };
         _words.Add(_current);
     }
 
@@ -336,17 +363,79 @@ internal sealed class ExpandedWordBuilder
         MarkCurrentWordForEmission();
     }
 
-    public IReadOnlyList<ExpandedWord> Build()
+    public IReadOnlyList<ExpandedWord> Build() => Build(selectFirstCasePatternField: false);
+
+    internal IReadOnlyList<ExpandedWord> BuildCasePattern()
+    {
+        if (!_hasQuotedAggregate)
+            return Build();
+        var separators = FieldSeparators.FromVariables(_variables);
+        var selectFirst = !_casePatternStartsWithEmptyIfs && !separators.IsEmpty;
+        var separator = selectFirst ? separators.First : Space;
+        for (var index = 1; index < _words.Count; index++)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (!_words[index].CasePatternSeparator.Bytes.Span.SequenceEqual(separator.Bytes.Span))
+            {
+                // An expansion changed IFS. The previously emitted separators still
+                // participate with their original bytes in the final pattern.
+                ExpandCasePatternSeparators();
+                break;
+            }
+        }
+        return Build(selectFirst);
+    }
+
+    private void ExpandCasePatternSeparators()
+    {
+        _current = _words[0];
+        for (var index = 1; index < _words.Count; index++)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            var word = _words[index];
+            AppendExpansion(word.CasePatternSeparator, allowWordSplitting: false, globQuoted: false);
+            _memory.Charge(_storage, 32L * word.Parts.Count);
+            _current.Parts.AddRange(word.Parts);
+        }
+        _words.RemoveRange(1, _words.Count - 1);
+    }
+
+    internal IReadOnlyList<ExpandedWord> BuildUnquotedCasePatternOperand()
+    {
+        var fields = Build();
+        if (_hasQuotedAggregate || fields.Count < 2 || !HasNonSpaceSeparator(FieldSeparators.FromVariables(_variables)))
+            return fields;
+        // A nested unquoted aggregate uses spaces after expanding with a non-space IFS.
+        var joined = ExpandedWord.JoinWithSpaces(fields, _memory);
+        return [new ExpandedWord(joined.Segments) { IsJoinedCasePatternOperand = true }];
+    }
+
+    private static bool HasNonSpaceSeparator(FieldSeparators separators) =>
+        !separators.IsEmpty && separators.Bytes.Span[0] != (byte)' ';
+
+    private static ShellValue CasePatternSeparator(FieldSeparators separators)
+    {
+        if (separators.IsEmpty || separators.Bytes.Span[0] == (byte)' ')
+            return Space;
+        var first = separators.First;
+        // A later expansion can replace IFS. Retain only the separator bytes from its old value.
+        return first.Bytes.Length == separators.Bytes.Length ? first : ShellValue.FromBytes(first.Bytes.Span.ToArray());
+    }
+
+    private IReadOnlyList<ExpandedWord> Build(bool selectFirstCasePatternField)
     {
         var results = new List<ExpandedWord>();
-        AppendTo(results);
+        AppendTo(results, selectFirstCasePatternField);
         return results;
     }
 
-    internal void AppendTo(List<ExpandedWord> results)
+    internal void AppendTo(List<ExpandedWord> results) => AppendTo(results, selectFirstCasePatternField: false);
+
+    private void AppendTo(List<ExpandedWord> results, bool selectFirstCasePatternField)
     {
         // Expansions can assign IFS: joins use its value at expansion time, splitting uses the final value.
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
+        var firstFieldOnly = selectFirstCasePatternField && !fieldSeparators.IsEmpty;
         var splitHereDocument = _hereDocumentHasAt && !AssigningHereDocumentOperand;
         var splitOnSpace = splitHereDocument && fieldSeparators.IsEmpty;
         foreach (var word in _words)
@@ -354,7 +443,7 @@ internal sealed class ExpandedWordBuilder
             _cancellationToken.ThrowIfCancellationRequested();
             if (word.Parts.Count == 0)
                 continue;
-            var split = splitHereDocument && word.Parts.Exists(static part => part.Origin == PartOrigin.Expansion)
+            var split = (splitHereDocument || firstFieldOnly) && word.Parts.Exists(static part => part.Origin == PartOrigin.Expansion)
                 || word.NeedsSplitting && !fieldSeparators.IsEmpty;
             if (!split)
             {
@@ -370,8 +459,12 @@ internal sealed class ExpandedWordBuilder
                     hasBytes |= !segment.Content.IsEmpty;
                     hasProtectedPart |= part.Origin == PartOrigin.Protected;
                 }
-                if (hasBytes || hasProtectedPart)
+                if (hasBytes || hasProtectedPart || Purpose == ExpansionPurpose.CasePattern)
+                {
                     results.Add(new ExpandedWord(segments, !hasBytes && word.HasEmptyAggregateField));
+                    if (firstFieldOnly)
+                        return;
+                }
                 continue;
             }
 
@@ -385,6 +478,8 @@ internal sealed class ExpandedWordBuilder
 
             foreach (var part in word.Parts)
             {
+                if (HasFirstCasePatternField())
+                    return;
                 _cancellationToken.ThrowIfCancellationRequested();
                 if (splitHereDocument && part.Origin == PartOrigin.Protected)
                 {
@@ -431,8 +526,14 @@ internal sealed class ExpandedWordBuilder
                     }
                 }
             }
+            if (HasFirstCasePatternField())
+                return;
             FlushExpansion();
+            if (HasFirstCasePatternField())
+                return;
             CompleteField();
+            if (HasFirstCasePatternField())
+                return;
 
             void QueueExpansion(ReadOnlyMemory<byte> bytes, bool globQuoted)
             {
@@ -455,10 +556,11 @@ internal sealed class ExpandedWordBuilder
             void AppendLiteral(ReadOnlyMemory<byte> bytes, bool globQuoted)
             {
                 FlushExpansion();
-                if (bytes.IsEmpty)
+                if (bytes.IsEmpty || HasFirstCasePatternField())
                     return;
                 ApplyPendingBreak();
-                AppendBytes(bytes, globQuoted);
+                if (!HasFirstCasePatternField())
+                    AppendBytes(bytes, globQuoted);
             }
 
             void AppendBytes(ReadOnlyMemory<byte> bytes, bool globQuoted)
@@ -506,6 +608,8 @@ internal sealed class ExpandedWordBuilder
                     if (position > literalStart)
                     {
                         AppendPendingBytes(literalStart, position);
+                        if (HasFirstCasePatternField())
+                            return;
                     }
                     if (isCharacter && FieldSeparators.HasWhitespaceSemantics(character))
                     {
@@ -516,6 +620,8 @@ internal sealed class ExpandedWordBuilder
                     {
                         emitEmpty = true;
                         StartNewField();
+                        if (HasFirstCasePatternField())
+                            return;
                     }
                     position += length;
                     literalStart = position;
@@ -532,6 +638,8 @@ internal sealed class ExpandedWordBuilder
                 void AppendPendingBytes(int start, int end)
                 {
                     ApplyPendingBreak();
+                    if (HasFirstCasePatternField())
+                        return;
                     while (start < end)
                     {
                         _cancellationToken.ThrowIfCancellationRequested();
@@ -574,6 +682,8 @@ internal sealed class ExpandedWordBuilder
                 emitEmpty = false;
             }
         }
+
+        bool HasFirstCasePatternField() => firstFieldOnly && results.Count != 0;
     }
 
     private SegmentBuilder GetPart(PartOrigin origin, bool globQuoted)
@@ -602,6 +712,7 @@ internal sealed class ExpandedWordBuilder
         public List<InputPart> Parts { get; } = [];
         public bool NeedsSplitting { get; set; }
         public bool HasEmptyAggregateField { get; set; }
+        public ShellValue CasePatternSeparator { get; init; }
     }
 
     private readonly record struct InputPart(PartOrigin Origin, SegmentBuilder Segment);

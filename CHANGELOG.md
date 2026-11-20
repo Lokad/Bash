@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Use the first expanded field of a quoted aggregate in a case pattern when
+  IFS enables field selection. Finish expanding the reached pattern before matching.
+
 - Accept grouped `trap -p` options and report invalid flags through the reached
   stderr. Help and usage retain status 2 when their shell descriptors are closed.
 
