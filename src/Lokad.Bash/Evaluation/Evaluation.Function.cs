@@ -42,6 +42,7 @@ public sealed partial class Evaluation
                     scope with { Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function)
                     {
                         GlobalPrefixes = scope.Context.GlobalPrefixes,
+                        CallerSource = scope.Context.CallerSource,
                         ErrexitIgnored = scope.Context.ErrexitIgnored,
                         SourceMemory = function.SourceMemory,
                         Coordinates = function.Coordinates

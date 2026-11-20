@@ -1391,6 +1391,7 @@ public sealed partial class Evaluation : IFileTester
                         Context = new EvaluationContext(builtinScope.Context.LoopDepth, scriptFunction, builtinScope.Context.ReturnTarget)
                         {
                             GlobalPrefixes = builtinScope.Context.GlobalPrefixes,
+                            CallerSource = builtinScope.Context.CallerSource,
                             ErrexitIgnored = builtinScope.Context.ErrexitIgnored,
                             SourceMemory = builtinScope.Context.SourceMemory,
                             Coordinates = builtinScope.Context.Coordinates
@@ -1407,6 +1408,7 @@ public sealed partial class Evaluation : IFileTester
                         {
                             ErrexitIgnored = builtinScope.Context.ErrexitIgnored,
                             SourceMemory = builtinScope.Context.SourceMemory,
+                            CallerSource = builtinScope.Context.CallerSource,
                             Coordinates = builtinScope.Context.Coordinates,
                             GlobalPrefixes = new GlobalPrefixBindings(bindings,
                                 builtinScope.Context.FunctionContext?.Depth ?? 0, builtinScope.Context.GlobalPrefixes)
@@ -3844,12 +3846,15 @@ public sealed partial class Evaluation : IFileTester
                 return EvaluationResult.FromExitCode(2);
             }
 
+            // The active command owns the frame until the sourced invocation and its children settle.
+            Memory.Charge(48);
             var sourceScope = scope with
             {
                 Context = new EvaluationContext(scope.Context.LoopDepth, scope.Context.FunctionContext, ReturnTargetKind.Source)
                 {
                     GlobalPrefixes = scope.Context.GlobalPrefixes,
                     ErrexitIgnored = scope.Context.ErrexitIgnored,
+                    CallerSource = new SourceCallerFrame(scope.Context.FunctionContext?.Depth ?? 0, scope.Context.CallerSource),
                     SourceMemory = sourceMemory
                 }
             };
@@ -4396,6 +4401,9 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>The nearest construct that permits and consumes return flow.</summary>
     internal enum ReturnTargetKind { None, Function, Source }
 
+    /// <summary>An active source invocation above the recorded function depth.</summary>
+    internal sealed record SourceCallerFrame(int FunctionDepth, SourceCallerFrame? Enclosing);
+
     /// <summary>Carries control-flow boundaries independently of function-local binding ownership.</summary>
     internal readonly struct EvaluationContext(int loopDepth, FunctionContext? functionContext, ReturnTargetKind returnTarget)
     {
@@ -4404,6 +4412,7 @@ public sealed partial class Evaluation : IFileTester
         public FunctionContext? FunctionContext { get; } = functionContext;
         public ReturnTargetKind ReturnTarget { get; } = returnTarget;
         public GlobalPrefixBindings? GlobalPrefixes { get; init; }
+        public SourceCallerFrame? CallerSource { get; init; }
         public bool ErrexitIgnored { get; init; }
         public SourceMemory? SourceMemory { get; init; }
         internal CommandCoordinates Coordinates { get; init; }
@@ -4467,8 +4476,15 @@ public sealed partial class Evaluation : IFileTester
                         prefixes?.FunctionDepth == depth ? prefixes.Bindings : null);
             }
 
+            // The source chain is immutable and its function-depth anchors survive reconstruction.
             return (variables, new EvaluationContext(LoopDepth, function, ReturnTarget)
-                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory, Coordinates = Coordinates });
+            {
+                GlobalPrefixes = prefixes,
+                CallerSource = CallerSource,
+                ErrexitIgnored = ErrexitIgnored,
+                SourceMemory = SourceMemory,
+                Coordinates = Coordinates
+            });
         }
 
         public Variables GetGlobalBindingOwner(BindingName name, Variables active)

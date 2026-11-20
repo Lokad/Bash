@@ -74,7 +74,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Local => new("[-aAcfFiIlnprux] [name[=value] | -] ...",
             "Declare function-local variables, arrays or name references. -I inherits the outer value and its attributes, except the name-reference attribute. '-' saves shell options for restoration when the function returns.\n    Declaration attributes use the same flags as declare except -g."
             + CaseAttributeDescription),
-        BuiltinKind.Caller => new("[expr]", "Print the current function context or select an enclosing function frame by index."),
+        BuiltinKind.Caller => new("[expr]", "Print the current function or source invocation. An index selects an enclosing invocation."),
         BuiltinKind.Source => new("[--] filename [arguments]", "Read and execute filename in the current shell context, with optional positional parameters."),
         BuiltinKind.Eval => new("[--] [arg ...]", "Join arguments with spaces, then parse and execute them in the current shell context."),
         BuiltinKind.Getopts => new("optstring name [arg ...]",

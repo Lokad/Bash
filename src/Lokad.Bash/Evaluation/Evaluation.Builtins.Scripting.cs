@@ -9,8 +9,10 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private static readonly ShellValue SourceCallerName = ShellValue.FromText("source");
+
     /// <summary>
-    /// Handles the <c>caller</c> builtin by emitting current function context information.
+    /// Handles the <c>caller</c> builtin by selecting an active function or sourced invocation.
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
     private async Task<EvaluationResult> EvaluateBuiltinCallerAsync(
@@ -42,19 +44,33 @@ public sealed partial class Evaluation
             if (index < 0)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
-        var frame = SkipScriptPrefixes(context.FunctionContext);
-        while (frame != null && index-- >= 0)
+        var function = SkipScriptPrefixes(context.FunctionContext);
+        var source = context.CallerSource;
+        while (true)
         {
             CheckCancellation();
-            frame = SkipScriptPrefixes(frame.Enclosing);
-        }
-        if (frame == null)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+            ShellValue name;
+            // At the same depth, the source was entered after the function.
+            if (source != null && source.FunctionDepth >= (function?.Depth ?? 0))
+            {
+                name = SourceCallerName;
+                source = source.Enclosing;
+            }
+            else if (function != null)
+            {
+                name = function.FunctionName;
+                function = SkipScriptPrefixes(function.Enclosing);
+            }
+            else
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
-        using var output = new ByteMemoryBuilder(0, Memory.Budget);
-        output.Append("0 "u8).Append(frame.FunctionName.Bytes).Append((byte)'\n');
-        await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
+            if (index-- >= 0)
+                continue;
+            using var output = new ByteMemoryBuilder(0, Memory.Budget);
+            output.Append("0 "u8).Append(name.Bytes).Append((byte)'\n');
+            await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
+        }
 
         async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
         {

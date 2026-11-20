@@ -600,4 +600,44 @@ public sealed class EvaluationFunctionTestsEndToEnd
             Assert.Empty(result.StdOut);
         Assert.Empty(result.StdErr);
     }
+
+    [Fact]
+    public async Task CallerInterleavesSourceAndFunctionFramesUntilTheirInvocationsReturn()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/outer", """
+            g() { prefix=value . /inner; }
+            g
+            printf 'inner-return:%s\n' "$?"
+            caller
+            caller 0
+            """);
+        host.AddFile("/inner", """
+            caller
+            another=value eval 'caller 0'
+            (caller 1)
+            caller 2
+            caller 3
+            printf 'past-end:%s\n' "$?"
+            return 7
+            """);
+        var result = await host.RunAsync("""
+            f() {
+                source /outer
+                printf 'outer-return:%s\n' "$?"
+                caller
+                caller 0
+                printf 'function-end:%s\n' "$?"
+            }
+            f
+            caller
+            printf 'root:%s\n' "$?"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0 source\n0 g\n0 source\n0 f\npast-end:1\ninner-return:7\n"
+            + "0 source\n0 f\nouter-return:0\n0 f\nfunction-end:1\nroot:1\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
 }

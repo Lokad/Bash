@@ -454,6 +454,11 @@ that forms a complete command list there. The prefix supplies the unit's final s
 resolution. They validate leading options before performing a file lookup or
 allocating copied script source. `source` decodes its selected filename and
 copies its positional argument tail directly into the callee frame.
+`caller` merges active sourced invocations with the function chain.
+Each source command owns its immutable frame across execution and child
+cleanup. Child evaluations borrow the frame chain and preserve the order
+relative to their reconstructed function scopes. A retained function
+definition keeps its source bytes independently of any active invocation.
 Explicit `Parser.Parse`/`Parser.TryParse` and prepared `Evaluation` execution retain
 whole-script validation. Recoverable arithmetic/assignment expansion failures end
 their current unit; unrecoverable failures and explicit exit stop the script.

@@ -153,7 +153,8 @@ public sealed partial class Evaluation
                 Context = new EvaluationContext(scope.Context.LoopDepth,
                     restoreLocals ? null : scope.Context.FunctionContext, scope.Context.ReturnTarget)
                 {
-                    GlobalPrefixes = restoreLocals ? null : scope.Context.GlobalPrefixes
+                    GlobalPrefixes = restoreLocals ? null : scope.Context.GlobalPrefixes,
+                    CallerSource = restoreLocals ? null : scope.Context.CallerSource
                 },
                 Timing = null,
                 ErrexitRedirections = null

@@ -203,7 +203,7 @@ public sealed class SourceMemoryLifetimeTests
         var governor = new MemoryGovernor(1024 * 1024);
         var scopes = new ConcurrentBag<RecordedScope>();
         var budget = new RecordingBudget(governor, depth: 0, scopes);
-        await using var host = new PendingHost(close) { MemoryBudget = budget };
+        await using var host = new PendingHost(close, "pending"u8.ToArray()) { MemoryBudget = budget };
         host.AddFile("/a", "f(){ unset -f f; printf pending; }\n#" + new string('a', PaddingBytes) + "\n");
         const string Script = "source /a; f >/out; :";
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -232,6 +232,44 @@ public sealed class SourceMemoryLifetimeTests
         }
         Assert.DoesNotContain(scopes, s => s.Depth > 1 && s.OwnBytes >= PaddingBytes);
         Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AChildBorrowsTheActiveSourceThroughACanceledCallerWrite(bool prepared)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        await using var host = new PendingHost(close: false, "0 source\n"u8.ToArray()) { MemoryBudget = budget };
+        host.AddFile("/a", "(caller >/out)\n#" + new string('a', PaddingBytes) + "\n");
+        const string Script = "source /a";
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var owner = budget.CreateScope();
+        var running = prepared
+            ? new Engine().RunAsync(new Eval(Parser.Parse(Script)), host, owner, cancellation.Token)
+            : BashScript.RunAsync(host, Script, Evaluation.EvaluationOptions.Default, cancellation.Token);
+        try
+        {
+            await host.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var active = Assert.Single(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+            cancellation.Cancel();
+            Assert.False(running.IsCompleted);
+            Assert.True(active.OwnBytes >= PaddingBytes);
+        }
+        finally
+        {
+            host.Release.TrySetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await running);
+        }
+
+        Assert.DoesNotContain(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+        Assert.Equal(0, host.OpenFileCount);
+        // A prepared evaluation can leave retained values with its supplied owner.
+        Assert.Equal(prepared ? Assert.IsType<RecordedScope>(owner).OwnBytes : 0L, governor.ReservedBytes);
         owner.Dispose();
         Assert.Equal(0, governor.ReservedBytes);
     }
@@ -415,7 +453,7 @@ public sealed class SourceMemoryLifetimeTests
         }
     }
 
-    private sealed class PendingHost(bool close) : MockFileSystem
+    private sealed class PendingHost(bool close, ReadOnlyMemory<byte> marker) : MockFileSystem
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -424,7 +462,7 @@ public sealed class SourceMemoryLifetimeTests
         public override async ValueTask<DescriptorWriteResult> WriteAsync(
             FileDescriptor descriptor, ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
         {
-            if (content.Span.SequenceEqual("pending"u8))
+            if (content.Span.SequenceEqual(marker.Span))
             {
                 _output = descriptor;
                 if (!close)
