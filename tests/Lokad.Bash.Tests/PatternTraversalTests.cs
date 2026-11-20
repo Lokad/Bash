@@ -23,9 +23,31 @@ public sealed class PatternTraversalTests
         var memory = new EvaluationMemory(governor);
         try
         {
-            var (value, mask) = word.ToPatternOperand(memory);
+            var (value, mask) = ExpandedWord.JoinPatternWithSpaces([word], memory);
             Assert.Equal<byte>([0xc3, 0xa9, (byte)'*', 0xff, (byte)'?'], value.Bytes.ToArray());
             Assert.Equal<byte>(quotedContent ? [1, 0, 0, 1, 1] : [], mask.Memory.ToArray());
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void PatternJoinMarksSeparatorsActiveAroundAnEmptyField()
+    {
+        ExpandedWord[] fields = [
+            new([new(ShellValue.FromText("q"), isGlobQuoted: false)]),
+            new([new(ShellValue.FromBytes(new byte[] { 0xff, (byte)'*' }), isGlobQuoted: true)]),
+            new([], isEmptyAggregateField: true),
+            new([new(ShellValue.FromText("?"), isGlobQuoted: false)])
+        ];
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var (value, mask) = ExpandedWord.JoinPatternWithSpaces(fields, memory);
+            Assert.Equal<byte>([(byte)'q', (byte)' ', 0xff, (byte)'*', (byte)' ', (byte)' ', (byte)'?'],
+                value.Bytes.ToArray());
+            Assert.Equal<byte>([1, 1, 0, 0, 1, 1, 1], mask.Memory.ToArray());
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);

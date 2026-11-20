@@ -328,10 +328,11 @@ public sealed class ByteValuedWordTests
 
         var first = await WordExpansion.ExpandToWordsAsync(word, scope);
         var second = await WordExpansion.ExpandToWordsAsync(word, scope);
-        var unsplit = await WordExpansion.ExpandUnsplitWordAsync(word, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading);
+        var unsplit = await WordExpansion.ExpandWithoutBraceAsync(
+            word, scope, allowWordSplitting: false, ExpansionPurpose.Scalar, TildeExpansion.Leading);
         Assert.Same(first, second);
-        Assert.Same(Assert.Single(first), unsplit);
-        var segment = Assert.Single(unsplit.Segments);
+        Assert.Same(first, unsplit);
+        var segment = Assert.Single(Assert.Single(unsplit).Segments);
         Assert.True(segment.Content.Bytes.Equals(bytes.AsMemory()));
         Assert.Equal(kind != WordPartKind.Unquoted, segment.IsGlobQuoted);
 

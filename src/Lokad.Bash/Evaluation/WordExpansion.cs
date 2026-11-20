@@ -42,18 +42,6 @@ internal static partial class WordExpansion
         return scope.CanExpand ? ExpandedWord.JoinValuesWithSpaces(fields, scope.Effects.Memory) : ShellValue.Empty;
     }
 
-    /// <summary>Expands a quote-aware operand without splitting, globbing or brace generation.</summary>
-    internal static async Task<ExpandedWord> ExpandUnsplitWordAsync(
-        Word word, ScopedEvaluation scope, ExpansionPurpose purpose, TildeExpansion tildeExpansion)
-    {
-        var fields = await ExpandWithoutBraceAsync(word, scope, allowWordSplitting: false, purpose, tildeExpansion)
-            .ConfigureAwait(false);
-        if (!scope.CanExpand)
-            return new ExpandedWord([]);
-        var budget = scope.Effects.Memory;
-        return ExpandedWord.JoinWithSpaces(fields, budget);
-    }
-
     /// <summary>
     /// Expands a scalar value or selects the first unsplit field for other consumers.
     /// </summary>

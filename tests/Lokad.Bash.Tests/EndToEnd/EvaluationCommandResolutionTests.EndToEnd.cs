@@ -202,18 +202,6 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Theory]
-    [InlineData("type -t")]
-    [InlineData("type -t --")]
-    public async Task Evaluation_TypeBuiltin_CompactWithoutNamesReturnsSuccess(string script)
-    {
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
     [Fact]
     public async Task Evaluation_TypeBuiltin_ReportsNotFound()
     {

@@ -124,37 +124,50 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         return new byte[(int)length];
     }
 
-    /// <summary>Projects a shell-word pattern or replacement operand and its per-byte quoting.</summary>
-    internal (ShellValue Value, GlobMask Mask) ToPatternOperand(EvaluationMemory memory)
+    /// <summary>Projects joined bytes and quote runs directly from the expanded fields.</summary>
+    internal static (ShellValue Value, GlobMask Mask) JoinPatternWithSpaces(
+        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory)
     {
-        var value = ToValue(memory);
-        var firstQuoted = 0;
-        var position = 0;
-        for (; firstQuoted < Segments.Count; firstQuoted++)
-        {
-            var segment = Segments[firstQuoted];
-            if (segment.IsGlobQuoted && !segment.Content.IsEmpty)
-                break;
-            position += segment.Content.Bytes.Length;
-        }
-        if (firstQuoted == Segments.Count)
-            return (value, new GlobMask(ReadOnlyMemory<byte>.Empty));
-
+        var value = JoinValuesWithSpaces(words, memory);
         var length = value.Bytes.Length;
-        if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
-            throw new ByteMemoryBuilder.LimitExceededException();
-        memory.Charge(checked(2L * length));
-        var mask = new byte[length];
-        mask.AsSpan(0, position).Fill(GlobMask.Active);
-        for (var index = firstQuoted; index < Segments.Count; index++)
+        byte[]? mask = null;
+        var position = 0;
+        for (var index = 0; index < words.Count; index++)
+        {
+            if (index > 0)
+            {
+                if (mask != null)
+                    mask[position] = GlobMask.Active;
+                position++;
+            }
+            position = words[index].AppendGlobMask(length, position, memory, ref mask);
+        }
+        return (value, new GlobMask(mask));
+    }
+
+    private int AppendGlobMask(int length, int position, EvaluationMemory memory, ref byte[]? mask)
+    {
+        for (var index = 0; index < Segments.Count; index++)
         {
             var segment = Segments[index];
             var count = segment.Content.Bytes.Length;
-            if (!segment.IsGlobQuoted)
+            if (segment.IsGlobQuoted)
+            {
+                if (count != 0 && mask == null)
+                {
+                    // Every position before the first quoted byte is active.
+                    if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                        throw new ByteMemoryBuilder.LimitExceededException();
+                    memory.Charge(checked(2L * length));
+                    mask = new byte[length];
+                    mask.AsSpan(0, position).Fill(GlobMask.Active);
+                }
+            }
+            else if (mask != null)
                 mask.AsSpan(position, count).Fill(GlobMask.Active);
             position += count;
         }
-        return (value, new GlobMask(mask));
+        return position;
     }
 }
 

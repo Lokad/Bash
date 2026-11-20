@@ -34,11 +34,12 @@ public sealed partial class Evaluation
             {
                 foreach (var pattern in item.Patterns)
                 {
-                    var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandUnsplitWordAsync(
-                        pattern, scope, ExpansionPurpose.Scalar, TildeExpansion.Leading)).ConfigureAwait(false);
+                    var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandWithoutBraceAsync(
+                        pattern, scope, allowWordSplitting: false, ExpansionPurpose.Scalar, TildeExpansion.Leading))
+                        .ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return null;
-                    if (ShellPattern.FromWord(expanded, Memory, _cancellationToken)
+                    if (ShellPattern.FromWords(expanded, Memory, _cancellationToken)
                         .IsMatch(subject.Bytes.Span, _cancellationToken))
                         return item.Body;
 

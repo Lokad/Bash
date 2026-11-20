@@ -278,8 +278,7 @@ internal static partial class WordExpansion
                 if (!scope.CanExpand)
                     return;
                 var budget = scope.Effects.Memory;
-                var pattern = ShellPattern.FromWord(ExpandedWord.JoinWithSpaces(words, budget),
-                    budget, scope.Effects.CancellationToken);
+                var pattern = ShellPattern.FromWords(words, budget, scope.Effects.CancellationToken);
                 EmitTransformedFields(RemoveField);
                 return;
 
@@ -1006,8 +1005,7 @@ internal static partial class WordExpansion
             {
                 var words = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
                     ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, assignmentTildes: false, hereDocumentParent: null).ConfigureAwait(false);
-                var word = ExpandedWord.JoinWithSpaces(words, budget);
-                var (value, mask) = word.ToPatternOperand(budget);
+                var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, budget);
                 return new ParameterOperand(value, mask);
             }
 

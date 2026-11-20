@@ -25,9 +25,10 @@ internal sealed class ShellPattern
     public bool IsEmpty => _value.IsEmpty;
     public bool RequiresByteCharacters => !_validUtf8;
 
-    public static ShellPattern FromWord(ExpandedWord word, EvaluationMemory memory, CancellationToken cancellationToken)
+    public static ShellPattern FromWords(
+        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var (value, mask) = word.ToPatternOperand(memory);
+        var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, memory);
         _ = mask.TryUnescape(value, memory, cancellationToken, out value, out mask);
         return FromUnescaped(value, mask, memory, cancellationToken);
     }

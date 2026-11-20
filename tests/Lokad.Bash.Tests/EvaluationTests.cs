@@ -4293,6 +4293,29 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task Case_PatternFieldsFitWithoutAJoinedSegmentList()
+    {
+        var state = new Eval(Parser.Parse("""case "$*" in $@) printf matched;; *) printf missed;; esac"""));
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        const int FieldCount = 256;
+        state.ReplacePositionalParameters(Enumerable.Range(0, FieldCount)
+            .Select(index => ShellValue.FromText(new string((char)('a' + index % 26), index == 0 ? 16 : 15)))
+            .ToArray());
+
+        var body = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, body.FileDescriptor);
+        Assert.Equal("matched", Text(body.Content));
+        body.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public async Task Evaluation_CaseCommand_NoMatchReturnsZero()
     {
         var script = Parser.Parse("case foo in bar) first ;; esac");
