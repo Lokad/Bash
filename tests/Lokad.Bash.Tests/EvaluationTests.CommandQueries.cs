@@ -9,6 +9,35 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
+    [Fact]
+    public async Task Evaluation_TypeBuiltin_ForcedPathBatchesShadowedNamesThroughTheHost()
+    {
+        var state = new Eval(Parser.Parse(
+            "tool(){ printf unexpected; }; PATH=/synthetic type -P tool printf if '/synthetic/absolute tool' '' $'\\xff' damaged"));
+        var lookup = await NextResolveCommandsAsync(state);
+        Assert.Equal(["tool", "printf", "if", "/synthetic/absolute tool", "damaged"], lookup.CommandNames);
+        Assert.Equal("/synthetic", FindEnvironmentValue(lookup.Environment, "PATH"));
+        lookup.SetResult([
+            new CommandLookupResult.Found("/synthetic/tool"),
+            new CommandLookupResult.Found("/synthetic/printf"),
+            new CommandLookupResult.Missing(),
+            new CommandLookupResult.Found("/synthetic/absolute tool"),
+            new CommandLookupResult.Failed(new OperationError("lookup unavailable\n"))
+        ]);
+
+        var output = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, output.FileDescriptor);
+        Assert.Equal("/synthetic/tool\n/synthetic/printf\n/synthetic/absolute tool\n", Text(output.Content));
+        output.SetResult(DescriptorWriteResult.Open);
+        var error = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, error.FileDescriptor);
+        Assert.Equal("type: damaged: lookup unavailable\n", Text(error.Content));
+        error.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData("command -V")]
     [InlineData("type")]

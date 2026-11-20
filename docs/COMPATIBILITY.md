@@ -339,7 +339,10 @@ pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.
 `type -p` prints the host's reported path when the selected name resolves to an
 external command. Builtins, keywords and functions resolve successfully in this
 mode and produce no output. `type -f` skips functions during lookup and combines
-with `-p` or `-t`. The last `-p` or `-t` selects the output mode.
+with `-p` or `-t`. `type -P` sends valid nonempty names directly to the host's
+command lookup, including names that are also functions, builtins or keywords.
+The last `-p`, `-P` or `-t` selects path or kind output. Once `-P` is supplied,
+host-only lookup applies regardless of the output mode or the placement of `-f`.
 
 `shift` uses expanded fields and accepts a leading `--`. Its count defaults to
 one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII

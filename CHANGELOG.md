@@ -45,8 +45,8 @@
 - Support record limits and sparse array origins in `mapfile` and `readarray`
   through `-n count` and `-O origin`.
 
-- Accept bare `+` while scanning `set` options. Support `type -p` for path output
-  and `type -f` for lookup that skips shell functions.
+- Accept bare `+` while scanning `set` options. Support `type -p` for path output,
+  `type -f` for lookup that skips shell functions, and `type -P` for direct host lookup.
 
 - Support `$(<file)` and the corresponding backtick shorthand without a host
   command invocation. Preserve the caller's filename expansion effects.

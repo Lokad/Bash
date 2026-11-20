@@ -2731,6 +2731,9 @@ public sealed partial class Evaluation : IFileTester
 
     private CommandResolution ResolveCommandName(ShellValue commandName, string text, CommandLookupMode lookupMode)
     {
+        if (lookupMode == CommandLookupMode.HostOnly)
+            return new CommandResolution.Host();
+
         if (lookupMode == CommandLookupMode.Normal
             && _state.Functions.TryGetValue(commandName, out var function))
         {
@@ -4302,7 +4305,8 @@ public sealed partial class Evaluation : IFileTester
     {
         Normal,
         BypassFunctions,
-        BuiltinOnly
+        BuiltinOnly,
+        HostOnly
     }
 
     private enum RootFlowHandling

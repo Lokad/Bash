@@ -127,7 +127,14 @@ public sealed partial class Evaluation
                 {
                     case (byte)'t': outputMode = CommandQueryOutputMode.TypeKind; break;
                     case (byte)'p': outputMode = CommandQueryOutputMode.TypePath; break;
-                    case (byte)'f': lookupMode = CommandLookupMode.BypassFunctions; break;
+                    case (byte)'P':
+                        lookupMode = CommandLookupMode.HostOnly;
+                        outputMode = CommandQueryOutputMode.TypePath;
+                        break;
+                    case (byte)'f':
+                        if (lookupMode == CommandLookupMode.Normal)
+                            lookupMode = CommandLookupMode.BypassFunctions;
+                        break;
                     default: return await InvalidOptionAsync(ShellValue.FromBytes(operand.Slice(optionIndex, 1)))
                         .ConfigureAwait(false);
                 }
@@ -340,7 +347,7 @@ public sealed partial class Evaluation
                     // Only names selected for the host keep their text across iterations.
                     lookupMemory.Resize(checked(retainedLookupBytes + decodeBytes));
                     var name = hasTextName ? value.ToUtf8String() : string.Empty;
-                    if (hasTextName && Parser.IsSupportedKeyword(name.AsSpan()))
+                    if (lookupMode != CommandLookupMode.HostOnly && hasTextName && Parser.IsSupportedKeyword(name.AsSpan()))
                     {
                         resolutions[index] = new CommandQueryResolution.Keyword();
                         continue;

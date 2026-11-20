@@ -80,7 +80,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Getopts => new("optstring name [arg ...]",
             "Parse one short option from the supplied arguments or positional parameters into name.\n    A colon after an option requires an argument, stored in OPTARG. Set OPTIND=1 to restart the scan.\n    A leading colon selects silent errors. Set OPTERR=0 to suppress diagnostics without changing error results."),
         BuiltinKind.Command => new("[-pVv] command [arg ...]", "Run a command without function lookup, or describe its resolution."),
-        BuiltinKind.Type => new("[-ftp] [--] [name ...]", "Describe how names resolve. -t prints the kind. -p prints the path of an external command. -f skips shell functions."),
+        BuiltinKind.Type => new("[-ftpP] [--] [name ...]", "Describe how names resolve. -t prints the kind. -p prints the path of an external command. -P forces host lookup. -f skips shell functions."),
         BuiltinKind.Builtin => new("[shell-builtin [arg ...]]", "Execute a supported shell builtin, bypassing functions."),
         BuiltinKind.Help => new("[-dms] [pattern ...]",
             "Display information about supported shell builtins. With no patterns, list builtin topics.\n    Patterns support *, ? and bracket ranges, with backslash escaping; if none match, try name prefixes.\n    -d prints descriptions, -s usage synopses, and -m a manual-style page.\n    Return 0 if any topic matches, 1 if none match, or 2 for invalid options or --help."),
