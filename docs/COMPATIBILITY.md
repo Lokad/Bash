@@ -498,6 +498,17 @@ double-quoted word with an incomplete parameter subscript fails before its
 substitutions run, while effects of earlier arguments survive. Source with a
 missing closing brace fails parsing through the ordinary delimiter diagnostic.
 
+Indirect value operators can read the source again before expanding the
+operator's operands. The first indirect read establishes availability.
+The second read selects the binding for the operator. A selected array can
+supply different values, and a selected scalar can supply declaration
+attributes for the initial payload. An empty short removal pattern returns
+the initial payload after the first read. Plain indirection and default
+operators use one source selection. A quoted scalar keeps one field when
+the second read introduces an at aggregate. When an initial aggregate becomes a
+scalar payload, empty fields contribute empty text and literal bytes remain
+data.
+
 A brace inside an array selector can belong to the selector when the same word
 contains its closing bracket. A complete expansion then reads the selector with
 that brace included. An unquoted reference with a complete selector can reach

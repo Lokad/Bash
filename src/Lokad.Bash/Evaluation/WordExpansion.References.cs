@@ -708,6 +708,7 @@ internal static partial class WordExpansion
         ResolvedVariableReference? Target)
     {
         public ParameterSource? RangeSource { get; init; }
+        public ParameterFieldJoin FieldJoin { get; init; }
         internal VariableBinding? InspectionBinding { get; init; }
         public IEnumerable<ShellValue> SelectedFields => RangeSource?.Fields ?? Fields;
         public int FieldCount => RangeSource?.Count ?? Fields.Count;

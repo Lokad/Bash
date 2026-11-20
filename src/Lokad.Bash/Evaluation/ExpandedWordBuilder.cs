@@ -27,6 +27,8 @@ internal enum HereDocumentJoin
     IfsBetweenProtectedValues,
 }
 
+internal enum ParameterFieldJoin { Default, IfsOrSpace, Space }
+
 /// <summary>Controls aggregate handling and operand syntax for values, diagnostics and arithmetic.</summary>
 internal enum ExpansionPurpose
 {
@@ -310,6 +312,20 @@ internal sealed class ExpandedWordBuilder
         }
         if (first && !allowWordSplitting)
             AppendEmptyExpansion(globQuoted: true);
+    }
+
+    internal bool TryAppendSelectedFields(ParameterFieldJoin join, IEnumerable<ShellValue> fields,
+        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext)
+    {
+        if (join == ParameterFieldJoin.Default)
+            return false;
+        var ifs = FieldSeparators.FromVariables(_variables);
+        var useSpace = join == ParameterFieldJoin.Space || ifs.IsEmpty;
+        if (quoteContext == ExpansionQuoteContext.HereDocument)
+            AppendHereDocumentFields(fields, useSpace ? HereDocumentJoin.SpaceBetweenProtectedValues : HereDocumentJoin.IfsBetweenProtectedValues);
+        else
+            AppendSeparatedFields(fields, useSpace ? Space : ifs.First, allowWordSplitting, globQuoted);
+        return true;
     }
 
     public void MarkCurrentWordForEmission() =>

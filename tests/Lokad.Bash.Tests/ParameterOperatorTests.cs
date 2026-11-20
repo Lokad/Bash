@@ -241,6 +241,69 @@ public sealed class ParameterOperatorTests
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("""
+        p=('a[q++]' 'b[r++]'); a=(alpha amber); b=(beta brown); i=0; q=0; r=0
+        printf '<%s>|%s:%s:%s' "${!p[i++]#$(printf pattern >&2; printf a)}" "$i" "$q" "$r"
+        """, "<beta>|2:1:1", "pattern")]
+    [InlineData("""
+        p=(reference reference); a=(alpha amber); declare -n reference='a[q++]'; i=0; q=0
+        printf '<%s>|%s:%s' "${!p[i++]^^}" "$i" "$q"
+        """, "<ALPHA>|2:1", "")]
+    [InlineData("""
+        p=(before after); before=alpha; export after=beta; i=0
+        printf '<%s>|%s' "${!p[i++]@A}" "$i"
+        """, "<declare -x after='alpha'>|2", "")]
+    [InlineData("""
+        p=(value 'a[@]'); value=alpha; a=('amber gold' 'apricot red'); IFS=:; i=0
+        printf '<%s>' "${!p[i++]^^}"
+        printf '|%s' "$i"
+        """, "<AMBER GOLD:APRICOT RED>|2", "")]
+    [InlineData("""
+        p=('a[@]' 'a[@]'); a=('amber gold' 'apricot red'); IFS=:; i=0
+        printf '<%s>' "${!p[i++]^^}"
+        printf '|%s' "$i"
+        """, "<AMBER GOLD><APRICOT RED>|2", "")]
+    [InlineData("""
+        p=('a[q++]' 'b[r++]'); a=(alpha amber); b=(beta brown); i=0; q=0; r=0
+        printf '<%s>|%s:%s:%s' "${!p[i++]#}" "$i" "$q" "$r"
+        i=0; q=0; r=0
+        printf '<%s>|%s:%s:%s' "${!p[i++]##}" "$i" "$q" "$r"
+        """, "<alpha>|1:1:0<beta>|2:1:1", "")]
+    [InlineData("""
+        p=(value); value=alpha; i=0
+        printf '<%s>|%s' "${!p[i++]/$(printf pattern >&2; printf a)/$(printf replacement >&2; printf z)}" "$i"
+        """, "<>|2", "patternreplacement")]
+    [InlineData("""
+        IFS=:; p=('a[@]' value); a=(alpha beta); value=scalar; i=0
+        printf '<%s>' "${!p[i+++(i>1?(a[0]=9,0):0)]@Q}"
+        printf '|%s:%s' "$i" "${a[0]}"
+        """, "<'alpha:beta'>|2:9", "")]
+    [InlineData("""
+        q=0; a=(alpha amber); declare -n p='a[q++]'
+        printf '<%s>|%s' "${!p@Q}" "$q"
+        """, "<'alpha'>|1", "")]
+    [InlineData("""
+        IFS=''; a=('' $'\177' alpha); p=('a[@]' value); value=scalar; i=0
+        printf '<%s>|%s' "${!p[i++]#$(printf pattern >&2; printf a)}" "$i"
+        """, "< \u007F alpha>|2", "pattern")]
+    public async Task IndirectValueOperatorsDistinguishInitialPayloadFromSelectedBinding(
+        string script, string expectedOutput, string expectedError)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Equal(expectedError, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     // Bash 5.2.21: unbound namerefs fail before operands; invalid assignment targets fail after the RHS.
     [Theory]
     [InlineData("declare -n p; printf '%s' \"${!p}\"; printf after", "p: invalid indirect expansion\n")]

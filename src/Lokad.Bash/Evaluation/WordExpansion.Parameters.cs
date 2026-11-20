@@ -80,6 +80,7 @@ internal static partial class WordExpansion
             && quoteContext == ExpansionQuoteContext.Unquoted
                 ? ExpansionPurpose.ArithmeticSource : ExpansionPurpose.Arithmetic;
         ShellSource? indirectName = null;
+        ParameterValue? initialRemovalValue = null;
         var parameter = await ReadParameterAsync().ConfigureAwait(false);
         if (!scope.CanExpand)
             return;
@@ -264,11 +265,9 @@ internal static partial class WordExpansion
             case BracedParameterOperatorKind.RemoveSuffixShortest:
             case BracedParameterOperatorKind.RemoveSuffixLongest:
             {
-                // Empty scalar values and zero-field aggregates leave the pattern unreached.
-                if (!parameter.IsSet
-                    || (parameter.Kind is not (VariableReferenceKind.At or VariableReferenceKind.Star) && parameter.Value.IsEmpty))
+                if (!ReachesRemoval(initialRemovalValue ?? parameter))
                 {
-                    Emit(parameter.Fields);
+                    Emit(parameter.SelectedFields);
                     return;
                 }
 
@@ -299,6 +298,11 @@ internal static partial class WordExpansion
             default:
                 throw new InvalidOperationException($"Unexpected braced parameter operator '{parsed.Kind}'.");
         }
+
+        bool ReachesRemoval(ParameterValue value) =>
+            (!parsed.Word.IsEmpty || parsed.Kind is BracedParameterOperatorKind.RemovePrefixLongest
+                or BracedParameterOperatorKind.RemoveSuffixLongest)
+            && value.IsSet && (value.Kind is VariableReferenceKind.At or VariableReferenceKind.Star || !value.Value.IsEmpty);
 
         bool IsAvailable()
         {
@@ -489,48 +493,90 @@ internal static partial class WordExpansion
             }
 
             var name = parsed.Name;
-            var modifier = parsed.Modifier;
             var syntax = ReadSyntax(name, GetSpecialParameterKind(name.AsSpan()));
-            if (modifier == ParameterModifier.Indirect
-                && (parsed.Kind != BracedParameterOperatorKind.None || syntax.Reference is not { IsAggregate: true }))
-            {
-                // Inspection follows the chain but never evaluates the terminal selector.
-                if (syntax.Reference is { Kind: VariableReferenceKind.Name } binding
-                    && scope.Variables.TryGetNameref(binding.Name, out _))
-                {
-                    if (!scope.Variables.TryResolveBinding(binding.Name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
-                        || !terminal.Owner.TryGetNameref(terminal.Name, out var referent) || referent.IsEmpty)
-                    {
-                        await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
-                        return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
-                    }
-                    if (inspection && terminal.Owner.TryResolveBinding(terminal.Name, selectOwner: null, out var referentBinding))
-                    {
-                        if (referentBinding.Reference.Kind != VariableReferenceKind.Name
-                            || referentBinding.Owner.IndexedArrays.ContainsKey(referentBinding.Name)
-                            || referentBinding.Owner.AssociativeArrays.ContainsKey(referentBinding.Name))
-                        {
-                            // Inspection of an indirect array referent uses its selected element.
-                            var referentSource = ShellSource.FromBytes(referent.Bytes);
-                            return await ReadValueAsync(ReadSyntax(referentSource, GetSpecialParameterKind(referent.Bytes.Span)),
-                                ParameterModifier.None).ConfigureAwait(false);
-                        }
-                        return new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null)
-                            { InspectionBinding = referentBinding };
-                    }
-                    return new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null);
-                }
+            if (parsed.Modifier != ParameterModifier.Indirect
+                || parsed.Kind == BracedParameterOperatorKind.None && syntax.Reference is { IsAggregate: true })
+                return await ReadValueAsync(syntax, parsed.Modifier).ConfigureAwait(false);
 
-                var source = await ReadValueAsync(syntax, ParameterModifier.None).ConfigureAwait(false);
-                if (!scope.CanExpand)
-                    return source;
-                if (!source.IsSet)
+            // A bare nameref initially supplies its referent's spelling. Value operators
+            // can use that referent to select an array or inspect a scalar binding.
+            if (syntax.Reference is { Kind: VariableReferenceKind.Name } binding
+                && scope.Variables.TryGetNameref(binding.Name, out _))
+            {
+                if (!scope.Variables.TryResolveBinding(binding.Name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
+                    || !terminal.Owner.TryGetNameref(terminal.Name, out var referent) || referent.IsEmpty)
                 {
-                    if (source.Kind is VariableReferenceKind.At or VariableReferenceKind.Star)
-                        return new ParameterValue(VariableReferenceKind.Name, [ShellValue.Empty], false, null, null);
                     await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
-                    return source;
+                    return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
                 }
+                var initial = new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null);
+                if (!ReachesOperatorSelection(initial))
+                    return initial;
+                if (removesPattern)
+                    initialRemovalValue = initial;
+                return await SelectOperatorValueAsync(
+                    ReadSyntax(ShellSource.FromBytes(referent.Bytes), GetSpecialParameterKind(referent.Bytes.Span)), initial, referent)
+                    .ConfigureAwait(false);
+            }
+
+            var source = await ReadValueAsync(syntax, ParameterModifier.None).ConfigureAwait(false);
+            if (!scope.CanExpand)
+                return source;
+            if (!source.IsSet)
+            {
+                if (source.Kind is VariableReferenceKind.At or VariableReferenceKind.Star)
+                    return new ParameterValue(VariableReferenceKind.Name, [ShellValue.Empty], false, null, null);
+                await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
+                return source;
+            }
+
+            var targetName = JoinIndirectFields(source);
+            var targetSource = ShellSource.FromBytes(targetName.Bytes);
+            indirectName = targetSource;
+            var target = ParseBracedParameterExpression(targetSource);
+            var special = GetSpecialParameterKind(targetName.Bytes.Span);
+            if (target.Kind != BracedParameterOperatorKind.None || target.Modifier != ParameterModifier.None
+                || special == SpecialParameterKind.None
+                    && (targetName.IsEmpty || !VariableNames.IsNameStart((char)targetName.Bytes.Span[0])))
+            {
+                await ReportFatalAsync(targetName, "invalid variable name").ConfigureAwait(false);
+                return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
+            }
+
+            var targetSyntax = ReadSyntax(targetSource, special);
+            var value = await ReadValueAsync(targetSyntax, ParameterModifier.None).ConfigureAwait(false);
+            if (!scope.CanExpand || !ReachesOperatorSelection(value))
+                return value;
+
+            if (removesPattern)
+                initialRemovalValue = value;
+            // A source selector can mutate the first target before changing its kind.
+            var initialScalar = value.RangeSource != null && syntax.Reference is { Kind: VariableReferenceKind.Element }
+                ? JoinIndirectFields(value) : value.Value;
+            var nextSource = await ReadValueAsync(syntax, ParameterModifier.None).ConfigureAwait(false);
+            if (!scope.CanExpand)
+                return value;
+            if (!nextSource.IsSet)
+                return new ParameterValue(VariableReferenceKind.Name, [ShellValue.Empty],
+                    parsed.Kind != BracedParameterOperatorKind.Transform, null, null);
+            var selectedName = JoinIndirectFields(nextSource);
+            var selectedSyntax = selectedName.Equals(targetName) ? targetSyntax
+                : ReadSyntax(ShellSource.FromBytes(selectedName.Bytes), GetSpecialParameterKind(selectedName.Bytes.Span));
+            return await SelectOperatorValueAsync(selectedSyntax, value, initialScalar).ConfigureAwait(false);
+
+            bool ReachesOperatorSelection(ParameterValue initial) => parsed.Kind switch
+            {
+                BracedParameterOperatorKind.Transform => initial.IsSet || transform is (byte)'a' or (byte)'A',
+                BracedParameterOperatorKind.Substring => initial.IsSet && !parsed.Word.IsEmpty,
+                BracedParameterOperatorKind.Replace or BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll
+                    or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll => initial.IsSet,
+                _ => removesPattern && ReachesRemoval(initial),
+            };
+
+            ShellValue JoinIndirectFields(ParameterValue source)
+            {
+                if (source.Kind is not (VariableReferenceKind.At or VariableReferenceKind.Star))
+                    return source.Value;
                 var joined = new ExpandedWordBuilder(scope.Variables, budget, ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
                 var fields = source.SelectedFields;
                 // Positional @ joins with spaces; array @ also uses spaces when IFS is empty.
@@ -539,45 +585,55 @@ internal static partial class WordExpansion
                     joined.AppendFields(fields, allowWordSplitting: false, globQuoted: true, ExpansionQuoteContext.DoubleQuoted);
                 else
                     joined.AppendJoinedFields(fields, allowWordSplitting: false, globQuoted: true);
-                name = ShellSource.FromBytes(ExpandedWord.JoinValuesWithSpaces(joined.Build(), budget).Bytes);
-                indirectName = name;
-                var target = ParseBracedParameterExpression(name);
-                var special = GetSpecialParameterKind(name.AsSpan());
-                if (target.Kind != BracedParameterOperatorKind.None || target.Modifier != ParameterModifier.None
-                    || special == SpecialParameterKind.None
-                        && (name.IsEmpty || !VariableNames.IsNameStart((char)name[0])))
-                {
-                    await ReportFatalAsync(name.ToValue(), "invalid variable name").ConfigureAwait(false);
-                    return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
-                }
-                modifier = ParameterModifier.None;
-                syntax = ReadSyntax(name, special);
+                return ExpandedWord.JoinValuesWithSpaces(joined.Build(), budget);
             }
-            var value = await ReadValueAsync(syntax, modifier).ConfigureAwait(false);
-            if (!scope.CanExpand)
-                return value;
-            if (indirectName != null && value.IsSet && value.Source is { Kind: VariableReferenceKind.Element }
-                && (parsed.Kind == BracedParameterOperatorKind.Substring && !parsed.Word.IsEmpty
-                    || removesPattern
-                    || parsed.Kind is BracedParameterOperatorKind.Replace or BracedParameterOperatorKind.Transform
-                        or BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll
-                        or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll))
-            {
-                // Reselect explicit indirect subscripts before operands, not selectors hidden behind namerefs.
-                // Missing substring bounds fail without reselection.
-                var selected = await ReadValueAsync(syntax, modifier).ConfigureAwait(false);
-                // Operand effects use the first availability check; transforms must distinguish unset from empty.
-                return parsed.Kind == BracedParameterOperatorKind.Transform ? selected : selected with { IsSet = value.IsSet };
-            }
-            return value;
 
-            (ShellSource Name, SpecialParameterKind Special, VariableReference? Reference) ReadSyntax(
-                ShellSource name, SpecialParameterKind special) =>
-                (name, special, special == SpecialParameterKind.None
+            async Task<ParameterValue> SelectOperatorValueAsync(ParameterReadSyntax selected, ParameterValue initial, ShellValue initialScalar)
+            {
+                VariableBinding? selectedBinding = null;
+                var useSelectedValue = selected.Special is SpecialParameterKind.At or SpecialParameterKind.Star
+                    || selected.Reference is { Kind: VariableReferenceKind.Element, Subscript.IsEmpty: false };
+                if (!useSelectedValue && selected.Reference is { Kind: not VariableReferenceKind.Element } reference)
+                {
+                    if (scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
+                        && binding.Reference.Kind == VariableReferenceKind.Name && binding.Owner.HasBinding(binding.Name))
+                    {
+                        selectedBinding = binding;
+                        useSelectedValue = binding.Owner.IndexedArrays.ContainsKey(binding.Name)
+                            || binding.Owner.AssociativeArrays.ContainsKey(binding.Name);
+                    }
+                }
+                if (!useSelectedValue)
+                    return new ParameterValue(VariableReferenceKind.Name, [initialScalar], initial.IsSet, null, null)
+                        { InspectionBinding = selectedBinding };
+
+                var value = await ReadValueAsync(selected, ParameterModifier.None).ConfigureAwait(false);
+                var join = ParameterFieldJoin.Default;
+                // The initial read determines whether the enclosing word recognizes
+                // separate at fields. A newly selected at aggregate still uses its
+                // operator's separators without introducing that word-level behavior.
+                if (value.RangeSource is ParameterSource.Positional
+                    && (removesPattern || parsed.Kind is BracedParameterOperatorKind.Transform or BracedParameterOperatorKind.Substring))
+                {
+                    var ifs = FieldSeparators.FromVariables(scope.Variables);
+                    if (initial.Kind != VariableReferenceKind.At || !ifs.IsEmpty && !ifs.Bytes.Span.Contains((byte)' '))
+                        join = ParameterFieldJoin.Space;
+                }
+                else if (value.Kind == VariableReferenceKind.At && initial.Kind != VariableReferenceKind.At)
+                    join = ParameterFieldJoin.IfsOrSpace;
+                // Pattern and arithmetic operands are reached according to the first read.
+                return value with
+                {
+                    FieldJoin = join,
+                    IsSet = parsed.Kind == BracedParameterOperatorKind.Transform ? value.IsSet : initial.IsSet
+                };
+            }
+
+            ParameterReadSyntax ReadSyntax(ShellSource name, SpecialParameterKind special) =>
+                new(name, special, special == SpecialParameterKind.None
                     && VariableReference.TryParse(name, budget, out var reference) ? reference : null);
 
-            async Task<ParameterValue> ReadValueAsync(
-                (ShellSource Name, SpecialParameterKind Special, VariableReference? Reference) syntax, ParameterModifier modifier)
+            async Task<ParameterValue> ReadValueAsync(ParameterReadSyntax syntax, ParameterModifier modifier)
             {
                 if (syntax.Special != SpecialParameterKind.None)
                 {
@@ -707,6 +763,8 @@ internal static partial class WordExpansion
 
         void Emit(IEnumerable<ShellValue> fields)
         {
+            if (output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
+                return;
             if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
             {
                 HereDocumentJoin? join = parsed.Kind switch
@@ -1070,6 +1128,8 @@ internal static partial class WordExpansion
             // Enumerate into the budgeted builder; never copy the full array or allocate its holes.
             void Emit(IEnumerable<ShellValue> fields)
             {
+                if (output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
+                    return;
                 if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
                     output.AppendHereDocumentFields(fields, HereDocumentJoin.SpaceBetweenProtectedValues);
                 else
@@ -1206,6 +1266,9 @@ internal static partial class WordExpansion
     }
 
     private sealed record ParameterOperand(ShellValue Value, GlobMask Mask);
+
+    private readonly record struct ParameterReadSyntax(
+        ShellSource Name, SpecialParameterKind Special, VariableReference? Reference);
 
     private readonly record struct BracedParameterExpression(
         ShellSource Name,

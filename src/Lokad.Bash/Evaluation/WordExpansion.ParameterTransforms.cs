@@ -128,11 +128,16 @@ internal static partial class WordExpansion
         else
             output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
 
-        void Emit(IEnumerable<ShellValue> fields) =>
-            AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
+        void Emit(IEnumerable<ShellValue> fields)
+        {
+            if (!output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
+                AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
+        }
 
         void EmitValues(IEnumerable<ShellValue> fields)
         {
+            if (output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
+                return;
             if (hereDocument && kind is VariableReferenceKind.At or VariableReferenceKind.Star)
                 output.AppendSeparatedFields(fields, SpaceSeparator, allowWordSplitting, globQuoted);
             else if (assignmentContext && kind == VariableReferenceKind.At)
@@ -181,7 +186,7 @@ internal static partial class WordExpansion
         {
             using var rendered = new ByteMemoryBuilder(0, budget);
             var separators = FieldSeparators.FromVariables(scope.Variables);
-            var separate = entireArray && !scalarContext
+            var separate = entireArray && parameter.FieldJoin == ParameterFieldJoin.Default && !scalarContext
                 && (kind == VariableReferenceKind.At && quoteContext == ExpansionQuoteContext.DoubleQuoted
                     && (separators.IsEmpty || separators.Bytes.Span.Contains((byte)' '))
                     || allowWordSplitting && separators.IsEmpty);
@@ -216,7 +221,8 @@ internal static partial class WordExpansion
         void EmitPositionalAssignment()
         {
             var quoted = QuoteFields(parameter.Fields);
-            if (scalarContext || hereDocument || kind == VariableReferenceKind.Star && !allowWordSplitting)
+            if (parameter.FieldJoin != ParameterFieldJoin.Default || scalarContext || hereDocument
+                || kind == VariableReferenceKind.Star && !allowWordSplitting)
             {
                 output.AppendExpansion(PositionalAssignmentPrefix, allowWordSplitting, globQuoted);
                 EmitValues(quoted);
