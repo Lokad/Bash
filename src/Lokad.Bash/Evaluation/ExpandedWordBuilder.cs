@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -353,15 +352,25 @@ internal sealed class ExpandedWordBuilder
         foreach (var word in _words)
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            var split = splitHereDocument && word.Parts.Any(static part => part.Origin == PartOrigin.Expansion)
+            if (word.Parts.Count == 0)
+                continue;
+            var split = splitHereDocument && word.Parts.Exists(static part => part.Origin == PartOrigin.Expansion)
                 || word.NeedsSplitting && !fieldSeparators.IsEmpty;
             if (!split)
             {
-                // No boundary processing is needed: retain completed segment buffers.
-                var segments = word.Parts.Select(part =>
-                    new ExpandedSegment(part.Segment.ToValue(), part.Segment.IsGlobQuoted)).ToArray();
-                var hasBytes = segments.Any(segment => !segment.Content.IsEmpty);
-                if (hasBytes || word.Parts.Any(part => part.Origin == PartOrigin.Protected))
+                // Retain completed buffers and decide whether to emit the field in the same pass.
+                var segments = new ExpandedSegment[word.Parts.Count];
+                var hasBytes = false;
+                var hasProtectedPart = false;
+                for (var index = 0; index < segments.Length; index++)
+                {
+                    var part = word.Parts[index];
+                    var segment = part.Segment.ToSegment();
+                    segments[index] = segment;
+                    hasBytes |= !segment.Content.IsEmpty;
+                    hasProtectedPart |= part.Origin == PartOrigin.Protected;
+                }
+                if (hasBytes || hasProtectedPart)
                     results.Add(new ExpandedWord(segments, !hasBytes && word.HasEmptyAggregateField));
                 continue;
             }
@@ -557,9 +566,10 @@ internal sealed class ExpandedWordBuilder
                 _cancellationToken.ThrowIfCancellationRequested();
                 if (field.Count == 0 && !emitEmpty)
                     return;
-                results.Add(new ExpandedWord(field
-                    .Select(segment => new ExpandedSegment(segment.ToValue(), segment.IsGlobQuoted))
-                    .ToArray()));
+                ExpandedSegment[] segments = field.Count == 0 ? [] : new ExpandedSegment[field.Count];
+                for (var index = 0; index < segments.Length; index++)
+                    segments[index] = field[index].ToSegment();
+                results.Add(new ExpandedWord(segments));
                 field.Clear();
                 emitEmpty = false;
             }
@@ -646,6 +656,8 @@ internal sealed class ExpandedWordBuilder
         }
 
         public ShellValue ToValue() => _bytes == null ? _retained : ShellValue.FromBytes(_bytes.ToCompactMemory(_storage));
+
+        public ExpandedSegment ToSegment() => new(ToValue(), IsGlobQuoted);
 
         public void AppendCopy(ReadOnlySpan<byte> bytes)
         {

@@ -8,6 +8,52 @@ namespace Lokad.Bash.Tests;
 public sealed class ByteFieldBoundaryTests
 {
     [Fact]
+    public void EmptyAggregateFieldsRetainTheirMarkerUntilTheyGainBytes()
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var builder = new ExpandedWordBuilder(Variables.CreateEmpty(), memory,
+                ExpansionPurpose.Normal, ImplicitEmptyPolicy.Preserve);
+            builder.AppendFields([ShellValue.Empty, ShellValue.FromText("value"), ShellValue.Empty],
+                allowWordSplitting: false, globQuoted: true, ExpansionQuoteContext.DoubleQuoted);
+            builder.AppendSource(ShellSource.FromText("tail"), globQuoted: false);
+
+            Assert.Collection(builder.Build(),
+                empty =>
+                {
+                    Assert.True(empty.IsEmptyAggregateField);
+                    var segment = Assert.Single(empty.Segments);
+                    Assert.True(segment.Content.IsEmpty);
+                    Assert.True(segment.IsGlobQuoted);
+                },
+                value =>
+                {
+                    Assert.False(value.IsEmptyAggregateField);
+                    Assert.Equal(ShellValue.FromText("value"), Assert.Single(value.Segments).Content);
+                },
+                extended =>
+                {
+                    Assert.False(extended.IsEmptyAggregateField);
+                    Assert.Collection(extended.Segments,
+                        prefix =>
+                        {
+                            Assert.True(prefix.Content.IsEmpty);
+                            Assert.True(prefix.IsGlobQuoted);
+                        },
+                        tail =>
+                        {
+                            Assert.Equal(ShellValue.FromText("tail"), tail.Content);
+                            Assert.False(tail.IsGlobQuoted);
+                        });
+                });
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void SplitRunsReuseScratchWithinTheSameWord()
     {
         const int RunCount = 16;
