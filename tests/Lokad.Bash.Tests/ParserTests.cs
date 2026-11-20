@@ -634,6 +634,17 @@ public class ParserTests
     }
 
     [Theory]
+    [InlineData("if (true) >out then :; fi")]
+    [InlineData("if (true) | true then :; fi")]
+    [InlineData("if (true) && true then :; fi")]
+    [InlineData("if (true) 'then' :; fi")]
+    [InlineData("{ (true) >out }")]
+    public void Parse_CompoundCloserDoesNotSupplyBoundaryAfterLaterWord(string source)
+    {
+        Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+    }
+
+    [Theory]
     [InlineData("{ ; echo ok; }")]
     [InlineData("( ; echo ok )")]
     [InlineData("{ echo a; ; echo b; }")]

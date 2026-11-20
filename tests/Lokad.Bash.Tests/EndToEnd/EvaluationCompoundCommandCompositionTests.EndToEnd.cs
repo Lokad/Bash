@@ -44,6 +44,53 @@ public sealed class EvaluationCompoundCommandCompositionTestsEndToEnd
         Assert.Equal(string.Empty, result.StdErr);
     }
 
+    [Theory]
+    [InlineData("if (true)then (printf hit)fi", "hit", 0)]
+    [InlineData("if [[ x ]] then ((0)) fi", "", 1)]
+    [InlineData("if true | (true) then printf hit; fi", "hit", 0)]
+    [InlineData("if false || { true; } then { printf hit; } fi", "hit", 0)]
+    [InlineData("TIMEFORMAT=; if time { true; } then printf hit; fi", "hit", 0)]
+    [InlineData("if f() { (printf hit) } then f; fi", "hit", 0)]
+    [InlineData("i=0; while ((i<1)) do { printf '%s' \"$i\"; i=1; } done", "0", 0)]
+    [InlineData("i=0; until ((i)) do { printf '%s' \"$i\"; i=1; } done", "0", 0)]
+    [InlineData("for i in a b; do (printf '%s' \"$i\") done", "ab", 0)]
+    [InlineData("for ((i=0;i<2;++i)) do (printf '%s' \"$i\") done", "01", 0)]
+    [InlineData("printf '<%s>' \"$(if (false) then (printf no) elif (false) then (printf no) else (printf hit) fi)\"", "<hit>", 0)]
+    public async Task CompoundCloserProvidesTheFollowingKeywordBoundary(string script, string expected, int exitCode)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("", 2, "before\n")]
+    [InlineData(";", 0, "before\nhit")]
+    [InlineData(";;", 0, "before\nhit")]
+    public async Task FinalCaseArmChecksTheBoundaryAfterARedirection(string separator, int exitCode, string output)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("printf 'before\\n'\ncase x in x) (printf hit) >out"
+            + separator + " esac; cat out", CancellationToken.None);
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        var createdFile = await EndToEndHarness.FileExistsAsync(host, "/out");
+        if (exitCode == 0)
+        {
+            Assert.True(createdFile);
+            Assert.Equal("hit", await EndToEndHarness.ReadFileAsync(host, "/out"));
+            Assert.Empty(host.StandardError.TextContent);
+        }
+        else
+        {
+            Assert.False(createdFile);
+            Assert.StartsWith("syntax error:", host.StandardError.TextContent);
+        }
+    }
+
     [Fact]
     public async Task Evaluation_WhileRead_WithNestedIfAndInputRedirection()
     {

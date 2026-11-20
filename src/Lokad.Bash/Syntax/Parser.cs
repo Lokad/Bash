@@ -565,13 +565,14 @@ public static class Parser
             return null;
         }
 
-        if (!result.TrailingTerminator)
+        var close = tokenizer.PeekTokenCore();
+        if (!result.TrailingTerminator
+            && (close.Kind != TokenKind.CloseBrace || !EndsInCompoundCommand(result.Command)))
         {
             tokenizer.RecordError("Group list must end with a terminator before }.", tokenizer.Position);
             return null;
         }
 
-        var close = tokenizer.PeekTokenCore();
         if (close.Kind != TokenKind.CloseBrace)
         {
             tokenizer.RecordError("Expected } to close a group.", tokenizer.Position);
@@ -589,7 +590,7 @@ public static class Parser
     {
         if (!TryConsumeKeyword(tokenizer, KeywordIf, "if"))
             return null;
-        var condition = ParseListUntilKeyword(tokenizer, KeywordThen, requireTerminator: true);
+        var condition = ParseListUntilKeyword(tokenizer, KeywordThen);
         if (condition == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordThen, "then"))
@@ -599,8 +600,7 @@ public static class Parser
             tokenizer,
             KeywordElif,
             KeywordElse,
-            KeywordFi,
-            requireTerminator: true);
+            KeywordFi);
         if (thenBody == null)
             return null;
 
@@ -609,7 +609,7 @@ public static class Parser
         {
             if (!TryConsumeKeyword(tokenizer, KeywordElif, "elif"))
                 return null;
-            var elifCondition = ParseListUntilKeyword(tokenizer, KeywordThen, requireTerminator: true);
+            var elifCondition = ParseListUntilKeyword(tokenizer, KeywordThen);
             if (elifCondition == null)
                 return null;
             if (!TryConsumeKeyword(tokenizer, KeywordThen, "then"))
@@ -618,8 +618,7 @@ public static class Parser
                 tokenizer,
                 KeywordElif,
                 KeywordElse,
-                KeywordFi,
-                requireTerminator: true);
+                KeywordFi);
             if (elifBody == null)
                 return null;
             elifClauses.Add(new ElifClause(elifCondition, elifBody));
@@ -630,7 +629,7 @@ public static class Parser
         {
             if (!TryConsumeKeyword(tokenizer, KeywordElse, "else"))
                 return null;
-            elseBody = ParseListUntilKeyword(tokenizer, KeywordFi, requireTerminator: true);
+            elseBody = ParseListUntilKeyword(tokenizer, KeywordFi);
             if (elseBody == null)
                 return null;
         }
@@ -647,12 +646,12 @@ public static class Parser
     {
         if (!TryConsumeKeyword(tokenizer, KeywordWhile, "while"))
             return null;
-        var condition = ParseListUntilKeyword(tokenizer, KeywordDo, requireTerminator: true);
+        var condition = ParseListUntilKeyword(tokenizer, KeywordDo);
         if (condition == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
             return null;
-        var body = ParseListUntilKeyword(tokenizer, KeywordDone, requireTerminator: true);
+        var body = ParseListUntilKeyword(tokenizer, KeywordDone);
         if (body == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
@@ -667,12 +666,12 @@ public static class Parser
     {
         if (!TryConsumeKeyword(tokenizer, KeywordUntil, "until"))
             return null;
-        var condition = ParseListUntilKeyword(tokenizer, KeywordDo, requireTerminator: true);
+        var condition = ParseListUntilKeyword(tokenizer, KeywordDo);
         if (condition == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
             return null;
-        var body = ParseListUntilKeyword(tokenizer, KeywordDone, requireTerminator: true);
+        var body = ParseListUntilKeyword(tokenizer, KeywordDone);
         if (body == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
@@ -768,7 +767,7 @@ public static class Parser
 
             if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
                 return null;
-            var list = ParseListUntilKeyword(tokenizer, KeywordDone, requireTerminator: true);
+            var list = ParseListUntilKeyword(tokenizer, KeywordDone);
             return list != null && TryConsumeKeyword(tokenizer, KeywordDone, "done") ? list : null;
         }
     }
@@ -864,11 +863,12 @@ public static class Parser
                 return null;
             }
 
-            var body = ParseListWithTerminatorInfo(tokenizer, null, [KeywordEsac], TokenKind.CaseTerminator).Command;
+            var (body, trailingTerminator) = ParseListWithTerminatorInfo(tokenizer, null, [KeywordEsac], TokenKind.CaseTerminator);
             var endToken = tokenizer.PeekTokenCore();
             if (endToken.Kind == TokenKind.CaseTerminator)
                 tokenizer.NextTokenCore();
-            else if (!IsKeyword(endToken, KeywordEsac))
+            else if (!IsKeyword(endToken, KeywordEsac)
+                || (body != null && !trailingTerminator && !EndsInCompoundCommand(body)))
             {
                 tokenizer.RecordError("Expected case item terminator.", tokenizer.Position);
                 return null;
@@ -935,12 +935,36 @@ public static class Parser
         while (compound is RedirectedCommand redirected)
             compound = redirected.Body;
 
-        if (compound is GroupCommand or SubshellCommand or IfCommand or WhileCommand or UntilCommand
-            or ForCommand or ArithmeticForCommand or CaseCommand or ArithmeticCommand or ConditionalCommand)
+        if (IsCompoundCommand(compound))
             return body;
 
         tokenizer.RecordError("Expected compound command as function body.", tokenizer.Position);
         return null;
+    }
+
+    private static bool IsCompoundCommand(ICommand? command) =>
+        command is GroupCommand or SubshellCommand or IfCommand or WhileCommand or UntilCommand
+            or ForCommand or ArithmeticForCommand or CaseCommand or ArithmeticCommand or ConditionalCommand;
+
+    /// <summary>Checks whether the last command's closing token already gives the following keyword a boundary.</summary>
+    private static bool EndsInCompoundCommand(ICommand command)
+    {
+        while (true)
+        {
+            var tail = command switch
+            {
+                ListCommand list => list.Right,
+                PipelineCommand pipeline => pipeline.Right,
+                NegatedCommand negated => negated.Inner,
+                TimedCommand timed => timed.Inner,
+                FunctionDefinition function => function.Body,
+                _ => null
+            };
+            // A trailing redirection ends in an operand and still needs a list separator.
+            if (tail == null)
+                return IsCompoundCommand(command);
+            command = tail;
+        }
     }
 
     /// <summary>
@@ -1401,28 +1425,21 @@ public static class Parser
         return false;
     }
 
-    private static ICommand? ParseListUntilKeyword(
-        Tokenizer tokenizer,
-        string keyword,
-        bool requireTerminator)
+    private static ICommand? ParseListUntilKeyword(Tokenizer tokenizer, string keyword)
     {
-        return ParseListUntilKeyword(tokenizer, [keyword], requireTerminator);
+        return ParseListUntilKeyword(tokenizer, [keyword]);
     }
 
     private static ICommand? ParseListUntilKeyword(
         Tokenizer tokenizer,
         string keyword1,
         string keyword2,
-        string keyword3,
-        bool requireTerminator)
+        string keyword3)
     {
-        return ParseListUntilKeyword(tokenizer, [keyword1, keyword2, keyword3], requireTerminator);
+        return ParseListUntilKeyword(tokenizer, [keyword1, keyword2, keyword3]);
     }
 
-    private static ICommand? ParseListUntilKeyword(
-        Tokenizer tokenizer,
-        string[] keywords,
-        bool requireTerminator)
+    private static ICommand? ParseListUntilKeyword(Tokenizer tokenizer, string[] keywords)
     {
         var result = ParseListWithTerminatorInfo(tokenizer, null, keywords, null);
         if (result.Command == null)
@@ -1431,7 +1448,8 @@ public static class Parser
             return null;
         }
 
-        if (requireTerminator && !result.TrailingTerminator)
+        if (!result.TrailingTerminator
+            && (!IsEndKeyword(tokenizer, keywords) || !EndsInCompoundCommand(result.Command)))
         {
             tokenizer.RecordError("Expected terminator before reserved word.", tokenizer.Position);
             return null;

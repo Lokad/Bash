@@ -329,6 +329,11 @@ Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
 A word loop needs a semicolon or line break before the opening brace. An
 arithmetic loop can place the opening brace immediately after `))`.
 
+A complete compound command can be followed directly by a closing brace or a
+keyword such as `then`, `do`, `fi`, `done` or `esac`. The last command in a list
+or pipeline supplies that boundary. A simple command or a trailing redirection
+needs a separator before these tokens.
+
 Out of scope: interactive prompts/history/completion, aliases, background execution,
 job/process-group control, OS signal handling, process substitution, `coproc`,
 `select`, network redirection devices, `ulimit`, `umask` and shell option toggles
