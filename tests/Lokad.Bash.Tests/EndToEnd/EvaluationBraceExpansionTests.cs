@@ -322,6 +322,34 @@ public sealed class EvaluationBraceExpansionTests
         Assert.True(governor.ReservedBytes < governor.PeakBytes);
     }
 
+    [Theory]
+    [InlineData(WordPartKind.Unquoted, 1)]
+    [InlineData(WordPartKind.SingleQuoted, 3)]
+    public void GeneratedWordsSizePartStorageFromMergedSourceRuns(WordPartKind middleKind, int partCount)
+    {
+        using var owner = new MemoryGovernor(1024 * 1024).CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var word = new Word([
+            WordPart.FromText(WordPartKind.Unquoted, "{a,b}" + string.Concat(Enumerable.Repeat("{1..1}", 64))),
+            WordPart.FromText(middleKind, "x"),
+            WordPart.FromText(WordPartKind.Unquoted, "{2..2}"),
+        ]);
+
+        var expanded = BraceExpansion.Expand(word, memory, CancellationToken.None);
+
+        Assert.Equal(2, expanded.Count);
+        for (var index = 0; index < expanded.Count; index++)
+        {
+            var parts = Assert.IsType<List<WordPart>>(expanded[index].Parts);
+            Assert.Equal(partCount, parts.Count);
+            Assert.Equal(partCount, parts.Capacity);
+            Assert.Equal((index == 0 ? "a" : "b") + new string('1', 64) + "x2",
+                string.Concat(parts.Select(static part => part.GetUtf8Text())));
+            if (middleKind == WordPartKind.SingleQuoted)
+                Assert.Equal(middleKind, parts[1].Kind);
+        }
+    }
+
     [Fact]
     public void RefusedScanReleasesItsOwnChargeBeforeCallerDisposal()
     {

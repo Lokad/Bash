@@ -354,14 +354,21 @@ internal static class BraceExpansion
             scratch.Resize(scratch.Bytes - MemoryCapacity.ArrayBackingBytes<Fragment>(previous));
         }
         var fragments = fragmentBuffer.AsSpan(0, prefix.Count);
+        var partCount = 0;
+        var adjoiningSource = false;
         for (var current = prefix; current != null; current = current.Previous)
         {
             cancellationToken.ThrowIfCancellationRequested();
             fragments[current.Count - 1] = current;
+            // Adjacent source fragments become one part. Each opaque part breaks the run.
+            var isSource = current.Opaque == null;
+            if (!isSource || !adjoiningSource)
+                partCount++;
+            adjoiningSource = isSource;
         }
 
-        memory.Charge(MemoryCapacity.ArrayBackingBytes<WordPart>(fragments.Length));
-        var parts = new List<WordPart>(fragments.Length);
+        memory.Charge(MemoryCapacity.ArrayBackingBytes<WordPart>(partCount));
+        var parts = new List<WordPart>(partCount);
         var rebuildFrom = -1;
         for (var index = 0; index < fragments.Length;)
         {
@@ -392,13 +399,16 @@ internal static class BraceExpansion
                 if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
                     throw new ByteMemoryBuilder.LimitExceededException();
                 memory.Charge(checked(32L + length));
-                var combined = ByteMemoryBuilder.CreateUnaccounted((int)length);
+                var combined = new byte[(int)length];
+                var destination = combined.AsSpan();
                 for (; index < end; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    combined.Append(fragments[index].Source.Bytes);
+                    var bytes = fragments[index].Source.AsSpan();
+                    bytes.CopyTo(destination);
+                    destination = destination[bytes.Length..];
                 }
-                source = ShellSource.FromBytes(combined.ToMemory());
+                source = ShellSource.FromBytes(combined);
             }
 
             if (rebuildFrom < 0 && generatedPunctuation && end < fragments.Length)
