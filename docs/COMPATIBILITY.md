@@ -463,6 +463,12 @@ retains earlier bytes when it stops and
 returns status 1 with errexit disabled. An errexit unwind preserves a prior
 nonzero status and otherwise returns 1.
 
+An ordinary assignment-target failure with errexit disabled ends the command
+unit with status 1 and publishes `PIPESTATUS=(1)` before its binding scope
+unwinds. In-process `eval`, `source` and EXIT action readers publish status 1
+as they recover. When errexit terminates the write, a prior nonzero status and
+the existing pipeline statuses survive. Forked execution ends at the failure.
+
 When arithmetic evaluation of an integer binding's assignment fails, the
 current command unit ends and reached functions, `eval`, and sourced files
 unwind. The script reader resumes at the next unit even under errexit. If the

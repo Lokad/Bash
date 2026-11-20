@@ -243,7 +243,9 @@ public sealed partial class Evaluation
 
         Memory.Workspace.Resize(Memory.Workspace.Bytes - MemoryCapacity.ArrayBackingBytes<ShellValue>(fields.Capacity));
         Memory.Workspace.TrimExcess();
-        if (!HasPendingExpansionError && lastAssignment is { } assignmentArgument)
+        if (HasPendingExpansionError)
+            PublishAssignmentTargetFailure(scope);
+        else if (lastAssignment is { } assignmentArgument)
         {
             if (assignmentArgument.Value.HasValue)
             {

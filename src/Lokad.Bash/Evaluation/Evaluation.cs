@@ -589,7 +589,7 @@ public sealed partial class Evaluation : IFileTester
                 var recoveryStatus = CanRecoverCommandSubstitutionSyntax ? 1 : RecoverableRootExpansionStatus;
                 if (recoveryStatus is not { } status)
                     return result;
-                result = await RecoverExpansionFailureAsync(status, scope).ConfigureAwait(false);
+                result = await RecoverExpansionFailureAsync(status, scope, loadedReader: false).ConfigureAwait(false);
             }
 
             if (result.Flow != FlowControlKind.None)
@@ -999,7 +999,10 @@ public sealed partial class Evaluation : IFileTester
             {
                 var applied = await AwaitWordExpansionAsync(ApplyAssignmentAsync(assignment)).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
+                {
+                    PublishAssignmentTargetFailure(scope);
                     return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false));
+                }
                 if (!applied)
                     exitCode = 1;
             }
@@ -3359,6 +3362,25 @@ public sealed partial class Evaluation : IFileTester
         _state.LastExitCode = 1;
         PublishExpansionPipelineStatus(1, scope);
         return ReportExpansionDiagnosticAsync(subject, message);
+    }
+
+    private void PublishAssignmentTargetFailure(ScopedEvaluation scope)
+    {
+        if (_state.FatalExpansion is not { Kind: ExpansionFailureKind.AssignmentTarget } failure)
+            return;
+
+        var canResume = !_state.ErrexitEnabled;
+        var previousStatus = _state.LastExitCode.GetValueOrDefault();
+        var status = !canResume && previousStatus != 0 ? previousStatus : 1;
+        _state.FatalExpansion = failure with { ExitCode = status, CanResumeUntestedUnit = canResume };
+        _state.SetExpansionError(status);
+        // Loaded in-process readers publish after unwind. Other writes use the
+        // foreground status storage admitted before the simple command expanded.
+        if (canResume && (_state.ForkKind != null || !scope.InNestedCommandUnits && _state.Traps?.ExitTrapStatus == null))
+        {
+            _state.LastExitCode = status;
+            scope.Variables.SetPipelineStatuses([status], scope.Context, _cancellationToken);
+        }
     }
 
     internal Task ReportParameterDefaultFailureAsync(

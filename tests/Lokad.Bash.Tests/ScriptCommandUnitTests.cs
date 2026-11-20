@@ -185,6 +185,41 @@ public sealed class ScriptCommandUnitTests
         }
     }
 
+    [Theory]
+    [InlineData("readonly v=; i=0\n(exit 7) && :\nv=$((++i)) >skipped; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        0, "[1:1:1]")]
+    [InlineData("readonly v=; i=0\nf() { local PIPESTATUS=(8 9); v=$((++i)); }\nf; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        0, "[1:0:1]")]
+    [InlineData("readonly v=; i=0\nf(){ local -; set -e; (exit 7) && :\nv=$((++i)); }\nf\nprintf skipped",
+        7, "")]
+    [InlineData("readonly v=; i=0\nf(){ local -; set +e; v=$((++i)); }\nset -e\nsource ./fixture\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        0, "[1:1:1][0:0:1]")]
+    [InlineData("readonly v=; i=0\nset -e\n(exit 7) && :\neval 'v=$((++i)); printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' || printf alternative\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        0, "[1:1:1][0:0:1]")]
+    [InlineData("readonly v=; i=0\nset -e\n(eval 'v=$((++i)); printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' || printf alternative)\nprintf skipped",
+        1, "")]
+    [InlineData("readonly v=; i=0\ntext=$(printf begin; eval 'v=$((++i)); printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"')\nprintf '[%s:%s:%s]<%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$text\"",
+        0, "[1:1:0]<begin>")]
+    [InlineData("readonly v=; i=0\nset -e\ntrap 'printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\n(exit 7) && :\nv=$((++i)); printf skipped",
+        7, "[7:7:1]")]
+    public async Task RejectedAssignmentsPublishStatusAtTheReachedReader(string script, int expectedStatus, string expectedOutput)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", "f; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"\n");
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(expectedStatus, status);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Equal("v: readonly variable\n", host.StandardError.TextContent);
+            Assert.False(host.FileExists("/skipped"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     private static async Task AssertUnitsAsync(string source, string output, int status, bool syntaxError)
     {
         await using var host = new TestHost();

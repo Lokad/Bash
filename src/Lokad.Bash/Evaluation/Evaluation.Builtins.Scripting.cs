@@ -267,35 +267,46 @@ public sealed partial class Evaluation
     /// <summary>Recovers unit-scoped expansion failures while preserving root versus nested status rules.</summary>
     private ValueTask<EvaluationResult> RecoverScriptExpansionFailureAsync(
         EvaluationResult result, ScriptExecutionKind kind, ScopedEvaluation scope) =>
-        GetRecoverableScriptExpansionStatus(kind, scope.Context) is { } status
-            ? RecoverExpansionFailureAsync(status, scope) : ValueTask.FromResult(result);
+        GetRecoverableScriptExpansionStatus(kind, scope) is { } status
+            ? RecoverExpansionFailureAsync(status, scope, IsLoadedReader(kind))
+            : ValueTask.FromResult(result);
 
-    private int? GetRecoverableScriptExpansionStatus(ScriptExecutionKind kind, EvaluationContext context)
+    private int? GetRecoverableScriptExpansionStatus(ScriptExecutionKind kind, ScopedEvaluation scope)
     {
         if (CanRecoverCommandSubstitutionSyntax)
             return 1;
-        if (kind == ScriptExecutionKind.Root && RecoverableRootExpansionStatus is { } status)
-            return status;
-        if (_state.FatalExpansion is { Kind: ExpansionFailureKind.ParameterDefaultAssignment } defaultFailure)
+        if (kind == ScriptExecutionKind.Root)
+        {
+            // A list inside a loaded unit must unwind to that reader before it resumes.
+            if (_state.FatalExpansion is { Kind: ExpansionFailureKind.AssignmentTarget }
+                && (scope.InNestedCommandUnits || _state.Traps?.ExitTrapStatus != null))
+                return null;
+            if (RecoverableRootExpansionStatus is { } status)
+                return status;
+        }
+        if (_state.FatalExpansion is
+            { Kind: ExpansionFailureKind.ParameterDefaultAssignment or ExpansionFailureKind.AssignmentTarget } assignmentFailure)
         {
             // Loaded units recover at the invoking reader, including when it was tested.
-            return _state.ForkKind == null && kind is (ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap)
-                && (defaultFailure.CanResumeUntestedUnit || context.ErrexitIgnored) ? 1 : null;
+            return _state.ForkKind == null && IsLoadedReader(kind)
+                && (assignmentFailure.CanResumeUntestedUnit || scope.Context.ErrexitIgnored) ? 1 : null;
         }
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
-                or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
+                or ExpansionFailureKind.NamerefDefault } failure)
             return null;
 
         // Recovery uses the caller's errexit state, including for tested commands within the unit.
-        if (_state.ErrexitEnabled && !context.ErrexitIgnored
-            && failure.Kind is ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.WordSyntax)
+        if (_state.ErrexitEnabled && !scope.Context.ErrexitIgnored && failure.Kind == ExpansionFailureKind.WordSyntax)
             return null;
 
         // Nameref defaults fail with 1 at script boundaries, but with 2 at the root.
         return failure.Kind == ExpansionFailureKind.NamerefDefault
             && kind is not (ScriptExecutionKind.Root or ScriptExecutionKind.LegacyCapture) ? 1 : failure.ExitCode;
     }
+
+    private static bool IsLoadedReader(ScriptExecutionKind kind) =>
+        kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap;
 
     private bool CanRecoverCommandSubstitutionSyntax =>
         _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1 };
@@ -304,13 +315,15 @@ public sealed partial class Evaluation
     {
         { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex, ExitCode: var status } => status,
         { Kind: ExpansionFailureKind.ParameterDefaultAssignment, ExitCode: 2 } => 2,
+        { Kind: ExpansionFailureKind.AssignmentTarget, CanResumeUntestedUnit: true } => 1,
         _ => null
     };
 
-    private async ValueTask<EvaluationResult> RecoverExpansionFailureAsync(int exitCode, ScopedEvaluation scope)
+    private async ValueTask<EvaluationResult> RecoverExpansionFailureAsync(int exitCode, ScopedEvaluation scope, bool loadedReader)
     {
         var kind = _state.FatalExpansion?.Kind;
-        var publishLoadedAssignment = kind == ExpansionFailureKind.ParameterDefaultAssignment && exitCode == 1;
+        var publishLoadedAssignment = loadedReader
+            && kind is ExpansionFailureKind.ParameterDefaultAssignment or ExpansionFailureKind.AssignmentTarget;
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
 

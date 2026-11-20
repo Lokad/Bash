@@ -203,7 +203,7 @@ public sealed partial class Evaluation
                             if (result.Flow != FlowControlKind.None)
                             {
                                 if (result.Flow != FlowControlKind.Exit
-                                    || GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope.Context) is not { } recoveryStatus)
+                                    || GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope) is not { } recoveryStatus)
                                     return ApplyNegation(result, listNegated);
                                 while (index + 1 < traversal.Count && traversal[index + 1] is not ListTraversal.Step.Execute { StartsCommandUnit: true })
                                 {
@@ -212,7 +212,7 @@ public sealed partial class Evaluation
                                 }
                                 if (index + 1 == traversal.Count)
                                     return ApplyNegation(result, listNegated);
-                                result = ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus, listScope)
+                                result = ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus, listScope, loadedReader: false)
                                     .ConfigureAwait(false), negated: false);
                             }
                             break;
