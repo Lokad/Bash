@@ -10,6 +10,70 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationGetoptsTestsEndToEnd
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetoptsHelpOwnsTheOutputUntilItsWriteSettles(bool cancel)
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var state = new Evaluation.Evaluation(Parser.Parse("getopts --help >documentation"));
+        state.Memory.Budget = owner;
+        var evaluation = state.EnsureRunning(cancellation.Token);
+
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep(deadline.Token));
+        var before = governor.ReservedBytes;
+        var descriptor = new FileDescriptor(17);
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        var content = write.Content.ToArray();
+        var pending = governor.ReservedBytes;
+        var writeDescriptor = write.FileDescriptor;
+        if (cancel)
+            cancellation.Cancel();
+        var closeStep = state.GetNextStep(deadline.Token);
+        var retained = governor.ReservedBytes;
+        var closedBeforeWrite = closeStep.IsCompleted;
+        write.SetResult(cancel ? DescriptorWriteResult.Open : DescriptorWriteResult.WriteFailure);
+
+        var close = Assert.IsType<CloseDescriptorOperation>(await closeStep);
+        var afterWrite = governor.ReservedBytes;
+        close.SetResult(null);
+        if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation.WaitAsync(deadline.Token));
+        else
+        {
+            await evaluation.WaitAsync(deadline.Token);
+            Assert.Equal(2, state.LastExitCode);
+        }
+
+        Assert.Equal(descriptor, writeDescriptor);
+        Assert.Equal(descriptor, close.Descriptor);
+        Assert.StartsWith("getopts: getopts optstring name [arg ...]\nParse", Utf8Text.Decode(content));
+        Assert.Equal(content.Length, pending - before);
+        Assert.Equal(pending, retained);
+        Assert.False(closedBeforeWrite);
+        Assert.True(pending - afterWrite >= content.Length);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task GetoptsHelpSkipsOutputWhenTheShellClosesStdout()
+    {
+        var state = new Evaluation.Evaluation(Parser.Parse("getopts --help >&-"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.WriteFailure);
+
+        await new Engine().RunAsync(state, host);
+
+        Assert.Equal(2, state.LastExitCode);
+        Assert.Empty(host.Appends);
+    }
+
+    [Theory]
     [InlineData("a", "-x")]
     [InlineData("a:", "-a")]
     public async Task ShellClosedStderrKeepsOptionWarningAssignments(string options, string operand)

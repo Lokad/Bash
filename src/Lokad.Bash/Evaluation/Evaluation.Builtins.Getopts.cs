@@ -18,7 +18,7 @@ public sealed partial class Evaluation
         {
             var first = words[operand].Bytes;
             if (first.Span.SequenceEqual("--help"u8))
-                return await WriteControlHelpAsync(BuiltinKind.Getopts, negated).ConfigureAwait(false);
+                return await WriteControlHelpAsync(words[0], BuiltinKind.Getopts, "getopts", negated).ConfigureAwait(false);
             if (first.Span.SequenceEqual("--"u8))
                 operand++;
             else if (first.Length > 1 && first.Span[0] == (byte)'-')

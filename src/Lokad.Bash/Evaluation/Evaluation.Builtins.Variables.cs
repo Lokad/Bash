@@ -202,7 +202,7 @@ public sealed partial class Evaluation
         bool negated)
     {
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
-            return await WriteControlHelpAsync(BuiltinKind.Shift, negated).ConfigureAwait(false);
+            return await WriteControlHelpAsync(words[0], BuiltinKind.Shift, "shift", negated).ConfigureAwait(false);
 
         var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
         var count = 1L;

@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
@@ -23,7 +22,7 @@ public sealed partial class Evaluation
         bool negated)
     {
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
-            return await WriteControlHelpAsync(BuiltinKind.Return, negated).ConfigureAwait(false);
+            return await WriteControlHelpAsync(words[0], BuiltinKind.Return, "return", negated).ConfigureAwait(false);
 
         var exitCode = _state.Traps?.ExitTrapStatus ?? _state.LastExitCode ?? 0;
         var firstOperand = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
@@ -60,9 +59,10 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateBuiltinLoopControlAsync(
         BuiltinKind builtin, IReadOnlyList<ShellValue> words, ScopedEvaluation scope, bool negated)
     {
-        var name = ShellValue.FromText(builtin == BuiltinKind.Break ? "break" : "continue");
+        var commandName = builtin == BuiltinKind.Break ? "break" : "continue";
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
-            return await WriteControlHelpAsync(builtin, negated).ConfigureAwait(false);
+            return await WriteControlHelpAsync(words[0], builtin, commandName, negated).ConfigureAwait(false);
+        var name = ShellValue.FromText(commandName);
         if (scope.Context.LoopDepth == 0)
         {
             await ReportExpansionDiagnosticAsync(name,
@@ -103,7 +103,7 @@ public sealed partial class Evaluation
         IReadOnlyList<ShellValue> words, ScopedEvaluation scope, CommandCompletion completion)
     {
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
-            return await WriteControlHelpAsync(BuiltinKind.Exit, false).ConfigureAwait(false);
+            return await WriteControlHelpAsync(words[0], BuiltinKind.Exit, "exit", false).ConfigureAwait(false);
         var exitCode = (words.Count == 1 ? _state.Traps?.ExitTrapStatus : null) ?? _state.LastExitCode ?? 0;
         var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
         if (first < words.Count)
@@ -139,23 +139,4 @@ public sealed partial class Evaluation
 
     private static bool TryParseControlNumber(ShellValue operand, out long status) =>
         Integers.TryParseBuiltinNumber(operand.Bytes.Span, out status);
-
-    private async Task<EvaluationResult> WriteControlHelpAsync(BuiltinKind builtin, bool negated)
-    {
-        var name = builtin switch
-        {
-            BuiltinKind.Break => "break",
-            BuiltinKind.Continue => "continue",
-            BuiltinKind.Exit => "exit",
-            BuiltinKind.Return => "return",
-            BuiltinKind.Shift => "shift",
-            BuiltinKind.Getopts => "getopts",
-            _ => throw new ArgumentOutOfRangeException(nameof(builtin))
-        };
-        var documentation = BuiltinDocumentation.For(builtin);
-        await ExecuteWriteAsync(GetStdOutDescriptor(),
-            Utf8Text.Encode(name + ": " + documentation.Synopsis(name) + "\n" + documentation.Description + "\n"))
-            .ConfigureAwait(false);
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
-    }
 }

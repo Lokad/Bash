@@ -13,6 +13,7 @@ public sealed partial class Evaluation
     internal bool BuiltinDiagnosticsOpen => _builtinDiagnostics?.Result.CanAcceptMore != false;
 
     private enum ClosedStderrHandling { AttemptWrite, Discard }
+    private enum BuiltinHelpOutput { Standard, Control }
 
     private Task<DescriptorWriteResult> WriteDiagnosticUnlessStderrClosedAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope) =>
@@ -35,29 +36,47 @@ public sealed partial class Evaluation
     }
 
     private Task<EvaluationResult> WriteBuiltinHelpUnlessStdoutClosedAsync(
-        ShellValue name, BuiltinKind kind, string commandName, bool negated)
+        ShellValue name, BuiltinKind kind, string commandName, bool negated) =>
+        WriteBuiltinHelpUnlessStdoutClosedAsync(name, kind, commandName, BuiltinHelpOutput.Standard, negated);
+
+    private Task<EvaluationResult> WriteControlHelpAsync(ShellValue name, BuiltinKind kind, string commandName, bool negated) =>
+        WriteBuiltinHelpUnlessStdoutClosedAsync(name, kind, commandName, BuiltinHelpOutput.Control, negated);
+
+    private Task<EvaluationResult> WriteBuiltinHelpAsync(ShellValue name, string synopsis, string description, bool negated) =>
+        WriteBuiltinHelpAsync(name, synopsis, description, BuiltinHelpOutput.Standard, negated);
+
+    private Task<EvaluationResult> WriteBuiltinHelpUnlessStdoutClosedAsync(
+        ShellValue name, BuiltinKind kind, string commandName, BuiltinHelpOutput mode, bool negated)
     {
         if (GetStdOutDescriptor().IsClosed)
             return FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
         var documentation = BuiltinDocumentation.For(kind);
-        return WriteBuiltinHelpAsync(name, documentation.Synopsis(commandName), documentation.Description, negated);
+        return WriteBuiltinHelpAsync(name, documentation.Synopsis(commandName), documentation.Description,
+            mode, negated);
     }
 
-    private async Task<EvaluationResult> WriteBuiltinHelpAsync(ShellValue name, string synopsis, string description, bool negated)
+    private async Task<EvaluationResult> WriteBuiltinHelpAsync(
+        ShellValue name, string synopsis, string description, BuiltinHelpOutput mode, bool negated)
     {
         var encoding = Utf8Text.StrictUtf8;
         var synopsisLength = encoding.GetByteCount(synopsis);
         var descriptionLength = encoding.GetByteCount(description);
-        using var output = new ByteMemoryBuilder(checked(name.Bytes.Length + synopsisLength + descriptionLength + 8), Memory.Budget);
+        var descriptionPrefix = mode == BuiltinHelpOutput.Control ? "\n"u8 : "\n    "u8;
+        using var output = new ByteMemoryBuilder(
+            checked(name.Bytes.Length + synopsisLength + descriptionLength + descriptionPrefix.Length + 3), Memory.Budget);
         output.Append(name.Bytes);
         output.Append(": "u8);
         encoding.GetBytes(synopsis.AsSpan(), output.AppendSpan(synopsisLength));
-        output.Append("\n    "u8);
+        output.Append(descriptionPrefix);
         encoding.GetBytes(description.AsSpan(), output.AppendSpan(descriptionLength));
         output.Append((byte)'\n');
-        var result = await WriteBuiltinOutputAsync(name, output.ToMemory()).ConfigureAwait(false);
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 2), negated)
-            .ConfigureAwait(false);
+        var result = await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
+        if (mode == BuiltinHelpOutput.Standard && result.IsError)
+        {
+            await ReportBuiltinWriteFailureAsync(name, result).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+        }
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
     }
 
     /// <summary>Reports a known output failure through the builtin's current stderr mapping.</summary>
