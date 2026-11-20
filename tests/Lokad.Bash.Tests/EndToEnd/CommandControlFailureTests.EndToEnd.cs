@@ -49,6 +49,7 @@ public sealed class CommandControlFailureTestsEndToEnd
     [InlineData("command -x echo 2>&-; printf '%s\\n' \"$?\"", "2\n", "", 0)]
     [InlineData("x=0; value=$((x++)) command -x \"$((x++))\"; printf '%s:%s:%s\\n' \"$?\" \"$x\" \"${value-unset}\"", "2:2:unset\n", "command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", 0)]
     [InlineData("x=0; exec -x \"$((x++))\"; printf '%s:%s\\n' \"$?\" \"$x\"", "2:1\n", "exec: -x: invalid option\nexec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n", 0)]
+    [InlineData("exec -cla; printf 'status:%s\\n' \"$?\"", "status:2\n", "exec: -a: option requires an argument\nexec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n", 0)]
     [InlineData("exec -x echo 2>&1; printf '%s\\n' \"$?\"", "exec: -x: invalid option\nexec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n2\n", "", 0)]
     [InlineData("! exec -x echo; printf '%s\\n' \"$?\"", "0\n", "exec: -x: invalid option\nexec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n", 0)]
     [InlineData("builtin ]", "", "builtin: ]: not a shell builtin\n", 1)]

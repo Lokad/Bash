@@ -123,11 +123,12 @@ public sealed partial class Evaluation
                 allowsPersistentRedirections = false;
                 if (next is not { } first)
                     return Terminal(0, ShellValue.Empty, help: null, builtinKind);
-                if (first.Bytes.Span.SequenceEqual("--help"u8))
+                var field = ClassifyShortOptionField(first.Bytes.Span);
+                if (field == ShortOptionField.Help)
                     return Help(builtinKind);
-                if (first.Bytes.Span.SequenceEqual("--"u8))
+                if (field == ShortOptionField.Terminator)
                     next = await ReadFieldAsync().ConfigureAwait(false);
-                else if (first.Bytes.Length > 1 && first.Bytes.Span[0] == (byte)'-')
+                else if (field == ShortOptionField.Flags)
                     return InvalidOption(builtinKind, first.Bytes.Span[1]);
 
                 if (next is not { } name)
@@ -153,21 +154,23 @@ public sealed partial class Evaluation
             var clearEnvironment = false;
             while (next is { } first)
             {
-                if (first.Bytes.Span.SequenceEqual("--help"u8))
+                var field = ClassifyShortOptionField(first.Bytes.Span);
+                if (field == ShortOptionField.Help)
                     return Help(builtinKind);
-                if (first.Bytes.Span.SequenceEqual("--"u8))
+                if (field == ShortOptionField.Terminator)
                 {
                     next = await ReadFieldAsync().ConfigureAwait(false);
                     break;
                 }
 
-                if (first.Bytes.Length < 2 || first.Bytes.Span[0] != (byte)'-')
+                if (field == ShortOptionField.Operand)
                     break;
 
-                var options = new CommandLineOptionParser([first], allowSingleDashLongOptions: false);
-                while (options.TryRead(out var option))
+                var flags = first.Bytes[1..];
+                while (!flags.IsEmpty)
                 {
-                    var flag = option.Kind == CommandLineOptionKind.ShortOption ? option.ShortName : (byte)'-';
+                    var flag = flags.Span[0];
+                    flags = flags[1..];
                     switch (builtinKind, flag)
                     {
                         case (BuiltinKind.Command, (byte)'p'):
@@ -186,9 +189,10 @@ public sealed partial class Evaluation
                             login = true;
                             break;
                         case (BuiltinKind.Exec, (byte)'a'):
-                            if (options.TryReadShortGroupRemainder(out var attachedName))
+                            if (!flags.IsEmpty)
                             {
-                                argumentZero = attachedName;
+                                argumentZero = ShellValue.FromBytes(flags);
+                                flags = default;
                                 break;
                             }
 
@@ -322,7 +326,7 @@ public sealed partial class Evaluation
                 kind == BuiltinKind.Exec && allowsPersistentRedirections
                     ? RedirectionLifetime.Evaluation : RedirectionLifetime.Command);
 
-        async Task<ShellValue?> ReadFieldAsync()
+        async ValueTask<ShellValue?> ReadFieldAsync()
         {
             while (!_state.HasPendingExpansionError)
             {

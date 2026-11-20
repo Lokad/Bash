@@ -158,6 +158,8 @@ public sealed class CommandInvocationTests
     [InlineData("exec -c custom", "custom", true)]
     [InlineData("exec -cl -a alias custom", "-alias", true)]
     [InlineData("exec -a first -a '' -l custom", "-", false)]
+    [InlineData("exec -a -- -l custom", "---", false)]
+    [InlineData("exec -a --help custom", "--help", false)]
     [InlineData("command -p exec -ca name custom", "name", true)]
     public async Task ExecSeparatesLookupNameFromArgumentZeroAndEnvironment(
         string command, string expectedName, bool clearEnvironment)
