@@ -1054,6 +1054,7 @@ public sealed partial class Evaluation : IFileTester
 
         // Expand once in the caller scope before redirections and temporary bindings.
         IReadOnlyList<ShellValue> byteOperands = [];
+        var pwdOptions = new PwdOptions();
         var lastArgument = commandValue;
         if (preparation is PreparedCommand.Executable command)
         {
@@ -1091,13 +1092,15 @@ public sealed partial class Evaluation : IFileTester
             }
             else
             {
-                await ExpandArgumentTailAsync(command.Words, 1).ConfigureAwait(false);
+                await ExpandArgumentTailAsync(command.Words, 1,
+                    scanPwdOptions: command.Resolution is CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Pwd })
+                    .ConfigureAwait(false);
             }
         }
         else if (preparation is PreparedCommand.Terminal terminalArguments)
         {
             lastArgument = terminalArguments.LastReadArgument;
-            await ExpandArgumentTailAsync(terminalArguments.Words, 0).ConfigureAwait(false);
+            await ExpandArgumentTailAsync(terminalArguments.Words, 0, scanPwdOptions: false).ConfigureAwait(false);
         }
         else if (preparation is PreparedCommand.Query queryArguments)
             lastArgument = queryArguments.LastReadArgument;
@@ -1445,6 +1448,7 @@ public sealed partial class Evaluation : IFileTester
                         byteOperands, builtinScope with { Variables = commandVars }, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
+                    BuiltinKind.Pwd => await EvaluateBuiltinPwdAsync(executable.CommandValue, pwdOptions, false).ConfigureAwait(false),
                     BuiltinKind.Dirs => await EvaluateBuiltinDirsAsync(byteOperands, commandVars, false).ConfigureAwait(false),
                     BuiltinKind.Pushd => await EvaluateBuiltinPushdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
@@ -1761,7 +1765,7 @@ public sealed partial class Evaluation : IFileTester
             return CompleteCommandResult(result, preparation.Completion, commandInvoked: false);
         }
 
-        async Task ExpandArgumentTailAsync(CommandWords words, int start)
+        async Task ExpandArgumentTailAsync(CommandWords words, int start, bool scanPwdOptions)
         {
             if (start >= words.Count)
                 return;
@@ -1775,6 +1779,15 @@ public sealed partial class Evaluation : IFileTester
                     break;
                 if (fields.Count != 0)
                     lastArgument = fields[^1];
+                if (scanPwdOptions && !pwdOptions.Finished)
+                {
+                    foreach (var field in fields)
+                    {
+                        pwdOptions.Read(field);
+                        if (pwdOptions.Finished)
+                            break;
+                    }
+                }
                 fields.Clear();
             }
         }
@@ -2760,8 +2773,6 @@ public sealed partial class Evaluation : IFileTester
     {
         switch (builtin)
         {
-            case BuiltinKind.Pwd:
-                return await EvaluateBuiltinPwdAsync(negated).ConfigureAwait(false);
             case BuiltinKind.Colon:
             case BuiltinKind.True:
             case BuiltinKind.False:

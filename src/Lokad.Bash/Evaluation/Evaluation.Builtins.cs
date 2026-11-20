@@ -9,6 +9,19 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private enum ShortOptionField { Operand, Terminator, Help, Flags }
+
+    private static ShortOptionField ClassifyShortOptionField(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 2 || bytes[0] != (byte)'-')
+            return ShortOptionField.Operand;
+        if (bytes[1] != (byte)'-')
+            return ShortOptionField.Flags;
+        if (bytes.Length == 2)
+            return ShortOptionField.Terminator;
+        return bytes.SequenceEqual("--help"u8) ? ShortOptionField.Help : ShortOptionField.Flags;
+    }
+
     /// <summary>Scans leading short options and borrows their bytes from the expanded arguments.</summary>
     private struct ShortOptionCursor(IReadOnlyList<ShellValue> arguments)
     {
@@ -26,20 +39,18 @@ public sealed partial class Evaluation
                 if (_finished || ArgumentIndex == arguments.Count)
                     return false;
                 var bytes = arguments[ArgumentIndex].Bytes;
-                if (bytes.Length < 2 || bytes.Span[0] != (byte)'-')
+                var field = ClassifyShortOptionField(bytes.Span);
+                if (field == ShortOptionField.Operand)
                 {
                     _finished = true;
                     return false;
                 }
                 ArgumentIndex++;
-                if (bytes.Span[1] == (byte)'-')
+                if (field is ShortOptionField.Help or ShortOptionField.Terminator)
                 {
-                    RequestedHelp = bytes.Span.SequenceEqual("--help"u8);
-                    if (RequestedHelp || bytes.Length == 2)
-                    {
-                        _finished = true;
-                        return false;
-                    }
+                    RequestedHelp = field == ShortOptionField.Help;
+                    _finished = true;
+                    return false;
                 }
                 _group = bytes[1..];
             }

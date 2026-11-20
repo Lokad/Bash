@@ -162,6 +162,12 @@ selected. An empty destination revalidates the current directory. A spelling
 such as `./-` is an ordinary path. CDPATH and the `-L`/`-P` modes are outside
 the current path profile.
 
+A leading `cd --help` prints help and returns 2 before any navigation.
+`pwd` accepts leading `-L` and `-P` options, including bundles. Both use the
+single current directory tracked by the host model. Invalid leading flags
+report usage and return 2. A reached `--help` returns 2, including with
+shell-closed stdout. `--`, a lone `-` and the first operand end option scanning.
+
 After successful navigation, directory bookkeeping writes OLDPWD before PWD,
 preserving array kinds, namerefs and attributes. Readonly failures diagnose and
 return 1 after changing cwd; eligible writes still occur, while push/pop completion

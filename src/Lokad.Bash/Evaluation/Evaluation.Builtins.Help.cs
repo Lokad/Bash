@@ -25,9 +25,8 @@ public sealed partial class Evaluation
                 case (byte)'s': synopses = true; break;
                 case (byte)'m': manual = true; break;
                 default:
-                    await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("-"),
-                        ShellValue.FromBytes(option), ShellValue.FromText(": invalid option\nhelp: usage: "
-                            + BuiltinDocumentation.For(BuiltinKind.Help).Synopsis("help"))], scope: null).ConfigureAwait(false);
+                    await WriteInvalidShortOptionUnlessStderrClosedAsync(command, option, BuiltinKind.Help, "help")
+                        .ConfigureAwait(false);
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
             }
         }

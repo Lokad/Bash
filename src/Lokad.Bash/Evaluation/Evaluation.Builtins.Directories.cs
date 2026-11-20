@@ -9,12 +9,49 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    /// <summary>Scans pwd flags as argument fields are expanded, without retaining ignored operands.</summary>
+    private struct PwdOptions
+    {
+        public bool Finished { get; private set; }
+        public bool RequestedHelp { get; private set; }
+        public ReadOnlyMemory<byte> InvalidFlag { get; private set; }
+
+        public void Read(ShellValue field)
+        {
+            var bytes = field.Bytes;
+            var kind = ClassifyShortOptionField(bytes.Span);
+            if (kind != ShortOptionField.Flags)
+            {
+                Finished = true;
+                RequestedHelp = kind == ShortOptionField.Help;
+                return;
+            }
+
+            var invalid = bytes.Span[1..].IndexOfAnyExcept((byte)'L', (byte)'P');
+            if (invalid >= 0)
+            {
+                InvalidFlag = bytes.Slice(invalid + 1, 1);
+                Finished = true;
+            }
+        }
+    }
+
     /// <summary>
     /// Handles the <c>pwd</c> builtin, emitting the current directory to stdout.
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
-    private async Task<EvaluationResult> EvaluateBuiltinPwdAsync(bool negated)
+    private async Task<EvaluationResult> EvaluateBuiltinPwdAsync(ShellValue name, PwdOptions options, bool negated)
     {
+        if (!options.InvalidFlag.IsEmpty)
+        {
+            await WriteInvalidShortOptionUnlessStderrClosedAsync(name, options.InvalidFlag, BuiltinKind.Pwd, "pwd")
+                .ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+        }
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(name, BuiltinKind.Pwd, "pwd", negated)
+                .ConfigureAwait(false);
+
         var output = await WriteDirectoryStackAsync("pwd", 0, DirectoryStackLayout.Compact, ShellValue.Empty)
             .ConfigureAwait(false);
         var exitCode = output.IsError ? 1 : 0;
@@ -36,13 +73,18 @@ public sealed partial class Evaluation
         if (first < words.Count)
         {
             var operand = words[first];
-            if (operand.Bytes.Span.SequenceEqual("--"u8))
-                first++;
-            else if (operand.Bytes.Span is [(byte)'-', _, ..])
+            switch (ClassifyShortOptionField(operand.Bytes.Span))
             {
-                await ReportExpansionDiagnosticAsync([ShellValue.FromText("cd")],
-                    [operand, ShellValue.FromText(": invalid option")]).ConfigureAwait(false);
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+                case ShortOptionField.Terminator:
+                    first++;
+                    break;
+                case ShortOptionField.Help:
+                    return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Cd, "cd", negated)
+                        .ConfigureAwait(false);
+                case ShortOptionField.Flags:
+                    await ReportExpansionDiagnosticAsync([words[0]], [operand, ShellValue.FromText(": invalid option")])
+                        .ConfigureAwait(false);
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
             }
         }
 

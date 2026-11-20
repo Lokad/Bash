@@ -7,6 +7,60 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationDirectoryTestsEndToEnd
 {
+    [Fact]
+    public async Task CdHelpUsesTheRedirectedOutputAndPreservesDirectoryState()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/target"], []);
+        var result = await host.RunAsync("OLDPWD=marker; cd --help target >documentation; "
+            + "printf '<%s><%s><%s>' \"$?\" \"$PWD\" \"$OLDPWD\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2></><marker>", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(
+            "cd: cd [--] [dir]\n    Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD.\n",
+            host.ReadFile("/documentation"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PwdHelpAfterBundledOptionsKeepsExpansionEffectsWhenStdoutIsClosed()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "option=--help; command pwd -LP \"$option\" \"$(printf x >effect; printf operand)\" >&-; "
+            + "printf '<%s><%s>' \"$?\" \"$_\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2><operand>", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal("x", host.ReadFile("/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task InvalidPwdFlagPreservesItsByteAndPrecedesHelp()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("pwd $'-L\\377' --help", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        byte[] expected = [.. "pwd: -"u8, 0xff, .. ": invalid option\npwd: usage: pwd [-LP]\n"u8];
+        Assert.Equal(expected, host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("-- --help")]
+    [InlineData("operand --help")]
+    public async Task PwdStopsScanningOptionsAtTheOperandBoundary(string arguments)
+    {
+        var result = await EvaluationTestHelper.RunAsync("pwd " + arguments);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("/\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
 
     [Fact]
     public async Task Evaluation_CdBuiltin_AssignmentPrefixContributesToDirectoryVariables()

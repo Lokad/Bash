@@ -19,6 +19,12 @@ public sealed partial class Evaluation
         BuiltinDiagnosticScope? scope) =>
         WriteDiagnosticAsync(name, message, scope, ClosedStderrHandling.Discard);
 
+    private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
+        ShellValue command, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
+        WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("-"), ShellValue.FromBytes(flag),
+            ShellValue.FromText(": invalid option\n" + name + ": usage: " + BuiltinDocumentation.For(kind).Synopsis(name))],
+            scope: null);
+
     private Task<DescriptorWriteResult> WriteInvalidIdentifierDiagnosticAsync(ShellValue command, ShellValue operand,
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
         WriteQuotedOperandDiagnosticAsync(command, operand, "not a valid identifier", scope, closedStderr);
