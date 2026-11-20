@@ -95,7 +95,6 @@ internal sealed class ExpandedWordBuilder
     public ExpansionPurpose Purpose { get; }
 
     /// <summary>Whether substitutions contributed data, even if their output was empty.</summary>
-    internal bool HasExpansion { get; private set; }
 
     internal void BeginDoubleQuote() => _doubleQuote = DoubleQuoteState.Open;
 
@@ -118,7 +117,6 @@ internal sealed class ExpandedWordBuilder
 
     public void AppendTextExpansion(ReadOnlySpan<char> text, bool allowWordSplitting, bool globQuoted)
     {
-        HasExpansion = true;
         _current.NeedsSplitting |= allowWordSplitting;
         if (!text.IsEmpty)
             GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendText(text);
@@ -128,7 +126,6 @@ internal sealed class ExpandedWordBuilder
 
     public void AppendExpansion(ShellValue value, bool allowWordSplitting, bool globQuoted)
     {
-        HasExpansion = true;
         _current.NeedsSplitting |= allowWordSplitting;
         if (!value.IsEmpty)
             GetPart(allowWordSplitting ? PartOrigin.Expansion : PartOrigin.Protected, globQuoted).AppendValue(value);
@@ -155,7 +152,6 @@ internal sealed class ExpandedWordBuilder
         bool globQuoted,
         ExpansionQuoteContext quoteContext)
     {
-        HasExpansion = true;
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (Purpose == ExpansionPurpose.IndexedCompound
             || Purpose == ExpansionPurpose.IndexedCompoundOperand && quoteContext == ExpansionQuoteContext.DoubleQuoted)
@@ -242,7 +238,6 @@ internal sealed class ExpandedWordBuilder
         bool allowWordSplitting,
         bool globQuoted)
     {
-        HasExpansion = true;
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (fieldSeparators.IsEmpty && allowWordSplitting)
         {
@@ -260,7 +255,6 @@ internal sealed class ExpandedWordBuilder
         bool allowWordSplitting,
         bool globQuoted)
     {
-        HasExpansion = true;
         var first = true;
         foreach (var value in fields)
         {
@@ -279,7 +273,6 @@ internal sealed class ExpandedWordBuilder
 
     private void AppendEmptyAggregateField()
     {
-        HasExpansion = true;
         _current.HasEmptyAggregateField = true;
         MarkCurrentWordForEmission();
     }

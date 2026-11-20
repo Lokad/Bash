@@ -28,6 +28,8 @@ internal static partial class WordExpansion
         if (source.Length == 0)
             return ArithmeticOperand.FromValue(ShellValue.Empty);
         var budget = scope.Effects.Memory;
+        // Bash expands the whole arithmetic word if any of these bytes require expansion.
+        var expandSubscripts = source.AsSpan().IndexOfAny("$`~\u0001"u8) >= 0;
         var scanContext = CreateExpansionScanContext(scope);
         var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), scanContext);
         using var bytes = new ByteMemoryBuilder(0, budget.Workspace);
@@ -44,8 +46,7 @@ internal static partial class WordExpansion
             firstPart = partIndex + 1;
             var selector = selectorPart.Source;
             var subscript = selector.Slice(1, selector.Length - 2);
-            var associative = IsAssociativeTarget();
-            var selectorPurpose = associative ? ExpansionPurpose.Scalar : purpose;
+            var selectorPurpose = expandSubscripts || IsAssociativeTarget() ? ExpansionPurpose.Scalar : purpose;
             var selectorWord = subscript.Length == 0 ? new Word([])
                 : Tokenizer.ReadExpansionWord(subscript, GetOperandSyntax(selectorPurpose), ShellQuoteKind.None, scanContext);
             var builder = await ExpandAsync(selectorWord, selectorPurpose, 0, selectorWord.Parts.Count)
@@ -53,9 +54,9 @@ internal static partial class WordExpansion
             if (!scope.CanExpand)
                 break;
             var expanded = ExpandedWord.JoinValuesWithSpaces(builder.Build(), budget);
-            var brackets = !associative && builder.HasExpansion ? ArithmeticBracketMode.Literal : ArithmeticBracketMode.References;
             budget.Charge(256);
-            subscripts.Add(bytes.Length, new ArithmeticOperand.Subscript(subscript, new ExpandedArraySubscript(expanded, brackets)));
+            subscripts.Add(bytes.Length, new ArithmeticOperand.Subscript(subscript,
+                new ExpandedArraySubscript(expanded, QuoteForArithmetic: expandSubscripts)));
             bytes.Append((byte)'[').Append(expanded.Bytes).Append((byte)']');
         }
         if (scope.CanExpand)
@@ -64,7 +65,7 @@ internal static partial class WordExpansion
             return null;
         var value = ShellValue.FromBytes(bytes.DetachSnapshot());
         var lexical = syntax?.Syntax != null && value.Bytes.Span.SequenceEqual(source.AsSpan()) ? syntax.Syntax : null;
-        return new ArithmeticOperand(value, subscripts, ArithmeticBracketMode.References, lexical);
+        return new ArithmeticOperand(value, subscripts, lexical);
 
         async Task FlushAsync(int endPart)
         {
@@ -99,6 +100,41 @@ internal static partial class WordExpansion
             return VariableReference.TryParse(ShellSource.FromBytes(prefix[start..]), budget, out var reference)
                 && scope.Variables.AssociativeArrays.ContainsKey(scope.Variables.ResolveNamerefName(reference.Name));
         }
+    }
+
+    private static ShellValue QuoteExpandedArithmeticIndex(ShellValue value, ScopedEvaluation scope)
+    {
+        var bytes = value.Bytes.Span;
+        var first = bytes.IndexOfAny("[]'~"u8);
+        if (first < 0)
+            return value;
+
+        var cancellationToken = scope.Effects.CancellationToken;
+        long length = bytes.Length;
+        foreach (var b in bytes[first..])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (NeedsEscape(b))
+                length++;
+        }
+        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        scope.Effects.Memory.Charge(checked(32L + length));
+        var escaped = new byte[(int)length];
+        bytes[..first].CopyTo(escaped);
+        var position = first;
+        foreach (var b in bytes[first..])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (NeedsEscape(b))
+                escaped[position++] = (byte)'\\';
+            escaped[position++] = b;
+        }
+        return ShellValue.FromBytes(escaped);
+
+        // These escapes survive the arithmetic quote-removal pass.
+        static bool NeedsEscape(byte b) => b is (byte)'[' or (byte)']' or (byte)'\'' or (byte)'~';
     }
 
     /// <summary>Evaluates through shared reference selection without recursive asynchronous callback stacks.</summary>
@@ -281,7 +317,7 @@ internal static partial class WordExpansion
                 }
                 var target = await ResolveReferenceAsync(reference,
                     use == ArithmeticReferenceUse.Read ? ReferenceUse.ArithmeticRead : ReferenceUse.ArithmeticAssign,
-                    scope, ExpansionPurpose.ArithmeticSource, null, scope.Variables, scope.Variables, selected.ExpandedSubscript)
+                    scope, ExpansionPurpose.ArithmeticSource, null, scope.Variables, scope.Variables, selected.ExpandedSubscript, command)
                     .ConfigureAwait(false);
                 ArithmeticElementFallback? fallback = null;
                 if (reference.Kind != VariableReferenceKind.Name && target is { Name.IsEmpty: true })

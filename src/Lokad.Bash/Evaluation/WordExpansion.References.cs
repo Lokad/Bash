@@ -380,7 +380,7 @@ internal static partial class WordExpansion
             return false;
         scope.Effects.Memory.Charge(checked(4L * operandName.Bytes.Length));
         var reference = VariableReference.ForElement(operandName.ToUtf8String(), ShellSource.FromBytes(subscript.Bytes));
-        return await IsVariableSetAsync(reference, scope, new ExpandedArraySubscript(subscript, ArithmeticBracketMode.References))
+        return await IsVariableSetAsync(reference, scope, new ExpandedArraySubscript(subscript, QuoteForArithmetic: false))
             .ConfigureAwait(false);
     }
 
@@ -402,7 +402,7 @@ internal static partial class WordExpansion
                     : selected.Owner.Scalars.ContainsKey(selected.Name);
         }
         var element = await ResolveReferenceAsync(reference, ReferenceUse.Presence, scope, ExpansionPurpose.ArithmeticSource,
-                null, variables, variables, preparedSubscript)
+                null, variables, variables, preparedSubscript, ShellValue.Empty)
             .ConfigureAwait(false);
         return element != null && element.TryRead(variables, out _);
     }
@@ -435,7 +435,8 @@ internal static partial class WordExpansion
         ShellValue? stagedSubscript,
         Variables targetVariables,
         Variables indexVariables) =>
-        ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, stagedSubscript, targetVariables, indexVariables, null);
+        ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, stagedSubscript, targetVariables, indexVariables,
+            null, ShellValue.Empty);
 
     private static async Task<ResolvedVariableReference?> ResolveReferenceAsync(
         VariableReference reference,
@@ -445,7 +446,8 @@ internal static partial class WordExpansion
         ShellValue? stagedSubscript,
         Variables targetVariables,
         Variables indexVariables,
-        ExpandedArraySubscript? preparedSubscript)
+        ExpandedArraySubscript? preparedSubscript,
+        ShellValue arithmeticCommand)
     {
         if (!scope.CanExpand)
             return null;
@@ -536,7 +538,7 @@ internal static partial class WordExpansion
                 return null;
             if (use == ReferenceUse.ArithmeticAssign && selector.Subscript.IsEmpty)
             {
-                await ReportSubscriptAsync("not a valid identifier").ConfigureAwait(false);
+                await ReportEmptyArithmeticAssignmentAsync().ConfigureAwait(false);
                 return null;
             }
             await ReportBadSubscriptAsync().ConfigureAwait(false);
@@ -572,9 +574,10 @@ internal static partial class WordExpansion
         else
         {
             // Index arithmetic starts after expansion of the selector's source bytes.
-            var evaluated = await EvaluateArithmeticAsync(
-                ArithmeticOperand.FromIndex(preparedSubscript ?? new ExpandedArraySubscript(expanded, ArithmeticBracketMode.References)),
-                scope, ArithmeticFailureMode.ArrayIndex).ConfigureAwait(false);
+            var operand = preparedSubscript is { QuoteForArithmetic: true }
+                ? ArithmeticOperand.FromExpandedIndex(QuoteExpandedArithmeticIndex(expanded, scope))
+                : ArithmeticOperand.FromValue(expanded);
+            var evaluated = await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.ArrayIndex).ConfigureAwait(false);
             if (evaluated is not { } index)
                 return null;
 
@@ -598,13 +601,21 @@ internal static partial class WordExpansion
             await ReportBadSubscriptAsync().ConfigureAwait(false);
         return null;
 
-        Task ReportBadSubscriptAsync() => ReportSubscriptAsync("bad array subscript");
-
-        Task ReportSubscriptAsync(string text)
+        Task ReportEmptyArithmeticAssignmentAsync()
         {
-            var message = ShellValue.FromText(text);
             var referenceName = reference.Name.ToValue();
-            if (use is ReferenceUse.Read or ReferenceUse.ArithmeticRead or ReferenceUse.Presence)
+            ReadOnlySpan<ShellValue> subject = arithmeticCommand.IsEmpty
+                ? [ShellValue.FromText("`"), referenceName, ShellValue.FromText("[]'")]
+                : [arithmeticCommand, ShellValue.FromText(": `"), referenceName, ShellValue.FromText("[]'")];
+            return scope.Effects.ReportExpansionDiagnosticAsync(subject, [ShellValue.FromText("not a valid identifier")]);
+        }
+
+        Task ReportBadSubscriptAsync()
+        {
+            var message = ShellValue.FromText("bad array subscript");
+            var referenceName = reference.Name.ToValue();
+            if (use is ReferenceUse.Read or ReferenceUse.Presence
+                || use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
                 return scope.Effects.ReportExpansionDiagnosticAsync(referenceName, message);
 
             var subscript = preparedSubscript is { } prepared
@@ -619,7 +630,7 @@ internal static partial class WordExpansion
             return use switch
             {
                 ReferenceUse.Unset or ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign
-                    or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign =>
+                    or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead =>
                     scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]),
                 ReferenceUse.Assign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.Assignment),
                 ReferenceUse.DirectAssign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.AssignmentTarget),

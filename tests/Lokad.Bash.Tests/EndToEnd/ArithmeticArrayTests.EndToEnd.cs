@@ -8,6 +8,33 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class ArithmeticArrayTestsEndToEnd
 {
+    [Theory]
+    [InlineData("((a[]))", "[1:0:prior]", "a[]: bad array subscript\na[]: bad array subscript\n")]
+    [InlineData("let 'a[]=7,i++'", "[1:1:prior]", "let: `a[]': not a valid identifier\n")]
+    [InlineData("value=$((a[b[0]]))", "[0:0:20]", "")]
+    [InlineData("value=$((a[b[0]]+$i))", "[1:0:prior]", "b\\[0\\]: syntax error: invalid arithmetic operator (error token is \"\\[0\\]\")\n")]
+    [InlineData("value=$((a[~0+2]))", "[1:0:prior]", "\\~0+2: syntax error: operand expected (error token is \"\\~0+2\")\n")]
+    [InlineData("changed='i=3'; key='changed~'; value=$((a[$key]))", "[1:0:prior]",
+        "changed\\~: syntax error: invalid arithmetic operator (error token is \"\\~\")\n")]
+    public async Task ArithmeticSelectorSpellingPreservesTheConsumerAndEffectOrder(string command, string output, string error)
+    {
+        var script = "a=(10 20); b=(1); i=0; value=prior\n" + command
+            + "\nprintf '[%s:%s:%s]' \"$?\" \"$i\" \"$value\"";
+
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Fact]
     public async Task CircularElementWrite_PreservesReadonlyBindings()
     {
@@ -253,7 +280,7 @@ public sealed class ArithmeticArrayTestsEndToEnd
     [InlineData("a=(10 20); b=(1); printf '<%s>\\n' \"$((\"a[b[0]]\"))\"", "<20>\n", 0, "")]
     [InlineData("a=(10 20); b=(1); printf '<%s>\\n' \"$((a['b[0]']))\"", "", 1, "syntax error: operand expected")]
     [InlineData("a=(10 20); b=(1); printf '<%s>\\n' \"$((a[b\\[0\\]]))\"", "", 1, "arithmetic")]
-    [InlineData("a=(10 20); b=(1); printf '<%s>\\n' \"$((a[$'b[0]']))\"", "", 1, "syntax error: operand expected")]
+    [InlineData("a=(10 20); b=(1); printf '<%s>\\n' \"$((a[$'b[0]']))\"", "", 1, "syntax error: invalid arithmetic operator")]
     [InlineData("a=(10 20); b=(1); i=0; let 'a[b[$i]]+=2'; printf '<%s>:<%s>\\n' \"$?\" \"${a[*]}\"", "<0>:<10 22>\n", 0, "")]
     [InlineData("a=(10 20); b=(1); i=0; printf '<%s>\\n' \"${a[b[$i]]}\"", "<20>\n", 0, "")]
     [InlineData("a=(10 20); b=(1); i=0; a[b[$i]]=9; printf '<%s>\\n' \"${a[*]}\"", "<10 9>\n", 0, "")]

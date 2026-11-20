@@ -889,12 +889,6 @@ public static partial class ArithmeticEvaluation
                 ? retained : ReadReferenceSyntax(ShellSource.FromBytes(_expression.Bytes), _index, PeekToken(out _).Length, _memory);
             if (cached.Bracket >= 0)
             {
-                if (_operand.Brackets == ArithmeticBracketMode.Literal)
-                {
-                    reference = default;
-                    Error = new ArithmeticError(ArithmeticErrorKind.InvalidExpression, _expression);
-                    return false;
-                }
                 if (_operand.Subscripts.TryGetValue(cached.Bracket, out var prepared))
                 {
                     reference = new ArithmeticReference(VariableReference.ForElement(cached.Syntax.Name, prepared.Source), prepared.Expansion);
@@ -907,6 +901,12 @@ public static partial class ArithmeticEvaluation
             {
                 reference = default;
                 Error = CreateError(ArithmeticErrorKind.BadArraySubscript, _lastTokenStart);
+                return false;
+            }
+            // A quoted selector diagnoses a following malformed token before reading the variable's value.
+            if (_operand.IsExpandedIndex && !IsNextTokenValid())
+            {
+                reference = default;
                 return false;
             }
             reference = new ArithmeticReference(cached.Syntax, null);

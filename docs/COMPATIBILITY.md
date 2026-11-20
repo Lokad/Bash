@@ -454,6 +454,11 @@ during word expansion, including expansion inside a subscript, publish status an
 `PIPESTATUS` in the reached scope and use the enclosing word expansion's recovery
 boundary.
 
+When an arithmetic word takes its expansion pass, its array selectors expand
+once. The indexed selector's brackets, apostrophes, and tildes remain escaped
+for its numeric evaluation. An expansion elsewhere in the same arithmetic word
+can select this path. Associative array keys retain their literal bytes.
+
 `LINENO` follows the active parsed command. Functions defined in a script retain
 their defining source coordinates. Sourced files and EXIT action source start
 at line 1, and `eval` bases its coordinates on the calling command. Parenthesized
