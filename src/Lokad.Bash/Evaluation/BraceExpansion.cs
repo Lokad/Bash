@@ -423,11 +423,9 @@ internal static class BraceExpansion
             // A generated escape or backtick can reinterpret an adjacent lexical part.
             // Re-read only that tail. Earlier parts keep their original expansion syntax.
             var tailCount = parts.Count - rebuildFrom;
-            scratch.Grow(checked(128L + 8L * tailCount));
-            var tail = new Word(parts.GetRange(rebuildFrom, tailCount));
             var spelling = new ShellScanContext { SyntaxMemory = memory.Workspace }
                 .CreateBoundedByteBuilder(0, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1);
-            if (!FunctionDefinitionFormatter.TryAppendWordSource(tail, spelling, memory.Budget, cancellationToken))
+            if (!FunctionDefinitionFormatter.TryAppendWordSource(parts, rebuildFrom, spelling, memory.Budget, cancellationToken))
                 throw new ByteMemoryBuilder.LimitExceededException();
             var rebuilt = Tokenizer.ReadBraceExpandedWord(ShellSource.FromBytes(spelling.ToMemory()), memory.Workspace);
             parts.RemoveRange(rebuildFrom, tailCount);

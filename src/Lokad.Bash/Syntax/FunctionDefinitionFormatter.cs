@@ -26,6 +26,11 @@ internal static class FunctionDefinitionFormatter
         CancellationToken cancellationToken, ShellScanContext? captures = null) =>
         TryAppend(new Step.Word(word), output, budget, Format.BraceSource, cancellationToken, captures: captures);
 
+    /// <summary>Renders a lexical suffix while borrowing the original word parts.</summary>
+    internal static bool TryAppendWordSource(IReadOnlyList<WordPart> parts, int firstPart, IByteMemoryWriter output,
+        IMemoryBudget budget, CancellationToken cancellationToken) =>
+        TryAppend(new Step.WordTail(parts, firstPart), output, budget, Format.BraceSource, cancellationToken);
+
     /// <summary>Locates commands in Bash's rendered capture body without materializing or parsing it again.</summary>
     internal static IReadOnlyList<Range>? ProjectCaptureLocations(ParsedScript script, MemoryCapacity? memory,
         bool collectOmittedSeparators)
@@ -139,44 +144,10 @@ internal static class FunctionDefinitionFormatter
                             : location with { EndLine = lines!.Line });
                     break;
                 case Step.Word(var word):
-                    var doubleQuoted = false;
-                    foreach (var part in word.Parts)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        var content = part.GetUnexpandedValue().Bytes.Span;
-                        var quotedPart = part.IsDoubleQuoted;
-                        if (doubleQuoted && quotedPart && part.DoubleQuote != DoubleQuoteBoundary.Continuation
-                            && !Append("\"\"")) return false;
-                        if (quotedPart != doubleQuoted && !Append("\"")) return false;
-                        doubleQuoted = quotedPart;
-                        var success = part.Kind switch
-                        {
-                            WordPartKind.Unquoted or WordPartKind.DoubleQuoted when captures != null && part is SourceWordPart source =>
-                                TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
-                            WordPartKind.Unquoted => output.TryAppend(content),
-                            // ANSI-C quoting keeps embedded apostrophes in one literal part on import.
-                            WordPartKind.SingleQuoted when format == Format.Export && content.Contains((byte)'\'') =>
-                                ShellArgumentEscaping.TryAppendQuoted(output, content, ShellQuoteStyle.AnsiC),
-                            WordPartKind.SingleQuoted => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, content),
-                            WordPartKind.DoubleQuoted => output.TryAppend(content),
-                            WordPartKind.Escaped => Append("\\") && output.TryAppend(content),
-                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
-                                when capture && part is CommandSubstitutionWordPart command => CountCaptureWord(command.Substitution),
-                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
-                                when part is CommandSubstitutionWordPart command
-                                    && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy
-                                        or CommandSubstitutionSyntax.AdjacentSubshell
-                                        or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }) =>
-                                TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),
-                            WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
-                                AppendCommandSubstitution(content),
-                            _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
-                        };
-                        if (!success) return false;
-                        if (capture && part is SourceWordPart { RenderedLineAdjustment: var adjustment })
-                            lines!.Adjust(adjustment);
-                    }
-                    if (doubleQuoted && !Append("\"")) return false;
+                    if (!AppendWordParts(word.Parts, 0)) return false;
+                    break;
+                case Step.WordTail(var parts, var firstPart):
+                    if (!AppendWordParts(parts, firstPart)) return false;
                     break;
                 case Step.Script(var script):
                     PrepareWork(Math.Max(0, checked(2 * script.Commands.Count - 1)));
@@ -488,6 +459,49 @@ internal static class FunctionDefinitionFormatter
         if (capture) return FlushCaptureDocuments();
         return !braceSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
 
+        bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart)
+        {
+            var doubleQuoted = false;
+            for (var index = firstPart; index < parts.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var part = parts[index];
+                var content = part.GetUnexpandedValue().Bytes.Span;
+                var quotedPart = part.IsDoubleQuoted;
+                if (doubleQuoted && quotedPart && part.DoubleQuote != DoubleQuoteBoundary.Continuation
+                    && !Append("\"\"")) return false;
+                if (quotedPart != doubleQuoted && !Append("\"")) return false;
+                doubleQuoted = quotedPart;
+                var success = part.Kind switch
+                {
+                    WordPartKind.Unquoted or WordPartKind.DoubleQuoted when captures != null && part is SourceWordPart source =>
+                        TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
+                    WordPartKind.Unquoted => output.TryAppend(content),
+                    // ANSI-C quoting keeps embedded apostrophes in one literal part on import.
+                    WordPartKind.SingleQuoted when format == Format.Export && content.Contains((byte)'\'') =>
+                        ShellArgumentEscaping.TryAppendQuoted(output, content, ShellQuoteStyle.AnsiC),
+                    WordPartKind.SingleQuoted => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, content),
+                    WordPartKind.DoubleQuoted => output.TryAppend(content),
+                    WordPartKind.Escaped => Append("\\") && output.TryAppend(content),
+                    WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
+                        when capture && part is CommandSubstitutionWordPart command => CountCaptureWord(command.Substitution),
+                    WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
+                        when part is CommandSubstitutionWordPart command
+                            && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy
+                                or CommandSubstitutionSyntax.AdjacentSubshell
+                                or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }) =>
+                        TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),
+                    WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
+                        AppendCommandSubstitution(content),
+                    _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
+                };
+                if (!success) return false;
+                if (lines != null && part is SourceWordPart { RenderedLineAdjustment: var adjustment })
+                    lines.Adjust(adjustment);
+            }
+            return !doubleQuoted || Append("\"");
+        }
+
         bool Append(string text)
         {
             if (lines != null)
@@ -673,6 +687,7 @@ internal static class FunctionDefinitionFormatter
         public sealed record Script(ParsedScript Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;
         public sealed record Word(Syntax.Word Value) : Step;
+        public sealed record WordTail(IReadOnlyList<WordPart> Parts, int FirstPart) : Step;
         public sealed record Condition(ConditionalExpression Value) : Step;
         public sealed record Assignment(AssignmentWord Value) : Step;
         public sealed record Redirection(Syntax.Redirection Value) : Step;

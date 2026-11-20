@@ -351,6 +351,29 @@ public sealed class EvaluationBraceExpansionTests
     }
 
     [Fact]
+    public void GeneratedEscapeRebuildsWideTailsWithinTheirAllowance()
+    {
+        var source = "printf '<%s>' {001..032}\"head\"{Y..a..3}"
+            + string.Concat(Enumerable.Repeat("\"z\"", 256));
+        var command = Assert.IsType<SimpleCommand>(Assert.Single(Parser.Parse(source).Commands));
+        var word = command.Words[^1];
+        var governor = new MemoryGovernor(6_660_000);
+        using var owner = governor.CreateScope();
+        using var retained = owner.Reserve(4096);
+        var memory = new EvaluationMemory(owner);
+
+        var expanded = BraceExpansion.Expand(word, memory, CancellationToken.None);
+
+        Assert.Equal(96, expanded.Count);
+        Assert.Equal("001", expanded[0].Parts[0].GetUtf8Text());
+        Assert.Equal("032", expanded[^1].Parts[0].GetUtf8Text());
+        Assert.Equal("head", word.Parts[1].GetUtf8Text());
+        Assert.All(expanded, result => Assert.Same(word.Parts[1], result.Parts[1]));
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void RefusedScanReleasesItsOwnChargeBeforeCallerDisposal()
     {
         var governor = new MemoryGovernor(12288);
