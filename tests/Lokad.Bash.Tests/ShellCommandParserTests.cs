@@ -54,6 +54,16 @@ public class ShellCommandParserTests
         Assert.Equal(new[] { "${outer:-${missing:-fallback}}" }, result.Value.Arguments);
     }
 
+    [Fact]
+    public void EmptyFragmentsDoNotSeparateTheBytesOfADisplayArgument()
+    {
+        var result = ShellCommandParser.TryParse("show $'\\303'\"\"$'\\251' ''");
+
+        Assert.NotNull(result);
+        Assert.Equal(new[] { "é", "" }, result.Value.Arguments);
+        Assert.Null(ShellCommandParser.TryParse("show $'\\303'\"\"$'\\301'"));
+    }
+
     [Theory]
     [InlineData("export arr=($(printf hidden))")]
     [InlineData("declare -a values=(\"${missing:-$(echo hidden)}\")")]

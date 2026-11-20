@@ -126,8 +126,8 @@ public static class ShellCommandParser
         {
             // Pending here-documents can make several headers share one source segment.
             var stages = singlePipeline == null ? null : TryFlattenPipeline(singlePipeline);
-            result.Add(new ShellCommandChainSegment(source.Slice(start, end - start).ToUtf8String().Trim(' ', '\t', '\n'),
-                stages));
+            var text = source.Slice(start, end - start).AsSpan().Trim(" \t\n"u8);
+            result.Add(new ShellCommandChainSegment(Utf8Text.StrictUtf8.GetString(text), stages));
             pipelines = 0;
             singlePipeline = null;
         }
@@ -174,6 +174,11 @@ public static class ShellCommandParser
         result = default;
         if (simple.Words.Count == 0 || !TryFlattenCommandWord(simple.Words[0], out var name))
             return false;
+        if (simple.Words.Count == 1)
+        {
+            result = (name, Array.Empty<string>());
+            return true;
+        }
 
         var arguments = new List<string>(simple.Words.Count - 1);
         for (var index = 1; index < simple.Words.Count; index++)
@@ -213,7 +218,8 @@ public static class ShellCommandParser
     /// </summary>
     private static bool TryFlattenWord(Word word, out string result)
     {
-        var bytes = ByteMemoryBuilder.CreateUnaccounted(0);
+        var first = ShellValue.Empty;
+        ByteMemoryBuilder? joined = null;
         foreach (var part in word.Parts)
         {
             switch (part.Kind)
@@ -232,9 +238,17 @@ public static class ShellCommandParser
 
                     break;
             }
-            bytes.Append(part.GetUnexpandedValue().Bytes);
+            var value = part.GetUnexpandedValue();
+            if (value.IsEmpty)
+                continue;
+            if (joined != null)
+                joined.Append(value.Bytes);
+            else if (first.IsEmpty)
+                first = value;
+            else
+                joined = ByteMemoryBuilder.CreateUnaccounted(0).Append(first.Bytes).Append(value.Bytes);
         }
-        return ShellValue.FromBytes(bytes.ToMemory()).TryGetUtf8Text(out result);
+        return (joined == null ? first : ShellValue.FromBytes(joined.ToMemory())).TryGetUtf8Text(out result);
 
         static bool ContainsNestedCommandSubstitutionOrMalformedExpansion(ShellSource text)
         {

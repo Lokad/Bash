@@ -78,6 +78,40 @@ public sealed partial class ComplexityRegressionTests
     }
 
     [Fact]
+    public void CommandDisplayDecodesALargeSinglePartWithoutCopyingItsBytes()
+    {
+        var argument = new string('a', 64 * 1024);
+        var source = "show '" + argument + "'";
+        _ = ShellCommandParser.TryParse(source);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = ShellCommandParser.TryParse(source);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.NotNull(result);
+        Assert.Equal("show", result.Value.Name);
+        Assert.Equal(argument, Assert.Single(result.Value.Arguments));
+        Assert.True(allocated <= 290 * 1024, $"Single-part display allocated {allocated:N0} bytes.");
+    }
+
+    [Fact]
+    public void CommandChainTrimsPaddingBeforeDecodingItsText()
+    {
+        var source = " \t" + new string(' ', 64 * 1024) + "show 'é🙂'\t ; λ \r \t";
+        _ = ShellCommandParser.TryParseChain(source);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = ShellCommandParser.TryParseChain(source);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Count);
+        Assert.Equal("show 'é🙂'", result[0].Text);
+        Assert.Equal("λ \r", result[1].Text);
+        Assert.True(allocated <= 128 * 1024, $"Padded chain display allocated {allocated:N0} bytes.");
+    }
+
+    [Fact]
     public void CompoundArraySubscriptScanDoesNotAllocatePerOrdinaryCharacter()
     {
         var expectedIndex = "outer[" + new string('a', 100_000) + "]";
