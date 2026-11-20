@@ -87,7 +87,9 @@ internal static partial class WordExpansion
                     await ReportSubstitutionFailureAsync("bad substitution", ExpansionFailureKind.Arithmetic).ConfigureAwait(false);
                     return;
                 }
-                await ExpandSubstringAsync(parsed, parameter, scope, output, allowWordSplitting, globQuoted, quoteContext, arithmeticPurpose)
+                var nameLength = parsed.Name.Length + (parsed.Modifier == ParameterModifier.Indirect ? 1 : 0);
+                await ExpandSubstringAsync(parsed.Word, content[..nameLength].ToValue(), parameter, scope, output,
+                        allowWordSplitting, globQuoted, quoteContext, arithmeticPurpose)
                     .ConfigureAwait(false);
                 return;
             case BracedParameterOperatorKind.Replace:
@@ -915,7 +917,7 @@ internal static partial class WordExpansion
         }
 
         static async Task ExpandSubstringAsync(
-            BracedParameterExpression expression, ParameterValue parameter, ScopedEvaluation scope,
+            ShellSource expression, ShellValue name, ParameterValue parameter, ScopedEvaluation scope,
             ExpandedWordBuilder output, bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext,
             ExpansionPurpose arithmeticPurpose)
         {
@@ -925,9 +927,9 @@ internal static partial class WordExpansion
                 return;
             }
 
-            var separator = FindSeparator(expression.Word);
+            var separator = FindSeparator(expression);
             var offset = await ExpandArithmeticOperandAsync(
-                separator < 0 ? expression.Word : expression.Word[..separator], scope, arithmeticPurpose).ConfigureAwait(false);
+                separator < 0 ? expression : expression[..separator], scope, arithmeticPurpose, name).ConfigureAwait(false);
             if (offset is not { } start)
                 return;
 
@@ -958,7 +960,8 @@ internal static partial class WordExpansion
             long? length = null;
             if (separator >= 0)
             {
-                length = await ExpandArithmeticOperandAsync(expression.Word[(separator + 1)..], scope, arithmeticPurpose).ConfigureAwait(false);
+                length = await ExpandArithmeticOperandAsync(expression[(separator + 1)..], scope, arithmeticPurpose, name)
+                    .ConfigureAwait(false);
                 if (length == null)
                     return;
             }

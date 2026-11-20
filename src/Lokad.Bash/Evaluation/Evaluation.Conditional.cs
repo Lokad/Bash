@@ -12,6 +12,8 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private static readonly ShellValue ConditionalCommandName = ShellValue.FromText("[[");
+
     /// <summary>Evaluates retained conditional structure, expanding only reached operands.</summary>
     private async Task<EvaluationResult> EvaluateConditionalCommandAsync(
         ConditionalCommand command, ScopedEvaluation scope, bool negated)
@@ -115,11 +117,11 @@ public sealed partial class Evaluation
                     {
                         // Both words expand before numeric evaluation changes bindings.
                         var l = await WordExpansion.EvaluateArithmeticAsync(ArithmeticOperand.FromValue(left), scope,
-                            WordExpansion.ArithmeticFailureMode.Diagnostic).ConfigureAwait(false);
+                            WordExpansion.ArithmeticFailureMode.Diagnostic, ConditionalCommandName).ConfigureAwait(false);
                         if (!l.HasValue)
                             return 1;
                         var r = await WordExpansion.EvaluateArithmeticAsync(ArithmeticOperand.FromValue(right), scope,
-                            WordExpansion.ArithmeticFailureMode.Diagnostic).ConfigureAwait(false);
+                            WordExpansion.ArithmeticFailureMode.Diagnostic, ConditionalCommandName).ConfigureAwait(false);
                         return !r.HasValue ? 1 : CompareNumbers(predicate.Operator, l.Value, r.Value) ? 0 : 1;
                     }
                     var comparison = ShellValue.ByteOrder.Compare(left, right);
@@ -294,7 +296,7 @@ public sealed partial class Evaluation
 
         async Task<int> ErrorAsync(string message)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("[["), ShellValue.FromText(message)).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync(ConditionalCommandName, ShellValue.FromText(message)).ConfigureAwait(false);
             return 2;
         }
     }

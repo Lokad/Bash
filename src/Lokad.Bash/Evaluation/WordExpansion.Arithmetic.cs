@@ -104,14 +104,13 @@ internal static partial class WordExpansion
     /// <summary>Evaluates through shared reference selection without recursive asynchronous callback stacks.</summary>
     internal static Task<long?> EvaluateArithmeticAsync(
         ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode) =>
-        EvaluateArithmeticAsync(expression, scope, failureMode, null);
+        EvaluateArithmeticAsync(expression, scope, failureMode, null, ShellValue.Empty);
 
     internal static Task<long?> EvaluateArithmeticAsync(
-        ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode,
-        Func<VariableReference, ResolvedVariableReference, ShellValue, bool>? assignOutput) =>
-        EvaluateArithmeticAsync(expression, scope, failureMode, assignOutput, ShellValue.Empty);
+        ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode, ShellValue command) =>
+        EvaluateArithmeticAsync(expression, scope, failureMode, null, command);
 
-    private static Task<long?> EvaluateArithmeticAsync(
+    internal static Task<long?> EvaluateArithmeticAsync(
         ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode,
         Func<VariableReference, ResolvedVariableReference, ShellValue, bool>? assignOutput, ShellValue command)
     {
@@ -324,17 +323,21 @@ internal static partial class WordExpansion
 
         Task ReportAsync(ArithmeticError error)
         {
-            ReadOnlySpan<ShellValue> subject = command.IsEmpty
-                ? [error.Subject]
-                : [command, ShellValue.FromText(": "), error.Subject];
             var message = ShellValue.FromText(error.Message);
+            var showCommand = !command.IsEmpty && (error.Token.HasValue || failureMode == ArithmeticFailureMode.IntegerAssignment);
+            ReadOnlySpan<ShellValue> subject = showCommand
+                ? [command, ShellValue.FromText(": "), error.Subject]
+                : [error.Subject];
+            ReadOnlySpan<ShellValue> detail = error.Token is { } token
+                ? [message, ShellValue.FromText(" (error token is \""), token, ShellValue.FromText("\")")]
+                : [message];
             if (failureMode == ArithmeticFailureMode.Diagnostic)
-                return scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]);
+                return scope.Effects.ReportExpansionDiagnosticAsync(subject, detail);
             if (failureMode == ArithmeticFailureMode.IntegerAssignment)
-                return scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.IntegerAssignment);
+                return scope.Effects.ReportFatalExpansionAsync(subject, detail, ExpansionFailureKind.IntegerAssignment);
             var failure = failureMode == ArithmeticFailureMode.ArrayIndex
                 ? ExpansionFailureKind.ArrayIndex : ExpansionFailureKind.Arithmetic;
-            return scope.Effects.ReportArithmeticFailureAsync(subject, message, scope, failure);
+            return scope.Effects.ReportArithmeticFailureAsync(subject, detail, scope, failure);
         }
     }
 

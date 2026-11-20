@@ -6,18 +6,18 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteArithmeticTests
 {
-    // Linux Bash 5.2.21/C.UTF-8: status, output and diagnostic subject bytes; wording remains separate.
+    // Linux Bash 5.2.21/C.UTF-8: status, output and diagnostic subject bytes.
     [Theory]
-    [InlineData("x=$'\\377'; let \"i=$x\"; printf 's=%s i=%s\\n' \"$?\" \"${i-unset}\"\n", "733D3120693D756E7365740A", 0, "693DFF")]
-    [InlineData("i=0; let 'i=2' $'\\377'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "FF")]
-    [InlineData("i=0; let $'i=2,\\377'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "693D322CFF")]
-    [InlineData("i=0; let $'\\377' \"j=$((i+=1))\"; printf 's=%s i=%s j=%s\\n' \"$?\" \"$i\" \"${j-unset}\"\n", "733D3120693D31206A3D756E7365740A", 0, "FF")]
+    [InlineData("x=$'\\377'; let \"i=$x\"; printf 's=%s i=%s\\n' \"$?\" \"${i-unset}\"\n", "733D3120693D756E7365740A", 0, "6C65743A20693DFF")]
+    [InlineData("i=0; let 'i=2' $'\\377'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "6C65743A20FF")]
+    [InlineData("i=0; let $'i=2,\\377'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "6C65743A20693D322CFF")]
+    [InlineData("i=0; let $'\\377' \"j=$((i+=1))\"; printf 's=%s i=%s j=%s\\n' \"$?\" \"$i\" \"${j-unset}\"\n", "733D3120693D31206A3D756E7365740A", 0, "6C65743A20FF")]
     [InlineData("x=$'\\377'; printf before; printf '%s' \"$((i=2,$x))\"; printf after\n", "6265666F7265", 1, "693D322CFF")]
     [InlineData("false && printf '%s' \"$(($'\\377'))\"; printf after\n", "6166746572", 0, "")]
     [InlineData("a=(one two); x=$'\\377'; printf before; printf '%s' \"${a[$x]}\"; printf after\n", "6265666F7265", 1, "FF")]
     [InlineData("a=(one two); x=$'\\377'; printf '%s' \"${a[i=2,$x]}\"; printf after\n", "", 1, "693D322CFF")]
-    [InlineData("let $'i=2,\\u00e9'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "693D322CC3A9")]
-    [InlineData("let $'i=2,3\\r'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "693D322C330D")]
+    [InlineData("let $'i=2,\\u00e9'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "6C65743A20693D322CC3A9")]
+    [InlineData("let $'i=2,3\\r'; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n", "733D3120693D320A", 0, "6C65743A20693D322C330D")]
     [InlineData("x=$'\\377'; printf '%s' \"$((i=2,2**-1,$x))\"; printf after\n", "", 1, "693D322C322A2A2D312CFF")]
     [InlineData("x=$'\\377'; printf '%s' \"$((i=2,1/0,$x))\"; printf after\n", "", 1, "693D322C312F302CFF")]
     public async Task Evaluation_ArithmeticConsumersRetainBytesAndEffects(
@@ -47,8 +47,9 @@ public sealed class ByteArithmeticTests
 
         Assert.False(ArithmeticEvaluation.TryEvaluate(expression, _ => x, Assign, out _, out var error));
         Assert.NotNull(error);
-        Assert.Equal(ArithmeticErrorKind.InvalidExpression, error.Kind);
+        Assert.Equal(ArithmeticErrorKind.OperandExpected, error.Kind);
         Assert.Equal(expression, error.Subject);
+        Assert.Equal(ShellValue.FromBytes(Convert.FromHexString(operandHex)), error.Token);
         Assert.Equal(30, x);
         Assert.Equal(0, ArithmeticEvaluation.Evaluate(expression.Bytes.Span));
 

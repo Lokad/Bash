@@ -65,15 +65,9 @@ public static partial class ArithmeticEvaluation
     internal readonly record struct BinaryToken(BinaryOperator Operator, ArithmeticPrecedence Precedence, int Length);
 
     internal readonly record struct TokenShape(ArithmeticTokenKind Kind, int Length);
-    internal readonly record struct CachedToken(TokenShape Shape, bool ValidNumber, long Number,
+    internal readonly record struct CachedToken(TokenShape Shape, ArithmeticErrorKind? NumberError, long Number,
         BinaryToken Binary, AssignmentOperator? Assignment);
-    internal readonly record struct CachedReference(VariableReference Syntax, int End, int Bracket, ArithmeticError? Failure);
-
-    private static bool ReadCachedNumber(CachedToken token, out long number)
-    {
-        number = token.Number;
-        return token.ValidNumber;
-    }
+    internal readonly record struct CachedReference(VariableReference Syntax, int End, int Bracket, bool IsIncomplete);
 
     private static BinaryToken GetBinaryToken(ReadOnlySpan<byte> token, ArithmeticTokenKind kind) =>
         kind == ArithmeticTokenKind.Operator ? token switch
@@ -161,13 +155,12 @@ public static partial class ArithmeticEvaluation
         var reference = VariableReference.ForName(name);
         var end = start + nameLength;
         if (end == source.Length || source.AsSpan()[end] != (byte)'[')
-            return new CachedReference(reference, end, -1, null);
+            return new CachedReference(reference, end, -1, false);
         var bracket = end;
         if (!ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = memory }, source, bracket, out var closing))
-            return new CachedReference(reference, end, bracket,
-                new ArithmeticError(ArithmeticErrorKind.BadArraySubscript, ShellValue.FromBytes(source.Bytes[start..])));
+            return new CachedReference(reference, end, bracket, true);
         reference = VariableReference.ForElement(name, source.Slice(bracket + 1, closing - bracket - 1));
-        return new CachedReference(reference, closing + 1, bracket, null);
+        return new CachedReference(reference, closing + 1, bracket, false);
     }
 
     /// <summary>Immutable lexical decisions owned by source syntax; no binding or execution state is retained.</summary>
@@ -196,18 +189,19 @@ public static partial class ArithmeticEvaluation
                 var shape = ReadTokenShape(bytes[index..], CancellationToken.None);
                 var token = bytes.Slice(index, shape.Length);
                 long value = 0;
-                var valid = shape.Kind == ArithmeticTokenKind.Number && TryParseIntegerLiteral(token, out value);
+                var numberError = shape.Kind == ArithmeticTokenKind.Number
+                    ? ReadIntegerLiteral(token, CancellationToken.None, out value) : null;
                 memory?.Grow(256);
-                _tokens.Add(index, new CachedToken(shape, valid, value, GetBinaryToken(token, shape.Kind), GetAssignment(token)));
+                _tokens.Add(index, new CachedToken(shape, numberError, value, GetBinaryToken(token, shape.Kind), GetAssignment(token)));
                 ordinaryTokens++;
-                literal = ordinaryTokens == 1 && valid ? value : null;
+                literal = ordinaryTokens == 1 && shape.Kind == ArithmeticTokenKind.Number && numberError == null ? value : null;
                 if (shape.Kind == ArithmeticTokenKind.Operator && token.Length == 2
                     && token[0] == token[1] && token[0] is (byte)'+' or (byte)'-')
                 {
                     var tail = ReadTokenShape(bytes[(index + 1)..], CancellationToken.None);
                     var tailText = bytes.Slice(index + 1, tail.Length);
                     memory?.Grow(256);
-                    _tokens.Add(index + 1, new CachedToken(tail, false, 0, GetBinaryToken(tailText, tail.Kind), GetAssignment(tailText)));
+                    _tokens.Add(index + 1, new CachedToken(tail, null, 0, GetBinaryToken(tailText, tail.Kind), GetAssignment(tailText)));
                 }
                 var end = index + shape.Length;
                 if (shape.Kind == ArithmeticTokenKind.Identifier)
@@ -218,7 +212,7 @@ public static partial class ArithmeticEvaluation
                     _references.Add(index, reference);
                     // No execution can pass a malformed reference. Avoid rescanning its
                     // remainder for another incomplete selector at every identifier.
-                    if (reference.Failure != null)
+                    if (reference.IsIncomplete)
                         break;
                 }
                 index = end;

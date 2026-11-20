@@ -386,7 +386,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("x=global; declare -n r=x; f(){ local -a x=(local); declare -gA r=(one two); printf '<%s>:<%s>/' \"${!x[@]}\" \"${x[*]}\"; }; f; printf '<%s>' \"$x\"", "<one>:<two>/<global>", "", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local -A x=([key]=local); declare -ga r=(one two); printf '<%s>' \"${x[@]}\"; }; f; printf '/<%s>' \"$x\"", "<'one'><'two'>/<global>", "", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local -A x=([key]=local); declare -g r=('two words' '' \"q'uote\"); printf '<%s>' \"${x[@]}\"; }; f", "<'two words'><''><'q'\\''uote'>", "", 0)]
-    [InlineData("x=global; declare -n r=x; f(){ local -A x=([key]=local); declare -ga r=([1]=one); printf after; }; f", "", "'1': invalid arithmetic expression\n", 1)]
+    [InlineData("x=global; declare -n r=x; f(){ local -A x=([key]=local); declare -ga r=([1]=one); printf after; }; f", "", "'1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
     [InlineData("declare -A x=([old]=prior); declare -n r=x; declare -g r=(one two); printf '<%s>:<%s>' \"${!x[*]}\" \"${x[*]}\"", "<one>:<two>", "", 0)]
     [InlineData("declare -A x=([old]=prior); declare -n r=x; declare -ga r=(one two); printf after", "", "r: cannot convert associative to indexed array\n", 1)]
     [InlineData("declare -n r=s s; f(){ local r=local; declare -ga r=(one two); printf '<%s>/' \"$r\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<local>/<one two>/<>", "", 0)]

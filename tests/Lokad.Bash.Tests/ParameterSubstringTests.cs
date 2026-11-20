@@ -6,17 +6,17 @@ public sealed class ParameterSubstringTests
 {
 
     [Theory]
-    [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:${a[@]:0:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "1 2: invalid arithmetic expression\n")]
-    [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:0:${a[@]:0:2}}\"'; printf 'after:%s' \"$?\"", "after:1", "1 2: invalid arithmetic expression\n")]
-    [InlineData("x=abc; set -- 1 2; eval 'printf \"%s\" \"${x:${@:1:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "1 2: invalid arithmetic expression\n")]
-    [InlineData("a=(1 2); eval 'printf \"%s\" \"$((${a[@]:0:2}))\"'; printf 'after:%s' \"$?\"", "after:1", "1 2: invalid arithmetic expression\n")]
+    [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:${a[@]:0:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
+    [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:0:${a[@]:0:2}}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
+    [InlineData("x=abc; set -- 1 2; eval 'printf \"%s\" \"${x:${@:1:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
+    [InlineData("a=(1 2); eval 'printf \"%s\" \"$((${a[@]:0:2}))\"'; printf 'after:%s' \"$?\"", "after:1", "1 2: syntax error in expression (error token is \"2\")\n")]
     [InlineData("x=abc; a=('' 1); printf '<%s>' \"${x:${a[@]:0:2}:1}\"", "<b>", "")]
-    [InlineData("x=abc; a=(1 2); IFS=:; eval 'printf \"%s\" \"${x:${a[@]:0:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "1 2: invalid arithmetic expression\n")]
-    [InlineData("x=abc; eval \"printf '%s' \\\"\\${x:1:'2'}\\\"\"; printf 'after:%s' \"$?\"", "after:1", "'2': invalid arithmetic expression\n")]
-    [InlineData("x=abc; eval 'printf \"%s\" \"${x:1:\\2}\"'; printf 'after:%s' \"$?\"", "after:1", "\\2: invalid arithmetic expression\n")]
+    [InlineData("x=abc; a=(1 2); IFS=:; eval 'printf \"%s\" \"${x:${a[@]:0:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
+    [InlineData("x=abc; eval \"printf '%s' \\\"\\${x:1:'2'}\\\"\"; printf 'after:%s' \"$?\"", "after:1", "x: '2': syntax error: operand expected (error token is \"'2'\")\n")]
+    [InlineData("x=abc; eval 'printf \"%s\" \"${x:1:\\2}\"'; printf 'after:%s' \"$?\"", "after:1", "x: \\2: syntax error: operand expected (error token is \"\\2\")\n")]
     [InlineData("x=abc; printf '<%s>' \"${x:1:\"2\"}\"", "<bc>", "")]
     [InlineData("printf '<%s>' \"$((\"2\"))\"", "<2>", "")]
-    [InlineData("eval \"printf '%s' \\\"\\$(('2'))\\\"\"; printf 'after:%s' \"$?\"", "after:1", "'2': invalid arithmetic expression\n")]
+    [InlineData("eval \"printf '%s' \\\"\\$(('2'))\\\"\"; printf 'after:%s' \"$?\"", "after:1", "'2': syntax error: operand expected (error token is \"'2'\")\n")]
     [InlineData("x=abc; printf '<%s>' \"${x:~0:1}\"", "<c>", "")]
     [InlineData("x=abcdef; a=(1 1); IFS=+; printf '<%s>' \"${x:${a[*]:0:2}:1}\"", "<c>", "")]
     [InlineData("x=abc; printf '<%s>' \"${x:1:$'2'}\"", "<bc>", "")]
@@ -40,11 +40,11 @@ public sealed class ParameterSubstringTests
     }
 
     [Theory]
-    [InlineData("${x:$n:1}", "FF", 0)]
-    [InlineData("${x:0:$n}", "FF", 0)]
+    [InlineData("${x:$n:1}", "783A20FF", 0)]
+    [InlineData("${x:0:$n}", "783A20FF", 0)]
     [InlineData("$(($n))", "FF", 0)]
-    [InlineData("${x:i++,$n:1}", "692B2B2CFF", 1)]
-    [InlineData("${x:0:i++,$n}", "692B2B2CFF", 1)]
+    [InlineData("${x:i++,$n:1}", "783A20692B2B2CFF", 1)]
+    [InlineData("${x:0:i++,$n}", "783A20692B2B2CFF", 1)]
     [InlineData("$((i++,$n))", "692B2B2CFF", 1)]
     public async Task MalformedArithmeticBytesReportRecoverableErrors(string operand, string expressionHex, int writes)
     {
@@ -54,7 +54,8 @@ public sealed class ParameterSubstringTests
 
         Assert.Equal("after:1:" + writes, result.StdOut);
         Assert.Equal(0, result.ExitCode);
-        byte[] expected = [.. Convert.FromHexString(expressionHex), .. ": invalid arithmetic expression\n"u8];
+        byte[] expected = [.. Convert.FromHexString(expressionHex), .. ": syntax error: operand expected (error token is \""u8,
+            0xff, .. "\")\n"u8];
         Assert.Equal(expected, result.Host.StandardError.Content.ToArray());
     }
 
@@ -119,9 +120,9 @@ public sealed class ParameterSubstringTests
     [InlineData("a=(); a[2]=''; a[9]=last; for f in \"${a[@]:2:1}\"; do printf '<%s>' \"$f\"; done", "<>", "", 0)]
     [InlineData("a=(); a[2]=''; a[9]=last; for f in \"${a[@]:2:0}\"; do printf bad; done", "", "", 0)]
     [InlineData("a=('a b' '' c); IFS=:; printf '<%s>' \"${a[*]:1:2}\"", "<:c>", "", 0)]
-    [InlineData("x=abc; eval 'printf bad\"${x:1/0}\"'; printf '%s' \"$?\"", "1", "1/0: division by 0\n", 0)]
+    [InlineData("x=abc; eval 'printf bad\"${x:1/0}\"'; printf '%s' \"$?\"", "1", "x: 1/0: division by 0 (error token is \"0\")\n", 0)]
     [InlineData("x=abc; eval 'printf bad\"${x:2:-2}\"'; printf '%s' \"$?\"", "1", "-2: substring expression < 0\n", 0)]
-    [InlineData("a=(a b c); i=0; eval 'printf \"${a[@]:i++:1/0}\"'; printf '%s:%s' \"$?\" \"$i\"", "1:1", "1/0: division by 0\n", 0)]
+    [InlineData("a=(a b c); i=0; eval 'printf \"${a[@]:i++:1/0}\"'; printf '%s:%s' \"$?\" \"$i\"", "1:1", "a[@]: 1/0: division by 0 (error token is \"0\")\n", 0)]
     [InlineData("a=([2]='a b' [5]='' [9]=c); IFS=:; f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${a[*]:3:2}\"; f \"${a[@]:3:2}\"\n", "n=1\n<:c>\nn=2\n<>\n<c>\n", "", 0)]
     [InlineData("a=([2]=two [5]=''); f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${a[@]:6}\"; f \"${a[*]:6}\"; f \"${a[@]:5:0}\"; f \"${a[@]:5:1}\"\n", "n=0\n<>\nn=1\n<>\nn=0\n<>\nn=1\n<>\n", "", 0)]
     [InlineData("set -- one two; f(){ printf 'n=%s\\n' \"$#\"; [ \"$1\" = \"$0\" ] && printf zero; }; f \"${@:0:1}\"; printf '\\n'; f \"${@:0:2}\"\n", "n=1\nzero\nn=2\nzero", "", 0)]

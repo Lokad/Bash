@@ -20,7 +20,33 @@ public sealed class ArithmeticErrorTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expectedOutput, result.StdOut);
-        Assert.Contains("invalid arithmetic expression", result.StdErr, StringComparison.Ordinal);
+        Assert.Contains("syntax error: operand expected", result.StdErr, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("(( 1 + ))", "((: 1 + : syntax error: operand expected (error token is \"+ \")\n")]
+    [InlineData("let '08 + 2'", "let: 08: value too great for base (error token is \"08\")\n")]
+    [InlineData("let '1 / 0 @'", "let: 1 / 0 @: syntax error: invalid arithmetic operator (error token is \"@\")\n")]
+    [InlineData("let '10 / (2 - 2) + 8'", "let: 10 / (2 - 2) + 8: division by 0 (error token is \"(2 - 2) + 8\")\n")]
+    [InlineData("let '(1 = 2)'", "let: (1 = 2): attempted assignment to non-variable (error token is \"= 2)\")\n")]
+    [InlineData("let '1 ? 2'", "let: 1 ? 2: `:' expected for conditional expression (error token is \"2\")\n")]
+    [InlineData("let 'i=2,a['", "let: i=2,a[: bad array subscript (error token is \"a[\")\n")]
+    [InlineData("x='2 / 0'; let 'x + 3'", "let: 2 / 0: division by 0 (error token is \"0\")\n")]
+    [InlineData("[[ '2 / 0' -eq 0 ]]", "[[: 2 / 0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=abcd; r=x; printf '%s' \"${!r:1/0}\"", "!r: 1/0: division by 0 (error token is \"0\")\n")]
+    public async Task ArithmeticDiagnosticsPreserveTheReachedRoleAndToken(string script, string expectedError)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(1, status);
+            Assert.Empty(host.StandardOutput.TextContent);
+            Assert.Equal(expectedError, host.StandardError.TextContent);
+        }
     }
 
     [Fact]
@@ -68,7 +94,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
 
         Assert.Equal(expectedOutput, result.StdOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("y=30,1/0: division by 0\n", result.StdErr);
+        Assert.Equal("y=30,1/0: division by 0 (error token is \"0\")\n", result.StdErr);
     }
 
     [Theory]
@@ -86,20 +112,20 @@ public sealed class ArithmeticErrorTestsEndToEnd
 
         Assert.Equal("middleafter", result.StdOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("1/0: division by 0\n", result.StdErr);
+        Assert.Equal("1/0: division by 0 (error token is \"0\")\n", result.StdErr);
     }
 
     [Theory]
     [InlineData("exit 7", "source /script; printf bad", "", 7, "")]
-    [InlineData("exec cat <<<\"$((x=30,1/0))\"; printf bad", "x=10; source /script; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
+    [InlineData("exec cat <<<\"$((x=30,1/0))\"; printf bad", "x=10; source /script; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
     [InlineData("exec cat <<<\"${MISSING:?required}\"; printf bad", "source /script; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("exec cat <<<'ok'; printf bad", "source /script; printf bad", "ok\n", 0, "")]
     [InlineData("x=${MISSING:?required}", "source /script; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("x=$((1+${MISSING:?required}))", "source /script; printf bad", "", 1, "MISSING: required\n")]
-    [InlineData("printf bad", "source /script \"$((1/0))\"; printf bad", "", 1, "1/0: division by 0\n")]
-    [InlineData("printf bad", "source /script <<<\"$((1/0))\"; printf bad", "", 1, "1/0: division by 0\n")]
-    [InlineData("x=$((1/0)); printf bad", "source /script; printf '%s' \"$((2/0))\"; printf bad", "", 1, "1/0: division by 0\n2/0: division by 0\n")]
-    [InlineData("x=$((1/0)); printf bad", "source /script 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0\n", 0, "")]
+    [InlineData("printf bad", "source /script \"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("printf bad", "source /script <<<\"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=$((1/0)); printf bad", "source /script; printf '%s' \"$((2/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n2/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=$((1/0)); printf bad", "source /script 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
     public async Task Source_ArithmeticRecoveryPreservesOtherFailureAndRedirectionSemantics(
         string content, string script, string expectedOutput, int expectedStatus, string expectedError)
     {
@@ -111,27 +137,27 @@ public sealed class ArithmeticErrorTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("x=10; y=20; eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "y=30,1/0: division by 0\n")]
-    [InlineData("eval 'x=$((1/0)); printf bad' || printf caught; printf after", "caughtafter", 0, "1/0: division by 0\n")]
-    [InlineData("! eval 'x=$((1/0)); printf bad'; printf '%s' \"$?\"", "0", 0, "1/0: division by 0\n")]
-    [InlineData("inner='x=$((1/0)); printf bad'; eval 'eval \"$inner\"; printf middle'; printf outer", "middleouter", 0, "1/0: division by 0\n")]
-    [InlineData("f() { eval 'x=$((1/0)); printf bad'; printf inner; }; f; printf outer", "innerouter", 0, "1/0: division by 0\n")]
-    [InlineData("eval 'f() { x=$((1/0)); printf bad; }; f; printf bad'; printf after", "after", 0, "1/0: division by 0\n")]
-    [InlineData("x=10; y=20; x=15 eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "y=30,1/0: division by 0\n")]
+    [InlineData("x=10; y=20; eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "y=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'x=$((1/0)); printf bad' || printf caught; printf after", "caughtafter", 0, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("! eval 'x=$((1/0)); printf bad'; printf '%s' \"$?\"", "0", 0, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("inner='x=$((1/0)); printf bad'; eval 'eval \"$inner\"; printf middle'; printf outer", "middleouter", 0, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("f() { eval 'x=$((1/0)); printf bad'; printf inner; }; f; printf outer", "innerouter", 0, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'f() { x=$((1/0)); printf bad; }; f; printf bad'; printf after", "after", 0, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; y=20; x=15 eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "y=30,1/0: division by 0 (error token is \"0\")\n")]
     [InlineData("readonly r=1; eval 'x=$((r=2)); printf bad'; printf '%s:%s' \"$?\" \"$r\"", "1:1", 0, "r: readonly variable\n")]
-    [InlineData("eval 'x=$((1/0))' 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0\n", 0, "")]
-    [InlineData("eval 'x=$((1/0))'; printf '%s' \"$((2/0))\"; printf bad", "", 1, "1/0: division by 0\n2/0: division by 0\n")]
-    [InlineData("eval \"$((1/0))\"; printf bad", "", 1, "1/0: division by 0\n")]
-    [InlineData("eval 'printf bad' <<<\"$((1/0))\"; printf bad", "", 1, "1/0: division by 0\n")]
+    [InlineData("eval 'x=$((1/0))' 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
+    [InlineData("eval 'x=$((1/0))'; printf '%s' \"$((2/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n2/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval \"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'printf bad' <<<\"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
     [InlineData("eval 'x=${MISSING:?required}; printf bad'; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("eval 'x=$((1+${MISSING:?required})); printf bad'; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("eval 'exit 7'; printf bad", "", 7, "")]
-    [InlineData("x=10; eval 'exec cat <<<\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
-    [InlineData("x=10; eval 'exec cat <\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
-    [InlineData("x=10; eval 'exec cat >\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0\n")]
-    [InlineData("x=10; eval 'exec cat <<EOF\n$((x=30,1/0))\nEOF\nprintf bad'; printf '%s:%s' \"$?\" \"$x\"", "bad0:30", 0, "x=30,1/0: division by 0\n")]
-    [InlineData("eval 'command exec cat <<<\"$((1/0))\"; printf bad' || printf caught; printf after", "caughtafter", 0, "1/0: division by 0\n")]
-    [InlineData("eval 'exec cat 2>/error <<<\"$((1/0))\"'; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0\n", 0, "")]
+    [InlineData("x=10; eval 'exec cat <<<\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; eval 'exec cat <\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; eval 'exec cat >\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; eval 'exec cat <<EOF\n$((x=30,1/0))\nEOF\nprintf bad'; printf '%s:%s' \"$?\" \"$x\"", "bad0:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'command exec cat <<<\"$((1/0))\"; printf bad' || printf caught; printf after", "caughtafter", 0, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'exec cat 2>/error <<<\"$((1/0))\"'; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
     [InlineData("eval 'exec cat <<<\"${MISSING:?required}\"; printf bad'; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("eval 'exec cat <<<ok; printf bad'; printf bad", "ok\n", 0, "")]
     public async Task Eval_HandlesOnlyArithmeticFailuresInsideItsText(
@@ -145,11 +171,11 @@ public sealed class ArithmeticErrorTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("x=10; ((x++,)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:11\n", 0, "invalid arithmetic expression")]
+    [InlineData("x=10; ((x++,)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:11\n", 0, "syntax error: operand expected")]
     [InlineData("x=10; ((x=30, 1/0)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:30\n", 0, "division by 0")]
     [InlineData("x=10; locked=20; y=50; readonly locked; ((x=30, locked=40, y=60)); printf '%s:%s:%s:%s\\n' \"$?\" \"$x\" \"$locked\" \"$y\"", "1:30:20:50\n", 0, "locked: readonly variable")]
-    [InlineData("x=3; ((++x++)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:4\n", 0, "invalid arithmetic expression")]
-    [InlineData("x=3; ((1 || ++x++)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:3\n", 0, "invalid arithmetic expression")]
+    [InlineData("x=3; ((++x++)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:4\n", 0, "assignment requires lvalue")]
+    [InlineData("x=3; ((1 || ++x++)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:3\n", 0, "assignment requires lvalue")]
     [InlineData("x=10; let 'x=30, 1/0' 'x=40'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:30\n", 0, "division by 0")]
     [InlineData("let ''; printf '%s\\n' \"$?\"", "1\n", 0, "")]
     [InlineData("(( )); printf '%s\\n' \"$?\"", "1\n", 0, "")]
@@ -158,42 +184,42 @@ public sealed class ArithmeticErrorTestsEndToEnd
     [InlineData("x=10; for ((;x=30, 1/0;)); do printf bad; done; printf '%s:%s\\n' \"$?\" \"$x\"", "1:30\n", 0, "division by 0")]
     [InlineData("x=10; for ((;x<20;x=30, 1/0)); do printf body; done; printf '%s:%s\\n' \"$?\" \"$x\"", "body1:30\n", 0, "division by 0")]
     [InlineData("x=10; ! for ((x=30,1/0;0;)); do printf bad; done; printf '%s:%s\\n' \"$?\" \"$x\"", "0:30\n", 0, "division by 0")]
-    [InlineData("x=10; printf '%s\\n' \"$((x++,))\"; printf after", "", 1, "invalid arithmetic expression")]
+    [InlineData("x=10; printf '%s\\n' \"$((x++,))\"; printf after", "", 1, "syntax error: operand expected")]
     [InlineData("x=10; printf '%s\\n' \"$((x=30, 1/0))\"; printf after", "", 1, "division by 0")]
     [InlineData("x=10; locked=20; readonly locked; printf '%s\\n' \"$((x=30, locked=40))\"; printf after", "", 1, "locked: readonly variable")]
     [InlineData("f() { printf '%s\\n' \"$((1/0))\"; printf inside; }; f || printf fallback; printf after", "", 1, "division by 0")]
     [InlineData("x=10; ! ((x=30,1/0)); printf '%s:%s\\n' \"$?\" \"$x\"", "0:30\n", 0, "division by 0")]
     [InlineData("i=0; for (( ; ; )); do ((i++)); break; done; printf '%s:%s\\n' \"$?\" \"$i\"", "0:1\n", 0, "")]
-    [InlineData("for ((\r;0;)); do printf bad; done; printf '%s\\n' \"$?\"", "1\n", 0, "invalid arithmetic expression")]
-    [InlineData("for ((;\r;)); do break; done; printf '%s\\n' \"$?\"", "1\n", 0, "invalid arithmetic expression")]
-    [InlineData("for ((;1;\r)); do printf body; done; printf '%s\\n' \"$?\"", "body1\n", 0, "invalid arithmetic expression")]
+    [InlineData("for ((\r;0;)); do printf bad; done; printf '%s\\n' \"$?\"", "1\n", 0, "syntax error: operand expected")]
+    [InlineData("for ((;\r;)); do break; done; printf '%s\\n' \"$?\"", "1\n", 0, "syntax error: operand expected")]
+    [InlineData("for ((;1;\r)); do printf body; done; printf '%s\\n' \"$?\"", "body1\n", 0, "syntax error: operand expected")]
     [InlineData("let 0 'x=2'; printf '%s:%s\\n' \"$?\" \"$x\"", "0:2\n", 0, "")]
     [InlineData("x=10; readonly locked=20; let 'x=30, locked=40' 'x=50'; printf '%s:%s:%s\\n' \"$?\" \"$x\" \"$locked\"", "1:30:20\n", 0, "locked: readonly variable")]
     [InlineData("x=10; readonly locked=20; let 'locked=(x=30)'; printf '%s:%s:%s\\n' \"$?\" \"$x\" \"$locked\"", "1:30:20\n", 0, "locked: readonly variable")]
     [InlineData("x=10; readonly locked=20; let '1 || (locked=(x=30))'; printf '%s:%s:%s\\n' \"$?\" \"$x\" \"$locked\"", "0:10:20\n", 0, "")]
     [InlineData("x=10; ((x=30,2**-1)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:30\n", 0, "exponent less than 0")]
     [InlineData("x=10; ((x=30,1%0)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:30\n", 0, "division by 0")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((1+=2))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$(((x)++))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((x++++))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((2\r+3))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((2\u000b+3))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((2\f+3))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((2 +3))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((++x++))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((--x--))\" \"$x\"", "", 1, "invalid arithmetic expression")]
-    [InlineData("x=3; printf '%s:%s\\n' \"$((x++--))\" \"$x\"", "", 1, "invalid arithmetic expression")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((1+=2))\" \"$x\"", "", 1, "attempted assignment to non-variable")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$(((x)++))\" \"$x\"", "", 1, "syntax error: operand expected")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((x++++))\" \"$x\"", "", 1, "syntax error: operand expected")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((2\r+3))\" \"$x\"", "", 1, "invalid arithmetic operator")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((2\u000b+3))\" \"$x\"", "", 1, "invalid arithmetic operator")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((2\f+3))\" \"$x\"", "", 1, "invalid arithmetic operator")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((2 +3))\" \"$x\"", "", 1, "invalid arithmetic operator")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((++x++))\" \"$x\"", "", 1, "assignment requires lvalue")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((--x--))\" \"$x\"", "", 1, "assignment requires lvalue")]
+    [InlineData("x=3; printf '%s:%s\\n' \"$((x++--))\" \"$x\"", "", 1, "syntax error: operand expected")]
     [InlineData("x=10; x=20 let 'x=30,1/0' 'x=40'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:30\n", 0, "division by 0")]
     [InlineData("x=10; x=20 let '1/0' 'x=40'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "division by 0")]
     [InlineData("x=10; y=50; readonly locked=20; x=15 y=60 let 'x=30, locked=40, y=70'; printf '%s:%s:%s:%s\\n' \"$?\" \"$x\" \"$locked\" \"$y\"", "1:30:20:50\n", 0, "locked: readonly variable")]
     [InlineData("x=10; x=20 let 'x=0'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:0\n", 0, "")]
     [InlineData("x=10; readonly locked=20; x=15 let 'locked=(x=30)'; printf '%s:%s:%s\\n' \"$?\" \"$x\" \"$locked\"", "1:30:20\n", 0, "locked: readonly variable")]
     [InlineData("x=10; f() { x=20 let 'x=30,1/0'; printf '%s:%s\\n' \"$?\" \"$x\"; }; x=15 f; printf '%s\\n' \"$x\"", "1:30\n10\n", 0, "division by 0")]
-    [InlineData("x=10; ((x=30@)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "invalid arithmetic expression")]
-    [InlineData("x=10; let 'x=30@'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "invalid arithmetic expression")]
-    [InlineData("x=10; let 'x=12foo'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "invalid arithmetic expression")]
-    [InlineData("x=10; y=20; ((x=(y=30)**=2)); printf '%s:%s:%s\\n' \"$?\" \"$x\" \"$y\"", "1:10:30\n", 0, "invalid arithmetic expression")]
-    [InlineData("x=10; for ((x=30@;0;)); do printf bad; done; printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "invalid arithmetic expression")]
+    [InlineData("x=10; ((x=30@)); printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "value too great for base")]
+    [InlineData("x=10; let 'x=30@'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "value too great for base")]
+    [InlineData("x=10; let 'x=12foo'; printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "value too great for base")]
+    [InlineData("x=10; y=20; ((x=(y=30)**=2)); printf '%s:%s:%s\\n' \"$?\" \"$x\" \"$y\"", "1:10:30\n", 0, "syntax error: operand expected")]
+    [InlineData("x=10; for ((x=30@;0;)); do printf bad; done; printf '%s:%s\\n' \"$?\" \"$x\"", "1:10\n", 0, "value too great for base")]
     [InlineData("a=(10 kept); let 'a=1,a+=2'; printf '%s:<%s>:<%s>\\n' \"$?\" \"${a[0]}\" \"${a[1]}\"", "0:<3>:<kept>\n", 0, "")]
     [InlineData("a=(10 kept); let 'a=30,a'; printf '%s:<%s>:<%s>\\n' \"$?\" \"${a[0]}\" \"${a[1]}\"", "0:<30>:<kept>\n", 0, "")]
     [InlineData("declare -A a; a[0]=10; a[k]=kept; let 'a=1,a+=2'; printf '%s:<%s>:<%s>\\n' \"$?\" \"${a[0]}\" \"${a[k]}\"", "0:<3>:<kept>\n", 0, "")]
@@ -214,7 +240,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
     [InlineData("cat \"$((1/0))\"; printf after", "", 1, "division by 0")]
     [InlineData("exec cat <<< \"$((1/0))\"; printf after", "", 1, "division by 0")]
     [InlineData("cat <<< \"$((1/0))\"; printf '%s' \"$((2/0))\"; printf after", "", 1, "division by 0")]
-    [InlineData("cat 2>/error <<< \"$((1/0))\"; printf 'after:%s\\n' \"$?\"; cat /error", "after:1\n1/0: division by 0\n", 0, "")]
+    [InlineData("cat 2>/error <<< \"$((1/0))\"; printf 'after:%s\\n' \"$?\"; cat /error", "after:1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
     public async Task ArithmeticErrors_PreserveEarlierEffectsAndApplyContextStatus(
         string script, string expectedOutput, int expectedStatus, string diagnostic)
     {
@@ -236,7 +262,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
             EndToEndHarness.BuildTree([]));
 
         Assert.Equal(Convert.FromHexString("313A3C33303E3A3CFF3E"), result.Host.StandardOutput.Content.ToArray());
-        Assert.Equal("a=30,1/0: division by 0\n", result.StdErr);
+        Assert.Equal("let: a=30,1/0: division by 0 (error token is \"0\")\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

@@ -3321,7 +3321,7 @@ public sealed partial class Evaluation : IFileTester
         _state.SetExpansionError(_state.FatalExpansion.Value.ExitCode);
     }
 
-    internal Task ReportArithmeticFailureAsync(ReadOnlySpan<ShellValue> subject, ShellValue message, ScopedEvaluation scope,
+    internal Task ReportArithmeticFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
         ExpansionFailureKind kind)
     {
         if (_state.FatalExpansion.HasValue)
@@ -3332,7 +3332,7 @@ public sealed partial class Evaluation : IFileTester
         _state.LastExitCode = 1;
         PreparePipelineStatusStorage(1);
         scope.Variables.SetPipelineStatuses([1], scope.Context, _cancellationToken);
-        return ReportExpansionDiagnosticAsync(subject, [message]);
+        return ReportExpansionDiagnosticAsync(subject, message);
     }
 
     internal Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure)
@@ -4009,6 +4009,8 @@ public sealed partial class Evaluation : IFileTester
         return BindingName.FromValue(ShellValue.FromBytes(name.ToValue().Bytes[..bracketIndex]));
     }
 
+    private static readonly ShellValue ArithmeticCommandName = ShellValue.FromText("((");
+
     /// <summary>Expands a reached command or loop operand once before numeric evaluation.</summary>
     private Task<long?> EvaluateArithmeticCommandOperandAsync(ArithmeticSource expression, ScopedEvaluation scope)
     {
@@ -4018,7 +4020,7 @@ public sealed partial class Evaluation : IFileTester
         {
             var operand = await WordExpansion.PrepareArithmeticAsync(expression, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
             return operand == null ? null : await WordExpansion.EvaluateArithmeticAsync(
-                operand, scope, WordExpansion.ArithmeticFailureMode.Diagnostic).ConfigureAwait(false);
+                operand, scope, WordExpansion.ArithmeticFailureMode.Diagnostic, ArithmeticCommandName).ConfigureAwait(false);
         }
     }
 

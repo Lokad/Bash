@@ -19,7 +19,7 @@ public sealed class ArithmeticErrorTests
     }
 
     [Theory]
-    [InlineData("x++,", "invalid arithmetic expression", 11L)]
+    [InlineData("x++,", "syntax error: operand expected", 11L)]
     [InlineData("x=30, 1/0, x=40", "division by 0", 30L)]
     [InlineData("x=30, 1%0, x=40", "division by 0", 30L)]
     [InlineData("x=30, 2**-1, x=40", "exponent less than 0", 30L)]
@@ -95,7 +95,7 @@ public sealed class ArithmeticErrorTests
 
         Assert.False(ArithmeticEvaluation.TryEvaluate(ShellValue.FromText(expression), name => variables.GetValueOrDefault(name),
             Assign, out _, out var error));
-        Assert.Equal(ArithmeticErrorKind.InvalidExpression, error.Kind);
+        Assert.NotNull(error.Token);
         Assert.Equal(x, variables["x"]);
         Assert.Equal(y, variables["y"]);
 
@@ -114,7 +114,8 @@ public sealed class ArithmeticErrorTests
     {
         Assert.False(ArithmeticEvaluation.TryEvaluate(ShellValue.FromText(expression), static _ => 0, static (_, _) => null,
             out _, out var error));
-        Assert.Equal(ArithmeticErrorKind.InvalidExpression, error.Kind);
+        Assert.Equal(ArithmeticErrorKind.DigitOutsideBase, error.Kind);
+        Assert.Equal(ShellValue.FromText("12foo"), error.Token);
     }
 
     [Theory]

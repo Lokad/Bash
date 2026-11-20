@@ -8,9 +8,9 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
 {
     [Theory]
     [InlineData("arr[-1]=x", "arr[-1]: bad array subscript\n", true)]
-    [InlineData("arr[1/0]=x", "1/0: division by 0\n", false)]
-    [InlineData("arr[$((1/0))]=x", "1/0: division by 0\n", true)]
-    [InlineData("arr[0]=$((1/0))", "1/0: division by 0\n", true)]
+    [InlineData("arr[1/0]=x", "1/0: division by 0 (error token is \"0\")\n", false)]
+    [InlineData("arr[$((1/0))]=x", "1/0: division by 0 (error token is \"0\")\n", true)]
+    [InlineData("arr[0]=$((1/0))", "1/0: division by 0 (error token is \"0\")\n", true)]
     [InlineData("readonly arr; arr[0]=x", "arr: readonly variable\n", true)]
     [InlineData("readonly arr; arr=x", "arr: readonly variable\n", true)]
     [InlineData("declare -A arr; key=; arr[$key]=x", "arr[$key]: bad array subscript\n", true)]
@@ -73,7 +73,7 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("1/0: division by 0\n", result.StdErr);
+        Assert.Equal("1/0: division by 0 (error token is \"0\")\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -97,7 +97,7 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
 
             Assert.Equal(0, exitCode);
             Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
-            Assert.Equal("1/0: division by 0\n", host.StandardError.TextContent);
+            Assert.Equal("1/0: division by 0 (error token is \"0\")\n", host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
         }
     }
@@ -161,8 +161,8 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [Theory]
     [InlineData("arr[1 + 2]=three; printf '<%s>\\n' \"${arr[3]}\"", "<three>\n", "", 0)]
     [InlineData("arr[\"1\"]=value; printf '<%s>\\n' \"${arr[1]}\"", "<value>\n", "", 0)]
-    [InlineData("arr['1']=value; printf after", "", "'1': invalid arithmetic expression\n", 1)]
-    [InlineData("arr[$'\\x31']=value; printf after", "", "'1': invalid arithmetic expression\n", 1)]
+    [InlineData("arr['1']=value; printf after", "", "'1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
+    [InlineData("arr[$'\\x31']=value; printf after", "", "'1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
     [InlineData("arr=(one two); arr[~0]=value; printf '<%s>\\n' \"${arr[1]}\"", "<value>\n", "", 0)]
     [InlineData("printf '<%s>\\n' arr[1 + 2]=three", "<arr[1>\n<+>\n<2]=three>\n", "", 0)]
     [InlineData("key=literal; printf '<%s>\\n' map[\"$key\"]=value", "<map[literal]=value>\n", "", 0)]

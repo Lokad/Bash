@@ -34,8 +34,8 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("a=([\"*\"]=bad tail); printf '<%s>' \"${a[@]}\"", "<tail>", "a[\"*\"]: bad array subscript\n", 0)]
     [InlineData("a=([$(printf @; printf selector >&2)]=$(printf bad; printf rhs >&2) tail); printf '<%s>' \"${a[@]}\"", "<tail>", "selectorrhsa[$(printf @; printf selector >&2)]: bad array subscript\n", 0)]
     [InlineData("declare -A a; k=@; a=([$k]=at [\"*\"]=star); printf '<%s>' \"${a['@']}\" \"${a['*']}\"", "<at><star>", "", 0)]
-    [InlineData("k=@; a=(['$k']=bad tail); printf after", "", "@: invalid arithmetic expression\n", 1)]
-    [InlineData("k=@; a[$k]=bad; printf after", "", "@: invalid arithmetic expression\n", 1)]
+    [InlineData("k=@; a=(['$k']=bad tail); printf after", "", "@: syntax error: operand expected (error token is \"@\")\n", 1)]
+    [InlineData("k=@; a[$k]=bad; printf after", "", "@: syntax error: operand expected (error token is \"@\")\n", 1)]
     [InlineData("IFS=:; yes=1; set -- x y; src=(x y); a=([0]=${missing:-${src[@]}}); printf '<%s>' \"${a[0]}\"", "<x y>", "", 0)]
     [InlineData("IFS=:; yes=1; set -- x y; src=(x y); a=([0]=${yes:+$@}); printf '<%s>' \"${a[0]}\"", "<x y>", "", 0)]
     [InlineData("IFS=:; yes=1; set -- x y; src=(x y); a=([0]=\"${missing:-${src[@]}}\"); printf '<%s>' \"${a[0]}\"", "<x:y>", "", 0)]
@@ -177,7 +177,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("1/0: division by 0\n", result.StdErr);
+        Assert.Equal("1/0: division by 0 (error token is \"0\")\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -294,7 +294,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("HOME=/home/test; declare -A map; map=([~]=unquoted [\"~\"]=quoted [{a,b}]=brace); printf '<%s>:<%s>:<%s>\\n' \"${map[/home/test]}\" \"${map['~']}\" \"${map['{a,b}']}\"", "<>:<quoted>:<brace>\n", "", 0)]
     [InlineData("empty=(); arr=(a \"${empty[@]}\" b \"\" c); printf '<%s>\\n' \"${arr[@]}\"", "<a>\n<b>\n<>\n<c>\n", "", 0)]
     [InlineData("arr=(old); arr=(\"${arr[0]:=fallback}\" \"${arr[2]:=effect}\"); printf '<%s>\\n' \"${!arr[@]}\" \"${arr[@]}\"", "<0>\n<1>\n<old>\n<effect>\n", "", 0)]
-    [InlineData("arr=([1/0]=$(printf a; printf first >&2) [$(printf 2; printf selector >&2)]=$(printf b; printf second >&2)); printf after", "", "firstselectorsecond1/0: division by 0\n", 1)]
+    [InlineData("arr=([1/0]=$(printf a; printf first >&2) [$(printf 2; printf selector >&2)]=$(printf b; printf second >&2)); printf after", "", "firstselectorsecond1/0: division by 0 (error token is \"0\")\n", 1)]
     [InlineData("arr=([$(printf 2; printf selector >&2)]=$(printf a; printf first >&2) \"${missing:?boom}\" $(printf b; printf second >&2)); printf after", "", "selectorfirstmissing: boom\n", 1)]
     [InlineData("arr=(new [-2]=$(printf bad; printf rhs >&2) $(printf tail; printf later >&2)); printf '<%s>\\n' \"${arr[@]}\"", "<new>\n<tail>\n", "rhslaterarr[-2]: bad array subscript\n", 0)]
     [InlineData("declare -A map; map=([a]=one $(printf plain; printf rhs >&2) [b]=two); printf '<%s>:<%s>\\n' \"${map[a]}\" \"${map[b]}\"", "<one>:<two>\n", "map: must use subscript when assigning associative array\n", 0)]
@@ -337,7 +337,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("arr=(old); arr=(first [1/0]=bad)", new[] { "first" }, "1/0: division by 0\n")]
+    [InlineData("arr=(old); arr=(first [1/0]=bad)", new[] { "first" }, "1/0: division by 0 (error token is \"0\")\n")]
     [InlineData("arr=(old); arr=(first \"${arr[2]:=effect}\" \"${missing:?boom}\")", new[] { "old", "", "effect" }, "missing: boom\n")]
     public async Task Evaluation_CompoundArrayFailure_RetainsEffectsOfItsCompletedStage(
         string script, string[] expectedArray, string expectedError)

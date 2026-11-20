@@ -333,7 +333,7 @@ public sealed partial class Evaluation
         bool negated)
     {
         if (words.Count == 1)
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("let"), ShellValue.FromText("expression expected"))
+            await ReportExpansionDiagnosticAsync(words[0], ShellValue.FromText("expression expected"))
                 .ConfigureAwait(false);
 
         long? lastResult = 0;
@@ -343,7 +343,7 @@ public sealed partial class Evaluation
 
             lastResult = await AwaitWordExpansionAsync(WordExpansion.EvaluateArithmeticAsync(
                 ArithmeticOperand.FromValue(expression), new ScopedEvaluation(this, commandVars, context) { SelectorBindings = bindings },
-                WordExpansion.ArithmeticFailureMode.Diagnostic, AssignOutput))
+                WordExpansion.ArithmeticFailureMode.Diagnostic, AssignOutput, words[0]))
                 .ConfigureAwait(false);
             if (lastResult == null)
                 break;

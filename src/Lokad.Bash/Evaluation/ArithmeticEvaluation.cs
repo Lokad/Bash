@@ -151,6 +151,9 @@ public static partial class ArithmeticEvaluation
         TryParseIntegerLiteral(text, CancellationToken.None, out value);
 
     internal static bool TryParseIntegerLiteral<T>(ReadOnlySpan<T> text, CancellationToken cancellationToken, out long value)
+        where T : IBinaryInteger<T> => ReadIntegerLiteral(text, cancellationToken, out value) == null;
+
+    private static ArithmeticErrorKind? ReadIntegerLiteral<T>(ReadOnlySpan<T> text, CancellationToken cancellationToken, out long value)
         where T : IBinaryInteger<T>
     {
         value = 0;
@@ -159,7 +162,7 @@ public static partial class ArithmeticEvaluation
         if (!text.IsEmpty && (negative || text[0] == T.CreateChecked('+')))
             text = text[1..];
         if (text.IsEmpty)
-            return false;
+            return ArithmeticErrorKind.InvalidNumber;
 
         var radix = 10;
         var separator = text.IndexOf(T.CreateChecked('#'));
@@ -176,18 +179,22 @@ public static partial class ArithmeticEvaluation
         else if (separator >= 0)
         {
             radix = 0;
-            if (separator == 0 || separator == text.Length - 1)
-                return false;
+            if (separator == 0)
+                return ArithmeticErrorKind.InvalidNumber;
             foreach (var character in text[..separator])
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var digit = int.CreateChecked(character) - '0';
-                if (digit is < 0 or > 9 || radix > 64)
-                    return false;
+                if (digit is < 0 or > 9)
+                    return ArithmeticErrorKind.DigitOutsideBase;
+                if (radix > 64)
+                    return ArithmeticErrorKind.InvalidArithmeticBase;
                 radix = radix * 10 + digit;
             }
             if (radix is < 2 or > 64)
-                return false;
+                return ArithmeticErrorKind.InvalidArithmeticBase;
+            if (separator == text.Length - 1 || text[separator + 1] == T.CreateChecked('#'))
+                return ArithmeticErrorKind.InvalidIntegerConstant;
             text = text[(separator + 1)..];
         }
 
@@ -204,12 +211,14 @@ public static partial class ArithmeticEvaluation
                 '_' => 63,
                 _ => -1
             };
-            if (digit < 0 || digit >= radix)
-                return false;
+            if (digit < 0)
+                return ArithmeticErrorKind.InvalidNumber;
+            if (digit >= radix)
+                return ArithmeticErrorKind.DigitOutsideBase;
             number = unchecked(number * radix + digit);
         }
         value = negative ? unchecked(-number) : number;
-        return true;
+        return null;
     }
 
     private sealed class AssignmentLog
@@ -249,6 +258,7 @@ public static partial class ArithmeticEvaluation
         private readonly CancellationToken _cancellationToken;
         private readonly MemoryCapacity? _memory;
         private int _index;
+        private int _lastTokenStart;
         private int _suppressedEvaluation;
         private int _nestedParseDepth;
         private ParseResult _parsed;
@@ -342,6 +352,8 @@ public static partial class ArithmeticEvaluation
                 SkipWhitespace();
                 if (IsAtEnd)
                     return new ArithmeticResult(_parsed.Value, null);
+                if (IsNextTokenValid())
+                    Error ??= CreateError(ArithmeticErrorKind.UnexpectedToken, _index);
             }
             return new ArithmeticResult(0, Error ?? new ArithmeticError(ArithmeticErrorKind.InvalidExpression, _expression));
 
@@ -406,6 +418,39 @@ public static partial class ArithmeticEvaluation
 
         private bool IsSuppressed => _suppressedEvaluation != 0;
 
+        private void ConsumeToken(int length)
+        {
+            _lastTokenStart = _index;
+            _index += length;
+        }
+
+        private int CurrentTokenStart()
+        {
+            SkipWhitespace();
+            return IsAtEnd ? _lastTokenStart : _index;
+        }
+
+        private ArithmeticError CreateError(ArithmeticErrorKind kind, int tokenStart) =>
+            CreateError(kind, tokenStart, Span.Length);
+
+        private ArithmeticError CreateError(ArithmeticErrorKind kind, int tokenStart, int end)
+        {
+            return new ArithmeticError(kind, ShellValue.FromBytes(_expression.Bytes[SkipBlanks(0)..end]))
+            {
+                Token = ShellValue.FromBytes(_expression.Bytes[tokenStart..end]),
+            };
+        }
+
+        private int SkipBlanks(int start)
+        {
+            while (start < Span.Length && Span[start] is (byte)' ' or (byte)'\t')
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                start++;
+            }
+            return start;
+        }
+
         private void SkipWhitespace()
         {
             static bool IsWhitespace(byte value) => value is (byte)' ' or (byte)'\t' or (byte)'\n';
@@ -443,11 +488,21 @@ public static partial class ArithmeticEvaluation
 
         private IEnumerable<ParseStep> TryParseAssignment()
         {
-            var saved = _index;
+            var saved = (_index, _lastTokenStart);
             if (!TryParseReference(out var reference) || !TryMatchAssignmentOperator(out var op))
             {
-                _index = saved;
+                if (Error != null)
+                {
+                    _parsed = default;
+                    yield break;
+                }
+                (_index, _lastTokenStart) = saved;
                 yield return Call(TryParseConditional());
+                if (_parsed.Success && !IsAtEnd && TryMatchAssignmentOperator(out _))
+                {
+                    Error = CreateError(ArithmeticErrorKind.AssignmentToNonVariable, _lastTokenStart);
+                    _parsed = default;
+                }
                 yield break;
             }
 
@@ -464,7 +519,7 @@ public static partial class ArithmeticEvaluation
             }
 
             yield return Call(TryParseNested(ParseProduction.Assignment));
-            if (!_parsed.TryGet(out var rhs) || !IsAssignmentRhsComplete())
+            if (!_parsed.TryGet(out var rhs) || !IsNextTokenValid())
             {
                 _parsed = default;
                 yield break;
@@ -507,24 +562,13 @@ public static partial class ArithmeticEvaluation
 
                 if (!applied)
                 {
+                    Error = CreateError(ArithmeticErrorKind.DivisionByZero, CurrentTokenStart());
                     _parsed = default;
                     yield break;
                 }
             }
             yield return Write(reference, binding, value);
             _parsed = Error == null ? new ParseResult(true, value) : default;
-
-            bool IsAssignmentRhsComplete()
-            {
-                if (!IsNextTokenValid())
-                    return false;
-                // Inner writes have completed, but a remaining assignment operator has no valid target.
-                var following = _index;
-                if (TryMatchAssignmentOperator(out _))
-                    return false;
-                _index = following;
-                return true;
-            }
         }
 
         private IEnumerable<ParseStep> TryParseConditional()
@@ -541,13 +585,21 @@ public static partial class ArithmeticEvaluation
                 yield break;
             }
 
+            SkipWhitespace();
+            if (IsAtEnd || Span[_index] == (byte)':')
+            {
+                Error = CreateError(ArithmeticErrorKind.ExpressionExpected, CurrentTokenStart());
+                _parsed = default;
+                yield break;
+            }
+
             if (condition != 0 && !IsSuppressed)
             {
                 yield return Call(TryParseNested(ParseProduction.Expression));
                 if (!_parsed.TryGet(out value))
                     yield break;
 
-                if (!TryMatch(":"u8))
+                if (!TryReadConditionalSeparator())
                 {
                     _parsed = default;
                     yield break;
@@ -562,7 +614,7 @@ public static partial class ArithmeticEvaluation
             if (!_parsed.Success)
                 yield break;
 
-            if (!TryMatch(":"u8))
+            if (!TryReadConditionalSeparator())
             {
                 _parsed = default;
                 yield break;
@@ -570,6 +622,21 @@ public static partial class ArithmeticEvaluation
 
             yield return Call(TryParseNested(ParseProduction.Conditional));
             yield break;
+
+            bool TryReadConditionalSeparator()
+            {
+                if (!TryMatch(":"u8))
+                {
+                    if (IsNextTokenValid())
+                        Error = CreateError(ArithmeticErrorKind.MissingConditionalColon, CurrentTokenStart());
+                    return false;
+                }
+                SkipWhitespace();
+                if (!IsAtEnd)
+                    return true;
+                Error = CreateError(ArithmeticErrorKind.ExpressionExpected, _lastTokenStart);
+                return false;
+            }
         }
 
         // Precedence climbing creates continuations only for pending operators or asynchronous operands.
@@ -590,7 +657,8 @@ public static partial class ArithmeticEvaluation
 
                 while (TryPeekBinary(parser, out var token) && token.Precedence >= minimum)
                 {
-                    parser._index += token.Length;
+                    parser.ConsumeToken(token.Length);
+                    var rhsStart = parser._index;
                     var suppressed = parser.IsSuppressed
                         || token.Operator == BinaryOperator.LogicalAnd && value == 0
                         || token.Operator == BinaryOperator.LogicalOr && value != 0;
@@ -623,6 +691,10 @@ public static partial class ArithmeticEvaluation
                         yield break;
                     if (!parser.TryApplyBinary(token.Operator, value, rhs, out value))
                     {
+                        if (parser.IsNextTokenValid())
+                            parser.Error = token.Operator == BinaryOperator.Power
+                                ? parser.CreateError(ArithmeticErrorKind.NegativeExponent, parser.CurrentTokenStart())
+                                : parser.CreateError(ArithmeticErrorKind.DivisionByZero, parser.SkipBlanks(rhsStart));
                         parser._parsed = default;
                         yield break;
                     }
@@ -644,9 +716,8 @@ public static partial class ArithmeticEvaluation
             var token = PeekToken(out var kind);
             if (kind == ArithmeticTokenKind.Number)
             {
-                var valid = _operand.Syntax is { } syntax && syntax.TryGetToken(_index, out var cached)
-                    ? ReadCachedNumber(cached, out var number) : TryParseIntegerLiteral(token, _cancellationToken, out number);
-                _index += token.Length;
+                var valid = TryReadNumberToken(token, out var number);
+                ConsumeToken(token.Length);
                 _parsed = valid ? new ParseResult(true, IsSuppressed ? 0 : number) : default;
                 return null;
             }
@@ -655,6 +726,7 @@ public static partial class ArithmeticEvaluation
             static IEnumerable<ParseStep> Parse(Parser<TTarget> parser)
             {
                 var prefixStart = parser._index;
+                var previousToken = parser._lastTokenStart;
                 if (parser.TryMatch("++"u8) || parser.TryMatch("--"u8))
                 {
                     var op = parser.Span[prefixStart] == (byte)'+' ? BinaryOperator.Add : BinaryOperator.Subtract;
@@ -668,7 +740,7 @@ public static partial class ArithmeticEvaluation
                         }
                         if (parser.IsSuppressed)
                         {
-                            parser._parsed = new ParseResult(true, 0);
+                            parser.CompletePrefixMutation(0);
                             yield break;
                         }
                         yield return parser.Bind(reference, ArithmeticReferenceUse.Read);
@@ -679,12 +751,18 @@ public static partial class ArithmeticEvaluation
                             yield break;
                         }
                         yield return parser.Write(reference, binding, assigned);
-                        parser._parsed = parser.Error == null ? new ParseResult(true, assigned) : default;
+                        parser.CompletePrefixMutation(assigned);
                         yield break;
                     }
 
+                    if (parser.Error != null)
+                    {
+                        parser._parsed = default;
+                        yield break;
+                    }
                     // Only a variable takes prefix mutation; ++1 is two unary pluses.
                     parser._index = prefixStart;
+                    parser._lastTokenStart = previousToken;
                 }
 
                 if (parser.TryMatchSingle((byte)'+'))
@@ -725,21 +803,27 @@ public static partial class ArithmeticEvaluation
                 parser.SkipWhitespace();
                 if (parser._index >= parser.Span.Length)
                 {
+                    parser.Error ??= parser.CreateError(ArithmeticErrorKind.OperandExpected, parser._lastTokenStart);
                     parser._parsed = default;
                     yield break;
                 }
 
                 if (parser.Span[parser._index] == (byte)'(')
                 {
-                    parser._index++;
+                    parser.ConsumeToken(1);
                     yield return parser.Call(parser.TryParseNested(ParseProduction.Expression));
-                    if (!parser._parsed.Success || !parser.TryMatch(")"u8))
+                    if (parser._parsed.Success && !parser.TryMatch(")"u8))
+                    {
+                        if (parser.IsNextTokenValid())
+                            parser.Error = parser.CreateError(ArithmeticErrorKind.MissingParenthesis, parser.CurrentTokenStart());
                         parser._parsed = default;
+                    }
                     yield break;
                 }
 
                 if (!parser.TryParseReference(out var identifier))
                 {
+                    parser.Error ??= parser.CreateError(ArithmeticErrorKind.OperandExpected, parser.CurrentTokenStart());
                     parser._parsed = default;
                     yield break;
                 }
@@ -778,6 +862,20 @@ public static partial class ArithmeticEvaluation
             }
         }
 
+        private void CompletePrefixMutation(long value)
+        {
+            if (Error == null)
+            {
+                // Prefix mutation commits before the adjacent second mutation is rejected.
+                var following = Span[_index..];
+                if (following.StartsWith("++"u8))
+                    Error = CreateError(ArithmeticErrorKind.IncrementRequiresVariable, _index);
+                else if (following.StartsWith("--"u8))
+                    Error = CreateError(ArithmeticErrorKind.DecrementRequiresVariable, _index);
+            }
+            _parsed = Error == null ? new ParseResult(true, value) : default;
+        }
+
         private bool TryParseReference(out ArithmeticReference reference)
         {
             SkipWhitespace();
@@ -800,15 +898,15 @@ public static partial class ArithmeticEvaluation
                 if (_operand.Subscripts.TryGetValue(cached.Bracket, out var prepared))
                 {
                     reference = new ArithmeticReference(VariableReference.ForElement(cached.Syntax.Name, prepared.Source), prepared.Expansion);
-                    _index = cached.Bracket + prepared.Expansion.Value.Bytes.Length + 2;
+                    ConsumeToken(cached.Bracket + prepared.Expansion.Value.Bytes.Length + 2 - _index);
                     return true;
                 }
             }
-            _index = cached.End;
-            if (cached.Failure is { } failure)
+            ConsumeToken(cached.End - _index);
+            if (cached.IsIncomplete)
             {
                 reference = default;
-                Error = failure;
+                Error = CreateError(ArithmeticErrorKind.BadArraySubscript, _lastTokenStart);
                 return false;
             }
             reference = new ArithmeticReference(cached.Syntax, null);
@@ -869,7 +967,6 @@ public static partial class ArithmeticEvaluation
                 if (right < 0)
                 {
                     value = 0;
-                    Error = new ArithmeticError(ArithmeticErrorKind.NegativeExponent, _expression);
                     return false;
                 }
 
@@ -892,7 +989,6 @@ public static partial class ArithmeticEvaluation
             if (op is BinaryOperator.Divide or BinaryOperator.Remainder && right == 0)
             {
                 value = 0;
-                Error = new ArithmeticError(ArithmeticErrorKind.DivisionByZero, _expression);
                 return false;
             }
 
@@ -926,9 +1022,31 @@ public static partial class ArithmeticEvaluation
         private bool IsNextTokenValid()
         {
             var token = PeekToken(out var kind);
-            return kind != ArithmeticTokenKind.Invalid
-                && (kind != ArithmeticTokenKind.Number || (_operand.Syntax is { } syntax && syntax.TryGetToken(_index, out var cached)
-                    ? cached.ValidNumber : TryParseIntegerLiteral(token, _cancellationToken, out _)));
+            if (kind == ArithmeticTokenKind.Invalid)
+            {
+                var failure = Span[_lastTokenStart] == (byte)')'
+                    ? ArithmeticErrorKind.OperandExpected : ArithmeticErrorKind.InvalidOperator;
+                Error ??= CreateError(failure, _index);
+                return false;
+            }
+            return kind != ArithmeticTokenKind.Number || TryReadNumberToken(token, out _);
+        }
+
+        private bool TryReadNumberToken(ReadOnlySpan<byte> token, out long number)
+        {
+            ArithmeticErrorKind? failure;
+            if (_operand.Syntax is { } syntax && syntax.TryGetToken(_index, out var cached))
+            {
+                number = cached.Number;
+                failure = cached.NumberError;
+            }
+            else
+                failure = ReadIntegerLiteral(token, _cancellationToken, out number);
+            if (failure is not { } kind)
+                return true;
+            // The lexical diagnostic occurs while the number is isolated from its following bytes.
+            Error ??= CreateError(kind, _index, _index + token.Length);
+            return false;
         }
 
         // Prepared sources share the same token boundaries as dynamic operands.
@@ -949,7 +1067,7 @@ public static partial class ArithmeticEvaluation
             op = assignment.GetValueOrDefault();
             if (!assignment.HasValue)
                 return false;
-            _index += token.Length;
+            ConsumeToken(token.Length);
             return true;
         }
 
@@ -965,7 +1083,7 @@ public static partial class ArithmeticEvaluation
                 || next.Length != 1 && !(token is (byte)'+' or (byte)'-' && next.Length == 2 && next[1] == token))
                 return false;
 
-            _index++;
+            ConsumeToken(1);
             return true;
         }
 
@@ -979,7 +1097,7 @@ public static partial class ArithmeticEvaluation
             if (kind != ArithmeticTokenKind.Operator || !next.SequenceEqual(token))
                 return false;
 
-            _index += token.Length;
+            ConsumeToken(token.Length);
             return true;
         }
 

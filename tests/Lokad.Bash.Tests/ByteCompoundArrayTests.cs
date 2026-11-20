@@ -21,7 +21,7 @@ public sealed class ByteCompoundArrayTests
     [InlineData("src=($'\\377' '' $'\\376'); a=(\"${src[@]}\"); printf '<%s>' \"${a[@]}\"\n", "3CFF3E3C3E3CFE3E", "", 0)]
     [InlineData("v=$'\\303'; f(){ printf '%s' \"$v\"; }; v+=$'\\251' f; printf '%s' \"$v\"\n", "C3A9C3", "", 0)]
     [InlineData("a=old; a=([0]=$(printf rhs >&2; printf '\\377') \"${missing:?$'\\377'}\" $(printf forbidden >&2)); printf after\n", "", "7268736D697373696E673A20FF0A", 1)]
-    [InlineData("i=$'\\377'; a=([0]=$'\\376' [$i]=$(printf rhs >&2)); printf after\n", "", "726873FF3A20696E76616C69642061726974686D657469632065787072657373696F6E0A", 1)]
+    [InlineData("i=$'\\377'; a=([0]=$'\\376' [$i]=$(printf rhs >&2)); printf after\n", "", "726873FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
     [InlineData("IFS=$'\\377'; src=(x y); a=([0]=\"${src[@]}\"); printf '%s' \"${a[0]}\"\n", "78FF79", "", 0)]
     [InlineData("i='['; a=([$i]=$'\\377'); printf '%s' \"${a[0]}\"\n", "5B5B5D3DFF", "", 0)]
     public async Task Evaluation_CompoundItemsAndAppendsRetainByteValues(
@@ -38,7 +38,7 @@ public sealed class ByteCompoundArrayTests
     [InlineData("a=([2]='", "' [5]='' tail); printf '<%s>' \"${a[@]}\"\n", "3CFF3E3C3E3C7461696C3E", "", 0)]
     [InlineData("a=('", "' '' last); printf '<%s>' \"${a[@]}\"\n", "3CFF3E3C3E3C6C6173743E", "", 0)]
     [InlineData("false && a=([", "]=$(printf forbidden >&2)); printf done\n", "646F6E65", "", 0)]
-    [InlineData("a=([0]=$(printf first >&2) [", "]=$(printf rhs >&2) $(printf later >&2)); printf after\n", "", "66697273747268736C61746572FF3A20696E76616C69642061726974686D657469632065787072657373696F6E0A", 1)]
+    [InlineData("a=([0]=$(printf first >&2) [", "]=$(printf rhs >&2) $(printf later >&2)); printf after\n", "", "66697273747268736C61746572FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
     [InlineData("a[", "]=($(printf forbidden >&2)); printf after\n", "", "615BFF5D3A2063616E6E6F742061737369676E206C69737420746F206172726179206D656D6265720A", 1)]
     [InlineData("a=([", "]=${missing:?boom}); printf after\n", "", "6D697373696E673A20626F6F6D0A", 1)]
     public async Task Evaluation_CompoundSourcePreservesBytesAndEffectOrder(
@@ -56,7 +56,7 @@ public sealed class ByteCompoundArrayTests
 
     // Bash-only EXIT probes observe these completed writes after each fatal stage.
     [Theory]
-    [InlineData("a=(old); i=$'\\377'; a=([0]=$'\\376' [$i]=bad)\n", new[] { "FE" }, "FF3A20696E76616C69642061726974686D657469632065787072657373696F6E0A")]
+    [InlineData("a=(old); i=$'\\377'; a=([0]=$'\\376' [$i]=bad)\n", new[] { "FE" }, "FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A")]
     [InlineData("a=($'\\377'); a=(first \"${a[2]:=$'\\376'}\" \"${missing:?boom}\")\n", new[] { "FF", "", "FE" }, "6D697373696E673A20626F6F6D0A")]
     public async Task Evaluation_CompoundFailureRetainsCompletedByteWrites(
         string script, string[] expectedArrayHex, string errorHex)

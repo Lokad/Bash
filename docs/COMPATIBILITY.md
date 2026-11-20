@@ -476,6 +476,9 @@ base has no leading zero. Stored variable/array values are arithmetic
 expressions evaluated against current bindings; they are not re-expanded as shell
 source. Active numeric recursion shares the structural nesting guard and observes
 cancellation. Completed arithmetic work consumes no execution allowance.
+Arithmetic parser diagnostics preserve the failing operand and token bytes,
+including significant trailing whitespace. Arithmetic commands, `let`, numeric
+conditionals and substring bounds identify the reached caller in the diagnostic.
 
 `let` reports `expression expected` and returns status 1 when expansion supplies
 no expressions. A quoted empty expression evaluates to zero and returns

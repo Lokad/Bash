@@ -13,7 +13,7 @@ public sealed class ByteAssignmentTargetTests
     [InlineData("i=0; a[ 1 + 1 ]=$'\\377\\u03bb'; printf '%s' \"${a[2]}\"\n", "FFCEBB", "", 0)]
     [InlineData("i=0; a[i++]=$'\\377'; printf '%s|%s' \"${a[0]}\" \"$i\"\n", "FF7C31", "", 0)]
     [InlineData("i=0; a[i++]=$((i+=10))$'\\377'; printf '%s|%s' \"$i\" \"${a[10]}\"\n", "31317C3130FF", "", 0)]
-    [InlineData("index=$'\\377'; a[$index]=$(printf rhs >&2); printf after\n", "", "726873FF3A20696E76616C69642061726974686D657469632065787072657373696F6E0A", 1)]
+    [InlineData("index=$'\\377'; a[$index]=$(printf rhs >&2); printf after\n", "", "726873FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
     [InlineData("a[$(printf selector >&2)]=\"${missing:?$'\\377'}\"; printf after\n", "", "6D697373696E673A20FF0A", 1)]
     [InlineData("a=old; readonly a; declare -n r=a; r[0]=$(printf rhs >&2); printf after\n", "", "726873723A20726561646F6E6C79207661726961626C650A", 1)]
     public async Task Evaluation_TargetSelectionPreservesByteValuesAndEffects(
@@ -28,10 +28,10 @@ public sealed class ByteAssignmentTargetTests
 
     [Theory]
     [InlineData("false && a[", "]=$(printf forbidden >&2); printf done\n", "646F6E65", "", 0)]
-    [InlineData("a[", "]=$(printf rhs >&2); printf after\n", "", "726873FF3A20696E76616C69642061726974686D657469632065787072657373696F6E0A", 1)]
+    [InlineData("a[", "]=$(printf rhs >&2); printf after\n", "", "726873FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
     [InlineData("a[", "]=${missing:?error}; printf after\n", "", "6D697373696E673A206572726F720A", 1)]
-    [InlineData("a[0]=x; printf '%s' \"${a[", "]}\"; printf after\n", "", "FF3A20696E76616C69642061726974686D657469632065787072657373696F6E0A", 1)]
-    [InlineData("a[0]=x; ref='a[", "]'; printf '%s' \"${!ref}\"; printf after\n", "", "FF3A20696E76616C69642061726974686D657469632065787072657373696F6E0A", 1)]
+    [InlineData("a[0]=x; printf '%s' \"${a[", "]}\"; printf after\n", "", "FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
+    [InlineData("a[0]=x; ref='a[", "]'; printf '%s' \"${!ref}\"; printf after\n", "", "FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
     [InlineData("x=set; printf '%s' \"${x:-${a[", "]}}\"; printf done\n", "736574646F6E65", "", 0)]
     [InlineData("a[ 1 + 1 ]='", "'; printf '%s' \"${a[2]}\"\n", "FF", "", 0)]
     [InlineData("declare -A a; false && a['", "']=value; printf done\n", "646F6E65", "", 0)]
