@@ -70,6 +70,7 @@ public sealed class ConformanceTests
         using var effects = JsonDocument.Parse(effectsJson);
         using var entries = JsonDocument.Parse(finalEntriesJson);
         AssertFileState(host, files.RootElement, effects.RootElement, entries.RootElement);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]

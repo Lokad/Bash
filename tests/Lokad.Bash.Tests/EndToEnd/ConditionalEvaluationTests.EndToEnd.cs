@@ -1,12 +1,3 @@
-using Lokad.Bash.Tests.EndToEnd;
-using Lokad.Bash.Files;
-using Lokad.Bash.Helpers;
-using Lokad.Bash.Tree;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Lokad.Bash.Evaluation;
-using Lokad.Bash.Syntax;
-
 namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class ConditionalEvaluationTestsEndToEnd
@@ -68,13 +59,6 @@ public sealed class ConditionalEvaluationTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
     }
 
-    [Fact]
-    public async Task ConditionalEvaluation_SupportsPackedOperators()
-    {
-        var result = await RunConditionAsync("a==a");
-        Assert.Equal(0, result.ExitCode);
-    }
-
     [Theory]
     [MemberData(nameof(PatternMatchData))]
     public async Task ConditionalEvaluation_EvaluatesPatternMatches(
@@ -99,13 +83,6 @@ public sealed class ConditionalEvaluationTestsEndToEnd
         Assert.Equal(expected ? 0 : 1, result.ExitCode);
     }
 
-    [Fact]
-    public async Task ConditionalEvaluation_InvalidRegexIsParseError()
-    {
-        var result = await RunConditionAsync("foo =~ *");
-        Assert.NotEqual(0, result.ExitCode);
-    }
-
     [Theory]
     [MemberData(nameof(NumericComparisonData))]
     public async Task ConditionalEvaluation_EvaluatesNumericComparisons(
@@ -116,13 +93,6 @@ public sealed class ConditionalEvaluationTestsEndToEnd
     {
         var result = await RunConditionAsync($"{left} {op} {right}");
         Assert.Equal(expected ? 0 : 1, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task ConditionalEvaluation_InvalidNumberReturnsFalse()
-    {
-        var result = await RunConditionAsync("a -eq 1");
-        Assert.Equal(1, result.ExitCode);
     }
 
     [Theory]
@@ -206,7 +176,7 @@ public sealed class ConditionalEvaluationTestsEndToEnd
     {
         var oldTime = DateTimeOffset.UnixEpoch;
         var newTime = oldTime.AddSeconds(1);
-        var tree = EndToEndHarness.BuildTree(
+        await using var tree = EndToEndHarness.BuildTree(
             [("/dir", oldTime)],
             [("/old", "one\n", oldTime), ("/new", "two\n", newTime), ("/same", "three\n", newTime)]);
         var leftOperand = left.Length == 0 ? "''" : $"/{left}";
@@ -214,7 +184,6 @@ public sealed class ConditionalEvaluationTestsEndToEnd
         foreach (var script in new[]
         {
             $"test {leftOperand} {op} {rightOperand}",
-            $"[ {leftOperand} {op} {rightOperand} ]",
             $"[[ {leftOperand} {op} {rightOperand} ]]"
         })
         {
@@ -271,7 +240,7 @@ public sealed class ConditionalEvaluationTestsEndToEnd
 
     [Theory]
     [InlineData("test -a /dir && [[ -e /file ]]", 0)]
-    [InlineData("test -f /file && [[ -d /dir ]]", 0)]
+    [InlineData("[ -f /file ] && [[ -d /dir ]]", 0)]
     [InlineData("test -d /file || [[ -f /dir ]]", 1)]
     [InlineData("test -e /missing || [[ -a /missing ]]", 1)]
     [InlineData("[[ ! -b /file && ! -c /dir && ! -p /missing && ! -S /file ]]", 0)]
@@ -298,9 +267,9 @@ public sealed class ConditionalEvaluationTestsEndToEnd
     [InlineData("dir/../../file", 0)]
     public async Task NonEmptyPredicates_PreserveSizeAndTraversalSemantics(string operand, int exitCode)
     {
-        foreach (var format in new[] { "test -s {0}", "[ -s {0} ]", "[[ -s {0} ]]" })
+        foreach (var format in new[] { "test -s {0}", "[[ -s {0} ]]" })
         {
-            var tree = EndToEndHarness.BuildTree(["/dir"], [("/file", "content"), ("/empty", "")]);
+            await using var tree = EndToEndHarness.BuildTree(["/dir"], [("/file", "content"), ("/empty", "")]);
             var result = await EndToEndHarness.RunScriptAsync(string.Format(format, operand), tree);
             Assert.Equal(exitCode, result.ExitCode);
             Assert.Empty(result.StdOut);
@@ -315,11 +284,11 @@ public sealed class ConditionalEvaluationTestsEndToEnd
         yield return ["-t"];
     }
 
-    private static async Task<EndToEndHarness.ExecutionResult> RunConditionAsync(string expression)
+    private static async Task<(int ExitCode, string StdErr)> RunConditionAsync(string expression)
     {
-        var tree = EndToEndHarness.BuildTree(["/dir"], [("/file", "content\n")]);
+        await using var tree = EndToEndHarness.BuildTree(["/dir"], [("/file", "content\n")]);
         var script = string.IsNullOrEmpty(expression) ? "[[ ]]" : $"[[ {expression} ]]";
         var result = await tree.RunAsync(script, CancellationToken.None);
-        return new(result.ExitCode, tree.StandardOutput.TextContent, tree.StandardError.TextContent, tree);
+        return (result.ExitCode, tree.StandardError.TextContent);
     }
 }

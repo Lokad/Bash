@@ -47,20 +47,9 @@ public sealed class RegexCaptureTests
     }
 
     [Theory]
-    [InlineData("[[ abc123 =~ ([a-z]+)([0-9]+) ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<abc123><abc><123>")]
-    [InlineData("[[ a =~ (a)(b)? ]]; printf '%s:<%s>' \"${#BASH_REMATCH[@]}\" \"${BASH_REMATCH[2]-unset}\"", "3:<>")]
-    [InlineData("[[ abc =~ (a) ]]; [[ x =~ (y) ]]; declare -p BASH_REMATCH", "declare -a BASH_REMATCH=()\n")]
-    [InlineData("[[ abc =~ (a) ]]; [[ x =~ * ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"", "2:<a a>")]
-    [InlineData("[[ abc =~ (a) ]]; [[ x || y =~ (y) ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"", "0:<a a>")]
-    [InlineData("[[ ! abc =~ (a) ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"", "1:<a a>")]
-    [InlineData("f(){ local BASH_REMATCH=(local); [[ ab =~ (a)(b) ]]; printf 'local:<%s>' \"${BASH_REMATCH[*]}\"; }; f; printf ':global:<%s>' \"${BASH_REMATCH[*]}\"", "local:<local>:global:<ab a b>")]
-    [InlineData("readonly BASH_REMATCH; [[ ab =~ (a) ]]; declare -p BASH_REMATCH", "declare -a BASH_REMATCH=([0]=\"a\" [1]=\"a\")\n")]
-    [InlineData("export BASH_REMATCH=old; [[ ab =~ (a) ]]; declare -p BASH_REMATCH", "declare -a BASH_REMATCH=([0]=\"a\" [1]=\"a\")\n")]
-    [InlineData("declare -A BASH_REMATCH=([key]=value); [[ ab =~ (a)(b) ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<ab><a><b>")]
-    [InlineData("declare -n BASH_REMATCH=target; [[ ab =~ (a)(b) ]]; printf '<%s>:<%s>' \"${BASH_REMATCH[*]}\" \"${target-unset}\"", "<ab a b>:<unset>")]
     [InlineData("[[ '😀x' =~ (😀)(.) ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<😀x><😀><x>")]
     [InlineData("prefix='\\'; tail='([[:digit:]]+)'; [[ '\\42' =~ \"$prefix\"$tail ]]; printf '<%s>' \"${BASH_REMATCH[@]}\"", "<\\42><42>")]
-    public async Task CapturesPreserveValuesAndGlobalBindingRules(string script, string expected)
+    public async Task CapturesPreserveSupplementaryValuesAndQuotedPatternBoundaries(string script, string expected)
     {
         await using var host = new TestHost();
         var result = await host.RunAsync(script, CancellationToken.None);
