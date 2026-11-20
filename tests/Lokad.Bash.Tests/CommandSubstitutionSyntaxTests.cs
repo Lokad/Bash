@@ -86,6 +86,54 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdjacentSubshellReportsReachedCaptureFailureAfterEarlierCompleteUnits(bool prepared)
+    {
+        const string Source = """
+            value=$((printf earlier); : >kept
+            (: >discarded; for ((i=7)); do : >body; break; done); printf discarded)
+            printf '%s:<%s>' "$?" "$value"
+            """;
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new EndToEnd.TestHost { MemoryBudget = owner };
+        var result = prepared
+            ? await new Engine().RunAsync(new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse(Source)),
+                host, owner, CancellationToken.None)
+            : await BashScript.RunAsync(host, Source, EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("2:<earlier>", host.StandardOutput.TextContent);
+        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+        Assert.Equal("kept", Assert.Single(host.CaptureEntries()).Key);
+        Assert.Equal(0, host.OpenFileCount);
+        if (!prepared)
+            Assert.Equal(0, governor.ReservedBytes);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task SkippedAdjacentSubshellDefersGrammarWhileFollowingCommandRuns()
+    {
+        var result = await EndToEnd.EvaluationTestHelper.RunAsync(
+            "false && value=$((fi);); printf '%s' \"$?\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("value=$((fi);")]
+    [InlineData("value=$( (fi);)")]
+    public void DeferredAdjacentSubshellRequiresAnAdjacentOpenerAndOuterCloser(string source)
+    {
+        Assert.False(Parser.TryParse(source, out _, out _));
+    }
+
     [Fact]
     public async Task ReachedLegacyTreesSharePhysicalSyntaxAndRefundAfterLastUser()
     {

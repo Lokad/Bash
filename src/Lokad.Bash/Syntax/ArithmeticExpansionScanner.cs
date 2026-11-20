@@ -102,6 +102,12 @@ internal static class ArithmeticExpansionScanner
         ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators, out error,
             captureExpression: true, form: ArithmeticForm.ForHeader);
 
+    /// <summary>Bounds adjacent subshell spelling after arithmetic selection and a failed body parse.</summary>
+    internal static bool TryScanAdjacentSubshell(ShellScanContext context, ShellSource text, int startIndex,
+        out int endIndex) =>
+        ScanCore(context, text, startIndex, out endIndex, out _, out _, out _, out _, out _,
+            captureExpression: false, form: ArithmeticForm.AdjacentSubshell) == ShellScanStatus.Complete;
+
     private static ShellScanStatus ScanCore(
         ShellScanContext context,
         ShellSource text,
@@ -125,9 +131,11 @@ internal static class ArithmeticExpansionScanner
             return ShellScanStatus.NotFound;
 
         var span = text.AsSpan();
-        var isCommand = form != ArithmeticForm.Expansion;
-        var hasPrefix = isCommand
-            ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "((", out var expressionStart)
+        var isCommand = form is ArithmeticForm.Command or ArithmeticForm.ForHeader;
+        var adjacentSubshell = form == ArithmeticForm.AdjacentSubshell;
+        int expressionStart;
+        var hasPrefix = isCommand ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "((", out expressionStart)
+            : adjacentSubshell ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "$((", out expressionStart)
             : TryReadExpansionPrefix(span, startIndex, out expressionStart, out bracketed);
         if (!hasPrefix)
             return ShellScanStatus.NotFound;
@@ -139,7 +147,7 @@ internal static class ArithmeticExpansionScanner
             var cursor = new ShellSourceCursor(text, expressionStart, context);
             var opening = bracketed ? (byte)'[' : (byte)'(';
             var closing = bracketed ? (byte)']' : (byte)')';
-            var depth = 0;
+            var depth = adjacentSubshell ? 1 : 0;
             while (!cursor.IsAtEnd)
             {
                 if (cursor.TryConsumeQuoteOrEscape())
@@ -186,6 +194,12 @@ internal static class ArithmeticExpansionScanner
                     depth--;
                     cursor.Advance();
                     continue;
+                }
+
+                if (adjacentSubshell)
+                {
+                    endIndex = cursor.Position;
+                    return ShellScanStatus.Complete;
                 }
 
                 // Brackets use a single closer. Expansion parentheses can cross a
@@ -285,5 +299,6 @@ internal static class ArithmeticExpansionScanner
         Expansion,
         Command,
         ForHeader,
+        AdjacentSubshell,
     }
 }

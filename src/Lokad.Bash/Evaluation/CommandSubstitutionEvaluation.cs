@@ -21,6 +21,8 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             {
                 if (script is CommandSubstitutionSyntax.Parsed retained)
                     parsed = retained.Script;
+                else if (script is CommandSubstitutionSyntax.AdjacentSubshell adjacent)
+                    parsed = new ParsedScript([new ScriptCommand(adjacent.Source)]);
                 else if (script is CommandSubstitutionSyntax.Legacy { Origin: not LegacySubstitutionOrigin.Temporary } legacy)
                 {
                     var owner = scope.Context.SourceMemory ?? outer.GetPreparedSubstitutionMemory();

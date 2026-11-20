@@ -14,6 +14,9 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
 
     /// <summary>Bytes still requiring execution-time parsing, including unfinished here-documents.</summary>
     internal sealed record Deferred(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);
+
+    /// <summary>Balanced adjacent subshell spelling to parse in complete units when reached.</summary>
+    internal sealed record AdjacentSubshell(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);
 }
 
 /// <summary>Known syntax failures when Bash rereads the spelling of a parsed substitution.</summary>

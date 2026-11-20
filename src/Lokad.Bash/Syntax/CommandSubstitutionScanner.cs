@@ -147,6 +147,14 @@ internal static class CommandSubstitutionScanner
                 substitution = parsed == null ? new CommandSubstitutionSyntax.Deferred(payload)
                     : new CommandSubstitutionSyntax.Parsed(payload, parsed, failure, preserveAdjacentOpening);
             }
+            else if (status == ShellScanStatus.Invalid && error != null && context.LimitError == null
+                && ArithmeticExpansionScanner.TryScanAdjacentSubshell(context, text, startIndex, out var adjacentEnd))
+            {
+                endIndex = adjacentEnd;
+                substitution = new CommandSubstitutionSyntax.AdjacentSubshell(text.Slice(payloadStart, endIndex - payloadStart));
+                error = null;
+                status = ShellScanStatus.Complete;
+            }
 
             return status;
         }
