@@ -34,6 +34,7 @@ internal enum ExpansionPurpose
     Normal,
     Scalar,
     CasePattern,
+    ParameterReplacement,
     Assignment,
     IndexedCompound,
     IndexedCompoundOperand,
@@ -54,6 +55,8 @@ internal enum ImplicitEmptyPolicy
 internal sealed class ExpandedWordBuilder
 {
     private static readonly ShellValue Space = ShellValue.FromText(" ");
+    private static readonly ExpandedWord ReplacementEmptyField =
+        new([new ExpandedSegment(ShellValue.FromText("\u007f"), isGlobQuoted: true)]);
     private readonly Variables _variables;
     private readonly EvaluationMemory _memory;
     private readonly MemoryCapacity _storage;
@@ -461,7 +464,10 @@ internal sealed class ExpandedWordBuilder
                 }
                 if (hasBytes || hasProtectedPart || Purpose == ExpansionPurpose.CasePattern)
                 {
-                    results.Add(new ExpandedWord(segments, !hasBytes && word.HasEmptyAggregateField));
+                    var emptyAggregateField = !hasBytes && word.HasEmptyAggregateField;
+                    // A replacement retains Bash's quoted-null byte in later supplied fields.
+                    results.Add(Purpose == ExpansionPurpose.ParameterReplacement && emptyAggregateField && results.Count != 0
+                        ? ReplacementEmptyField : new ExpandedWord(segments, emptyAggregateField));
                     if (firstFieldOnly)
                         return;
                 }

@@ -341,8 +341,12 @@ internal static partial class WordExpansion
                 return;
             }
 
-            var purpose = output.Purpose == ExpansionPurpose.IndexedCompound
-                ? ExpansionPurpose.IndexedCompoundOperand : output.Purpose;
+            var purpose = output.Purpose switch
+            {
+                ExpansionPurpose.IndexedCompound => ExpansionPurpose.IndexedCompoundOperand,
+                ExpansionPurpose.ParameterReplacement => ExpansionPurpose.Scalar,
+                _ => output.Purpose,
+            };
             var expanded = await ExpandOperatorWordAsync(
                     parsed.Word, scanContext, scope, quoteContext, purpose,
                     purpose is ExpansionPurpose.Scalar or ExpansionPurpose.CasePattern
@@ -824,7 +828,8 @@ internal static partial class WordExpansion
                     operand = operand[1..];
                 }
                 var separator = FindReplacementSeparator(operand, mode);
-                var pattern = await ExpandOperandAsync(separator < 0 ? operand : operand[..separator]).ConfigureAwait(false);
+                var pattern = await ExpandOperandAsync(separator < 0 ? operand : operand[..separator], ExpansionPurpose.Scalar)
+                    .ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
                 // Anchors can come from an expansion, but quoted prefixes and global replacements stay literal.
@@ -836,7 +841,8 @@ internal static partial class WordExpansion
                         new GlobMask(pattern.Mask.Memory.IsEmpty ? ReadOnlyMemory<byte>.Empty : pattern.Mask.Memory[1..]));
                 }
                 var canMatch = TryUnescapePattern(pattern, out pattern);
-                var replacement = await ExpandOperandAsync(separator < 0 ? ShellSource.Empty : operand[(separator + 1)..]).ConfigureAwait(false);
+                var replacement = await ExpandOperandAsync(separator < 0 ? ShellSource.Empty : operand[(separator + 1)..],
+                    ExpansionPurpose.ParameterReplacement).ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
                 var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken) : null;
@@ -987,7 +993,8 @@ internal static partial class WordExpansion
                 }
             }
 
-            var casePattern = parsed.Word.IsEmpty ? null : await ExpandOperandAsync(parsed.Word).ConfigureAwait(false);
+            var casePattern = parsed.Word.IsEmpty ? null
+                : await ExpandOperandAsync(parsed.Word, ExpansionPurpose.Scalar).ConfigureAwait(false);
             if (!scope.CanExpand)
                 return;
             var canMatchCase = casePattern == null || TryUnescapePattern(casePattern, out casePattern);
@@ -1003,10 +1010,10 @@ internal static partial class WordExpansion
                 return success;
             }
 
-            async Task<ParameterOperand> ExpandOperandAsync(ShellSource source)
+            async Task<ParameterOperand> ExpandOperandAsync(ShellSource source, ExpansionPurpose purpose)
             {
                 var words = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
-                    ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, assignmentTildes: false, operandParent: null).ConfigureAwait(false);
+                    purpose, ImplicitEmptyPolicy.Preserve, assignmentTildes: false, operandParent: null).ConfigureAwait(false);
                 var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, budget);
                 return new ParameterOperand(value, mask);
             }

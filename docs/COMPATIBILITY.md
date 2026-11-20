@@ -460,6 +460,10 @@ after the whole pattern has expanded. With empty IFS, the pattern can retain
 the joined fields. Unquoted `$@` joins with spaces and quoted `$*` uses the
 first IFS character as its separator.
 
+In parameter replacement text, later empty fields from quoted `$@` or
+`${array[@]}` emit a DEL byte (`0x7F`) in the recorded Bash profile. A leading
+or single empty field contributes zero bytes. A literal DEL remains data.
+
 Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
 A word loop needs a semicolon or line break before the opening brace. An
 arithmetic loop can place the opening brace immediately after `))`.

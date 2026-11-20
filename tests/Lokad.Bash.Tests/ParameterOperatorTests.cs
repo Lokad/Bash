@@ -242,6 +242,25 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
+    [InlineData("unset IFS; set -- x '' y", "\"${value/match/\"$@\"}\"", "<x \u007f y-tail>")]
+    [InlineData("IFS=:; set -- x y ''", "\"${value/match/\"$@\"}\"", "<x y \u007f-tail>")]
+    [InlineData("set -- '' x y", "\"${value/match/\"$@\"}\"", "< x y-tail>")]
+    [InlineData("set -- ''", "\"${value/match/\"$@\"}\"", "<-tail>")]
+    [InlineData("set -- x '' y", "\"${value/match/\"$*\"}\"", "<x  y-tail>")]
+    [InlineData("set -- x '' y", "${value/match/\"$@\"}", "<x><\u007f><y-tail>")]
+    [InlineData("IFS=; items=(x '' y)", "\"${value/match/\"${items[@]}\"}\"", "<x \u007f y-tail>")]
+    [InlineData("unset missing; set -- x '' y", "\"${value/match/${missing:-\"$@\"}}\"", "<x \u007f y-tail>")]
+    public async Task ParameterReplacementPreservesLaterQuotedEmptyFields(string setup, string operand, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            setup + "\nvalue=match-tail\nprintf '<%s>' " + operand + "\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("""
         p=('a[q++]' 'b[r++]'); a=(alpha amber); b=(beta brown); i=0; q=0; r=0
         printf '<%s>|%s:%s:%s' "${!p[i++]#$(printf pattern >&2; printf a)}" "$i" "$q" "$r"

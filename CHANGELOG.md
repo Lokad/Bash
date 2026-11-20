@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve Bash's DEL byte for later empty quoted aggregate fields in
+  parameter replacement text.
+
 - Use the first expanded field of a quoted aggregate in a case pattern when
   IFS enables field selection. Finish expanding the reached pattern before matching.
 
