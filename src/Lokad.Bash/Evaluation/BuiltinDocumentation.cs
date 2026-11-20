@@ -5,6 +5,9 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Describes the implemented builtin surface, shared by help and usage diagnostics.</summary>
 internal readonly record struct BuiltinDocumentation(string Arguments, string Description)
 {
+    private const string CaseAttributeDescription =
+        "\n    -l lowercases assigned values, -u uppercases them, and -c uppercases the first character and lowercases the rest.";
+
     public string Summary
     {
         get
@@ -64,10 +67,12 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Set => new("[-e|+e] [-o errexit|+o errexit] [-|+|--] [arg ...]", "Set errexit or replace positional parameters. A lone + is consumed while scanning options. -o/+o alone inspect errexit. With no arguments, return success without listing variables."),
         BuiltinKind.Exec => new("[-cl] [-a name] [command [argument ...]] [redirection ...]",
             "Replace this evaluation with a command, or preserve redirections without a command."),
-        BuiltinKind.Declare => new("[-aAfgFiInprx] [name[=value] ...]",
-            "Declare or list variables and functions. -a/-A select array kinds, -i evaluates assigned values as integers, -n selects a name reference, -r marks readonly, and -x exports.\n    -I inherits an outer binding in a function. -g selects global bindings. -f/-F list function definitions/names. -p prints declarations. '+' removes attributes."),
-        BuiltinKind.Local => new("[-aAfFiInprx] [name[=value] | -] ...",
-            "Declare function-local variables, arrays or name references. -I inherits the outer value and its attributes, except the name-reference attribute. '-' saves shell options for restoration when the function returns.\n    Declaration attributes use the same flags as declare except -g."),
+        BuiltinKind.Declare => new("[-aAcfFgiIlnprux] [name[=value] ...]",
+            "Declare or list variables and functions. -a/-A select array kinds, -i evaluates assigned values as integers, -n selects a name reference, -r marks readonly, and -x exports.\n    -I inherits an outer binding in a function. -g selects global bindings. -f/-F list function definitions/names. -p prints declarations. '+' removes attributes."
+            + CaseAttributeDescription),
+        BuiltinKind.Local => new("[-aAcfFiIlnprux] [name[=value] | -] ...",
+            "Declare function-local variables, arrays or name references. -I inherits the outer value and its attributes, except the name-reference attribute. '-' saves shell options for restoration when the function returns.\n    Declaration attributes use the same flags as declare except -g."
+            + CaseAttributeDescription),
         BuiltinKind.Caller => new("[frame]", "Print the current function context or select an enclosing function frame by index."),
         BuiltinKind.Source => new("[--] filename [arguments]", "Read and execute filename in the current shell context, with optional positional parameters."),
         BuiltinKind.Eval => new("[--] [arg ...]", "Join arguments with spaces, then parse and execute them in the current shell context."),

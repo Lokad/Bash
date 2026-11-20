@@ -10,6 +10,28 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationAttributeTestsEndToEnd
 {
     [Theory]
+    [InlineData("v=MiXeD; declare -l v; printf '<%s>' \"$v\"; v+=TaIL; declare -p v", "<MiXeD>declare -l v=\"mixedtail\"\n")]
+    [InlineData("declare -c a='...mIXeD tEXT' b='tWO wORDS'; declare -p a b", "declare -c a=\"...mixed text\"\ndeclare -c b=\"Two words\"\n")]
+    [InlineData("declare -lu v=MiXeD; declare -p v", "declare -- v=\"MiXeD\"\n")]
+    [InlineData("declare -u v=one; declare -n r=v; r=MiXeD; declare -p r v", "declare -n r=\"v\"\ndeclare -u v=\"MIXED\"\n")]
+    [InlineData("declare -uA a; printf '<%s>' \"${a[Key]:=MiXeD}\"; declare -p a", "<MIXED>declare -Au a=([Key]=\"MIXED\" )\n")]
+    [InlineData("declare -l v=MiXeD; f(){ local -I v; v=NeXt; declare -p v; }; f; declare -p v", "declare -l v=\"next\"\ndeclare -l v=\"mixed\"\n")]
+    [InlineData("declare --help -A a=([Key]=MiXeD) >&-; declare -p a", "declare -Al a=([Key]=\"mixed\" )\n")]
+    [InlineData("declare -ua v; read -ra v <<< 'MiXeD Text'; declare -p v", "declare -au v=([0]=\"MIXED\" [1]=\"TEXT\")\n")]
+    [InlineData("declare -la v=(OLD); mapfile -t -O 2 v <<< MiXeD; declare -p v", "declare -al v=([0]=\"old\" [2]=\"mixed\")\n")]
+    [InlineData("declare -u v=école; declare -p v", "declare -u v=\"ÉCOLE\"\n")]
+    [InlineData("f(){ :; }; g(){ :; }; declare -fu f; declare -Fu", "declare -fu f\n")]
+    [InlineData("opt=-u; declare \"$opt\" -a a=(MiXeD); declare -p a", "declare -au a=([0]=\"MiXeD\")\n")]
+    public async Task DeclarationCaseAttributesApplyWhenTheSelectedValueIsWritten(string script, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("readonly -n r=v\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r",
         "[0:0]declare -- r=\"v\"\n", "")]
     [InlineData("v=old; declare -n r=v\nreadonly -n r=new\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r v",

@@ -63,7 +63,7 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>The current simple command owns the prefix-name set, adding names as their bindings are prepared.</summary>
     internal readonly record struct ExpansionBindings(Variables Variables, HashSet<BindingName> PrefixNames);
 
-    public void SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value)
+    public ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value)
     {
         if (SelectorBindings is { } bindings && Context.FunctionContext?.IsLocal(name) == true
             && Variables.TryGetNameref(name, out _))
@@ -72,18 +72,18 @@ internal readonly record struct ScopedEvaluation(
             if (!resolved.IsEmpty && bindings.RetainSelectorBinding(resolved, Effects.Memory, Effects.CancellationToken) is { } retained)
             {
                 // Scalar writes through local namerefs reach the caller; subsequent reads still see the prefix.
-                retained.SetResolvedValuePreservingArray(resolved, value, Effects.Memory);
-                return;
+                return retained.SetResolvedValuePreservingArray(resolved, value, Effects.Memory);
             }
         }
 
-        Variables.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
+        var stored = Variables.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
         if (SelectorBindings != null)
         {
             var resolved = Variables.ResolveNamerefName(name);
             GetSelectorWriteTarget(name, resolved)?.SetResolvedValuePreservingArray(resolved, value, Effects.Memory);
         }
         GetExpansionWriteTarget(name)?.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
+        return stored;
     }
 
     /// <summary>Retains selected builtin writes, except indirect writes into temporary prefixes.</summary>

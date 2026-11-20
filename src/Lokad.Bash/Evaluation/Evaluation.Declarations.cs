@@ -5,6 +5,8 @@ using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using BindingAttributes = Lokad.Bash.Evaluation.Variables.BindingAttributes;
+using CaseAttributeChange = Lokad.Bash.Evaluation.Variables.CaseAttributeChange;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -27,9 +29,14 @@ public sealed partial class Evaluation
         var fields = new List<ShellValue>();
         ShellValue? lastArgument = null;
         PreparedDeclarationOperand? lastAssignment = null;
+        var readCompoundOptions = command.DeclarationAssignments.Count != 0;
+        var compoundCase = BindingAttributes.None;
+        byte compoundAttributeSign = 0;
         for (var index = 1; index < sourceWords.Count; index++)
         {
             var word = sourceWords[index];
+            if (readCompoundOptions)
+                ReadCompoundOptions(word);
             if (command.DeclarationAssignments.TryGetValue(word, out var assignment))
             {
                 options.EndOptions();
@@ -115,7 +122,7 @@ public sealed partial class Evaluation
                             : options.ArrayKind;
                         if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
                                 new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
-                                declarationKind, isNameref: false, options.Inherit, Memory))
+                                declarationKind, isNameref: false, options.Inherit, caseChange: default, Memory))
                         {
                             var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
                             await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(message)).ConfigureAwait(false);
@@ -132,6 +139,7 @@ public sealed partial class Evaluation
                     }
                     if (options.IntegerChange != DeclarationAttributeChange.Unchanged)
                         targetVariables.SetIntegerBinding(name, options.IntegerChange == DeclarationAttributeChange.Set);
+                    targetVariables.SetCaseAttributes(name, GetCompoundCaseChange());
                     if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, targetVariables, declaredName,
                             ShellValue.FromText(commandName))).ConfigureAwait(false))
@@ -296,6 +304,39 @@ public sealed partial class Evaluation
             AddOperand(words, operand.ToWord());
         }
 
+        void ReadCompoundOptions(Word word)
+        {
+            // Compound declaration operands take transformation attributes from
+            // the leading option spellings, before ordinary option dispatch.
+            var bytes = word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted } source]
+                ? source.Source.AsSpan() : ReadOnlySpan<byte>.Empty;
+            if (bytes is not [(byte)'-' or (byte)'+', ..] || bytes.SequenceEqual("--"u8))
+            {
+                readCompoundOptions = false;
+                return;
+            }
+            foreach (var flag in bytes[1..])
+            {
+                var attribute = ReadCaseAttribute(flag);
+                if (attribute == BindingAttributes.None && flag is not ((byte)'i' or (byte)'I'))
+                    continue;
+                if (compoundAttributeSign == 0)
+                    compoundAttributeSign = bytes[0];
+                compoundCase |= attribute;
+            }
+        }
+
+        CaseAttributeChange GetCompoundCaseChange()
+        {
+            if (compoundCase == BindingAttributes.None)
+                return default;
+            if (compoundAttributeSign == (byte)'+' && !options.Global && options.ArrayKind == ArrayAssignmentKind.Auto)
+                return new(BindingAttributes.None, compoundCase);
+            return compoundCase is BindingAttributes.Capitalize or BindingAttributes.Lowercase or BindingAttributes.Uppercase
+                ? default(CaseAttributeChange).Include(compoundCase, remove: false)
+                : new(compoundCase, BindingAttributes.Case);
+        }
+
         static bool HasConflictingArrayKind(Variables variables, BindingName name, ArrayKind kind) =>
             kind == ArrayKind.Associative ? variables.IndexedArrays.ContainsKey(name) : variables.AssociativeArrays.ContainsKey(name);
     }
@@ -339,6 +380,14 @@ public sealed partial class Evaluation
 
     private enum DeclarationHelp { None, FirstField, AfterOptions }
 
+    private static BindingAttributes ReadCaseAttribute(byte flag) => flag switch
+    {
+        (byte)'c' => BindingAttributes.Capitalize,
+        (byte)'l' => BindingAttributes.Lowercase,
+        (byte)'u' => BindingAttributes.Uppercase,
+        _ => BindingAttributes.None
+    };
+
     /// <summary>Consumes only the initial option fields; later fields retain their operand meaning.</summary>
     private sealed class DeclarationOptions(BuiltinKind builtin)
     {
@@ -352,6 +401,7 @@ public sealed partial class Evaluation
                 ? ArrayAssignmentKind.Indexed : ArrayAssignmentKind.Auto;
         public DeclarationAttributeChange NamerefChange { get; private set; }
         public DeclarationAttributeChange IntegerChange { get; private set; }
+        public CaseAttributeChange CaseChange { get; private set; }
         public DeclarationAttributeChange ExportChange { get; private set; } = builtin == BuiltinKind.Export
             ? DeclarationAttributeChange.Set : DeclarationAttributeChange.Unchanged;
         public DeclarationAttributeChange ReadonlyChange { get; private set; } = builtin == BuiltinKind.Readonly
@@ -437,6 +487,9 @@ public sealed partial class Evaluation
                     case (byte)'r' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: ReadonlyChange = ReadChange(ReadonlyChange, DeclarationListingAttributes.Readonly); break;
                     case (byte)'x' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: ExportChange = ReadChange(ExportChange, DeclarationListingAttributes.Exported); break;
                     case (byte)'i' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: IntegerChange = ReadChange(IntegerChange, DeclarationListingAttributes.Integer); break;
+                    case (byte)'c' or (byte)'l' or (byte)'u' when Builtin is BuiltinKind.Declare or BuiltinKind.Local:
+                        CaseChange = CaseChange.Include(ReadCaseAttribute(item.ShortName), remove);
+                        break;
                     case (byte)'I' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: Inherit = !remove; break;
                     case (byte)'g' when Builtin == BuiltinKind.Declare: Global |= !remove; break;
                     case (byte)'p': Print = true; break;

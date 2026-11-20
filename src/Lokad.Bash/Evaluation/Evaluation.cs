@@ -14,6 +14,7 @@ using Lokad.Bash.Formatting;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
+using BindingAttributes = Lokad.Bash.Evaluation.Variables.BindingAttributes;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -1862,7 +1863,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 var listOptionSnapshot = listing && localBuiltinFrame?.HasOwnOptionSnapshot == true;
                 var style = listing && options.Builtin == BuiltinKind.Declare && !options.Print
-                    && options.ListingAttributes == DeclarationListingAttributes.None
+                    && options.ListingAttributes == DeclarationListingAttributes.None && options.CaseChange.Set == BindingAttributes.None
                     ? VariableDisplayStyle.Assignment : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationName : VariableDisplayStyle.Declaration;
                 var printStatus = 0;
                 var outputClosed = false;
@@ -1950,7 +1951,9 @@ public sealed partial class Evaluation : IFileTester
                         && (!flags.HasFlag(DeclarationListingAttributes.Nameref) || variables.TryGetNameref(name, out _))
                         && (!flags.HasFlag(DeclarationListingAttributes.Exported) || variables.IsExported(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Integer) || variables.IsIntegerBinding(name))
-                        && (!flags.HasFlag(DeclarationListingAttributes.Readonly) || variables.IsReadonlyBinding(name));
+                        && (!flags.HasFlag(DeclarationListingAttributes.Readonly) || variables.IsReadonlyBinding(name))
+                        && (options.CaseChange.Set == BindingAttributes.None
+                            || (variables.GetAssignmentAttributes(name) & options.CaseChange.Set) != 0);
                 }
             }
 
@@ -1972,8 +1975,10 @@ public sealed partial class Evaluation : IFileTester
                         && options.IndexedChange == DeclarationAttributeChange.Unchanged
                         && options.AssociativeChange == DeclarationAttributeChange.Unchanged
                         && options.IntegerChange == DeclarationAttributeChange.Unchanged
-                        && options.NamerefChange == DeclarationAttributeChange.Unchanged);
-                var filter = FunctionAttributes.None;
+                        && options.NamerefChange == DeclarationAttributeChange.Unchanged
+                        && options.CaseChange.IsEmpty);
+                var caseAttributes = (FunctionAttributes)options.CaseChange.Set;
+                var filter = caseAttributes;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Readonly)) filter |= FunctionAttributes.Readonly;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Exported)) filter |= FunctionAttributes.Exported;
                 var functionStatus = 0;
@@ -2001,7 +2006,8 @@ public sealed partial class Evaluation : IFileTester
                     }
                     var attributes = function.Attributes;
                     // Function lists select the union of attributes, unlike variable lists.
-                    if (noOperands && options.ListingAttributes != DeclarationListingAttributes.None && (attributes & filter) == 0)
+                    if (noOperands && (options.ListingAttributes != DeclarationListingAttributes.None || caseAttributes != FunctionAttributes.None)
+                        && (attributes & filter) == 0)
                         continue;
                     if (!inspect)
                     {
@@ -2022,6 +2028,7 @@ public sealed partial class Evaluation : IFileTester
                         if (options.Readonly) attributes |= FunctionAttributes.Readonly;
                         if (options.ExportChange == DeclarationAttributeChange.Set) attributes |= FunctionAttributes.Exported;
                         if (options.ExportChange == DeclarationAttributeChange.Clear) attributes &= ~FunctionAttributes.Exported;
+                        attributes = (attributes | caseAttributes) & ~(FunctionAttributes)options.CaseChange.Clear;
                         if (attributes != function.Attributes)
                             _state.SetFunctionBinding(function with { Attributes = attributes });
                         continue;
@@ -2362,7 +2369,7 @@ public sealed partial class Evaluation : IFileTester
                         hasReferenceValue ? VariableOperandKind.Assignment : VariableOperandKind.Name,
                         reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
                     if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
-                            localOperand, prefixNames, options.ArrayKind, options.Nameref, options.Inherit, Memory))
+                            localOperand, prefixNames, options.ArrayKind, options.Nameref, options.Inherit, options.CaseChange, Memory))
                     {
                         var message = targetVars.IsReadonly(name) ? "readonly variable"
                             : options.ArrayKind != ArrayAssignmentKind.Auto
@@ -2431,6 +2438,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         var target = namerefTarget ?? ShellValue.Empty;
                         Memory.Charge(checked(4L * target.Bytes.Length));
+                        targetVars.SetCaseAttributes(name, options.CaseChange);
                         if (!targetVars.TrySetNameref(name, target, Memory))
                         {
                             exitCode = 1;
@@ -2632,6 +2640,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (!target.Name.IsEmpty && options.IntegerChange != DeclarationAttributeChange.Unchanged)
                     destination.SetIntegerBinding(target.Name, options.IntegerChange == DeclarationAttributeChange.Set);
+                destination.SetCaseAttributes(target.Name, options.CaseChange);
                 return await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
                     ShellValue.FromText(commandName), declarationWrite).ConfigureAwait(false) is not null;
             }
@@ -2690,6 +2699,7 @@ public sealed partial class Evaluation : IFileTester
 
             void SetAttributes(BindingName name, Variables variables)
             {
+                variables.SetCaseAttributes(name, options.CaseChange);
                 if (options.IntegerChange != DeclarationAttributeChange.Unchanged)
                     variables.SetIntegerBinding(name, options.IntegerChange == DeclarationAttributeChange.Set);
                 if (options.ExportChange != DeclarationAttributeChange.Unchanged)

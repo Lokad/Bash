@@ -77,7 +77,8 @@ internal static partial class WordExpansion
                 return null;
             ShellValue? previous = operation == AssignmentOperator.Append && TryRead(destination, out var stored)
                 ? stored : null;
-            if (destination.IsIntegerBinding(Name))
+            var attributes = destination.GetAssignmentAttributes(Name);
+            if ((attributes & Variables.BindingAttributes.Integer) != 0)
             {
                 if (declarationWrite != DeclarationWrite.ActiveGlobalIndexed && destination.IsReadonly(Name))
                     return null;
@@ -88,7 +89,10 @@ internal static partial class WordExpansion
             }
             else if (previous is { } prefix)
                 value = AppendAssignmentValue(prefix, value, scope);
-            return TryPublishValue(scope with { Variables = destination }, sourceName, value, declarationWrite) ? value : null;
+            if (!TryPublishValue(scope with { Variables = destination }, sourceName, value, declarationWrite))
+                return null;
+            return (attributes & Variables.BindingAttributes.Case) != 0 && TryRead(destination, out var assigned)
+                ? assigned : value;
         }
 
         internal bool TryPublishValue(ScopedEvaluation scope, BindingName sourceName, ShellValue value) =>

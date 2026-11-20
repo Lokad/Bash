@@ -41,7 +41,13 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
 }
 
 [Flags]
-internal enum FunctionAttributes { None = 0, Readonly = 1, Exported = 2 }
+internal enum FunctionAttributes
+{
+    None = 0, Readonly = 1, Exported = 2,
+    Capitalize = (int)Variables.BindingAttributes.Capitalize,
+    Lowercase = (int)Variables.BindingAttributes.Lowercase,
+    Uppercase = (int)Variables.BindingAttributes.Uppercase
+}
 
 internal enum FunctionDisplayStyle { Name, Attributes, Definition, DefinitionWithAttributes }
 
@@ -150,6 +156,9 @@ internal sealed record FunctionBinding
             && (!output.TryAppend("declare -f"u8)
                 || Attributes.HasFlag(FunctionAttributes.Readonly) && !output.TryAppend((byte)'r')
                 || Attributes.HasFlag(FunctionAttributes.Exported) && !output.TryAppend((byte)'x')
+                || Attributes.HasFlag(FunctionAttributes.Capitalize) && !output.TryAppend((byte)'c')
+                || Attributes.HasFlag(FunctionAttributes.Lowercase) && !output.TryAppend((byte)'l')
+                || Attributes.HasFlag(FunctionAttributes.Uppercase) && !output.TryAppend((byte)'u')
                 || !output.TryAppend((byte)' ')))
             return false;
         return output.TryAppend(Definition.Name.Value.Bytes.Span) && output.TryAppend((byte)'\n');

@@ -91,7 +91,9 @@ public sealed partial class Evaluation
         var resolved = target.Name;
 
         var descriptor = GetStdInDescriptor();
-        var integer = variables.IsIntegerBinding(resolved);
+        var attributes = variables.GetAssignmentAttributes(resolved);
+        var integer = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0;
+        var convertCase = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Case) != 0;
         // Arithmetic consumes borrowed records after input settles. Ordinary records can
         // outlive their batch independently after publication.
         using var integerInputMemory = integer ? Memory.Budget.CreateScope() : null;
@@ -186,6 +188,23 @@ public sealed partial class Evaluation
                     value = ShellValue.Empty;
                 else if (!integer)
                 {
+                    if (convertCase)
+                    {
+                        var beforeConversion = Memory.Workspace.Bytes;
+                        try
+                        {
+                            var converted = global::Lokad.Bash.Evaluation.Variables.ConvertAssignmentCase(attributes, value, Memory);
+                            if (!converted.Bytes.Equals(value.Bytes))
+                            {
+                                values.Add(converted);
+                                continue;
+                            }
+                        }
+                        finally
+                        {
+                            stagedBytes += Memory.Workspace.Bytes - beforeConversion;
+                        }
+                    }
                     var bytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value);
                     Memory.Charge(bytes);
                     stagedBytes += bytes;

@@ -10,6 +10,8 @@ using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
+internal enum CaseTransformation { Lowercase, Uppercase, Capitalize }
+
 internal static partial class WordExpansion
 {
     // Array sources keep the selected owner. Some operators consume it after applying operand effects.
@@ -206,8 +208,8 @@ internal static partial class WordExpansion
                             var resolved = scope.Variables.ResolveNamerefName(named.Name);
                             if (scope.Variables.IsIntegerBinding(resolved) && !scope.Variables.IsReadonly(resolved))
                                 assigned = await EvaluateIntegerAssignmentAsync(expanded, null, scope, ShellValue.Empty).ConfigureAwait(false);
-                            if (assigned is { } value && scope.CanExpand && !TrySetVariable(named.Name, value, scope))
-                                assigned = null;
+                            if (assigned is { } value && scope.CanExpand)
+                                assigned = TrySetVariable(named.Name, value, scope);
                         }
                         else if (target != null && parameter.Source is { } source)
                             assigned = await target.AssignValueAsync(scope, source.Name, expanded, AssignmentOperator.Replace).ConfigureAwait(false);
@@ -912,47 +914,9 @@ internal static partial class WordExpansion
                 return new ParameterOperand(value, word.GetGlobMask(budget));
             }
 
-            int Match(ParameterOperand pattern, ReadOnlySpan<byte> value, bool requireEnd)
-            {
-                var mask = pattern.Mask.AsSpan();
-                var matched = TextGlobMatcher.MatchUtf8(pattern.Value.Bytes.Span, in mask, value,
-                    requireEnd, budget.Workspace, cancellationToken, out var length);
-                return matched == GlobMatchResult.Match ? length : -1;
-            }
-
             ShellValue ChangeCase(ShellValue value, bool upper, bool firstOnly, ParameterOperand? pattern, MemoryCapacity scratch)
-            {
-                var bytes = value.Bytes.Span;
-                using var builder = new ByteMemoryBuilder(0, scratch);
-                Span<byte> encoded = stackalloc byte[4];
-                var copiedThrough = 0;
-                for (var position = 0; position < bytes.Length;)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var valid = Rune.DecodeFromUtf8(bytes[position..], out var rune, out var length) == OperationStatus.Done;
-                    if (!valid)
-                        length = 1;
-                    if (valid && (pattern == null || Match(pattern, bytes.Slice(position, length), true) >= 0))
-                    {
-                        var changed = upper ? Rune.ToUpperInvariant(rune) : Rune.ToLowerInvariant(rune);
-                        if (changed != rune)
-                        {
-                            builder.Append(bytes[copiedThrough..position]);
-                            var written = changed.EncodeToUtf8(encoded);
-                            builder.Append(encoded[..written]);
-                            copiedThrough = position + length;
-                        }
-                    }
-                    if (firstOnly)
-                        break;
-                    position += length;
-                }
-                if (copiedThrough == 0)
-                    return value;
-
-                builder.Append(bytes[copiedThrough..]);
-                return ShellValue.FromBytes(builder.DetachSnapshot());
-            }
+                => TransformCase(value, upper ? CaseTransformation.Uppercase : CaseTransformation.Lowercase,
+                    firstOnly, pattern, budget.Workspace, scratch, cancellationToken);
         }
 
         static ReadOnlyMemory<byte> ApplyPatternRemoval(ShellValue value, ShellPattern pattern,
@@ -1145,6 +1109,57 @@ internal static partial class WordExpansion
     private enum ParameterClosure { Closed, Missing, MissingAfterOperator }
 
     private enum ParameterReplacementMode { First, All, Prefix, Suffix }
+
+    internal static ShellValue ChangeAssignmentCase(ShellValue value, CaseTransformation conversion, EvaluationMemory? memory) =>
+        TransformCase(value, conversion, firstOnly: false, pattern: null, patternMemory: null, memory?.Workspace,
+            memory?.CancellationToken ?? CancellationToken.None);
+
+    private static ShellValue TransformCase(
+        ShellValue value, CaseTransformation conversion, bool firstOnly, ParameterOperand? pattern,
+        MemoryCapacity? patternMemory, MemoryCapacity? scratch, CancellationToken cancellationToken)
+    {
+        var bytes = value.Bytes.Span;
+        var mask = pattern == null ? default : pattern.Mask.AsSpan();
+        ByteMemoryBuilder? builder = null;
+        Span<byte> encoded = stackalloc byte[4];
+        var copiedThrough = 0;
+        try
+        {
+            for (var position = 0; position < bytes.Length;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var valid = Rune.DecodeFromUtf8(bytes[position..], out var rune, out var length) == OperationStatus.Done;
+                if (!valid)
+                    length = 1;
+                if (valid && (pattern == null || TextGlobMatcher.MatchUtf8(pattern.Value.Bytes.Span, in mask,
+                        bytes.Slice(position, length), requireEnd: true, patternMemory, cancellationToken, out _) == GlobMatchResult.Match))
+                {
+                    var upper = conversion == CaseTransformation.Uppercase
+                        || conversion == CaseTransformation.Capitalize && position == 0;
+                    var changed = upper ? Rune.ToUpperInvariant(rune) : Rune.ToLowerInvariant(rune);
+                    if (changed != rune)
+                    {
+                        builder ??= scratch == null ? ByteMemoryBuilder.CreateUnaccounted(0) : new ByteMemoryBuilder(0, scratch);
+                        builder.Append(bytes[copiedThrough..position]);
+                        var written = changed.EncodeToUtf8(encoded);
+                        builder.Append(encoded[..written]);
+                        copiedThrough = position + length;
+                    }
+                }
+                if (firstOnly)
+                    break;
+                position += length;
+            }
+            if (builder == null)
+                return value;
+            builder.Append(bytes[copiedThrough..]);
+            return ShellValue.FromBytes(builder.DetachSnapshot());
+        }
+        finally
+        {
+            builder?.Dispose();
+        }
+    }
 
     private sealed record ParameterOperand(ShellValue Value, GlobMask Mask);
 

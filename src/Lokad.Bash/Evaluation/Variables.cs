@@ -586,6 +586,7 @@ public sealed partial class Variables
             ArrayAssignmentKind arrayKind,
             bool isNameref,
             bool inherit,
+            CaseAttributeChange caseChange,
             EvaluationMemory memory)
         {
             var hasAssignment = operand.Kind == VariableOperandKind.Assignment;
@@ -738,6 +739,7 @@ public sealed partial class Variables
                     var target = hasAssignment ? operand.Value
                         : variables.Scalars.GetValueOrDefault(name, ShellValue.Empty);
                     memory.Charge(checked(4L * target.Bytes.Length));
+                    variables.SetCaseAttributes(name, caseChange);
                     if (!variables.TrySetNameref(name, target, memory))
                         return false;
                     return true;
@@ -767,10 +769,11 @@ public sealed partial class Variables
                 if (hasAssignment && variables.IsReadonly(name))
                     return false;
 
+                variables.SetCaseAttributes(resolved, caseChange);
                 var index = reference.Kind == VariableReferenceKind.Element ? reference.Subscript.ToValue() : ShellValue.FromText("0");
                 if (kind == ArrayAssignmentKind.Auto)
                 {
-                    variables.SetResolvedScalar(resolved, operand.Value);
+                    variables.SetAssignedScalar(resolved, operand.Value, memory);
                     return true;
                 }
                 // Without an initializer, a selector declares the array type but is not evaluated.
@@ -902,28 +905,30 @@ public sealed partial class Variables
 
     /// <summary>Expansion assignments update element zero without replacing an existing array.</summary>
     /// <remarks>The expansion caller checks readonly status before applying or forwarding the write.</remarks>
-    internal void SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, EvaluationMemory memory)
+    internal ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, EvaluationMemory memory)
     {
         if (!TryResolveWholeName(name, out var resolved))
-            return;
+            return value;
 
         if (resolved.IsEmpty)
         {
             _ = TrySetScalar(name, value, memory);
-            return;
+            return value;
         }
-        SetResolvedValuePreservingArray(resolved, value, memory);
+        return SetResolvedValuePreservingArray(resolved, value, memory);
     }
 
     /// <summary>Writes a resolved scalar or array element zero; callers own readonly checks.</summary>
-    internal void SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory)
+    internal ShellValue SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory)
     {
         if (IndexedArrays.ContainsKey(resolved))
             _ = TrySetResolvedArrayElement(resolved, default(IndexedArrayIndex), value, memory);
         else if (AssociativeArrays.ContainsKey(resolved))
             _ = TrySetResolvedArrayElement(resolved, ShellValue.FromText("0"), value, ArrayKind.Associative, memory);
         else
-            SetResolvedScalar(resolved, value);
+            return SetAssignedScalar(resolved, value, memory);
+        return HasAttribute(resolved, BindingAttributes.Case) && TryGetExpansionValue(resolved, out var stored)
+            ? stored : value;
     }
 
     /// <summary>
@@ -946,7 +951,7 @@ public sealed partial class Variables
         if (commandPrefix && TryGetBinding(resolved, out var slot) && slot is LineNumberSlot)
             ReplaceValue(resolved, new ScalarSlot(value));
         else
-            SetResolvedScalar(resolved, value);
+            SetAssignedScalar(resolved, value, memory);
         return true;
     }
 
@@ -970,7 +975,7 @@ public sealed partial class Variables
             return false;
         if (NamerefTargets.TryGetValue(name, out var target) && target.IsEmpty)
             return TrySetScalar(name, value, memory);
-        SetResolvedScalar(name, value);
+        SetAssignedScalar(name, value, memory);
         return true;
     }
 
@@ -1007,7 +1012,21 @@ public sealed partial class Variables
     /// <summary>Replaces a resolved binding; callers own name and readonly validation.</summary>
     private void SetResolvedScalar(BindingName resolved, ShellValue value)
     {
-        if (TryGetBinding(resolved, out var slot) && slot is ScalarSlot scalar)
+        TryGetBinding(resolved, out var slot);
+        SetResolvedScalar(resolved, slot, value);
+    }
+
+    private ShellValue SetAssignedScalar(BindingName resolved, ShellValue value, EvaluationMemory? memory)
+    {
+        TryGetBinding(resolved, out var slot);
+        value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, value, memory);
+        SetResolvedScalar(resolved, slot, value);
+        return value;
+    }
+
+    private void SetResolvedScalar(BindingName resolved, VariableSlot? slot, ShellValue value)
+    {
+        if (slot is ScalarSlot scalar)
         {
             using var memory = TrackBindingMemory(resolved);
             scalar.Value = value;
@@ -1258,18 +1277,23 @@ public sealed partial class Variables
     internal bool TrySetResolvedArrayElement(
         BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
     {
-        if (resolved.IsEmpty || AssociativeArrays.ContainsKey(resolved))
+        if (resolved.IsEmpty)
             return false;
 
-        if (IndexedArrays.TryGetValue(resolved, out var array))
+        TryGetBinding(resolved, out var slot);
+        if (slot is AssociativeSlot)
+            return false;
+        if (value is { } assigned)
+            value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, assigned, memory);
+        if (slot is IndexedSlot indexed)
         {
             using var change = TrackBindingMemory(resolved);
-            array.Set(index, value, memory, prepaidBytes);
+            indexed.Value.Set(index, value, memory, prepaidBytes);
         }
         else
         {
             memory?.Charge(BindingOverheadBytes);
-            array = CreatePromotedIndexedArray(resolved, memory);
+            var array = CreatePromotedIndexedArray(resolved, memory);
             array.Set(index, value, memory, prepaidBytes);
             ReplaceValue(resolved, new IndexedSlot(array));
         }
@@ -1305,20 +1329,25 @@ public sealed partial class Variables
 
     internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue? value, EvaluationMemory? memory)
     {
-        if (resolved.IsEmpty || IndexedArrays.ContainsKey(resolved))
+        if (resolved.IsEmpty)
             return false;
 
-        if (AssociativeArrays.TryGetValue(resolved, out var associative))
+        TryGetBinding(resolved, out var slot);
+        if (slot is IndexedSlot)
+            return false;
+        if (value is { } assigned)
+            value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, assigned, memory);
+        if (slot is AssociativeSlot associative)
         {
             using var change = TrackBindingMemory(resolved);
-            associative.Set(key, value, memory);
+            associative.Value.Set(key, value, memory);
         }
         else
         {
             memory?.Charge(BindingOverheadBytes);
-            associative = new AssociativeArray(isInitialized: false);
-            associative.Set(key, value, memory);
-            ReplaceValue(resolved, new AssociativeSlot(associative));
+            var array = new AssociativeArray(isInitialized: false);
+            array.Set(key, value, memory);
+            ReplaceValue(resolved, new AssociativeSlot(array));
         }
         if (resolved.CachedText == "OPTIND" && key.Value.Bytes.Span.SequenceEqual("0"u8))
             ResetGetoptsPosition(resolved);
@@ -1352,7 +1381,7 @@ public sealed partial class Variables
             return true;
         if (style != VariableDisplayStyle.Assignment)
         {
-            Span<byte> flags = stackalloc byte[4];
+            Span<byte> flags = stackalloc byte[8];
             var count = WriteDeclarationAttributes(slot, flags);
             if (!output.TryAppend("declare -"u8)
                 || !output.TryAppend(count == 0 ? "-"u8 : flags[..count])
@@ -1385,7 +1414,7 @@ public sealed partial class Variables
     internal ShellValue GetDeclarationAttributes(BindingName name)
     {
         TryGetBinding(name, out var slot);
-        Span<byte> flags = stackalloc byte[4];
+        Span<byte> flags = stackalloc byte[8];
         var count = WriteDeclarationAttributes(slot, flags);
         return count == 0 ? ShellValue.Empty : ShellValue.FromBytes(flags[..count].ToArray());
     }
@@ -1410,6 +1439,12 @@ public sealed partial class Variables
             flags[length++] = (byte)'r';
         if ((attributes & BindingAttributes.Exported) != 0)
             flags[length++] = (byte)'x';
+        if ((attributes & BindingAttributes.Capitalize) != 0)
+            flags[length++] = (byte)'c';
+        if ((attributes & BindingAttributes.Lowercase) != 0)
+            flags[length++] = (byte)'l';
+        if ((attributes & BindingAttributes.Uppercase) != 0)
+            flags[length++] = (byte)'u';
         return length;
     }
 
@@ -1491,6 +1526,7 @@ public sealed partial class Variables
         if (HasAttribute(name, BindingAttributes.Readonly) || IndexedArrays.ContainsKey(name) || AssociativeArrays.ContainsKey(name))
             return false;
 
+        target = ConvertAssignmentCase(name, target, memory);
         VariableReference? reference = null;
         if (!target.IsEmpty)
         {

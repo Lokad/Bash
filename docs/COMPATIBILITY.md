@@ -92,6 +92,15 @@ and Lokad.Bash's builtin documentation to stdout with status 2. At script
 scope, a leading `local --help` still prints help. Other `local` invocations
 require function context before reporting option errors.
 
+`declare`, `typeset` and `local` support `-l`, `-u` and `-c` case
+attributes. They affect later assignments, including compound arrays,
+appends, case-aware parameter-default results, and values read by `read`
+and `mapfile`. Adding an attribute to an existing binding leaves its current
+value in place until an assignment. Array selectors continue to use the
+original key spelling. Integer attributes take precedence when evaluating an
+assigned value. Case conversion uses the invariant UTF-8 character profile
+and copies malformed bytes verbatim.
+
 Function display/export preserves legacy backticks and their original escapes.
 Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches

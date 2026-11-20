@@ -140,7 +140,8 @@ public sealed partial class Evaluation
                 fieldMemory, scope.Variables, Memory, _cancellationToken);
             if (arrayTarget is { } array)
             {
-                if (scope.Variables.IsIntegerBinding(array.Name))
+                var attributes = scope.Variables.GetAssignmentAttributes(array.Name);
+                if ((attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0)
                 {
                     var assigned = await AssignIntegerIndexedInputAsync(array.Name, fields, null, scope, words[0])
                         .ConfigureAwait(false);
@@ -150,7 +151,9 @@ public sealed partial class Evaluation
                 for (var index = 0; index < fields.Count; index++)
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
-                    fields[index] = RetainField(fields[index]);
+                    var field = fields[index];
+                    var converted = global::Lokad.Bash.Evaluation.Variables.ConvertAssignmentCase(attributes, field, Memory);
+                    fields[index] = converted.Bytes.Equals(field.Bytes) ? RetainField(field) : converted;
                 }
                 var replacement = IndexedArray.FromSequential(fields);
                 _cancellationToken.ThrowIfCancellationRequested();

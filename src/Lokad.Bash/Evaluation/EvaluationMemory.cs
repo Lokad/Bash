@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
@@ -20,6 +21,7 @@ internal sealed class EvaluationMemory
 
     internal bool HasCommand => _command != null;
     internal MemoryCapacity Workspace => _memory;
+    internal CancellationToken CancellationToken => _command?.CancellationToken ?? CancellationToken.None;
 
     public EvaluationMemory(IMemoryBudget budget)
     {
@@ -106,6 +108,8 @@ internal sealed class EvaluationMemory
 
     internal sealed class Command(EvaluationMemory owner, ScopedEvaluation scope, Command? parent, long baseline) : IDisposable
     {
+        internal CancellationToken CancellationToken => scope.Effects.CancellationToken;
+
         internal void PrepareRetainedStorage(long bytes)
         {
             var required = checked(baseline + RetainedBytes(scope) + bytes);

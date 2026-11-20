@@ -352,7 +352,7 @@ internal static partial class WordExpansion
                 if (reference.Kind == VariableReferenceKind.Name
                     && scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
                     && binding.Reference.Kind == VariableReferenceKind.Name)
-                    return TrySetVariable(reference.Name, value, scope);
+                    return TrySetVariable(reference.Name, value, scope).HasValue;
                 return target.TryPublishValue(scope, reference.Name, value);
             }
         }

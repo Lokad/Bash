@@ -1052,14 +1052,14 @@ internal static partial class WordExpansion
     private static ShellScanContext CreateExpansionScanContext(ScopedEvaluation scope) =>
         new() { SyntaxMemory = scope.Effects.Memory.Workspace, LegacyOrigin = scope.ExpansionOrigin };
 
-    private static bool TrySetVariable(
+    private static ShellValue? TrySetVariable(
         BindingName name,
         ShellValue value,
         ScopedEvaluation scope)
     {
         if (name.IsEmpty)
         {
-            return false;
+            return null;
         }
 
         var key = name;
@@ -1067,11 +1067,10 @@ internal static partial class WordExpansion
             || scope.Variables.GetNamerefAssignmentFailure(key, key, value, scope.Effects.Memory)
                 != NamerefAssignmentFailure.None)
         {
-            return false;
+            return null;
         }
 
-        scope.SetExpansionValueIgnoringReadonly(key, value);
-        return true;
+        return scope.SetExpansionValueIgnoringReadonly(key, value);
     }
 
     /// <summary>

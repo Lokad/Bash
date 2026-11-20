@@ -10,6 +10,28 @@ namespace Lokad.Bash.Tests;
 public sealed class CollectionOwnershipTests
 {
     [Fact]
+    public void RefusedCaseConversionPreservesThePreviousScalar()
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("old");
+        Assert.True(variables.TrySetScalar("value", original));
+        variables.SetCaseAttributes("value", default(Variables.CaseAttributeChange)
+            .Include(Variables.BindingAttributes.Uppercase, remove: false));
+        var governor = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(governor);
+
+        try
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                variables.TrySetScalar("value", ShellValue.FromText("new"), memory));
+            Assert.True(variables.TryGetScalar("value", out var after));
+            Assert.Equal(original, after);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void IndexedWriteAdmitsBackingOverlapBeforeAddingAPosition()
     {
         var variables = Variables.CreateEmpty();

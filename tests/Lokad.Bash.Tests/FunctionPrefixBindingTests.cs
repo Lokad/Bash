@@ -270,7 +270,7 @@ public sealed partial class FunctionPrefixBindingTests
         {
             Assert.True(locals.TryDeclare(caller, caller,
                 new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("map"), ShellValue.FromText("local")),
-                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, memory));
+                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default, memory));
             var donor = Assert.IsType<Variables>(locals.SavedBindings);
             var saved = donor.AssociativeArrays["map"];
 
@@ -308,7 +308,7 @@ public sealed partial class FunctionPrefixBindingTests
         {
             Assert.Throws<MemoryBudgetExceededException>(() => locals.TryDeclare(caller, caller,
                 new VariableOperand(VariableOperandKind.Name, VariableReference.ForName("x"), ShellValue.Empty),
-                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, memory));
+                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default, memory));
             Assert.Empty(locals.SavedNames);
             Assert.Same(array, caller.IndexedArrays["x"]);
             Assert.Equal(256, array.Count);

@@ -17,7 +17,21 @@ public sealed partial class Variables
     private readonly HashSet<BindingName> _exportedIndex = new();
 
     [Flags]
-    private enum BindingAttributes { None = 0, Readonly = 1, Exported = 2, Temporary = 4, Integer = 8 }
+    internal enum BindingAttributes
+    {
+        None = 0, Readonly = 1, Exported = 2, Temporary = 4, Integer = 8,
+        Capitalize = 16, Lowercase = 32, Uppercase = 64,
+        Case = Capitalize | Lowercase | Uppercase
+    }
+
+    internal readonly record struct CaseAttributeChange(BindingAttributes Set, BindingAttributes Clear)
+    {
+        internal bool IsEmpty => (Set | Clear) == BindingAttributes.None;
+
+        internal CaseAttributeChange Include(BindingAttributes attribute, bool remove) => remove
+            ? this with { Clear = Clear | attribute }
+            : new(Set | attribute, Clear | (BindingAttributes.Case & ~attribute));
+    }
 
     private abstract class VariableSlot
     {
@@ -186,6 +200,38 @@ public sealed partial class Variables
 
     private bool HasAttribute(BindingName name, BindingAttributes attribute) =>
         TryGetBinding(name, out var slot) && (slot.Attributes & attribute) != 0;
+
+    internal BindingAttributes GetAssignmentAttributes(BindingName name) =>
+        TryGetBinding(name, out var slot) ? slot.Attributes : BindingAttributes.None;
+
+    internal void SetCaseAttributes(BindingName name, CaseAttributeChange change)
+    {
+        if (change.IsEmpty || name.IsEmpty)
+            return;
+        if (!TryGetBinding(name, out var slot))
+        {
+            if ((change.Set & ~change.Clear) == 0)
+                return;
+            slot = new AttributeSlot();
+        }
+        var attributes = (slot.Attributes | change.Set) & ~change.Clear;
+        if (slot.Attributes == attributes)
+            return;
+        slot.Attributes = attributes;
+        StoreBinding(name, slot);
+    }
+
+    internal ShellValue ConvertAssignmentCase(BindingName name, ShellValue value, EvaluationMemory? memory) =>
+        ConvertAssignmentCase(GetAssignmentAttributes(name), value, memory);
+
+    internal static ShellValue ConvertAssignmentCase(BindingAttributes attributes, ShellValue value, EvaluationMemory? memory)
+    {
+        if ((attributes & BindingAttributes.Case) == 0 || (attributes & BindingAttributes.Integer) != 0)
+            return value;
+        var conversion = (attributes & BindingAttributes.Capitalize) != 0 ? CaseTransformation.Capitalize
+            : (attributes & BindingAttributes.Uppercase) != 0 ? CaseTransformation.Uppercase : CaseTransformation.Lowercase;
+        return WordExpansion.ChangeAssignmentCase(value, conversion, memory);
+    }
 
     internal bool IsTemporaryBinding(BindingName name) => HasAttribute(name, BindingAttributes.Temporary);
 
