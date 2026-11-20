@@ -24,6 +24,8 @@ public sealed class TestOperationVisitor : IBashHost
     private readonly Queue<Task<FileOpenResult>> _fileOpenResults;
     /// <summary> Stores queued close completions for CloseDescriptorAsync. </summary>
     private readonly Queue<Task<OperationError?>> _closeDescriptorResults;
+    private readonly Lock _closeGate = new();
+    private readonly List<FileDescriptor> _closedDescriptors = [];
     /// <summary> Stores queued read completions, including failures and cancellation. </summary>
     private readonly Queue<Task<ReadResult>> _readResults;
     /// <summary> Stores queued byte reads to return for ReadBytesAsync. </summary>
@@ -67,7 +69,14 @@ public sealed class TestOperationVisitor : IBashHost
 
     public Action<FileDescriptor>? BeforeDescriptorClose { get; set; }
 
-    public List<FileDescriptor> ClosedDescriptors { get; } = [];
+    public IReadOnlyList<FileDescriptor> ClosedDescriptors
+    {
+        get
+        {
+            lock (_closeGate)
+                return _closedDescriptors.ToArray();
+        }
+    }
 
     public List<FilePathLookup> PathInfoRequests { get; } = [];
 
@@ -350,14 +359,15 @@ public sealed class TestOperationVisitor : IBashHost
             return Task.FromResult<OperationError?>(null);
         }
 
-        ClosedDescriptors.Add(descriptor);
+        Task<OperationError?>? completion;
+        lock (_closeGate)
+        {
+            _closedDescriptors.Add(descriptor);
+            _closeDescriptorResults.TryDequeue(out completion);
+        }
         BeforeDescriptorClose?.Invoke(descriptor);
-
-        if (_closeDescriptorResults.Count == 0)
-            return FileHost?.CloseDescriptorAsync(descriptor)
-                ?? throw new InvalidOperationException("No descriptor close outcomes are available for this operation.");
-
-        return _closeDescriptorResults.Dequeue();
+        return completion ?? FileHost?.CloseDescriptorAsync(descriptor)
+            ?? throw new InvalidOperationException("No descriptor close outcomes are available for this operation.");
     }
 
     public Task<IReadOnlyList<DirectoryListingResult>> ListDirectoriesAsync(
@@ -506,17 +516,14 @@ public sealed class TestOperationVisitor : IBashHost
 
     public void EnqueueFileOpenTask(Task<FileOpenResult> completion) => _fileOpenResults.Enqueue(completion);
 
-    public void EnqueueCloseDescriptor()
-    {
-        _closeDescriptorResults.Enqueue(Task.FromResult<OperationError?>(null));
-    }
+    public void EnqueueCloseDescriptor() => EnqueueCloseCompletion(Task.FromResult<OperationError?>(null));
 
     public void EnqueueCloseDescriptorResult(OperationError error) =>
-        _closeDescriptorResults.Enqueue(Task.FromResult<OperationError?>(error));
+        EnqueueCloseCompletion(Task.FromResult<OperationError?>(error));
 
     public void EnqueueCloseDescriptorTask(Task closeTask)
     {
-        _closeDescriptorResults.Enqueue(AwaitCloseAsync());
+        EnqueueCloseCompletion(AwaitCloseAsync());
 
         async Task<OperationError?> AwaitCloseAsync()
         {
@@ -527,6 +534,12 @@ public sealed class TestOperationVisitor : IBashHost
 
     public void EnqueueCloseDescriptorException(Exception exception) =>
         EnqueueCloseDescriptorTask(Task.FromException(exception));
+
+    private void EnqueueCloseCompletion(Task<OperationError?> completion)
+    {
+        lock (_closeGate)
+            _closeDescriptorResults.Enqueue(completion);
+    }
 
     public void EnqueueReadResult(ReadResult result)
     {
