@@ -13,26 +13,35 @@ public sealed partial class Evaluation
 
     private async Task<EvaluationResult> EvaluateBuiltinTrapAsync(IReadOnlyList<ShellValue> words)
     {
+        var command = words[0];
         var index = 1;
         var list = false;
-        while (index < words.Count)
+        if (index < words.Count && words[index].Bytes.Span is [(byte)'-', _, ..])
         {
-            var option = words[index].Bytes.Span;
-            if (option.SequenceEqual("--"u8))
+            var options = new CommandLineOptionParser(words, allowSingleDashLongOptions: false);
+            options.TryReadRaw(out _);
+            index = words.Count;
+            while (options.TryRead(out var option))
             {
-                index++;
-                break;
-            }
-            if (option.SequenceEqual("-p"u8))
-            {
-                list = true;
-                index++;
-                continue;
-            }
-            if (option.Length < 2 || option[0] != (byte)'-')
-                break;
+                if (option.Kind == CommandLineOptionKind.Argument)
+                {
+                    index = options.NextArgumentIndex - 1;
+                    break;
+                }
+                if (option.Kind == CommandLineOptionKind.ShortOption && option.ShortName == (byte)'p')
+                {
+                    list = true;
+                    continue;
+                }
+                if (option.Kind == CommandLineOptionKind.LongOption && !option.HasValue
+                    && option.LongName.Bytes.Span.SequenceEqual("help"u8))
+                    return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Trap, "trap", negated: false)
+                        .ConfigureAwait(false);
 
-            return await UsageAsync(option.SequenceEqual("--help"u8)).ConfigureAwait(false);
+                var invalid = option.Kind == CommandLineOptionKind.ShortOption
+                    ? ShellValue.FromBytes(new byte[] { (byte)'-', option.ShortName }) : ShellValue.FromText("--");
+                return await ReportUsageAsync(invalid).ConfigureAwait(false);
+            }
         }
 
         var traps = _state.GetOrCreateTraps();
@@ -67,7 +76,7 @@ public sealed partial class Evaluation
         if (index == words.Count)
         {
             if (!ShellTraps.TryParse(action, out _))
-                return await UsageAsync(standardOutput: false).ConfigureAwait(false);
+                return await ReportUsageAsync(invalidOption: null).ConfigureAwait(false);
             reset = true;
             index--;
         }
@@ -89,17 +98,19 @@ public sealed partial class Evaluation
         }
         return EvaluationResult.FromExitCode(status);
 
-        async Task<EvaluationResult> UsageAsync(bool standardOutput)
+        async Task<EvaluationResult> ReportUsageAsync(ShellValue? invalidOption)
         {
-            var documentation = BuiltinDocumentation.For(BuiltinKind.Trap);
-            var output = Utf8Text.Encode("trap: " + documentation.Synopsis("trap") + "\n    " + documentation.Description + "\n");
-            var written = await ExecuteWriteAsync(standardOutput ? GetStdOutDescriptor() : GetStdErrDescriptor(), output).ConfigureAwait(false);
+            var synopsis = ShellValue.FromText(BuiltinDocumentation.For(BuiltinKind.Trap).Synopsis("trap"));
+            var diagnostic = invalidOption is { } operand
+                ? WriteDiagnosticUnlessStderrClosedAsync([command],
+                    [operand, ShellValue.FromText(": invalid option\ntrap: usage: "), synopsis], scope: null)
+                : WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: "), synopsis], scope: null);
+            var written = await diagnostic.ConfigureAwait(false);
             return EvaluationResult.FromExitCode(written.IsError ? 1 : 2);
         }
 
         Task InvalidConditionAsync(ShellValue operand) =>
-            ReportExpansionDiagnosticAsync([ShellValue.FromText("trap")],
-                [operand, ShellValue.FromText(": invalid signal specification")]);
+            ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(": invalid signal specification")]);
 
         async Task<bool> PrintAsync(TrapCondition condition)
         {

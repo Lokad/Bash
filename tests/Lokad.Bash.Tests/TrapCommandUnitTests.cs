@@ -9,6 +9,55 @@ namespace Lokad.Bash.Tests;
 
 public sealed class TrapCommandUnitTests
 {
+    [Fact]
+    public async Task BundledTrapListingAndAnInvalidOptionPreserveTheRegistration()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            trap ':' EXIT
+            trap -pz EXIT
+            printf '<%s>' "$?"
+            trap -pp -- EXIT
+            trap - EXIT
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2>trap -- ':' EXIT\n", result.StdOut);
+        Assert.Equal("trap: -z: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task TrapUsageWritesTheInvalidOptionByteToTheReachedDescriptor()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("trap $'-p\\xff' 2>diagnostic", CancellationToken.None);
+        byte[] expected = [.. "trap: -"u8, 0xff,
+            .. ": invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n"u8];
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(expected, host.ReadFileBytes("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task TrapHelpUsesTheReachedOutputAndPreservesUsageWithClosedStdout()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            trap -pp --help >documentation
+            printf '<%s>' "$?"
+            trap --help 1>&-
+            printf '<%s>' "$?"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2><2>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.StartsWith("trap: trap [-p] [--] [action condition ...]\n    ", host.ReadFile("/documentation"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("trap -p -- $'\\r+15\\t'", "trap -- 'sample' SIGTERM\n|0|trap -- 'sample' SIGTERM\n", "")]
     [InlineData("trap -p -- -0", "trap -- '' EXIT\n|0|trap -- 'sample' SIGTERM\n", "")]

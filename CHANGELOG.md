@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept grouped `trap -p` options and report invalid flags through the reached
+  stderr. Help and usage retain status 2 when their shell descriptors are closed.
+
 - Report builtin listing write failures through the active stderr. Preserve
   successful directory-stack edits and caller selections when output fails.
   Support stack-only `pushd` and `popd` edits and signed stack indices.

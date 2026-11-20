@@ -16,6 +16,11 @@ The runtime supports deterministic, non-interactive shell workflows:
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT
   handlers. Cancellation and external signals do not deliver traps.
 
+`trap` accepts repeated and grouped `-p` options before its first operand.
+A reached `--help` prints help and returns 2. With closed stdout it returns 2 silently.
+Invalid options report the first invalid flag and usage on stderr. A shell-closed
+stderr suppresses the message and preserves status 2.
+
 `mapfile` and `readarray` split standard input on LF by default. `-u fd`
 selects an existing logical descriptor after redirections are applied. Each
 explicit selector must name an open descriptor, and the last one supplies the

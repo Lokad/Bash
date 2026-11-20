@@ -16,6 +16,8 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("readarray -z")]
     [InlineData("read -z")]
     [InlineData("getopts -z option")]
+    [InlineData("trap -pz")]
+    [InlineData("trap unknown_name")]
     public async Task ShellClosedStderrPreservesUsageStatus(string command)
     {
         var result = await EndToEndHarness.RunScriptAsync(command + " 2>&-; printf '<%s>' \"$?\"",
@@ -30,6 +32,7 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("mapfile -z")]
     [InlineData("read -z")]
     [InlineData("getopts -z option")]
+    [InlineData("trap -pz")]
     public async Task HostUsageDiagnosticFailureStillReturnsOne(string command)
     {
         var state = new Eval(Parser.Parse(command));
