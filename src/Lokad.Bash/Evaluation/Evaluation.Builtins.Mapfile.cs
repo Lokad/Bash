@@ -19,86 +19,52 @@ public sealed partial class Evaluation
         const int ReadBatchRecords = 128;
         const int RecordListEntryBytes = 64; // Includes list capacity and resize overlap.
         using var diagnostics = new BuiltinDiagnosticScope(this);
-        var targetValue = ShellValue.FromText("MAPFILE");
         var descriptor = GetStdInDescriptor();
         var delimiter = (byte)'\n';
         var trimDelimiter = false;
         uint count = 0;
         uint skip = 0;
         uint? origin = null;
-        var targetSeen = false;
-        var parseOptions = true;
-        for (var argumentIndex = 1; argumentIndex < arguments.Count; argumentIndex++)
+        var options = new InputOptionCursor(arguments);
+        while (options.TryReadFlag(out var flag))
         {
-            var argument = arguments[argumentIndex];
-            var bytes = argument.Bytes.Span;
-            if (parseOptions && bytes.SequenceEqual("--"u8))
+            var option = flag.Span[0];
+            if (option == (byte)'t')
             {
-                parseOptions = false;
+                trimDelimiter = true;
                 continue;
             }
+            if (option is not ((byte)'d' or (byte)'n' or (byte)'O' or (byte)'s' or (byte)'u'))
+                return await InvalidArgumentsAsync(flag, ": invalid option").ConfigureAwait(false);
+            if (!options.TryReadOperand(out var operand))
+                return await InvalidArgumentsAsync(flag, ": option requires an argument").ConfigureAwait(false);
 
-            if (parseOptions && bytes.Length > 1 && bytes[0] == (byte)'-')
+            if (option == (byte)'d')
+                delimiter = operand.Bytes.IsEmpty ? (byte)0 : operand.Bytes.Span[0];
+            else if (option == (byte)'u')
             {
-                for (var optionIndex = 1; optionIndex < bytes.Length; optionIndex++)
+                var (number, handle) = ResolveInputDescriptorOperand(operand.Bytes.Span);
+                if (number == null || handle.IsClosed)
                 {
-                    var option = bytes[optionIndex];
-                    if (option == (byte)'t')
-                    {
-                        trimDelimiter = true;
-                        continue;
-                    }
-                    if (option is not ((byte)'d' or (byte)'n' or (byte)'O' or (byte)'s' or (byte)'u'))
-                        return await InvalidArgumentsAsync(argument.Bytes.Slice(optionIndex, 1), ": invalid option")
-                            .ConfigureAwait(false);
-
-                    var operand = argument.Bytes[(optionIndex + 1)..];
-                    if (operand.IsEmpty)
-                    {
-                        if (++argumentIndex == arguments.Count)
-                            return await InvalidArgumentsAsync(argument.Bytes.Slice(optionIndex, 1), ": option requires an argument")
-                                .ConfigureAwait(false);
-                        operand = arguments[argumentIndex].Bytes;
-                    }
-
-                    if (option == (byte)'d')
-                        delimiter = operand.IsEmpty ? (byte)0 : operand.Span[0];
-                    else if (option == (byte)'u')
-                    {
-                        var (number, handle) = ResolveInputDescriptorOperand(operand.Span);
-                        if (number == null || handle.IsClosed)
-                        {
-                            await ReportInvalidInputDescriptorAsync(arguments[0], ShellValue.FromBytes(operand), number)
-                                .ConfigureAwait(false);
-                            return await FinishAsync(1).ConfigureAwait(false);
-                        }
-                        descriptor = handle;
-                    }
-                    else
-                    {
-                        if (!Integers.TryParseBuiltinNumber(operand.Span, out var number) || number is < 0 or > uint.MaxValue)
-                            return await InvalidNumberAsync(operand, option).ConfigureAwait(false);
-                        if (option == (byte)'n')
-                            count = (uint)number;
-                        else if (option == (byte)'s')
-                            skip = (uint)number;
-                        else
-                            origin = (uint)number;
-                    }
-                    break;
+                    await ReportInvalidInputDescriptorAsync(arguments[0], operand, number).ConfigureAwait(false);
+                    return await FinishAsync(1).ConfigureAwait(false);
                 }
-
-                continue;
+                descriptor = handle;
             }
-
-            if (targetSeen)
-                continue;
-
-            targetValue = argument;
-            targetSeen = true;
-            parseOptions = false;
+            else
+            {
+                if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var number) || number is < 0 or > uint.MaxValue)
+                    return await InvalidNumberAsync(operand.Bytes, option).ConfigureAwait(false);
+                if (option == (byte)'n')
+                    count = (uint)number;
+                else if (option == (byte)'s')
+                    skip = (uint)number;
+                else
+                    origin = (uint)number;
+            }
         }
 
+        var targetValue = options.ArgumentIndex < arguments.Count ? arguments[options.ArgumentIndex] : ShellValue.FromText("MAPFILE");
         var (selected, targetStatus) = await SelectIndexedInputTargetAsync(arguments[0], targetValue, variables, warn: true)
             .ConfigureAwait(false);
         if (selected is not { } target)

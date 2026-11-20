@@ -40,6 +40,28 @@ public sealed class ReadTargetBindingTests
     }
 
     [Theory]
+    [InlineData("-raarr -- -r", 1, "-r", "old", "one two")]
+    [InlineData("-a arr ''", 1, "", "old", "one two")]
+    [InlineData("-a 1bad 2bad", 1, "2bad", "old", "one two")]
+    [InlineData("-a 1bad ignored", 1, "1bad", "old", "next")]
+    [InlineData("-a arr 'unused[i++]' 1bad", 0, null, "one,two", "next")]
+    public async Task ReadArrayValidatesFirstPositionalNameBeforeReading(
+        string options, int status, string? invalidName, string array, string remainder)
+    {
+        var script = "arr=(old); i=0; read " + options
+            + """
+            ; status=$?; IFS= read -r next; IFS=,; printf '<%s><%s><%s><%s>' "$status" "${arr[*]}" "$i" "$next"
+            """;
+        var host = EndToEndHarness.BuildTree([]);
+        var result = await EndToEndHarness.RunScriptAsync(script, host, "one two\nnext\n"u8.ToArray());
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}><{array}><0><{remainder}>", result.StdOut);
+        Assert.Equal(invalidName is null ? "" : $"read: `{invalidName}': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("""IFS=: read -a a <<< ':one::two:'; printf '[%s]' "${a[@]}" """, "[][one][][two]")]
     [InlineData("""IFS=: read -a a <<< 'a\:b::c'; printf '[%s]' "${a[@]}" """, "[a:b][][c]")]
     [InlineData("""IFS=: read -ra a <<< 'a\:b::c'; printf '[%s]' "${a[@]}" """, "[a\\][b][][c]")]

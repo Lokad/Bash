@@ -32,9 +32,11 @@ preserves the other entries. These three operands accept unsigned 32-bit
 decimal values. Destination indices continue from zero after index 4294967295.
 
 `read -a array` replaces an indexed array with all fields from one logical
-record using IFS and the ordinary delimiter and escape rules. It assigns an
-empty array for a record with no fields. At EOF it publishes fields
-from the partial record, or an empty array, and returns failure.
+record using IFS and the ordinary delimiter and escape rules. It checks the
+syntax of the first positional name before consuming input.
+The array destination is checked after reading, and positional names receive
+no assignments. A record with no fields assigns an empty array. At EOF it
+publishes fields from the partial record, or an empty array, and returns failure.
 
 `read` skips unquoted NUL bytes unless NUL is the chosen delimiter. With
 escape processing enabled, a quoted NUL ends the text available for assignment

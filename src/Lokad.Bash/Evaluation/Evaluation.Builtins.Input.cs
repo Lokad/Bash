@@ -14,6 +14,60 @@ public sealed partial class Evaluation
     private const int ReadScratchRetentionBytes = 64 * 1024;
     private ReadWorkspace? _readWorkspace;
 
+    /// <summary>Scans leading short options and borrows their bytes from the expanded arguments.</summary>
+    private struct InputOptionCursor(IReadOnlyList<ShellValue> arguments)
+    {
+        private ReadOnlyMemory<byte> _group;
+        private bool _finished;
+
+        public int ArgumentIndex { get; private set; } = 1;
+
+        public bool TryReadFlag(out ReadOnlyMemory<byte> flag)
+        {
+            flag = default;
+            if (_group.IsEmpty)
+            {
+                if (_finished || ArgumentIndex == arguments.Count)
+                    return false;
+                var bytes = arguments[ArgumentIndex].Bytes;
+                if (bytes.Length < 2 || bytes.Span[0] != (byte)'-')
+                {
+                    _finished = true;
+                    return false;
+                }
+                ArgumentIndex++;
+                if (bytes.Span.SequenceEqual("--"u8))
+                {
+                    _finished = true;
+                    return false;
+                }
+                _group = bytes[1..];
+            }
+
+            flag = _group[..1];
+            _group = _group[1..];
+            return true;
+        }
+
+        public bool TryReadOperand(out ShellValue operand)
+        {
+            if (!_group.IsEmpty)
+            {
+                operand = ShellValue.FromBytes(_group);
+                _group = default;
+                return true;
+            }
+            if (ArgumentIndex < arguments.Count)
+            {
+                operand = arguments[ArgumentIndex++];
+                return true;
+            }
+
+            operand = default;
+            return false;
+        }
+    }
+
     private (LogicalDescriptor? Number, FileDescriptor Handle) ResolveInputDescriptorOperand(ReadOnlySpan<byte> operand)
     {
         if (!Integers.TryParseBuiltinNumber(operand, out var number) || number is < 0 or > int.MaxValue)
@@ -55,73 +109,57 @@ public sealed partial class Evaluation
     {
         using var diagnostics = new BuiltinDiagnosticScope(this);
         static string Usage() => "read: usage: " + BuiltinDocumentation.For(BuiltinKind.Read).Synopsis("read");
-        var argumentIndex = 1;
+        var options = new InputOptionCursor(words);
         var backslashMode = ReadBackslashMode.InterpretEscapes;
         var delimiter = (byte)'\n';
         var inputNumber = LogicalDescriptor.StdIn;
         var inputDescriptor = GetStdInDescriptor();
         ShellValue? arrayName = null;
-        while (argumentIndex < words.Count)
+        while (options.TryReadFlag(out var option))
         {
-            var option = words[argumentIndex].Bytes;
-            if (option.Span.SequenceEqual("--"u8))
+            var flag = option.Span[0];
+            if (flag == (byte)'r')
             {
-                argumentIndex++;
-                break;
+                backslashMode = ReadBackslashMode.Preserve;
+                continue;
             }
-            if (option.Length < 2 || option.Span[0] != (byte)'-')
-                break;
-            for (var index = 1; index < option.Length; index++)
+            if (flag is not ((byte)'u' or (byte)'d' or (byte)'a'))
+                return await FailUsageAsync([ShellValue.FromText("-"), ShellValue.FromBytes(option),
+                    ShellValue.FromText(": invalid option\n" + Usage())]).ConfigureAwait(false);
+            if (!options.TryReadOperand(out var operand))
+                return await FailUsageAsync([ShellValue.FromText($"-{(char)flag}: option requires an argument\n" + Usage())])
+                    .ConfigureAwait(false);
+
+            if (flag == (byte)'d')
             {
-                if (option.Span[index] == (byte)'r')
-                {
-                    backslashMode = ReadBackslashMode.Preserve;
-                    continue;
-                }
-                var flag = option.Span[index];
-                if (flag is not ((byte)'u' or (byte)'d' or (byte)'a'))
-                    return await FailUsageAsync([ShellValue.FromText("-"), ShellValue.FromBytes(option.Slice(index, 1)),
-                        ShellValue.FromText(": invalid option\n" + Usage())]).ConfigureAwait(false);
-
-                ShellValue operand;
-                if (index + 1 < option.Length)
-                    operand = ShellValue.FromBytes(option[(index + 1)..]);
-                else if (++argumentIndex < words.Count)
-                    operand = words[argumentIndex];
-                else
-                    return await FailUsageAsync([ShellValue.FromText($"-{(char)flag}: option requires an argument\n" + Usage())])
-                        .ConfigureAwait(false);
-
-                if (flag == (byte)'d')
-                {
-                    delimiter = operand.Bytes.IsEmpty ? (byte)0 : operand.Bytes.Span[0];
-                    break;
-                }
-                if (flag == (byte)'a')
-                {
-                    arrayName = operand;
-                    break;
-                }
-
-                var (number, descriptor) = ResolveInputDescriptorOperand(operand.Bytes.Span);
-                if (number is not { } logical || descriptor.IsClosed)
-                {
-                    await ReportInvalidInputDescriptorAsync(ShellValue.FromText("read"), operand, number)
-                        .ConfigureAwait(false);
-                    return await FinishAsync(1).ConfigureAwait(false);
-                }
-                inputNumber = logical;
-                inputDescriptor = descriptor;
-                break;
+                delimiter = operand.Bytes.IsEmpty ? (byte)0 : operand.Bytes.Span[0];
+                continue;
             }
-            argumentIndex++;
+            if (flag == (byte)'a')
+            {
+                arrayName = operand;
+                continue;
+            }
+
+            var (number, descriptor) = ResolveInputDescriptorOperand(operand.Bytes.Span);
+            if (number is not { } logical || descriptor.IsClosed)
+            {
+                await ReportInvalidInputDescriptorAsync(ShellValue.FromText("read"), operand, number)
+                    .ConfigureAwait(false);
+                return await FinishAsync(1).ConfigureAwait(false);
+            }
+            inputNumber = logical;
+            inputDescriptor = descriptor;
         }
 
-        var implicitReply = arrayName == null && argumentIndex == words.Count;
+        var argumentIndex = options.ArgumentIndex;
+        var hasPositionals = argumentIndex < words.Count;
+        var implicitReply = arrayName == null && !hasPositionals;
         var fieldCount = arrayName.HasValue ? 0 : implicitReply ? 1 : words.Count - argumentIndex;
-        var firstName = arrayName ?? (implicitReply ? ShellValue.FromText("REPLY") : words[argumentIndex]);
+        var firstName = implicitReply ? ShellValue.FromText("REPLY") : hasPositionals ? words[argumentIndex] : default;
         VariableReference firstReference = default;
-        if (arrayName == null && !TryParseTarget(firstName, out firstReference))
+        // A first positional operand is validated even when -a selects the only assignment destination.
+        if ((hasPositionals || implicitReply) && !TryParseTarget(firstName, out firstReference))
             return await InvalidTargetAsync(firstName).ConfigureAwait(false);
 
         var memory = _readWorkspace ??= new ReadWorkspace(Memory.Budget);
