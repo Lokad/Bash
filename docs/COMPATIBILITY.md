@@ -424,6 +424,13 @@ builtin's usage and returns 2. Later fields are ordinary operands.
 parameters for that file. The filename must be valid UTF-8 for the host path
 boundary. Script content and positional parameters retain their byte values.
 
+`LINENO` follows the active parsed command. Functions defined in a script retain
+their defining source coordinates. Sourced files and EXIT action source start
+at line 1, and `eval` bases its coordinates on the calling command. Parenthesized
+captures use the rendered body layout, while backtick captures use the decoded
+body. Local and temporary bindings can shadow `LINENO`. Unsetting the dynamic
+binding allows later assignments to create an ordinary variable.
+
 An unhandled errexit status runs EXIT with the reached positional parameters and
 loop or return target. An ordinary failure restores function locals and temporary
 prefixes before the action. Subshell and pipeline child execution can keep those

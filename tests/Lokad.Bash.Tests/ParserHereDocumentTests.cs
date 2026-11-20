@@ -71,7 +71,7 @@ public sealed class ParserHereDocumentTests
         var reader = tokenizer.HereDocuments;
         Assert.NotNull(reader);
 
-        var completed = Assert.IsType<TimedCommand>(reader.Complete(provisional));
+        var completed = Assert.IsType<TimedCommand>(reader.Complete(provisional, tokenizer.Locations));
         var command = Assert.IsType<SimpleCommand>(completed.Inner);
         var redirection = Assert.Single(command.Redirections);
         Assert.Equal(portable, completed.Portable);
@@ -85,15 +85,24 @@ public sealed class ParserHereDocumentTests
     [Fact]
     public void CompletingBodies_PreservesProvisionalNodesAndUnchangedCollections()
     {
-        var tokenizer = new Tokenizer(ShellSource.FromText("cat <<END | cat\nbody\nEND\n"));
+        var tokenizer = new Tokenizer(ShellSource.FromText("cat <<END | cat\nbody\nEND\n"))
+        {
+            TrackCommandLocations = true
+        };
         var provisional = Assert.IsType<PipelineCommand>(Parser.ParsePipeline(tokenizer));
         var left = Assert.IsType<SimpleCommand>(provisional.Left);
         var original = Assert.Single(left.Redirections);
         Assert.Equal("END", Assert.Single(original.Target.Parts).GetUtf8Text());
 
         Assert.NotNull(tokenizer.HereDocuments);
-        var completed = Assert.IsType<PipelineCommand>(tokenizer.HereDocuments.Complete(provisional));
+        var locations = tokenizer.Locations;
+        Assert.NotNull(locations);
+        Assert.True(locations.TryGet(left, out var sourceLocation));
+        var completed = Assert.IsType<PipelineCommand>(tokenizer.HereDocuments.Complete(provisional, locations));
         var completedLeft = Assert.IsType<SimpleCommand>(completed.Left);
+        Assert.False(locations.TryGet(left, out _));
+        Assert.True(locations.TryGet(completedLeft, out var completedLocation));
+        Assert.Equal(sourceLocation, completedLocation);
         var redirection = Assert.Single(completedLeft.Redirections);
         Assert.Equal("body\n", Assert.Single(redirection.Target.Parts).GetUtf8Text());
         Assert.Same(original.Target, redirection.HereDocumentDelimiter);

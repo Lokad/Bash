@@ -10,7 +10,10 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
 
     /// <summary>Legacy executable bytes and their original delimiters/escapes, validated only when reached.</summary>
     internal sealed record Legacy(ShellSource SourceText, ShellSource Spelling, LegacySubstitutionOrigin Origin)
-        : CommandSubstitutionSyntax(SourceText);
+        : CommandSubstitutionSyntax(SourceText)
+    {
+        internal int RemovedLineContinuations { get; init; }
+    }
 
     /// <summary>Bytes still requiring execution-time parsing, including unfinished here-documents.</summary>
     internal sealed record Deferred(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);

@@ -136,7 +136,7 @@ public static class Parser
             return false;
         }
         context.LegacyOrigin = LegacySubstitutionOrigin.Script;
-        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context);
+        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context) { TrackCommandLocations = true };
         SkipNewlines(tokenizer);
         var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, retainUnitBoundaries: true);
         SkipNewlines(tokenizer);
@@ -147,7 +147,7 @@ public static class Parser
         failure = tokenizer.Failure;
         if (failure != null)
             return false;
-        script = command == null ? new ParsedScript([]) : new ParsedScript([tokenizer.HereDocuments?.Complete(command) ?? command]);
+        script = CompleteScript(tokenizer, command);
         return true;
     }
 
@@ -172,6 +172,7 @@ public static class Parser
         scanContext.LegacyOrigin = LegacySubstitutionOrigin.Script;
         var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, scanContext)
         {
+            TrackCommandLocations = true,
             EndInputOnQuotedSubstitutionFailure = true
         };
         while (true)
@@ -186,8 +187,9 @@ public static class Parser
             if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
             {
                 var prefix = tokenizer.Error == null && command != null && tokenizer.HereDocuments is not { HasPending: true }
-                    ? tokenizer.HereDocuments?.Complete(command) ?? command : null;
-                yield return new CommandUnitParseResult.Failed(quotedFailure) { CompletedPrefix = prefix };
+                    ? tokenizer.HereDocuments?.Complete(command, tokenizer.Locations) ?? command : null;
+                yield return new CommandUnitParseResult.Failed(quotedFailure)
+                    { CompletedPrefix = prefix, Locations = prefix != null ? tokenizer.Locations : null };
                 yield break;
             }
             if (tokenizer.Failure is { } failure)
@@ -198,11 +200,11 @@ public static class Parser
             if (command == null)
                 yield break;
 
-            var completed = tokenizer.HereDocuments?.Complete(command) ?? command;
+            var completed = tokenizer.HereDocuments?.Complete(command, tokenizer.Locations) ?? command;
             tokenizer.HereDocuments = null;
             if (trailing.Kind == TokenKind.Newline)
                 tokenizer.NextTokenCore();
-            yield return new CommandUnitParseResult.Parsed(completed);
+            yield return new CommandUnitParseResult.Parsed(completed) { Locations = tokenizer.Locations };
         }
     }
 
@@ -228,8 +230,7 @@ public static class Parser
         if (payloadStart < 0 || payloadStart > input.Length)
             return ShellScanStatus.NotFound;
 
-        var tokenizer = new Tokenizer(input, payloadStart, context);
-        SkipNewlines(tokenizer);
+        var tokenizer = new Tokenizer(input, payloadStart, context) { TrackCommandLocations = true };
         var (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
         SkipNewlines(tokenizer);
         if (tokenizer.Failure is { } bodyFailure)
@@ -260,10 +261,20 @@ public static class Parser
             failure = SubstitutionSyntaxFailure.MissingTimedCommand;
         // An unconsumed body historically fails when the substitution executes, not during lookahead.
         if (tokenizer.HereDocuments is not { HasPending: true })
-            parsed = command == null ? new ParsedScript([])
-                : new ParsedScript([tokenizer.HereDocuments?.Complete(command) ?? command]);
+        {
+            parsed = CompleteScript(tokenizer, command);
+            if (failure == SubstitutionSyntaxFailure.None && !preserveAdjacentOpening)
+                FunctionDefinitionFormatter.ProjectCaptureLocations(parsed, context.SyntaxMemory?.Budget);
+        }
         return ShellScanStatus.Complete;
     }
+
+    private static ParsedScript CompleteScript(Tokenizer tokenizer, ICommand? command) =>
+        command == null ? new ParsedScript([]) :
+        new ParsedScript([tokenizer.HereDocuments?.Complete(command, tokenizer.Locations) ?? command])
+        {
+            Locations = tokenizer.Locations
+        };
 
     private static bool EndsInBareTime(ICommand? command)
     {
@@ -444,6 +455,9 @@ public static class Parser
         {
             SkipNewlines(tokenizer);
             var token = tokenizer.PeekTokenCore();
+            if (token.Kind is TokenKind.EndOfInput or TokenKind.CloseParen or TokenKind.CloseBrace)
+                return null;
+            var startLine = tokenizer.GetLine(token.Source.Start.Value);
             ICommand? command;
             switch (token.Kind)
             {
@@ -464,9 +478,6 @@ public static class Parser
                     var groupBody = ParseBraceList(tokenizer);
                     command = groupBody == null ? null : new GroupCommand(groupBody);
                     break;
-                case TokenKind.CloseParen:
-                case TokenKind.CloseBrace:
-                    return null;
                 default:
                     if (IsKeyword(token, KeywordFunction))
                     {
@@ -519,7 +530,7 @@ public static class Parser
                         return null;
                     }
 
-                    return ParseSimpleCommand(tokenizer);
+                    return ParseSimpleCommand(tokenizer, startLine);
             }
 
             if (command == null)
@@ -527,15 +538,16 @@ public static class Parser
                 return null;
             }
 
-            if (command is SimpleCommand)
-            {
-                return command;
-            }
+            tokenizer.RecordLocation(command, startLine, startLine);
 
             var redirections = ReadTrailingRedirections(tokenizer);
             if (tokenizer.Error != null)
                 return null;
-            return redirections.Count > 0 ? new RedirectedCommand(command, redirections) : command;
+            if (redirections.Count == 0)
+                return command;
+            var redirected = new RedirectedCommand(command, redirections);
+            tokenizer.RecordLocation(redirected, startLine, startLine);
+            return redirected;
         }
         finally
         {
@@ -1004,7 +1016,7 @@ public static class Parser
     /// <summary>
     /// Parses a simple command with assignments, words, and redirections.
     /// </summary>
-    private static SimpleCommand? ParseSimpleCommand(Tokenizer tokenizer)
+    private static SimpleCommand? ParseSimpleCommand(Tokenizer tokenizer, int startLine)
     {
         bool TrySplitScalarAssignment(Word word, out AssignmentWord assignment)
         {
@@ -1099,11 +1111,14 @@ public static class Parser
         var allowAssignments = true;
         var allowDeclarationAssignments = false;
         var sawAny = false;
+        var firstElementEndLine = 0;
 
         while (true)
         {
             if (tokenizer.Error != null)
                 return null;
+            if (sawAny && firstElementEndLine == 0 && tokenizer.TrackCommandLocations)
+                firstElementEndLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
             var peek = tokenizer.PeekTokenCore();
             if (tokenizer.Error != null)
                 return null;
@@ -1244,8 +1259,13 @@ public static class Parser
             }
         }
 
-        SimpleCommand CreateCommand() =>
-            new(assignments, words, redirections, declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
+        SimpleCommand CreateCommand()
+        {
+            var command = new SimpleCommand(assignments, words, redirections,
+                declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
+            tokenizer.RecordLocation(command, startLine, firstElementEndLine);
+            return command;
+        }
 
         void AddAssignment(AssignmentWord assignment, Word word)
         {
@@ -1591,7 +1611,11 @@ public static class Parser
                 break;
             }
 
-            current = new ListCommand(current, ListOperator.Sequence, right) { StartsCommandUnit = startsCommandUnit };
+            current = new ListCommand(current, ListOperator.Sequence, right)
+            {
+                StartsCommandUnit = startsCommandUnit,
+                HasNewlineConnector = token.Kind == TokenKind.Newline
+            };
             trailingTerminator = false;
         }
 

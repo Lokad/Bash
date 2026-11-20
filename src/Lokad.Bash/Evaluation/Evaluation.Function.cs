@@ -43,7 +43,8 @@ public sealed partial class Evaluation
                     {
                         GlobalPrefixes = scope.Context.GlobalPrefixes,
                         ErrexitIgnored = scope.Context.ErrexitIgnored,
-                        SourceMemory = function.SourceMemory
+                        SourceMemory = function.SourceMemory,
+                        Coordinates = function.Coordinates
                     } },
                     negated: false)
                 .ConfigureAwait(false);

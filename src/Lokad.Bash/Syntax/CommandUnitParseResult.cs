@@ -5,6 +5,8 @@ internal abstract record CommandUnitParseResult
 {
     private CommandUnitParseResult() { }
 
+    internal CommandLocations? Locations { get; init; }
+
     /// <summary>A complete unit whose syntax and here-document bodies have been parsed.</summary>
     internal sealed record Parsed(ICommand Command) : CommandUnitParseResult;
 

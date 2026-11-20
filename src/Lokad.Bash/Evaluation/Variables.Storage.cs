@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
@@ -45,10 +46,38 @@ public sealed partial class Variables
         protected override VariableSlot CloneValue() => new UnassignedSlot();
     }
 
-    private sealed class ScalarSlot(ShellValue value) : VariableSlot
+    private class ScalarSlot(ShellValue value) : VariableSlot
     {
-        public ShellValue Value { get; set; } = value;
+        public virtual ShellValue Value { get; set; } = value;
         protected override VariableSlot CloneValue() => new ScalarSlot(Value);
+    }
+
+    private sealed class LineNumberSlot(int line) : ScalarSlot(ShellValue.Empty)
+    {
+        private int _line = line;
+        private ShellValue _cachedValue;
+        public int Line
+        {
+            get => _line;
+            set
+            {
+                if (_line == value)
+                    return;
+                _line = value;
+                _cachedValue = ShellValue.Empty;
+            }
+        }
+
+        public override ShellValue Value
+        {
+            get => _cachedValue.IsEmpty
+                ? _cachedValue = ShellValue.FromBytes(NumberFormatting.FormatNumber(Line))
+                : _cachedValue;
+            set => Line = Integers.TryParseNumber(Integers.TrimWhitespace(value.Bytes.Span), out var number)
+                ? unchecked((int)number) : 0;
+        }
+
+        protected override VariableSlot CloneValue() => new LineNumberSlot(Line);
     }
 
     private sealed class IndexedSlot(IndexedArray value) : VariableSlot

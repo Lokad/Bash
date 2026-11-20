@@ -40,6 +40,7 @@ internal sealed record FunctionBinding
 {
     public FunctionDefinition Definition { get; }
     public SourceMemory? SourceMemory { get; }
+    internal CommandCoordinates Coordinates { get; init; }
     public FunctionAttributes Attributes { get; init; }
 
     // Attribute copies and child evaluations share this cell, including before its first publication.
@@ -492,14 +493,17 @@ internal sealed class EvaluationState
     }
 
     /// <summary>Redefinition retains attributes and fails without changing a readonly function.</summary>
-    public bool TryRegisterFunction(FunctionDefinition functionDefinition, SourceMemory? sourceMemory, EvaluationMemory memory)
+    public bool TryRegisterFunction(FunctionDefinition functionDefinition, Evaluation.EvaluationContext context, EvaluationMemory memory)
     {
         var attributes = _functions.TryGetValue(functionDefinition.Name.Value, out var previous)
             ? previous.Attributes : FunctionAttributes.None;
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
         memory.Charge(256);
-        SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, sourceMemory, memory));
+        SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, context.SourceMemory, memory)
+        {
+            Coordinates = context.Coordinates
+        });
         return true;
     }
 

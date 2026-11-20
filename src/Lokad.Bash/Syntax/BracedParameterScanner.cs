@@ -38,7 +38,8 @@ internal static class BracedParameterScanner
             out payload,
             out containsCommandSubstitution,
             out _,
-            capturePayload: true);
+            out _,
+            capturePayload: true, trackRenderedLines: false);
         return status == BracedParameterScanStatus.Found;
     }
 
@@ -57,7 +58,8 @@ internal static class BracedParameterScanner
             out _,
             out _,
             out _,
-            capturePayload: false);
+            out _,
+            capturePayload: false, trackRenderedLines: false);
 
     internal static BracedParameterScanStatus ScanShape(
         ShellScanContext context,
@@ -66,7 +68,9 @@ internal static class BracedParameterScanner
         out int endIndex,
         out int errorIndex,
         out bool containsCommandSubstitution,
-        out ParserFailure? error) =>
+        out int renderedLineAdjustment,
+        out ParserFailure? error,
+        bool trackRenderedLines) =>
         ScanCore(
             context,
             text,
@@ -75,8 +79,9 @@ internal static class BracedParameterScanner
             out errorIndex,
             out _,
             out containsCommandSubstitution,
+            out renderedLineAdjustment,
             out error,
-            capturePayload: false);
+            capturePayload: false, trackRenderedLines);
 
     /// <summary>Captures normalized payload bytes while retaining the structural scan's lookahead context.</summary>
     internal static BracedParameterScanStatus ScanWithPayload(
@@ -86,9 +91,11 @@ internal static class BracedParameterScanner
         out int endIndex,
         out int errorIndex,
         out ShellSource payload,
-        out ParserFailure? error) =>
-        ScanCore(context, text, startIndex, out endIndex, out errorIndex, out payload, out _, out error,
-            capturePayload: true);
+        out int renderedLineAdjustment,
+        out ParserFailure? error,
+        bool trackRenderedLines = false) =>
+        ScanCore(context, text, startIndex, out endIndex, out errorIndex, out payload, out _,
+            out renderedLineAdjustment, out error, capturePayload: true, trackRenderedLines);
 
     private static BracedParameterScanStatus ScanCore(
         ShellScanContext context,
@@ -98,13 +105,16 @@ internal static class BracedParameterScanner
         out int errorIndex,
         out ShellSource payload,
         out bool containsCommandSubstitution,
+        out int renderedLineAdjustment,
         out ParserFailure? error,
-        bool capturePayload)
+        bool capturePayload,
+        bool trackRenderedLines)
     {
         endIndex = startIndex;
         errorIndex = startIndex;
         payload = ShellSource.Empty;
         containsCommandSubstitution = false;
+        renderedLineAdjustment = 0;
         error = null;
         if (!HasPrefix(text, startIndex))
             return BracedParameterScanStatus.NotBraced;
@@ -120,10 +130,11 @@ internal static class BracedParameterScanner
                 if (cursor.TryConsumeQuoteOrEscape())
                     continue;
 
-                var nestedResult = cursor.SkipNestedExpansion(BracedParameterRecognition.All);
+                var nestedResult = cursor.SkipNestedExpansion(BracedParameterRecognition.All, trackRenderedLines);
                 if (nestedResult is ShellNestedExpansionScan.Complete nested)
                 {
                     containsCommandSubstitution |= nested.ContainsCommandSubstitution;
+                    renderedLineAdjustment += nested.RenderedLineAdjustment;
                     continue;
                 }
 

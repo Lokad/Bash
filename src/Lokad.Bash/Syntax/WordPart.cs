@@ -68,6 +68,8 @@ public sealed class SourceWordPart : WordPart
 
     /// <summary>Brace sequences can synthesize escapes after the original word was tokenized.</summary>
     internal bool IsBraceExpanded { get; init; }
+    // The bytes still carry nested expansion operands in source form.
+    internal int RenderedLineAdjustment { get; init; }
 
     /// <summary>The selected lexical span and its operand. A missing operand fails if reached.</summary>
     internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand);
@@ -97,7 +99,8 @@ public sealed class SourceWordPart : WordPart
         return new(Kind, source, _arithmetic, checked(_arithmeticOffset + start))
         {
             DoubleQuote = DoubleQuote,
-            IsBraceExpanded = IsBraceExpanded
+            IsBraceExpanded = IsBraceExpanded,
+            RenderedLineAdjustment = RenderedLineAdjustment
         };
     }
 
@@ -129,7 +132,7 @@ public sealed class SourceWordPart : WordPart
                 continue;
             var context = new ShellScanContext { SyntaxMemory = memory };
             var status = ArithmeticExpansionScanner.Scan(context, source, index, out var end,
-                out var expression, out _, out var bracketed, out _);
+                out var expression, out _, out var bracketed, out _, out _);
             if (status != ShellScanStatus.Complete)
                 continue;
             memory?.Grow(256);

@@ -1,6 +1,22 @@
 using System.Collections.Generic;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
+
+/// <summary>Relates the active syntax tree's lines to the current script invocation.</summary>
+internal readonly record struct CommandCoordinates(CommandLocations? Locations, int Offset, int Line, int EndLine)
+{
+    internal CommandCoordinates At(ICommand command, CommandLocation location) => this with
+    {
+        Line = Offset + (command switch
+        {
+            SimpleCommand => location.FirstElementEndLine,
+            ArithmeticCommand or ConditionalCommand => location.EndLine,
+            _ => location.StartLine
+        }),
+        EndLine = Offset + location.EndLine
+    };
+}
 
 /// <summary>
 /// Selects active bindings and lexical context for evaluator-owned effects.

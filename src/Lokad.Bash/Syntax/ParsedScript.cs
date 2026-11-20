@@ -25,4 +25,7 @@ public sealed class ParsedScript
     /// Gets the top-level commands in the script.
     /// </summary>
     public IReadOnlyList<ICommand> Commands { get; }
+
+    internal CommandLocations? Locations { get; init; }
+    internal int? RenderedLineBreaks { get; set; }
 }

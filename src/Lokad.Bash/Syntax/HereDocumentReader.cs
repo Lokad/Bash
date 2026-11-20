@@ -63,7 +63,7 @@ internal sealed class HereDocumentReader
     }
 
     /// <summary>Rebuilds only changed nodes, without recursive traversal of left-associated command lists.</summary>
-    internal ICommand Complete(ICommand root)
+    internal ICommand Complete(ICommand root, CommandLocations? locations)
     {
         if (_completed.Count == 0) return root;
 
@@ -122,7 +122,11 @@ internal sealed class HereDocumentReader
                     ? new CaseItem(item.Patterns, Get(item.Body)) : item) is { } items => selection with { Items = items },
                 _ => command
             };
-            if (!ReferenceEquals(result, command)) replacements.Add(command, result);
+            if (!ReferenceEquals(result, command))
+            {
+                locations?.Replace(command, result);
+                replacements.Add(command, result);
+            }
         }
         return Get(root);
 

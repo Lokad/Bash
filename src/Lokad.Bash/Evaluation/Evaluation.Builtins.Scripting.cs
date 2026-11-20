@@ -168,6 +168,12 @@ public sealed partial class Evaluation
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         if (kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval)
             scope = scope with { InNestedCommandUnits = true };
+        var lineOffset = kind switch
+        {
+            ScriptExecutionKind.Eval => Math.Max(1, scope.Context.Coordinates.EndLine) - 1,
+            ScriptExecutionKind.Source or ScriptExecutionKind.Trap => 0,
+            _ => scope.Context.Coordinates.Offset
+        };
 
         var result = EvaluationResult.FromExitCode(0);
         var scanContext = new ShellScanContext();
@@ -228,7 +234,11 @@ public sealed partial class Evaluation
                     continue;
 
                 result = await EvaluateCommandAsync(command,
-                    scope with { Context = scope.Context.WithSourceMemory(unitMemory) }, negated: false)
+                    scope with
+                    {
+                        Context = scope.Context.WithSourceMemory(unitMemory).WithCoordinates(
+                            new CommandCoordinates(commands.Current.Locations, lineOffset, lineOffset + 1, lineOffset + 1))
+                    }, negated: false)
                     .ConfigureAwait(false);
                 if (result.Flow == FlowControlKind.Return)
                     return kind == ScriptExecutionKind.Source ? EvaluationResult.FromExitCode(result.ExitCode) : result;

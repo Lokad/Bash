@@ -18,13 +18,40 @@ internal sealed class Tokenizer
     private readonly ShellScanContext _scanContext;
 
     private ArraySubscriptScanner.Lookahead? _arraySubscripts;
+    private int _lineOffset;
+    private int _line = 1;
+
+    internal bool TrackCommandLocations { get; init; }
+    internal CommandLocations? Locations { get; private set; }
+    internal int ConsumedPosition { get; private set; }
 
     internal ShellScanContext ScanContext => _scanContext;
 
     internal void BeginCommandUnit()
     {
         _arraySubscripts = null;
+        Locations = null;
         _scanContext.ClearCommandUnitLookahead();
+    }
+
+    internal int GetLine(int offset)
+    {
+        if (!TrackCommandLocations)
+            return 0;
+        var source = _input.AsSpan();
+        _line += offset >= _lineOffset
+            ? source[_lineOffset..offset].Count((byte)'\n')
+            : -source[offset.._lineOffset].Count((byte)'\n');
+        _lineOffset = offset;
+        return _line;
+    }
+
+    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine)
+    {
+        if (!TrackCommandLocations)
+            return;
+        (Locations ??= new CommandLocations()).Add(command,
+            new CommandLocation(startLine, firstElementEndLine, GetLine(ConsumedPosition)), _scanContext.SyntaxMemory);
     }
 
     private ParserFailure? _failure;
@@ -97,6 +124,8 @@ internal sealed class Tokenizer
         _input = input;
         _scanContext = scanContext;
         Position = position;
+        ConsumedPosition = position;
+        _lineOffset = position;
     }
 
     /// <summary>
@@ -344,7 +373,7 @@ internal sealed class Tokenizer
             return _pushback.Peek();
         }
 
-        var token = NextTokenCore();
+        var token = ReadToken(forHeader: false, out _);
         _pushback.Push(token);
         return token;
     }
@@ -362,10 +391,17 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Reads a token without throwing for source errors; EOF also terminates failed reads.</summary>
-    internal Token NextTokenCore() => ReadToken(forHeader: false, out _);
+    internal Token NextTokenCore() => Consume(ReadToken(forHeader: false, out _));
 
     /// <summary>Reads the next token after a consumed for keyword, identifying arithmetic clause boundaries.</summary>
-    internal Token ReadForHeader(out ArithmeticForSeparators separators) => ReadToken(forHeader: true, out separators);
+    internal Token ReadForHeader(out ArithmeticForSeparators separators) => Consume(ReadToken(forHeader: true, out separators));
+
+    private Token Consume(Token token)
+    {
+        if (TrackCommandLocations && token.Kind != TokenKind.EndOfInput)
+            ConsumedPosition = token.Source.End.Value;
+        return token;
+    }
 
     private Token ReadToken(bool forHeader, out ArithmeticForSeparators separators)
     {
@@ -763,6 +799,8 @@ internal sealed class Tokenizer
             return false;
         }
         Position = end;
+        if (TrackCommandLocations)
+            ConsumedPosition = end;
         return true;
     }
 
@@ -857,6 +895,7 @@ internal sealed class Tokenizer
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var arithmetic = syntax is not (ExpansionWordSyntax.Parameter or ExpansionWordSyntax.BraceExpanded);
         var continuesQuote = false;
+        var renderedLineAdjustment = 0;
 
         void AddPart(WordPart part)
         {
@@ -879,8 +918,9 @@ internal sealed class Tokenizer
                 return;
             AddPart(new SourceWordPart(
                 quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, ShellSource.FromBytes(unquoted.ToCompactMemory(_scanContext.SyntaxMemory)),
-                _scanContext.SyntaxMemory) { IsBraceExpanded = braceExpanded });
+                _scanContext.SyntaxMemory) { IsBraceExpanded = braceExpanded, RenderedLineAdjustment = renderedLineAdjustment });
             unquoted = _scanContext.CreateByteBuilder(0);
+            renderedLineAdjustment = 0;
         }
 
         while (Position < span.Length && Error == null)
@@ -892,13 +932,13 @@ internal sealed class Tokenizer
                 AddPart(subscript);
                 continue;
             }
-            if (TryReadBracedParameterExpansion(unquoted, quotedOperand))
+            if (TryReadBracedParameterExpansion(unquoted, quotedOperand, ref renderedLineAdjustment))
             {
                 continue;
             }
 
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(unquoted, quotedOperand))
+                && TryReadArithmeticExpansion(unquoted, quotedOperand, ref renderedLineAdjustment))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
@@ -1050,13 +1090,14 @@ internal sealed class Tokenizer
     /// <summary>
     /// Captures canonical arithmetic-expansion syntax while retaining physical cursor offsets.
     /// </summary>
-    private bool TryReadArithmeticExpansion(ByteMemoryBuilder unquoted, bool quoted)
+    private bool TryReadArithmeticExpansion(ByteMemoryBuilder unquoted, bool quoted, ref int renderedLineAdjustment)
     {
         var start = Position;
         if (_scanContext.TryGetCommandSubstitution(_input, start, out _))
             return false;
         var status = ArithmeticExpansionScanner.Scan(
-            _scanContext, _input, start, out var endIndex, out var expression, out _, out var bracketed, out var error);
+            _scanContext, _input, start, out var endIndex, out var expression, out _, out var bracketed,
+            out var adjustment, out var error, trackRenderedLines: true);
         if (status == ShellScanStatus.NotFound)
             return false;
         if (status != ShellScanStatus.Complete)
@@ -1066,6 +1107,7 @@ internal sealed class Tokenizer
         }
 
         Position = endIndex + 1;
+        renderedLineAdjustment += adjustment;
         unquoted.Append(bracketed ? "$["u8 : "$(("u8);
         unquoted.Append(expression.Bytes);
         unquoted.Append(bracketed ? "]"u8 : "))"u8);
@@ -1110,7 +1152,7 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a braced parameter expansion as unexpanded segment bytes.
     /// </summary>
-    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content, bool quoted)
+    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content, bool quoted, ref int renderedLineAdjustment)
     {
         if (!BracedParameterScanner.HasPrefix(_input, Position))
         {
@@ -1125,12 +1167,15 @@ internal sealed class Tokenizer
             out var endIndex,
             out var errorIndex,
             out var payload,
-            out var error);
+            out var adjustment,
+            out var error,
+            trackRenderedLines: true);
         if (status == BracedParameterScanStatus.Found)
         {
             content.Append("${"u8);
             content.Append(payload.Bytes);
             content.Append((byte)'}');
+            renderedLineAdjustment += adjustment;
             Position = endIndex + 1;
             return true;
         }
@@ -1152,6 +1197,7 @@ internal sealed class Tokenizer
     {
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var parts = new List<WordPart>();
+        var renderedLineAdjustment = 0;
         var content = _scanContext.CreateByteBuilder(0);
 
         void AddPart(WordPart part)
@@ -1176,8 +1222,13 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
-            AddPart(WordPart.FromSource(WordPartKind.DoubleQuoted, ShellSource.FromBytes(content.ToCompactMemory(_scanContext.SyntaxMemory)), _scanContext.SyntaxMemory));
+            AddPart(new SourceWordPart(WordPartKind.DoubleQuoted,
+                ShellSource.FromBytes(content.ToCompactMemory(_scanContext.SyntaxMemory)), _scanContext.SyntaxMemory)
+            {
+                RenderedLineAdjustment = renderedLineAdjustment
+            });
             content = _scanContext.CreateByteBuilder(0);
+            renderedLineAdjustment = 0;
         }
 
         while (Position < span.Length && Error == null)
@@ -1232,13 +1283,13 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (TryReadBracedParameterExpansion(content, quoted: true))
+            if (TryReadBracedParameterExpansion(content, quoted: true, ref renderedLineAdjustment))
             {
                 continue;
             }
 
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(content, quoted: true))
+                && TryReadArithmeticExpansion(content, quoted: true, ref renderedLineAdjustment))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)

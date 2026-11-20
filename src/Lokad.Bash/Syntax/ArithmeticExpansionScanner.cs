@@ -38,7 +38,7 @@ internal static class ArithmeticExpansionScanner
         out ShellSource expression,
         out bool containsCommandSubstitution) =>
         Scan(new ShellScanContext(), text, startIndex, out endIndex, out expression, out containsCommandSubstitution,
-            out _, out _);
+            out _, out _, out _);
 
     internal static ShellScanStatus Scan(
         ShellScanContext context,
@@ -48,7 +48,9 @@ internal static class ArithmeticExpansionScanner
         out ShellSource expression,
         out bool containsCommandSubstitution,
         out bool bracketed,
-        out ParserFailure? error) =>
+        out int renderedLineAdjustment,
+        out ParserFailure? error,
+        bool trackRenderedLines = false) =>
         ScanCore(
             context,
             text,
@@ -58,9 +60,11 @@ internal static class ArithmeticExpansionScanner
             out containsCommandSubstitution,
             out bracketed,
             out _,
+            out renderedLineAdjustment,
             out error,
             captureExpression: true,
-            form: ArithmeticForm.Expansion);
+            form: ArithmeticForm.Expansion,
+            trackRenderedLines);
 
     internal static ShellScanStatus ScanShape(
         ShellScanContext context,
@@ -68,7 +72,9 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out bool containsCommandSubstitution,
-        out ParserFailure? error) =>
+        out int renderedLineAdjustment,
+        out ParserFailure? error,
+        bool trackRenderedLines = false) =>
         ScanCore(
             context,
             text,
@@ -78,9 +84,11 @@ internal static class ArithmeticExpansionScanner
             out containsCommandSubstitution,
             out _,
             out _,
+            out renderedLineAdjustment,
             out error,
             captureExpression: false,
-            form: ArithmeticForm.Expansion);
+            form: ArithmeticForm.Expansion,
+            trackRenderedLines);
 
     /// <summary>
     /// Scans a command with adjacent closers, sharing the tokenizer's nesting budget.
@@ -93,19 +101,19 @@ internal static class ArithmeticExpansionScanner
         out int endIndex,
         out ShellSource expression,
         out ParserFailure? error) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out _, out error,
+        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out _, out _, out error,
             captureExpression: true, form: ArithmeticForm.Command);
 
     internal static ShellScanStatus ScanForHeader(
         ShellScanContext context, ShellSource text, int startIndex,
         out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators, out ParserFailure? error) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators, out error,
+        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators, out _, out error,
             captureExpression: true, form: ArithmeticForm.ForHeader);
 
     /// <summary>Bounds adjacent subshell spelling after arithmetic selection and a failed body parse.</summary>
     internal static bool TryScanAdjacentSubshell(ShellScanContext context, ShellSource text, int startIndex,
         out int endIndex) =>
-        ScanCore(context, text, startIndex, out endIndex, out _, out _, out _, out _, out _,
+        ScanCore(context, text, startIndex, out endIndex, out _, out _, out _, out _, out _, out _,
             captureExpression: false, form: ArithmeticForm.AdjacentSubshell) == ShellScanStatus.Complete;
 
     private static ShellScanStatus ScanCore(
@@ -117,15 +125,18 @@ internal static class ArithmeticExpansionScanner
         out bool containsCommandSubstitution,
         out bool bracketed,
         out ArithmeticForSeparators separators,
+        out int renderedLineAdjustment,
         out ParserFailure? error,
         bool captureExpression,
-        ArithmeticForm form)
+        ArithmeticForm form,
+        bool trackRenderedLines = false)
     {
         endIndex = startIndex;
         expression = ShellSource.Empty;
         containsCommandSubstitution = false;
         bracketed = false;
         separators = default;
+        renderedLineAdjustment = 0;
         error = null;
         if (startIndex < 0)
             return ShellScanStatus.NotFound;
@@ -155,10 +166,11 @@ internal static class ArithmeticExpansionScanner
 
                 var nestedResult = cursor.SkipNestedExpansion(isCommand
                     ? BracedParameterRecognition.DoubleQuotedOnly
-                    : BracedParameterRecognition.All);
+                    : BracedParameterRecognition.All, trackRenderedLines);
                 if (nestedResult is ShellNestedExpansionScan.Complete nested)
                 {
                     containsCommandSubstitution |= nested.ContainsCommandSubstitution;
+                    renderedLineAdjustment += nested.RenderedLineAdjustment;
                     continue;
                 }
 

@@ -38,6 +38,7 @@ public sealed partial class Variables
     internal const int ExportSelectionNameBytes = 4 * BindingNameSetEntryBytes;
     private const int PositionalEntryBytes = 32;
     internal static readonly BindingName LastArgumentName = "_";
+    private static readonly BindingName LineNumberName = "LINENO";
 
     /// <summary>Retains bytes and parsed selectors; a null reference denotes an unset nameref.</summary>
     private readonly record struct NamerefTarget(ShellValue Value, VariableReference? Reference, BindingName? LiteralName)
@@ -92,12 +93,35 @@ public sealed partial class Variables
         var overhead = BindingOverheadBytes + (long)ValueCapacityMultiplier * name.ByteLength;
         return overhead + (slot switch
         {
+            LineNumberSlot => EstimateValueBytes(11),
             ScalarSlot scalar => EstimateValueBytes(scalar.Value),
             IndexedSlot indexed => indexed.Value.EstimatedMemoryBytes,
             AssociativeSlot associative => associative.Value.EstimatedMemoryBytes,
             NamerefSlot reference => EstimateValueBytes(reference.Value.Value),
             _ => 0
         });
+    }
+
+    internal void InitializeLineNumber() => StoreBinding(LineNumberName, new LineNumberSlot(1));
+
+    internal LineNumberScope EnterLineNumber(int line)
+    {
+        if (TryGetBinding(LineNumberName, out var slot) && slot is LineNumberSlot dynamic)
+        {
+            var previous = dynamic.Line;
+            dynamic.Line = line;
+            return new LineNumberScope(this, previous);
+        }
+        return default;
+    }
+
+    internal readonly struct LineNumberScope(Variables? owner, int previous) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (owner != null && owner.TryGetBinding(LineNumberName, out var slot) && slot is LineNumberSlot dynamic)
+                dynamic.Line = previous;
+        }
     }
 
     internal readonly struct BindingMemoryChange(Variables owner, BindingName name) : IDisposable
@@ -907,7 +931,7 @@ public sealed partial class Variables
     /// </summary>
     public bool TrySetScalar(BindingName name, ShellValue value) => TrySetScalar(name, value, memory: null);
 
-    internal bool TrySetScalar(BindingName name, ShellValue value, EvaluationMemory? memory)
+    internal bool TrySetScalar(BindingName name, ShellValue value, EvaluationMemory? memory, bool commandPrefix = false)
     {
         if (!TryResolveWritableName(name, out var resolved))
             return false;
@@ -919,7 +943,10 @@ public sealed partial class Variables
             memory?.Charge(checked(4L * value.Bytes.Length));
             return TrySetNameref(name, value, memory);
         }
-        SetResolvedScalar(resolved, value);
+        if (commandPrefix && TryGetBinding(resolved, out var slot) && slot is LineNumberSlot)
+            ReplaceValue(resolved, new ScalarSlot(value));
+        else
+            SetResolvedScalar(resolved, value);
         return true;
     }
 

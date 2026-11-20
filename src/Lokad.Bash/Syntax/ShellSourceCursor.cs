@@ -320,7 +320,7 @@ internal sealed class ShellSourceCursor
     /// Arithmetic commands leave unquoted parameter operands to their own delimiter rules;
     /// those operands are validated only when execution reaches the command.
     /// </summary>
-    public ShellNestedExpansionScan SkipNestedExpansion(BracedParameterRecognition parameters)
+    public ShellNestedExpansionScan SkipNestedExpansion(BracedParameterRecognition parameters, bool trackRenderedLines = false)
     {
         if (_quote is ShellQuoteKind.Single or ShellQuoteKind.AnsiC)
             return ShellNestedExpansionScan.NotFound.Instance;
@@ -334,13 +334,16 @@ internal sealed class ShellSourceCursor
                 start,
                 out var endIndex,
                 out var containsCommandSubstitution,
-                out var error);
+                out var renderedLineAdjustment,
+                out var error,
+                trackRenderedLines);
             if (status == ShellScanStatus.Complete)
             {
                 Position = endIndex + 1;
                 return new ShellNestedExpansionScan.Complete(
                     ShellNestedExpansionKind.Arithmetic,
-                    containsCommandSubstitution);
+                    containsCommandSubstitution,
+                    renderedLineAdjustment);
             }
             if (status != ShellScanStatus.NotFound)
                 return ToFailure(status, ShellNestedExpansionKind.Arithmetic, error);
@@ -356,7 +359,9 @@ internal sealed class ShellSourceCursor
                 out var endIndex,
                 out _,
                 out var containsCommandSubstitution,
-                out var error);
+                out var renderedLineAdjustment,
+                out var error,
+                trackRenderedLines);
             if (status != BracedParameterScanStatus.Found)
             {
                 return status is BracedParameterScanStatus.Unterminated
@@ -368,7 +373,8 @@ internal sealed class ShellSourceCursor
             Position = endIndex + 1;
             return new ShellNestedExpansionScan.Complete(
                 ShellNestedExpansionKind.Parameter,
-                containsCommandSubstitution);
+                containsCommandSubstitution,
+                renderedLineAdjustment);
         }
 
         if (CommandSubstitutionScanner.HasPrefix(_text, start))
@@ -378,15 +384,23 @@ internal sealed class ShellSourceCursor
                 _text,
                 start,
                 out var endIndex,
-                out _,
+                out var substitution,
                 out var error);
             if (status != ShellScanStatus.Complete)
                 return ToFailure(status, ShellNestedExpansionKind.Command, error);
 
             Position = endIndex + 1;
+            var renderedLineAdjustment = trackRenderedLines ? substitution switch
+            {
+                CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } breaks } =>
+                    breaks - _text.AsSpan(start, Position - start).Count((byte)'\n'),
+                CommandSubstitutionSyntax.Legacy legacy => -legacy.RemovedLineContinuations,
+                _ => 0
+            } : 0;
             return new ShellNestedExpansionScan.Complete(
                 ShellNestedExpansionKind.Command,
-                ContainsCommandSubstitution: true);
+                ContainsCommandSubstitution: true,
+                renderedLineAdjustment);
         }
 
         return ShellNestedExpansionScan.NotFound.Instance;
@@ -591,7 +605,8 @@ internal abstract record ShellNestedExpansionScan
     /// <summary>A complete nested expansion was consumed.</summary>
     internal sealed record Complete(
         ShellNestedExpansionKind Kind,
-        bool ContainsCommandSubstitution) : ShellNestedExpansionScan;
+        bool ContainsCommandSubstitution,
+        int RenderedLineAdjustment = 0) : ShellNestedExpansionScan;
 
     /// <summary>A nested prefix was present but input ended before it closed.</summary>
     internal sealed record Incomplete(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan;

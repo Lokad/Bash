@@ -148,8 +148,8 @@ public sealed class CollectionOwnershipTests
         var state = new EvaluationState(Parser.Parse(""), ShellPath.Root, inheritedDescriptorTable: null);
 
         var memory = new EvaluationMemory(new MemoryGovernor(1024 * 1024));
-        Assert.True(state.TryRegisterFunction(first, sourceMemory: null, memory));
-        Assert.True(state.TryRegisterFunction(next, sourceMemory: null, memory));
+        Assert.True(state.TryRegisterFunction(first, context: default, memory));
+        Assert.True(state.TryRegisterFunction(next, context: default, memory));
 
         var name = Assert.Single(state.Functions.Keys);
         Assert.True(name.Bytes.Equals(next.Name.Value.Bytes));

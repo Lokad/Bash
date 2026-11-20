@@ -133,7 +133,11 @@ public sealed partial class Evaluation : IFileTester
             global::Lokad.Bash.Evaluation.Variables.CreateEmpty(),
             descriptorSetup,
             options,
-            new EvaluationContext(0, null, ReturnTargetKind.None) { SourceMemory = sourceMemory },
+            new EvaluationContext(0, null, ReturnTargetKind.None)
+            {
+                SourceMemory = sourceMemory,
+                Coordinates = new CommandCoordinates(script.Locations, 0, 1, 1)
+            },
             RootFlowHandling.Normalize,
             publishNextStep,
             onComplete,
@@ -146,6 +150,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.TrySetScalar("OPTIND", one);
         _vars.SetIntegerBinding("OPTIND", true);
         _vars.TrySetScalar("OPTERR", one);
+        _vars.InitializeLineNumber();
     }
 
     /// <summary>Forks bindings and shell state; descriptors stay borrowed and live memory shares the caller's allowance.</summary>
@@ -157,6 +162,8 @@ public sealed partial class Evaluation : IFileTester
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
         var (variables, context) = scope.ForkBindings();
+        var line = Math.Max(1, scope.Context.Coordinates.Line);
+        context = context.WithCoordinates(new CommandCoordinates(script.Locations, line - 1, line, line));
         var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution, outer.Memory);
         return new Evaluation(
             state,
@@ -1362,7 +1369,8 @@ public sealed partial class Evaluation : IFileTester
                         {
                             GlobalPrefixes = builtinScope.Context.GlobalPrefixes,
                             ErrexitIgnored = builtinScope.Context.ErrexitIgnored,
-                            SourceMemory = builtinScope.Context.SourceMemory
+                            SourceMemory = builtinScope.Context.SourceMemory,
+                            Coordinates = builtinScope.Context.Coordinates
                         }
                     };
                 }
@@ -1376,6 +1384,7 @@ public sealed partial class Evaluation : IFileTester
                         {
                             ErrexitIgnored = builtinScope.Context.ErrexitIgnored,
                             SourceMemory = builtinScope.Context.SourceMemory,
+                            Coordinates = builtinScope.Context.Coordinates,
                             GlobalPrefixes = new GlobalPrefixBindings(bindings,
                                 builtinScope.Context.FunctionContext?.Depth ?? 0, builtinScope.Context.GlobalPrefixes)
                         }
@@ -1675,7 +1684,7 @@ public sealed partial class Evaluation : IFileTester
                             value = WordExpansion.AppendAssignmentValue(previous, value, assignmentScope);
                     }
 
-                    if (!commandVars.TrySetScalar(name, value))
+                    if (!commandVars.TrySetScalar(name, value, memory: null, commandPrefix: true))
                     {
                         if (commandVars.IsReadonly(name))
                             await ReportExpansionDiagnosticAsync(assignment.Target.ToValue(),
@@ -4270,25 +4279,22 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Carries control-flow boundaries independently of function-local binding ownership.</summary>
     internal readonly struct EvaluationContext(int loopDepth, FunctionContext? functionContext, ReturnTargetKind returnTarget)
     {
-        public int LoopDepth { get; } = loopDepth;
+        public int LoopDepth { get; init; } = loopDepth;
 
         public FunctionContext? FunctionContext { get; } = functionContext;
         public ReturnTargetKind ReturnTarget { get; } = returnTarget;
         public GlobalPrefixBindings? GlobalPrefixes { get; init; }
         public bool ErrexitIgnored { get; init; }
         public SourceMemory? SourceMemory { get; init; }
+        internal CommandCoordinates Coordinates { get; init; }
 
-        public EvaluationContext WithErrexitIgnored() =>
-            new(LoopDepth, FunctionContext, ReturnTarget)
-                { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = true, SourceMemory = SourceMemory };
+        public EvaluationContext WithErrexitIgnored() => this with { ErrexitIgnored = true };
 
-        public EvaluationContext WithLoopDepth(int loopDepth) =>
-            new(loopDepth, FunctionContext, ReturnTarget)
-                { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory };
+        public EvaluationContext WithLoopDepth(int loopDepth) => this with { LoopDepth = loopDepth };
 
-        public EvaluationContext WithSourceMemory(SourceMemory? sourceMemory) =>
-            new(LoopDepth, FunctionContext, ReturnTarget)
-                { GlobalPrefixes = GlobalPrefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = sourceMemory };
+        public EvaluationContext WithSourceMemory(SourceMemory? sourceMemory) => this with { SourceMemory = sourceMemory };
+
+        internal EvaluationContext WithCoordinates(CommandCoordinates coordinates) => this with { Coordinates = coordinates };
 
         /// <summary>Preserves local declaration identity while isolating child bindings and restoration.</summary>
         internal (Variables, EvaluationContext) Fork(Variables source, EvaluationMemory memory, CancellationToken cancellationToken)
@@ -4342,7 +4348,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             return (variables, new EvaluationContext(LoopDepth, function, ReturnTarget)
-                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory });
+                { GlobalPrefixes = prefixes, ErrexitIgnored = ErrexitIgnored, SourceMemory = SourceMemory, Coordinates = Coordinates });
         }
 
         public Variables GetGlobalBindingOwner(BindingName name, Variables active)

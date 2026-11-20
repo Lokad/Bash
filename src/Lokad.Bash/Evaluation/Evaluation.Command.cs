@@ -30,6 +30,16 @@ public sealed partial class Evaluation
         if (negated ^ command is PipelineCommand { Negated: true })
             scope = scope with { Context = scope.Context.WithErrexitIgnored() };
 
+        var coordinates = scope.Context.Coordinates;
+        var lineScope = default(Variables.LineNumberScope);
+        if (coordinates.Locations is { } locations && locations.TryGet(command, out var location))
+        {
+            coordinates = coordinates.At(command, location);
+            scope = scope with { Context = scope.Context.WithCoordinates(coordinates) };
+            lineScope = scope.Variables.EnterLineNumber(coordinates.Line);
+        }
+        using var activeLine = lineScope;
+
         EvaluationResult result;
         try
         {
@@ -133,7 +143,7 @@ public sealed partial class Evaluation
                         await ReportInvalidIdentifierAsync(functionDefinition.Name.Value).ConfigureAwait(false);
                         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
                     }
-                    if (!_state.TryRegisterFunction(functionDefinition, scope.Context.SourceMemory, Memory))
+                    if (!_state.TryRegisterFunction(functionDefinition, scope.Context, Memory))
                     {
                         await ReportExpansionDiagnosticAsync(functionDefinition.Name.Value, ShellValue.FromText("readonly function")).ConfigureAwait(false);
                         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);

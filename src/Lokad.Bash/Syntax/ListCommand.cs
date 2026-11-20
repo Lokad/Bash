@@ -20,6 +20,7 @@ public sealed record ListCommand : ICommand
 
     /// <summary>The right operand begins a new complete unit in a prepared root script.</summary>
     internal bool StartsCommandUnit { get => _startsCommandUnit; init { _startsCommandUnit = value; _traversal = null; } }
+    internal bool HasNewlineConnector { get; init; }
 
     public ListCommand(ICommand Left, ListOperator Operator, ICommand Right)
     {

@@ -652,7 +652,7 @@ internal static partial class WordExpansion
             {
                 var context = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
                 arithmeticStatus = ArithmeticExpansionScanner.Scan(context, content, index, out arithmeticEnd,
-                    out expression, out _, out var bracketed, out arithmeticError);
+                    out expression, out _, out var bracketed, out _, out arithmeticError);
                 invalidQuotedBracket = arithmeticStatus == ShellScanStatus.Complete && bracketed
                     && quoteContext == ExpansionQuoteContext.DoubleQuoted
                     && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression);
@@ -780,7 +780,7 @@ internal static partial class WordExpansion
                 var parameterScan = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
                 var parameterStatus = BracedParameterScanner.ScanWithPayload(
                     parameterScan, content, index,
-                    out var closingIndex, out _, out var payload, out var parameterError);
+                    out var closingIndex, out _, out var payload, out _, out var parameterError);
                 if (parameterStatus != BracedParameterScanStatus.Found)
                 {
                     if (quoteContext == ExpansionQuoteContext.HereDocument)

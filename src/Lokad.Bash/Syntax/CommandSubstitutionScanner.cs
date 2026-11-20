@@ -40,7 +40,7 @@ internal static class CommandSubstitutionScanner
         out ShellSource payload)
     {
         var context = new ShellScanContext();
-        var arithmetic = ArithmeticExpansionScanner.ScanShape(context, text, startIndex, out _, out _, out _);
+        var arithmetic = ArithmeticExpansionScanner.ScanShape(context, text, startIndex, out _, out _, out _, out _);
         if (arithmetic != ShellScanStatus.NotFound)
         {
             endIndex = startIndex;
@@ -175,13 +175,17 @@ internal static class CommandSubstitutionScanner
             closingIndex = substitutionStart;
             var builder = context.CreateByteBuilder(0);
             var position = substitutionStart + 1;
+            var removedLineContinuations = 0;
             while (position < source.Length)
             {
                 var current = source[position];
                 if (current == (byte)'`')
                 {
                     legacyPayload = new CommandSubstitutionSyntax.Legacy(ShellSource.FromBytes(builder.ToMemory()),
-                        source.Slice(substitutionStart, position - substitutionStart + 1), context.LegacyOrigin);
+                        source.Slice(substitutionStart, position - substitutionStart + 1), context.LegacyOrigin)
+                    {
+                        RemovedLineContinuations = removedLineContinuations
+                    };
                     closingIndex = position;
                     return ShellScanStatus.Complete;
                 }
@@ -189,6 +193,12 @@ internal static class CommandSubstitutionScanner
                 if (current == (byte)'\\' && position + 1 < source.Length)
                 {
                     var next = source[position + 1];
+                    if (next == (byte)'\n')
+                    {
+                        removedLineContinuations++;
+                        position += 2;
+                        continue;
+                    }
                     if (next is (byte)'$' or (byte)'`' or (byte)'\\')
                     {
                         builder.Append(next);
