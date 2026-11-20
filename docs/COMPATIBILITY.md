@@ -476,7 +476,13 @@ builtin's usage and returns 2. Later fields are ordinary operands.
 `eval` joins its remaining fields with spaces and succeeds on empty input.
 `source` and `.` require a filename and use any following fields as positional
 parameters for that file. The filename must be valid UTF-8 for the host path
-boundary. Script content and positional parameters retain their byte values.
+boundary. A source call without additional fields uses the caller's current
+parameters directly. Given additional fields, a source call in a function
+restores the function's parameters on return. At the top level, a reached `set`
+can keep a replacement after an argument-bearing source returns. A later source
+entry or in-process function return clears that replacement decision. A `shift`
+alone leaves the restoration decision intact. Script content and arguments
+retain their bytes.
 
 An invalid braced parameter or empty subscript reports status 1 and ends the
 reached command unit. It publishes `PIPESTATUS=(1)` in the active variable scope.

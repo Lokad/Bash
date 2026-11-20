@@ -152,8 +152,12 @@ public sealed partial class Evaluation
         var argumentCount = words.Count - argumentStart;
         if (argumentCount > 0)
             Memory.Charge(checked(scope.Variables.PositionalMemoryBytes + 32L * argumentCount));
+        else
+            scope.Variables.ClearPositionalReplacement();
+        var restorePolicy = scope.Context.FunctionContext == null
+            ? PositionalParametersRestorePolicy.UnlessReplaced : PositionalParametersRestorePolicy.Always;
         using var positionalScope = argumentCount == 0 ? null : scope.Variables.EnterPositionalParametersScope(
-            words, argumentStart, PositionalParametersRestorePolicy.UnlessReplaced);
+            words, argumentStart, restorePolicy);
         return ApplyNegation(await ExecuteSourceAsync(path, scope).ConfigureAwait(false), negated);
 
         async Task<EvaluationResult> FinishUsageErrorAsync()

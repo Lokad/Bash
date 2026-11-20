@@ -303,8 +303,12 @@ view. Shifting advances a head index and releases consumed value references;
 surviving entries are not moved. Functions and argument-bearing source calls
 retain the caller frame and restore it without copying its entries. A new frame
 copies callee entries once while sharing immutable value bytes. Functions always
-restore their caller; source restores unless an explicit positional replacement
-survives. Saved frames remain admitted through their surrounding command scope.
+restore their caller. A source call with arguments restores its caller inside
+a function. Outside functions, it can keep an explicit `set` replacement.
+Source entry clears the replacement marker even when the active frame is reused.
+Function restores and argument-bearing source returns also clear it. Shifts
+preserve the marker and child evaluations isolate it. Saved frames remain
+admitted through their surrounding command scope.
 An unset positional scalar such as `"$1"` emits one empty field on its own in
 double quotes. An aggregate that emits zero fields suppresses empty expansions
 inside the same double quotes. Supplied empty aggregate elements and separate

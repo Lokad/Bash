@@ -309,7 +309,7 @@ public sealed partial class Evaluation
         if (replacePositionals || index < words.Count)
         {
             Memory.Charge(checked(32L * (words.Count - index)));
-            commandVars.ReplacePositionalParameters(words, index);
+            commandVars.ReplacePositionalParametersFromSet(words, index);
         }
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
 

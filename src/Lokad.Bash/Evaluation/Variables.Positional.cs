@@ -10,7 +10,7 @@ internal enum PositionalParametersRestorePolicy
     /// <summary>Restore the captured frame regardless of replacements inside the scope.</summary>
     Always,
 
-    /// <summary>Restore only when the scope's frame was not replaced wholesale.</summary>
+    /// <summary>Keep an explicit replacement by set since the last positional scope boundary.</summary>
     UnlessReplaced
 }
 
@@ -18,6 +18,7 @@ public sealed partial class Variables
 {
     private PositionalParametersFrame _positional = new([], 0);
     private readonly PositionalParametersView _positionalView;
+    private bool _positionalParametersReplaced;
 
     internal long PositionalMemoryBytes => _positional.EstimatedMemoryBytes;
 
@@ -32,15 +33,18 @@ public sealed partial class Variables
     }
 
     internal void ReplacePositionalParameters(IReadOnlyList<ShellValue> values) =>
-        ReplacePositionalParameters(values, 0);
+        SetPositionalFrame(new PositionalParametersFrame(values, 0), replacedBySet: false);
 
-    /// <summary>Copies the selected argument tail once into an owned frame.</summary>
-    internal void ReplacePositionalParameters(IReadOnlyList<ShellValue> values, int start) =>
-        SetPositionalFrame(new PositionalParametersFrame(values, start));
+    /// <summary>Copies the tail selected by set and marks it for source return.</summary>
+    internal void ReplacePositionalParametersFromSet(IReadOnlyList<ShellValue> values, int start) =>
+        SetPositionalFrame(new PositionalParametersFrame(values, start), replacedBySet: true);
 
-    private void SetPositionalFrame(PositionalParametersFrame frame)
+    internal void ClearPositionalReplacement() => _positionalParametersReplaced = false;
+
+    private void SetPositionalFrame(PositionalParametersFrame frame, bool replacedBySet)
     {
         _positional = frame;
+        _positionalParametersReplaced = replacedBySet;
         _savedLocalBindings?.RefreshSavedMemory();
     }
 
@@ -135,7 +139,6 @@ public sealed partial class Variables
     {
         private readonly Variables _variables;
         private readonly PositionalParametersFrame _saved;
-        private readonly PositionalParametersFrame _entered;
         private readonly PositionalParametersRestorePolicy _restorePolicy;
         private bool _isDisposed;
 
@@ -144,9 +147,8 @@ public sealed partial class Variables
         {
             _variables = variables;
             _saved = variables._positional;
-            _entered = new PositionalParametersFrame(values, start);
             _restorePolicy = restorePolicy;
-            variables.SetPositionalFrame(_entered);
+            variables.SetPositionalFrame(new PositionalParametersFrame(values, start), replacedBySet: false);
         }
 
         public void Dispose()
@@ -154,8 +156,10 @@ public sealed partial class Variables
             if (_isDisposed)
                 return;
             _isDisposed = true;
-            if (_restorePolicy == PositionalParametersRestorePolicy.Always || ReferenceEquals(_variables._positional, _entered))
-                _variables.SetPositionalFrame(_saved);
+            if (_restorePolicy == PositionalParametersRestorePolicy.Always || !_variables._positionalParametersReplaced)
+                _variables.SetPositionalFrame(_saved, replacedBySet: false);
+            else
+                _variables.ClearPositionalReplacement();
         }
     }
 }

@@ -163,6 +163,51 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("source ./unit item more", "set -- changed", "1:changed:", "2:function:tail")]
+    [InlineData(". ./unit item more", "set --", "0::", "2:function:tail")]
+    [InlineData("eval 'source ./unit item more'", "set -- changed", "1:changed:", "2:function:tail")]
+    [InlineData("source ./unit", "set -- changed", "1:changed:", "1:changed:")]
+    public async Task SourceRestoresFunctionArgumentsAfterReturn(
+        string invocation, string replacement, string inside, string afterSource)
+    {
+        var host = EndToEndHarness.BuildTree([
+            ("/unit", replacement + "; printf '[%s:%s:%s]' \"$#\" \"${1-}\" \"${2-}\"; return 7\n")
+        ]);
+        var script = "set -- root; f() { " + invocation
+            + "; printf '<%s:%s:%s:%s>' \"$?\" \"$#\" \"${1-}\" \"${2-}\"; }; f function tail; printf '|%s' \"$1\"";
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"[{inside}]<7:{afterSource}>|root", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("set -- new; f", ":", "new", "root")]
+    [InlineData("set -- new; (f)", ":", "new", "new")]
+    [InlineData("set -- new; source ./child nested", "shift", "new", "root")]
+    [InlineData("set -- new; source ./child", ":", "new", "root")]
+    [InlineData("source ./child nested", "set -- new", "new", "root")]
+    [InlineData("source ./child", "set -- new", "new", "new")]
+    [InlineData("set -- new; source ./child nested; set -- final", ":", "final", "final")]
+    public async Task SourceKeepsOnlyReplacementSinceTheLastSourceOrFunctionBoundary(
+        string commands, string child, string beforeReturn, string afterReturn)
+    {
+        var host = EndToEndHarness.BuildTree([
+            ("/unit", commands + "; printf '<%s>' \"${1-}\"\n"),
+            ("/child", child + "\n")
+        ]);
+        var result = await EndToEndHarness.RunScriptAsync(
+            "set -- root; f() { :; }; source ./unit item; printf '<%s>' \"${1-}\"", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{beforeReturn}><{afterReturn}>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("source", "source")]
     [InlineData(".", ".")]
     [InlineData("source --", "source")]

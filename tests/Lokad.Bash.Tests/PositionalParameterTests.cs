@@ -61,7 +61,7 @@ public sealed class PositionalParameterTests
         Assert.True(variables.TryShiftPositionalParameters(1));
         using (variables.EnterPositionalParametersScope([ShellValue.FromText("function")], PositionalParametersRestorePolicy.Always))
         {
-            variables.PositionalParameters = [ShellValue.FromText("explicit replacement")];
+            variables.ReplacePositionalParametersFromSet([ShellValue.FromText("explicit replacement")], 0);
             Assert.True(variables.TryShiftPositionalParameters(1));
         }
         Assert.Equal("source", Assert.Single(view).ToUtf8String());
@@ -79,7 +79,7 @@ public sealed class PositionalParameterTests
         variables.PositionalParameters = [ShellValue.FromText("outer")];
         using (variables.EnterPositionalParametersScope([ShellValue.FromText("inner")], PositionalParametersRestorePolicy.UnlessReplaced))
         {
-            variables.PositionalParameters = variables.PositionalParameters;
+            variables.ReplacePositionalParametersFromSet(variables.PositionalParameters, 0);
             Assert.True(variables.TryShiftPositionalParameters(1));
         }
         Assert.Empty(variables.PositionalParameters);
