@@ -37,6 +37,7 @@ internal static class BracedParameterScanner
             out _,
             out payload,
             out containsCommandSubstitution,
+            out _,
             capturePayload: true);
         return status == BracedParameterScanStatus.Found;
     }
@@ -55,6 +56,7 @@ internal static class BracedParameterScanner
             out errorIndex,
             out _,
             out _,
+            out _,
             capturePayload: false);
 
     internal static BracedParameterScanStatus ScanShape(
@@ -63,7 +65,8 @@ internal static class BracedParameterScanner
         int startIndex,
         out int endIndex,
         out int errorIndex,
-        out bool containsCommandSubstitution) =>
+        out bool containsCommandSubstitution,
+        out SyntaxError? error) =>
         ScanCore(
             context,
             text,
@@ -72,6 +75,7 @@ internal static class BracedParameterScanner
             out errorIndex,
             out _,
             out containsCommandSubstitution,
+            out error,
             capturePayload: false);
 
     /// <summary>Captures normalized payload bytes while retaining the structural scan's lookahead context.</summary>
@@ -81,8 +85,10 @@ internal static class BracedParameterScanner
         int startIndex,
         out int endIndex,
         out int errorIndex,
-        out ShellSource payload) =>
-        ScanCore(context, text, startIndex, out endIndex, out errorIndex, out payload, out _, capturePayload: true);
+        out ShellSource payload,
+        out SyntaxError? error) =>
+        ScanCore(context, text, startIndex, out endIndex, out errorIndex, out payload, out _, out error,
+            capturePayload: true);
 
     private static BracedParameterScanStatus ScanCore(
         ShellScanContext context,
@@ -92,12 +98,14 @@ internal static class BracedParameterScanner
         out int errorIndex,
         out ShellSource payload,
         out bool containsCommandSubstitution,
+        out SyntaxError? error,
         bool capturePayload)
     {
         endIndex = startIndex;
         errorIndex = startIndex;
         payload = ShellSource.Empty;
         containsCommandSubstitution = false;
+        error = null;
         if (!HasPrefix(text, startIndex))
             return BracedParameterScanStatus.NotBraced;
         if (!context.TryEnter())
@@ -127,9 +135,10 @@ internal static class BracedParameterScanner
                         : BracedParameterScanStatus.Unterminated;
                 }
 
-                if (nestedResult is ShellNestedExpansionScan.Invalid)
+                if (nestedResult is ShellNestedExpansionScan.Invalid invalid)
                 {
                     errorIndex = cursor.Position;
+                    error = invalid.Error;
                     return BracedParameterScanStatus.InvalidNestedSyntax;
                 }
 

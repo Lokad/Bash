@@ -129,7 +129,7 @@ public sealed class SourceWordPart : WordPart
                 continue;
             var context = new ShellScanContext { SyntaxMemory = memory };
             var status = ArithmeticExpansionScanner.Scan(context, source, index, out var end,
-                out var expression, out _, out var bracketed);
+                out var expression, out _, out var bracketed, out _);
             if (status != ShellScanStatus.Complete)
                 continue;
             memory?.Grow(256);

@@ -353,6 +353,9 @@ internal sealed class ConditionalParser
             switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
             {
                 case ShellNestedExpansionScan.Complete: continue;
+                case ShellNestedExpansionScan.Invalid { Error: { } error }:
+                    _error ??= error;
+                    return new(TokenKind.Invalid, default, error.Offset);
                 case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid:
                     Fail("Invalid expansion in conditional operand.", cursor.Position);
                     return new(TokenKind.Invalid, default, cursor.Position);

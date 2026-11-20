@@ -333,7 +333,8 @@ internal sealed class ShellSourceCursor
                 _text,
                 start,
                 out var endIndex,
-                out var containsCommandSubstitution);
+                out var containsCommandSubstitution,
+                out var error);
             if (status == ShellScanStatus.Complete)
             {
                 Position = endIndex + 1;
@@ -342,7 +343,7 @@ internal sealed class ShellSourceCursor
                     containsCommandSubstitution);
             }
             if (status != ShellScanStatus.NotFound)
-                return ToFailure(status, ShellNestedExpansionKind.Arithmetic);
+                return ToFailure(status, ShellNestedExpansionKind.Arithmetic, error);
         }
 
         if ((parameters == BracedParameterRecognition.All || IsDoubleQuoted)
@@ -354,13 +355,14 @@ internal sealed class ShellSourceCursor
                 start,
                 out var endIndex,
                 out _,
-                out var containsCommandSubstitution);
+                out var containsCommandSubstitution,
+                out var error);
             if (status != BracedParameterScanStatus.Found)
             {
                 return status is BracedParameterScanStatus.Unterminated
                     or BracedParameterScanStatus.UnterminatedCommandSubstitution
                     ? new ShellNestedExpansionScan.Incomplete(ShellNestedExpansionKind.Parameter)
-                    : new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Parameter);
+                    : new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Parameter, error);
             }
 
             Position = endIndex + 1;
@@ -376,9 +378,10 @@ internal sealed class ShellSourceCursor
                 _text,
                 start,
                 out var endIndex,
-                out _);
+                out _,
+                out var error);
             if (status != ShellScanStatus.Complete)
-                return ToFailure(status, ShellNestedExpansionKind.Command);
+                return ToFailure(status, ShellNestedExpansionKind.Command, error);
 
             Position = endIndex + 1;
             return new ShellNestedExpansionScan.Complete(
@@ -390,10 +393,11 @@ internal sealed class ShellSourceCursor
 
         static ShellNestedExpansionScan ToFailure(
             ShellScanStatus status,
-            ShellNestedExpansionKind kind) =>
+            ShellNestedExpansionKind kind,
+            SyntaxError? error) =>
             status == ShellScanStatus.Incomplete
                 ? new ShellNestedExpansionScan.Incomplete(kind)
-                : new ShellNestedExpansionScan.Invalid(kind);
+                : new ShellNestedExpansionScan.Invalid(kind, error);
     }
 
 }
@@ -593,7 +597,7 @@ internal abstract record ShellNestedExpansionScan
     internal sealed record Incomplete(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan;
 
     /// <summary>A nested prefix was present but contained malformed nested syntax.</summary>
-    internal sealed record Invalid(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan;
+    internal sealed record Invalid(ShellNestedExpansionKind Kind, SyntaxError? Error) : ShellNestedExpansionScan;
 }
 
 /// <summary>Reports the four semantic outcomes shared by delimiter scanners.</summary>

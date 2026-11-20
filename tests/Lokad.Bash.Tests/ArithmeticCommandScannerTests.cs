@@ -91,7 +91,7 @@ public sealed class ArithmeticCommandScannerTests
         Assert.Equal(ShellScanStatus.Complete, Scan("((1))"));
 
         ShellScanStatus Scan(string source) =>
-            ArithmeticExpansionScanner.ScanCommand(context, ShellSource.FromText(source), 0, out _, out _);
+            ArithmeticExpansionScanner.ScanCommand(context, ShellSource.FromText(source), 0, out _, out _, out _);
 
         static string Build(int count) => "((" + string.Concat(Enumerable.Repeat("$((", count))
             + "1" + string.Concat(Enumerable.Repeat("))", count)) + "))";
@@ -104,7 +104,7 @@ public sealed class ArithmeticCommandScannerTests
         var source = "((" + expression + "))tail";
 
         Assert.Equal(ShellScanStatus.Complete,
-            ArithmeticExpansionScanner.ScanCommand(new ShellScanContext(), ShellSource.FromText(source), 0, out var end, out var captured));
+            ArithmeticExpansionScanner.ScanCommand(new ShellScanContext(), ShellSource.FromText(source), 0, out var end, out var captured, out _));
         Assert.Equal(expression, captured.ToUtf8String());
         Assert.Equal("tail", source[(end + 1)..]);
     }

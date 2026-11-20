@@ -183,6 +183,11 @@ a pair of logical closing parentheses. A single closer with following input
 hands delimiter selection to the command parser. Command lookahead records its
 required expansion and command depth, including reused descendants. The
 tokenizer can transfer a cached tree to a different depth within both budgets.
+When the body grammar diagnoses a malformed parenthesized substitution, the
+scanner carries that diagnostic to the enclosing command and retains the source
+offset. Missing closing delimiters keep their own diagnostics. A diagnosed
+substitution in expanded here-document data is reported during redirection
+setup, before the captured body runs.
 
 Arithmetic commands, arithmetic-for clauses and ordinary word arithmetic
 expansions retain source-owned lexical decisions for stable source. Numeric values,

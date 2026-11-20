@@ -194,11 +194,13 @@ public static class Parser
         out int closingParenthesisIndex,
         out ParsedScript? parsed,
         out SubstitutionSyntaxFailure failure,
-        out bool preserveAdjacentOpening)
+        out bool preserveAdjacentOpening,
+        out SyntaxError? syntaxError)
     {
         parsed = null;
         failure = SubstitutionSyntaxFailure.None;
         preserveAdjacentOpening = false;
+        syntaxError = null;
         closingParenthesisIndex = payloadStart;
         if (payloadStart < 0 || payloadStart > input.Length)
             return ShellScanStatus.NotFound;
@@ -210,7 +212,10 @@ public static class Parser
         if (tokenizer.Error is { } error)
         {
             if (context.ParsingLimitExceeded || error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
+            {
+                syntaxError = error;
                 return ShellScanStatus.Invalid;
+            }
 
             return ShellScanStatus.Incomplete;
         }

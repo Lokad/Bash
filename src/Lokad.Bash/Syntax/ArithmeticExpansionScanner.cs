@@ -38,7 +38,7 @@ internal static class ArithmeticExpansionScanner
         out ShellSource expression,
         out bool containsCommandSubstitution) =>
         Scan(new ShellScanContext(), text, startIndex, out endIndex, out expression, out containsCommandSubstitution,
-            out _);
+            out _, out _);
 
     internal static ShellScanStatus Scan(
         ShellScanContext context,
@@ -47,7 +47,8 @@ internal static class ArithmeticExpansionScanner
         out int endIndex,
         out ShellSource expression,
         out bool containsCommandSubstitution,
-        out bool bracketed) =>
+        out bool bracketed,
+        out SyntaxError? error) =>
         ScanCore(
             context,
             text,
@@ -57,6 +58,7 @@ internal static class ArithmeticExpansionScanner
             out containsCommandSubstitution,
             out bracketed,
             out _,
+            out error,
             captureExpression: true,
             form: ArithmeticForm.Expansion);
 
@@ -65,7 +67,8 @@ internal static class ArithmeticExpansionScanner
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out bool containsCommandSubstitution) =>
+        out bool containsCommandSubstitution,
+        out SyntaxError? error) =>
         ScanCore(
             context,
             text,
@@ -75,6 +78,7 @@ internal static class ArithmeticExpansionScanner
             out containsCommandSubstitution,
             out _,
             out _,
+            out error,
             captureExpression: false,
             form: ArithmeticForm.Expansion);
 
@@ -87,14 +91,15 @@ internal static class ArithmeticExpansionScanner
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out ShellSource expression) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out _,
+        out ShellSource expression,
+        out SyntaxError? error) =>
+        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out _, out error,
             captureExpression: true, form: ArithmeticForm.Command);
 
     internal static ShellScanStatus ScanForHeader(
         ShellScanContext context, ShellSource text, int startIndex,
-        out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators,
+        out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators, out SyntaxError? error) =>
+        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators, out error,
             captureExpression: true, form: ArithmeticForm.ForHeader);
 
     private static ShellScanStatus ScanCore(
@@ -106,6 +111,7 @@ internal static class ArithmeticExpansionScanner
         out bool containsCommandSubstitution,
         out bool bracketed,
         out ArithmeticForSeparators separators,
+        out SyntaxError? error,
         bool captureExpression,
         ArithmeticForm form)
     {
@@ -114,6 +120,7 @@ internal static class ArithmeticExpansionScanner
         containsCommandSubstitution = false;
         bracketed = false;
         separators = default;
+        error = null;
         if (startIndex < 0)
             return ShellScanStatus.NotFound;
 
@@ -149,8 +156,11 @@ internal static class ArithmeticExpansionScanner
 
                 if (nestedResult is ShellNestedExpansionScan.Incomplete)
                     return ShellScanStatus.Incomplete;
-                if (nestedResult is ShellNestedExpansionScan.Invalid)
+                if (nestedResult is ShellNestedExpansionScan.Invalid invalid)
+                {
+                    error = invalid.Error;
                     return ShellScanStatus.Invalid;
+                }
 
                 if (cursor.IsQuoted)
                 {

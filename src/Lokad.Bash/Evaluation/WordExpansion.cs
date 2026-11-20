@@ -590,7 +590,7 @@ internal static partial class WordExpansion
             {
                 var legacyStatus = ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace,
                     quoteContext == ExpansionQuoteContext.HereDocument ? LegacySubstitutionOrigin.HereDocument : LegacySubstitutionOrigin.Temporary,
-                    out var legacyScript, out var legacyEndIndex);
+                    out var legacyScript, out var legacyEndIndex, out var legacyError);
                 if (legacyStatus == ShellScanStatus.Complete)
                 {
                     await ExpandCommandSubstitutionAsync(
@@ -606,7 +606,7 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument
                     && legacyStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid)
                 {
-                    await RejectHereDocumentAsync(scope, legacyStatus).ConfigureAwait(false);
+                    await RejectHereDocumentAsync(scope, legacyStatus, legacyError).ConfigureAwait(false);
                     return null;
                 }
                 if (syntax.IsBraceExpanded && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)
@@ -646,12 +646,13 @@ internal static partial class WordExpansion
             var arithmeticEnd = prepared?.End ?? -1;
             var expression = ShellSource.Empty;
             var arithmeticStatus = ShellScanStatus.Complete;
+            SyntaxError? arithmeticError = null;
             var invalidQuotedBracket = prepared is { Operand: null };
             if (!prepared.HasValue)
             {
                 var context = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
                 arithmeticStatus = ArithmeticExpansionScanner.Scan(context, content, index, out arithmeticEnd,
-                    out expression, out _, out var bracketed);
+                    out expression, out _, out var bracketed, out arithmeticError);
                 invalidQuotedBracket = arithmeticStatus == ShellScanStatus.Complete && bracketed
                     && quoteContext == ExpansionQuoteContext.DoubleQuoted
                     && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression);
@@ -682,10 +683,11 @@ internal static partial class WordExpansion
             }
 
             CommandSubstitutionSyntax? script = null;
+            SyntaxError? commandError = null;
             var endIndex = index;
             var commandStatus = arithmeticStatus == ShellScanStatus.NotFound
                 ? ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace,
-                    LegacySubstitutionOrigin.Temporary, out script, out endIndex)
+                    LegacySubstitutionOrigin.Temporary, out script, out endIndex, out commandError)
                 : ShellScanStatus.NotFound;
             if (commandStatus == ShellScanStatus.Complete)
             {
@@ -703,7 +705,8 @@ internal static partial class WordExpansion
                 && (commandStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid
                     || arithmeticStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid))
             {
-                await RejectHereDocumentAsync(scope, commandStatus == ShellScanStatus.NotFound ? arithmeticStatus : commandStatus)
+                await RejectHereDocumentAsync(scope, commandStatus == ShellScanStatus.NotFound ? arithmeticStatus : commandStatus,
+                        commandError ?? arithmeticError)
                     .ConfigureAwait(false);
                 return null;
             }
@@ -777,14 +780,14 @@ internal static partial class WordExpansion
                 var parameterScan = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
                 var parameterStatus = BracedParameterScanner.ScanWithPayload(
                     parameterScan, content, index,
-                    out var closingIndex, out _, out var payload);
+                    out var closingIndex, out _, out var payload, out var parameterError);
                 if (parameterStatus != BracedParameterScanStatus.Found)
                 {
                     if (quoteContext == ExpansionQuoteContext.HereDocument)
                     {
                         await RejectHereDocumentAsync(scope, parameterStatus is BracedParameterScanStatus.Unterminated
                             or BracedParameterScanStatus.UnterminatedCommandSubstitution
-                            ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid).ConfigureAwait(false);
+                            ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid, parameterError).ConfigureAwait(false);
                         return null;
                     }
                     if (output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)
@@ -843,11 +846,11 @@ internal static partial class WordExpansion
         }
         return null;
 
-        static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status)
+        static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, SyntaxError? error)
         {
             await failedScope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("here-document"),
-                ShellValue.FromText(status == ShellScanStatus.Incomplete
-                    ? "unexpected end of substitution" : "invalid substitution")).ConfigureAwait(false);
+                ShellValue.FromText(error?.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
+                    ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
             failedScope.Effects.SetExpansionError(1);
         }
     }
@@ -903,10 +906,11 @@ internal static partial class WordExpansion
         MemoryCapacity memory,
         LegacySubstitutionOrigin legacyOrigin,
         out CommandSubstitutionSyntax? script,
-        out int endIndex)
+        out int endIndex,
+        out SyntaxError? error)
     {
         var context = new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = legacyOrigin };
-        return CommandSubstitutionScanner.ScanParsed(context, content, startIndex, out endIndex, out script);
+        return CommandSubstitutionScanner.ScanParsed(context, content, startIndex, out endIndex, out script, out error);
     }
 
     internal static async Task<ExpandedWord> ExpandExpressionAsync(

@@ -16,6 +16,76 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Throws<SyntaxException>(() => Parser.Parse(source));
     }
 
+    [Theory]
+    [InlineData("v=$(for ((i=7)); do :; done)")]
+    [InlineData("printf '%s' \"$(printf '%s' \"$(for ((i=7)); do :; done)\")\"")]
+    [InlineData("v=\"${missing:-$(for ((i=7)); do :; done)}\"")]
+    [InlineData("v=$((1 + $(for ((i=7)); do :; done)))")]
+    [InlineData("[[ \"$(for ((i=7)); do :; done)\" == yes ]]")]
+    [InlineData("v=$\\\n(for ((i=7)); do :; done)")]
+    public void NestedGrammarFailurePreservesMessageAndSourceCoordinates(string command)
+    {
+        var source = "# é\n" + command;
+        var expectedOffset = source.IndexOf("((i=7", StringComparison.Ordinal);
+        Assert.False(Parser.TryParse(source, out _, out var textError));
+        Assert.NotNull(textError);
+        Assert.Equal("Arithmetic for header requires two semicolons.", textError.Message);
+        Assert.Equal(expectedOffset, textError.Offset);
+
+        Assert.False(Parser.TryParse(System.Text.Encoding.UTF8.GetBytes(source), out _, out var byteError));
+        Assert.NotNull(byteError);
+        Assert.Equal(textError.Message, byteError.Message);
+        Assert.Equal(expectedOffset + 1, byteError.Offset);
+    }
+
+    [Theory]
+    [InlineData("$(printf ok |)", (int)ShellScanStatus.Invalid, "Expected command after pipeline operator.")]
+    [InlineData("$(printf ok |", (int)ShellScanStatus.Incomplete, null)]
+    [InlineData("$(printf ')'", (int)ShellScanStatus.Incomplete, null)]
+    public void FailedLookaheadReportsOnlyTheDiagnosedBodyError(string source, int expected, string? message)
+    {
+        var context = new ShellScanContext();
+        Assert.Equal((ShellScanStatus)expected, CommandSubstitutionScanner.ScanParsedForLaterReuse(
+            context, ShellSource.FromText(source), 0, out _, out var rejected, out var error));
+        Assert.Null(rejected);
+        Assert.Equal(message, error?.Message);
+
+        Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsed(
+            context, ShellSource.FromText("$(printf valid)"), 0, out _, out var accepted, out var laterError));
+        Assert.IsType<CommandSubstitutionSyntax.Parsed>(accepted);
+        Assert.Null(laterError);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HereDocumentExpansionReportsChildDiagnosticBeforeAnyCaptureEffects(bool prepared)
+    {
+        const string Source = """
+            value=prior
+            IFS= read -r value <<END
+            $(: >inside; for ((i=7)); do : >body; break; done)
+            END
+            printf '%s:%s' "$?" "$value"
+            """;
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new EndToEnd.TestHost { MemoryBudget = owner };
+        var result = prepared
+            ? await new Engine().RunAsync(new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse(Source)),
+                host, owner, CancellationToken.None)
+            : await BashScript.RunAsync(host, Source, EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:prior", host.StandardOutput.TextContent);
+        Assert.Equal("here-document: syntax error: Arithmetic for header requires two semicolons.\n",
+            host.StandardError.TextContent);
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task ReachedLegacyTreesSharePhysicalSyntaxAndRefundAfterLastUser()
     {
@@ -77,7 +147,7 @@ public sealed class CommandSubstitutionSyntaxTests
     {
         var context = new ShellScanContext { LegacyOrigin = LegacySubstitutionOrigin.Script };
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var syntax));
+            CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var syntax, out _));
         return Assert.IsType<CommandSubstitutionSyntax.Legacy>(syntax);
     }
 
@@ -87,12 +157,12 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf retained)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out var end, out var first));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out var end, out var first, out _));
         var retained = Assert.IsType<CommandSubstitutionSyntax.Parsed>(first);
         Assert.Equal("printf retained", retained.Source.ToUtf8String());
         Assert.NotEmpty(retained.Script.Commands);
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out var lookedAgain));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out var lookedAgain, out _));
         Assert.Same(first, lookedAgain);
 
         var tokenizer = new Tokenizer(source, 0, context);
@@ -109,7 +179,7 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf one)$(printf two)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out var end, out var first));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out var end, out var first, out _));
         Assert.False(context.TryGetCommandSubstitution(ShellSource.FromText(source.ToUtf8String()), 0, out _));
         Assert.False(context.TryGetCommandSubstitution(source, end + 1, out _));
         Assert.True(context.TryTakeCommandSubstitution(source, 0, out var cached));
@@ -146,7 +216,7 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$( (printf retained) )");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out _, out _));
         var depth = ShellScanContext.MaximumCommandDepth - 1;
         for (var level = 0; level < depth; level++)
             Assert.True(context.TryEnterCommand());
@@ -154,7 +224,7 @@ public sealed class CommandSubstitutionSyntaxTests
         {
             Assert.False(context.TryGetCommandSubstitution(source, 0, out _));
             Assert.Equal(ShellScanStatus.Invalid,
-                CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out _));
+                CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out _, out _));
             Assert.Contains("Command nesting", Assert.IsType<SyntaxError>(context.LimitError).Message);
         }
         finally
@@ -193,13 +263,13 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf retained)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out var first));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out var first, out _));
         var depth = 0;
         while (context.TryEnter()) depth++;
         try
         {
             Assert.Equal(ShellScanStatus.Invalid,
-                CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var rejected));
+                CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var rejected, out _));
             Assert.Null(rejected);
         }
         finally
@@ -216,13 +286,13 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf retained)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out _, out _));
         for (var depth = 0; depth < ShellScanContext.MaximumCommandDepth; depth++)
             Assert.True(context.TryEnterCommand());
 
         Assert.False(context.TryGetCommandSubstitution(source, 0, out _));
         Assert.Equal(ShellScanStatus.Invalid,
-            CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var rejected));
+            CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var rejected, out _));
         Assert.Null(rejected);
         var error = Assert.IsType<SyntaxError>(context.LimitError);
         Assert.Contains("Command nesting", error.Message);

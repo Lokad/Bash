@@ -40,7 +40,7 @@ internal static class CommandSubstitutionScanner
         out ShellSource payload)
     {
         var context = new ShellScanContext();
-        var arithmetic = ArithmeticExpansionScanner.ScanShape(context, text, startIndex, out _, out _);
+        var arithmetic = ArithmeticExpansionScanner.ScanShape(context, text, startIndex, out _, out _, out _);
         if (arithmetic != ShellScanStatus.NotFound)
         {
             endIndex = startIndex;
@@ -48,7 +48,7 @@ internal static class CommandSubstitutionScanner
             return ShellScanStatus.NotFound;
         }
 
-        var status = ScanParsedForLaterReuse(context, text, startIndex, out endIndex, out var substitution);
+        var status = ScanParsedForLaterReuse(context, text, startIndex, out endIndex, out var substitution, out _);
         payload = substitution?.Source ?? ShellSource.Empty;
         return status;
     }
@@ -59,21 +59,9 @@ internal static class CommandSubstitutionScanner
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out CommandSubstitutionSyntax? substitution)
-    {
-        if (context.PreserveDelimiterLookahead)
-            return ScanParsedForLaterReuse(context, text, startIndex, out endIndex, out substitution);
-        if (context.TryTakeCommandSubstitution(text, startIndex, out var cached))
-        {
-            endIndex = startIndex + cached.Length - 1;
-            substitution = cached.Substitution;
-            RecordSyntaxFailure(context, substitution);
-            return ShellScanStatus.Complete;
-        }
-        var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution);
-        RecordSyntaxFailure(context, substitution);
-        return status;
-    }
+        out CommandSubstitutionSyntax? substitution,
+        out SyntaxError? error) =>
+        ScanParsed(context, text, startIndex, context.PreserveDelimiterLookahead, out endIndex, out substitution, out error);
 
     /// <summary>Keeps a structural lookahead result until tokenization reaches the same source position.</summary>
     internal static ShellScanStatus ScanParsedForLaterReuse(
@@ -81,25 +69,36 @@ internal static class CommandSubstitutionScanner
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out CommandSubstitutionSyntax? substitution)
+        out CommandSubstitutionSyntax? substitution,
+        out SyntaxError? error) =>
+        ScanParsed(context, text, startIndex, keepLookahead: true, out endIndex, out substitution, out error);
+
+    private static ShellScanStatus ScanParsed(ShellScanContext context, ShellSource text, int startIndex,
+        bool keepLookahead, out int endIndex, out CommandSubstitutionSyntax? substitution, out SyntaxError? error)
     {
-        if (context.TryGetCommandSubstitution(text, startIndex, out var cached))
+        error = null;
+        if (keepLookahead ? context.TryGetCommandSubstitution(text, startIndex, out var cached)
+            : context.TryTakeCommandSubstitution(text, startIndex, out cached))
         {
             endIndex = startIndex + cached.Length - 1;
             substitution = cached.Substitution;
             RecordSyntaxFailure(context, substitution);
             return ShellScanStatus.Complete;
         }
-        var previousPeak = context.BeginLookahead();
+        var previousPeak = keepLookahead ? context.BeginLookahead() : default;
         try
         {
-            var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution);
-            if (substitution != null)
+            var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution, out error);
+            if (keepLookahead && substitution != null)
                 context.StoreCommandSubstitution(text, startIndex, endIndex - startIndex + 1, substitution);
             RecordSyntaxFailure(context, substitution);
             return status;
         }
-        finally { context.EndLookahead(previousPeak); }
+        finally
+        {
+            if (keepLookahead)
+                context.EndLookahead(previousPeak);
+        }
     }
 
     private static void RecordSyntaxFailure(ShellScanContext context, CommandSubstitutionSyntax? substitution)
@@ -114,9 +113,11 @@ internal static class CommandSubstitutionScanner
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out CommandSubstitutionSyntax? substitution)
+        out CommandSubstitutionSyntax? substitution,
+        out SyntaxError? error)
     {
         substitution = null;
+        error = null;
         endIndex = startIndex;
         if (!HasPrefix(text, startIndex))
             return ShellScanStatus.NotFound;
@@ -138,7 +139,8 @@ internal static class CommandSubstitutionScanner
                 out endIndex,
                 out var parsed,
                 out var failure,
-                out var preserveAdjacentOpening);
+                out var preserveAdjacentOpening,
+                out error);
             if (status == ShellScanStatus.Complete)
             {
                 var payload = text.Slice(payloadStart, endIndex - payloadStart);
