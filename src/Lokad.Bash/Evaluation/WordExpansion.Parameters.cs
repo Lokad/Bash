@@ -490,12 +490,12 @@ internal static partial class WordExpansion
 
             var name = parsed.Name;
             var modifier = parsed.Modifier;
+            var syntax = ReadSyntax(name, GetSpecialParameterKind(name.AsSpan()));
             if (modifier == ParameterModifier.Indirect
-                && (parsed.Kind != BracedParameterOperatorKind.None
-                    || !VariableReference.TryParse(name, scope.Effects.Memory, out var aggregate) || !aggregate.IsAggregate))
+                && (parsed.Kind != BracedParameterOperatorKind.None || syntax.Reference is not { IsAggregate: true }))
             {
                 // Inspection follows the chain but never evaluates the terminal selector.
-                if (VariableReference.TryParse(name, scope.Effects.Memory, out var binding) && binding.Kind == VariableReferenceKind.Name
+                if (syntax.Reference is { Kind: VariableReferenceKind.Name } binding
                     && scope.Variables.TryGetNameref(binding.Name, out _))
                 {
                     if (!scope.Variables.TryResolveBinding(binding.Name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
@@ -511,8 +511,9 @@ internal static partial class WordExpansion
                             || referentBinding.Owner.AssociativeArrays.ContainsKey(referentBinding.Name))
                         {
                             // Inspection of an indirect array referent uses its selected element.
-                            return await ReadValueAsync(ShellSource.FromBytes(referent.Bytes), ParameterModifier.None)
-                                .ConfigureAwait(false);
+                            var referentSource = ShellSource.FromBytes(referent.Bytes);
+                            return await ReadValueAsync(ReadSyntax(referentSource, GetSpecialParameterKind(referent.Bytes.Span)),
+                                ParameterModifier.None).ConfigureAwait(false);
                         }
                         return new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null)
                             { InspectionBinding = referentBinding };
@@ -520,7 +521,7 @@ internal static partial class WordExpansion
                     return new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null);
                 }
 
-                var source = await ReadValueAsync(name, ParameterModifier.None).ConfigureAwait(false);
+                var source = await ReadValueAsync(syntax, ParameterModifier.None).ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return source;
                 if (!source.IsSet)
@@ -541,16 +542,18 @@ internal static partial class WordExpansion
                 name = ShellSource.FromBytes(ExpandedWord.JoinValuesWithSpaces(joined.Build(), budget).Bytes);
                 indirectName = name;
                 var target = ParseBracedParameterExpression(name);
+                var special = GetSpecialParameterKind(name.AsSpan());
                 if (target.Kind != BracedParameterOperatorKind.None || target.Modifier != ParameterModifier.None
-                    || GetSpecialParameterKind(name.AsSpan()) == SpecialParameterKind.None
+                    || special == SpecialParameterKind.None
                         && (name.IsEmpty || !VariableNames.IsNameStart((char)name[0])))
                 {
                     await ReportFatalAsync(name.ToValue(), "invalid variable name").ConfigureAwait(false);
                     return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
                 }
                 modifier = ParameterModifier.None;
+                syntax = ReadSyntax(name, special);
             }
-            var value = await ReadValueAsync(name, modifier).ConfigureAwait(false);
+            var value = await ReadValueAsync(syntax, modifier).ConfigureAwait(false);
             if (!scope.CanExpand)
                 return value;
             if (indirectName != null && value.IsSet && value.Source is { Kind: VariableReferenceKind.Element }
@@ -562,16 +565,23 @@ internal static partial class WordExpansion
             {
                 // Reselect explicit indirect subscripts before operands, not selectors hidden behind namerefs.
                 // Missing substring bounds fail without reselection.
-                var selected = await ReadValueAsync(name, modifier).ConfigureAwait(false);
+                var selected = await ReadValueAsync(syntax, modifier).ConfigureAwait(false);
                 // Operand effects use the first availability check; transforms must distinguish unset from empty.
                 return parsed.Kind == BracedParameterOperatorKind.Transform ? selected : selected with { IsSet = value.IsSet };
             }
             return value;
 
-            async Task<ParameterValue> ReadValueAsync(ShellSource name, ParameterModifier modifier)
+            (ShellSource Name, SpecialParameterKind Special, VariableReference? Reference) ReadSyntax(
+                ShellSource name, SpecialParameterKind special) =>
+                (name, special, special == SpecialParameterKind.None
+                    && VariableReference.TryParse(name, budget, out var reference) ? reference : null);
+
+            async Task<ParameterValue> ReadValueAsync(
+                (ShellSource Name, SpecialParameterKind Special, VariableReference? Reference) syntax, ParameterModifier modifier)
             {
-                if (ReadSpecialParameter(name.AsSpan(), scope) is { } special)
+                if (syntax.Special != SpecialParameterKind.None)
                 {
+                    var special = ReadSpecialParameter(syntax.Name.AsSpan(), syntax.Special, scope);
                     if (modifier != ParameterModifier.Length)
                         return special;
                     var length = special.Kind is VariableReferenceKind.At or VariableReferenceKind.Star
@@ -579,7 +589,7 @@ internal static partial class WordExpansion
                     return new ParameterValue(VariableReferenceKind.Name,
                         [ShellValue.FromInteger(length)], true, null, null);
                 }
-                if (!VariableReference.TryParse(name, budget, out var reference))
+                if (syntax.Reference is not { } reference)
                 {
                     await ReportSubstitutionFailureAsync("unsupported special parameter", ExpansionFailureKind.Parameter)
                         .ConfigureAwait(false);
@@ -640,11 +650,8 @@ internal static partial class WordExpansion
                     : new ParameterValue(reference.Kind, [value], isSet, reference, target);
 
                 // Special parameters are values, not assignable variable locations.
-                static ParameterValue? ReadSpecialParameter(ReadOnlySpan<byte> name, ScopedEvaluation scope)
+                static ParameterValue ReadSpecialParameter(ReadOnlySpan<byte> name, SpecialParameterKind kind, ScopedEvaluation scope)
                 {
-                    var kind = GetSpecialParameterKind(name);
-                    if (kind == SpecialParameterKind.None)
-                        return null;
                     if (kind is SpecialParameterKind.At or SpecialParameterKind.Star)
                         return new ParameterValue(kind == SpecialParameterKind.At ? VariableReferenceKind.At : VariableReferenceKind.Star,
                             scope.Variables.PositionalParameters, scope.Variables.PositionalParameters.Count != 0, null, null)

@@ -408,6 +408,8 @@ public sealed class ParameterOperatorTests
     [InlineData("set -- target; unset target; printf '<%s>\\n' \"${!1:=value}\" \"$target\"\n", "<value>\n<value>\n", "", 0)]
     [InlineData("p=9; set --; printf '<%s>\\n' \"${!p:=$(printf effect >&2; printf value)}\"; printf after\n", "", "effect9: invalid variable name\n", 1)]
     [InlineData("a=(zero one two); p='a[i++]'; i=1; printf '<%s>\\n' \"${!p}\" \"$i\"\n", "<one>\n<2>\n", "", 0)]
+    [InlineData("p=('a[q++]' spare); a=(alpha amber); p_index=0; q=0\nprintf '<%s>|%s|%s' \"${!p[p_index++]}\" \"$p_index\" \"$q\"\n",
+        "<alpha>|1|1", "", 0)]
     [InlineData("false && printf '<%s>\\n' \"${x@Z}\"; printf after\n", "after", "", 0)]
     [InlineData("probe_a=1; probe_b=2; f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${!probe_@}\"\n", "n=2\n<probe_a>\n<probe_b>\n", "", 0)]
     [InlineData("printf '<%s>\\n' \"${!:-missing}\" \"$!\" \"${#!}\"\n", "<missing>\n<>\n<0>\n", "", 0)]
