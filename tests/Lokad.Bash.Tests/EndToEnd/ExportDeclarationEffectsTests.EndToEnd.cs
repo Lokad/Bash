@@ -183,6 +183,108 @@ public sealed class ExportDeclarationEffectsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("x=nested inner")]
+    [InlineData("x=nested eval 'inner'")]
+    [InlineData("x=nested . body")]
+    public async Task ExposedPrefixesFromOneOperandDoNotCrossTheNextOperandsLocalBoundary(string invocation)
+    {
+        var script = """
+            x=base-x; y=base-y
+            inner() {
+                local y=inner
+                unset x y
+                export x y
+                printf 'inner:<%s>:<%s>/' "${x-unset}" "${y-unset}"
+            }
+            outer() {
+                unset x
+                INVOKE
+                printf 'outer:<%s>:<%s>/' "${x-unset}" "${y-unset}"
+            }
+            x=prefix-x y=prefix-y outer
+            printf 'final:<%s>:<%s>' "${x-unset}" "${y-unset}"
+            """.Replace("INVOKE", invocation, StringComparison.Ordinal);
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            host.AddFile("/body", "inner\n");
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("inner:<base-x>:<unset>/outer:<base-x>:<prefix-y>/final:<base-x>:<base-y>",
+                host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public void PrefixLookupAdmitsAndReusesItsSelectionBacking(int prefixCount)
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        var prefixMemory = new EvaluationMemory(owner);
+        var active = Variables.CreateEmpty();
+        Assert.True(active.TrySetScalar("x", ShellValue.FromText("base")));
+        var names = new HashSet<BindingName> { "x" };
+        var installed = new List<Variables.CommandBindings>();
+        ShellEvaluation.GlobalPrefixBindings? chain = null;
+        try
+        {
+            for (var index = 0; index < prefixCount; index++)
+            {
+                var temporary = Variables.CreateEmpty();
+                Assert.True(temporary.TrySetScalar("x", ShellValue.FromText("prefix")));
+                var prefix = new Variables.CommandBindings(active, temporary, names, prefixMemory, CancellationToken.None);
+                installed.Add(prefix);
+                chain = new ShellEvaluation.GlobalPrefixBindings(prefix, 0, chain);
+                Assert.True(active.TryUnset("x"));
+            }
+
+            var context = new ShellEvaluation.EvaluationContext(0, null, ShellEvaluation.ReturnTargetKind.None)
+                { GlobalPrefixes = chain };
+            List<Variables.CommandBindings>? selected = null;
+            var refused = new EvaluationMemory(new MemoryGovernor(0));
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                context.GetVisibleBindingOwner("x", active, refused, ref selected));
+            Assert.Equal(0, Assert.IsType<List<Variables.CommandBindings>>(selected).Capacity);
+            Assert.False(active.TryGetScalar("x", out _));
+
+            var retained = governor.ReservedBytes;
+            using var selectionOwner = owner.CreateScope();
+            var selectionMemory = new EvaluationMemory(selectionOwner);
+            var source = context.GetVisibleBindingOwner("x", active, selectionMemory, ref selected);
+            var buffer = Assert.IsType<List<Variables.CommandBindings>>(selected);
+            Assert.Same(installed[0].SavedVariables, source);
+            Assert.Equal(installed.AsEnumerable().Reverse(), buffer);
+            var backing = MemoryCapacity.ArrayBackingBytes<Variables.CommandBindings>(buffer.Capacity);
+            Assert.Equal(backing, selectionMemory.Workspace.Bytes);
+
+            buffer.Clear();
+            Assert.Same(source, context.GetVisibleBindingOwner("x", active, selectionMemory, ref selected));
+            Assert.Same(buffer, selected);
+            Assert.Equal(backing, selectionMemory.Workspace.Bytes);
+            Assert.Equal(installed.AsEnumerable().Reverse(), buffer);
+
+            selectionOwner.Dispose();
+            Assert.Equal(retained, governor.ReservedBytes);
+        }
+        finally
+        {
+            for (var index = installed.Count - 1; index >= 0; index--)
+                installed[index].Dispose();
+        }
+    }
+
+    [Theory]
     [InlineData("x=outer", "unset x; readonly x", "outer")]
     [InlineData("unset x", "unset x; readonly x", "unset")]
     [InlineData("x=outer", "local x; readonly x", "prefix")]

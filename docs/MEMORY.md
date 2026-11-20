@@ -150,8 +150,10 @@ workspace. Missing command bindings hide caller names without deleting caller
 state. In-process installation admits the saved caller set before publishing any
 prefix. It moves original slots to the saved store and consumes the prepared
 prefix slots. Retained outputs admit independent copies before staging, reusing
-the surrounding command's capacity for later replacements. Full child snapshots
-retain separate admission for their complete visible
+the surrounding command's capacity for later replacements. Valueless declaration
+lookup admits its prefix selection buffer in command workspace as it grows.
+Each operand clears the selected references before the next lookup.
+Full child snapshots retain separate admission for their complete visible
 store and saved function-local and prefix stores. Child context reconstruction admits
 copies before allocating and reconnects enclosing frames iteratively. Mutable backing
 is independent and immutable value bytes stay shared. The surrounding command owns

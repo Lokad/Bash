@@ -2048,6 +2048,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var exitCode = 0;
+            List<Variables.CommandBindings>? exposedPrefixes = null;
             foreach (var operand in declaration.Operands)
             {
                 if (operand.Value == null && TrySaveLocalOptions(operand.Name))
@@ -2083,12 +2084,15 @@ public sealed partial class Evaluation : IFileTester
                         || commandVars.IsUnassignedScalar(visibleName) && (options.Readonly || options.ExportChange == DeclarationAttributeChange.Set)))
                     {
                         // An unset prefix exposes its caller's binding; an unset local still hides it.
-                        var exposedPrefixes = new List<Variables.CommandBindings>();
-                        var owner = declarationScope.Context.GetBindingOwner(visibleName, commandVars, DeclarationBindingScope.Visible, exposedPrefixes);
+                        var owner = declarationScope.Context.GetVisibleBindingOwner(visibleName, commandVars, Memory, ref exposedPrefixes);
                         if (!ReferenceEquals(owner, commandVars))
                             commandVars.CopyBindingFrom(owner, visibleName);
-                        foreach (var prefix in exposedPrefixes)
-                            prefix.ExposeBinding(visibleName, commandVars);
+                        if (exposedPrefixes is { } selected)
+                        {
+                            foreach (var prefix in selected)
+                                prefix.ExposeBinding(visibleName, commandVars);
+                            selected.Clear();
+                        }
                     }
                 }
                 var resolution = !local && options.NamerefChange == DeclarationAttributeChange.Clear
@@ -4488,14 +4492,20 @@ public sealed partial class Evaluation : IFileTester
         }
 
         public Variables GetGlobalBindingOwner(BindingName name, Variables active)
-            => GetBindingOwner(name, active, DeclarationBindingScope.Global, exposedPrefixes: null);
+            => GetGlobalBindingOwner(name, active, outerBoundary: null);
 
-        public Variables GetBindingOwner(BindingName name, Variables active, DeclarationBindingScope lookup,
-            List<Variables.CommandBindings>? exposedPrefixes)
-            => GetBindingOwner(name, active, lookup, exposedPrefixes, outerBoundary: null);
+        private Variables GetGlobalBindingOwner(BindingName name, Variables active, FunctionContext? outerBoundary)
+        {
+            List<Variables.CommandBindings>? exposedPrefixes = null;
+            return GetBindingOwner(name, active, DeclarationBindingScope.Global, prefixMemory: null, ref exposedPrefixes, outerBoundary);
+        }
+
+        public Variables GetVisibleBindingOwner(BindingName name, Variables active, EvaluationMemory memory,
+            ref List<Variables.CommandBindings>? exposedPrefixes) =>
+            GetBindingOwner(name, active, DeclarationBindingScope.Visible, memory, ref exposedPrefixes, outerBoundary: null);
 
         private Variables GetBindingOwner(BindingName name, Variables active, DeclarationBindingScope lookup,
-            List<Variables.CommandBindings>? exposedPrefixes, FunctionContext? outerBoundary)
+            EvaluationMemory? prefixMemory, ref List<Variables.CommandBindings>? exposedPrefixes, FunctionContext? outerBoundary)
         {
             var bindingName = StripArraySubscript(name);
             var owner = active;
@@ -4518,7 +4528,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 while (prefix != null && prefix.FunctionDepth == function.Depth)
                 {
-                    UnhidePrefix();
+                    UnhidePrefix(ref exposedPrefixes);
                     if (lookup == DeclarationBindingScope.Visible && owner.HasBinding(bindingName) && !owner.IsUnassignedScalar(bindingName))
                         return owner;
                 }
@@ -4527,29 +4537,39 @@ public sealed partial class Evaluation : IFileTester
                 if (function.PrefixBindings is { } bindings && bindings.Contains(bindingName))
                 {
                     owner = bindings.SavedVariables;
-                    exposedPrefixes?.Add(bindings);
+                    RecordExposedPrefix(bindings, ref exposedPrefixes);
                 }
                 if (lookup == DeclarationBindingScope.Visible && owner.HasBinding(bindingName) && !owner.IsUnassignedScalar(bindingName))
                     return owner;
             }
             while (prefix != null && (outerBoundary == null || prefix.FunctionDepth > outerBoundary.Depth))
             {
-                UnhidePrefix();
+                UnhidePrefix(ref exposedPrefixes);
                 if (lookup == DeclarationBindingScope.Visible && owner.HasBinding(bindingName))
                     return owner;
             }
             return owner;
 
-            void UnhidePrefix()
+            void UnhidePrefix(ref List<Variables.CommandBindings>? exposed)
             {
                 if (prefix is not { } current)
                     return;
                 if (current.Names.Contains(bindingName))
                 {
                     owner = current.Saved;
-                    exposedPrefixes?.Add(current.Bindings);
+                    RecordExposedPrefix(current.Bindings, ref exposed);
                 }
                 prefix = current.Enclosing;
+            }
+
+            void RecordExposedPrefix(Variables.CommandBindings bindings, ref List<Variables.CommandBindings>? exposed)
+            {
+                if (prefixMemory == null)
+                    return;
+                // Finish the admitted lookup before exposing or restoring any binding.
+                var prefixes = exposed ??= [];
+                prefixMemory.PrepareListCapacity(prefixes, 1);
+                prefixes.Add(bindings);
             }
         }
 
@@ -4595,8 +4615,7 @@ public sealed partial class Evaluation : IFileTester
                     return true;
                 }
 
-                Variables CallerOwner(BindingName variable) => context.GetBindingOwner(variable, active,
-                    DeclarationBindingScope.Global, exposedPrefixes: null, outerBoundary);
+                Variables CallerOwner(BindingName variable) => context.GetGlobalBindingOwner(variable, active, outerBoundary);
             }
 
             // Inner locals can hide the scalar created in the source frame. A target owned by
