@@ -30,6 +30,7 @@ internal static partial class WordExpansion
 
     private static async Task ExpandBracedParameterAsync(
         ShellSource content,
+        ShellScanContext scanContext,
         ScopedEvaluation scope,
         ExpandedWordBuilder output,
         bool allowWordSplitting,
@@ -139,7 +140,7 @@ internal static partial class WordExpansion
                         return;
                     }
                     var words = await ExpandOperatorWordAsync(
-                            parsed.Word, scope, quoteContext,
+                            parsed.Word, scanContext, scope, quoteContext,
                             output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? output.Purpose : ExpansionPurpose.Scalar,
                             ImplicitEmptyPolicy.Preserve, assignmentTildes)
                         .ConfigureAwait(false);
@@ -246,7 +247,7 @@ internal static partial class WordExpansion
                 }
 
                 var words = await ExpandOperatorWordAsync(
-                        parsed.Word, scope, ExpansionQuoteContext.Unquoted, ExpansionPurpose.Scalar,
+                        parsed.Word, scanContext, scope, ExpansionQuoteContext.Unquoted, ExpansionPurpose.Scalar,
                         ImplicitEmptyPolicy.Preserve, assignmentTildes: false)
                     .ConfigureAwait(false);
                 if (!scope.CanExpand)
@@ -283,7 +284,7 @@ internal static partial class WordExpansion
             var purpose = output.Purpose == ExpansionPurpose.IndexedCompound
                 ? ExpansionPurpose.IndexedCompoundOperand : output.Purpose;
             var expanded = await ExpandOperatorWordAsync(
-                    parsed.Word, scope, quoteContext, purpose,
+                    parsed.Word, scanContext, scope, quoteContext, purpose,
                     purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment or ExpansionPurpose.IndexedCompoundOperand
                         or ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource
                         ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove, assignmentTildes)
@@ -852,7 +853,7 @@ internal static partial class WordExpansion
 
             async Task<ParameterOperand> ExpandOperandAsync(ShellSource source)
             {
-                var words = await ExpandOperatorWordAsync(source, scope, ExpansionQuoteContext.Unquoted,
+                var words = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
                     ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve, assignmentTildes: false).ConfigureAwait(false);
                 var word = ExpandedWord.JoinWithSpaces(words, budget);
                 var value = word.ToValue(budget);

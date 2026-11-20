@@ -89,6 +89,125 @@ public sealed class CommandSubstitutionSyntaxTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task RenderedHereDocumentSeparatorFailurePrecedesAllCaptureEffects(bool prepared)
+    {
+        const string source = """
+            value=before
+            value=$(printf prefix >trace
+            { cat <<DOC
+            body
+            DOC
+            }; # The original grammar can read the separator across this gap.
+            printf tail)
+            printf '<%s:%s>' "$?" "$value"
+            """;
+        await using var host = new EndToEnd.TestHost();
+        var status = await RunAsync(source, host, prepared);
+
+        Assert.Equal(0, status);
+        Assert.Equal("<1:before>", host.StandardOutput.TextContent);
+        Assert.Contains("here-document in command substitution", host.StandardError.TextContent);
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RenderedHereDocumentCanJoinPipelineArgumentsAndKeepTheirLine(bool prepared)
+    {
+        const string source = """
+            value=$({ : <<DOC
+            body
+            DOC
+            } | printf '<%s>' "$LINENO"; printf tail)
+            printf '[%s:%s]' "$?" "$value"
+            """;
+        await using var host = new EndToEnd.TestHost();
+        var status = await RunAsync(source, host, prepared);
+
+        Assert.Equal(0, status);
+        Assert.Equal("[0:<7><printf><tail>]", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnOmittedSeparatorStillCompletesPendingHereDocumentInput(bool prepared)
+    {
+        const string source = """
+            value=$(cat <<DOC; printf '<%s>' "$LINENO";
+            $LINENO
+            DOC
+            printf tail
+            printf '[%s]' "$LINENO")
+            printf '[%s:%s]' "$?" "$value"
+            """;
+        await using var host = new EndToEnd.TestHost();
+        var status = await RunAsync(source, host, prepared);
+
+        Assert.Equal(0, status);
+        Assert.Equal("[0:5\n<8><printf><tail>[9]]", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AParameterOperandInAHereDocumentUsesItsSourceSeparators(bool prepared)
+    {
+        const string source = """
+            cat <<END
+            ${none:-$({ : <<DOC
+            body
+            DOC
+            }; printf tail)}
+            END
+            """;
+        await using var host = new EndToEnd.TestHost();
+        var status = await RunAsync(source, host, prepared);
+
+        Assert.Equal(0, status);
+        Assert.Equal("tail\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public void ReplayedSeparatorRetainsNestedCaptureSyntaxFromTheSameSource()
+    {
+        const string input = """
+            $({ : <<DOC
+            body
+            DOC
+            } | printf '%s' "$(printf nested)"; printf tail)
+            """;
+        var source = ShellSource.FromText(input);
+        var context = new ShellScanContext();
+        var nestedStart = input.IndexOf("$(printf nested)", StringComparison.Ordinal);
+        Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsedForLaterReuse(
+            context, source, nestedStart, out _, out var cachedSubstitution, out _));
+        Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsed(
+            context, source, 0, out _, out var capture, out var error));
+        Assert.Null(error);
+        var script = Assert.IsType<CommandSubstitutionSyntax.Parsed>(capture);
+        var pipeline = Assert.IsType<PipelineCommand>(Assert.Single(script.Script.Commands));
+        var right = Assert.IsType<SimpleCommand>(pipeline.Right);
+        Assert.Equal(5, right.Words.Count);
+        var nested = Assert.IsType<CommandSubstitutionWordPart>(Assert.Single(right.Words[2].Parts));
+        Assert.Same(cachedSubstitution, nested.Substitution);
+    }
+
+    private static async Task<int> RunAsync(string source, EndToEnd.TestHost host, bool prepared) => prepared
+        ? (await EndToEnd.EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+        : (await BashScript.RunAsync(host, source, EvaluationOptions.Default, CancellationToken.None)).ExitCode;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task AdjacentSubshellReportsReachedCaptureFailureAfterEarlierCompleteUnits(bool prepared)
     {
         const string Source = """

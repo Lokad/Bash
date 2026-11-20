@@ -407,7 +407,8 @@ public sealed class ShellSourceScannerTests
     {
         var source = ShellSource.FromText("1" + new string('[', ShellScanContext.MaximumSyntaxUnits + 1));
 
-        var error = Assert.Throws<SyntaxException>(() => Tokenizer.ReadArithmeticWord(source, ExpansionWordSyntax.Arithmetic, null));
+        var error = Assert.Throws<SyntaxException>(() => Tokenizer.ReadArithmeticWord(
+            source, ExpansionWordSyntax.Arithmetic, new ShellScanContext()));
 
         Assert.Contains("Script parsing limit exceeded", error.Message);
     }

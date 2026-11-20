@@ -444,6 +444,7 @@ internal sealed class ShellScanContext
     internal MemoryCapacity? SyntaxMemory { get; set; }
     internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
     internal bool PreserveDelimiterLookahead { get; set; }
+    internal bool RetainCaptureLookahead { get; set; }
     internal SubstitutionSyntaxFailure SubstitutionFailure { get; set; }
 
     internal ByteMemoryBuilder CreateByteBuilder(int capacity) => SyntaxMemory is { } memory

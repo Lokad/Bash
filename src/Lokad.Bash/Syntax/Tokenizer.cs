@@ -20,8 +20,10 @@ internal sealed class Tokenizer
     private ArraySubscriptScanner.Lookahead? _arraySubscripts;
     private int _lineOffset;
     private int _line = 1;
+    private int _nextOmittedSeparator;
 
     internal bool TrackCommandLocations { get; init; }
+    internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
 
@@ -420,6 +422,13 @@ internal sealed class Tokenizer
         while (true)
         {
             Position = ShellSourceCursor.SkipTokenSpacing(span, Position);
+            if (OmittedSeparators is { } edits && _nextOmittedSeparator < edits.Count
+                && Position == edits[_nextOmittedSeparator].Start.Value)
+            {
+                var end = edits[_nextOmittedSeparator++].End.Value;
+                if (!SkipOmittedSeparator(span, end))
+                    return Located(Token.EndOfInput());
+            }
             start = Position;
             if (Position >= span.Length)
             {
@@ -551,6 +560,26 @@ internal sealed class Tokenizer
             }
             return token with { Source = start..Position };
         }
+    }
+
+    private bool SkipOmittedSeparator(ReadOnlySpan<byte> source, int end)
+    {
+        if (HereDocuments is { HasPending: true } documents)
+        {
+            // The physical LF still supplies the redirection's body, even when it
+            // occurs in the gap consumed by a separator that Bash did not print.
+            var cursor = ShellSourceCursor.SkipTokenSpacing(source, Position + 1);
+            if (cursor < end && source[cursor] == (byte)'#')
+                cursor = ShellSourceCursor.SkipComment(source, cursor);
+            if (cursor < end && source[cursor] == (byte)'\n')
+            {
+                Position = cursor + 1;
+                if (!documents.TryReadBodies(this))
+                    return false;
+            }
+        }
+        Position = end;
+        return true;
     }
 
     public void PushBack(Token token)
@@ -825,11 +854,15 @@ internal sealed class Tokenizer
 
     /// <summary>Reads an expansion operand under its surrounding quote context, without adding source quotes.</summary>
     internal static Word ReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote) =>
-        ReadExpansionWord(content, syntax, outerQuote, null);
+        ReadExpansionWord(content, syntax, outerQuote, memory: null);
 
     internal static Word ReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         MemoryCapacity? memory) =>
-        TryReadExpansionWord(content, syntax, outerQuote, memory, out var word, out var error) ? word : throw error.ToException();
+        ReadExpansionWord(content, syntax, outerQuote, new ShellScanContext { SyntaxMemory = memory });
+
+    internal static Word ReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
+        ShellScanContext context) =>
+        TryReadExpansionWord(content, syntax, outerQuote, context, out var word, out var error) ? word : throw error.ToException();
 
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error) =>
@@ -851,9 +884,9 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Retains direct selectors for the arithmetic consumer to prepare separately.</summary>
-    internal static Word ReadArithmeticWord(ShellSource content, ExpansionWordSyntax syntax, MemoryCapacity? memory)
+    internal static Word ReadArithmeticWord(ShellSource content, ExpansionWordSyntax syntax, ShellScanContext context)
     {
-        var tokenizer = new Tokenizer(content, 0, new ShellScanContext { SyntaxMemory = memory }) { _retainArithmeticSubscripts = true };
+        var tokenizer = new Tokenizer(content, 0, context) { _retainArithmeticSubscripts = true };
         var word = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, ShellQuoteKind.None);
         return tokenizer.Error is { } error ? throw error.ToException() : word;
     }

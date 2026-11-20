@@ -164,6 +164,12 @@ An adjacent subshell opener retains its source separators, and a nested spelling
 failure there ends the unit under ordinary execution. Function display and export
 retain the original timing separator so reparsing a definition preserves the
 point of validation.
+Parenthesized capture rendering can omit a semicolon after a flushed
+here-document. The resulting command list can combine operands or attach a
+redirection to the preceding command. If the rendered list fails to parse,
+the reached substitution reports a syntax error before any of its commands
+run. Backtick captures and captures read directly from a here-document use
+their source separators.
 Legacy `$[expression]` uses the same arithmetic evaluation as `$((expression))`,
 with a single closing bracket outside nested brackets. Within a double-quoted
 word, an unescaped inner double quote at that level causes a substitution failure

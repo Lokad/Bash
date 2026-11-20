@@ -28,6 +28,8 @@ internal enum SubstitutionSyntaxFailure
     None,
     MissingTimedCommand,
     NestedSyntax,
+    HereDocumentSeparator,
+    NestedHereDocumentSeparator,
 }
 
 /// <summary>Identifies which legacy bytes can be owned with the surrounding syntax.</summary>

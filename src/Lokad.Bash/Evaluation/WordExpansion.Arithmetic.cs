@@ -28,7 +28,8 @@ internal static partial class WordExpansion
         if (source.Length == 0)
             return ArithmeticOperand.FromValue(ShellValue.Empty);
         var budget = scope.Effects.Memory;
-        var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), budget.Workspace);
+        var scanContext = CreateExpansionScanContext(scope);
+        var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), scanContext);
         using var bytes = new ByteMemoryBuilder(0, budget.Workspace);
         var subscripts = new Dictionary<int, ArithmeticOperand.Subscript>();
         var firstPart = 0;
@@ -46,7 +47,7 @@ internal static partial class WordExpansion
             var associative = IsAssociativeTarget();
             var selectorPurpose = associative ? ExpansionPurpose.Scalar : purpose;
             var selectorWord = subscript.Length == 0 ? new Word([])
-                : Tokenizer.ReadExpansionWord(subscript, GetOperandSyntax(selectorPurpose), ShellQuoteKind.None, budget.Workspace);
+                : Tokenizer.ReadExpansionWord(subscript, GetOperandSyntax(selectorPurpose), ShellQuoteKind.None, scanContext);
             var builder = await ExpandAsync(selectorWord, selectorPurpose, 0, selectorWord.Parts.Count)
                 .ConfigureAwait(false);
             if (!scope.CanExpand)

@@ -61,7 +61,8 @@ internal static class CommandSubstitutionScanner
         out int endIndex,
         out CommandSubstitutionSyntax? substitution,
         out ParserFailure? error) =>
-        ScanParsed(context, text, startIndex, context.PreserveDelimiterLookahead, out endIndex, out substitution, out error);
+        ScanParsed(context, text, startIndex, context.PreserveDelimiterLookahead || context.RetainCaptureLookahead,
+            out endIndex, out substitution, out error);
 
     /// <summary>Keeps a structural lookahead result until tokenization reaches the same source position.</summary>
     internal static ShellScanStatus ScanParsedForLaterReuse(

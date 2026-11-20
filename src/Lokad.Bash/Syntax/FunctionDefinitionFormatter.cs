@@ -26,17 +26,19 @@ internal static class FunctionDefinitionFormatter
         TryAppend(new Step.Word(word), output, budget, Format.BraceSource, cancellationToken);
 
     /// <summary>Locates commands in Bash's rendered capture body without materializing or parsing it again.</summary>
-    internal static void ProjectCaptureLocations(ParsedScript script, IMemoryBudget? budget)
+    internal static IReadOnlyList<Range>? ProjectCaptureLocations(ParsedScript script, MemoryCapacity? memory,
+        bool collectOmittedSeparators)
     {
         if (script.Locations is not { } locations)
         {
             script.RenderedLineBreaks = 0;
-            return;
+            return null;
         }
 
-        var counter = new LineCounter();
-        TryAppend(new Step.Script(script), counter, budget, Format.CaptureCoordinates, CancellationToken.None, locations);
+        var counter = new LineCounter(collectOmittedSeparators, memory);
+        TryAppend(new Step.Script(script), counter, memory?.Budget, Format.CaptureCoordinates, CancellationToken.None, locations);
         script.RenderedLineBreaks = counter.Line - 1;
+        return counter.OmittedSeparators;
     }
 
     internal static bool TryAppendSubstitutionSource(
@@ -114,12 +116,17 @@ internal static class FunctionDefinitionFormatter
                     if (hereDocuments.Count != 0)
                     {
                         if (!FlushHereDocuments()) return false;
+                        if (capture) flushedHereDocuments = true;
                         if (display && !Append("\n")) return false;
                     }
                     if ((display || braceSource) && !output.TryAppend(indent, (byte)' ')) return false;
                     break;
-                case Step.FunctionDepth(var change):
-                    functionDepth += change;
+                case Step.EnterFunction:
+                    functionDepth++;
+                    break;
+                case Step.LeaveFunction(var resetHereDocuments):
+                    functionDepth--;
+                    if (resetHereDocuments) flushedHereDocuments = false;
                     break;
                 case Step.FlushDocuments:
                     if (!FlushCaptureDocuments()) return false;
@@ -174,15 +181,24 @@ internal static class FunctionDefinitionFormatter
                     {
                         work.Push(new Step.Command(script.Commands[index], 0));
                         if (index != 0)
-                            work.Push(new Step.CommandSeparator(Newline: false));
+                            work.Push(new Step.CommandSeparator(Newline: false, default));
                     }
                     break;
-                case Step.CommandSeparator(var newline):
+                case Step.CommandSeparator(var newline, var separator):
                     if (capture)
                     {
-                        var afterDocuments = flushedHereDocuments || hereDocuments.Count != 0;
-                        if (!FlushCaptureDocuments()) return false;
-                        flushedHereDocuments = false;
+                        var pendingDocuments = hereDocuments.Count != 0;
+                        var afterDocuments = flushedHereDocuments || pendingDocuments;
+                        if (pendingDocuments)
+                        {
+                            if (!FlushCaptureDocuments()) return false;
+                        }
+                        else if (flushedHereDocuments)
+                        {
+                            flushedHereDocuments = false;
+                            if (!newline && functionDepth == 0)
+                                lines?.RecordOmittedSeparator(separator);
+                        }
                         var breaks = functionDepth != 0 ? newline && !afterDocuments ? 2 : 1 : newline ? 1 : 0;
                         if (!output.TryAppend(breaks, (byte)'\n')) return false;
                     }
@@ -248,6 +264,8 @@ internal static class FunctionDefinitionFormatter
                     }
                     break;
                 case Step.Redirections(var redirections, var firstElement):
+                    if (capture && redirections.Count != 0)
+                        flushedHereDocuments = false;
                     PrepareWork(redirections.Count + (firstElement != null ? 1 : 0));
                     for (var index = redirections.Count - 1; index >= 0; index--)
                     {
@@ -310,8 +328,9 @@ internal static class FunctionDefinitionFormatter
                     {
                         // Bash emits an outer group even for a function with a different compound body.
                         var grouped = body is GroupCommand or RedirectedCommand { Body: GroupCommand };
-                        Push(new Step.Text(grouped ? "\n" : "\n{\n"), new Step.FunctionDepth(1),
-                            new Step.Command(body, indent), new Step.FunctionDepth(-1), new Step.FlushDocuments(),
+                        Push(new Step.Text(grouped ? "\n" : "\n{\n"), new Step.EnterFunction(),
+                            new Step.Command(body, indent), new Step.FlushDocuments(),
+                            new Step.LeaveFunction(body is not RedirectedCommand { Body: GroupCommand }),
                             new Step.Text(grouped ? "" : "\n}"));
                     }
                     else Push(new Step.Layout(indent), new Step.Command(body, indent));
@@ -366,7 +385,7 @@ internal static class FunctionDefinitionFormatter
                         case ListCommand list:
                             if (capture) PushStep(new Step.FlushDocuments());
                             Push(new Step.Command(list.Left, indent), list.Operator == ListOperator.Sequence
-                                    ? braceSource || capture ? new Step.CommandSeparator(list.HasNewlineConnector) : new Step.Line(indent, Terminate: true)
+                                    ? braceSource || capture ? new Step.CommandSeparator(list.HasNewlineConnector, list.SeparatorSource) : new Step.Line(indent, Terminate: true)
                                     : capture ? new Step.LogicalSeparator() : new Step.Text(list.Operator == ListOperator.And ? " && " : " || "),
                                 new Step.Command(list.Right, indent));
                             break;
@@ -586,9 +605,18 @@ internal static class FunctionDefinitionFormatter
                 new Step.Line(indent, Terminate: true), new Step.Text("done"));
     }
 
-    private sealed class LineCounter : IByteMemoryWriter
+    private sealed class LineCounter(bool collectOmittedSeparators, MemoryCapacity? memory) : IByteMemoryWriter
     {
         internal int Line { get; private set; } = 1;
+        internal List<Range>? OmittedSeparators { get; private set; }
+
+        internal void RecordOmittedSeparator(Range separator)
+        {
+            if (!collectOmittedSeparators || separator.End.Value == separator.Start.Value)
+                return;
+            memory?.Grow(OmittedSeparators == null ? 128 : 32);
+            (OmittedSeparators ??= []).Add(separator);
+        }
 
         public bool TryAppend(ReadOnlySpan<byte> bytes)
         {
@@ -614,10 +642,11 @@ internal static class FunctionDefinitionFormatter
         public sealed record Source(ShellSource Value) : Step;
         public sealed record Layout(int Indent) : Step;
         public sealed record Line(int Indent, bool Terminate) : Step;
-        public sealed record CommandSeparator(bool Newline) : Step;
+        public sealed record CommandSeparator(bool Newline, Range SeparatorRange) : Step;
         public sealed record LogicalSeparator : Step;
         public sealed record FlushDocuments : Step;
-        public sealed record FunctionDepth(int Change) : Step;
+        public sealed record EnterFunction : Step;
+        public sealed record LeaveFunction(bool ResetHereDocuments) : Step;
         public sealed record Location(ICommand Node, bool FirstElement) : Step;
         public sealed record Script(ParsedScript Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;

@@ -321,7 +321,7 @@ internal static partial class WordExpansion
             case WordPartKind.HereDocument:
                 await ExpandSegmentAsync(
                         (SourceWordPart)part,
-                        scope,
+                        scope with { ExpansionOrigin = LegacySubstitutionOrigin.HereDocument },
                         builder,
                         allowWordSplitting: false,
                         globQuoted: true,
@@ -589,7 +589,7 @@ internal static partial class WordExpansion
                 && quoteContext is ExpansionQuoteContext.Unquoted or ExpansionQuoteContext.HereDocument)
             {
                 var legacyStatus = ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace,
-                    quoteContext == ExpansionQuoteContext.HereDocument ? LegacySubstitutionOrigin.HereDocument : LegacySubstitutionOrigin.Temporary,
+                    scope.ExpansionOrigin,
                     out var legacyScript, out var legacyEndIndex, out var legacyError);
                 if (legacyStatus == ShellScanStatus.Complete)
                 {
@@ -687,7 +687,7 @@ internal static partial class WordExpansion
             var endIndex = index;
             var commandStatus = arithmeticStatus == ShellScanStatus.NotFound
                 ? ScanCommandSubstitution(content, index, scope.Effects.Memory.Workspace,
-                    LegacySubstitutionOrigin.Temporary, out script, out endIndex, out commandError)
+                    scope.ExpansionOrigin, out script, out endIndex, out commandError)
                 : ShellScanStatus.NotFound;
             if (commandStatus == ShellScanStatus.Complete)
             {
@@ -777,7 +777,7 @@ internal static partial class WordExpansion
 
             if (BracedParameterScanner.HasPrefix(content, index))
             {
-                var parameterScan = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
+                var parameterScan = CreateExpansionScanContext(scope);
                 var parameterStatus = BracedParameterScanner.ScanWithPayload(
                     parameterScan, content, index,
                     out var closingIndex, out _, out var payload, out _, out var parameterError);
@@ -812,6 +812,7 @@ internal static partial class WordExpansion
 
                 await ExpandBracedParameterAsync(
                         payload,
+                        parameterScan,
                         scope with { PreserveCommandSubstitutionSpelling = false },
                         output,
                         allowWordSplitting,
@@ -935,6 +936,7 @@ internal static partial class WordExpansion
     /// <summary>Expands a selected operand once, retaining fields and quotes until its consumer joins or splits them.</summary>
     private static async Task<IReadOnlyList<ExpandedWord>> ExpandOperatorWordAsync(
         ShellSource expression,
+        ShellScanContext scanContext,
         ScopedEvaluation scope,
         ExpansionQuoteContext quoteContext,
         ExpansionPurpose purpose,
@@ -944,10 +946,9 @@ internal static partial class WordExpansion
         if (expression.Length == 0)
             return [];
 
-        var word = Tokenizer.ReadExpansionWord(expression,
-            GetOperandSyntax(purpose),
+        var word = Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose),
             quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double,
-            scope.Effects.Memory.Workspace);
+            scanContext);
         var builder = new ExpandedWordBuilder(
             scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken);
         var tildeExpansion = purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? TildeExpansion.None
@@ -963,6 +964,9 @@ internal static partial class WordExpansion
         ExpansionPurpose.ArithmeticSource => ExpansionWordSyntax.ArithmeticSource,
         _ => ExpansionWordSyntax.Parameter,
     };
+
+    private static ShellScanContext CreateExpansionScanContext(ScopedEvaluation scope) =>
+        new() { SyntaxMemory = scope.Effects.Memory.Workspace, LegacyOrigin = scope.ExpansionOrigin };
 
     private static bool TrySetVariable(
         BindingName name,

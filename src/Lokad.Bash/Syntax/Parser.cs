@@ -230,43 +230,95 @@ public static class Parser
         if (payloadStart < 0 || payloadStart > input.Length)
             return ShellScanStatus.NotFound;
 
-        var tokenizer = new Tokenizer(input, payloadStart, context) { TrackCommandLocations = true };
-        var (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
-        SkipNewlines(tokenizer);
-        if (tokenizer.Failure is { } bodyFailure)
+        var retainLookahead = context.RetainCaptureLookahead;
+        var rawHereDocument = !retainLookahead && context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument;
+        try
         {
-            if (context.ParsingLimitExceeded || bodyFailure.Error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
+            // The delimiter parse can replay a changed list while borrowing its original words and captures.
+            context.RetainCaptureLookahead = true;
+            var tokenizer = new Tokenizer(input, payloadStart, context) { TrackCommandLocations = true };
+            var status = ReadBody(tokenizer, out var command, out closingParenthesisIndex, out syntaxError);
+            if (status != ShellScanStatus.Complete)
+                return status;
+
+            // Adjacent parentheses retain the outer body's separators. Nested
+            // substitutions still undergo validation when Bash reads that body.
+            var adjacentParenthesis = ShellSourceCursor.TryMatchLogicalText(input.AsSpan(), payloadStart, "(", out _);
+            var nestedFailure = context.SubstitutionFailure;
+            var bareTime = tokenizer.HasSubshellEndingInBareTime || EndsInBareTime(command);
+            preserveAdjacentOpening = adjacentParenthesis && (bareTime || nestedFailure != SubstitutionSyntaxFailure.None);
+            if (nestedFailure != SubstitutionSyntaxFailure.None
+                && !(rawHereDocument && IsHereDocumentSeparatorFailure(nestedFailure)))
+                failure = ClassifyNestedFailure(nestedFailure, adjacentParenthesis);
+            else if (!adjacentParenthesis && bareTime)
+                failure = SubstitutionSyntaxFailure.MissingTimedCommand;
+
+            // Unconsumed bodies fail when reached, after the outer grammar has found their delimiter.
+            if (tokenizer.HereDocuments is { HasPending: true })
+                return ShellScanStatus.Complete;
+
+            parsed = CompleteScript(tokenizer, command);
+            if (failure != SubstitutionSyntaxFailure.None || preserveAdjacentOpening || rawHereDocument)
+                return ShellScanStatus.Complete;
+
+            var edits = FunctionDefinitionFormatter.ProjectCaptureLocations(parsed, context.SyntaxMemory,
+                collectOmittedSeparators: !adjacentParenthesis);
+            if (edits == null)
+                return ShellScanStatus.Complete;
+
+            // Keep positions on the original backing so delimiter lookahead can reuse nested parses.
+            var replay = new Tokenizer(input, payloadStart, context) { TrackCommandLocations = true, OmittedSeparators = edits };
+            status = ReadBody(replay, out var corrected, out var replayEnd, out var replayFailure);
+            if (status == ShellScanStatus.Complete && replayEnd == closingParenthesisIndex
+                && replay.HereDocuments is not { HasPending: true })
             {
-                syntaxError = bodyFailure.InSubstitution();
+                parsed = CompleteScript(replay, corrected);
+                if (context.SubstitutionFailure != SubstitutionSyntaxFailure.None)
+                    failure = ClassifyNestedFailure(context.SubstitutionFailure, adjacentParenthesis);
+                FunctionDefinitionFormatter.ProjectCaptureLocations(parsed, context.SyntaxMemory, collectOmittedSeparators: false);
+            }
+            else if (replayFailure is { Kind: ParserFailureKind.Limit })
+            {
+                syntaxError = replayFailure;
                 return ShellScanStatus.Invalid;
             }
-
-            return ShellScanStatus.Incomplete;
+            else
+                failure = SubstitutionSyntaxFailure.HereDocumentSeparator;
+            return ShellScanStatus.Complete;
         }
+        finally { context.RetainCaptureLookahead = retainLookahead; }
 
-        var closing = tokenizer.PeekTokenCore();
-        if (closing.Kind != TokenKind.CloseParen)
-            return closing.Kind == TokenKind.EndOfInput ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid;
-        tokenizer.NextTokenCore();
-        closingParenthesisIndex = closing.Source.Start.Value;
-        // Adjacent parentheses retain the outer body's separators. Nested
-        // substitutions still undergo validation when Bash reads that body.
-        var adjacentParenthesis = ShellSourceCursor.TryMatchLogicalText(input.AsSpan(), payloadStart, "(", out _);
-        var nestedFailure = context.SubstitutionFailure != SubstitutionSyntaxFailure.None;
-        var bareTime = tokenizer.HasSubshellEndingInBareTime || EndsInBareTime(command);
-        preserveAdjacentOpening = adjacentParenthesis && (bareTime || nestedFailure);
-        if (nestedFailure)
-            failure = adjacentParenthesis ? SubstitutionSyntaxFailure.MissingTimedCommand : SubstitutionSyntaxFailure.NestedSyntax;
-        else if (!adjacentParenthesis && bareTime)
-            failure = SubstitutionSyntaxFailure.MissingTimedCommand;
-        // An unconsumed body historically fails when the substitution executes, not during lookahead.
-        if (tokenizer.HereDocuments is not { HasPending: true })
+        ShellScanStatus ReadBody(Tokenizer tokenizer, out ICommand? command, out int end, out ParserFailure? error)
         {
-            parsed = CompleteScript(tokenizer, command);
-            if (failure == SubstitutionSyntaxFailure.None && !preserveAdjacentOpening)
-                FunctionDefinitionFormatter.ProjectCaptureLocations(parsed, context.SyntaxMemory?.Budget);
+            end = payloadStart;
+            error = null;
+            (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
+            SkipNewlines(tokenizer);
+            if (tokenizer.Failure is { } bodyFailure)
+            {
+                if (context.ParsingLimitExceeded || bodyFailure.Error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
+                {
+                    error = bodyFailure.InSubstitution();
+                    return ShellScanStatus.Invalid;
+                }
+                return ShellScanStatus.Incomplete;
+            }
+
+            var closing = tokenizer.PeekTokenCore();
+            if (closing.Kind != TokenKind.CloseParen)
+                return closing.Kind == TokenKind.EndOfInput ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid;
+            tokenizer.NextTokenCore();
+            end = closing.Source.Start.Value;
+            return ShellScanStatus.Complete;
         }
-        return ShellScanStatus.Complete;
+
+        static SubstitutionSyntaxFailure ClassifyNestedFailure(SubstitutionSyntaxFailure nested, bool adjacent) =>
+            IsHereDocumentSeparatorFailure(nested)
+                ? adjacent ? SubstitutionSyntaxFailure.HereDocumentSeparator : SubstitutionSyntaxFailure.NestedHereDocumentSeparator
+                : adjacent ? SubstitutionSyntaxFailure.MissingTimedCommand : SubstitutionSyntaxFailure.NestedSyntax;
+
+        static bool IsHereDocumentSeparatorFailure(SubstitutionSyntaxFailure nested) =>
+            nested is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
     }
 
     private static ParsedScript CompleteScript(Tokenizer tokenizer, ICommand? command) =>
@@ -1605,6 +1657,8 @@ public static class Parser
                 break;
             }
 
+            var separator = token.Kind == TokenKind.Semicolon && tokenizer.ScanContext.RetainCaptureLookahead
+                ? token.Source.Start..tokenizer.PeekTokenCore().Source.Start : default;
             var right = ParseAndOrList(tokenizer);
             if (right == null)
             {
@@ -1614,7 +1668,8 @@ public static class Parser
             current = new ListCommand(current, ListOperator.Sequence, right)
             {
                 StartsCommandUnit = startsCommandUnit,
-                HasNewlineConnector = token.Kind == TokenKind.Newline
+                HasNewlineConnector = token.Kind == TokenKind.Newline,
+                SeparatorSource = separator
             };
             trailingTerminator = false;
         }

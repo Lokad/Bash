@@ -42,6 +42,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Diagnostic expansion retains command substitution spelling.</summary>
     internal bool PreserveCommandSubstitutionSpelling { get; init; }
 
+    /// <summary>Source role of words read during expansion, including nested operands.</summary>
+    internal LegacySubstitutionOrigin ExpansionOrigin { get; init; }
+
     /// <summary>The nearest in-process simple invocation with redirections to restore.</summary>
     internal Evaluation.RedirectionScope? ErrexitRedirections { get; init; }
 

@@ -3319,10 +3319,14 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
 
-        var exitCode = _state.ErrexitEnabled || failure == SubstitutionSyntaxFailure.NestedSyntax ? 2 : 1;
+        var exitCode = _state.ErrexitEnabled || failure is SubstitutionSyntaxFailure.NestedSyntax
+            or SubstitutionSyntaxFailure.NestedHereDocumentSeparator ? 2 : 1;
         SetFatalExpansionError(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode);
         _state.LastExitCode = exitCode;
-        return ReportSyntaxErrorAsync(new SyntaxError("Unexpected ')' after a pipeline prefix in command substitution.", 0));
+        var message = failure is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator
+            ? "Unexpected token after a here-document in command substitution."
+            : "Unexpected ')' after a pipeline prefix in command substitution.";
+        return ReportSyntaxErrorAsync(new SyntaxError(message, 0));
     }
 
     private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
