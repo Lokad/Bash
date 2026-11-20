@@ -161,7 +161,8 @@ public sealed partial class Evaluation
             var handler = await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap)
                 .ConfigureAwait(false);
             if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
-                && (_state.FatalExpansion == null || _state.ErrexitEnabled))
+                && (_state.FatalExpansion == null
+                    || _state.ErrexitEnabled && _state.FatalExpansion is not { Kind: ExpansionFailureKind.IntegerAssignment }))
                 result = result.WithExitCode(handler.ExitCode);
             return result;
         }

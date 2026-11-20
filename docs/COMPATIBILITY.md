@@ -430,6 +430,14 @@ builtin's usage and returns 2. Later fields are ordinary operands.
 parameters for that file. The filename must be valid UTF-8 for the host path
 boundary. Script content and positional parameters retain their byte values.
 
+When arithmetic evaluation of an integer binding's assignment fails, the
+current command unit ends and reached functions, `eval`, and sourced files
+unwind. The script reader resumes at the next unit even under errexit. If the
+prior status was zero it publishes status 1 and sets `PIPESTATUS` to `(1)`.
+A prior nonzero status and its pipeline statuses remain visible. A command
+capture ends with status 1 and retains earlier captured output. An EXIT
+action ends at the failure and preserves the status that entered the action.
+
 `LINENO` follows the active parsed command. Functions defined in a script retain
 their defining source coordinates. Sourced files and EXIT action source start
 at line 1, and `eval` bases its coordinates on the calling command. Parenthesized

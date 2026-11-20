@@ -212,7 +212,8 @@ public sealed partial class Evaluation
                                 }
                                 if (index + 1 == traversal.Count)
                                     return ApplyNegation(result, listNegated);
-                                result = ApplyNegation(RecoverExpansionFailure(recoveryStatus), negated: false);
+                                result = ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus, listScope)
+                                    .ConfigureAwait(false), negated: false);
                             }
                             break;
                         case ListTraversal.Step.Select select when !EvaluationRules.ShouldExecuteRight(select.Operator, result.ExitCode):

@@ -8,7 +8,7 @@ using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
-/// <summary>Distinguishes failures recoverable at eval/source boundaries from shell-fatal expansions.</summary>
+/// <summary>Classifies expansion failures by their unwind and recovery behavior.</summary>
 internal enum ExpansionFailureKind
 {
     Arithmetic,
@@ -22,6 +22,8 @@ internal enum ExpansionFailureKind
     /// <summary>An errexit-enabled file substitution could not open its input.</summary>
     InputSubstitution,
     Assignment,
+    /// <summary>An integer binding's operand failed arithmetic evaluation.</summary>
+    IntegerAssignment,
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>
     NamerefDefault,
     /// <summary>A direct write failed; eval/source can return control to their caller.</summary>

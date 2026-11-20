@@ -103,6 +103,84 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("true; number='1 +'; printf skipped", "[1:2:1]EXIT[0:2]")]
+    [InlineData("true | true; number='1 +'", "[1:2:1]EXIT[0:2]")]
+    [InlineData("(exit 7) || number='1 +'", "[7:2:7]EXIT[0:2]")]
+    [InlineData("false | true || number='1 +'", "[1:2:1 0]EXIT[0:2]")]
+    public Task InvalidIntegerAssignmentPublishesStatusAtTheNextUnit(string unit, string expected)
+    {
+        var script = """
+            declare -i number=2
+            trap 'printf "EXIT[%s:%s]" "$?" "$number"' EXIT
+            set -e
+            """ + "\n" + unit + "\n" + """printf '[%s:%s:%s]' "$?" "$number" "${PIPESTATUS[*]}" """;
+        return CheckIntegerFailureAsync(script, expected, 0, configure: null, check: null);
+    }
+
+    [Theory]
+    [InlineData("eval 'number=\"1 +\"; printf inside'")]
+    [InlineData("source ./fixture")]
+    public Task InvalidIntegerAssignmentUnwindsNestedScriptCalls(string invocation) =>
+        CheckIntegerFailureAsync("declare -i number=2\n" + invocation + "; printf skipped\n"
+                + """printf '[%s:%s:%s]' "$?" "$number" "${PIPESTATUS[*]}" """,
+            "[1:2:1]", 0, host => host.AddFile("/fixture", "number='1 +'\nprintf inside"), check: null);
+
+    [Theory]
+    [InlineData("""
+        declare -i number=2
+        value=$(printf prior; (exit 7); number='1 +'
+        printf skipped)
+        printf '[%s:%s:%s]' "$?" "$number" "$value"
+        """, "[1:2:prior]", 0)]
+    [InlineData("""
+        declare -i number=2
+        set -e
+        trap 'number="1 +"; printf skipped' EXIT
+        true
+        """, "", 0)]
+    [InlineData("""
+        declare -i number=2
+        set -e
+        trap 'number="1 +"; printf skipped' EXIT
+        exit 7
+        """, "", 7)]
+    public Task InvalidIntegerAssignmentStopsAtCaptureAndExitActionBoundaries(string script, string expected, int status) =>
+        CheckIntegerFailureAsync(script, expected, status, configure: null, check: null);
+
+    [Fact]
+    public Task InvalidIntegerAssignmentRestoresCompoundRedirection() =>
+        CheckIntegerFailureAsync("""
+            declare -i number=2
+            { printf prior; number='1 +'; printf skipped; } >inner
+            printf continued
+            printf '[%s:%s:%s]' "$?" "$number" "${PIPESTATUS[*]}"
+            """, "continued[0:2:0]", 0, configure: null,
+            check: host => Assert.Equal("prior", host.ReadFile("/inner")));
+
+    private static async Task CheckIntegerFailureAsync(string script, string expected, int status,
+        Action<TestHost>? configure, Action<TestHost>? check)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            configure?.Invoke(host);
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(status, result.ExitCode);
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.NotEmpty(host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            check?.Invoke(host);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
     [InlineData("read -ra a <<< 'i++ long_value'")]
     [InlineData("mapfile -t -O 10 a <<< $'i++\\nlong_value'")]
     public async Task IntegerInputRefusalRestoresTheOriginalArray(string input)

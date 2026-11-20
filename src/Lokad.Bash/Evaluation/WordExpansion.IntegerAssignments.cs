@@ -30,7 +30,7 @@ internal static partial class WordExpansion
             if (ArithmeticEvaluation.TryParseIntegerLiteral(payload, scope.Effects.CancellationToken, out var number))
                 return ValueTask.FromResult((long?)number);
             return new ValueTask<long?>(EvaluateArithmeticAsync(
-                ArithmeticOperand.FromValue(operand), scope, ArithmeticFailureMode.Assignment, null, command));
+                ArithmeticOperand.FromValue(operand), scope, ArithmeticFailureMode.IntegerAssignment, null, command));
         }
     }
 }

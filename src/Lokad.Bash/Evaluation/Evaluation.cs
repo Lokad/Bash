@@ -581,10 +581,13 @@ public sealed partial class Evaluation : IFileTester
             var result = await EvaluateCommandAsync(command, scope, negated: false)
                 .ConfigureAwait(false);
 
-            if (result.Flow == FlowControlKind.Exit && CanRecoverCommandSubstitutionSyntax)
-                result = RecoverExpansionFailure(1);
             if (result.Flow == FlowControlKind.Exit)
-                return result;
+            {
+                var recoveryStatus = CanRecoverCommandSubstitutionSyntax ? 1 : RecoverableIntegerAssignmentStatus;
+                if (recoveryStatus is not { } status)
+                    return result;
+                result = await RecoverExpansionFailureAsync(status, scope).ConfigureAwait(false);
+            }
 
             if (result.Flow != FlowControlKind.None)
             {
@@ -3301,7 +3304,11 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
 
-        SetFatalExpansionError(kind);
+        if (kind == ExpansionFailureKind.IntegerAssignment && _state.ForkKind is null or ShellForkKind.Subshell
+            && _state.LastExitCode is { } previousStatus && previousStatus != 0)
+            SetFatalExpansionError(kind, previousStatus);
+        else
+            SetFatalExpansionError(kind);
         return ReportExpansionDiagnosticAsync(name, message);
     }
 

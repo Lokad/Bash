@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -246,8 +247,8 @@ public sealed partial class Evaluation
                 {
                     // Recover only the expansion failures that end the current command unit.
                     // Explicit exit, errexit and unrecoverable expansion failures still terminate.
-                    result = await FinalizeResultAsync(RecoverScriptExpansionFailure(result, kind, scope.Context), negated: false)
-                        .ConfigureAwait(false);
+                    result = await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
+                    result = await FinalizeResultAsync(result, negated: false).ConfigureAwait(false);
                     if (result.Flow == FlowControlKind.Exit)
                         return result;
                 }
@@ -260,18 +261,21 @@ public sealed partial class Evaluation
                 unitMemory.Release();
             }
         }
-        return RecoverScriptExpansionFailure(result, kind, scope.Context);
+        return await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
     }
 
     /// <summary>Recovers unit-scoped expansion failures while preserving root versus nested status rules.</summary>
-    private EvaluationResult RecoverScriptExpansionFailure(
-        EvaluationResult result, ScriptExecutionKind kind, EvaluationContext context) =>
-        GetRecoverableScriptExpansionStatus(kind, context) is { } status ? RecoverExpansionFailure(status) : result;
+    private ValueTask<EvaluationResult> RecoverScriptExpansionFailureAsync(
+        EvaluationResult result, ScriptExecutionKind kind, ScopedEvaluation scope) =>
+        GetRecoverableScriptExpansionStatus(kind, scope.Context) is { } status
+            ? RecoverExpansionFailureAsync(status, scope) : ValueTask.FromResult(result);
 
     private int? GetRecoverableScriptExpansionStatus(ScriptExecutionKind kind, EvaluationContext context)
     {
         if (CanRecoverCommandSubstitutionSyntax)
             return 1;
+        if (kind == ScriptExecutionKind.Root && RecoverableIntegerAssignmentStatus is { } status)
+            return status;
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
                 or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
@@ -290,10 +294,35 @@ public sealed partial class Evaluation
     private bool CanRecoverCommandSubstitutionSyntax =>
         _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1 };
 
-    private EvaluationResult RecoverExpansionFailure(int exitCode)
+    private int? RecoverableIntegerAssignmentStatus => _state.ForkKind == null
+        && _state.FatalExpansion is { Kind: ExpansionFailureKind.IntegerAssignment, ExitCode: var status } ? status : null;
+
+    private async ValueTask<EvaluationResult> RecoverExpansionFailureAsync(int exitCode, ScopedEvaluation scope)
     {
+        var integerAssignment = _state.FatalExpansion is { Kind: ExpansionFailureKind.IntegerAssignment };
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
+
+        if (integerAssignment)
+        {
+            // The script reader replaces PIPESTATUS only after a previous success.
+            // The caller's bindings and descriptors are visible again at this boundary.
+            if (_state.LastExitCode.GetValueOrDefault() == 0)
+            {
+                try
+                {
+                    using var memory = Memory.BeginCommand(scope);
+                    PreparePipelineStatusStorage(1);
+                    scope.Variables.SetPipelineStatuses([exitCode], scope.Context, _cancellationToken);
+                }
+                catch (MemoryBudgetExceededException)
+                {
+                    Memory.ReleaseUnusedCapacity();
+                    await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
+                }
+            }
+            _state.LastExitCode = exitCode;
+        }
         return EvaluationResult.FromExitCode(exitCode);
     }
 }
