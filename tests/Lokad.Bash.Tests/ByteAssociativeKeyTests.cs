@@ -14,6 +14,7 @@ public sealed class ByteAssociativeKeyTests
     [InlineData("declare -A a; k=$'\\377'; printf '<%s><%s><%s>' \"${a[$k]:=$'\\376'}\" \"${a[$k]}\" \"${a[$'\\376']-missing}\"", "3CFE3E3CFE3E3C6D697373696E673E", "")]
     [InlineData("declare -A a; a[$(printf selector >&2; printf '\\377')]=$(printf rhs >&2; printf value); printf '<%s>' \"${a[$'\\377']}\"", "3C76616C75653E", "72687373656C6563746F72")]
     [InlineData("declare -A a=([$'\\377']=$'\\376'); a+=([$'\\377']+=x); printf '<%s><%s>' \"${a[$'\\377']}\" \"${!a[@]}\"", "3CFE783E3CFF3E", "")]
+    [InlineData("declare -A a=([$'\\377']=one); printf '<%s>' \"pre${!a[@]}${a[added]:=new}post\"; printf '|%s' \"${a[added]}\"", "3C707265FF6E6577706F73743E7C6E6577", "")]
     [InlineData("declare -A a=([$'\\377']=first [$'\\376']=second [$'\\303']=third [é]=fourth); printf '<%s>' \"${#a[@]}\" \"${a[$'\\377']}\" \"${a[$'\\376']}\" \"${a[$'\\303']}\" \"${a[é]}\"", "3C343E3C66697273743E3C7365636F6E643E3C74686972643E3C666F757274683E", "")]
     [InlineData("declare -A a=([$'\\377']=$'\\376'); declare -p a; snapshot=$(declare -p a); unset a; eval \"$snapshot\"; printf '<%s><%s>' \"${!a[@]}\" \"${a[@]}\"", "6465636C617265202D4120613D285B24275C333737275D3D24275C3337362720290A3CFF3E3CFE3E", "")]
     public async Task References_PreserveKeyBytesAcrossConsumers(string script, string outputHex, string errorHex)

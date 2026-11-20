@@ -14,6 +14,7 @@ public sealed class ByteCompoundArrayTests
     [InlineData("IFS=:; src=($'\\377' $'\\376'); a=([0]=${missing:-${src[@]}}); printf '%s' \"${a[0]}\"", "FF20FE", "", 0)]
     [InlineData("IFS=:; src=($'\\377' $'\\376'); a=([0]=${missing:-\"${src[@]}\"}); printf '%s' \"${a[0]}\"", "FF3AFE", "", 0)]
     [InlineData("a=([2]=$'\\377' [5]='' tail); printf '<%s>' \"${a[@]}\" \"${!a[@]}\"\n", "3CFF3E3C3E3C7461696C3E3C323E3C353E3C363E", "", 0)]
+    [InlineData("a=([1]=one [4]=four); printf '<%s>' \"pre${!a[@]}$((a[2]=4))post\"; printf '|'; printf '<%s>' \"${!a[@]}\"", "3C707265313E3C3434706F73743E7C3C313E3C323E3C343E", "", 0)]
     [InlineData("v=$'\\303'; v+=$'\\251'; printf '%s' \"$v\"\n", "C3A9", "", 0)]
     [InlineData("a=([3]=$'\\377'); a+=([3]+=$'\\376' $'\\375'); printf '<%s>' \"${a[@]}\" \"${!a[@]}\"\n", "3CFFFE3E3CFD3E3C333E3C343E", "", 0)]
     [InlineData("declare -A a; a=([x]=$'\\377'); a+=([x]+=$'\\376'); printf '%s' \"${a[x]}\"\n", "FFFE", "", 0)]

@@ -20,12 +20,14 @@ internal static partial class WordExpansion
         internal sealed record Indexed(IndexedArray Array) : ParameterSource;
         internal sealed record Associative(AssociativeArray Array) : ParameterSource;
         internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource;
+        internal sealed record Keys(IEnumerable<ShellValue> Values, int KeyCount) : ParameterSource;
 
         public int Count => this switch
         {
             Indexed indexed => indexed.Array.Count,
             Associative associative => associative.Array.Count,
             Positional positional => positional.Arguments.Count,
+            Keys keys => keys.KeyCount,
             _ => throw new InvalidOperationException("Unknown parameter source.")
         };
 
@@ -34,6 +36,7 @@ internal static partial class WordExpansion
             Indexed indexed => indexed.Array.PresentValues,
             Associative associative => associative.Array.PresentValues,
             Positional positional => positional.Arguments,
+            Keys keys => keys.Values,
             _ => throw new InvalidOperationException("Unknown parameter source.")
         };
     }
@@ -605,11 +608,16 @@ internal static partial class WordExpansion
                             { RangeSource = source, InspectionBinding = inspection ? selected : null };
                     }
 
-                    // Admit the key vector and indexed key bytes before enumerating.
-                    budget.Charge(checked(256L * count));
-                    IEnumerable<ShellValue> keys = array != null ? array.PresentKeys
-                        : map != null ? map.PresentKeys : count == 0 ? [] : [ShellValue.FromBytes(NumberFormatting.FormatNumber(0))];
-                    return new ParameterValue(reference.Kind, keys.ToArray(), count != 0, reference, null);
+                    if (count == 0)
+                        return new ParameterValue(reference.Kind, [], false, reference, null);
+                    var keys = array?.PresentKeys ?? map?.PresentKeys;
+                    if (keys == null)
+                        return new ParameterValue(reference.Kind, [ShellValue.FromInteger(0)], true, reference, null);
+
+                    // Indirect aggregate keys are consumed synchronously. The word builder
+                    // owns the emitted fields and admits any retained or copied backing.
+                    return new ParameterValue(reference.Kind, [], true, reference, null)
+                        { RangeSource = new ParameterSource.Keys(keys, count) };
                 }
 
                 var target = await ResolveReferenceAsync(reference,
