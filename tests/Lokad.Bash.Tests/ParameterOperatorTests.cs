@@ -10,6 +10,46 @@ namespace Lokad.Bash.Tests;
 public sealed class ParameterOperatorTests
 {
     [Theory]
+    [InlineData("a=(); i=0; saved=prior\nsaved=${a[@]:=$((++i))}; printf skipped\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",
+        0, "[2:2:1:prior]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0; saved=prior\nsaved=\"${a[@]:=$((++i))}\" true; printf skipped\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",
+        0, "[2:2:1:prior]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\nf() { local PIPESTATUS=(8 9); printf '%s' \"${a[*]:=$((++i))}\"; }; f; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        0, "[2:0:1]", "a[*]: bad array subscript\n")]
+    [InlineData("a=(); i=0\nf() { local -; set +e; printf '%s' \"${a[@]:=$((++i))}\"; }; set -e\neval 'f; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"'",
+        0, "[1:1:1]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\nset -e\nsource ./fixture || printf alternative\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        0, "[1:1:1][0:0:1]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\nprintf '%s' \"${a[@]:=$((++i))}\" | cat\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        0, "[2:2 0:0]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\neval 'printf \"%s\" \"${a[@]:=$((++i))}\" | cat\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"\n{ printf \"%s\" \"${a[@]:=$((++i))}\"; } | cat\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"'",
+        0, "[1:1 0:0][2:2 0:0]", "a[@]: bad array subscript\na[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\nsaved=$(printf prior; printf '%s' \"${a[@]:=$((++i))}\"\nprintf skipped)\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",
+        0, "[1:1:0:prior]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\ntrap 'printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\nset -e\n! printf '%s' \"${a[@]:=$((++i))}\"\nprintf skipped",
+        1, "[1:0:1]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\ntrap 'printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\nset -e\n(exit 7) && :\nprintf '%s' \"${a[@]:=$((++i))}\"",
+        7, "[7:7:1]", "a[@]: bad array subscript\n")]
+    [InlineData("a=(); i=0\ntrap 'printf \"%s\" \"${a[@]:=$((++i))}\" | cat\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\nexit 7",
+        7, "[7:7 0:0]", "a[@]: bad array subscript\n")]
+    public async Task RejectedIndexedAggregateDefaultUsesTheReachedReadersStatus(string script, int status, string output, string error)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", "printf '%s' \"${a[@]:=$((++i))}\"; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"\n");
+            var actual = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(status, actual);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData(false, "+")]
     [InlineData(false, ":+")]
     [InlineData(true, ":+")]

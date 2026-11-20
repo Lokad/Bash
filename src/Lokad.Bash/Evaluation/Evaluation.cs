@@ -71,6 +71,8 @@ public sealed partial class Evaluation : IFileTester
     private readonly RootFlowHandling _rootFlowHandling;
     // Pipelines retain completed evaluators until all stages and descriptor cleanup finish.
     private bool _retainCompletedMemory;
+    // Simple stages can inherit the status rules of the reader that started the pipeline.
+    private bool _pipelineUsesLoadedUnitStatus;
     /// <summary>
     /// Tracks descriptors inherited by a nested evaluator and therefore not owned by it.
     /// </summary>
@@ -833,6 +835,9 @@ public sealed partial class Evaluation : IFileTester
                     descriptorsToClose.Add(stdOut);
 
                 stage._retainCompletedMemory = true;
+                stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
+                    && (scope.InNestedCommandUnits || _state.ForkKind == ShellForkKind.CommandSubstitution
+                        || PipelineInheritsLoadedUnitStatus);
                 stage.Memory.Budget = pipelineMemory;
                 stages.Add(new PipelineEvaluationStage(stage, descriptorsToClose));
             }
@@ -3318,18 +3323,18 @@ public sealed partial class Evaluation : IFileTester
 
         if (kind == ExpansionFailureKind.IntegerAssignment && _state.ForkKind is null or ShellForkKind.Subshell
             && _state.LastExitCode is { } previousStatus && previousStatus != 0)
-            SetFatalExpansionError(kind, previousStatus);
+            SetFatalExpansionError(new ExpansionFailure(kind, previousStatus));
         else
             SetFatalExpansionError(kind);
         return ReportExpansionDiagnosticAsync(name, message);
     }
 
     internal void SetFatalExpansionError(ExpansionFailureKind kind)
-        => SetFatalExpansionError(kind, kind == ExpansionFailureKind.NamerefDefault ? 2 : 1);
+        => SetFatalExpansionError(new ExpansionFailure(kind, kind == ExpansionFailureKind.NamerefDefault ? 2 : 1));
 
-    private void SetFatalExpansionError(ExpansionFailureKind kind, int exitCode)
+    private void SetFatalExpansionError(ExpansionFailure failure)
     {
-        _state.FatalExpansion ??= new ExpansionFailure(kind, exitCode);
+        _state.FatalExpansion ??= failure;
         _state.SetExpansionError(_state.FatalExpansion.Value.ExitCode);
     }
 
@@ -3342,10 +3347,57 @@ public sealed partial class Evaluation : IFileTester
         // Publish status while the reached lexical scope is still active.
         SetFatalExpansionError(kind);
         _state.LastExitCode = 1;
-        PreparePipelineStatusStorage(1);
-        scope.Variables.SetPipelineStatuses([1], scope.Context, _cancellationToken);
+        PublishExpansionPipelineStatus(1, scope);
         return ReportExpansionDiagnosticAsync(subject, message);
     }
+
+    internal Task ReportIndexedAggregateDefaultFailureAsync(
+        ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope)
+    {
+        if (_state.FatalExpansion.HasValue)
+            return Task.CompletedTask;
+
+        var exitActionStatus = _state.Traps?.ExitTrapStatus;
+        var loadedUnits = scope.InNestedCommandUnits || PipelineInheritsLoadedUnitStatus || exitActionStatus != null;
+        var canResume = !_state.ErrexitEnabled;
+        int exitCode;
+        if (!canResume)
+        {
+            // An errexit unwind retains an existing nonzero status.
+            exitCode = _state.LastExitCode is { } previous && previous != 0 ? previous : 1;
+        }
+        else if (_state.ForkKind == ShellForkKind.PipelineSimpleCommand && !scope.InNestedCommandUnits && exitActionStatus is { } saved)
+        {
+            // A simple pipeline stage inherits the status that entered the EXIT action.
+            exitCode = saved;
+        }
+        else
+        {
+            exitCode = loadedUnits || _state.ForkKind == ShellForkKind.CommandSubstitution ? 1 : 2;
+        }
+        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.IndexedAggregateDefaultAssignment, exitCode)
+            { CanResumeUntestedUnit = canResume });
+        // Publish in the reached bindings before a function can restore its locals.
+        // An in-process loaded reader publishes its own status after unwinding.
+        if (canResume && (!loadedUnits || _state.ForkKind != null))
+        {
+            _state.LastExitCode = exitCode;
+            // A prefix RHS writes through to the caller even though its temporary bindings go away.
+            var statusScope = ReferenceEquals(scope.ExpansionWriteTarget?.Variables, _vars)
+                ? scope with { Variables = _vars } : scope;
+            PublishExpansionPipelineStatus(exitCode, statusScope);
+        }
+        return ReportExpansionDiagnosticAsync(subject, message);
+    }
+
+    private void PublishExpansionPipelineStatus(int exitCode, ScopedEvaluation scope)
+    {
+        PreparePipelineStatusStorage(1);
+        scope.Variables.SetPipelineStatuses([exitCode], scope.Context, _cancellationToken);
+    }
+
+    private bool PipelineInheritsLoadedUnitStatus => _state.ForkKind == ShellForkKind.PipelineSimpleCommand
+        && _pipelineUsesLoadedUnitStatus;
 
     internal Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure)
     {
@@ -3354,7 +3406,7 @@ public sealed partial class Evaluation : IFileTester
 
         var exitCode = _state.ErrexitEnabled || failure is SubstitutionSyntaxFailure.NestedSyntax
             or SubstitutionSyntaxFailure.NestedHereDocumentSeparator ? 2 : 1;
-        SetFatalExpansionError(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode);
+        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode));
         _state.LastExitCode = exitCode;
         var message = failure is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator
             ? "Unexpected token after a here-document in command substitution."

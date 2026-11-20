@@ -632,6 +632,8 @@ internal static partial class WordExpansion
                 ReferenceUse.Unset or ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign
                     or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead =>
                     scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]),
+                ReferenceUse.Assign when selector.IsAggregate =>
+                    scope.Effects.ReportIndexedAggregateDefaultFailureAsync(subject, [message], scope),
                 ReferenceUse.Assign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.Assignment),
                 ReferenceUse.DirectAssign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.AssignmentTarget),
                 _ => throw new InvalidOperationException("Unknown reference use."),

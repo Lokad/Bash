@@ -163,7 +163,8 @@ public sealed partial class Evaluation
             if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
                 && (_state.FatalExpansion == null
                     || _state.ErrexitEnabled && _state.FatalExpansion is not
-                    { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex }))
+                    { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex
+                        or ExpansionFailureKind.IndexedAggregateDefaultAssignment }))
                 result = result.WithExitCode(handler.ExitCode);
             return result;
         }

@@ -26,13 +26,19 @@ internal enum ExpansionFailureKind
     IntegerAssignment,
     /// <summary>Arithmetic selection of an indexed array element failed.</summary>
     ArrayIndex,
+    /// <summary>An indexed aggregate rejected a reached parameter-default write.</summary>
+    IndexedAggregateDefaultAssignment,
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>
     NamerefDefault,
     /// <summary>A direct write failed; eval/source can return control to their caller.</summary>
     AssignmentTarget
 }
 
-internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int ExitCode);
+internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int ExitCode)
+{
+    // A local option scope may be restored before the loaded script reader handles the failure.
+    internal bool CanResumeUntestedUnit { get; init; }
+}
 
 [Flags]
 internal enum FunctionAttributes { None = 0, Readonly = 1, Exported = 2 }

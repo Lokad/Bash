@@ -276,6 +276,12 @@ public sealed partial class Evaluation
             return 1;
         if (kind == ScriptExecutionKind.Root && RecoverableRootExpansionStatus is { } status)
             return status;
+        if (_state.FatalExpansion is { Kind: ExpansionFailureKind.IndexedAggregateDefaultAssignment } aggregateFailure)
+        {
+            // Loaded units recover at the invoking reader, including when it was tested.
+            return _state.ForkKind == null && kind is (ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap)
+                && (aggregateFailure.CanResumeUntestedUnit || context.ErrexitIgnored) ? 1 : null;
+        }
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
                 or ExpansionFailureKind.AssignmentTarget or ExpansionFailureKind.NamerefDefault } failure)
@@ -294,26 +300,30 @@ public sealed partial class Evaluation
     private bool CanRecoverCommandSubstitutionSyntax =>
         _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1 };
 
-    private int? RecoverableRootExpansionStatus => _state.ForkKind == null && _state.FatalExpansion is
-        { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex, ExitCode: var status } ? status : null;
+    private int? RecoverableRootExpansionStatus => _state.ForkKind != null ? null : _state.FatalExpansion switch
+    {
+        { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex, ExitCode: var status } => status,
+        { Kind: ExpansionFailureKind.IndexedAggregateDefaultAssignment, ExitCode: 2 } => 2,
+        _ => null
+    };
 
     private async ValueTask<EvaluationResult> RecoverExpansionFailureAsync(int exitCode, ScopedEvaluation scope)
     {
-        var integerAssignment = _state.FatalExpansion is { Kind: ExpansionFailureKind.IntegerAssignment };
+        var kind = _state.FatalExpansion?.Kind;
+        var publishLoadedAssignment = kind == ExpansionFailureKind.IndexedAggregateDefaultAssignment && exitCode == 1;
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
 
-        if (integerAssignment)
+        if (kind == ExpansionFailureKind.IntegerAssignment || publishLoadedAssignment)
         {
-            // The script reader replaces PIPESTATUS only after a previous success.
-            // The caller's bindings and descriptors are visible again at this boundary.
-            if (_state.LastExitCode.GetValueOrDefault() == 0)
+            // The caller's bindings and descriptors are visible again. Integer assignments
+            // replace PIPESTATUS only after a previous success.
+            if (publishLoadedAssignment || _state.LastExitCode.GetValueOrDefault() == 0)
             {
                 try
                 {
                     using var memory = Memory.BeginCommand(scope);
-                    PreparePipelineStatusStorage(1);
-                    scope.Variables.SetPipelineStatuses([exitCode], scope.Context, _cancellationToken);
+                    PublishExpansionPipelineStatus(exitCode, scope);
                 }
                 catch (MemoryBudgetExceededException)
                 {
