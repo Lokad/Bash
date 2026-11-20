@@ -11,6 +11,8 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
+    private const string MapfileUsageArguments = "[-t] [-d delim] [-n count] [-O origin] [-u fd] [--] [array]";
+
     [Fact]
     public async Task Evaluation_MapfileBuiltin_ReadsAllLinesInBatches()
     {
@@ -330,7 +332,6 @@ public partial class EvaluationTests
 
     [Theory]
     [InlineData("mapfile -s 1 arr")]
-    [InlineData("mapfile -u 3 arr")]
     [InlineData("mapfile -C callback arr")]
     [InlineData("mapfile -c 1 arr")]
     [InlineData("mapfile -x arr")]
@@ -342,7 +343,7 @@ public partial class EvaluationTests
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
         var reason = command.Split(' ')[1] + ": invalid option";
-        Assert.Equal("mapfile: " + reason + "\nmapfile: usage: mapfile [-t] [-d delim] [-n count] [-O origin] [--] [array]\n",
+        Assert.Equal($"mapfile: {reason}\nmapfile: usage: mapfile {MapfileUsageArguments}\n",
             Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
@@ -352,17 +353,69 @@ public partial class EvaluationTests
         Assert.Equal(ShellValue.FromText("old"), state.IndexedArrays["arr"][0]);
     }
 
+    [Fact]
+    public async Task Evaluation_MapfileBuiltin_ReadsTheBorrowedLogicalDescriptor()
+    {
+        var table = new DescriptorTable();
+        var handle = new FileDescriptor(9);
+        table.Set(new LogicalDescriptor(3), handle);
+        var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
+        var state = new Eval(Parser.Parse("mapfile -tn1 -u3 arr"), descriptors,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default,
+            new MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
+
+        var read = await NextReadAsync(state);
+        Assert.Equal(handle, read.FileDescriptor);
+        Assert.Equal(1, read.Limit);
+        read.SetResult(ReadResult.Success(Utf8Bytes("selected\n"), [], reachedEoF: false));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("selected"), Assert.Single(state.IndexedArrays["arr"]));
+        Assert.Equal(handle, table.Resolve(new LogicalDescriptor(3)));
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
+    [Theory]
+    [InlineData("mapfile -u9 -u3", false, "mapfile: 9: invalid file descriptor: Bad file descriptor\n")]
+    [InlineData("readarray -u +009", true, "readarray: 9: invalid file descriptor: Bad file descriptor\n")]
+    [InlineData("mapfile -u -1", false, "mapfile: -1: invalid file descriptor specification\n")]
+    public async Task Evaluation_MapfileBuiltin_RejectsInvalidDescriptorBeforeInput(
+        string command, bool explicitlyClosed, string error)
+    {
+        var table = new DescriptorTable();
+        var handle = new FileDescriptor(9);
+        table.Set(new LogicalDescriptor(3), handle);
+        if (explicitlyClosed)
+            table.Set(new LogicalDescriptor(9), FileDescriptor.Closed);
+        var descriptors = new EvaluationDescriptorSetup(table.Capture(), [handle]);
+        var state = new Eval(Parser.Parse($"MAPFILE=(old); {command}"), descriptors,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default,
+            new MemoryGovernor(TestMemoryBudget.EvaluationBytes), sourceMemory: null);
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal(error, Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["MAPFILE"]));
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
     [Theory]
     [InlineData("mapfile -d : -d", "mapfile", "-d")]
     [InlineData("readarray -td", "readarray", "-d")]
     [InlineData("mapfile -n", "mapfile", "-n")]
     [InlineData("readarray -tO", "readarray", "-O")]
+    [InlineData("mapfile -u", "mapfile", "-u")]
     public async Task Evaluation_MapfileBuiltin_RejectsMissingOptionOperandBeforeReading(string command, string builtin, string option)
     {
         var state = new Eval(Parser.Parse($"arr=(old); {command}"));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal($"{builtin}: {option}: option requires an argument\n{builtin}: usage: {builtin} [-t] [-d delim] [-n count] [-O origin] [--] [array]\n",
+        Assert.Equal($"{builtin}: {option}: option requires an argument\n{builtin}: usage: {builtin} {MapfileUsageArguments}\n",
             Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 

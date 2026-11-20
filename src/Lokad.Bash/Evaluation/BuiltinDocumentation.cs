@@ -60,7 +60,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
             "Mark bindings for export, or list exported bindings. -n removes export; -f selects functions; -a/-A select array kinds."),
         BuiltinKind.Readonly => new("[-aAfnp] [name[=value] ...]",
             "Mark bindings readonly, or list readonly bindings. -f selects functions; -a and -A select indexed and associative arrays. With named operands, -n skips adding the readonly attribute and preserves existing attributes."),
-        BuiltinKind.Mapfile => new("[-t] [-d delim] [-n count] [-O origin] [--] [array]",
+        BuiltinKind.Mapfile => new("[-t] [-d delim] [-n count] [-O origin] [-u fd] [--] [array]",
             "Read standard input into an indexed array, defaulting to MAPFILE. -d uses the first delimiter byte, or NUL for an empty delimiter. -t removes each record's trailing delimiter.\n    -n limits records read; zero reads to EOF. -O writes at the supplied starting index and preserves other entries."),
         BuiltinKind.Hash => new("", "Return success without operands; command-path caching is not implemented."),
         BuiltinKind.Shift => new("[--] [n]", "Remove the first n positional parameters. With no count, remove one."),

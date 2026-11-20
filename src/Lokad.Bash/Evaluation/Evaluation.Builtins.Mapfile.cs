@@ -20,6 +20,7 @@ public sealed partial class Evaluation
         const int RecordListEntryBytes = 64; // Includes list capacity and resize overlap.
         using var diagnostics = new BuiltinDiagnosticScope(this);
         var targetValue = ShellValue.FromText("MAPFILE");
+        var descriptor = GetStdInDescriptor();
         var delimiter = (byte)'\n';
         var trimDelimiter = false;
         uint count = 0;
@@ -46,7 +47,7 @@ public sealed partial class Evaluation
                         trimDelimiter = true;
                         continue;
                     }
-                    if (option is not ((byte)'d' or (byte)'n' or (byte)'O'))
+                    if (option is not ((byte)'d' or (byte)'n' or (byte)'O' or (byte)'u'))
                         return await InvalidArgumentsAsync(argument.Bytes.Slice(optionIndex, 1), ": invalid option")
                             .ConfigureAwait(false);
 
@@ -61,6 +62,17 @@ public sealed partial class Evaluation
 
                     if (option == (byte)'d')
                         delimiter = operand.IsEmpty ? (byte)0 : operand.Span[0];
+                    else if (option == (byte)'u')
+                    {
+                        var (number, handle) = ResolveInputDescriptorOperand(operand.Span);
+                        if (number == null || handle.IsClosed)
+                        {
+                            await ReportInvalidInputDescriptorAsync(arguments[0], ShellValue.FromBytes(operand), number)
+                                .ConfigureAwait(false);
+                            return await FinishAsync(1).ConfigureAwait(false);
+                        }
+                        descriptor = handle;
+                    }
                     else
                     {
                         if (!Integers.TryParseBuiltinNumber(operand.Span, out var number) || number is < 0 or > uint.MaxValue)
@@ -90,7 +102,6 @@ public sealed partial class Evaluation
             return await FinishAsync(targetStatus).ConfigureAwait(false);
         var resolved = target.Name;
 
-        var descriptor = GetStdInDescriptor();
         var attributes = variables.GetAssignmentAttributes(resolved);
         var integer = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0;
         var convertCase = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Case) != 0;

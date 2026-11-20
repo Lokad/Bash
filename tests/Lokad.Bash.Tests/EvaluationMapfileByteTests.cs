@@ -11,6 +11,31 @@ namespace Lokad.Bash.Tests;
 
 public sealed class EvaluationMapfileByteTests
 {
+    [Theory]
+    [InlineData("mapfile -n1 -tu3 records", "read -ru3 next", "first\nsecond\n")]
+    [InlineData("readarray -td: -n1 -u 3 records", "read -ru3 -d : next", "first:second:")]
+    public async Task SelectedDescriptorRetainsUnreadRecordsAndLeavesStdinAvailable(
+        string command, string nextRead, string input)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/selected", input);
+        host.AddFile("/standard", "standard\n");
+        var source = $$"""
+            exec 3<selected 4<standard
+            {{command}} <&4
+            status=$?
+            {{nextRead}}
+            read -ru4 ordinary
+            printf '%s:<%s>:<%s>:<%s>' "$status" "${records[0]}" "$next" "$ordinary"
+            """;
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0:<first>:<second>:<standard>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
 
     [Theory]
     [InlineData('\n', "")]

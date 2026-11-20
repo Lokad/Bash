@@ -16,7 +16,10 @@ The runtime supports deterministic, non-interactive shell workflows:
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT
   handlers. Cancellation and external signals do not deliver traps.
 
-`mapfile` and `readarray` split standard input on LF by default. `-d delim`
+`mapfile` and `readarray` split standard input on LF by default. `-u fd`
+selects an existing logical descriptor after redirections are applied. Each
+explicit selector must name an open descriptor, and the last one supplies the
+input. The command borrows the selected handle. `-d delim`
 uses the first byte of `delim`, with an empty operand selecting NUL. `-t`
 removes a record's final delimiter when present. Array values end at the first
 NUL byte, including when NUL is the delimiter.

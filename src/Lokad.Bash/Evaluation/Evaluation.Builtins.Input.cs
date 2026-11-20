@@ -14,6 +14,21 @@ public sealed partial class Evaluation
     private const int ReadScratchRetentionBytes = 64 * 1024;
     private ReadWorkspace? _readWorkspace;
 
+    private (LogicalDescriptor? Number, FileDescriptor Handle) ResolveInputDescriptorOperand(ReadOnlySpan<byte> operand)
+    {
+        if (!Integers.TryParseBuiltinNumber(operand, out var number) || number is < 0 or > int.MaxValue)
+            return (null, FileDescriptor.Closed);
+
+        // Input borrows the reached logical mapping and leaves handle ownership with it.
+        var logical = new LogicalDescriptor((int)number);
+        return (logical, _state.CurrentRedirectionTable?.Resolve(logical) ?? CaptureDescriptorBindings().Resolve(logical));
+    }
+
+    private Task ReportInvalidInputDescriptorAsync(ShellValue command, ShellValue operand, LogicalDescriptor? number) =>
+        number is { } logical
+            ? ReportExpansionDiagnosticAsync(command, ShellValue.FromText(logical + ": invalid file descriptor: Bad file descriptor"))
+            : ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(": invalid file descriptor specification")]);
+
     // Each evaluator owns its workspace: pipeline stages and command substitutions may overlap.
     private sealed class ReadWorkspace(IMemoryBudget budget) : IDisposable
     {
@@ -88,18 +103,15 @@ public sealed partial class Evaluation
                     break;
                 }
 
-                if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var number)
-                    || number is < 0 or > int.MaxValue)
-                    return await FailAsync([operand, ShellValue.FromText(": invalid file descriptor specification")])
+                var (number, descriptor) = ResolveInputDescriptorOperand(operand.Bytes.Span);
+                if (number is not { } logical || descriptor.IsClosed)
+                {
+                    await ReportInvalidInputDescriptorAsync(ShellValue.FromText("read"), operand, number)
                         .ConfigureAwait(false);
-
-                // Borrow the existing mapping; a logical number never exposes an opaque host handle.
-                inputNumber = new LogicalDescriptor((int)number);
-                inputDescriptor = _state.CurrentRedirectionTable?.Resolve(inputNumber)
-                    ?? CaptureDescriptorBindings().Resolve(inputNumber);
-                if (inputDescriptor.IsClosed)
-                    return await FailAsync([ShellValue.FromText(inputNumber
-                        + ": invalid file descriptor: Bad file descriptor")]).ConfigureAwait(false);
+                    return await FinishAsync(1).ConfigureAwait(false);
+                }
+                inputNumber = logical;
+                inputDescriptor = descriptor;
                 break;
             }
             argumentIndex++;
@@ -205,9 +217,6 @@ public sealed partial class Evaluation
 
         Task<EvaluationResult> FailUsageAsync(ReadOnlySpan<ShellValue> message) =>
             FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("read")], message, diagnostics), 2);
-
-        Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message) =>
-            FinishFailureAsync(ReportExpansionDiagnosticAsync([ShellValue.FromText("read")], message), 1);
 
         async Task<EvaluationResult> FinishFailureAsync(Task diagnostic, int status)
         {
