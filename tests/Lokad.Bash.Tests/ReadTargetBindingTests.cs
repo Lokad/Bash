@@ -90,6 +90,33 @@ public sealed class ReadTargetBindingTests
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadRetainsDecodedBytesAndDetachesBorrowedRecordFields(bool array)
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.SetStandardInputBytes(Convert.FromHexString("5CFF5CFE207261770A6E657874206C696E650A"));
+        var state = new Eval(Parser.Parse(array ? "read -a values; read tail" : "read decoded raw; read tail"));
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        var decoded = array ? state.IndexedArrays["values"][0] : state.Variables["decoded"];
+        var raw = array ? state.IndexedArrays["values"][1] : state.Variables["raw"];
+        Assert.True(decoded.Bytes.Span.SequenceEqual(new byte[] { 0xff, 0xfe }));
+        Assert.True(decoded.TryGetCompactArrayCapacity(out var capacity));
+        Assert.Equal(4, capacity);
+        Assert.Equal(ShellValue.FromText("raw"), raw);
+        Assert.Equal(ShellValue.FromText("next line"), state.Variables["tail"]);
+        Assert.Equal(0, state.LastExitCode);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task ReadRefundsDecodedFieldsBeforeTheNextCommand()
     {

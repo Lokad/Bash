@@ -203,7 +203,7 @@ public sealed partial class Evaluation
                     _cancellationToken.ThrowIfCancellationRequested();
                     var field = fields[index];
                     var converted = global::Lokad.Bash.Evaluation.Variables.ConvertAssignmentCase(attributes, field, Memory);
-                    fields[index] = converted.Bytes.Equals(field.Bytes) ? RetainField(field) : converted;
+                    fields[index] = converted.Bytes.Equals(field.Bytes) ? RetainField(field, input.Content.Span) : converted;
                 }
                 var replacement = IndexedArray.FromSequential(fields);
                 _cancellationToken.ThrowIfCancellationRequested();
@@ -218,7 +218,7 @@ public sealed partial class Evaluation
                 var reference = firstReference;
                 if (index != 0 && !TryParseTarget(name, out reference))
                     return await InvalidTargetAsync(name).ConfigureAwait(false);
-                var assignment = await AssignBuiltinAsync(reference, RetainField(fields[index]), scope,
+                var assignment = await AssignBuiltinAsync(reference, RetainField(fields[index], input.Content.Span), scope,
                     bindings, BuiltinAssignmentKind.Read, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
@@ -240,11 +240,16 @@ public sealed partial class Evaluation
         }
         return await FinishAsync(exitCode).ConfigureAwait(false);
 
-        ShellValue RetainField(ShellValue value)
+        ShellValue RetainField(ShellValue value, ReadOnlySpan<byte> record)
         {
+            if (value.IsEmpty)
+                return ShellValue.Empty;
             // Command scratch covers publication; the variable estimate keeps accepted values charged.
             Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
-            return value.IsEmpty ? ShellValue.Empty : ShellValue.FromBytes(value.Bytes.ToArray());
+            // Reuse compact decoded backing and detach slices of the reusable record.
+            if (!value.Bytes.Span.Overlaps(record) && value.TryGetCompactArrayCapacity(out _))
+                return value;
+            return ShellValue.FromBytes(value.Bytes.ToArray());
         }
 
         Task ReportInputRefusalAsync() => ReportExpansionDiagnosticAsync(ShellValue.FromText("read"),

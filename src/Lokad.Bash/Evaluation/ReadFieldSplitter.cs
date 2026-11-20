@@ -3,13 +3,12 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
-using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
 /// <summary>Splits delimiter-free read input, preserving escapes and the last field's remainder.</summary>
-/// <remarks>Fields borrow the input or use the supplied scratch budget. Copy them before retaining assignments.</remarks>
+/// <remarks>Fields borrow the input or use the supplied scratch budget. Detach borrowed slices and admit retained backing before assigning.</remarks>
 internal static class ReadFieldSplitter
 {
     internal static List<ShellValue> Split(ReadOnlyMemory<byte> content, int fieldCount, ReadBuiltinOptions options,
@@ -183,18 +182,23 @@ internal static class ReadFieldSplitter
                     return ShellValue.FromBytes(content[start..valueEnd]);
                 }
 
-                using var builder = new ByteMemoryBuilder(valueEnd - start, scratch);
+                var rawLength = valueEnd - start;
+                scratch.Grow(rawLength);
+                var value = new byte[rawLength];
+                var written = 0;
                 var index = start;
                 while (index < valueEnd && TryReadCharacter(index, out var character, out var next))
                 {
                     // A quoted NUL affects splitting before it terminates the assigned field.
-                    if (character.Bytes.Span[0] == 0)
+                    var bytes = character.Bytes.Span;
+                    if (bytes[0] == 0)
                         break;
-                    builder.Append(character.Bytes);
+                    bytes.CopyTo(value.AsSpan(written));
+                    written += bytes.Length;
                     index = next;
                 }
 
-                return ShellValue.FromBytes(builder.DetachSnapshot());
+                return written == 0 ? ShellValue.Empty : ShellValue.FromBytes(value.AsMemory(0, written));
             }
         }
     }
