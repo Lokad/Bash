@@ -59,6 +59,8 @@ public sealed partial class ConditionalLexingTests
     [InlineData("[[ '#' == # ]] && : >effect")]
     [InlineData("[[ x == # ]] fake close\n ]] && : >effect")]
     [InlineData("[[ x == x # inert \\\n&& ]] && : >effect")]
+    [InlineData("[[ x || -n > ]] && : >effect")]
+    [InlineData("[[ x =~ (a ]] && : >effect")]
     public async Task MissingOperandsCannotExecuteEarlierLookingClosingDelimiters(string invalid)
     {
         var governor = new MemoryGovernor(128 * 1024);

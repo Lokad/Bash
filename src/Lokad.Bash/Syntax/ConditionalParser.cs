@@ -8,6 +8,7 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Parses conditional operators without interpreting or expanding operand data.</summary>
 internal sealed class ConditionalParser
 {
+    private static readonly Word EmptyRegexOperand = new([]);
     private readonly ShellSource _source;
     private readonly ShellScanContext _context;
     private readonly bool _command;
@@ -184,7 +185,7 @@ internal sealed class ConditionalParser
             Fail("Conditional operand expected.", token.Offset);
             return null;
         }
-        return ParseWord(token);
+        return regex && token.Source.IsEmpty ? EmptyRegexOperand : ParseWord(token);
     }
 
     private ConditionalExpression.VariableElement? ParseVariableElement(Token token)
@@ -312,7 +313,7 @@ internal sealed class ConditionalParser
             {
                 (byte)'(' => TokenKind.Open,
                 (byte)')' => TokenKind.Close,
-                (byte)'<' or (byte)'>' => TokenKind.Word,
+                (byte)'<' or (byte)'>' => TokenKind.Order,
                 (byte)'&' when ShellSourceCursor.TryMatchLogicalText(span, start, "&&", out logicalEnd) => TokenKind.And,
                 (byte)'|' when ShellSourceCursor.TryMatchLogicalText(span, start, "||", out logicalEnd) => TokenKind.Or,
                 (byte)'&' or (byte)'|' or (byte)';' => TokenKind.Invalid,
@@ -327,53 +328,18 @@ internal sealed class ConditionalParser
         }
         var cursor = new ShellSourceCursor(_source, start, _context);
         var parentheses = 0;
-        var bracket = false;
-        var firstBracketMember = false;
-        byte classTerminator = 0;
         while (!cursor.IsAtEnd)
         {
             if (!cursor.IsQuoted)
             {
                 var ch = cursor.Current;
-                if (ch is (byte)' ' or (byte)'\t' or (byte)'\n')
-                    break;
-                if (regex)
-                {
-                    if (bracket)
-                    {
-                        if (classTerminator != 0)
-                        {
-                            if (ch == classTerminator && cursor.Position + 1 < span.Length
-                                && span[cursor.Position + 1] == (byte)']')
-                            {
-                                cursor.Advance();
-                                cursor.Advance();
-                                classTerminator = 0;
-                                firstBracketMember = false;
-                                continue;
-                            }
-                        }
-                        else if (ch == (byte)'[' && cursor.Position + 1 < span.Length
-                            && span[cursor.Position + 1] is (byte)':' or (byte)'=' or (byte)'.')
-                            classTerminator = span[cursor.Position + 1];
-                        else if (ch == (byte)']' && !firstBracketMember)
-                            bracket = false;
-                        else if (!(firstBracketMember && ch == (byte)'^'))
-                            firstBracketMember = false;
-                    }
-                    else if (ch == (byte)'[')
-                    {
-                        bracket = true;
-                        firstBracketMember = true;
-                    }
-                    else if (ch == (byte)'(') parentheses++;
-                    else if (ch == (byte)')')
-                    {
-                        if (parentheses == 0) break;
-                        parentheses--;
-                    }
-                }
-                else if (ch is (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'&' or (byte)'|' or (byte)';')
+                // Regex parentheses nest at the shell-word layer. Brackets are interpreted
+                // later by the matcher. Outside a regex group, | remains part of its word.
+                if (regex && ch == (byte)'(')
+                    parentheses++;
+                else if (ch == (byte)')' && parentheses > 0)
+                    parentheses--;
+                else if (parentheses == 0 && Tokenizer.IsWordDelimiter(ch) && (!regex || ch != (byte)'|'))
                     break;
             }
             var quotedLiteral = cursor.IsQuoted && !cursor.IsDoubleQuoted;
@@ -393,13 +359,39 @@ internal sealed class ConditionalParser
             }
             cursor.Advance();
         }
-        if (cursor.IsQuoted || cursor.Position == start)
-        {
-            Fail("Invalid or unterminated conditional operand.", cursor.Position);
-            return new(TokenKind.Invalid, default, cursor.Position);
-        }
         _position = cursor.Position;
-        return new(TokenKind.Word, _source.Slice(start, _position - start), start);
+        if (cursor.IsQuoted || parentheses != 0 || (!regex && _position == start))
+        {
+            Fail("Invalid or unterminated conditional operand.", _position);
+            return new(TokenKind.Invalid, default, _position);
+        }
+
+        // Regex-word reading can yield an empty operand before a shell metacharacter.
+        // The next read uses conditional token rules and handles that character.
+        var word = _source.Slice(start, _position - start);
+        var boundary = _position < span.Length && span[_position] is (byte)'<' or (byte)'>'
+            && IsDescriptorNumber(word.AsSpan());
+        return new(boundary ? TokenKind.DescriptorNumber : TokenKind.Word, word, start);
+
+        static bool IsDescriptorNumber(ReadOnlySpan<byte> source)
+        {
+            // The same adjacent numeric spelling denotes a descriptor in command syntax.
+            // Recognize it without allocating a normalized copy for continued digits.
+            if (source.IsEmpty)
+                return false;
+            uint value = 0;
+            for (var index = 0; index < source.Length; index++)
+            {
+                index = ShellSourceCursor.SkipLineContinuations(source, index);
+                if (index == source.Length)
+                    break;
+                var digit = (uint)(source[index] - (byte)'0');
+                if (digit > 9 || value > (int.MaxValue - digit) / 10)
+                    return false;
+                value = value * 10 + digit;
+            }
+            return true;
+        }
     }
 
     private void Fail(string message) => _error ??= new(message, _position);
@@ -448,6 +440,6 @@ internal sealed class ConditionalParser
         return ShellSource.FromBytes(output.ToMemory());
     }
 
-    private enum TokenKind { End, Word, And, Or, Open, Close, EndCommand, Newline, Invalid }
+    private enum TokenKind { End, Word, And, Or, Open, Close, Order, DescriptorNumber, EndCommand, Newline, Invalid }
     private sealed record Token(TokenKind Kind, ShellSource Source, int Offset);
 }

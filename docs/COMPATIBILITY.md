@@ -303,9 +303,17 @@ pieces treated literally; numeric predicates evaluate arithmetic expressions aft
 both operand words expand. Logical operators skip unreached expansions and host
 queries. Each reached file predicate observes its own host result. Invalid
 conditional structure, including an empty `[[ ]]`, is a syntax error.
+Unquoted `<` and `>` are order operators in `[[`. Quoting or escaping them
+keeps them as operand bytes. A plain decimal within the descriptor range
+directly before either operator has descriptor syntax and is rejected there.
 Token-start comments apply inside `[[` and end only at LF. Delimiter-looking bytes
-inside regex groups remain operand data. LF is accepted before a term or after
-a complete predicate; it cannot split an operator from its required operand, or
+inside balanced regex groups remain operand data, including unquoted spaces,
+LF and `#`. Shell quoting and escapes govern parenthesis balancing even within
+a regex bracket expression. At the top level of a regex word, unquoted `|` is
+alternation data and `&&` ends the word and resumes conditional parsing. An
+empty regex word before `&&` or a conditional `)` uses the .NET regex profile.
+LF is accepted before a term or after a complete predicate. It cannot split
+an operator from its required operand or
 follow the left word before predicate selection. Backslash/LF continuation retains
 its ordinary lexical rules. Comments do not execute expansions or terminate early
 on quotes, `]]` or CR.

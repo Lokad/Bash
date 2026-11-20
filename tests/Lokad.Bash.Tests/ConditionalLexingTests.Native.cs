@@ -83,6 +83,10 @@ public sealed partial class ConditionalLexingTests
             yield return ["control-false-and", "[[ '' && $( : >forbidden ) ]] && : >effect; printf tail", 0, "7461696C", false, "{}", "{}", false, prepared];
             yield return ["control-regex-named-class", "[[ 5 =~ [[:digit:]] ]] && : >effect; printf tail", 0, "7461696C", false, "{}", "{\"effect\":\"File:\"}", false, prepared];
             yield return ["control-regex-leading-bracket", "[[ ']' =~ ([]]) ]] && : >effect; printf tail", 0, "7461696C", false, "{}", "{\"effect\":\"File:\"}", false, prepared];
+            yield return ["regex-and-adjacent-reached", "[[ a =~ a&&$(printf reached >effect; printf yes) ]] && printf yes; printf ':%s' \"$?\"", 0, "7965733A30", false, "{}", "{\"effect\":\"File:72656163686564\"}", false, prepared];
+            yield return ["regex-and-adjacent-skipped", "[[ z =~ a&&$(printf skipped >effect; printf yes) ]] && printf yes; printf ':%s' \"$?\"", 0, "3A31", false, "{}", "{}", false, prepared];
+            yield return ["regex-group-with-whitespace-replay", "f(){ [[ 'a ]] b' =~ (a ]] b) ]] && printf reached >effect; }; saved=$(declare -f f); unset -f f; eval \"$saved\"; f; printf tail", 0, "7461696C", false, "{}", "{\"effect\":\"File:72656163686564\"}", false, prepared];
+            yield return ["regex-group-with-whitespace-modern", "v=$([[ 'a ]] b' =~ (a ]] b) ]] && printf value); printf '[%s]' \"$v\"", 0, "5B76616C75655D", false, "{}", "{}", false, prepared];
             yield return ["nested-continuation", "[[ $(printf 'x\\\ny') == $'x\\\ny' ]] && : >effect; printf tail", 0, "7461696C", false, "{}", "{\"effect\":\"File:\"}", false, prepared];
             yield return ["nested-literal-comment", "[[ $(printf '#') == '#' # inert\n ]] && : >effect; printf tail", 0, "7461696C", false, "{}", "{\"effect\":\"File:\"}", false, prepared];
             yield return ["heredoc", "[[ $(cat <<END\n]] # ' literal\nEND\n) == \"]] # ' literal\" ]] && : >effect; printf tail", 0, "7461696C", false, "{}", "{\"effect\":\"File:\"}", false, prepared];

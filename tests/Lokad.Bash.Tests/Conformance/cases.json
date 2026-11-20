@@ -6361,6 +6361,20 @@
       "stderrHex": "7072656669786f706572616e64636f6d6d616e643a202d783a20696e76616c6964206f7074696f6e0a636f6d6d616e643a2075736167653a20636f6d6d616e64205b2d7056765d20636f6d6d616e64205b617267202e2e2e5d0a",
       "fileEffects": [],
       "stderrNormalization": "bash-command-location"
+    },
+    {
+      "id": "conditional-regex-group-whitespace-captures",
+      "classification": "supported",
+      "reason": "Balanced unquoted groups preserve spaces and publish numbered captures.",
+      "locale": "C",
+      "script": "[[ 'left a b right' =~ (a (b)) ]]; printf '[%s]' \"${BASH_REMATCH[@]}\"",
+      "scriptSha256": "bac66b6b9e14b03d4361484eae83aa3706b68373980dce38904efd84840335e5",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "5b6120625d5b6120625d5b625d",
+      "stderrHex": "",
+      "fileEffects": []
     }
   ]
 }

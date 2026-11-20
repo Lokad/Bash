@@ -16,6 +16,16 @@ public sealed class ConditionalParserTests
     [InlineData("a '==' a")]
     [InlineData("'-n' a")]
     [InlineData("a &&")]
+    [InlineData("<")]
+    [InlineData("-n >")]
+    [InlineData("a == <")]
+    [InlineData("a < >")]
+    [InlineData("1<2")]
+    [InlineData("1\\\n2<3")]
+    [InlineData("a =~ a<b")]
+    [InlineData("a =~ [;b]")]
+    [InlineData("a =~ ([)])")]
+    [InlineData("a =~ (b c")]
     public void InvalidStructureFailsDuringParsing(string expression)
     {
         Assert.False(ConditionalParser.TryParse(ShellSource.FromText(expression), out _, out _, out var error));
@@ -37,6 +47,27 @@ public sealed class ConditionalParserTests
         Assert.True(and.And);
         Assert.IsType<ConditionalExpression.Negated>(and.Left);
         Assert.Equal(BinaryPredicateKind.NumericEqual, Assert.IsType<ConditionalExpression.Binary>(and.Right).Predicate.Operator);
+    }
+
+    [Theory]
+    [InlineData("a<b")]
+    [InlineData("1 < 2")]
+    [InlineData("'1'<2")]
+    [InlineData("2147483648>1")]
+    public void OrderOperatorsRetainOrdinaryWordOperands(string expression)
+    {
+        Assert.True(ConditionalParser.TryParse(ShellSource.FromText(expression), out var parsed, out _, out var error));
+        Assert.Null(error);
+        Assert.IsType<ConditionalExpression.Binary>(parsed);
+    }
+
+    [Theory]
+    [InlineData("a =~ && b")]
+    [InlineData("(a =~ )")]
+    public void EmptyRegexOperandCanPrecedeConditionalPunctuation(string expression)
+    {
+        Assert.True(ConditionalParser.TryParse(ShellSource.FromText(expression), out _, out _, out var error));
+        Assert.Null(error);
     }
 
     [Theory]
@@ -70,6 +101,10 @@ public sealed class ConditionalParserTests
     [InlineData("[[ '#' =~ (#) ]]", "(#)")]
     [InlineData("[[ # inert ]] $( '\n'#' =~ (#) ]]", "(#)")]
     [InlineData("[[ ']]' =~ (]\\\n]) ]]", "(]])")]
+    [InlineData("[[ 'a # b' =~ ((a # b)) ]]", "((a # b))")]
+    [InlineData("[[ 'a ]] b' =~ (a ]] b) ]]", "(a ]] b)")]
+    [InlineData("[[ 'a\nb' =~ (a\nb) ]]", "(a\nb)")]
+    [InlineData("[[ 'a&b' =~ (a&b) ]]", "(a&b)")]
     public void RegexContextOwnsItsGroupsCommentsAndClosingBrackets(string source, string expected)
     {
         Assert.True(Parser.TryParse(source, out var script, out var error), error?.Message);
@@ -107,6 +142,8 @@ public sealed class ConditionalParserTests
     [InlineData("[[ x == x &\\\n& ; ]]", ";")]
     [InlineData("[[ 'β' == 'β' # ignored\n&& ; ]]", ";")]
     [InlineData("[[ x == x && ]\\\n]", "]")]
+    [InlineData("[[ -n > ]]", ">")]
+    [InlineData("[[ 'β' =~ a;b ]]", ";")]
     public void ConditionalErrorsUsePhysicalByteOffsets(string source, string marker)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(source);

@@ -293,7 +293,7 @@ internal sealed class Tokenizer
             return false;
 
         Position = ShellSourceCursor.SkipLineContinuations(source, equals + 1);
-        var value = Position >= source.Length || IsDelimiter(source[Position])
+        var value = Position >= source.Length || IsWordDelimiter(source[Position])
             ? new Word([])
             : ReadWord(source);
         element = new CompoundArrayElement(_input.Slice(opening + 1, closing - opening - 1), value, operation);
@@ -864,7 +864,7 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (Position >= delimiterStart && IsDelimiter(current))
+            if (Position >= delimiterStart && IsWordDelimiter(current))
             {
                 break;
             }
@@ -1222,13 +1222,13 @@ internal sealed class Tokenizer
     /// <summary>
     /// Returns true when an ASCII byte terminates a word; CR is ordinary data.
     /// </summary>
-    private static bool IsDelimiter(byte value) =>
+    internal static bool IsWordDelimiter(byte value) =>
         value is (byte)' ' or (byte)'\t' or (byte)'\n' or (byte)';' or (byte)'&' or (byte)'|' or (byte)'<' or (byte)'>' or (byte)'(' or (byte)')';
 
     private static bool IsWordBoundary(ReadOnlySpan<byte> span, int position)
     {
         position = ShellSourceCursor.SkipLineContinuations(span, position);
-        return position >= span.Length || IsDelimiter(span[position]);
+        return position >= span.Length || IsWordDelimiter(span[position]);
     }
 
     /// <summary>
