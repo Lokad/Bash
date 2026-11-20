@@ -70,6 +70,37 @@ public sealed class ListTraversalReuseTests
     }
 
     [Fact]
+    public void NestedBranchesKeepSeparateEndpointsAndUnitBoundaries()
+    {
+        var first = Assert.Single(Parser.Parse("first").Commands);
+        var second = Assert.Single(Parser.Parse("second").Commands);
+        var fallback = Assert.Single(Parser.Parse("fallback").Commands);
+        var withinUnit = Assert.Single(Parser.Parse("within").Commands);
+        var nextUnit = Assert.Single(Parser.Parse("next").Commands);
+        var alternative = new ListCommand(second, ListOperator.Or, fallback);
+        var guarded = new ListCommand(first, ListOperator.And,
+            new ListCommand(alternative, ListOperator.Sequence, withinUnit));
+        var root = new ListCommand(guarded, ListOperator.Sequence, nextUnit) { StartsCommandUnit = true };
+
+        Assert.Collection(root.GetTraversal(CancellationToken.None).Steps,
+            step => AssertStep(step, first, 0, ignored: true, startsUnit: false),
+            step => AssertStep(step, guarded, 6, ignored: false, startsUnit: false),
+            step => AssertStep(step, second, 0, ignored: true, startsUnit: false),
+            step => AssertStep(step, alternative, 5, ignored: false, startsUnit: false),
+            step => AssertStep(step, fallback, 0, ignored: false, startsUnit: false),
+            step => AssertStep(step, withinUnit, 0, ignored: false, startsUnit: false),
+            step => AssertStep(step, nextUnit, 0, ignored: false, startsUnit: true));
+
+        static void AssertStep(ListTraversal.Step step, ICommand command, int endExclusive, bool ignored, bool startsUnit)
+        {
+            Assert.Same(command, step.Command);
+            Assert.Equal(endExclusive, step.EndExclusive);
+            Assert.Equal(ignored, step.ErrexitIgnored);
+            Assert.Equal(startsUnit, step.StartsCommandUnit);
+        }
+    }
+
+    [Fact]
     public void RecordCopiesInvalidateTraversalForChangedOperandsOrOperator()
     {
         var left = Assert.Single(Parser.Parse("true").Commands);

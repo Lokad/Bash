@@ -194,31 +194,31 @@ public sealed partial class Evaluation
                 for (var index = 0; index < traversal.Count; index++)
                 {
                     CheckCancellation();
-                    switch (traversal[index])
+                    var step = traversal[index];
+                    if (step.Command is ListCommand branch)
                     {
-                        case ListTraversal.Step.Execute execute:
-                            var currentScope = execute.ErrexitIgnored
-                                ? listScope with { Context = listScope.Context.WithErrexitIgnored() } : listScope;
-                            result = await EvaluateCommandAsync(execute.Command, currentScope, negated: false).ConfigureAwait(false);
-                            if (result.Flow != FlowControlKind.None)
-                            {
-                                if (result.Flow != FlowControlKind.Exit
-                                    || GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope) is not { } recoveryStatus)
-                                    return ApplyNegation(result, listNegated);
-                                while (index + 1 < traversal.Count && traversal[index + 1] is not ListTraversal.Step.Execute { StartsCommandUnit: true })
-                                {
-                                    CheckCancellation();
-                                    index++;
-                                }
-                                if (index + 1 == traversal.Count)
-                                    return ApplyNegation(result, listNegated);
-                                result = ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus, listScope, loadedReader: false)
-                                    .ConfigureAwait(false), negated: false);
-                            }
-                            break;
-                        case ListTraversal.Step.Select select when !EvaluationRules.ShouldExecuteRight(select.Operator, result.ExitCode):
-                            index = select.EndExclusive - 1;
-                            break;
+                        if (!EvaluationRules.ShouldExecuteRight(branch.Operator, result.ExitCode))
+                            index = step.EndExclusive - 1;
+                        continue;
+                    }
+
+                    var currentScope = step.ErrexitIgnored
+                        ? listScope with { Context = listScope.Context.WithErrexitIgnored() } : listScope;
+                    result = await EvaluateCommandAsync(step.Command, currentScope, negated: false).ConfigureAwait(false);
+                    if (result.Flow != FlowControlKind.None)
+                    {
+                        if (result.Flow != FlowControlKind.Exit
+                            || GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope) is not { } recoveryStatus)
+                            return ApplyNegation(result, listNegated);
+                        while (index + 1 < traversal.Count && !traversal[index + 1].StartsCommandUnit)
+                        {
+                            CheckCancellation();
+                            index++;
+                        }
+                        if (index + 1 == traversal.Count)
+                            return ApplyNegation(result, listNegated);
+                        result = ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus, listScope, loadedReader: false)
+                            .ConfigureAwait(false), negated: false);
                     }
                 }
                 return ApplyNegation(result, listNegated);

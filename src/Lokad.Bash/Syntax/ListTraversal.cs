@@ -6,10 +6,13 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Immutable list navigation; leaves still run through the ordinary evaluator.</summary>
 internal sealed class ListTraversal
 {
-    internal abstract record Step
+    // List commands mark branches. Every executable step holds a non-list command.
+    internal readonly struct Step(ICommand command, int endExclusive, bool errexitIgnored, bool startsCommandUnit)
     {
-        public sealed record Execute(ICommand Command, bool ErrexitIgnored, bool StartsCommandUnit) : Step;
-        public sealed record Select(ListOperator Operator, int EndExclusive) : Step;
+        public ICommand Command { get; } = command;
+        public int EndExclusive { get; } = endExclusive;
+        public bool ErrexitIgnored { get; } = errexitIgnored;
+        public bool StartsCommandUnit { get; } = startsCommandUnit;
     }
 
     public IReadOnlyList<Step> Steps { get; }
@@ -27,7 +30,7 @@ internal sealed class ListTraversal
             cancellationToken.ThrowIfCancellationRequested();
             if (item.Phase == Preparation.Finish)
             {
-                steps[item.Branch] = new Step.Select(((ListCommand)item.Command).Operator, steps.Count);
+                steps[item.Branch] = new Step(item.Command, steps.Count, errexitIgnored: false, startsCommandUnit: false);
                 continue;
             }
             if (item.Phase == Preparation.Right)
@@ -37,7 +40,8 @@ internal sealed class ListTraversal
                 if (list.Operator != ListOperator.Sequence)
                 {
                     var branch = steps.Count;
-                    steps.Add(new Step.Select(list.Operator, 0));
+                    // Finish fills the reserved slot before the traversal can be published.
+                    steps.Add(default);
                     pending.Push((list, item.Ignored, Preparation.Finish, branch));
                 }
                 pending.Push((list.Right, item.Ignored, Preparation.Visit, 0));
@@ -51,10 +55,10 @@ internal sealed class ListTraversal
             }
             else
             {
-                steps.Add(new Step.Execute(item.Command, item.Ignored, startsCommandUnit));
+                steps.Add(new Step(item.Command, endExclusive: 0, item.Ignored, startsCommandUnit));
                 startsCommandUnit = false;
             }
         }
-        Steps = steps.ToArray();
+        Steps = steps;
     }
 }
