@@ -780,20 +780,34 @@ public sealed partial class Evaluation : IFileTester
         bool negated)
     {
         CheckCancellation();
-        var commands = new List<ICommand>();
-        var operators = new List<PipelineOperator>();
-        FlattenPipeline(pipelineCommand, commands, operators);
-        PreparePipelineStatusStorage(commands.Count);
-        // The parent owns the pipe and stage lists, per-stage close lists and the dispatcher
-        // task and status arrays through dispatch, status publication and cleanup.
-        Memory.Charge(checked(192L + 128L * commands.Count));
-        var pipes = new List<PipeDescriptors>(Math.Max(0, commands.Count - 1));
-        var stages = new List<PipelineEvaluationStage>(commands.Count);
+        // Only the left spine belongs to this pipeline. A compound right operand stays one stage.
+        ICommand first = pipelineCommand;
+        var stageCount = 1;
+        while (first is PipelineCommand link)
+        {
+            CheckCancellation();
+            stageCount = checked(stageCount + 1);
+            first = link.Left;
+        }
+        // The parent owns these arrays and lists through dispatch, status publication and cleanup.
+        var pipeCount = stageCount - 1;
+        Memory.Charge(MemoryCapacity.ArrayBackingBytes<PipelineCommand>(pipeCount));
+        PreparePipelineStatusStorage(stageCount);
+        Memory.Charge(checked(192L + 128L * stageCount));
+        var links = new PipelineCommand[pipeCount];
+        var position = links.Length;
+        for (ICommand remaining = pipelineCommand; remaining is PipelineCommand link; remaining = link.Left)
+        {
+            CheckCancellation();
+            links[--position] = link;
+        }
+        var pipes = new List<PipeDescriptors>(links.Length);
+        var stages = new List<PipelineEvaluationStage>(stageCount);
         using var pipelineMemory = Memory.Budget.CreateScope();
         var ownershipTransferred = false;
         try
         {
-            for (var index = 0; index < commands.Count - 1; index++)
+            for (var index = 0; index < links.Length; index++)
             {
                 var creation = await ExecuteCreatePipeAsync().ConfigureAwait(false);
                 if (creation.Descriptors is not { } pipe)
@@ -811,12 +825,12 @@ public sealed partial class Evaluation : IFileTester
             // namespace owners so refusal cannot strand a partially constructed stage.
             var borrowedDescriptors = CollectDescriptorsAvailableToNestedEvaluation();
             var bindings = CaptureDescriptorBindings();
-            for (var index = 0; index < commands.Count; index++)
+            for (var index = 0; index < stageCount; index++)
             {
                 var stdIn = index > 0 ? pipes[index - 1].Read : GetStdInDescriptor();
-                var stdOut = index < commands.Count - 1 ? pipes[index].Write : GetStdOutDescriptor();
-                var command = commands[index];
-                if (index < operators.Count && operators[index] == PipelineOperator.PipeAndError)
+                var stdOut = index < links.Length ? pipes[index].Write : GetStdOutDescriptor();
+                var command = index == 0 ? first : links[index - 1].Right;
+                if (index < links.Length && links[index].Operator == PipelineOperator.PipeAndError)
                     command = AppendPipeStandardError(command);
                 var script = new ParsedScript([command]);
                 var descriptors = new EvaluationDescriptorSetup(
@@ -835,11 +849,12 @@ public sealed partial class Evaluation : IFileTester
                     onComplete: null,
                     Memory.Budget,
                     _preparedSyntaxRoot);
-                var descriptorsToClose = new List<FileDescriptor>(2);
-                if (index > 0)
-                    descriptorsToClose.Add(stdIn);
-                if (index < commands.Count - 1)
-                    descriptorsToClose.Add(stdOut);
+                FileDescriptor[] descriptorsToClose = index switch
+                {
+                    0 => [stdOut],
+                    _ when index == links.Length => [stdIn],
+                    _ => [stdIn, stdOut]
+                };
 
                 stage._retainCompletedMemory = true;
                 stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
@@ -945,32 +960,6 @@ public sealed partial class Evaluation : IFileTester
 
             return 0;
         }
-    }
-
-    /// <summary>
-    /// Flattens a nested pipeline command into a left-to-right command list and operator list.
-    /// </summary>
-    private void FlattenPipeline(
-        ICommand command,
-        List<ICommand> commands,
-        List<PipelineOperator> operators)
-    {
-        // The grammar builds a left spine. Collect it backwards without consuming
-        // the CLR stack; a right-hand compound command remains one pipeline stage.
-        while (command is PipelineCommand pipeline)
-        {
-            CheckCancellation();
-            Memory.Charge(32); // Command/operator list capacities, including growth slack.
-            commands.Add(pipeline.Right);
-            operators.Add(pipeline.Operator);
-            command = pipeline.Left;
-        }
-
-        CheckCancellation();
-        Memory.Charge(32);
-        commands.Add(command);
-        commands.Reverse();
-        operators.Reverse();
     }
 
     /// <summary>

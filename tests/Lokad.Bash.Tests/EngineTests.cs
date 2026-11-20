@@ -12,6 +12,29 @@ namespace Lokad.Bash.Tests;
 
 public class EngineTests
 {
+    [Fact]
+    public async Task PipelineStagesOwnTheirAdjacentEndpointsInSourceOrder()
+    {
+        var state = new Eval(Parser.Parse("first |& second | third |& fourth"));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        for (var index = 0; index < 3; index++)
+        {
+            var pipe = Assert.IsType<CreatePipeOperation>(await state.GetNextStep(deadline.Token));
+            pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(10 + 2 * index, 11 + 2 * index)));
+        }
+
+        var pipeline = Assert.IsType<RunPipelineEvaluations>(await state.GetNextStep(deadline.Token));
+        Assert.Collection(pipeline.Stages,
+            first => Assert.Equal(new FileDescriptor(11), Assert.Single(first.DescriptorsToClose)),
+            second => Assert.Equal([new FileDescriptor(10), new FileDescriptor(13)], second.DescriptorsToClose),
+            third => Assert.Equal([new FileDescriptor(12), new FileDescriptor(15)], third.DescriptorsToClose),
+            fourth => Assert.Equal(new FileDescriptor(14), Assert.Single(fourth.DescriptorsToClose)));
+
+        pipeline.SetResult([0, 0, 0, 0]);
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
     [Theory]
     [InlineData(16, false, false)]
     [InlineData(4096, false, false)]
