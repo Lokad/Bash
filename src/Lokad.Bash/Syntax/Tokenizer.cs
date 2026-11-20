@@ -876,7 +876,7 @@ internal sealed class Tokenizer
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         ShellScanContext context, [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
     {
-        var tokenizer = new Tokenizer(content, 0, context);
+        var tokenizer = new Tokenizer(content, 0, context) { _isExpansionOperand = true };
         var parsed = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, outerQuote);
         error = tokenizer.Error;
         word = error == null ? parsed : null;
@@ -886,18 +886,19 @@ internal sealed class Tokenizer
     /// <summary>Retains direct selectors for the arithmetic consumer to prepare separately.</summary>
     internal static Word ReadArithmeticWord(ShellSource content, ExpansionWordSyntax syntax, ShellScanContext context)
     {
-        var tokenizer = new Tokenizer(content, 0, context) { _retainArithmeticSubscripts = true };
+        var tokenizer = new Tokenizer(content, 0, context) { _retainArithmeticSubscripts = true, _isExpansionOperand = true };
         var word = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, ShellQuoteKind.None);
         return tokenizer.Error is { } error ? throw error.ToException() : word;
     }
 
     private bool _retainArithmeticSubscripts;
+    private bool _isExpansionOperand;
 
     /// <summary>Reads one already-delimited word after generated punctuation changes its quote context.</summary>
     internal static Word ReadBraceExpandedWord(ShellSource content, MemoryCapacity memory)
     {
         var tokenizer = new Tokenizer(content, 0,
-            new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Temporary });
+            new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Temporary }) { _isExpansionOperand = true };
         var word = tokenizer.ReadWord(content.AsSpan(), content.Length, ExpansionWordSyntax.BraceExpanded, ShellQuoteKind.None);
         return tokenizer.Error is { } error
             ? new Word([new BraceExpansionFailureWordPart(ShellValue.FromText(error.Message))])
@@ -929,6 +930,7 @@ internal sealed class Tokenizer
         var arithmetic = syntax is not (ExpansionWordSyntax.Parameter or ExpansionWordSyntax.BraceExpanded);
         var continuesQuote = false;
         var renderedLineAdjustment = 0;
+        var subscriptFailure = ParameterSubscriptFailure.None;
 
         void AddPart(WordPart part)
         {
@@ -951,9 +953,15 @@ internal sealed class Tokenizer
                 return;
             AddPart(new SourceWordPart(
                 quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, ShellSource.FromBytes(unquoted.ToCompactMemory(_scanContext.SyntaxMemory)),
-                _scanContext.SyntaxMemory) { IsBraceExpanded = braceExpanded, RenderedLineAdjustment = renderedLineAdjustment });
+                _scanContext.SyntaxMemory)
+            {
+                IsBraceExpanded = braceExpanded,
+                RenderedLineAdjustment = renderedLineAdjustment,
+                ParameterSubscriptFailure = subscriptFailure
+            });
             unquoted = _scanContext.CreateByteBuilder(0);
             renderedLineAdjustment = 0;
+            subscriptFailure = ParameterSubscriptFailure.None;
         }
 
         while (Position < span.Length && Error == null)
@@ -965,7 +973,7 @@ internal sealed class Tokenizer
                 AddPart(subscript);
                 continue;
             }
-            if (TryReadBracedParameterExpansion(unquoted, quotedOperand, ref renderedLineAdjustment))
+            if (TryReadBracedParameterExpansion(unquoted, quotedOperand, ref renderedLineAdjustment, ref subscriptFailure))
             {
                 continue;
             }
@@ -1013,7 +1021,11 @@ internal sealed class Tokenizer
                     }
                     // Decoding another fragment must not reset the shared syntax/nesting allowance.
                     var decoded = ShellSource.FromBytes(quoted.ToMemory());
-                    var tokenizer = new Tokenizer(decoded, 0, _scanContext) { _retainArithmeticSubscripts = _retainArithmeticSubscripts };
+                    var tokenizer = new Tokenizer(decoded, 0, _scanContext)
+                    {
+                        _retainArithmeticSubscripts = _retainArithmeticSubscripts,
+                        _isExpansionOperand = true
+                    };
                     var operand = tokenizer.ReadWord(decoded.AsSpan(), delimiterStart: decoded.Length,
                         ExpansionWordSyntax.DecodedArithmetic, ShellQuoteKind.None);
                     if (tokenizer.Error is { } error)
@@ -1185,7 +1197,8 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a braced parameter expansion as unexpanded segment bytes.
     /// </summary>
-    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content, bool quoted, ref int renderedLineAdjustment)
+    private bool TryReadBracedParameterExpansion(ByteMemoryBuilder content, bool quoted, ref int renderedLineAdjustment,
+        ref ParameterSubscriptFailure subscriptFailure)
     {
         if (!BracedParameterScanner.HasPrefix(_input, Position))
         {
@@ -1202,6 +1215,7 @@ internal sealed class Tokenizer
             out var payload,
             out var adjustment,
             out var error,
+            out var incompleteSubscript,
             trackRenderedLines: true);
         if (status == BracedParameterScanStatus.Found)
         {
@@ -1209,6 +1223,8 @@ internal sealed class Tokenizer
             content.Append(payload.Bytes);
             content.Append((byte)'}');
             renderedLineAdjustment += adjustment;
+            if (quoted && subscriptFailure == ParameterSubscriptFailure.None)
+                subscriptFailure = incompleteSubscript;
             Position = endIndex + 1;
             return true;
         }
@@ -1218,6 +1234,10 @@ internal sealed class Tokenizer
         else if (status == BracedParameterScanStatus.UnterminatedCommandSubstitution)
         {
             RecordExpansionFailure(null, quoted, "Unterminated command substitution.", errorIndex);
+        }
+        else if (status == BracedParameterScanStatus.Unterminated && !_isExpansionOperand)
+        {
+            RecordExpansionFailure(null, quoted, quoted ? "Unterminated double-quoted string." : "Unterminated parameter expansion.", errorIndex);
         }
 
         return false;
@@ -1231,6 +1251,7 @@ internal sealed class Tokenizer
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var parts = new List<WordPart>();
         var renderedLineAdjustment = 0;
+        var subscriptFailure = ParameterSubscriptFailure.None;
         var content = _scanContext.CreateByteBuilder(0);
 
         void AddPart(WordPart part)
@@ -1258,10 +1279,12 @@ internal sealed class Tokenizer
             AddPart(new SourceWordPart(WordPartKind.DoubleQuoted,
                 ShellSource.FromBytes(content.ToCompactMemory(_scanContext.SyntaxMemory)), _scanContext.SyntaxMemory)
             {
-                RenderedLineAdjustment = renderedLineAdjustment
+                RenderedLineAdjustment = renderedLineAdjustment,
+                ParameterSubscriptFailure = subscriptFailure
             });
             content = _scanContext.CreateByteBuilder(0);
             renderedLineAdjustment = 0;
+            subscriptFailure = ParameterSubscriptFailure.None;
         }
 
         while (Position < span.Length && Error == null)
@@ -1316,7 +1339,7 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (TryReadBracedParameterExpansion(content, quoted: true, ref renderedLineAdjustment))
+            if (TryReadBracedParameterExpansion(content, quoted: true, ref renderedLineAdjustment, ref subscriptFailure))
             {
                 continue;
             }

@@ -3321,7 +3321,7 @@ public sealed partial class Evaluation : IFileTester
         _state.SetExpansionError(_state.FatalExpansion.Value.ExitCode);
     }
 
-    internal Task ReportArithmeticFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
+    internal Task ReportUnitExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
         ExpansionFailureKind kind)
     {
         if (_state.FatalExpansion.HasValue)

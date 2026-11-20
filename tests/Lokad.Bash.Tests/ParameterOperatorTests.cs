@@ -5,6 +5,44 @@ namespace Lokad.Bash.Tests;
 public sealed class ParameterOperatorTests
 {
     [Theory]
+    [InlineData("printf '%s' \"${a[]}\"", "${a[]}: bad substitution\n")]
+    [InlineData("printf '%s' \"${a[1}\"", "bad substitution: no closing `}' in \"${a[1}\"\n")]
+    [InlineData("printf '%s' ${a[1}", "${a[1}: bad substitution\n")]
+    [InlineData("printf '%s' \"${a.dot}\"", "${a.dot}: bad substitution\n")]
+    [InlineData("printf '%s' \"${saved:-${a[1}}\"", "bad substitution: no closing `}' in ${saved:-${a[1}}\n")]
+    public async Task MalformedBracedParametersPublishStatusBeforeRecoveringTheNextUnit(string command, string error)
+    {
+        var script = "a=(old); saved=prior\n(exit 7) | true\n" + command
+            + "; printf skipped\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"";
+
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("[1:1]", host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task IncompleteQuotedSubscriptStopsItsWordAfterEarlierArguments()
+    {
+        const string script = "printf '%s' \"$(printf earlier >&2)\" \"$(printf skipped >&2)${a[1}\"\nprintf '%s' \"$?\"";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1", host.StandardOutput.TextContent);
+        Assert.Equal("earlierbad substitution: no closing `}' in \"$(printf skipped 1>&2)${a[1}\"\n",
+            host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData(":1:2", "bc")]
     [InlineData("#a", "bcdef")]
     [InlineData("##a*", "")]

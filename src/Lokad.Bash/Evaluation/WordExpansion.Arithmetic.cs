@@ -337,7 +337,7 @@ internal static partial class WordExpansion
                 return scope.Effects.ReportFatalExpansionAsync(subject, detail, ExpansionFailureKind.IntegerAssignment);
             var failure = failureMode == ArithmeticFailureMode.ArrayIndex
                 ? ExpansionFailureKind.ArrayIndex : ExpansionFailureKind.Arithmetic;
-            return scope.Effects.ReportArithmeticFailureAsync(subject, detail, scope, failure);
+            return scope.Effects.ReportUnitExpansionFailureAsync(subject, detail, scope, failure);
         }
     }
 

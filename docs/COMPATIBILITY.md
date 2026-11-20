@@ -430,6 +430,13 @@ builtin's usage and returns 2. Later fields are ordinary operands.
 parameters for that file. The filename must be valid UTF-8 for the host path
 boundary. Script content and positional parameters retain their byte values.
 
+An invalid braced parameter or empty subscript reports status 1 and ends the
+reached command unit. It publishes `PIPESTATUS=(1)` in the active variable scope.
+With errexit disabled, the reader continues at the next unit. A closed,
+double-quoted word with an incomplete parameter subscript fails before its
+substitutions run, while effects of earlier arguments survive. Source with a
+missing closing brace fails parsing through the ordinary delimiter diagnostic.
+
 When arithmetic evaluation of an integer binding's assignment fails, the
 current command unit ends and reached functions, `eval`, and sourced files
 unwind. The script reader resumes at the next unit even under errexit. If the

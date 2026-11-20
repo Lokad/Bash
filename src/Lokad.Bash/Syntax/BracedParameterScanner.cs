@@ -1,4 +1,5 @@
 using System;
+using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Syntax;
 
@@ -39,6 +40,7 @@ internal static class BracedParameterScanner
             out containsCommandSubstitution,
             out _,
             out _,
+            out _,
             capturePayload: true, trackRenderedLines: false);
         return status == BracedParameterScanStatus.Found;
     }
@@ -59,6 +61,7 @@ internal static class BracedParameterScanner
             out _,
             out _,
             out _,
+            out _,
             capturePayload: false, trackRenderedLines: false);
 
     internal static BracedParameterScanStatus ScanShape(
@@ -70,6 +73,7 @@ internal static class BracedParameterScanner
         out bool containsCommandSubstitution,
         out int renderedLineAdjustment,
         out ParserFailure? error,
+        out ParameterSubscriptFailure subscriptFailure,
         bool trackRenderedLines) =>
         ScanCore(
             context,
@@ -81,6 +85,7 @@ internal static class BracedParameterScanner
             out containsCommandSubstitution,
             out renderedLineAdjustment,
             out error,
+            out subscriptFailure,
             capturePayload: false, trackRenderedLines);
 
     /// <summary>Captures normalized payload bytes while retaining the structural scan's lookahead context.</summary>
@@ -94,8 +99,22 @@ internal static class BracedParameterScanner
         out int renderedLineAdjustment,
         out ParserFailure? error,
         bool trackRenderedLines = false) =>
+        ScanWithPayload(context, text, startIndex, out endIndex, out errorIndex, out payload,
+            out renderedLineAdjustment, out error, out _, trackRenderedLines);
+
+    internal static BracedParameterScanStatus ScanWithPayload(
+        ShellScanContext context,
+        ShellSource text,
+        int startIndex,
+        out int endIndex,
+        out int errorIndex,
+        out ShellSource payload,
+        out int renderedLineAdjustment,
+        out ParserFailure? error,
+        out ParameterSubscriptFailure subscriptFailure,
+        bool trackRenderedLines) =>
         ScanCore(context, text, startIndex, out endIndex, out errorIndex, out payload, out _,
-            out renderedLineAdjustment, out error, capturePayload: true, trackRenderedLines);
+            out renderedLineAdjustment, out error, out subscriptFailure, capturePayload: true, trackRenderedLines);
 
     private static BracedParameterScanStatus ScanCore(
         ShellScanContext context,
@@ -107,6 +126,7 @@ internal static class BracedParameterScanner
         out bool containsCommandSubstitution,
         out int renderedLineAdjustment,
         out ParserFailure? error,
+        out ParameterSubscriptFailure subscriptFailure,
         bool capturePayload,
         bool trackRenderedLines)
     {
@@ -116,6 +136,7 @@ internal static class BracedParameterScanner
         containsCommandSubstitution = false;
         renderedLineAdjustment = 0;
         error = null;
+        subscriptFailure = ParameterSubscriptFailure.None;
         if (!HasPrefix(text, startIndex))
             return BracedParameterScanStatus.NotBraced;
         if (!context.TryEnter())
@@ -124,7 +145,10 @@ internal static class BracedParameterScanner
         try
         {
             _ = ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), startIndex, "${", out var payloadStart);
-            var cursor = new ShellSourceCursor(text, payloadStart, context);
+            var nameEnd = ReadSimpleNameEnd(text.AsSpan(), payloadStart);
+            var cursor = new ShellSourceCursor(text, nameEnd, context);
+            var openingBracket = nameEnd > payloadStart && nameEnd < text.Length && text[nameEnd] == (byte)'[' ? nameEnd : -1;
+            var selectorDepth = 0;
             while (!cursor.IsAtEnd)
             {
                 if (cursor.TryConsumeQuoteOrEscape())
@@ -135,6 +159,8 @@ internal static class BracedParameterScanner
                 {
                     containsCommandSubstitution |= nested.ContainsCommandSubstitution;
                     renderedLineAdjustment += nested.RenderedLineAdjustment;
+                    if (nested.ParameterSubscriptFailure != ParameterSubscriptFailure.None)
+                        subscriptFailure = ParameterSubscriptFailure.Nested;
                     continue;
                 }
 
@@ -156,12 +182,21 @@ internal static class BracedParameterScanner
                 if (!cursor.IsDoubleQuoted && cursor.Current == (byte)'}')
                 {
                     endIndex = cursor.Position;
+                    if (selectorDepth != 0)
+                        subscriptFailure = ParameterSubscriptFailure.Direct;
                     if (capturePayload)
                         payload = ShellSourceCursor.RemoveLineContinuations(
                             context, text.Slice(payloadStart, cursor.Position - payloadStart));
                     return BracedParameterScanStatus.Found;
                 }
 
+                if (cursor.Position == openingBracket || selectorDepth != 0 && !cursor.IsQuoted)
+                {
+                    if (cursor.Current == (byte)'[')
+                        selectorDepth++;
+                    else if (cursor.Current == (byte)']')
+                        selectorDepth--;
+                }
                 cursor.Advance();
             }
 
@@ -173,7 +208,21 @@ internal static class BracedParameterScanner
             context.Exit();
         }
     }
+
+    private static int ReadSimpleNameEnd(ReadOnlySpan<byte> text, int start)
+    {
+        var index = ShellSourceCursor.SkipLineContinuations(text, start);
+        if (index < text.Length && text[index] == (byte)'!')
+            index = ShellSourceCursor.SkipLineContinuations(text, index + 1);
+        if (index == text.Length || !VariableNames.IsNameStart((char)text[index]))
+            return start;
+        do { index = ShellSourceCursor.SkipLineContinuations(text, index + 1); }
+        while (index < text.Length && VariableNames.IsNamePart((char)text[index]));
+        return index;
+    }
 }
+
+internal enum ParameterSubscriptFailure : byte { None, Direct, Nested }
 
 internal enum BracedParameterScanStatus
 {

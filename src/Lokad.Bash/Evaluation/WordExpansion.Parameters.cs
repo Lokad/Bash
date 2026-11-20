@@ -36,12 +36,14 @@ internal static partial class WordExpansion
         bool allowWordSplitting,
         bool globQuoted,
         ExpansionQuoteContext quoteContext,
-        bool assignmentTildes)
+        bool assignmentTildes,
+        ShellSource segment)
     {
         var parsed = ParseBracedParameterExpression(content);
-        if (parsed.Kind == BracedParameterOperatorKind.Invalid)
+        if (parsed.Kind is BracedParameterOperatorKind.Invalid or BracedParameterOperatorKind.IncompleteSubscript)
         {
-            await ReportSubstitutionFailureAsync("bad substitution", ExpansionFailureKind.Parameter).ConfigureAwait(false);
+            await ReportBadSubstitutionAsync(parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript
+                && quoteContext != ExpansionQuoteContext.DoubleQuoted).ConfigureAwait(false);
             return;
         }
         var transform = parsed.Kind == BracedParameterOperatorKind.Transform ? parsed.Word[0] : (byte)0;
@@ -307,6 +309,9 @@ internal static partial class WordExpansion
                 start = 1;
             }
             var end = ReadPrimaryEnd(start);
+            if (end < 0)
+                return new(ShellSource.Empty, modifier == ParameterModifier.Length ? BracedParameterOperatorKind.Invalid
+                    : BracedParameterOperatorKind.IncompleteSubscript, ShellSource.Empty, false, modifier);
             if (end == start)
                 return Invalid();
             if (modifier == ParameterModifier.Indirect
@@ -377,7 +382,7 @@ internal static partial class WordExpansion
                     while (++position < content.Length && VariableNames.IsNamePart((char)content[position])) { }
                     if (position < content.Length && content[position] == (byte)'[')
                         return ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace },
-                            content, position, out var closing) ? closing + 1 : start;
+                            content, position, out var closing) ? closing + 1 : -1;
                     return position;
                 }
                 if (first is >= (byte)'0' and <= (byte)'9')
@@ -509,7 +514,7 @@ internal static partial class WordExpansion
 
                 if (reference.Kind == VariableReferenceKind.Element && reference.Subscript.Length == 0)
                 {
-                    await ReportSubstitutionFailureAsync("bad substitution", ExpansionFailureKind.Parameter).ConfigureAwait(false);
+                    await ReportBadSubstitutionAsync(quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
                     return new ParameterValue(reference.Kind, [], false, reference, null);
                 }
 
@@ -629,6 +634,14 @@ internal static partial class WordExpansion
             scope.Effects.ReportFatalExpansionAsync(
                 [ShellValue.FromText("${"), ShellValue.FromBytes(content.Bytes), ShellValue.FromText("}")],
                 [ShellValue.FromText(message)], kind);
+
+        Task ReportBadSubstitutionAsync(bool useSegment)
+        {
+            ReadOnlySpan<ShellValue> subject = useSegment ? [segment.ToValue()]
+                : [ShellValue.FromText("${"), content.ToValue(), ShellValue.FromText("}")];
+            return scope.Effects.ReportUnitExpansionFailureAsync(subject, [ShellValue.FromText("bad substitution")],
+                scope, ExpansionFailureKind.WordSyntax);
+        }
 
         Task ReportFatalAsync(ShellValue subject, string message)
         {
@@ -1070,6 +1083,7 @@ internal static partial class WordExpansion
     private enum BracedParameterOperatorKind
     {
         Invalid,
+        IncompleteSubscript,
         None,
         UseDefault,
         UseAlternate,

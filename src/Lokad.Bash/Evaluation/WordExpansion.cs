@@ -198,6 +198,17 @@ internal static partial class WordExpansion
     {
         if (!scope.CanExpand)
             return;
+        if (word.HasIncompleteQuotedParameterSubscript)
+        {
+            for (var part = firstPart; part < endPart; part++)
+            {
+                if (word.Parts[part] is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None } failed)
+                {
+                    await ReportIncompleteParameterSubscriptAsync(word, failed, scope).ConfigureAwait(false);
+                    return;
+                }
+            }
+        }
         var assignmentEquals = tildeExpansion == TildeExpansion.Argument ? FindAssignmentEquals(word, scope) : -1;
         var assignmentValue = tildeExpansion == TildeExpansion.Assignment;
         var assignment = assignmentValue || assignmentEquals >= 0
@@ -240,6 +251,24 @@ internal static partial class WordExpansion
                 await ExpandPartAsync(part, scope, builder, allowWordSplitting).ConfigureAwait(false);
             position = new WordPosition(position.Part + 1, 0);
         }
+    }
+
+    private static async Task ReportIncompleteParameterSubscriptAsync(Word word, SourceWordPart failed, ScopedEvaluation scope)
+    {
+        // Bash scans the word's double-quoted parameter syntax before applying its expansions.
+        if (failed.ParameterSubscriptFailure == ParameterSubscriptFailure.Nested)
+        {
+            await ReportAsync(failed.Source.ToValue()).ConfigureAwait(false);
+            return;
+        }
+
+        using var source = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+        if (!FunctionDefinitionFormatter.TryAppendWordSource(word, source, scope.Effects.Memory.Budget, scope.Effects.CancellationToken))
+            throw new ByteMemoryBuilder.LimitExceededException();
+        await ReportAsync(ShellValue.FromBytes(source.ToMemory())).ConfigureAwait(false);
+
+        Task ReportAsync(ShellValue spelling) => scope.Effects.ReportUnitExpansionFailureAsync([ShellValue.FromText("bad substitution")],
+            [ShellValue.FromText("no closing `}' in "), spelling], scope, ExpansionFailureKind.WordSyntax);
     }
 
     // Lexical assignment operands still go through ordinary field processing.
@@ -819,7 +848,8 @@ internal static partial class WordExpansion
                         allowWordSplitting,
                         globQuoted,
                         quoteContext,
-                        assignment?.InheritInParameterWords == true)
+                        assignment?.InheritInParameterWords == true,
+                        content)
                     .ConfigureAwait(false);
                 index = closingIndex;
                 continue;

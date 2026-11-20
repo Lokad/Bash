@@ -70,6 +70,7 @@ public sealed class SourceWordPart : WordPart
     internal bool IsBraceExpanded { get; init; }
     // The bytes still carry nested expansion operands in source form.
     internal int RenderedLineAdjustment { get; init; }
+    internal ParameterSubscriptFailure ParameterSubscriptFailure { get; init; }
 
     /// <summary>The selected lexical span and its operand. A missing operand fails if reached.</summary>
     internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand);
@@ -100,7 +101,8 @@ public sealed class SourceWordPart : WordPart
         {
             DoubleQuote = DoubleQuote,
             IsBraceExpanded = IsBraceExpanded,
-            RenderedLineAdjustment = RenderedLineAdjustment
+            RenderedLineAdjustment = RenderedLineAdjustment,
+            ParameterSubscriptFailure = ParameterSubscriptFailure
         };
     }
 

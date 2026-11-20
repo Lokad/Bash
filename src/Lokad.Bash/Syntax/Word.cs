@@ -16,6 +16,16 @@ public sealed class Word
     {
         Parts = parts;
         LiteralFields = PrepareLiteral(parts);
+        if (LiteralFields != null)
+            return;
+        for (var index = 0; index < parts.Count; index++)
+        {
+            if (parts[index] is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None })
+            {
+                HasIncompleteQuotedParameterSubscript = true;
+                break;
+            }
+        }
 
         static IReadOnlyList<ExpandedWord>? PrepareLiteral(IReadOnlyList<WordPart> parts)
         {
@@ -47,6 +57,7 @@ public sealed class Word
 
     /// <summary>Frozen literal expansion scaffolding borrowing immutable syntax bytes.</summary>
     internal IReadOnlyList<ExpandedWord>? LiteralFields { get; }
+    internal bool HasIncompleteQuotedParameterSubscript { get; }
 
     /// <summary>
     /// Gets the parts that compose this word.

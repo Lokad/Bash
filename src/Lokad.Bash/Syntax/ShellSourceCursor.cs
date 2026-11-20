@@ -361,6 +361,7 @@ internal sealed class ShellSourceCursor
                 out var containsCommandSubstitution,
                 out var renderedLineAdjustment,
                 out var error,
+                out var subscriptFailure,
                 trackRenderedLines);
             if (status != BracedParameterScanStatus.Found)
             {
@@ -374,7 +375,7 @@ internal sealed class ShellSourceCursor
             return new ShellNestedExpansionScan.Complete(
                 ShellNestedExpansionKind.Parameter,
                 containsCommandSubstitution,
-                renderedLineAdjustment);
+                renderedLineAdjustment) { ParameterSubscriptFailure = subscriptFailure };
         }
 
         if (CommandSubstitutionScanner.HasPrefix(_text, start))
@@ -607,7 +608,10 @@ internal abstract record ShellNestedExpansionScan
     internal sealed record Complete(
         ShellNestedExpansionKind Kind,
         bool ContainsCommandSubstitution,
-        int RenderedLineAdjustment = 0) : ShellNestedExpansionScan;
+        int RenderedLineAdjustment = 0) : ShellNestedExpansionScan
+    {
+        internal ParameterSubscriptFailure ParameterSubscriptFailure { get; init; }
+    }
 
     /// <summary>A nested prefix was present but input ended before it closed.</summary>
     internal sealed record Incomplete(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan;
