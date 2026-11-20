@@ -281,7 +281,7 @@ public sealed partial class Evaluation
                 else
                     CaptureArgument(new PreparedDeclarationOperand(field, null, AssignmentOperator.Replace, CompoundApplied: false));
             }
-            if (options.TryConsume(field, Memory))
+            if (options.TryConsume(field))
                 return;
             // Once option scanning stops, every remaining field in this word is an operand.
             Memory.PrepareListCapacity(operands, remainingFields);
@@ -429,7 +429,7 @@ public sealed partial class Evaluation
 
         public void EndOptions() => _readingOptions = false;
 
-        public bool TryConsume(ShellValue field, EvaluationMemory memory)
+        public bool TryConsume(ShellValue field)
         {
             if (!_readingOptions)
                 return false;
@@ -454,27 +454,19 @@ public sealed partial class Evaluation
             }
             _seenOption = true;
 
-            // Reuse grouped-option parsing; only declaration builtins give '+' an option meaning.
-            var optionField = field;
-            if (remove)
+            // The exact long spellings were handled above. A dash after either sign is invalid.
+            if (bytes[1] == (byte)'-')
             {
-                memory.Charge(checked(4L * bytes.Length));
-                var normalized = bytes.ToArray();
-                normalized[0] = (byte)'-';
-                optionField = ShellValue.FromBytes(normalized);
+                if (InvalidOption.IsEmpty)
+                    InvalidOption = ShellValue.FromBytes(field.Bytes[..2]);
+                return true;
             }
-            var parser = new CommandLineOptionParser([optionField], allowSingleDashLongOptions: false);
-            while (parser.TryRead(out var item))
+            foreach (var flag in bytes[1..])
             {
-                if (item.Kind != CommandLineOptionKind.ShortOption)
-                {
-                    if (InvalidOption.IsEmpty) InvalidOption = ShellValue.FromBytes(field.Bytes[..2]);
-                    continue;
-                }
                 if (!remove && InvalidFunctionAttribute.Length == 0
-                    && (item.ShortName is (byte)'a' or (byte)'A' or (byte)'i' || item.ShortName == (byte)'n' && Builtin != BuiltinKind.Export))
-                    InvalidFunctionAttribute = "-" + (char)item.ShortName;
-                switch (item.ShortName)
+                    && (flag is (byte)'a' or (byte)'A' or (byte)'i' || flag == (byte)'n' && Builtin != BuiltinKind.Export))
+                    InvalidFunctionAttribute = "-" + (char)flag;
+                switch (flag)
                 {
                     case (byte)'a': IndexedChange = ReadChange(IndexedChange, DeclarationListingAttributes.Indexed); break;
                     case (byte)'A': AssociativeChange = ReadChange(AssociativeChange, DeclarationListingAttributes.Associative); break;
@@ -488,19 +480,19 @@ public sealed partial class Evaluation
                     case (byte)'x' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: ExportChange = ReadChange(ExportChange, DeclarationListingAttributes.Exported); break;
                     case (byte)'i' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: IntegerChange = ReadChange(IntegerChange, DeclarationListingAttributes.Integer); break;
                     case (byte)'c' or (byte)'l' or (byte)'u' when Builtin is BuiltinKind.Declare or BuiltinKind.Local:
-                        CaseChange = CaseChange.Include(ReadCaseAttribute(item.ShortName), remove);
+                        CaseChange = CaseChange.Include(ReadCaseAttribute(flag), remove);
                         break;
                     case (byte)'I' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: Inherit = !remove; break;
                     case (byte)'g' when Builtin == BuiltinKind.Declare: Global |= !remove; break;
                     case (byte)'p': Print = true; break;
                     case (byte)'f':
                     case (byte)'F' when Builtin is BuiltinKind.Declare or BuiltinKind.Local:
-                        FunctionNamesOnly |= item.ShortName == (byte)'F';
+                        FunctionNamesOnly |= flag == (byte)'F';
                         Functions |= !remove;
                         RemoveFunctions |= remove;
                         break;
                     default:
-                        if (InvalidOption.IsEmpty) InvalidOption = ShellValue.FromBytes(new byte[] { bytes[0], (byte)item.ShortName });
+                        if (InvalidOption.IsEmpty) InvalidOption = ShellValue.FromBytes(new byte[] { bytes[0], flag });
                         break;
                 }
             }
