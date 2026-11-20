@@ -229,8 +229,8 @@ internal static partial class WordExpansion
             var part = word.Parts[position.Part];
             if (part is SourceWordPart { Kind: WordPartKind.Unquoted } source)
             {
-                var next = await ExpandSegmentAsync(source, scope, builder, allowWordSplitting, globQuoted: false,
-                        ExpansionQuoteContext.Unquoted, position, assignment, word)
+                var next = await ExpandSegmentAsync(source.Source, source, scope, builder, allowWordSplitting, globQuoted: false,
+                        ExpansionQuoteContext.Unquoted, position, assignment, word, inHereDocumentOperand: false)
                     .ConfigureAwait(false);
                 if (next is { } selected)
                 {
@@ -596,11 +596,12 @@ internal static partial class WordExpansion
     private static Task ExpandSegmentAsync(
         SourceWordPart part, ScopedEvaluation scope, ExpandedWordBuilder output,
         bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext) =>
-        ExpandSegmentAsync(part, scope, output, allowWordSplitting, globQuoted, quoteContext,
-            new WordPosition(0, 0), null, null);
+        ExpandSegmentAsync(part.Source, part, scope, output, allowWordSplitting, globQuoted, quoteContext,
+            new WordPosition(0, 0), null, null, inHereDocumentOperand: false);
 
     private static async Task<WordPosition?> ExpandSegmentAsync(
-        SourceWordPart syntax,
+        ShellSource content,
+        SourceWordPart? syntax,
         ScopedEvaluation scope,
         ExpandedWordBuilder output,
         bool allowWordSplitting,
@@ -608,9 +609,9 @@ internal static partial class WordExpansion
         ExpansionQuoteContext quoteContext,
         WordPosition start,
         AssignmentTildes? assignment,
-        Word? originalWord)
+        Word? originalWord,
+        bool inHereDocumentOperand)
     {
-        var content = syntax.Source;
         var length = content.Length;
         ShellScanContext? parameterScan = null;
         for (var index = start.Offset; index < length; index++)
@@ -619,7 +620,10 @@ internal static partial class WordExpansion
                 return null;
 
             var value = content[index];
-            if (value == (byte)'\\' && syntax.IsBraceExpanded)
+            // Modern Bash removes unescaped double quotes within the selected parameter operand.
+            if (inHereDocumentOperand && value == (byte)'"')
+                continue;
+            if (value == (byte)'\\' && syntax?.IsBraceExpanded == true)
             {
                 if (++index == length)
                 {
@@ -642,10 +646,18 @@ internal static partial class WordExpansion
                     continue;
                 }
 
-                if (escaped is (byte)'$' or (byte)'`' or (byte)'\\')
+                if (escaped is (byte)'$' or (byte)'`' or (byte)'\\'
+                    || inHereDocumentOperand && escaped is (byte)'"' or (byte)'}')
                 {
                     output.AppendSource(content.Slice(index + 1, 1), globQuoted);
                     index++;
+                    continue;
+                }
+                if (inHereDocumentOperand)
+                {
+                    var size = Utf8Text.FirstCharacterLength(content.AsSpan()[(index + 1)..]);
+                    output.AppendHereDocumentUnprotected(content.Slice(index, size + 1).ToValue());
+                    index += size;
                     continue;
                 }
             }
@@ -674,7 +686,7 @@ internal static partial class WordExpansion
                     await RejectHereDocumentAsync(scope, legacyStatus, legacyError).ConfigureAwait(false);
                     return null;
                 }
-                if (syntax.IsBraceExpanded && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)
+                if (syntax?.IsBraceExpanded == true && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)
                 {
                     var message = BraceExpansionFailureWordPart.FormatMissingDelimiter(content.Slice(index), (byte)'`',
                         scope.Effects.Memory.Workspace);
@@ -685,7 +697,13 @@ internal static partial class WordExpansion
 
             if (value != (byte)'$')
             {
-                output.AppendSource(content.Slice(index, 1), globQuoted);
+                var literal = content.Slice(index, 1);
+                // In a here-document operand, punctuation handled by the word scanner
+                // can participate in the enclosing body's IFS split.
+                if (inHereDocumentOperand && value is (byte)':' or (byte)'=' or (byte)'~' or (byte)'\'')
+                    output.AppendHereDocumentUnprotected(literal.ToValue());
+                else
+                    output.AppendSource(literal, globQuoted);
                 // Only literal punctuation reached by this scan opens a prefix.
                 // A colon inside a substitution is consumed with that substitution.
                 if (assignment is { } tildes
@@ -707,7 +725,8 @@ internal static partial class WordExpansion
                 continue;
             }
 
-            var prepared = syntax.TryGetArithmetic(index, out var captured) ? captured : (SourceWordPart.ArithmeticExpansion?)null;
+            var prepared = syntax != null && syntax.TryGetArithmetic(index, out var captured)
+                ? captured : (SourceWordPart.ArithmeticExpansion?)null;
             var arithmeticEnd = prepared?.End ?? -1;
             var expression = ShellSource.Empty;
             var arithmeticStatus = ShellScanStatus.Complete;
@@ -818,10 +837,11 @@ internal static partial class WordExpansion
 
             if (next == (byte)'*')
             {
-                output.AppendJoinedFields(
-                    scope.Variables.PositionalParameters,
-                    allowWordSplitting,
-                    globQuoted);
+                var arguments = scope.Variables.PositionalParameters;
+                if (quoteContext == ExpansionQuoteContext.HereDocument)
+                    output.AppendHereDocumentFields(arguments, HereDocumentJoin.PositionalStar);
+                else
+                    output.AppendJoinedFields(arguments, allowWordSplitting, globQuoted);
                 index++;
                 continue;
             }
@@ -1025,22 +1045,40 @@ internal static partial class WordExpansion
         ExpansionQuoteContext quoteContext,
         ExpansionPurpose purpose,
         ImplicitEmptyPolicy implicitEmptyPolicy,
-        bool assignmentTildes)
+        bool assignmentTildes,
+        ExpandedWordBuilder? hereDocumentParent)
     {
         if (expression.Length == 0)
             return [];
 
-        var word = Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose),
-            quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double,
-            scanContext);
+        var word = quoteContext == ExpansionQuoteContext.HereDocument ? null
+            : Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose),
+                quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double, scanContext);
         var builder = new ExpandedWordBuilder(
-            scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken);
-        var tildeExpansion = purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? TildeExpansion.None
-            : assignmentTildes ? TildeExpansion.Assignment : TildeExpansion.Leading;
-        await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, tildeExpansion)
-            .ConfigureAwait(false);
-        return !scope.CanExpand ? [] : builder.Build();
+            scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken)
+        {
+            AssigningHereDocumentOperand = hereDocumentParent != null,
+        };
+        if (word == null)
+        {
+            await ExpandHereDocumentOperandAsync(expression, scope, builder).ConfigureAwait(false);
+        }
+        else
+        {
+            var tildeExpansion = purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? TildeExpansion.None
+                : assignmentTildes ? TildeExpansion.Assignment : TildeExpansion.Leading;
+            await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, tildeExpansion).ConfigureAwait(false);
+        }
+        if (!scope.CanExpand)
+            return [];
+        hereDocumentParent?.IncludeHereDocumentAt(builder);
+        return builder.Build();
     }
+
+    private static Task ExpandHereDocumentOperandAsync(ShellSource expression, ScopedEvaluation scope, ExpandedWordBuilder builder) =>
+        ExpandSegmentAsync(expression, syntax: null, scope, builder,
+            allowWordSplitting: false, globQuoted: true, ExpansionQuoteContext.HereDocument, new WordPosition(0, 0),
+            assignment: null, originalWord: null, inHereDocumentOperand: true);
 
     private static ExpansionWordSyntax GetOperandSyntax(ExpansionPurpose purpose) => purpose switch
     {

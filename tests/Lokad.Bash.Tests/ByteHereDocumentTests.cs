@@ -10,6 +10,47 @@ namespace Lokad.Bash.Tests;
 public sealed class ByteHereDocumentTests
 {
     [Theory]
+    [InlineData("IFS=:; set -- left right; a=([2]=left [40]=right)",
+        "[$*][${!a[*]}][${a[*]}][${a[*]:2}]", "[left right][2 40][left:right][left right]")]
+    [InlineData("IFS=:; set -- a b; p_a=1; p_b=2",
+        "[${*^^}][${*/a/z}][${!p_*}]", "[A:B][z:b][p_a:p_b]")]
+    [InlineData("IFS=:; set -- a b; p_a=1; p_b=2",
+        "[$@][${*^^}][${*/a/z}][${!p_*}]", "[a b][A B][z b][p_a p_b]")]
+    [InlineData("IFS=:; set -- a b; p_a=1; p_b=2",
+        "[${*^^}][${*/a/z}][${!p_*}]\n[$@]", "[A B][z b][p_a p_b]\n[a b]")]
+    [InlineData("IFS=:; set --; p_a=1; p_b=2",
+        "[${!p_*}][${missing:-$@}]", "[p_a p_b][]")]
+    [InlineData("IFS=:; set -- 'a:p' 'b:q'; p_a=1; p_b=2",
+        "[${x:=$@-${!p_*}}][$x][${!p_*}]", "[a:p b:q-p_a:p_b][a:p b:q-p_a:p_b][p_a p_b]")]
+    [InlineData("IFS=:; set -- a b; v='left:right'",
+        "L:L[${missing:-left:right}][$v][$@]", "L:L[left right][left:right][a b]")]
+    [InlineData("IFS=; set -- '' ''",
+        "[$@][$*][${*:-missing}][${*:+alternate}]", "[ ][ ][ ][alternate]")]
+    [InlineData("IFS=' '; set -- '' ' a  b ' '' ''",
+        "[$@][$*][${*^^}][${*:1}]", "[  a  b   ][ a b ][  A  B  ][  a  b  ]")]
+    public async Task AggregateBodyJoinsPreserveExpansionProvenance(string setup, string body, string expected)
+    {
+        var source = setup + "\ncat <<END\n" + body + "\nEND\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(ShellEvaluationStartup.CreateForNewHost(Parser.Parse(source),
+                        Evaluation.EvaluationOptions.Default), host, owner, CancellationToken.None)
+                : await host.RunAsync(source, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(expected + "\n", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task StructuredDelimiterRetainsMalformedUtf8(bool prepared)

@@ -18,6 +18,15 @@ internal enum ExpansionQuoteContext
     HereDocument,
 }
 
+internal enum HereDocumentJoin
+{
+    At,
+    PositionalStar,
+    SpaceBetweenProtectedValues,
+    UnprotectedIfs,
+    IfsBetweenProtectedValues,
+}
+
 /// <summary>Controls aggregate handling and operand syntax for values, diagnostics and arithmetic.</summary>
 internal enum ExpansionPurpose
 {
@@ -42,6 +51,7 @@ internal enum ImplicitEmptyPolicy
 /// <summary>Assembles word bytes and their provenance before applying IFS boundaries.</summary>
 internal sealed class ExpandedWordBuilder
 {
+    private static readonly ShellValue Space = ShellValue.FromText(" ");
     private readonly Variables _variables;
     private readonly EvaluationMemory _memory;
     private readonly MemoryCapacity _storage;
@@ -50,6 +60,7 @@ internal sealed class ExpandedWordBuilder
     private readonly List<InputWord> _words = [];
     private InputWord _current;
     private DoubleQuoteState _doubleQuote;
+    private bool _hereDocumentHasAt;
 
     private enum DoubleQuoteState : byte { Outside, Open, EmptyExpansion, EmptyAggregate }
 
@@ -93,6 +104,7 @@ internal sealed class ExpandedWordBuilder
     }
 
     public ExpansionPurpose Purpose { get; }
+    internal bool AssigningHereDocumentOperand { get; init; }
 
     /// <summary>Whether substitutions contributed data, even if their output was empty.</summary>
 
@@ -146,6 +158,12 @@ internal sealed class ExpandedWordBuilder
         bool globQuoted,
         ExpansionQuoteContext quoteContext)
     {
+        if (quoteContext == ExpansionQuoteContext.HereDocument)
+        {
+            AppendHereDocumentFields(fields, HereDocumentJoin.At);
+            return;
+        }
+
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (Purpose == ExpansionPurpose.IndexedCompound
             || Purpose == ExpansionPurpose.IndexedCompoundOperand && quoteContext == ExpansionQuoteContext.DoubleQuoted)
@@ -188,6 +206,38 @@ internal sealed class ExpandedWordBuilder
         if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted && _doubleQuote != DoubleQuoteState.Outside)
             _doubleQuote = DoubleQuoteState.EmptyAggregate;
     }
+
+    /// <summary>Records the protected text and exposed separators until the complete body is expanded.</summary>
+    internal void AppendHereDocumentFields(IEnumerable<ShellValue> fields, HereDocumentJoin join)
+    {
+        if (join == HereDocumentJoin.At)
+            _hereDocumentHasAt = true;
+        var separator = Space;
+        if (join is not (HereDocumentJoin.PositionalStar or HereDocumentJoin.SpaceBetweenProtectedValues)
+            && !(join == HereDocumentJoin.At && AssigningHereDocumentOperand))
+        {
+            var ifs = FieldSeparators.FromVariables(_variables);
+            separator = ifs.IsEmpty ? join == HereDocumentJoin.At ? Space : ShellValue.Empty : ifs.First;
+        }
+        var origin = join is HereDocumentJoin.PositionalStar or HereDocumentJoin.UnprotectedIfs
+            ? PartOrigin.Expansion : PartOrigin.Protected;
+        var first = true;
+        foreach (var value in fields)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (!first && !separator.IsEmpty)
+                GetPart(PartOrigin.Expansion, globQuoted: true).AppendValue(separator);
+            first = false;
+            if (join == HereDocumentJoin.At || !value.IsEmpty)
+                GetPart(origin, globQuoted: true).AppendValue(value);
+        }
+    }
+
+    internal void IncludeHereDocumentAt(ExpandedWordBuilder operand) =>
+        _hereDocumentHasAt |= operand._hereDocumentHasAt;
+
+    internal void AppendHereDocumentUnprotected(ShellValue value) =>
+        GetPart(PartOrigin.Expansion, globQuoted: true).AppendValue(value);
 
     /// <summary>Splices operand fields into the enclosing word without flattening their quote metadata.</summary>
     public void AppendExpandedWords(
@@ -282,10 +332,13 @@ internal sealed class ExpandedWordBuilder
     {
         // Expansions can assign IFS: joins use its value at expansion time, splitting uses the final value.
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
+        var splitHereDocument = _hereDocumentHasAt && !AssigningHereDocumentOperand;
+        var splitOnSpace = splitHereDocument && fieldSeparators.IsEmpty;
         foreach (var word in _words)
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            var split = word.NeedsSplitting && !fieldSeparators.IsEmpty;
+            var split = splitHereDocument && word.Parts.Any(static part => part.Origin == PartOrigin.Expansion)
+                || word.NeedsSplitting && !fieldSeparators.IsEmpty;
             if (!split)
             {
                 // No boundary processing is needed: retain completed segment buffers.
@@ -308,6 +361,17 @@ internal sealed class ExpandedWordBuilder
             foreach (var part in word.Parts)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
+                if (splitHereDocument && part.Origin == PartOrigin.Protected)
+                {
+                    // The body owns this segment through emission. Transfer it without copying its bytes.
+                    FlushExpansion();
+                    ApplyPendingBreak();
+                    if (part.Segment.IsEmpty)
+                        emitEmpty = true;
+                    else
+                        field.Add(part.Segment);
+                    continue;
+                }
                 var value = part.Segment.ToValue();
                 var quoted = part.Segment.IsGlobQuoted;
                 if (part.Origin == PartOrigin.Protected)
@@ -395,11 +459,19 @@ internal sealed class ExpandedWordBuilder
                     var isCharacter = status == OperationStatus.Done;
                     if (!isCharacter)
                         length = 1;
-                    fieldSeparators = isCharacter
-                        ? fieldSeparators.PrepareCharacters(_variables, _memory, _cancellationToken)
-                        : fieldSeparators.PrepareBytes(_variables, _memory, _cancellationToken);
-                    var isDelimiter = isCharacter ? fieldSeparators.Contains(character)
-                        : fieldSeparators.Contains(bytes.Span[position]);
+                    bool isDelimiter;
+                    if (splitOnSpace)
+                    {
+                        isDelimiter = isCharacter && character.Value == ' ';
+                    }
+                    else
+                    {
+                        fieldSeparators = isCharacter
+                            ? fieldSeparators.PrepareCharacters(_variables, _memory, _cancellationToken)
+                            : fieldSeparators.PrepareBytes(_variables, _memory, _cancellationToken);
+                        isDelimiter = isCharacter ? fieldSeparators.Contains(character)
+                            : fieldSeparators.Contains(bytes.Span[position]);
+                    }
                     if (!isDelimiter)
                     {
                         position += length;
@@ -527,6 +599,7 @@ internal sealed class ExpandedWordBuilder
         }
 
         public bool IsGlobQuoted { get; }
+        public bool IsEmpty => _bytes == null ? _retained.IsEmpty : _bytes.Length == 0;
 
         public void AppendValue(ShellValue value)
         {

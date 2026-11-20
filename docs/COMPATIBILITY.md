@@ -228,6 +228,13 @@ Here-strings expand one scalar operand without brace generation, field splitting
 or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
 dollar, backtick, backslash and LF; double quotes remain ordinary data. Quoting the
 delimiter disables body expansion.
+Direct positional star expansions, indirect array key stars and aggregate slices
+in the body join with spaces. Direct array value stars use the first IFS character.
+An at expansion anywhere in the body enables the final IFS split of exposed
+bytes, including separators in other expansions. Results are joined with spaces.
+Quoted values and literal source keep their protected bytes. Parameter default
+operands retain their here-document context, and assignment operands form their
+stored value before the enclosing body is split.
 For unquoted delimiters, escaped LF is removed while collecting the body, before
 delimiter recognition. Continued lines can form a delimiter; a physical line that
 only resembles one inside continued data does not end the body. The `<<-` mode
