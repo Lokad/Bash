@@ -34,6 +34,10 @@ public readonly struct BindingName : IEquatable<BindingName>
     /// <summary>Gets the exact spelling for diagnostics, inspection, or environment transport.</summary>
     public ShellValue ToValue() => _bytes.IsEmpty && _text is { } text ? ShellValue.FromText(text) : _bytes;
 
+    /// <summary>Retains the original identity with a spelling ready for repeated byte access.</summary>
+    internal BindingName WithEncodedSpelling() =>
+        _bytes.IsEmpty && _text is { Length: > 0 } text ? new BindingName(text, ShellValue.FromText(text)) : this;
+
     /// <summary>Decodes only names that can cross a text-only host boundary.</summary>
     public bool TryGetText(out string text)
     {

@@ -147,9 +147,10 @@ leaves any earlier complete units' output and effects available. A skipped
 capture stays inert.
 A diagnosed command substitution grammar error in `source` or `eval` can
 terminate the invoking shell even in a tested command. A malformed arithmetic
-`for` header in an unquoted substitution terminates with status 2. An enclosing
-double quote makes that header error return from the builtin with status 2,
-or status 1 inside a compound array assignment. For errors such as a pipeline
+`for` header in an unquoted substitution terminates with status 2. With an
+enclosing double quote, the builtin returns the status of any complete command
+prefix in that unit, or 2 if the unit has no complete prefix. A compound array
+assignment with that quoted error returns 1. For errors such as a pipeline
 with a missing command, EXIT sees parser status 257 and shell completion
 returns its low byte, 1. In a command capture or a simple pipeline stage,
 the child unwinds the builtin and completes with status 1. Ordinary syntax

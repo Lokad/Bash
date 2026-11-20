@@ -113,6 +113,34 @@ public sealed class ByteDeclarationInspectionTests
         Assert.Empty(host.ClosedDescriptors);
     }
 
+    [Fact]
+    public async Task OperandFreeInspectionKeepsOneSpellingPerSortedName()
+    {
+        var names = Enumerable.Range(0, 32)
+            .Select(index => "probe_" + new string('x', 118) + $"{index:D4}").ToArray();
+        var setup = "export " + string.Join(' ', names.Reverse().Select(name => name + "=value"));
+        var state = new Eval(Parser.Parse(setup + "\ndeclare -xp"));
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = governor };
+        var rows = new List<(string Text, long Workspace)>();
+        host.BeforeAppend = (descriptor, content, _) =>
+        {
+            if (descriptor == FileDescriptor.StdOut && content.Span.StartsWith("declare -x probe_"u8))
+                rows.Add((Utf8Text.Decode(content), state.Memory.Workspace.Bytes));
+        };
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(names.Select(name => $"declare -x {name}=\"value\"\n"), rows.Select(row => row.Text));
+        Assert.All(rows, row => Assert.Equal(rows[0].Workspace, row.Workspace));
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("declare -p", "declare: ", ": not found\n", 56 * 1024)]
     [InlineData("declare -fp", "declare: ", ": not found\n", 32 * 1024)]

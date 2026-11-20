@@ -1762,24 +1762,25 @@ public sealed partial class Evaluation : IFileTester
                     ? VariableDisplayStyle.Assignment : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationName : VariableDisplayStyle.Declaration;
                 var printStatus = 0;
                 var outputClosed = false;
-                await foreach (var nameValue in GetNamesAsync(GetListedNames(), copyNames: false).ConfigureAwait(false))
+                await foreach (var name in GetNamesAsync(listing ? GetListedNames() : [],
+                    value => BindingNameExpansion.FromValue(value, Memory)).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError)
                         break;
-                    var name = BindingNameExpansion.FromValue(nameValue, Memory);
-                    var optionSnapshot = nameValue.Bytes.Span.SequenceEqual("-"u8)
+                    var optionSnapshot = name == "-"
                         && (listing ? listOptionSnapshot : HasOptionSnapshot());
-                    if (!optionSnapshot && (!SelectVariables(name).HasBinding(name)
+                    var variables = SelectVariables(name);
+                    if (!optionSnapshot && (!variables.HasBinding(name)
                         || localBuiltinFrame != null && !localBuiltinFrame.Locals.Declares(name)))
                     {
                         printStatus = 1;
-                        await ReportDeclarationOperandAsync(nameValue, "not found").ConfigureAwait(false);
+                        await ReportDeclarationOperandAsync(name.ToValue(), "not found").ConfigureAwait(false);
                         continue;
                     }
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
                     if (optionSnapshot)
                         output.Append(listing && localBuiltinFrame != null ? "local -\n"u8 : "declare -- -\n"u8);
-                    else if (!SelectVariables(name).TryAppendVariable(name, output, style))
+                    else if (!variables.TryAppendVariable(name, output, style))
                     {
                         printStatus = 1;
                         await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("output limit exceeded")).ConfigureAwait(false);
@@ -1807,18 +1808,22 @@ public sealed partial class Evaluation : IFileTester
                 Variables SelectVariables(BindingName name) => !listing ? commandVars
                     : bindings?.Contains(name) == true ? bindings.SavedVariables : declarationScope.Variables;
 
-                IEnumerable<ShellValue> GetListedNames()
+                IEnumerable<BindingName> GetListedNames()
                 {
                     var names = commandVars.BindingNames;
                     if (bindings != null)
                         names = names.Concat(bindings.SavedVariables.BindingNames);
-                    var filtered = names.Distinct().Where(MatchesFilter).Select(EncodeName);
-                    return listOptionSnapshot ? filtered.Prepend(ShellValue.FromText("-")) : filtered;
+                    var selected = names.Distinct().Where(MatchesFilter);
+                    if (listOptionSnapshot)
+                        selected = selected.Prepend("-");
+                    return selected.Select(PrepareName).OrderBy(static name => name.ToValue(), ShellValue.ByteOrder);
 
-                    ShellValue EncodeName(BindingName name)
+                    BindingName PrepareName(BindingName name)
                     {
-                        Memory.Charge(checked(4L * name.ByteLength));
-                        return name.ToValue();
+                        Memory.Charge(256);
+                        if (name.NeedsValueEncoding)
+                            Memory.Charge(checked(4L * name.ByteLength));
+                        return name.WithEncodedSpelling();
                     }
                 }
 
@@ -1862,9 +1867,10 @@ public sealed partial class Evaluation : IFileTester
                 var filter = FunctionAttributes.None;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Readonly)) filter |= FunctionAttributes.Readonly;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Exported)) filter |= FunctionAttributes.Exported;
-                var names = _state.Functions.Keys;
+                IEnumerable<ShellValue> names = noOperands
+                    ? _state.Functions.Keys.Select(CopyName).Order(ShellValue.ByteOrder) : [];
                 var functionStatus = 0;
-                await foreach (var name in GetNamesAsync(names, copyNames: true).ConfigureAwait(false))
+                await foreach (var name in GetNamesAsync(names, static value => value).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError) break;
                     if (!options.Print && TrySaveLocalOptions(name))
@@ -1928,32 +1934,32 @@ public sealed partial class Evaluation : IFileTester
                         return result.IsError ? 1 : functionStatus;
                 }
                 return functionStatus;
+
+                ShellValue CopyName(ShellValue name)
+                {
+                    // A sorted name snapshot can outlive a source-backed binding during host writes.
+                    Memory.Charge(256 + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(name));
+                    return ShellValue.FromBytes(name.Bytes.ToArray());
+                }
             }
 
-            async IAsyncEnumerable<ShellValue> GetNamesAsync(IEnumerable<ShellValue> listedNames, bool copyNames)
+            async IAsyncEnumerable<T> GetNamesAsync<T>(IEnumerable<T> listedNames, Func<ShellValue, T> bindOperand)
             {
                 if (declaration.Operands.Count == 0)
                 {
-                    foreach (var name in listedNames.Select(ChargeName).Order(ShellValue.ByteOrder))
+                    foreach (var name in listedNames)
                         yield return name;
-
-                    ShellValue ChargeName(ShellValue name)
-                    {
-                        Memory.Charge(256);
-                        if (copyNames)
-                        {
-                            // A sorted name snapshot can outlive a source-backed binding during host writes.
-                            Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(name));
-                            return ShellValue.FromBytes(name.Bytes.ToArray());
-                        }
-                        return name;
-                    }
                 }
                 else
                 {
                     // Explicit operands remain literal and join through the shared budget/diagnostic path.
                     foreach (var operand in declaration.Operands)
-                        yield return await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
+                    {
+                        var value = await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
+                        if (HasPendingExpansionError)
+                            yield break;
+                        yield return bindOperand(value);
+                    }
                 }
             }
 
