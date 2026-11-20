@@ -158,6 +158,11 @@ Compound command prefixes keep expanded field groups through a single copy
 into their parenthesized scalar value and refund the grouping list before
 installing the binding.
 
+`read` retains reusable line and logical record buffers within its size limit.
+Custom-delimited record scratch stays charged through dispatch and normalization.
+The field list and decoded fields share an allowance through assignment. Each
+scratch allowance is refunded when its last consumer settles.
+
 Directory stacks admit replacement backing before growth, and retained capacity
 and owned path text stay charged across commands. Navigation admits normalized
 path storage before construction, and stack mutations update the retained path

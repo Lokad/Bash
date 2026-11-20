@@ -13,19 +13,17 @@ namespace Lokad.Bash.Evaluation;
 internal static class ReadFieldSplitter
 {
     internal static List<ShellValue> Split(ReadOnlyMemory<byte> content, int fieldCount, ReadBuiltinOptions options,
-        MemoryCapacity listMemory, MemoryCapacity decodedMemory,
-        Variables variables, EvaluationMemory memory, CancellationToken cancellationToken)
+        MemoryCapacity scratch, Variables variables, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         var fieldSeparators = options.FieldSeparators;
-        const int FieldSlotBytes = 2 * sizeof(long);
-        const int FieldListOverheadBytes = 64;
+        const int FieldListOverheadBytes = 32;
         var capacity = options.FieldMode switch
         {
             ReadFieldMode.PreserveInput => 1,
             ReadFieldMode.SplitAll => 0,
             _ => fieldCount
         };
-        listMemory.Grow(FieldListOverheadBytes + (long)FieldSlotBytes * capacity);
+        scratch.Grow(FieldListOverheadBytes + MemoryCapacity.ArrayBackingBytes<ShellValue>(capacity));
         return SplitReadFields(content.Length);
 
         List<ShellValue> SplitReadFields(int contentEnd)
@@ -39,16 +37,7 @@ internal static class ReadFieldSplitter
             {
                 while (TryReadField(ref position, out var start, out var end))
                 {
-                    if (splitFields.Count == splitFields.Capacity)
-                    {
-                        var previous = splitFields.Capacity;
-                        var next = (int)Math.Min(Array.MaxLength, Math.Max(4L, 2L * previous));
-                        if (next == previous)
-                            throw new MemoryBudgetExceededException();
-                        listMemory.Resize(FieldListOverheadBytes + FieldSlotBytes * ((long)next + previous));
-                        splitFields.Capacity = next;
-                        listMemory.Resize(FieldListOverheadBytes + (long)FieldSlotBytes * next);
-                    }
+                    scratch.PrepareListCapacity(splitFields, 1);
                     splitFields.Add(BuildValue(start, end));
                 }
                 return splitFields;
@@ -194,7 +183,7 @@ internal static class ReadFieldSplitter
                     return ShellValue.FromBytes(content[start..valueEnd]);
                 }
 
-                using var builder = new ByteMemoryBuilder(valueEnd - start, decodedMemory);
+                using var builder = new ByteMemoryBuilder(valueEnd - start, scratch);
                 var index = start;
                 while (index < valueEnd && TryReadCharacter(index, out var character, out var next))
                 {

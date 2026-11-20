@@ -19,17 +19,11 @@ public sealed partial class Evaluation
     {
         public ByteMemoryBuilder Content { get; } = new(0, budget);
         public ByteMemoryBuilder? PhysicalLine { get; set; }
-        public MemoryCapacity RecordMemory { get; } = new(budget, 0);
-        public MemoryCapacity FieldListMemory { get; } = new(budget, 0);
-        public MemoryCapacity DecodedFieldMemory { get; } = new(budget, 0);
 
         public void Dispose()
         {
             Content.Dispose();
             PhysicalLine?.Dispose();
-            RecordMemory.Dispose();
-            FieldListMemory.Dispose();
-            DecodedFieldMemory.Dispose();
         }
     }
 
@@ -120,8 +114,6 @@ public sealed partial class Evaluation
 
         var memory = _readWorkspace ??= new ReadWorkspace(Memory.Budget);
         memory.Content.Truncate(0);
-        memory.FieldListMemory.Resize(0);
-        memory.DecodedFieldMemory.Resize(0);
         var exitCode = 0;
         try
         {
@@ -142,10 +134,10 @@ public sealed partial class Evaluation
                 fieldMode = ReadFieldMode.SplitAll;
             }
 
+            using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
             var fields = ReadFieldSplitter.Split(input.Content, fieldCount, new ReadBuiltinOptions(
                 FieldSeparators.FromVariables(scope.Variables), backslashMode, fieldMode),
-                memory.FieldListMemory, memory.DecodedFieldMemory,
-                scope.Variables, Memory, _cancellationToken);
+                fieldMemory, scope.Variables, Memory, _cancellationToken);
             if (arrayTarget is { } array)
             {
                 if (scope.Variables.IsIntegerBinding(array.Name))
@@ -190,11 +182,7 @@ public sealed partial class Evaluation
         }
         finally
         {
-            if (memory.Content.Capacity > ReadScratchRetentionBytes
-                || memory.RecordMemory.Bytes > 2 * ReadScratchRetentionBytes
-                || memory.PhysicalLine?.Capacity > ReadScratchRetentionBytes
-                || memory.FieldListMemory.Bytes > ReadScratchRetentionBytes
-                || memory.DecodedFieldMemory.Bytes > ReadScratchRetentionBytes)
+            if (memory.Content.Capacity > ReadScratchRetentionBytes)
                 ReleaseReadWorkspace();
         }
         return await FinishAsync(exitCode).ConfigureAwait(false);
@@ -304,32 +292,40 @@ public sealed partial class Evaluation
 
             async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectDelimitedInputAsync()
             {
-                var remaining = ByteMemoryBuilder.MaxMemoryBuilderBytes;
-                while (true)
+                OperationError? readError = null;
+                using (var recordMemory = new MemoryCapacity(Memory.Budget, 0))
                 {
-                    _cancellationToken.ThrowIfCancellationRequested();
-                    memory.RecordMemory.Resize(0);
-                    var completion = new TaskCompletionSource<ReadRecordResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    PublishOperation(new ReadRecordOperation(completion, inputDescriptor, delimiter, remaining, memory.RecordMemory));
-                    var result = await completion.Task.ConfigureAwait(false);
-                    _cancellationToken.ThrowIfCancellationRequested();
-                    if (result.Record is { ExceedsLimit: true })
-                        return await RejectInputAsync().ConfigureAwait(false);
-                    if (result.Failure.Error is { } error)
-                        return await ReadFailureAsync(error).ConfigureAwait(false);
-                    if (result.Record is not { } record)
-                        break;
+                    var remaining = ByteMemoryBuilder.MaxMemoryBuilderBytes;
+                    while (true)
+                    {
+                        _cancellationToken.ThrowIfCancellationRequested();
+                        recordMemory.Resize(0);
+                        var completion = new TaskCompletionSource<ReadRecordResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        PublishOperation(new ReadRecordOperation(completion, inputDescriptor, delimiter, remaining, recordMemory));
+                        var result = await completion.Task.ConfigureAwait(false);
+                        _cancellationToken.ThrowIfCancellationRequested();
+                        if (result.Record is { ExceedsLimit: true })
+                            break;
+                        if (result.Failure.Error is { } error)
+                        {
+                            readError = error;
+                            break;
+                        }
+                        if (result.Record is not { } record)
+                            return (1, content.ToMemory(), false);
 
-                    var sourceBytes = record.Content.Length + (record.HasTerminator ? 1 : 0);
-                    if (sourceBytes > remaining)
-                        return await RejectInputAsync().ConfigureAwait(false);
-                    remaining -= sourceBytes;
-                    if (AppendRecord(record.Content, record.HasTerminator))
-                        continue;
-                    return (record.HasTerminator ? 0 : 1, content.ToMemory(), false);
+                        var sourceBytes = record.Content.Length + (record.HasTerminator ? 1 : 0);
+                        if (sourceBytes > remaining)
+                            break;
+                        remaining -= sourceBytes;
+                        if (!AppendRecord(record.Content, record.HasTerminator))
+                            return (record.HasTerminator ? 0 : 1, content.ToMemory(), false);
+                    }
                 }
 
-                return (1, content.ToMemory(), false);
+                return readError is { } failure
+                    ? await ReadFailureAsync(failure).ConfigureAwait(false)
+                    : await RejectInputAsync().ConfigureAwait(false);
             }
 
             // Normalize as we collect the record. Quoting still controls framing

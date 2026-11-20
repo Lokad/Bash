@@ -69,6 +69,90 @@ public sealed class ReadTargetBindingTests
     }
 
     [Fact]
+    public async Task ReadRefundsDecodedFieldsBeforeTheNextCommand()
+    {
+        var value = new string('x', 8191);
+        var expected = ShellValue.FromText(value);
+
+        var plain = await MeasureAsync(value + " \nnext\n");
+        var escaped = await MeasureAsync("\\" + value + "\nnext\n");
+
+        Assert.Equal(plain, escaped);
+
+        async Task<long> MeasureAsync(string input)
+        {
+            var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+            using var owner = governor.CreateScope();
+            await using var host = new MockFileSystem { MemoryBudget = governor };
+            host.SetStandardInput(input);
+            var state = new Eval(Parser.Parse("read value; printf '%s' \"$?\"; read tail"));
+            state.Memory.Budget = owner;
+
+            var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep());
+            await ShellOperationDispatcher.DispatchAsync(read, host, CancellationToken.None);
+            var marker = Assert.IsType<WriteOperation>(await state.GetNextStep());
+            Assert.Equal(FileDescriptor.StdOut, marker.FileDescriptor);
+            Assert.True(marker.Content.Span.SequenceEqual("0"u8));
+            Assert.Equal(expected, state.Variables["value"]);
+            var admitted = governor.ReservedBytes;
+            marker.SetResult(DescriptorWriteResult.Open);
+
+            var next = Assert.IsType<ReadLineOperation>(await state.GetNextStep());
+            Assert.NotNull(read.ReusableLine);
+            Assert.Same(read.ReusableLine, next.ReusableLine);
+            await ShellOperationDispatcher.DispatchAsync(next, host, CancellationToken.None);
+            Assert.Null(await state.GetNextStep());
+            Assert.Equal(expected, state.Variables["value"]);
+            Assert.Equal(ShellValue.FromText("next"), state.Variables["tail"]);
+            return admitted;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadDelimitedScratchFollowsThePendingRecord(bool cancel)
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        await using var host = new PendingReadHost { MemoryBudget = governor };
+        host.SetStandardInput("value:");
+        var state = new Eval(Parser.Parse("value=old; read -d : value; printf '%s' \"$value\""));
+        state.Memory.Budget = owner;
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var read = Assert.IsType<ReadRecordOperation>(await state.GetNextStep());
+        var dispatch = ShellOperationDispatcher.DispatchAsync(read, host, cancellation.Token);
+        await host.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        if (cancel)
+            cancellation.Cancel();
+        var pendingBytes = read.Memory.Bytes;
+        var endedBeforeHost = evaluation.IsCompleted;
+        host.Release.SetResult();
+        await dispatch;
+
+        Assert.True(pendingBytes > 0);
+        Assert.False(endedBeforeHost);
+        if (cancel)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => state.GetNextStep());
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+            Assert.Equal(ShellValue.FromText("old"), state.Variables["value"]);
+        }
+        else
+        {
+            var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+            Assert.Equal(0, read.Memory.Bytes);
+            Assert.Equal(FileDescriptor.StdOut, write.FileDescriptor);
+            Assert.True(write.Content.Span.SequenceEqual("value"u8));
+            write.SetResult(DescriptorWriteResult.Open);
+            Assert.Null(await state.GetNextStep());
+            await evaluation;
+        }
+        Assert.Equal(0, read.Memory.Bytes);
+    }
+
+    [Fact]
     public async Task ReadArrayKeepsItsTargetOnPublicationRefusal()
     {
         var governor = new MemoryGovernor(96 * 1024);
@@ -189,5 +273,19 @@ public sealed class ReadTargetBindingTests
         Assert.Equal("<0><new><second><remaining>", result.Host.StandardOutput.TextContent);
         Assert.Empty(result.Host.StandardError.Content.ToArray());
         Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    private sealed class PendingReadHost : MockFileSystem
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<DescriptorReadBuffer> ReadAsync(
+            FileDescriptor descriptor, DescriptorReadRequest request, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            await Release.Task;
+            return await base.ReadAsync(descriptor, request, CancellationToken.None);
+        }
     }
 }
