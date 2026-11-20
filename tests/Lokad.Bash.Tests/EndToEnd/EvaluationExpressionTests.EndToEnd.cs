@@ -110,6 +110,8 @@ public sealed class EvaluationExpressionTestsEndToEnd
     [InlineData("let")]
     [InlineData("unset operand; let $operand")]
     [InlineData("set --; builtin let \"$@\"")]
+    [InlineData("let --")]
+    [InlineData("unset operand; builtin let -- $operand")]
     public async Task Evaluation_LetBuiltin_DiagnosesMissingExpandedExpressions(string script)
     {
         var result = await EvaluationTestHelper.RunAsync(script);
@@ -117,6 +119,52 @@ public sealed class EvaluationExpressionTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
         Assert.Equal("let: expression expected\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task LetConsumesOnlyTheFirstTerminator()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=2
+            help=7
+            set -- command let -- 'x=4' 'x+=2'
+            "$@"
+            printf '%s:%s:%s\n' "$?" "$x" "$_"
+            let -- --help
+            printf '%s:%s:%s\n' "$?" "$help" "$_"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0:6:x+=2\n0:6:--help\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("1>&-")]
+    public async Task LetHelpPreservesExpandedOperandEffectsAndUsageStatus(string redirection)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"""
+            unset omitted
+            value=0
+            builtin let $omitted --help "$(printf reached >effect; printf value=4)" {redirection}
+            printf 'status:%s:last:%s:value:%s\n' "$?" "$_" "$value"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        const string After = "status:2:last:value=4:value:0\n";
+        var output = host.StandardOutput.TextContent;
+        if (redirection.Length == 0)
+        {
+            Assert.StartsWith("let: let arg [arg ...]\n", output);
+            Assert.EndsWith(After, output);
+        }
+        else
+            Assert.Equal(After, output);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("reached", host.ReadFile("/effect"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Fact]

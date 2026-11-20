@@ -332,12 +332,28 @@ public sealed partial class Evaluation
         EvaluationContext context,
         bool negated)
     {
-        if (words.Count == 1)
+        var first = 1;
+        if (first < words.Count)
+        {
+            var option = words[first].Bytes.Span;
+            if (option.SequenceEqual("--"u8))
+                first++;
+            else if (option.SequenceEqual("--help"u8))
+            {
+                if (GetStdOutDescriptor().IsClosed)
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+                var documentation = BuiltinDocumentation.For(BuiltinKind.Let);
+                return await WriteBuiltinHelpAsync(words[0], documentation.Synopsis("let"), documentation.Description, negated)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        if (first == words.Count)
             await ReportExpansionDiagnosticAsync(words[0], ShellValue.FromText("expression expected"))
                 .ConfigureAwait(false);
 
         long? lastResult = 0;
-        for (var index = 1; index < words.Count; index++)
+        for (var index = first; index < words.Count; index++)
         {
             var expression = words[index];
 

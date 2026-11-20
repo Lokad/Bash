@@ -556,9 +556,11 @@ Arithmetic parser diagnostics preserve the failing operand and token bytes,
 including significant trailing whitespace. Arithmetic commands, `let`, numeric
 conditionals and substring bounds identify the reached caller in the diagnostic.
 
-`let` reports `expression expected` and returns status 1 when expansion supplies
-no expressions. A quoted empty expression evaluates to zero and returns
-status 1 without a diagnostic.
+`let` consumes one leading `--` after operand expansion. A leading `--help`
+requests help on stdout and returns status 2 even with closed stdout. Later
+fields are arithmetic expressions. If no expressions remain, `let` reports
+`expression expected` and returns status 1. A quoted empty expression
+evaluates to zero and returns status 1 without a diagnostic.
 
 Associative arrays enumerate keys in ascending lexicographic order of unsigned
 bytes. Key and value aggregates follow that order, and value slices select

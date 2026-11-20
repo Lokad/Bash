@@ -42,7 +42,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Break => new("[n]", "Leave n enclosing loops; n defaults to 1."),
         BuiltinKind.Continue => new("[n]", "Continue the next iteration of the nth enclosing loop; n defaults to 1."),
         BuiltinKind.Return => new("[n]", "Return from a function or sourced script with status n, or the last command's status."),
-        BuiltinKind.Let => new("expression [expression ...]", "Evaluate integer arithmetic expressions; return success if the last value is nonzero."),
+        BuiltinKind.Let => new("arg [arg ...]", "Evaluate integer arithmetic expressions. Return success if the last value is nonzero."),
         BuiltinKind.Test => new("expression", "Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax."),
         BuiltinKind.Pwd => new("", "Print the current working directory."),
         BuiltinKind.Cd => new("[--] [dir]", "Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD."),
