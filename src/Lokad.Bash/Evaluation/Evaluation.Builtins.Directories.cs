@@ -78,14 +78,12 @@ public sealed partial class Evaluation
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
     private async Task<EvaluationResult> EvaluateBuiltinDirsAsync(
-        IReadOnlyList<string> words,
+        string? option,
         bool negated)
     {
-        if (words.Count > 1)
+        if (option != null)
         {
-            var option = words[1];
-
-            if (option.AsSpan().Length != 2 || option.AsSpan()[0] != '-' || option.AsSpan()[1] != 'c')
+            if (option != "-c")
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
 
             _state.ResetDirectoryStack();

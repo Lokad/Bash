@@ -64,6 +64,33 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("unset omitted", "dirs $omitted -c", "", 0, "/target")]
+    [InlineData("set --", "dirs \"$@\" -c", "", 0, "/target")]
+    [InlineData("unset omitted; set -- command dirs", "\"$@\" $omitted -c", " 1>&-", 0, "/target")]
+    [InlineData("omitted=", "dirs \"$omitted\" -c", "", 1, "/target /")]
+    public async Task DirsClearUsesTheFirstProducedArgument(
+        string setup, string invocation, string redirection, int status, string stack)
+    {
+        await using var host = new TestHost();
+        host.AddDirectory("/target");
+        var source = $"""
+            pushd /target >/dev/null
+            {setup}
+            {invocation} $(printf reached >effect){redirection}
+            printf 'status:%s:%s\n' "$?" "$_"
+            dirs
+            """;
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"status:{status}:-c\n{stack}\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("reached", host.ReadFile("/target/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_PushdBuiltin_UpdatesStackAndOutputs()
     {

@@ -1059,7 +1059,7 @@ public sealed partial class Evaluation : IFileTester
             return PublishStatus(await FailPreparationAsync(declarationError).ConfigureAwait(false));
 
         // Expand once in the caller scope before redirections and temporary bindings.
-        IReadOnlyList<string> arguments = [];
+        string? textOperand = null;
         IReadOnlyList<ShellValue> byteOperands = [];
         var lastArgument = commandValue;
         if (preparation is PreparedCommand.Executable command)
@@ -1098,13 +1098,15 @@ public sealed partial class Evaluation : IFileTester
             }
             else
             {
-                arguments = await ExpandArgumentsAsync(command).ConfigureAwait(false);
+                textOperand = await ExpandArgumentTailAsync(command.Words, 1,
+                        captureFirstOperand: command.Resolution is CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Dirs })
+                    .ConfigureAwait(false);
             }
         }
         else if (preparation is PreparedCommand.Terminal terminalArguments)
         {
             lastArgument = terminalArguments.LastReadArgument;
-            await ExpandArgumentTailAsync(terminalArguments.Words, 0, textOperands: null, lastTextOperandIndex: -1)
+            await ExpandArgumentTailAsync(terminalArguments.Words, 0, captureFirstOperand: false)
                 .ConfigureAwait(false);
         }
         else if (preparation is PreparedCommand.Query queryArguments)
@@ -1465,10 +1467,7 @@ public sealed partial class Evaluation : IFileTester
                     _ => await EvaluateBuiltinAsync(
                         evaluatorBuiltin.Kind,
                         commandName,
-                        arguments,
-                        builtinScope,
-                        commandVars,
-                        bindings,
+                        textOperand,
                         false).ConfigureAwait(false)
                 };
                 if (scriptFunction != null)
@@ -1770,32 +1769,14 @@ public sealed partial class Evaluation : IFileTester
             return CompleteCommandResult(result, preparation.Completion, commandInvoked: false);
         }
 
-        async Task<IReadOnlyList<string>> ExpandArgumentsAsync(PreparedCommand.Executable command)
-        {
-            var builtin = (CommandResolution.EvaluatorBuiltin)command.Resolution;
-            var words = command.Words;
-            var expanded = new List<string>();
-            AddOperand(expanded, command.CommandName);
-            // Match existing consumer arity; unused operands still expand for effects and limits.
-            var lastTextOperandIndex = builtin.Kind switch
-            {
-                BuiltinKind.Colon or BuiltinKind.True or BuiltinKind.False
-                    or BuiltinKind.Pwd => 0,
-                BuiltinKind.Dirs => 1,
-                _ => words.Count - 1
-            };
-
-            await ExpandArgumentTailAsync(words, 1, expanded, lastTextOperandIndex).ConfigureAwait(false);
-            return expanded;
-        }
-
-        async Task ExpandArgumentTailAsync(CommandWords words, int start, List<string>? textOperands, int lastTextOperandIndex)
+        async Task<string?> ExpandArgumentTailAsync(CommandWords words, int start, bool captureFirstOperand)
         {
             if (start >= words.Count)
-                return;
+                return null;
 
             using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
             var fields = new List<ShellValue>();
+            string? firstOperand = null;
             for (var index = start; index < words.Count; index++)
             {
                 await AppendOperandValuesAsync(words[index], scope, fields, fieldMemory).ConfigureAwait(false);
@@ -1804,16 +1785,16 @@ public sealed partial class Evaluation : IFileTester
                 if (fields.Count != 0)
                 {
                     lastArgument = fields[^1];
-                    if (textOperands != null && index <= lastTextOperandIndex)
+                    if (captureFirstOperand && firstOperand == null)
                     {
-                        var text = await DecodeExpandedValueAsync(fields[0]).ConfigureAwait(false);
+                        firstOperand = await DecodeExpandedValueAsync(fields[0]).ConfigureAwait(false);
                         if (_state.HasPendingExpansionError)
                             break;
-                        AddOperand(textOperands, text);
                     }
                 }
                 fields.Clear();
             }
+            return firstOperand;
         }
 
         // Applies or inspects prepared declarations without replaying expansion effects.
@@ -2782,23 +2763,19 @@ public sealed partial class Evaluation : IFileTester
             : new CommandResolution.Host();
     }
 
-    /// <summary>Executes completed text operands against the command's temporary bindings.</summary>
+    /// <summary>Executes the builtins that take at most one text operand.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinAsync(
         BuiltinKind builtin,
         string commandName,
-        IReadOnlyList<string> words,
-        ScopedEvaluation scope,
-        Variables commandVars,
-        Variables.CommandBindings? bindings,
+        string? operand,
         bool negated)
     {
-        var function = scope.Context.FunctionContext;
         switch (builtin)
         {
             case BuiltinKind.Pwd:
                 return await EvaluateBuiltinPwdAsync(negated).ConfigureAwait(false);
             case BuiltinKind.Dirs:
-                return await EvaluateBuiltinDirsAsync(words, negated)
+                return await EvaluateBuiltinDirsAsync(operand, negated)
                     .ConfigureAwait(false);
             case BuiltinKind.Colon:
             case BuiltinKind.True:
