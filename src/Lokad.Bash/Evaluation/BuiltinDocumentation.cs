@@ -54,7 +54,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Unset => new("[-f] [-v] [-n] [name ...]",
             "Remove variables or functions. -f selects functions, -v variables, and -n removes a name reference itself."),
         BuiltinKind.Dirs => new("[-c]", "Print the directory stack. The -c option clears it to the current directory without printing."),
-        BuiltinKind.Pushd => new("[-n] [dir | +N | -N]", "Push or rotate the directory stack. With no operand, swap the top entries. The -n option keeps the working directory."),
+        BuiltinKind.Pushd => new("[-n] [+N | -N | dir]", "Push or rotate the directory stack. With no operand, swap the top entries. A navigation operand of '-' selects OLDPWD. The -n option keeps the working directory."),
         BuiltinKind.Popd => new("[-n] [+N | -N]", "Remove a directory stack entry. The -n option keeps the working directory."),
         BuiltinKind.Export => new("[-aAfnp] [name[=value] ...]",
             "Mark bindings for export, or list exported bindings. -n removes export; -f selects functions; -a/-A select array kinds."),

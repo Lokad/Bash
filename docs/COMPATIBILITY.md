@@ -121,9 +121,15 @@ replaces its second entry with the current directory, as in Bash. Failed lookup
 preserves PWD/OLDPWD, and empty-stack operations diagnose failure.
 `dirs -c` leaves only the current directory on the stack and emits no output.
 `pushd` and `popd` accept signed stack indices and `-n` for edits that
-retain the working directory and its variables. A directory stored by
-`pushd -n dir` retains its supplied bytes until a later navigation resolves
-the path through the host. Successful stack edits retain success if the
+retain the working directory and its variables. They finish option validation
+before navigation. Ordinary `pushd` accepts one path, and `popd` rejects stray
+operands before `--`. The terminator ends option scanning.
+A navigation operand of `-` in `pushd` selects and announces OLDPWD.
+If that announcement fails, the changed directory and its bookkeeping survive
+and the saved stack keeps its existing entries. An empty path revalidates the
+current directory. A directory stored by `pushd -n dir` retains its supplied bytes
+until a later navigation resolves the path through the host.
+Successful stack edits retain success if the
 listing write fails, and the write cause is reported through active stderr.
 `pwd`, `dirs`, and declaration and option listings report write failures
 and return failure. `caller` uses a compact function-context display and

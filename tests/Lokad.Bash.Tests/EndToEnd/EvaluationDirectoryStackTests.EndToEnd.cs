@@ -6,6 +6,67 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationDirectoryStackTestsEndToEnd
 {
+    [Theory]
+    [InlineData("pushd /alpha /beta", 1, "pushd: too many arguments\n")]
+    [InlineData("pushd -n -x", 2, "pushd: -x: invalid number\npushd: usage: pushd [-n] [+N | -N | dir]\n")]
+    [InlineData("popd +1 stray", 2, "popd: stray: invalid argument\npopd: usage: popd [-n] [+N | -N]\n")]
+    [InlineData("popd -n --help", 2, "popd: --help: invalid number\npopd: usage: popd [-n] [+N | -N]\n")]
+    public async Task InvalidStackOperandsLeavePathsAndBindingsUntouched(string command, int status, string error)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/alpha", "/beta"], []);
+        var lookups = new List<string>();
+        host.BeforeGetPathInfo = path => lookups.Add(path.Path);
+        var source = $"""
+            pushd /alpha >/dev/null
+            pushd /beta >/dev/null
+            {command}
+            printf '%s|%s|%s\n' "$?" "$PWD" "$OLDPWD"
+            dirs
+            """;
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { "/alpha", "/beta" }, lookups);
+        Assert.Equal($"{status}|/beta|/alpha\n/beta /alpha /\n", host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("pushd -", "/alpha\n/alpha /beta /alpha /\n0|/alpha|/beta\n/alpha /beta /alpha /\n", "")]
+    [InlineData("pushd -- - 1>&-", "1|/alpha|/beta\n/alpha /alpha /\n", "pushd: write error: Bad file descriptor\n")]
+    [InlineData("pushd ''", "/beta /beta /alpha /\n0|/beta|/beta\n/beta /beta /alpha /\n", "")]
+    public async Task PushdAppliesNavigationBeforeCompletingTheStackEdit(string command, string expected, string error)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/alpha", "/beta"], []);
+        var source = $"""
+            pushd /alpha >/dev/null
+            pushd /beta >/dev/null
+            {command}
+            printf '%s|%s|%s\n' "$?" "$PWD" "$OLDPWD"
+            dirs
+            """;
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PopdHelpRunsBeforeTheEmptyStackCheck()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("popd --help", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.StartsWith("popd: popd [-n] [+N | -N]\n", host.StandardOutput.TextContent, StringComparison.Ordinal);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
 
     [Fact]
     public async Task Evaluation_PushdBuiltin_AssignmentPrefixContributesToDirectoryVariables()

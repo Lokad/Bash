@@ -158,7 +158,7 @@ public sealed class ByteValuedWordTests
     [InlineData("x=0; : \"$((x+=1))\" \"$(printf side >&2; printf '\\377')\"; printf '%s' \"$x\"", "1", "side")]
     [InlineData("pwd $'\\377'", "/\n", "")]
     [InlineData("f() { caller $'\\377'; }; f", "0 f\n", "")]
-    [InlineData("pushd /tmp >/dev/null; popd $'\\377'", "/\n", "")]
+    [InlineData("pushd /tmp >/dev/null; popd -- $'\\377'", "/\n", "")]
     [InlineData("hash $'\\377'; printf '%s/after' \"$?\"", "1/after", "")]
     [InlineData("A=1 builtin hash \"$(printf '\\377')\"; printf '%s/after' \"$?\"", "1/after", "")]
     [InlineData("x=0; command hash \"$((x+=1))\" \"$(printf side >&2; printf '\\377')\"; printf '%s/%s' \"$?\" \"$x\"", "1/1", "side")]
@@ -179,7 +179,7 @@ public sealed class ByteValuedWordTests
     [InlineData("mapfile names $'\\377' </dev/null; printf after", "after", 0)]
     [InlineData("readarray names \"$(printf '\\377')\" </dev/null; printf after", "after", 0)]
     [InlineData("dirs -c $'\\377' >/dev/null; printf after", "after", 0)]
-    [InlineData("pushd /tmp $'\\377' >/dev/null; pwd", "/tmp\n", 0)]
+    [InlineData("pushd -n /tmp $'\\377' >/dev/null; dirs", "/ /tmp\n", 0)]
     public async Task IgnoredTrailingOperands_DoNotRequireText(string script, string expected, int expectedExitCode)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree(["/tmp"], []));
@@ -199,19 +199,38 @@ public sealed class ByteValuedWordTests
         Assert.Equal("shift: too many arguments\n", result.StdErr);
     }
 
-    [Fact]
-    public async Task CdRejectsSurplusWithoutDecodingOrSkippingOperandEffects()
+    [Theory]
+    [InlineData("cd")]
+    [InlineData("pushd")]
+    public async Task DirectoryNavigationRejectsSurplusWithoutDecodingOrSkippingOperandEffects(string command)
     {
         await using var host = EndToEndHarness.BuildTree(["/tmp"], []);
         var result = await host.RunAsync(
-            "{ cd /tmp $'\\377' \"$(printf 'reached\\n' >&2)\"; printf '%s:%s' \"$?\" \"$PWD\"; } 2>/errors",
+            "{ " + command + " /tmp $'\\377' \"$(printf 'reached\\n' >&2)\"; printf '%s:%s' \"$?\" \"$PWD\"; } 2>/errors",
             CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("1:/", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal("reached\ncd: too many arguments\n", host.ReadFile("/errors"));
+        Assert.Equal($"reached\n{command}: too many arguments\n", host.ReadFile("/errors"));
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PopdReportsAByteValuedInvalidOperandWithoutChangingTheStack()
+    {
+        var result = await EndToEndHarness.RunScriptAsync(
+            "pushd /tmp >/dev/null; popd $'\\377'; printf '%s:%s\\n' \"$?\" \"$PWD\"; dirs",
+            EndToEndHarness.BuildTree(["/tmp"], []));
+        byte[] expected =
+        [
+            .. "popd: "u8, 0xff,
+            .. ": invalid argument\npopd: usage: popd [-n] [+N | -N]\n"u8
+        ];
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("2:/tmp\n/tmp /\n", result.StdOut);
+        Assert.Equal(expected, result.Host.StandardError.Content.ToArray());
     }
 
     // Bash 5.2.37: ignored mapfile operands still expand once before the builtin reads input.
