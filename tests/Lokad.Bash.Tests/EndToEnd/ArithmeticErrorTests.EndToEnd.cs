@@ -6,6 +6,23 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class ArithmeticErrorTestsEndToEnd
 {
+    [Theory]
+    [InlineData("x=$((1+))", "[1:1]")]
+    [InlineData("printf '%s' \"${text:1+}\"", "[1:1]")]
+    [InlineData("eval 'printf -v \"a[1+]\" bad\nprintf inside'", "[1:1]")]
+    [InlineData("eval 'a[$((1+))]=bad\nprintf inside'", "insideoutside[0:0]")]
+    public async Task ArithmeticFailurePublishesStatusAndRecoversAtItsEvaluationBoundary(
+        string command, string expectedOutput)
+    {
+        var script = "text=abcd\n(exit 7) | true\n" + command
+            + "; printf outside\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"";
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Contains("invalid arithmetic expression", result.StdErr, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task LegacyArithmeticQuoteFailureKeepsEarlierEffectsAndSkipsOperandEffects()
     {

@@ -583,7 +583,7 @@ public sealed partial class Evaluation : IFileTester
 
             if (result.Flow == FlowControlKind.Exit)
             {
-                var recoveryStatus = CanRecoverCommandSubstitutionSyntax ? 1 : RecoverableIntegerAssignmentStatus;
+                var recoveryStatus = CanRecoverCommandSubstitutionSyntax ? 1 : RecoverableRootExpansionStatus;
                 if (recoveryStatus is not { } status)
                     return result;
                 result = await RecoverExpansionFailureAsync(status, scope).ConfigureAwait(false);
@@ -3319,6 +3319,20 @@ public sealed partial class Evaluation : IFileTester
     {
         _state.FatalExpansion ??= new ExpansionFailure(kind, exitCode);
         _state.SetExpansionError(_state.FatalExpansion.Value.ExitCode);
+    }
+
+    internal Task ReportArithmeticFailureAsync(ReadOnlySpan<ShellValue> subject, ShellValue message, ScopedEvaluation scope,
+        ExpansionFailureKind kind)
+    {
+        if (_state.FatalExpansion.HasValue)
+            return Task.CompletedTask;
+
+        // Publish status while the reached lexical scope is still active.
+        SetFatalExpansionError(kind);
+        _state.LastExitCode = 1;
+        PreparePipelineStatusStorage(1);
+        scope.Variables.SetPipelineStatuses([1], scope.Context, _cancellationToken);
+        return ReportExpansionDiagnosticAsync(subject, [message]);
     }
 
     internal Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure)

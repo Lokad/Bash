@@ -861,14 +861,14 @@ internal static partial class WordExpansion
         ShellSource expression, ScopedEvaluation scope, ExpansionPurpose purpose)
     {
         var operand = await PrepareArithmeticAsync(expression, scope, purpose).ConfigureAwait(false);
-        return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Fatal).ConfigureAwait(false);
+        return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Expansion).ConfigureAwait(false);
     }
 
     private static async Task<long?> ExpandArithmeticOperandAsync(
         ArithmeticSource expression, ScopedEvaluation scope, ExpansionPurpose purpose)
     {
         var operand = await PrepareArithmeticAsync(expression, scope, purpose).ConfigureAwait(false);
-        return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Fatal).ConfigureAwait(false);
+        return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Expansion).ConfigureAwait(false);
     }
 
     private static Task ReportBraceExpansionFailureAsync(ShellValue message, ScopedEvaluation scope) =>

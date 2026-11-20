@@ -274,7 +274,7 @@ public sealed partial class Evaluation
     {
         if (CanRecoverCommandSubstitutionSyntax)
             return 1;
-        if (kind == ScriptExecutionKind.Root && RecoverableIntegerAssignmentStatus is { } status)
+        if (kind == ScriptExecutionKind.Root && RecoverableRootExpansionStatus is { } status)
             return status;
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
@@ -294,8 +294,8 @@ public sealed partial class Evaluation
     private bool CanRecoverCommandSubstitutionSyntax =>
         _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1 };
 
-    private int? RecoverableIntegerAssignmentStatus => _state.ForkKind == null
-        && _state.FatalExpansion is { Kind: ExpansionFailureKind.IntegerAssignment, ExitCode: var status } ? status : null;
+    private int? RecoverableRootExpansionStatus => _state.ForkKind == null && _state.FatalExpansion is
+        { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex, ExitCode: var status } ? status : null;
 
     private async ValueTask<EvaluationResult> RecoverExpansionFailureAsync(int exitCode, ScopedEvaluation scope)
     {

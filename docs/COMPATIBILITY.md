@@ -438,6 +438,15 @@ A prior nonzero status and its pipeline statuses remain visible. A command
 capture ends with status 1 and retains earlier captured output. An EXIT
 action ends at the failure and preserves the status that entered the action.
 
+If numeric evaluation of an indexed array subscript fails after the subscript's
+word expansions, the shell publishes status 1 and `PIPESTATUS=(1)` in the scope
+where the index was evaluated, then unwinds the current command unit. The root
+reader resumes at the next unit, including under errexit. A compound indexed
+assignment retains the entries already applied to the array. Arithmetic failures
+during word expansion, including expansion inside a subscript, publish status and
+`PIPESTATUS` in the reached scope and use the enclosing word expansion's recovery
+boundary.
+
 `LINENO` follows the active parsed command. Functions defined in a script retain
 their defining source coordinates. Sourced files and EXIT action source start
 at line 1, and `eval` bases its coordinates on the calling command. Parenthesized

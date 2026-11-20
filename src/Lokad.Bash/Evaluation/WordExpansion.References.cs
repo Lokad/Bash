@@ -571,12 +571,10 @@ internal static partial class WordExpansion
         }
         else
         {
-            // Assignment index evaluation is shell-fatal, unlike arithmetic expansion in its source.
-            var failure = use is ReferenceUse.DirectAssign or ReferenceUse.CompoundAssign
-                ? ArithmeticFailureMode.Assignment : ArithmeticFailureMode.Fatal;
+            // Index arithmetic starts after expansion of the selector's source bytes.
             var evaluated = await EvaluateArithmeticAsync(
                 ArithmeticOperand.FromIndex(preparedSubscript ?? new ExpandedArraySubscript(expanded, ArithmeticBracketMode.References)),
-                scope, failure).ConfigureAwait(false);
+                scope, ArithmeticFailureMode.ArrayIndex).ConfigureAwait(false);
             if (evaluated is not { } index)
                 return null;
 

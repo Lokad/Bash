@@ -77,6 +77,31 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("arr[1/0]=bad", "[1:1]declare -a arr=([7]=\"old\")\n")]
+    [InlineData("arr=([1/0]=bad [2]=later)", "[1:1]declare -a arr=()\n")]
+    [InlineData("arr=([1]=early [1/0]=bad [2]=later)", "[1:1]declare -a arr=([1]=\"early\")\n")]
+    [InlineData("arr+=([8]=early [1/0]=bad [9]=later)", "[1:1]declare -a arr=([7]=\"old\" [8]=\"early\")\n")]
+    [InlineData("f", "[1:7 0]declare -a arr=([7]=\"old\")\n")]
+    public async Task InvalidNumericIndexPublishesStatusInTheReachedScopeAndKeepsCompletedWrites(
+        string assignment, string expectedOutput)
+    {
+        var script = "declare -a arr=([7]=old)\nf() { local -a PIPESTATUS=(4 5); arr[1/0]=bad; }\n(exit 7) | true\n" + assignment
+            + "; printf skipped\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p arr";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var exitCode = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Equal("1/0: division by 0\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Fact]
     public async Task Evaluation_ArrayElementSubscripts_ExpandByExistingArrayKind()
     {

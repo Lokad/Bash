@@ -330,13 +330,11 @@ internal static partial class WordExpansion
             var message = ShellValue.FromText(error.Message);
             if (failureMode == ArithmeticFailureMode.Diagnostic)
                 return scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]);
-            var kind = failureMode switch
-            {
-                ArithmeticFailureMode.Assignment => ExpansionFailureKind.Assignment,
-                ArithmeticFailureMode.IntegerAssignment => ExpansionFailureKind.IntegerAssignment,
-                _ => ExpansionFailureKind.Arithmetic
-            };
-            return scope.Effects.ReportFatalExpansionAsync(subject, [message], kind);
+            if (failureMode == ArithmeticFailureMode.IntegerAssignment)
+                return scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.IntegerAssignment);
+            var failure = failureMode == ArithmeticFailureMode.ArrayIndex
+                ? ExpansionFailureKind.ArrayIndex : ExpansionFailureKind.Arithmetic;
+            return scope.Effects.ReportArithmeticFailureAsync(subject, message, scope, failure);
         }
     }
 
@@ -352,5 +350,5 @@ internal static partial class WordExpansion
         internal sealed record Invalid(ShellValue Subject) : ArithmeticElementFallback;
     }
 
-    internal enum ArithmeticFailureMode { Diagnostic, Fatal, Assignment, IntegerAssignment }
+    internal enum ArithmeticFailureMode { Diagnostic, Expansion, ArrayIndex, IntegerAssignment }
 }

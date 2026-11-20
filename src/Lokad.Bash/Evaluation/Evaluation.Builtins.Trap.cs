@@ -162,7 +162,8 @@ public sealed partial class Evaluation
                 .ConfigureAwait(false);
             if ((handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
                 && (_state.FatalExpansion == null
-                    || _state.ErrexitEnabled && _state.FatalExpansion is not { Kind: ExpansionFailureKind.IntegerAssignment }))
+                    || _state.ErrexitEnabled && _state.FatalExpansion is not
+                    { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex }))
                 result = result.WithExitCode(handler.ExitCode);
             return result;
         }
