@@ -1,3 +1,4 @@
+using System.Reflection;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
@@ -9,6 +10,40 @@ namespace Lokad.Bash.Tests;
 
 public sealed class TrapCommandUnitTests
 {
+    [Theory]
+    [InlineData("trap", 0, "")]
+    [InlineData("trap -p EXIT", 0, "")]
+    [InlineData("trap -p unknown_name", 1, "trap: unknown_name: invalid signal specification\n")]
+    [InlineData("trap ':' unknown_name", 1, "trap: unknown_name: invalid signal specification\n")]
+    [InlineData("trap - EXIT", 0, "")]
+    [InlineData("trap ':' EXIT; trap - EXIT", 0, "")]
+    public async Task EmptyTrapCommandsLeaveNoState(string script, int status, string diagnostic)
+    {
+        var evaluation = new Eval(Parser.Parse(script));
+        await using var host = new TestHost();
+        var result = await new Engine().RunAsync(evaluation, host);
+        var state = Assert.IsType<EvaluationState>(typeof(Eval)
+            .GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(evaluation));
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
+        Assert.Null(state.Traps);
+    }
+
+    [Fact]
+    public async Task ResetDuringExitKeepsTheSavedStatus()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            trap 'trap - EXIT; trap -p; printf running; false; exit' EXIT
+            exit 7
+            """);
+
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal("running", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task BundledTrapListingAndAnInvalidOptionPreserveTheRegistration()
     {

@@ -239,6 +239,22 @@ public sealed class CollectionOwnershipTests
     }
 
     [Fact]
+    public void RefusingTheFirstTrapActionDoesNotPublishEmptyState()
+    {
+        var parent = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var budget = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => parent.SetTrap(
+                TrapCondition.Exit, ShellValue.FromText(":"), memory));
+            Assert.Null(parent.Traps);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
     public void NestedTrapForkAdmitsItsMapsAndSharesActionBytes()
     {
         var script = Parser.Parse(":");
@@ -247,8 +263,8 @@ public sealed class CollectionOwnershipTests
         var staging = new EvaluationMemory(new MemoryGovernor(64 * 1024));
         try
         {
-            parent.GetOrCreateTraps().Set(TrapCondition.Exit, action, staging);
-            parent.GetOrCreateTraps().Set(TrapCondition.Interrupt, ShellValue.Empty, staging);
+            parent.SetTrap(TrapCondition.Exit, action, staging);
+            parent.SetTrap(TrapCondition.Interrupt, ShellValue.Empty, staging);
         }
         finally { staging.Finish(retainVariables: false); }
 
@@ -269,7 +285,7 @@ public sealed class CollectionOwnershipTests
             Assert.False(traps.TryBeginExit(0, out _));
             traps.DiscardInheritedListing();
             Assert.True(traps.ListedHandlers[TrapCondition.Interrupt].IsEmpty);
-            Assert.True(parent.GetOrCreateTraps().ListedHandlers.ContainsKey(TrapCondition.Exit));
+            Assert.True(Assert.IsType<ShellTraps>(parent.Traps).ListedHandlers.ContainsKey(TrapCondition.Exit));
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, budget.ReservedBytes);

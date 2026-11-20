@@ -44,12 +44,14 @@ public sealed partial class Evaluation
             }
         }
 
-        var traps = _state.GetOrCreateTraps();
+        var traps = _state.Traps;
         var status = 0;
         if (list || index == words.Count)
         {
             if (index == words.Count)
             {
+                if (traps == null)
+                    return EvaluationResult.FromExitCode(0);
                 foreach (var condition in ShellTraps.Conditions)
                     if (!await PrintAsync(condition).ConfigureAwait(false))
                         return EvaluationResult.FromExitCode(1);
@@ -83,18 +85,25 @@ public sealed partial class Evaluation
         else if (numericReset)
             index--;
 
-        traps.DiscardInheritedListing();
-        for (; index < words.Count; index++)
+        traps?.DiscardInheritedListing();
+        try
         {
-            if (!ShellTraps.TryParse(words[index], out var condition))
+            for (; index < words.Count; index++)
             {
-                await InvalidConditionAsync(words[index]).ConfigureAwait(false);
-                status = 1;
+                if (!ShellTraps.TryParse(words[index], out var condition))
+                {
+                    await InvalidConditionAsync(words[index]).ConfigureAwait(false);
+                    status = 1;
+                }
+                else if (reset)
+                    traps?.Reset(condition);
+                else
+                    _state.SetTrap(condition, action, Memory);
             }
-            else if (reset)
-                traps.Reset(condition);
-            else
-                traps.Set(condition, action, Memory);
+        }
+        finally
+        {
+            _state.RetireEmptyTraps();
         }
         return EvaluationResult.FromExitCode(status);
 
@@ -114,7 +123,7 @@ public sealed partial class Evaluation
 
         async Task<bool> PrintAsync(TrapCondition condition)
         {
-            if (!traps.ListedHandlers.TryGetValue(condition, out var handler))
+            if (traps == null || !traps.ListedHandlers.TryGetValue(condition, out var handler))
                 return true;
             var name = Utf8Text.Encode(ShellTraps.GetName(condition));
             var length = "trap -- "u8.Length + ShellArgumentEscaping.GetLiteralSingleQuotedLength(handler.Bytes.Span)

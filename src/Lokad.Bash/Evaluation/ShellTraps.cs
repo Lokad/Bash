@@ -24,6 +24,9 @@ internal sealed class ShellTraps
     internal bool HasPendingExitAction =>
         !_exitHandled && _handlers.TryGetValue(TrapCondition.Exit, out var action) && !action.IsEmpty;
 
+    // Retain the EXIT latch and saved status even if the action clears all registrations.
+    internal bool CanRetire => !_exitHandled && _handlers.Count == 0 && ListedHandlers.Count == 0;
+
     public IReadOnlyDictionary<TrapCondition, ShellValue> ListedHandlers => _inheritedForListing ?? _handlers;
 
     // At most four registrations. Shared actions are conservatively counted per condition.
@@ -61,9 +64,10 @@ internal sealed class ShellTraps
         // Bash keeps an active EXIT context in substitutions and simple pipeline commands.
         // Explicit subshells and compound pipeline stages start with no handler in progress.
         var inheritExitContext = kind != ShellForkKind.Subshell && ExitTrapStatus.HasValue;
+        var listed = ListedHandlers;
         var child = new ShellTraps
         {
-            _inheritedForListing = new Dictionary<TrapCondition, ShellValue>(ListedHandlers),
+            _inheritedForListing = listed.Count == 0 ? null : new Dictionary<TrapCondition, ShellValue>(listed),
             _exitHandled = inheritExitContext,
             ExitTrapStatus = inheritExitContext ? ExitTrapStatus : null
         };

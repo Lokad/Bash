@@ -399,7 +399,18 @@ internal sealed class EvaluationState
 
     public ShellTraps? Traps { get; private set; }
 
-    public ShellTraps GetOrCreateTraps() => Traps ??= new();
+    public void SetTrap(TrapCondition condition, ShellValue action, EvaluationMemory memory)
+    {
+        var traps = Traps ?? new ShellTraps();
+        traps.Set(condition, action, memory);
+        Traps = traps;
+    }
+
+    public void RetireEmptyTraps()
+    {
+        if (Traps?.CanRetire == true)
+            Traps = null;
+    }
 
     public DescriptorTable? CurrentRedirectionTable => _redirections.CurrentTable;
 
