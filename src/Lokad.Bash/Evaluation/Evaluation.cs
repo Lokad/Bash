@@ -2911,9 +2911,24 @@ public sealed partial class Evaluation : IFileTester
     internal Task<ShellValue> ExpandWordValueAsync(Word word, ScopedEvaluation scope) =>
         AwaitWordExpansionAsync(WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar));
 
-    /// <summary>Expands one here-input value without brace generation, splitting or pathname expansion.</summary>
-    internal Task<ShellValue> ExpandHereInputValueAsync(Word word, ScopedEvaluation scope) =>
-        AwaitWordExpansionAsync(WordExpansion.ExpandAssignmentValueAsync(word, scope));
+    /// <summary>Expands here-input fields under their assembly owner without joining their bytes.</summary>
+    internal Task<(IReadOnlyList<ExpandedWord> Fields, int Length)> ExpandHereInputAsync(
+        Word word, ScopedEvaluation scope, MemoryCapacity storage)
+    {
+        return AwaitWordExpansionAsync(ExpandAsync());
+
+        async Task<(IReadOnlyList<ExpandedWord>, int)> ExpandAsync()
+        {
+            var fields = await WordExpansion.ExpandHereInputAsync(word, scope, storage).ConfigureAwait(false);
+            var length = ExpandedWord.GetJoinedValueLength(fields);
+            // A single existing value can use its full length. A joined value has the
+            // same representational bound as ordinary scalar expansion.
+            if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes
+                && (length != ByteMemoryBuilder.MaxMemoryBuilderBytes || fields is not [{ Segments.Count: 1 }]))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            return (fields, (int)length);
+        }
+    }
 
     /// <summary>Decodes the first unsplit field for existing single-text-field consumers.</summary>
     internal Task<string> ExpandWordAsync(Word word, ScopedEvaluation scope)
@@ -3696,14 +3711,15 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>Transfers a here-input's writer/payload to an independent owner registered on its reader.</summary>
-    internal async Task<OperationError?> StartPipeInputAsync(PipeDescriptors pipe, ReadOnlyMemory<byte> content, bool appendNewline)
+    internal async Task<OperationError?> StartPipeInputAsync(
+        PipeDescriptors pipe, IReadOnlyList<ExpandedWord> fields, int length, bool appendNewline)
     {
         var inputs = _pipeInputs ?? throw new InvalidOperationException("Here-input registration was not prepared.");
         PipeInputWriter writer;
         try
         {
             CheckCancellation();
-            writer = new PipeInputWriter(pipe, content, appendNewline, Memory.Budget);
+            writer = new PipeInputWriter(pipe, fields, length, appendNewline, Memory.Budget);
         }
         catch
         {

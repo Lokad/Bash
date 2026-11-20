@@ -18,6 +18,11 @@ internal static partial class WordExpansion
     internal static Task<ShellValue> ExpandAssignmentValueAsync(Word word, ScopedEvaluation scope) =>
         ExpandUnsplitValueAsync(word, scope, ExpansionPurpose.Assignment, TildeExpansion.Assignment);
 
+    internal static Task<IReadOnlyList<ExpandedWord>> ExpandHereInputAsync(
+        Word word, ScopedEvaluation scope, MemoryCapacity storage) =>
+        ExpandWithoutBraceAsync(word, scope, allowWordSplitting: false, ExpansionPurpose.Assignment,
+            TildeExpansion.Assignment, destination: null, storage);
+
     internal static Task<ShellValue> ExpandCompoundValueAsync(Word word, ScopedEvaluation scope, ArrayKind kind) =>
         ExpandUnsplitValueAsync(word, scope,
             kind == ArrayKind.Indexed ? ExpansionPurpose.IndexedCompound : ExpansionPurpose.Assignment,
@@ -105,7 +110,8 @@ internal static partial class WordExpansion
                     allowWordSplitting,
                     purpose,
                     TildeExpansion.Argument,
-                    joinFields ? null : results)
+                    joinFields ? null : results,
+                    scope.Effects.Memory.Workspace)
                 .ConfigureAwait(false);
 
             if (!scope.CanExpand)
@@ -131,7 +137,8 @@ internal static partial class WordExpansion
         bool allowWordSplitting,
         ExpansionPurpose purpose,
         TildeExpansion tildeExpansion) =>
-        ExpandWithoutBraceAsync(word, scope, allowWordSplitting, purpose, tildeExpansion, destination: null);
+        ExpandWithoutBraceAsync(word, scope, allowWordSplitting, purpose, tildeExpansion, destination: null,
+            scope.Effects.Memory.Workspace);
 
     private static async Task<IReadOnlyList<ExpandedWord>> ExpandWithoutBraceAsync(
         Word word,
@@ -139,7 +146,8 @@ internal static partial class WordExpansion
         bool allowWordSplitting,
         ExpansionPurpose purpose,
         TildeExpansion tildeExpansion,
-        List<ExpandedWord>? destination)
+        List<ExpandedWord>? destination,
+        MemoryCapacity storage)
     {
         if (!scope.CanExpand)
             return [];
@@ -157,7 +165,8 @@ internal static partial class WordExpansion
             return [];
 
         var builder = new ExpandedWordBuilder(
-            scope.Variables, scope.Effects.Memory, purpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken);
+            scope.Variables, scope.Effects.Memory, purpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken,
+            storage);
         await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, tildeExpansion)
             .ConfigureAwait(false);
 

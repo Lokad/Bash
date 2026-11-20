@@ -54,9 +54,11 @@ internal sealed class EvaluationMemory
         return command;
     }
 
-    public void Charge(long bytes)
+    public void Charge(long bytes) => Charge(_memory, bytes);
+
+    internal void Charge(MemoryCapacity owner, long bytes)
     {
-        try { _memory.Grow(bytes); }
+        try { owner.Grow(bytes); }
         catch (MemoryBudgetExceededException) { _refused = true; throw; }
     }
 

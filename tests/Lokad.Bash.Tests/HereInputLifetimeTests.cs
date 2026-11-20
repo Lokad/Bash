@@ -176,6 +176,69 @@ public sealed class HereInputLifetimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task HereInputExpansionWorkspaceRetiresBeforeConsumption(bool document)
+    {
+        var small = await ObserveAsync(64);
+        var large = await ObserveAsync(128 * 1024);
+
+        Assert.Equal(small, large);
+
+        async Task<long> ObserveAsync(int length)
+        {
+            var literal = new string('x', length);
+            var input = document ? $"<<END\n{literal}${{tail:=end}}\nEND\n" : $"<<<{literal}\"${{tail:=end}}\"; ";
+            var state = new Evaluation.Evaluation(Parser.Parse("read -r value " + input + ":"));
+            var governor = new MemoryGovernor(8 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var observed = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var payload = new TaskCompletionSource<ReadOnlyMemory<byte>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var write = new TaskCompletionSource<DescriptorWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var host = new TestOperationVisitor([])
+            {
+                MemoryBudget = governor,
+                BeforeAppend = (descriptor, content) =>
+                {
+                    Assert.Equal(new FileDescriptor(11), descriptor);
+                    payload.SetResult(content);
+                },
+                BeforeDescriptorRead = descriptor =>
+                {
+                    Assert.Equal(new FileDescriptor(10), descriptor);
+                    observed.SetResult(state.Memory.Workspace.Bytes);
+                }
+            };
+            host.EnqueuePipeDescriptors(new PipeDescriptors(10, 11));
+            host.EnqueueAppendTask(write.Task);
+            host.EnqueueReadResult(ReadResult.EndOfFile);
+            host.EnqueueCloseDescriptor();
+            host.EnqueueCloseDescriptor();
+            var running = new Engine().RunAsync(state, host, owner, deadline.Token);
+            long workspace;
+            try
+            {
+                workspace = await observed.Task.WaitAsync(deadline.Token);
+                var pending = await payload.Task.WaitAsync(deadline.Token);
+                Assert.Equal(length + 4, pending.Length);
+                Assert.Equal(-1, pending.Span[..length].IndexOfAnyExcept((byte)'x'));
+                Assert.True(pending.Span[length..].SequenceEqual("end\n"u8));
+                Assert.False(write.Task.IsCompleted);
+                Assert.True(governor.ReservedBytes >= pending.Length);
+            }
+            finally { write.TrySetResult(DescriptorWriteResult.Open); }
+
+            Assert.Equal(0, (await running.WaitAsync(deadline.Token)).ExitCode);
+            Assert.Equal(ShellValue.FromText("end"), state.Variables["tail"]);
+            Assert.Equal(new[] { new FileDescriptor(10), new FileDescriptor(11) }, host.ClosedDescriptors.OrderBy(descriptor => descriptor.Id));
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return workspace;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CancellationRetainsPayloadThroughPendingWriteAndBothCloses(bool allocated)
     {
         using var cancellation = new CancellationTokenSource();

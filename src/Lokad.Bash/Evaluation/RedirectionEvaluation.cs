@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -138,10 +139,8 @@ internal sealed class RedirectionEvaluation
                     break;
                 case RedirectionKind.HereDocument:
                 case RedirectionKind.HereDocumentStripTabs:
-                    await HereDocumentAsync(scope, redirection, targetDescriptor).ConfigureAwait(false);
-                    break;
                 case RedirectionKind.HereString:
-                    await HereStringAsync(scope, redirection, targetDescriptor).ConfigureAwait(false);
+                    await HereInputAsync(scope, redirection, targetDescriptor).ConfigureAwait(false);
                     break;
                 case RedirectionKind.CloseOutput:
                 case RedirectionKind.CloseInput:
@@ -319,54 +318,40 @@ internal sealed class RedirectionEvaluation
 
     }
 
-    /// <summary> Writes a here-string into a pipe and assigns it to the target descriptor. </summary>
-    private async Task HereStringAsync(
-        ScopedEvaluation scope,
-        Redirection redirection,
-        LogicalDescriptor targetDescriptor)
-    {
-        var content = await scope.Effects.ExpandHereInputValueAsync(redirection.Target, scope).ConfigureAwait(false);
-        if (scope.Effects.HasPendingExpansionError)
-            return;
-
-        await WritePipeInputAsync(scope, targetDescriptor, content.Bytes, appendNewline: true).ConfigureAwait(false);
-    }
-
-    /// <summary> Writes a here-document into a pipe and assigns it to the target descriptor. </summary>
-    private async Task HereDocumentAsync(
-        ScopedEvaluation scope,
-        Redirection redirection,
-        LogicalDescriptor targetDescriptor)
-    {
-        var content = await scope.Effects.ExpandHereInputValueAsync(redirection.Target, scope).ConfigureAwait(false);
-        if (scope.Effects.HasPendingExpansionError)
-            return;
-
-        await WritePipeInputAsync(scope, targetDescriptor, content.Bytes, appendNewline: false).ConfigureAwait(false);
-    }
-
     /// <summary>Publishes the reader while its independently owned producer can wait for pipe capacity.</summary>
-    private async Task WritePipeInputAsync(
-        ScopedEvaluation scope, LogicalDescriptor targetDescriptor, ReadOnlyMemory<byte> content, bool appendNewline)
+    private async Task HereInputAsync(ScopedEvaluation scope, Redirection redirection, LogicalDescriptor targetDescriptor)
     {
-        PrepareOpenedDescriptor(scope);
-        scope.Effects.PrepareOwnedDescriptors(1);
-        scope.Effects.PreparePipeInput();
-        var creation = await scope.Effects.ExecuteCreatePipeAsync().ConfigureAwait(false);
-        if (creation.Descriptors is not { } pipe)
+        var effects = scope.Effects;
+        FileDescriptor? reader = null;
+        OperationError? error;
+        using (var storage = new MemoryCapacity(effects.Memory.Budget, 0))
         {
-            await ReportFailureAsync(scope, creation.Error).ConfigureAwait(false);
+            var (fields, length) = await effects.ExpandHereInputAsync(redirection.Target, scope, storage).ConfigureAwait(false);
+            if (effects.HasPendingExpansionError)
+                return;
+
+            storage.ReleaseUnusedCapacity();
+            PrepareOpenedDescriptor(scope);
+            effects.PrepareOwnedDescriptors(1);
+            effects.PreparePipeInput();
+            var creation = await effects.ExecuteCreatePipeAsync().ConfigureAwait(false);
+            error = creation.Error;
+            if (creation.Descriptors is { } pipe)
+            {
+                reader = pipe.Read;
+                _openedDescriptors.AddPrepared(pipe.Read);
+                effects.TrackOwnedDescriptor(pipe.Read);
+                error = await effects.StartPipeInputAsync(pipe, fields, length,
+                    appendNewline: redirection.Kind == RedirectionKind.HereString).ConfigureAwait(false);
+            }
+        }
+
+        if (!reader.HasValue || error.HasValue)
+        {
+            await ReportFailureAsync(scope, error).ConfigureAwait(false);
             return;
         }
-        _openedDescriptors.AddPrepared(pipe.Read);
-        scope.Effects.TrackOwnedDescriptor(pipe.Read);
-        var error = await scope.Effects.StartPipeInputAsync(pipe, content, appendNewline).ConfigureAwait(false);
-        if (error is { } failure)
-        {
-            await ReportFailureAsync(scope, failure).ConfigureAwait(false);
-            return;
-        }
-        SetDescriptor(scope, targetDescriptor, pipe.Read);
+        SetDescriptor(scope, targetDescriptor, reader.Value);
     }
 
     /// <summary>Publishes one selected variable output and persists the acquired alias through restoration boundaries.</summary>

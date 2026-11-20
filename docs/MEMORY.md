@@ -393,6 +393,11 @@ Retained estimates include actual owned index capacity and saved frame/stack
 storage. Final cleanup drops the owned indexes only after all close attempts have
 settled, before retiring workspace. Ownership lists are no longer copied for every
 successive transferred handle.
+Here-string and here-document word assembly has a scratch allowance through
+writer startup. Assembly returns unused credit before pipe acquisition. The
+writer joins the expanded fields directly in its own admitted buffer. The
+assembly allowance is refunded before the reader is published. Expansion
+writes and descriptor bookkeeping keep their own owners.
 Here-input registration dictionaries prepare capacity before pipe acquisition,
 including replacement overlap. Their actual high-water capacity belongs to the
 execution cleanup owner, separately from producer payload/channel estimates.

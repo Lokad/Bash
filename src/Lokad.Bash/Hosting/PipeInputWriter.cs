@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -23,15 +25,16 @@ internal sealed class PipeInputWriter
     private TaskCompletionSource<DescriptorCloseResult>? _readerClose;
     private bool _stopping;
 
-    public PipeInputWriter(PipeDescriptors pipe, ReadOnlyMemory<byte> content, bool appendNewline, IMemoryBudget budget)
+    public PipeInputWriter(
+        PipeDescriptors pipe, IReadOnlyList<ExpandedWord> fields, int length, bool appendNewline, IMemoryBudget budget)
     {
         _pipe = pipe;
         _memory = budget.CreateScope();
         try
         {
             _memory.Reserve(512); // Pump and completion channels; the evaluator owns registration capacity.
-            _content = new ByteMemoryBuilder(checked(content.Length + (appendNewline ? 1 : 0)), _memory);
-            _content.Append(content);
+            _content = new ByteMemoryBuilder(checked(length + (appendNewline ? 1 : 0)), _memory);
+            ExpandedWord.CopyJoinedValueTo(fields, _content.AppendSpan(length));
             if (appendNewline) _content.Append((byte)'\n');
         }
         catch
