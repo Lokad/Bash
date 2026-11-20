@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -743,6 +744,24 @@ public sealed partial class Evaluation : IFileTester
             string.Empty, hereDocumentDelimiter: null)
     ];
 
+    /// <summary>Borrows a stage's parsed redirections and exposes the implicit alias after them.</summary>
+    private sealed class PipelineStderrRedirections(IReadOnlyList<Redirection> explicitRedirections) : IReadOnlyList<Redirection>
+    {
+        public int Count => checked(explicitRedirections.Count + 1);
+
+        public Redirection this[int index] => index == explicitRedirections.Count
+            ? PipeStandardErrorRedirections[0] : explicitRedirections[index];
+
+        public IEnumerator<Redirection> GetEnumerator()
+        {
+            for (var index = 0; index < explicitRedirections.Count; index++)
+                yield return explicitRedirections[index];
+            yield return PipeStandardErrorRedirections[0];
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     /// <summary>
     /// Evaluates a pipeline by preparing pipe descriptors, running commands, and collecting exit codes.
     /// </summary>
@@ -878,15 +897,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (redirections.Count == 0)
                     return PipeStandardErrorRedirections;
-                Memory.Charge(checked(32L + 8L * (redirections.Count + 1L)));
-                var appended = new Redirection[checked(redirections.Count + 1)];
-                for (var index = 0; index < redirections.Count; index++)
-                {
-                    CheckCancellation();
-                    appended[index] = redirections[index];
-                }
-                appended[^1] = PipeStandardErrorRedirections[0];
-                return appended;
+                Memory.Charge(32);
+                return new PipelineStderrRedirections(redirections);
             }
         }
 

@@ -12,6 +12,37 @@ public sealed class DescriptorBookkeepingTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task PipeAndErrorStagePreparationUsesConstantWorkspaceForExplicitRedirections(bool compound)
+    {
+        Assert.Equal(await MeasureDispatchWorkspaceAsync(1), await MeasureDispatchWorkspaceAsync(1024));
+
+        async Task<long> MeasureDispatchWorkspaceAsync(int redirections)
+        {
+            var script = (compound ? "{ :; }" : ":") + string.Concat(Enumerable.Repeat(" 1>&1", redirections)) + " |& :";
+            var evaluation = new Eval(Parser.Parse(script));
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            evaluation.Memory.Budget = owner;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            var pipe = Assert.IsType<CreatePipeOperation>(await evaluation.GetNextStep(deadline.Token));
+            pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(10, 11)));
+            var pipeline = Assert.IsType<RunPipelineEvaluations>(await evaluation.GetNextStep(deadline.Token));
+            var workspace = evaluation.Memory.Workspace.Bytes;
+            pipeline.SetResult([0, 0]);
+
+            Assert.Null(await evaluation.GetNextStep(deadline.Token));
+            await evaluation.Completion;
+            Assert.Equal(0, evaluation.LastExitCode);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return workspace;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task PreparedRepeatedOpensAdmitTrackingWhileNoOpAliasesStayBounded(bool opens)
     {
         const int Count = 1024;
