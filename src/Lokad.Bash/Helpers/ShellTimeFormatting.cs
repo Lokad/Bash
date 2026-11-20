@@ -1,5 +1,6 @@
 using System;
-using System.Globalization;
+using System.Buffers;
+using System.Buffers.Text;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Helpers;
@@ -24,6 +25,7 @@ public static class ShellTimeFormatting
             return true;
 
         using var builder = new ByteMemoryBuilder(0, memoryBudget);
+        Span<byte> number = stackalloc byte[40];
         try
         {
             var bytes = format.Bytes.Span;
@@ -46,7 +48,10 @@ public static class ShellTimeFormatting
                 {
                     var percent = duration.Real.Ticks == 0 ? 0
                         : 100m * (duration.User.Ticks + duration.System.Ticks) / duration.Real.Ticks;
-                    builder.Append(Utf8Text.Encode((decimal.Truncate(percent * 100) / 100).ToString("F2", CultureInfo.InvariantCulture)));
+                    var truncated = decimal.Truncate(percent * 100) / 100;
+                    if (!Utf8Formatter.TryFormat(truncated, number, out var written, new StandardFormat('F', 2)))
+                        throw new InvalidOperationException("A CPU percentage must fit its format buffer.");
+                    builder.Append(number[..written]);
                     continue;
                 }
 
@@ -82,14 +87,16 @@ public static class ShellTimeFormatting
                 var units = milliseconds / (1000 / scale);
                 if (longFormat)
                 {
-                    builder.Append(Utf8Text.Encode((units / (60 * scale)).ToString(CultureInfo.InvariantCulture)))
-                        .Append((byte)'m');
+                    AppendInteger(units / (60 * scale), number, default);
+                    builder.Append((byte)'m');
                     units %= 60 * scale;
                 }
-                builder.Append(Utf8Text.Encode((units / scale).ToString(CultureInfo.InvariantCulture)));
+                AppendInteger(units / scale, number, default);
                 if (precision != 0)
-                    builder.Append((byte)'.')
-                        .Append(Utf8Text.Encode((units % scale).ToString("D" + precision, CultureInfo.InvariantCulture)));
+                {
+                    builder.Append((byte)'.');
+                    AppendInteger(units % scale, number, new StandardFormat('D', (byte)precision));
+                }
                 if (longFormat)
                     builder.Append((byte)'s');
             }
@@ -101,6 +108,13 @@ public static class ShellTimeFormatting
         {
             error = "TIMEFORMAT: output exceeds the CLR array length limit\n"u8.ToArray();
             return false;
+        }
+
+        void AppendInteger(long value, Span<byte> buffer, StandardFormat format)
+        {
+            if (!Utf8Formatter.TryFormat(value, buffer, out var written, format))
+                throw new InvalidOperationException("A timing number must fit its format buffer.");
+            builder.Append(buffer[..written]);
         }
     }
 }
