@@ -69,6 +69,33 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
     }
 
     [Fact]
+    public async Task StackEditsPreserveOrderAcrossRotationTildeLookupAndSubshells()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/root", "/root/alpha", "/root/beta"], []);
+        const string Script = """
+            cd /root
+            pushd -n /root/alpha >/dev/null
+            pushd -n /root/beta >/dev/null
+            (popd -n +1 >/dev/null; printf 'child:%s:%s:%s\n' ~+0 ~+1 ~-0)
+            printf 'parent:%s:%s:%s\n' ~+0 ~+1 ~-0
+            pushd +1 >/dev/null
+            printf 'rotated:%s:%s:%s\n' ~+0 ~+1 ~-0
+            popd -n -0 >/dev/null
+            dirs
+            """;
+
+        var result = await host.RunAsync(Script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("child:/root:/root/alpha:/root/alpha\n"
+            + "parent:/root:/root/beta:/root/alpha\n"
+            + "rotated:/root/beta:/root/alpha:/root\n"
+            + "/root/beta /root/alpha\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task Evaluation_PushdBuiltin_AssignmentPrefixContributesToDirectoryVariables()
     {
         var script = @"PWD=/temporary OLDPWD=/ignored pushd /target; printf '%s|%s\n' ""$PWD"" ""$OLDPWD""";

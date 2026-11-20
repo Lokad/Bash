@@ -188,15 +188,14 @@ internal sealed class EvaluationState
     private RedirectionState _redirections;
 
     /// <summary>
-    /// Stores the directory stack with the current directory at index 0; updated by pushd/popd style builtins.
+    /// Stores entries in reverse logical order, with the current directory at the end.
     /// </summary>
     private readonly List<DirectoryStackEntry> _directoryStack;
     private long _ownedDirectoryPathBytes;
 
     internal readonly struct DirectoryStackEntry
     {
-        // Either an admitted resolved path or owned operand bytes. Both fit in the original
-        // reference slot, so adding deferred entries does not enlarge every stack allocation.
+        // Both forms use a path reference and an ownership estimate.
         private readonly object _path;
 
         private DirectoryStackEntry(object path, long ownedBytes)
@@ -230,7 +229,7 @@ internal sealed class EvaluationState
         DescriptorTable? inheritedDescriptorTable)
         : this(script, new RedirectionState(inheritedDescriptorTable), new List<DirectoryStackEntry>(1) { DirectoryStackEntry.Resolved(currentDirectory) })
     {
-        _ownedDirectoryPathBytes = _directoryStack[0].OwnedBytes;
+        _ownedDirectoryPathBytes = _directoryStack[^1].OwnedBytes;
     }
 
     private EvaluationState(ParsedScript script, RedirectionState redirections, List<DirectoryStackEntry> directoryStack)
@@ -262,15 +261,16 @@ internal sealed class EvaluationState
     /// <summary>
     /// Stores the current working directory; initialized to "/" and updated by directory-changing builtins.
     /// </summary>
-    public ShellPath CurrentDirectory => _directoryStack[0].Path
+    public ShellPath CurrentDirectory => _directoryStack[^1].Path
         ?? throw new InvalidOperationException("The working directory must be resolved.");
 
     internal int DirectoryStackCount => _directoryStack.Count;
-    internal DirectoryStackEntry GetDirectoryStackEntry(int index) => _directoryStack[index];
+    internal DirectoryStackEntry GetDirectoryStackEntry(int index) => _directoryStack[DirectoryStackSlot(index)];
     internal long RetainedDirectoryStackBytes => checked(EstimateDirectoryStackBytes(_directoryStack.Capacity)
         + _ownedDirectoryPathBytes);
 
     private static long EstimateDirectoryStackBytes(int capacity) => 32L + 16L * capacity;
+    private int DirectoryStackSlot(int index) => _directoryStack.Count - 1 - index;
 
     public IReadOnlyDictionary<ShellValue, FunctionBinding> Functions => _functions;
 
@@ -576,7 +576,7 @@ internal sealed class EvaluationState
 
     public void ResetDirectoryStack()
     {
-        _directoryStack.RemoveRange(1, _directoryStack.Count - 1);
+        _directoryStack.RemoveRange(0, _directoryStack.Count - 1);
         _ownedDirectoryPathBytes = _directoryStack[0].OwnedBytes;
     }
 
@@ -589,23 +589,26 @@ internal sealed class EvaluationState
 
     public void RemoveSavedDirectory(int index)
     {
-        _ownedDirectoryPathBytes -= _directoryStack[index].OwnedBytes;
-        _directoryStack.RemoveAt(index);
+        var slot = DirectoryStackSlot(index);
+        _ownedDirectoryPathBytes -= _directoryStack[slot].OwnedBytes;
+        _directoryStack.RemoveAt(slot);
     }
 
     /// <summary>Rotates saved entries while the active directory remains in place until lookup succeeds.</summary>
     public DirectoryStackEntry RotateSavedDirectories(int index, EvaluationMemory memory)
     {
-        var current = _directoryStack[0];
+        var current = _directoryStack[^1];
         if (index == 0)
             return current;
 
-        var selected = _directoryStack[index];
+        var selected = GetDirectoryStackEntry(index);
         memory.Charge(Math.Max(0, current.OwnedBytes - selected.OwnedBytes));
-        _directoryStack.Reverse(0, index);
-        _directoryStack.Reverse(index, _directoryStack.Count - index);
+        // Logical left rotation is right rotation in the backing list.
+        var split = _directoryStack.Count - index;
+        _directoryStack.Reverse(0, split);
+        _directoryStack.Reverse(split, index);
         _directoryStack.Reverse();
-        _directoryStack[0] = current;
+        _directoryStack[^1] = current;
         _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + current.OwnedBytes - selected.OwnedBytes);
         return selected;
     }
@@ -613,9 +616,9 @@ internal sealed class EvaluationState
     /// <summary>Applies a settled lookup, including Bash's partial stack change after a rejected swap.</summary>
     public DirectoryStackEntry ApplyDirectoryLookup(DirectoryChangeKind kind, ShellPath target, bool succeeded, EvaluationMemory memory)
     {
-        var previous = _directoryStack[0];
+        var previous = _directoryStack[^1];
         var fromStack = kind is DirectoryChangeKind.PopDirectory or DirectoryChangeKind.SwapDirectories;
-        var stored = fromStack ? _directoryStack[1] : previous;
+        var stored = fromStack ? _directoryStack[^2] : previous;
         var destination = ReferenceEquals(stored.Path, target) ? stored : DirectoryStackEntry.Resolved(target);
         if (kind == DirectoryChangeKind.SwapDirectories)
         {
@@ -635,8 +638,9 @@ internal sealed class EvaluationState
 
         void Replace(int index, DirectoryStackEntry entry)
         {
-            _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes - _directoryStack[index].OwnedBytes);
-            _directoryStack[index] = entry;
+            var slot = DirectoryStackSlot(index);
+            _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes - _directoryStack[slot].OwnedBytes);
+            _directoryStack[slot] = entry;
         }
     }
 
@@ -671,7 +675,7 @@ internal sealed class EvaluationState
             memory.Charge(EstimateDirectoryStackBytes(capacity));
             _directoryStack.Capacity = capacity;
         }
-        _directoryStack.Insert(1, entry);
+        _directoryStack.Insert(_directoryStack.Count - 1, entry);
         _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes);
     }
 
