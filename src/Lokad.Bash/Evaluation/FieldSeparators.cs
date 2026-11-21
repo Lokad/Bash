@@ -15,6 +15,7 @@ internal sealed class FieldSeparators
 
     /// <summary>The shared separators used when <c>IFS</c> is unset.</summary>
     internal static readonly FieldSeparators Default = new(ShellValue.FromText(DefaultValue), null, null);
+    internal static readonly FieldSeparators Empty = new(ShellValue.Empty, null, null);
 
     /// <summary>The separator bytes, including any malformed UTF-8.</summary>
     private readonly ShellValue _value;

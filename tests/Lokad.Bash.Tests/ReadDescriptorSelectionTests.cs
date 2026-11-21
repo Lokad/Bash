@@ -51,6 +51,6 @@ public sealed class ReadDescriptorSelectionTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("", result.StdOut);
-        Assert.Equal("read: -u: option requires an argument\nread: usage: read [-r] [-a array] [-d delim] [-u fd] [name ...]\n", result.StdErr);
+        Assert.Equal("read: -u: option requires an argument\nread: usage: read [-r] [-a array] [-d delim] [-n count] [-N count] [-u fd] [name ...]\n", result.StdErr);
     }
 }

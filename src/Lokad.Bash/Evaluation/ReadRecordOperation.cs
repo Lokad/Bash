@@ -22,6 +22,22 @@ internal sealed class ReadRecordOperation(
 /// <summary>A retained record, normal EOF without a record, or a descriptor read failure.</summary>
 internal readonly record struct ReadRecordResult(DelimitedRecord? Record, ByteReadResult Failure);
 
+/// <summary>Normalizes a counted read into the evaluator's reusable input buffer.</summary>
+internal sealed class ReadCountedRecordOperation(
+    TaskCompletionSource<(bool Complete, OperationError? Error)> completion,
+    FileDescriptor descriptor,
+    byte? delimiter,
+    int count,
+    ReadBackslashMode backslashMode,
+    ByteMemoryBuilder content) : EvaluationOperation<(bool Complete, OperationError? Error)>(completion)
+{
+    public FileDescriptor Descriptor { get; } = descriptor;
+    public byte? Delimiter { get; } = delimiter;
+    public int Count { get; } = count;
+    public ReadBackslashMode BackslashMode { get; } = backslashMode;
+    public ByteMemoryBuilder Content { get; } = content;
+}
+
 /// <summary>Reads a bounded batch of raw records into caller-owned storage.</summary>
 internal sealed class ReadRecordBatchOperation(
     TaskCompletionSource<DescriptorRecordBatch> completion,

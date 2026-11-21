@@ -50,6 +50,16 @@ consumes the logical record, including escaped delimiters. If Bash 5.2 emits
 its internal `0x01` marker for that empty field, Lokad.Bash assigns empty text.
 Literal `0x01` input remains data. With `-r`, backslashes remain literal.
 
+`read -n count` stops at the byte count or an unescaped delimiter. If the count
+is reached first, the next read starts at the following byte, including any
+delimiter there. `-N count` ignores the delimiter and disables IFS splitting.
+The last count applies, and any reached `-N` selects the exact-count mode.
+Counts use the C locale byte profile, including for UTF-8 input. Escape
+processing skips backslash-LF and counts the protected byte for other escapes.
+Unquoted NUL does not count toward either limit. Zero assigns an empty value
+without consuming bytes. EOF before the requested boundary publishes partial
+input and returns failure.
+
 `$(<file)` and its backtick form read a single input-file redirection on
 descriptor zero. Filename expansion runs in the caller. The result removes
 NUL bytes with a diagnostic and strips trailing LF bytes. CR is preserved.

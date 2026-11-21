@@ -56,6 +56,8 @@ internal static class ShellOperationDispatcher
                     request.Delimiter, request.Limit, request.DestinationBudget, state.CancellationToken))),
             ReadRecordOperation record => record.UseResult(state, static (request, state) =>
                 ReadRecordAsync(request, state.Host, state.CancellationToken)),
+            ReadCountedRecordOperation counted => HandleReadLimitAsync(counted.UseResult(state, static (request, state) =>
+                ReadCountedRecordAsync(request, state.Host, state.CancellationToken))),
             ReadSubstitutionInputOperation input => input.UseResult(state, static (request, state) =>
                 state.Host.TryReadAllBytesAsync(request.Descriptor, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1,
                     static _ => { }, request.DestinationBudget, state.CancellationToken)),
@@ -177,6 +179,26 @@ internal static class ShellOperationDispatcher
                 record = value with { Content = value.Content.ToArray() };
             }
             return new ReadRecordResult(record, reader.ReadFailure);
+        }
+
+        static async ValueTask<(bool Complete, OperationError? Error)> ReadCountedRecordAsync(
+            ReadCountedRecordOperation request, IBashHost host, CancellationToken cancellationToken)
+        {
+            var input = new ReadInputBuffer(request.Content, request.BackslashMode);
+            var remaining = request.Count;
+            while (true)
+            {
+                using var buffer = await host.ReadAsync(request.Descriptor,
+                    DescriptorReadRequest.UpTo(DescriptorReader.BufferSize), cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (buffer.Result.Error is { } error)
+                    return (false, error);
+                var complete = input.Append(buffer.Content.Span, request.Delimiter, ref remaining, out var consumed,
+                    cancellationToken);
+                buffer.Consume(consumed);
+                if (complete || buffer.Result.ReachedEoF)
+                    return (complete, null);
+            }
         }
 
         static async Task HandleReadLimitAsync(Task pending)

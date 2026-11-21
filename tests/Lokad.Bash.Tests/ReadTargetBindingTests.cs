@@ -220,6 +220,52 @@ public sealed class ReadTargetBindingTests
     }
 
     [Fact]
+    public async Task ReadCountKeepsItsTargetOnInputBufferRefusal()
+    {
+        var governor = new MemoryGovernor(96 * 1024);
+        await using var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), governor);
+        host.SetStandardInput(new string('x', 80 * 1024));
+        using var owner = governor.CreateScope();
+        var state = new Eval(Parser.Parse("value=old; read -rN81920 value; status=$?"));
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(ShellValue.FromText("old"), state.Variables["value"]);
+        Assert.Equal(ShellValue.FromText("1"), state.Variables["status"]);
+        Assert.Equal("read: shared memory budget exhausted\n", host.StandardError.TextContent);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ReadCountCancellationSettlesTheBorrowBeforeUnwinding()
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        await using var host = new PendingReadHost { MemoryBudget = governor };
+        host.SetStandardInput("value\n");
+        var state = new Eval(Parser.Parse("value=old; read -N2 value"));
+        state.Memory.Budget = owner;
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var read = Assert.IsType<ReadCountedRecordOperation>(await state.GetNextStep());
+        var dispatch = ShellOperationDispatcher.DispatchAsync(read, host, cancellation.Token);
+        await host.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cancellation.Cancel();
+        var endedBeforeHost = evaluation.IsCompleted;
+        host.Release.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatch);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => state.GetNextStep());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+        Assert.False(endedBeforeHost);
+        Assert.Equal(0, host.ReadBytesConsumed);
+        Assert.Equal(ShellValue.FromText("old"), state.Variables["value"]);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public async Task ReadArrayLeavesTheTargetUntilACanceledInputBorrowSettles()
     {
         var state = new Eval(Parser.Parse("a=(old); read -a a"));
