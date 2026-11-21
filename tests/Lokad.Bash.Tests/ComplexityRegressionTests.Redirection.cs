@@ -136,17 +136,18 @@ public sealed partial class ComplexityRegressionTests
 
         IReadOnlyList<FileDescriptor> batch = [descriptor];
         var closing = new OrderedDescriptorSet();
+        var queuedForClose = 0;
         for (var iteration = 0; iteration < 20_000; iteration++)
-            Assert.True(state.TransferRedirectionDescriptors(batch, null, closing).Count == 0);
+            Transfer();
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var iteration = 0; iteration < 10_000; iteration++)
-            Assert.True(state.TransferRedirectionDescriptors(batch, null, closing).Count == 0);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        AllocationAssert.SustainedReuse(Transfer, iterations: 10_000, maximumBytes: 1_024);
 
-        Assert.True(
-            allocated <= 1_024,
-            $"Repeated descriptor tracking allocated {allocated:N0} bytes; the scope stack was likely copied.");
+        Assert.Equal(0, queuedForClose);
+        Assert.Empty(state.PopRedirectionTable());
+        Assert.Equal(descriptor, Assert.Single(state.CurrentRedirectionOpenedDescriptors));
+        Assert.Empty(outerOpened);
+
+        void Transfer() => queuedForClose += state.TransferRedirectionDescriptors(batch, null, closing).Count;
     }
 
     [Theory]

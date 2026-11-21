@@ -123,13 +123,13 @@ public sealed class DescriptorReferenceTests
         Assert.False(table.References(absent));
         Assert.True(table.References(last));
         using var blocker = owner.Reserve(governor.LimitBytes - governor.ReservedBytes);
-        var baseline = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 1024; index++)
+        AllocationAssert.SustainedReuse(CheckReferences, iterations: 1024, maximumBytes: 0);
+
+        void CheckReferences()
         {
             if (table.References(absent) || !table.References(last))
                 throw new InvalidOperationException("Reference membership changed without a mutation.");
         }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - baseline);
     }
 
     [Theory]
