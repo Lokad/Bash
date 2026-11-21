@@ -1956,6 +1956,8 @@ public sealed partial class Evaluation : IFileTester
                 var filter = caseAttributes;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Readonly)) filter |= FunctionAttributes.Readonly;
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Exported)) filter |= FunctionAttributes.Exported;
+                var filterNames = noOperands && (options.ListingAttributes != DeclarationListingAttributes.None
+                    || caseAttributes != FunctionAttributes.None);
                 var functionStatus = 0;
                 await foreach (var name in GetNamesAsync(GetListedFunctionNames, static value => value).ConfigureAwait(false))
                 {
@@ -1979,6 +1981,8 @@ public sealed partial class Evaluation : IFileTester
                             await ReportDeclarationOperandAsync(name, "not found").ConfigureAwait(false);
                         continue;
                     }
+                    if (filterNames && !MatchesFilter(function))
+                        continue;
                     if (!inspect)
                     {
                         var attributes = function.Attributes;
@@ -2023,32 +2027,34 @@ public sealed partial class Evaluation : IFileTester
                 IEnumerable<ShellValue> GetListedFunctionNames(MemoryCapacity listingMemory)
                 {
                     var functions = _state.Functions;
-                    var filterByAttributes = options.ListingAttributes != DeclarationListingAttributes.None
-                        || caseAttributes != FunctionAttributes.None;
-                    // The namespace is stable until output starts. Count the selected union so the
-                    // snapshot has exact backing even when most functions match.
-                    var selected = filterByAttributes ? functions.Where(MatchesFilter) : functions;
-                    var count = filterByAttributes ? selected.Count() : functions.Count;
-                    if (count == 0)
+                    var count = functions.Count;
+                    if (count == 0 || filterNames && !functions.Values.Any(MatchesFilter))
                         return [];
 
+                    // A host write can replace attributes on any name already in the listing.
                     Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<ShellValue>(count));
                     var sorted = new ShellValue[count];
                     var index = 0;
-                    foreach (var (name, _) in selected)
+                    foreach (var (name, function) in functions)
                     {
-                        // A sorted name snapshot can outlive a source-backed binding during host writes.
-                        Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<byte>(name.Bytes.Length));
-                        sorted[index++] = ShellValue.FromBytes(name.Bytes.ToArray());
+                        CheckCancellation();
+                        // A replacement can retire evaluator-owned source during a write.
+                        var spelling = name;
+                        if (function.SourceMemory != null)
+                        {
+                            Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<byte>(name.Bytes.Length));
+                            spelling = ShellValue.FromBytes(name.Bytes.ToArray());
+                        }
+                        sorted[index++] = spelling;
                     }
                     Array.Sort(sorted, ShellValue.ByteOrder);
                     return sorted;
+                }
 
-                    bool MatchesFilter(KeyValuePair<ShellValue, FunctionBinding> entry)
-                    {
-                        CheckCancellation();
-                        return (entry.Value.Attributes & filter) != FunctionAttributes.None;
-                    }
+                bool MatchesFilter(FunctionBinding function)
+                {
+                    CheckCancellation();
+                    return (function.Attributes & filter) != FunctionAttributes.None;
                 }
             }
 

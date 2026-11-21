@@ -441,6 +441,44 @@ public sealed class SourceMemoryLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("export -f a", "-Fx", "declare -fx a\ndeclare -fx z\n")]
+    [InlineData("readonly -f a z", "-Fr", "declare -fr a\n")]
+    public async Task FunctionListingChecksReachedAttributesAfterHostWrites(string attributes, string filter, string expected)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        var evaluation = new Eval(Parser.Parse($"a(){{ :; }}\nsource /definitions\n{attributes}\ndeclare {filter}\n"));
+        var replacement = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("z(){ :; }").Commands));
+        var inserted = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("b(){ :; }").Commands));
+        await using var host = new TestHost { MemoryBudget = budget };
+        host.AddFile("/definitions", "z(){ :; }\n#" + new string('z', PaddingBytes) + "\n");
+        using var owner = budget.CreateScope();
+        var updated = false;
+        host.BeforeAppend = (descriptor, _, _) =>
+        {
+            if (descriptor != FileDescriptor.StdOut || updated)
+                return;
+            updated = true;
+            Assert.Single(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+            evaluation.SetExportedFunction(replacement);
+            evaluation.SetExportedFunction(inserted);
+            Assert.DoesNotContain(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+        };
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, cancel.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(updated);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     private sealed class LookupHost(Action lookup) : MockFileSystem
     {
         public override Task<IReadOnlyList<CommandLookupResult>> ResolveCommandsAsync(
