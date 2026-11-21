@@ -1042,16 +1042,6 @@ public sealed partial class Evaluation : IFileTester
         if (_state.TryConsumeExpansionError(out var preparationError))
             return PublishStatus(await FailPreparationAsync(preparationError).ConfigureAwait(false));
 
-        if (declaration == null && preparation is PreparedCommand.Executable
-            { Resolution: CommandResolution.EvaluatorBuiltin { Kind: BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local } } declarationCommand)
-        {
-            declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(
-                simpleCommand, declarationCommand.Words, scope, captureCommandWords: false))
-                .ConfigureAwait(false);
-        }
-        if (_state.TryConsumeExpansionError(out var declarationError))
-            return PublishStatus(await FailPreparationAsync(declarationError).ConfigureAwait(false));
-
         // Expand once in the caller scope before redirections and temporary bindings.
         IReadOnlyList<ShellValue> byteOperands = [];
         var pwdOptions = new PwdOptions();
@@ -1059,35 +1049,34 @@ public sealed partial class Evaluation : IFileTester
         if (preparation is PreparedCommand.Executable command)
         {
             lastArgument = command.CommandValue;
-            if (command.Resolution is not CommandResolution.EvaluatorBuiltin
-                || command.Resolution is CommandResolution.EvaluatorBuiltin
-                {
-                    Kind: BuiltinKind.Printf or BuiltinKind.Echo or BuiltinKind.Hash or BuiltinKind.Type or BuiltinKind.Help or BuiltinKind.Export
-                        or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local
-                        or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
-                        or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
-                        or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd or BuiltinKind.Shift
-                        or BuiltinKind.Dirs or BuiltinKind.Pushd or BuiltinKind.Popd or BuiltinKind.Caller
-                })
+            var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
+            if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)
             {
-                var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
+                declaration ??= await AwaitWordExpansionAsync(PrepareDeclarationAsync(
+                    simpleCommand, command.Words, scope, captureCommandWords: false)).ConfigureAwait(false);
+                if (_state.TryConsumeExpansionError(out var declarationError))
+                    return PublishStatus(await FailPreparationAsync(declarationError).ConfigureAwait(false));
+
+                lastArgument = declaration.LastArgument ?? lastArgument;
+            }
+            else if (kind is null or BuiltinKind.Printf or BuiltinKind.Echo or BuiltinKind.Hash or BuiltinKind.Type or BuiltinKind.Help
+                or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
+                or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
+                or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd or BuiltinKind.Shift
+                or BuiltinKind.Dirs or BuiltinKind.Pushd or BuiltinKind.Popd or BuiltinKind.Caller)
+            {
                 var operands = new List<ShellValue>();
                 if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo)
-                    AddOperand(operands, ShellValue.FromText(command.CommandName));
+                    AddOperand(operands, command.CommandValue);
                 var words = command.Words;
-                for (var index = 1; (declaration == null || kind is not (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)) && index < words.Count; index++)
+                for (var index = 1; index < words.Count; index++)
                 {
-                    if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)
-                        AddOperand(operands, await ExpandWordValueAsync(words[index], scope).ConfigureAwait(false));
-                    else
-                        await AppendOperandValuesAsync(words[index], scope, operands).ConfigureAwait(false);
+                    await AppendOperandValuesAsync(words[index], scope, operands).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         break;
                 }
                 byteOperands = operands;
-                if (declaration != null && kind is (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local))
-                    lastArgument = declaration.LastArgument ?? lastArgument;
-                else if (operands.Count != 0)
+                if (operands.Count != 0)
                     lastArgument = operands[^1];
             }
             else
@@ -3214,11 +3203,13 @@ public sealed partial class Evaluation : IFileTester
         IReadOnlyList<ExpandedWord> expanded, List<T> results, MemoryCapacity backingOwner, Func<ShellValue, T> createItem)
     {
         // Each expanded field contributes at least one value, including literal glob fallback.
-        if (expanded.Count > 1)
-            Memory.PrepareListCapacity(backingOwner, results, expanded.Count);
-        foreach (var expandedWord in expanded)
+        var count = expanded.Count;
+        if (count > 1)
+            Memory.PrepareListCapacity(backingOwner, results, count);
+        for (var index = 0; index < count; index++)
         {
             CheckCancellation();
+            var expandedWord = expanded[index];
             if (!GlobPattern.RequiresExpansion(expandedWord))
             {
                 Memory.PrepareListCapacity(backingOwner, results, 1);

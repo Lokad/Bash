@@ -65,12 +65,10 @@ internal static partial class WordExpansion
     /// <param name="word">The word to expand.</param>
     /// <param name="scope">The active bindings, lexical context and evaluator-owned effects.</param>
     /// <returns>The expanded words.</returns>
-    public static async Task<IReadOnlyList<ExpandedWord>> ExpandToWordsAsync(
+    public static Task<IReadOnlyList<ExpandedWord>> ExpandToWordsAsync(
         Word word,
-        ScopedEvaluation scope)
-    {
-        return await ExpandInternalAsync(word, scope, allowWordSplitting: true, ExpansionPurpose.Normal).ConfigureAwait(false);
-    }
+        ScopedEvaluation scope) =>
+        ExpandInternalAsync(word, scope, allowWordSplitting: true, ExpansionPurpose.Normal);
 
     private static async Task<IReadOnlyList<ExpandedWord>> ExpandInternalAsync(
         Word word,
