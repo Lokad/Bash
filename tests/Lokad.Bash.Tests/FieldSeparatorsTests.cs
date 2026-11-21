@@ -76,6 +76,46 @@ public sealed class FieldSeparatorsTests : IDisposable
     }
 
     [Fact]
+    public void AggregateJoinsObserveEachSeparatorAndSplittingUsesTheFinalValue()
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("separator", ShellValue.FromText(":")));
+        Assert.True(variables.TrySetNameref("IFS", ShellValue.FromText("separator")));
+        var builder = new ExpandedWordBuilder(variables, _memory, ExpansionPurpose.Normal, ImplicitEmptyPolicy.Remove);
+
+        builder.AppendFields([ShellValue.FromText("left"), ShellValue.FromText("right")],
+            allowWordSplitting: true, globQuoted: false, ExpansionQuoteContext.Unquoted);
+        builder.AppendValue(ShellValue.FromText("|"), globQuoted: true);
+        Assert.True(variables.TrySetScalar("separator", ShellValue.FromText(",")));
+        builder.AppendFields([ShellValue.FromText("up"), ShellValue.FromText("down")],
+            allowWordSplitting: true, globQuoted: false, ExpansionQuoteContext.Unquoted);
+
+        Assert.Equal([ShellValue.FromText("left:right|up"), ShellValue.FromText("down")],
+            builder.Build().Select(word => word.ToValue(_memory)));
+    }
+
+    [Fact]
+    public void AHereDocumentJoinRetainsItsSelectedSeparatorDuringFieldEnumeration()
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(":")));
+        var builder = new ExpandedWordBuilder(variables, _memory, ExpansionPurpose.Scalar, ImplicitEmptyPolicy.Preserve);
+
+        Assert.True(builder.TryAppendSelectedFields(ParameterFieldJoin.IfsOrSpace, GetFields(),
+            allowWordSplitting: false, globQuoted: true, ExpansionQuoteContext.HereDocument));
+
+        Assert.Equal(ShellValue.FromText("left:right"), Assert.Single(builder.Build()).ToValue(_memory));
+        Assert.Equal(ShellValue.FromText(","), FieldSeparators.FromVariables(variables).First);
+
+        IEnumerable<ShellValue> GetFields()
+        {
+            yield return ShellValue.FromText("left");
+            Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(",")));
+            yield return ShellValue.FromText("right");
+        }
+    }
+
+    [Fact]
     public async Task ClonedScopesCanInitializeMembershipConcurrently()
     {
         var variables = Variables.CreateEmpty();

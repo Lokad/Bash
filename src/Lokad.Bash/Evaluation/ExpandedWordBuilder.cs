@@ -178,9 +178,18 @@ internal sealed class ExpandedWordBuilder
             return;
         }
 
+        AppendFields(fields, allowWordSplitting, globQuoted, quoteContext, FieldSeparators.FromVariables(_variables));
+    }
+
+    private void AppendFields(
+        IEnumerable<ShellValue> fields,
+        bool allowWordSplitting,
+        bool globQuoted,
+        ExpansionQuoteContext quoteContext,
+        FieldSeparators fieldSeparators)
+    {
         _hasQuotedAggregate |= Purpose == ExpansionPurpose.CasePattern
             && quoteContext == ExpansionQuoteContext.DoubleQuoted;
-        var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (Purpose == ExpansionPurpose.IndexedCompound
             || Purpose == ExpansionPurpose.IndexedCompoundOperand && quoteContext == ExpansionQuoteContext.DoubleQuoted)
         {
@@ -191,7 +200,7 @@ internal sealed class ExpandedWordBuilder
         }
         if (allowWordSplitting && !fieldSeparators.IsEmpty)
         {
-            AppendJoinedFields(fields, allowWordSplitting, globQuoted);
+            AppendSeparatedFields(fields, fieldSeparators.First, allowWordSplitting, globQuoted);
             return;
         }
 
@@ -231,17 +240,23 @@ internal sealed class ExpandedWordBuilder
     /// <summary>Records the protected text and exposed separators until the complete body is expanded.</summary>
     internal void AppendHereDocumentFields(IEnumerable<ShellValue> fields, HereDocumentJoin join)
     {
-        if (join == HereDocumentJoin.At)
-            _hereDocumentHasAt = true;
+        var preserveEmptyFields = join == HereDocumentJoin.At;
+        _hereDocumentHasAt |= preserveEmptyFields;
         var separator = Space;
         if (join is not (HereDocumentJoin.PositionalStar or HereDocumentJoin.SpaceBetweenProtectedValues)
-            && !(join == HereDocumentJoin.At && AssigningHereDocumentOperand))
+            && !(preserveEmptyFields && AssigningHereDocumentOperand))
         {
             var ifs = FieldSeparators.FromVariables(_variables);
-            separator = ifs.IsEmpty ? join == HereDocumentJoin.At ? Space : ShellValue.Empty : ifs.First;
+            separator = ifs.IsEmpty ? preserveEmptyFields ? Space : ShellValue.Empty : ifs.First;
         }
         var origin = join is HereDocumentJoin.PositionalStar or HereDocumentJoin.UnprotectedIfs
             ? PartOrigin.Expansion : PartOrigin.Protected;
+        AppendHereDocumentFields(fields, separator, origin, preserveEmptyFields);
+    }
+
+    private void AppendHereDocumentFields(
+        IEnumerable<ShellValue> fields, ShellValue separator, PartOrigin origin, bool preserveEmptyFields)
+    {
         var first = true;
         foreach (var value in fields)
         {
@@ -249,7 +264,7 @@ internal sealed class ExpandedWordBuilder
             if (!first && !separator.IsEmpty)
                 GetPart(PartOrigin.Expansion, globQuoted: true).AppendValue(separator);
             first = false;
-            if (join == HereDocumentJoin.At || !value.IsEmpty)
+            if (preserveEmptyFields || !value.IsEmpty)
                 GetPart(origin, globQuoted: true).AppendValue(value);
         }
     }
@@ -316,7 +331,7 @@ internal sealed class ExpandedWordBuilder
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (fieldSeparators.IsEmpty && allowWordSplitting)
         {
-            AppendFields(fields, allowWordSplitting, globQuoted, ExpansionQuoteContext.Unquoted);
+            AppendFields(fields, allowWordSplitting, globQuoted, ExpansionQuoteContext.Unquoted, fieldSeparators);
             return;
         }
 
@@ -349,11 +364,11 @@ internal sealed class ExpandedWordBuilder
         if (join == ParameterFieldJoin.Default)
             return false;
         var ifs = FieldSeparators.FromVariables(_variables);
-        var useSpace = join == ParameterFieldJoin.Space || ifs.IsEmpty;
+        var separator = join == ParameterFieldJoin.Space || ifs.IsEmpty ? Space : ifs.First;
         if (quoteContext == ExpansionQuoteContext.HereDocument)
-            AppendHereDocumentFields(fields, useSpace ? HereDocumentJoin.SpaceBetweenProtectedValues : HereDocumentJoin.IfsBetweenProtectedValues);
+            AppendHereDocumentFields(fields, separator, PartOrigin.Protected, preserveEmptyFields: false);
         else
-            AppendSeparatedFields(fields, useSpace ? Space : ifs.First, allowWordSplitting, globQuoted);
+            AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
         return true;
     }
 
@@ -366,7 +381,7 @@ internal sealed class ExpandedWordBuilder
         MarkCurrentWordForEmission();
     }
 
-    public IReadOnlyList<ExpandedWord> Build() => Build(selectFirstCasePatternField: false);
+    public IReadOnlyList<ExpandedWord> Build() => Build(FieldSeparators.FromVariables(_variables), firstFieldOnly: false);
 
     internal IReadOnlyList<ExpandedWord> BuildCasePattern()
     {
@@ -386,7 +401,7 @@ internal sealed class ExpandedWordBuilder
                 break;
             }
         }
-        return Build(selectFirst);
+        return Build(separators, selectFirst);
     }
 
     private void ExpandCasePatternSeparators()
@@ -405,8 +420,9 @@ internal sealed class ExpandedWordBuilder
 
     internal IReadOnlyList<ExpandedWord> BuildUnquotedCasePatternOperand()
     {
-        var fields = Build();
-        if (_hasQuotedAggregate || fields.Count < 2 || !HasNonSpaceSeparator(FieldSeparators.FromVariables(_variables)))
+        var separators = FieldSeparators.FromVariables(_variables);
+        var fields = Build(separators, firstFieldOnly: false);
+        if (_hasQuotedAggregate || fields.Count < 2 || !HasNonSpaceSeparator(separators))
             return fields;
         // A nested unquoted aggregate uses spaces after expanding with a non-space IFS.
         return [ExpandedWord.JoinCasePatternOperandWithSpaces(fields, _memory)];
@@ -424,20 +440,19 @@ internal sealed class ExpandedWordBuilder
         return first.Bytes.Length == separators.Bytes.Length ? first : ShellValue.FromBytes(first.Bytes.Span.ToArray());
     }
 
-    private IReadOnlyList<ExpandedWord> Build(bool selectFirstCasePatternField)
+    private IReadOnlyList<ExpandedWord> Build(FieldSeparators fieldSeparators, bool firstFieldOnly)
     {
         var results = new List<ExpandedWord>();
-        AppendTo(results, selectFirstCasePatternField);
+        AppendTo(results, fieldSeparators, firstFieldOnly);
         return results;
     }
 
-    internal void AppendTo(List<ExpandedWord> results) => AppendTo(results, selectFirstCasePatternField: false);
+    // Expansions can assign IFS: joins use its value at expansion time, splitting uses the final value.
+    internal void AppendTo(List<ExpandedWord> results) =>
+        AppendTo(results, FieldSeparators.FromVariables(_variables), firstFieldOnly: false);
 
-    private void AppendTo(List<ExpandedWord> results, bool selectFirstCasePatternField)
+    private void AppendTo(List<ExpandedWord> results, FieldSeparators fieldSeparators, bool firstFieldOnly)
     {
-        // Expansions can assign IFS: joins use its value at expansion time, splitting uses the final value.
-        var fieldSeparators = FieldSeparators.FromVariables(_variables);
-        var firstFieldOnly = selectFirstCasePatternField && !fieldSeparators.IsEmpty;
         var splitHereDocument = _hereDocumentHasAt && !AssigningHereDocumentOperand;
         var splitOnSpace = splitHereDocument && fieldSeparators.IsEmpty;
         foreach (var word in _words)
