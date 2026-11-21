@@ -35,13 +35,17 @@ public sealed class TestEvaluation
         _end = argumentLimit;
         ParseArguments();
         if (!HasParseError && _index != _end)
-            Fail(null, "too many arguments");
+        {
+            if (_index < _end && _arguments[_index].Bytes.Span.StartsWith("-"u8))
+                Fail("syntax error: `", _arguments[_index], "' unexpected");
+            else
+                Fail("too many arguments");
+        }
     }
 
     /// <summary>Gets whether arguments contain a syntax, integer or text-boundary error.</summary>
-    public bool HasParseError => ErrorMessage.Length != 0;
-    internal ShellValue? ErrorOperand { get; private set; }
-    internal string ErrorMessage { get; private set; } = string.Empty;
+    public bool HasParseError => ParseError.HasValue;
+    internal (string Prefix, ShellValue Operand, string Suffix)? ParseError { get; private set; }
     internal bool HasVariablePredicates { get; private set; }
 
     /// <summary>Encodes text arguments and parses them through the byte-valued test grammar.</summary>
@@ -167,7 +171,7 @@ public sealed class TestEvaluation
                 else if (TryUnary(first, out var unary))
                     Unary(unary);
                 else
-                    Fail(first, "unary operator expected");
+                    Fail(first, ": unary operator expected");
                 return;
             case 3:
                 var op = _arguments[_index + 1];
@@ -186,9 +190,15 @@ public sealed class TestEvaluation
                     Constant(Is(op, "-a"u8) ? left && right : left || right);
                     return;
                 }
-                if (Is(_arguments[_index], "!"u8) || Is(_arguments[_index], "("u8) && Is(_arguments[_end - 1], ")"u8))
+                if (Is(_arguments[_index], "!"u8))
                     goto case 4;
-                Fail(op, "binary operator expected");
+                if (_arguments[_index].Bytes.Span.StartsWith("("u8) && _arguments[_end - 1].Bytes.Span.StartsWith(")"u8))
+                {
+                    Constant(!op.IsEmpty);
+                    _index = _end;
+                    return;
+                }
+                Fail(op, ": binary operator expected");
                 return;
             case 4:
                 if (Is(_arguments[_index], "!"u8))
@@ -236,25 +246,31 @@ public sealed class TestEvaluation
     {
         _cancellationToken.ThrowIfCancellationRequested();
         var negated = false;
-        while (_index + 1 < _end && Consume("!"u8))
+        while (Consume("!"u8))
         {
             _cancellationToken.ThrowIfCancellationRequested();
             negated = !negated;
         }
         if (_index >= _end)
         {
-            Fail(null, "argument expected");
+            Fail("argument expected");
             return;
         }
         if (Consume("("u8))
         {
             if (depth >= ShellSourceCursor.MaximumNestedExpansionDepth)
-                Fail(null, "expression nesting limit exceeded");
+                Fail("expression nesting limit exceeded");
             else
             {
                 ParseOr(depth + 1);
                 if (!Consume(")"u8))
-                    Fail(null, "closing parenthesis expected");
+                {
+                    // The closing bracket stays available for diagnostics after the expression ends.
+                    if (_index < _arguments.Count)
+                        Fail("`)' expected, found ", _arguments[_index], string.Empty);
+                    else
+                        Fail("`)' expected");
+                }
             }
         }
         else if (_index + 2 < _end && TryTestBinary(_arguments[_index + 1], out var binary))
@@ -300,9 +316,9 @@ public sealed class TestEvaluation
         else if (predicate.IsNumeric)
         {
             if (!TryInteger(left, out var l))
-                Fail(left, "integer expression expected");
+                Fail(left, ": integer expression expected");
             else if (!TryInteger(right, out var r))
-                Fail(right, "integer expression expected");
+                Fail(right, ": integer expression expected");
             else
                 Constant(CompareNumbers(predicate.Operator, l, r));
         }
@@ -343,13 +359,13 @@ public sealed class TestEvaluation
         _memory?.Charge(checked(4L * (left.Bytes.Length + (long)(right?.Bytes.Length ?? 0))));
         if (!left.TryGetUtf8Text(out var path))
         {
-            Fail(left, "file operand is not valid UTF-8");
+            Fail(left, ": file operand is not valid UTF-8");
             return;
         }
         string? otherPath = null;
         if (right.HasValue && !right.Value.TryGetUtf8Text(out otherPath))
         {
-            Fail(right.Value, "file operand is not valid UTF-8");
+            Fail(right.Value, ": file operand is not valid UTF-8");
             return;
         }
         AppendPredicate(StepKind.File, _files.Count);
@@ -385,13 +401,11 @@ public sealed class TestEvaluation
         _steps.Add(new(kind, 0));
         _stackDepth--;
     }
-    private void Fail(ShellValue? operand, string message)
-    {
-        if (HasParseError)
-            return;
-        ErrorOperand = operand;
-        ErrorMessage = message;
-    }
+    private void Fail(string message) => Fail(message, ShellValue.Empty, string.Empty);
+
+    private void Fail(ShellValue operand, string suffix) => Fail(string.Empty, operand, suffix);
+
+    private void Fail(string prefix, ShellValue operand, string suffix) => ParseError ??= (prefix, operand, suffix);
     private enum StepKind { Constant, File, VariableIsSet, NamerefIsSet, Not, And, Or }
     private readonly record struct Step(StepKind Kind, int Value);
 }

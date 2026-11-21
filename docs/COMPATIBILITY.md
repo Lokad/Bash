@@ -720,10 +720,13 @@ octal escapes.
 
 `test`/`[` preserve bytes in string equality, ordering and length predicates. Their
 zero-to-four argument rules precede the `!`, parenthesis, `-a` and `-o` expression
-grammar. Numeric operands must be signed 64-bit decimal integers, with optional
-surrounding ASCII whitespace; they do not evaluate arithmetic expressions or base
-prefixes. Invalid integers, malformed expressions and a missing closing `]` report
-a diagnostic and status 2. File predicates retain the UTF-8 path boundary.
+grammar. In the expression grammar, `!` requires a following term. The short
+argument-count rules can treat it as a literal string. In the three-argument
+fallback, a first operand beginning with `(` and a third beginning with `)`
+select the middle string. Numeric operands accept signed 64-bit decimal integers
+with optional surrounding ASCII whitespace. Invalid integers, malformed
+expressions and a missing closing `]` report a diagnostic and status 2. File
+predicates retain the UTF-8 path boundary.
 
 The unary `-o` predicate in `[[ … ]]`, `test` and `[` reports the current
 `errexit` state and the always-enabled `braceexpand` and `pipefail` options.

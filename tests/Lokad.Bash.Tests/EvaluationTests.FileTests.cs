@@ -82,10 +82,12 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
     }
 
-    [Fact]
-    public async Task MixedTestRunsParsedPredicatesBeforeReportingASyntaxError()
+    [Theory]
+    [InlineData("")]
+    [InlineData(" '!'")]
+    public async Task MixedTestRunsParsedPredicatesBeforeReportingASyntaxError(string unfinishedTerm)
     {
-        var state = new Eval(Parser.Parse("a=([3]=present); i=3; test -e first -a -v 'a[i++]' -a"));
+        var state = new Eval(Parser.Parse("a=([3]=present); i=3; test -e first -a -v 'a[i++]' -a" + unfinishedTerm));
         var first = await NextPathKindsAsync(state);
         Assert.Equal("/first", Assert.Single(first.Paths).Path);
         Assert.Equal(ShellValue.FromText("3"), state.Variables["i"]);

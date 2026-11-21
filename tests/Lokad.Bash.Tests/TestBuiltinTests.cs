@@ -17,6 +17,10 @@ public sealed class TestBuiltinTests
     [InlineData("test ! = '!'", 0)]
     [InlineData("test '(' = '('", 0)]
     [InlineData("test '(' x ')'", 0)]
+    [InlineData("test '(prefix' x ')'", 0)]
+    [InlineData("test '(prefix' '' ')suffix'", 1)]
+    [InlineData("[ ! '(' x ')suffix' ]", 1)]
+    [InlineData("test '(prefix' '=' ')suffix'", 1)]
     [InlineData("test x -a -z", 0)]
     [InlineData("test '!' -a ''", 1)]
     [InlineData("test ! '(' x ')'", 1)]
@@ -68,6 +72,13 @@ public sealed class TestBuiltinTests
     [InlineData("test '(' x", "test: (: unary operator expected\n")]
     [InlineData("test -n x = x", "test: too many arguments\n")]
     [InlineData("test '!' != '' -o x", "test: too many arguments\n")]
+    [InlineData("test ! ! ! ! !", "test: argument expected\n")]
+    [InlineData("test x = x -a '!'", "test: argument expected\n")]
+    [InlineData("[ -n x -o '!' '!' ]", "[: argument expected\n")]
+    [InlineData("test x -a '(' x -o y", "test: `)' expected\n")]
+    [InlineData("[ x -a '(' x -o y ]", "[: `)' expected, found ]\n")]
+    [InlineData("test x -a '(' x extra ')'", "test: `)' expected, found extra\n")]
+    [InlineData("[ '(prefix' -n '!' ')' ]", "[: syntax error: `-n' unexpected\n")]
     [InlineData("[ x", "[: missing `]'\n")]
     [InlineData("[", "[: missing `]'\n")]
     public async Task ErrorsReturnTwoAndADiagnosticThenContinue(string script, string diagnostic)
@@ -108,5 +119,15 @@ public sealed class TestBuiltinTests
         Assert.Equal(2, result.ExitCode);
         Assert.Equal(Convert.FromHexString("746573743a20ff3a20696e74656765722065787072657373696f6e2065787065637465640a"),
             host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task UnexpectedGroupOperandPreservesItsBytesInTheDiagnostic()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("test x -a '(' x $'\\377' ')'", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal<byte>([.. "test: `)' expected, found "u8, 0xff, 10], host.StandardError.Content.ToArray());
     }
 }

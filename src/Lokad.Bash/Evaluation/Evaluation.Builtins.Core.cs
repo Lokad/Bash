@@ -56,14 +56,11 @@ public sealed partial class Evaluation
             if (!scope.CanExpand)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
-        if (evaluation.HasParseError)
+        if (evaluation.ParseError is { } error)
         {
-            var name = ShellValue.FromText(commandName);
-            var message = ShellValue.FromText(evaluation.ErrorMessage);
-            if (evaluation.ErrorOperand is { } errorOperand)
-                await ReportExpansionDiagnosticAsync([name], [errorOperand, ShellValue.FromText(": "), message]).ConfigureAwait(false);
-            else
-                await ReportExpansionDiagnosticAsync(name, message).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync([ShellValue.FromText(commandName)],
+                [ShellValue.FromText(error.Prefix), error.Operand, ShellValue.FromText(error.Suffix)])
+                .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
         }
 
