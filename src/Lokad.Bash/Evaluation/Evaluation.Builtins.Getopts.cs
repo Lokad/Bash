@@ -34,7 +34,6 @@ public sealed partial class Evaluation
         var variables = scope.Variables;
         var optionSpec = words[operand].Bytes;
         var name = words[operand + 1];
-        var target = BindingName.FromValue(name);
         var start = operand + 2;
         var arguments = words.Count > start ? words : variables.PositionalParameters;
         if (words.Count == start)
@@ -102,12 +101,16 @@ public sealed partial class Evaluation
 
         async Task<int> SetNameAsync(byte optionByte)
         {
-            if (!target.IsIdentifier)
+            if (!VariableNames.IsValidVariableName(name.Bytes.Span))
             {
                 await WriteInvalidIdentifierDiagnosticAsync(command, name, diagnostics, ClosedStderrHandling.AttemptWrite)
                     .ConfigureAwait(false);
                 return 1;
             }
+            if (!scope.CanExpand)
+                return 1;
+
+            var target = BindingNameExpansion.FromValue(name, Memory);
             var assigned = await AssignAsync(target, ByteValue(optionByte)).ConfigureAwait(false);
             return assigned switch
             {

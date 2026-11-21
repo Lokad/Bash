@@ -104,6 +104,59 @@ public sealed class EvaluationGetoptsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetoptsDestinationNameCopyUsesTheCommandAllowance(bool constrain)
+    {
+        var name = new string('n', 4096);
+        var state = new Evaluation.Evaluation(Parser.Parse(name + "=old; getopts a \"$1\" -a 2>diagnostic"));
+        state.ReplacePositionalParameters([ShellValue.FromText(name)]);
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        using var occupied = constrain ? governor.Reserve(governor.LimitBytes - governor.ReservedBytes - 4096) : null;
+        var descriptor = new FileDescriptor(17);
+        open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+        var step = await state.GetNextStep();
+        byte[] diagnostic = [];
+        if (step is WriteOperation write)
+        {
+            Assert.Equal(descriptor, write.FileDescriptor);
+            diagnostic = write.Content.ToArray();
+            write.SetResult(DescriptorWriteResult.Open);
+            step = await state.GetNextStep();
+        }
+        var close = Assert.IsType<CloseDescriptorOperation>(step);
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(constrain ? 1 : 0, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("2"), state.Variables["OPTIND"]);
+        Assert.Equal(ShellValue.FromText(constrain ? "old" : "a"), state.Variables[name]);
+        Assert.Equal(constrain ? "getopts: shared memory budget exhausted\n"u8.ToArray() : [], diagnostic);
+        occupied?.Dispose();
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task GetoptsInvalidDestinationKeepsItsOriginalDiagnosticBytes()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "getopts a $'x\\377' -a 2>diagnostic; printf '<%s:%s>' \"$?\" \"$OPTIND\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:2>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal<byte>([.. "getopts: `x"u8, 0xff, .. "': not a valid identifier\n"u8], host.ReadFileBytes("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData(16, false)]
     [InlineData(16, true)]
     [InlineData(4096, false)]
