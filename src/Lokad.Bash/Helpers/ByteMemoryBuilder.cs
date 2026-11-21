@@ -13,6 +13,7 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     private IMemoryReservation? _reservation;
     private readonly IMemoryBudget? _memoryBudget;
     private readonly MemoryCapacity? _prepaidMemory;
+    private readonly int _expectedLength;
 
     /// <summary> Stores the backing buffer for appended bytes. </summary>
     private byte[] _buffer;
@@ -39,6 +40,13 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
         _reservation = memoryBudget.Reserve((long)Math.Max(0, capacity));
         try { _buffer = capacity > 0 ? new byte[capacity] : []; }
         catch { _reservation?.Dispose(); throw; }
+    }
+
+    /// <summary>Caps geometric growth at the expected final length when it can fit the append.</summary>
+    /// <remarks>Use zero when the final length is unknown.</remarks>
+    internal ByteMemoryBuilder(IMemoryBudget memoryBudget, int expectedLength) : this(0, memoryBudget)
+    {
+        _expectedLength = expectedLength;
     }
 
     /// <summary>Spends a caller-owned allowance; snapshots remain charged until that owner resets it.</summary>
@@ -210,6 +218,8 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
         {
             newSize = _buffer.Length == 0 ? 16 : _buffer.Length;
             while (newSize < capacity) newSize = (int)Math.Min(MaxMemoryBuilderBytes, 2L * newSize);
+            if (capacity <= _expectedLength)
+                newSize = Math.Min(newSize, _expectedLength);
         }
 
         // Reserve the replacement before allocating: the old array still exists during growth.

@@ -3812,7 +3812,8 @@ public sealed partial class Evaluation : IFileTester
             Exception? readException = null;
             try
             {
-                var output = new ByteMemoryBuilder(0, sourceMemory.Budget);
+                var expectedLength = open.ReadSize is { } size && size <= Parser.MaximumScriptBytes ? (int)size : 0;
+                var output = new ByteMemoryBuilder(sourceMemory.Budget, expectedLength);
                 var sourceDestination = new SourceLineDestination(output, Parser.MaximumScriptBytes);
                 using var reader = AsyncLineReader.CreateStreaming(
                     (limit, memory, _) => new ValueTask<ReadResult>(

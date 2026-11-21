@@ -136,7 +136,7 @@ public sealed class SourceReadCompletionTests
         tail[0] = (byte)'#';
         var state = new Eval(Parser.Parse("source file"));
         var host = new TestOperationVisitor([]);
-        host.EnqueueOpenFileDescriptor(10);
+        host.EnqueueFileOpenResult(FileOpenResult.Opened(new FileDescriptor(10), first.Length + tail.Length));
         host.EnqueueReadResult(ReadResult.Success(first, [], reachedEoF: false));
         host.EnqueueReadResult(ReadResult.Success(tail, [], reachedEoF: true));
         host.EnqueueCloseDescriptor();
@@ -187,12 +187,14 @@ public sealed class SourceReadCompletionTests
         Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
     }
 
-    [Fact]
-    public async Task SourceReadFailureDiscardsEarlierInputAndRestoresPrefixState()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(65536)]
+    public async Task SourceReadFailureDiscardsEarlierInputAndRestoresPrefixState(int? readSize)
     {
         var state = new Eval(Parser.Parse("value=outer; value=prefix source file"));
-        var host = new TestOperationVisitor([]);
-        host.EnqueueOpenFileDescriptor(10);
+        var host = new TestOperationVisitor([]) { MemoryBudget = new MemoryGovernor(16 * 1024), RecordAppends = true };
+        host.EnqueueFileOpenResult(FileOpenResult.Opened(new FileDescriptor(10), readSize));
         host.EnqueueReadResult(ReadResult.Success("value=changed; external\n"u8.ToArray(), [], reachedEoF: false));
         host.EnqueueReadResult(ReadResult.Failure(error: new OperationError("read error\n")));
         host.EnqueueCloseDescriptor();
@@ -202,6 +204,7 @@ public sealed class SourceReadCompletionTests
         Assert.Equal(1, state.LastExitCode);
         Assert.Equal(ShellValue.FromText("outer"), state.Variables["value"]);
         Assert.Empty(host.CommandNames);
+        Assert.Empty(host.Appends);
         Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
     }
 
@@ -244,12 +247,14 @@ public sealed class SourceReadCompletionTests
         Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
     }
 
-    [Fact]
-    public async Task SourceReadFailureSurvivesTerminalCloseFailure()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(65536)]
+    public async Task SourceReadFailureSurvivesTerminalCloseFailure(int? readSize)
     {
         var state = new Eval(Parser.Parse("source file"));
-        var host = new TestOperationVisitor([]);
-        host.EnqueueOpenFileDescriptor(10);
+        var host = new TestOperationVisitor([]) { MemoryBudget = new MemoryGovernor(16 * 1024), RecordAppends = true };
+        host.EnqueueFileOpenResult(FileOpenResult.Opened(new FileDescriptor(10), readSize));
         host.EnqueueReadResult(ReadResult.Failure(new OperationError("read error\n")));
         host.EnqueueCloseDescriptorException(new IOException("close failed"));
         host.EnqueueCloseDescriptor();
@@ -257,6 +262,7 @@ public sealed class SourceReadCompletionTests
         await new Engine().RunAsync(state, host);
 
         Assert.Equal(1, state.LastExitCode);
+        Assert.Empty(host.Appends);
         Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
     }
 

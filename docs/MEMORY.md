@@ -305,9 +305,11 @@ continuation joining uses the existing syntax owner for normalized backing.
 A dispatched source read writes into the parser's admitted spare capacity.
 A complete first batch that reports EOF can allocate its exact final buffer.
 Other batches that need growth copy into the read batch owner, then grow the
-parser's buffer after the host borrow settles. The read batch owns its line
-offsets and releases them before the next batch or descriptor close. Externally
-completed line operations use bounded aggregation.
+parser's buffer after the host borrow settles. A known source length caps
+geometric growth when a batch requires a larger buffer. The reader uses actual
+bytes to enforce the parser limit. The read batch owns its line offsets and
+releases them before the next batch or descriptor close. Externally completed
+line operations use bounded aggregation.
 
 A sourced input scope stays admitted while parsing/executing the file, while a
 function namespace retains its definitions, and through active function preparation,
