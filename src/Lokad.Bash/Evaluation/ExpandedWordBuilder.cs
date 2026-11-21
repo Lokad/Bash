@@ -194,7 +194,7 @@ internal sealed class ExpandedWordBuilder
             || Purpose == ExpansionPurpose.IndexedCompoundOperand && quoteContext == ExpansionQuoteContext.DoubleQuoted)
         {
             // Compound @ joins use IFS except in unquoted parameter operands; empty IFS uses a space.
-            var separator = fieldSeparators.IsEmpty ? ShellValue.FromText(" ") : fieldSeparators.First;
+            var separator = fieldSeparators.IsEmpty ? Space : fieldSeparators.First;
             AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
             return;
         }

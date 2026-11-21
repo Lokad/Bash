@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Evaluation;
@@ -11,6 +10,8 @@ namespace Lokad.Bash.Evaluation;
 /// <remarks>Callers must not mutate retained segments.</remarks>
 internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool isEmptyAggregateField)
 {
+    private static readonly ShellValue Space = ShellValue.FromText(" ");
+
     public ExpandedWord(IReadOnlyList<ExpandedSegment> segments) : this(segments, false) { }
 
     /// <summary>
@@ -37,30 +38,30 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         if (words.Count == 1)
             return words[0];
 
-        var segmentCount = words.Sum(static word => (long)word.Segments.Count) + Math.Max(0, words.Count - 1);
+        var segmentCount = (long)words.Count - 1;
+        for (var index = 0; index < words.Count; index++)
+            segmentCount += words[index].Segments.Count;
         if (segmentCount >= Array.MaxLength)
             throw new ByteMemoryBuilder.LimitExceededException();
-        memory.Charge(checked(256L * (segmentCount)));
-        var segments = new List<ExpandedSegment>((int)segmentCount);
-        var separator = ShellValue.FromText(" ");
+        memory.Charge(checked(256L * segmentCount));
+        var segments = new ExpandedSegment[(int)segmentCount];
+        var separator = new ExpandedSegment(Space, isGlobQuoted: false)
+        {
+            IsCasePatternIfsProtected = protectCasePatternFields,
+        };
+        var destination = 0;
         for (var index = 0; index < words.Count; index++)
         {
             if (index > 0)
-            {
-                segments.Add(new ExpandedSegment(separator, isGlobQuoted: false)
-                {
-                    IsCasePatternIfsProtected = protectCasePatternFields,
-                });
-            }
+                segments[destination++] = separator;
 
             var field = words[index].Segments;
-            if (protectCasePatternFields)
+            for (var part = 0; part < field.Count; part++)
             {
-                foreach (var segment in field)
-                    segments.Add(segment with { IsCasePatternIfsProtected = true });
+                var segment = field[part];
+                segments[destination++] = protectCasePatternFields
+                    ? segment with { IsCasePatternIfsProtected = true } : segment;
             }
-            else
-                segments.AddRange(field);
         }
 
         return new ExpandedWord(segments);
