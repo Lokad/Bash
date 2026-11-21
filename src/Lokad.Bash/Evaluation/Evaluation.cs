@@ -2760,7 +2760,7 @@ public sealed partial class Evaluation : IFileTester
     private CommandResolution ResolveCommandName(ShellValue commandName, CommandLookupMode lookupMode)
     {
         if (lookupMode == CommandLookupMode.HostOnly)
-            return new CommandResolution.Host();
+            return CommandResolution.Host.Instance;
 
         if (lookupMode == CommandLookupMode.Normal
             && _state.Functions.TryGetValue(commandName, out var function))
@@ -2776,8 +2776,8 @@ public sealed partial class Evaluation : IFileTester
         }
 
         return lookupMode == CommandLookupMode.BuiltinOnly
-            ? new CommandResolution.Missing()
-            : new CommandResolution.Host();
+            ? CommandResolution.Missing.Instance
+            : CommandResolution.Host.Instance;
     }
 
     /// <summary>
@@ -4266,9 +4266,15 @@ public sealed partial class Evaluation : IFileTester
 
         public sealed record HostBuiltin(BuiltinKind Kind) : CommandResolution;
 
-        public sealed record Host : CommandResolution;
+        public sealed record Host : CommandResolution
+        {
+            public static readonly Host Instance = new();
+        }
 
-        public sealed record Missing : CommandResolution;
+        public sealed record Missing : CommandResolution
+        {
+            public static readonly Missing Instance = new();
+        }
     }
 
     /// <summary> Describes how a queried command name resolves without executing it. </summary>
@@ -4278,17 +4284,26 @@ public sealed partial class Evaluation : IFileTester
         public sealed record Function(FunctionDefinition Definition) : CommandQueryResolution;
 
         /// <summary> The name resolves to an evaluator-owned or host-backed shell builtin. </summary>
-        public sealed record Builtin : CommandQueryResolution;
+        public sealed record Builtin : CommandQueryResolution
+        {
+            public static readonly Builtin Instance = new();
+        }
 
         /// <summary> The name resolves to a reserved shell keyword. </summary>
-        public sealed record Keyword : CommandQueryResolution;
+        public sealed record Keyword : CommandQueryResolution
+        {
+            public static readonly Keyword Instance = new();
+        }
 
         /// <summary> The name resolves to a command provided by the shell host. </summary>
         /// <param name="ResolvedName">The host-specific name or path reported for the command.</param>
         public sealed record Host(string ResolvedName) : CommandQueryResolution;
 
         /// <summary> The name does not resolve to any function, builtin, keyword, or host command. </summary>
-        public sealed record Missing : CommandQueryResolution;
+        public sealed record Missing : CommandQueryResolution
+        {
+            public static readonly Missing Instance = new();
+        }
 
         /// <summary>The host could not determine command availability.</summary>
         public sealed record Failed(OperationError Error) : CommandQueryResolution;

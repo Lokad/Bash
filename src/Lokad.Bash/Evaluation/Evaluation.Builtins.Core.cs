@@ -366,7 +366,7 @@ public sealed partial class Evaluation
                     // Keywords take precedence in queries, even when a function shadows their spelling.
                     if (lookupMode != CommandLookupMode.HostOnly && Parser.IsSupportedKeyword(value.Bytes.Span))
                     {
-                        resolutions[index] = new CommandQueryResolution.Keyword();
+                        resolutions[index] = CommandQueryResolution.Keyword.Instance;
                         continue;
                     }
                     var resolution = ResolveCommandName(value, lookupMode);
@@ -379,20 +379,20 @@ public sealed partial class Evaluation
                     }
                     if (resolution is CommandResolution.EvaluatorBuiltin)
                     {
-                        resolutions[index] = new CommandQueryResolution.Builtin();
+                        resolutions[index] = CommandQueryResolution.Builtin.Instance;
                         continue;
                     }
 
                     // Host command names must be nonempty UTF-8. Local names stay byte-valued.
                     if (resolution is CommandResolution.Missing || value.IsEmpty || !Utf8.IsValid(value.Bytes.Span))
                     {
-                        resolutions[index] = new CommandQueryResolution.Missing();
+                        resolutions[index] = CommandQueryResolution.Missing.Instance;
                         continue;
                     }
 
                     // Keep the builtin display classification, subject to the host confirming availability.
                     if (resolution is CommandResolution.HostBuiltin)
-                        resolutions[index] = new CommandQueryResolution.Builtin();
+                        resolutions[index] = CommandQueryResolution.Builtin.Instance;
 
                     var decodeBytes = Math.Max(0, 32 + 2L * value.Bytes.Length
                         - (builtin == BuiltinKind.Command ? PreparedQueryDecodeBytes(value) : 0));
@@ -421,7 +421,7 @@ public sealed partial class Evaluation
                             CommandLookupResult.Found
                                 when resolutions[hostIndexes[index]] is CommandQueryResolution.Builtin builtin => builtin,
                             CommandLookupResult.Found found => new CommandQueryResolution.Host(found.ResolvedName),
-                            CommandLookupResult.Missing => new CommandQueryResolution.Missing(),
+                            CommandLookupResult.Missing => CommandQueryResolution.Missing.Instance,
                             CommandLookupResult.Failed failed => new CommandQueryResolution.Failed(failed.Error),
                             _ => throw new InvalidOperationException("Host returned an unknown command lookup result.")
                         };
