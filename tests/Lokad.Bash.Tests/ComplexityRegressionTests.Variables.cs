@@ -13,6 +13,35 @@ namespace Lokad.Bash.Tests;
 public sealed partial class ComplexityRegressionTests
 {
     [Fact]
+    public async Task ExplicitFunctionUnsetDoesNotAdmitVariableNameCopies()
+    {
+        const int operandCount = 64;
+        const int nameBytes = 512;
+        var operands = string.Join(' ', Enumerable.Repeat(new string('q', nameBytes), operandCount));
+
+        var functionPeak = await PeakAllowanceAsync("-fn");
+        var variablePeak = await PeakAllowanceAsync("-vn");
+
+        Assert.True(variablePeak - functionPeak >= operandCount * nameBytes,
+            $"Function unset reserved {functionPeak:N0} bytes and variable unset reserved {variablePeak:N0} bytes.");
+
+        async Task<long> PeakAllowanceAsync(string options)
+        {
+            var parsed = Parser.Parse("spare(){ :; }; unset " + options + " " + operands);
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            var evaluation = new Eval(parsed);
+            evaluation.Memory.Budget = owner;
+
+            Assert.Null(await evaluation.GetNextStep());
+            Assert.Equal(0, evaluation.LastExitCode);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return governor.PeakBytes;
+        }
+    }
+
+    [Fact]
     public async Task GetoptsDoesNotDecodeStoredOptindOnEveryCall()
     {
         const int calls = 32;

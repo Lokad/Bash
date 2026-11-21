@@ -47,9 +47,15 @@ public sealed partial class Evaluation
         for (var index = options.ArgumentIndex; index < words.Count; index++)
         {
             var nameValue = words[index];
+            if (functions)
+            {
+                await UnsetFunctionAsync(nameValue).ConfigureAwait(false);
+                continue;
+            }
+
             var name = BindingNameExpansion.FromValue(nameValue, Memory);
             var isIdentifier = name.IsIdentifier;
-            var canSelectElement = !functions && !namerefs && !isIdentifier;
+            var canSelectElement = !namerefs && !isIdentifier;
             var literalBinding = canSelectElement
                 && (commandVars.HasBinding(name) || context.FunctionContext?.IsLocal(name) == true);
             var directReference = default(VariableReference);
@@ -63,15 +69,10 @@ public sealed partial class Evaluation
                 && !binding.IsUnsetNameref && (binding.Owner.HasBinding(binding.Name)
                     || context.FunctionContext?.IsLocal(binding.Name) == true);
             // -n is a no-op for valid non-nameref names; other spellings can still select a function.
-            if (functions || !variables && (!namerefs || !isIdentifier)
+            if (!variables && (!namerefs || !isIdentifier)
                 && !hidesFunction && _state.Functions.ContainsKey(nameValue))
             {
-                if (!_state.TryUnsetFunction(nameValue))
-                {
-                    exitCode = 1;
-                    await ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
-                        [nameValue, ShellValue.FromText(": cannot unset: readonly function")]).ConfigureAwait(false);
-                }
+                await UnsetFunctionAsync(nameValue).ConfigureAwait(false);
                 continue;
             }
             if (variables && !isIdentifier && !directSelector && !literalBinding)
@@ -125,6 +126,15 @@ public sealed partial class Evaluation
         }
 
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+
+        Task UnsetFunctionAsync(ShellValue name)
+        {
+            if (_state.TryUnsetFunction(name))
+                return Task.CompletedTask;
+            exitCode = 1;
+            return ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
+                [name, ShellValue.FromText(": cannot unset: readonly function")]);
+        }
 
         Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message, int status) =>
             FinishFailureAsync(ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")], message), status);

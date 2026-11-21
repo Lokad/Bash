@@ -563,17 +563,18 @@ internal sealed class EvaluationState
     /// <summary>Removes the current binding, not a definition already being invoked.</summary>
     public bool TryUnsetFunction(ShellValue name)
     {
-        if (_functions.TryGetValue(name, out var function) && function.Attributes.HasFlag(FunctionAttributes.Readonly))
+        if (!_functions.TryGetValue(name, out var function))
+            return true;
+        if (function.Attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
-        if (_functions.Remove(name, out var removed))
+
+        _functions.Remove(name);
+        if (function.Attributes.HasFlag(FunctionAttributes.Exported))
         {
-            if (removed.Attributes.HasFlag(FunctionAttributes.Exported))
-            {
-                ReleaseExportedFunctionSelection();
-                _exportedFunctionCount--;
-            }
-            removed.Release();
+            ReleaseExportedFunctionSelection();
+            _exportedFunctionCount--;
         }
+        function.Release();
         return true;
     }
 
