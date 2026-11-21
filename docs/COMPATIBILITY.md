@@ -379,6 +379,12 @@ During option scanning, `--help` writes the builtin synopsis and returns 2.
 It returns 2 silently with closed stdout. After `--` or the first name,
 `--help` is an ordinary name.
 
+`hash` uses an empty command cache. A bare invocation reports that the
+table is empty. `-r` clears it and `-l` lists its reusable entries.
+Both succeed silently, including when bundled or repeated. Name operands
+return 1 silently. A leading `--` ends option scanning, and a reached
+`--help` prints the supported usage and returns 2.
+
 `shift` uses expanded fields and accepts a leading `--`. Its count defaults to
 one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII
 whitespace and trailing space or tab. A count larger than the remaining

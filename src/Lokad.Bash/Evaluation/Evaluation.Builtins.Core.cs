@@ -14,6 +14,8 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private static readonly ReadOnlyMemory<byte> EmptyHashTableOutput = "hash: hash table empty\n"u8.ToArray();
+
     /// <summary>
     /// Handles the <c>test</c> and <c>[</c> builtins, evaluating predicates and filesystem tests as needed.
     /// </summary>
@@ -96,6 +98,38 @@ public sealed partial class Evaluation
         }
         var exitCode = write.IsError ? 1 : 0;
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
+    }
+
+    /// <summary>Handles reset and listing against the emulator's empty command cache.</summary>
+    private async Task<EvaluationResult> EvaluateBuiltinHashAsync(IReadOnlyList<ShellValue> words)
+    {
+        var command = words[0];
+        var options = new ShortOptionCursor(words);
+        var silent = false;
+        while (options.TryReadFlag(out var flag))
+        {
+            CheckCancellation();
+            if (flag.Span[0] is (byte)'l' or (byte)'r')
+            {
+                silent = true;
+                continue;
+            }
+
+            await WriteInvalidShortOptionUnlessStderrClosedAsync(command, flag, BuiltinKind.Hash, "hash")
+                .ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated: false).ConfigureAwait(false);
+        }
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Hash, "hash", negated: false)
+                .ConfigureAwait(false);
+
+        var status = options.ArgumentIndex < words.Count ? 1 : 0;
+        if (status == 0 && !silent)
+        {
+            var write = await WriteBuiltinOutputAsync(command, EmptyHashTableOutput).ConfigureAwait(false);
+            status = write.IsError ? 1 : 0;
+        }
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false).ConfigureAwait(false);
     }
 
     /// <summary>

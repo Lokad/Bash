@@ -1072,7 +1072,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
                 var operands = new List<ShellValue>();
-                if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo and not BuiltinKind.Hash)
+                if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo)
                     AddOperand(operands, ShellValue.FromText(command.CommandName));
                 var words = command.Words;
                 for (var index = 1; (declaration == null || kind is not (BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)) && index < words.Count; index++)
@@ -1463,9 +1463,7 @@ public sealed partial class Evaluation : IFileTester
                         .ConfigureAwait(false),
                     BuiltinKind.Shift => await AwaitWordExpansionAsync(EvaluateBuiltinShiftAsync(
                         byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
-                    // hash only distinguishes no operands from some; their values need no decoding.
-                    BuiltinKind.Hash => await FinalizeResultAsync(
-                        EvaluationResult.FromExitCode(byteOperands.Count == 0 ? 0 : 1), false).ConfigureAwait(false),
+                    BuiltinKind.Hash => await EvaluateBuiltinHashAsync(byteOperands).ConfigureAwait(false),
                     _ => await EvaluateBuiltinAsync(
                         evaluatorBuiltin.Kind,
                         commandName,

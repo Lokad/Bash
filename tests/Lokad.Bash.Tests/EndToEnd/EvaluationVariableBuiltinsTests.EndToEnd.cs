@@ -36,17 +36,71 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_HashBuiltin_ReturnsSuccess()
+    public async Task Evaluation_HashBuiltin_ReportsTheEmptyTable()
     {
-        // This test verifies that "hash" with no arguments succeeds.
-        // The script "hash" must emit no output and exit with code 0.
-        // If hash requires arguments, the exit code would be 1.
-        var script = @"hash";
-        var result = await EvaluationTestHelper.RunAsync(script);
+        var result = await EvaluationTestHelper.RunAsync("hash");
 
-        Assert.Equal(string.Empty, result.StdOut);
+        Assert.Equal("hash: hash table empty\n", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("hash -r")]
+    [InlineData("hash -rr -l --")]
+    [InlineData("hash -l 1>&-")]
+    [InlineData("command hash -lr")]
+    [InlineData("builtin hash -r")]
+    [InlineData("option=-r; hash $option \"$@\"")]
+    public async Task Evaluation_HashBuiltin_EmptyControlsSucceedUnderErrexit(string script)
+    {
+        var result = await EvaluationTestHelper.RunAsync("set -e; " + script + "; printf after");
+
+        Assert.Equal("after", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("hash -- -r", 1, "")]
+    [InlineData("hash -r -- --help", 1, "")]
+    [InlineData("hash -rz --help", 2, "hash: -z: invalid option\nhash: usage: hash [-lr] [--]\n")]
+    [InlineData("hash -z 2>&-", 2, "")]
+    [InlineData("hash -r --help 1>&-", 2, "")]
+    [InlineData("hash 1>&-", 1, "hash: write error: Bad file descriptor\n")]
+    public async Task Evaluation_HashBuiltin_RespectsTheOptionAndDescriptorBoundaries(
+        string script, int status, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Fact]
+    public async Task Evaluation_HashBuiltin_RoutesReachedHelpThroughRedirection()
+    {
+        var host = EndToEndHarness.BuildTree([]);
+        var result = await EndToEndHarness.RunScriptAsync("command hash -r --help -z >usage", host);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.StartsWith("hash: hash [-lr] [--]\n", host.ReadFile("/usage"), StringComparison.Ordinal);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task Evaluation_HashBuiltin_PreservesTheInvalidOptionByte()
+    {
+        var host = EndToEndHarness.BuildTree([]);
+        var result = await EndToEndHarness.RunScriptAsync("hash $'-r\\377'", host);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        byte[] expected = [.. "hash: -"u8, 0xff, .. ": invalid option\nhash: usage: hash [-lr] [--]\n"u8];
+        Assert.Equal(expected, host.StandardError.Content.ToArray());
     }
 
     [Fact]

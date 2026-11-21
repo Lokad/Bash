@@ -3169,11 +3169,15 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_HashBuiltin_ReturnsSuccess()
+    public async Task Evaluation_HashBuiltin_EmitsTheEmptyTableToStdout()
     {
         var script = Parser.Parse("hash");
         var state = new Eval(script);
 
+        var write = Assert.IsType<WriteOperation>(await NextStepAsync(state));
+        Assert.Equal(FileDescriptor.StdOut, write.FileDescriptor);
+        Assert.Equal("hash: hash table empty\n", Text(write.Content));
+        write.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
     }

@@ -163,8 +163,8 @@ public sealed class ByteValuedWordTests
     [InlineData("A=1 builtin hash \"$(printf '\\377')\"; printf '%s/after' \"$?\"", "1/after", "")]
     [InlineData("x=0; command hash \"$((x+=1))\" \"$(printf side >&2; printf '\\377')\"; printf '%s/%s' \"$?\" \"$x\"", "1/1", "side")]
     [InlineData("hash ''; printf '%s' \"$?\"", "1", "")]
-    [InlineData("set --; hash \"$@\"; printf '%s' \"$?\"", "0", "")]
-    [InlineData("unset missing; hash $missing; printf '%s' \"$?\"", "0", "")]
+    [InlineData("set --; hash \"$@\"; printf '%s' \"$?\"", "hash: hash table empty\n0", "")]
+    [InlineData("unset missing; hash $missing; printf '%s' \"$?\"", "hash: hash table empty\n0", "")]
     public async Task IgnoredOperands_ExpandWithoutTextDecoding(string script, string expected, string expectedError)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree(["/tmp"], []));
