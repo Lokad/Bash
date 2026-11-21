@@ -225,6 +225,42 @@ public class ParserTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Parse_ArrayAssignmentReusesTheTokenizedValue(bool compound)
+    {
+        var prefix = compound ? "a=([0]=" : "declare a[0]=";
+        var ending = compound ? "' tail')\n" : "' tail'\n";
+        byte[] value = [.. Encoding.ASCII.GetBytes(new string('x', 4096)), 0xff, (byte)'\r'];
+        byte[] input = [.. Encoding.ASCII.GetBytes(prefix), .. value, .. Encoding.ASCII.GetBytes(ending)];
+        var command = AssertSingleCommand(Parser.Parse(input));
+        Word original;
+        Word rhs;
+        if (compound)
+        {
+            var assignment = Assert.Single(command.Assignments);
+            var item = Assert.Single(Assert.IsAssignableFrom<IReadOnlyList<CompoundArrayItem>>(assignment.ArrayValues));
+            original = item.Word;
+            rhs = Assert.IsType<CompoundArrayElement>(item.Element).Value;
+        }
+        else
+        {
+            var assignment = Assert.Single(command.DeclarationAssignments);
+            original = assignment.Key;
+            rhs = assignment.Value.Value;
+        }
+
+        Assert.Equal(2, rhs.Parts.Count);
+        Assert.Equal(value, rhs.Parts[0].GetUnexpandedValue().Bytes.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(original.Parts[0].GetUnexpandedValue().Bytes, out var source));
+        Assert.True(MemoryMarshal.TryGetArray(rhs.Parts[0].GetUnexpandedValue().Bytes, out var suffix));
+        Assert.NotNull(source.Array);
+        Assert.Same(source.Array, suffix.Array);
+        Assert.Equal(" tail", rhs.Parts[1].GetUnexpandedValue().ToUtf8String());
+        Assert.Same(original.Parts[1], rhs.Parts[1]);
+    }
+
+    [Theory]
     [InlineData("files=(a b)\\\n")]
     [InlineData("files=(a b)\\\n\\\n")]
     [InlineData("files=(a b)\\\n;")]

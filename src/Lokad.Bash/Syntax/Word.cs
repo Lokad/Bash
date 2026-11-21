@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -58,6 +59,17 @@ public sealed class Word
     /// <summary>Frozen literal expansion scaffolding borrowing immutable syntax bytes.</summary>
     internal IReadOnlyList<ExpandedWord>? LiteralFields { get; }
     internal bool HasIncompleteQuotedParameterSubscript { get; }
+
+    /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
+    internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)
+    {
+        var suffix = new List<WordPart>();
+        if (prefixLength < leading.Source.Length)
+            suffix.Add(leading.Slice(prefixLength, leading.Source.Length - prefixLength, memory));
+        for (var index = 1; index < Parts.Count; index++)
+            suffix.Add(Parts[index]);
+        return new Word(suffix);
+    }
 
     /// <summary>
     /// Gets the parts that compose this word.

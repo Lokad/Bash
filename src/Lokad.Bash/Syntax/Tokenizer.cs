@@ -270,7 +270,7 @@ internal sealed class Tokenizer
             return false;
         _arraySubscripts ??= new ArraySubscriptScanner.Lookahead(_input, _scanContext);
         if (_arraySubscripts.Scan(position, out var closing) != ShellScanStatus.Complete
-            || !TryReadSubscriptAssignment(position, closing, out var element))
+            || !TryReadSubscriptAssignment(token, position, closing, out var element))
             return false;
 
         // The leading word part already has the logical name. Selector spelling still needs its
@@ -310,7 +310,7 @@ internal sealed class Tokenizer
                 return new CompoundArrayItem(new Word([]), null);
             }
 
-            if (!TryReadSubscriptAssignment(start, closing, out var element))
+            if (!TryReadSubscriptAssignment(token, start, closing, out var element))
             {
                 if (token.Token.Source.End.Value > closing)
                     return new CompoundArrayItem(token.Word, null);
@@ -336,6 +336,7 @@ internal sealed class Tokenizer
 
     /// <summary>Reads = or += after a matched bracket pair; leaves Position unchanged if absent.</summary>
     private bool TryReadSubscriptAssignment(
+        WordToken token,
         int opening,
         int closing,
         [NotNullWhen(true)] out CompoundArrayElement? element)
@@ -353,9 +354,24 @@ internal sealed class Tokenizer
             return false;
 
         Position = ShellSourceCursor.SkipLineContinuations(source, equals + 1);
-        var value = Position >= source.Length || IsWordDelimiter(source[Position])
-            ? new Word([])
-            : ReadWord(source);
+        Word value;
+        if (Position >= source.Length || IsWordDelimiter(source[Position]))
+            value = new Word([]);
+        else
+        {
+            var prefix = source[token.Token.Source.Start.Value..Position];
+            // Require an intact prefix in the first unquoted part. A dollar
+            // expansion in the selector can contribute metadata before the RHS.
+            if (Position <= token.Token.Source.End.Value
+                && token.Word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted } leading, ..]
+                && leading.Source.AsSpan().StartsWith(prefix) && !prefix.Contains((byte)'$'))
+            {
+                value = token.Word.AfterSourcePrefix(leading, prefix.Length, _scanContext.SyntaxMemory);
+                Position = token.Token.Source.End.Value;
+            }
+            else
+                value = ReadWord(source);
+        }
         element = new CompoundArrayElement(_input.Slice(opening + 1, closing - opening - 1), value, operation);
         return true;
     }

@@ -1095,14 +1095,8 @@ public static class Parser
             memory?.Grow(MemoryCapacity.ArrayBackingBytes<byte>(name.Length));
             var target = ShellSource.FromBytes(name.ToArray());
 
-            var valueParts = new List<WordPart>();
-            if (equals + 1 < source.Length)
-                valueParts.Add(part.Slice(equals + 1, source.Length - equals - 1, memory));
-            for (var index = 1; index < word.Parts.Count; index++)
-                valueParts.Add(word.Parts[index]);
-
             var operation = append ? AssignmentOperator.Append : AssignmentOperator.Replace;
-            assignment = new AssignmentWord(target, new Word(valueParts), operation);
+            assignment = new AssignmentWord(target, word.AfterSourcePrefix(part, equals + 1, memory), operation);
             return true;
         }
 
