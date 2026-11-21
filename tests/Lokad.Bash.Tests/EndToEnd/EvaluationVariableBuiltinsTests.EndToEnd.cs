@@ -64,7 +64,7 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
     [Theory]
     [InlineData("hash -- -r", 1, "")]
     [InlineData("hash -r -- --help", 1, "")]
-    [InlineData("hash -rz --help", 2, "hash: -z: invalid option\nhash: usage: hash [-lr] [--]\n")]
+    [InlineData("hash -rz --help", 2, "hash: -z: invalid option\nhash: usage: hash [-dlrt] [--] [name ...]\n")]
     [InlineData("hash -z 2>&-", 2, "")]
     [InlineData("hash -r --help 1>&-", 2, "")]
     [InlineData("hash 1>&-", 1, "hash: write error: Bad file descriptor\n")]
@@ -78,6 +78,37 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
         Assert.Equal(error, result.StdErr);
     }
 
+    [Theory]
+    [InlineData("hash -d absent_one absent_two", 0, "")]
+    [InlineData("hash -d", 1, "hash: -d: option requires an argument\n")]
+    [InlineData("hash -t", 1, "hash: -t: option requires an argument\n")]
+    [InlineData("hash -t -d --", 1, "hash: -d: option requires an argument\n")]
+    [InlineData("hash -dt directory/name", 1, "hash: directory/name: not found\n")]
+    [InlineData("command hash -t -- -name --help", 1, "hash: -name: not found\nhash: --help: not found\n")]
+    [InlineData("builtin hash -rt echo 2>&-", 1, "")]
+    public async Task Evaluation_HashBuiltin_UsesEmptyCacheEntrySemantics(string script, int status, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Fact]
+    public async Task Evaluation_HashTargetMissPreservesRawBytesOnRedirectedStderr()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("hash -t $'\\377' echo 2>diagnostic", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        byte[] expected = [.. "hash: "u8, 0xff, .. ": not found\nhash: echo: not found\n"u8];
+        Assert.Equal(expected, host.ReadFileBytes("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_HashBuiltin_RoutesReachedHelpThroughRedirection()
     {
@@ -87,7 +118,7 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.StdOut);
         Assert.Empty(result.StdErr);
-        Assert.StartsWith("hash: hash [-lr] [--]\n", host.ReadFile("/usage"), StringComparison.Ordinal);
+        Assert.StartsWith("hash: hash [-dlrt] [--] [name ...]\n", host.ReadFile("/usage"), StringComparison.Ordinal);
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -99,7 +130,7 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
 
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.StdOut);
-        byte[] expected = [.. "hash: -"u8, 0xff, .. ": invalid option\nhash: usage: hash [-lr] [--]\n"u8];
+        byte[] expected = [.. "hash: -"u8, 0xff, .. ": invalid option\nhash: usage: hash [-dlrt] [--] [name ...]\n"u8];
         Assert.Equal(expected, host.StandardError.Content.ToArray());
     }
 

@@ -3182,6 +3182,28 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Evaluation_HashTargetMissesUseOnlyDiagnosticWrites(bool rejectFirst)
+    {
+        var state = new Eval(Parser.Parse("hash -t first second"));
+        var first = Assert.IsType<WriteOperation>(await NextStepAsync(state));
+        Assert.Equal(FileDescriptor.StdErr, first.FileDescriptor);
+        Assert.Equal("hash: first: not found\n", Text(first.Content));
+        first.SetResult(rejectFirst ? DescriptorWriteResult.WriteFailure : DescriptorWriteResult.Open);
+
+        if (!rejectFirst)
+        {
+            var second = Assert.IsType<WriteOperation>(await NextStepAsync(state));
+            Assert.Equal(FileDescriptor.StdErr, second.FileDescriptor);
+            Assert.Equal("hash: second: not found\n", Text(second.Content));
+            second.SetResult(DescriptorWriteResult.Open);
+        }
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
     [Fact]
     public async Task Evaluation_ShiftBuiltin_RemovesFirstParameter()
     {

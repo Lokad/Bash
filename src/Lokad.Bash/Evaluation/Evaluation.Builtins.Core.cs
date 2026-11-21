@@ -97,19 +97,22 @@ public sealed partial class Evaluation
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
     }
 
-    /// <summary>Handles reset and listing against the emulator's empty command cache.</summary>
+    /// <summary>Handles reset, deletion and queries against the emulator's empty command cache.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinHashAsync(IReadOnlyList<ShellValue> words)
     {
         var command = words[0];
         var options = new ShortOptionCursor(words);
         var silent = false;
+        var delete = false;
+        var query = false;
         while (options.TryReadFlag(out var flag))
         {
             CheckCancellation();
-            if (flag.Span[0] is (byte)'l' or (byte)'r')
+            switch (flag.Span[0])
             {
-                silent = true;
-                continue;
+                case (byte)'l' or (byte)'r': silent = true; continue;
+                case (byte)'d': delete = true; continue;
+                case (byte)'t': query = true; continue;
             }
 
             await WriteInvalidShortOptionUnlessStderrClosedAsync(command, flag, BuiltinKind.Hash, "hash")
@@ -120,8 +123,32 @@ public sealed partial class Evaluation
             return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Hash, "hash", negated: false)
                 .ConfigureAwait(false);
 
-        var status = options.ArgumentIndex < words.Count ? 1 : 0;
-        if (status == 0 && !silent)
+        var status = 0;
+        var firstName = options.ArgumentIndex;
+        if (firstName < words.Count)
+        {
+            status = query || !delete ? 1 : 0;
+            if (query)
+            {
+                var notFound = ShellValue.FromText(": not found");
+                for (var index = firstName; index < words.Count; index++)
+                {
+                    CheckCancellation();
+                    var write = await WriteDiagnosticUnlessStderrClosedAsync([command], [words[index], notFound], scope: null)
+                        .ConfigureAwait(false);
+                    if (!write.CanAcceptMore)
+                        break;
+                }
+            }
+        }
+        else if (delete || query)
+        {
+            var missingOption = ShellValue.FromText(delete ? "-d" : "-t");
+            await WriteDiagnosticUnlessStderrClosedAsync([command],
+                [missingOption, ShellValue.FromText(": option requires an argument")], scope: null).ConfigureAwait(false);
+            status = 1;
+        }
+        else if (!silent)
         {
             var write = await WriteBuiltinOutputAsync(command, EmptyHashTableOutput).ConfigureAwait(false);
             status = write.IsError ? 1 : 0;

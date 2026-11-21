@@ -77,6 +77,13 @@ public sealed class ExecutionLifetimeTests
     }
 
     [Fact]
+    public Task CancelledHashTargetDiagnosticStaysChargedUntilTheHostSettles()
+    {
+        var name = new string('x', 4096);
+        return VerifyPendingWriteAsync($"hash -t '{name}' 2>out; after=1", $"hash: {name}: not found\n");
+    }
+
+    [Fact]
     public Task CancelledPrintfDiagnosticStaysChargedUntilTheHostSettles()
     {
         var number = new string('x', 4096);

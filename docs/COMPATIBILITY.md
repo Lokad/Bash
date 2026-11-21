@@ -394,8 +394,11 @@ It returns 2 silently with closed stdout. After `--` or the first name,
 
 `hash` uses an empty command cache. A bare invocation reports that the
 table is empty. `-r` clears it and `-l` lists its reusable entries.
-Both succeed silently, including when bundled or repeated. Name operands
-return 1 silently. A leading `--` ends option scanning, and a reached
+Both succeed silently, including when bundled or repeated. With named operands,
+`-d` succeeds silently and `-t` reports each queried name as missing with
+status 1. Both options require a name. When combined, `-t` selects the query
+and `-d` supplies the missing-name diagnostic. Names supplied for cache
+population return 1 silently. A leading `--` ends option scanning, and a reached
 `--help` prints the supported usage and returns 2.
 
 `shift` uses expanded fields and accepts a leading `--`. Its count defaults to
