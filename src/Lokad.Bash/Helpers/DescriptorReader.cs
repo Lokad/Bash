@@ -80,6 +80,8 @@ public static class DescriptorReader
     {
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit));
+        var maximumBatchBytes = sourceDestination is { } sourceOutput
+            ? sourceOutput.MaximumBytes - sourceOutput.Buffer.Length : int.MaxValue;
         var minimum = 1;
         var examined = 0;
         (DescriptorReadBufferOwner? Owner, long Offset) position = default;
@@ -109,7 +111,12 @@ public static class DescriptorReader
             var batchLimit = examined > 0 && (bytes.Length - examined > BufferSize || bytes.Length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 ? 1 : limit;
             var length = ByteLines.FindCompleteRecords(bytes.Span, delimiter, batchLimit, examined, result.ReachedEoF,
-                destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
+                maximumBatchBytes, destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
+            if (length > maximumBatchBytes)
+            {
+                buffer.Consume(length);
+                return project(new DescriptorRecordBatch(default, Array.Empty<int>(), ByteReadResult.TooLarge));
+            }
             if (examined > 0 && (length == 0 ? bytes.Length : length) > ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
             if (length != 0 || result.ReachedEoF)
@@ -127,7 +134,6 @@ public static class DescriptorReader
                         content = reusableLine.ToMemory();
                     }
                     else if (sourceDestination is { } destination
-                        && length <= destination.MaximumBytes - destination.Buffer.Length
                         && (length <= destination.Buffer.Capacity - destination.Buffer.Length
                             || destination.Buffer.Length == 0 && reachedEof))
                     {
@@ -162,7 +168,8 @@ internal readonly record struct SourceLineDestination(ByteMemoryBuilder Buffer, 
 internal readonly record struct DescriptorRecordBatch(ReadOnlyMemory<byte> Content, int[] RecordStartOffsets, ByteReadResult Result)
 {
     /// <summary>Projects a batch scanned with LF to the public line result.</summary>
-    internal ReadResult AsLines() => Result.Error is { } error ? ReadResult.Failure(error)
+    internal ReadResult AsLines() => Result.IsTooLarge ? ReadResult.TooLarge
+        : Result.Error is { } error ? ReadResult.Failure(error)
         : Content.IsEmpty ? ReadResult.EndOfFile
         : ReadResult.FromValidatedLines(Content, RecordStartOffsets, Result.ReachedEoF);
 }

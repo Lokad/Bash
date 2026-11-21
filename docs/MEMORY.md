@@ -308,8 +308,9 @@ Other batches that need growth copy into the read batch owner, then grow the
 parser's buffer after the host borrow settles. A host can refund its temporary
 window on disposal, freeing capacity for the old and new parser buffers to
 overlap. A known source length caps geometric growth when a batch requires a
-larger buffer. The reader uses actual bytes to enforce the parser limit. The
-read batch owns its line offsets and releases them before the next batch or
+larger buffer. A framed batch that exceeds the remaining parser limit returns
+a size rejection before retaining payload bytes or offsets. The read batch
+owns offsets for accepted input and releases them before the next batch or
 descriptor close. Externally completed line operations use bounded aggregation.
 
 A sourced input scope stays admitted while parsing/executing the file, while a

@@ -150,7 +150,7 @@ public sealed class AsyncLineReader : IDisposable
             if (content.IsEmpty)
                 return ValueTask.FromResult(ReadResult.EndOfFile);
             var length = ByteLines.FindCompleteRecords(content.Span, (byte)'\n', limit, examined: 0, reachedEof: true,
-                budget, out var offsets, out _);
+                maximumBatchBytes: int.MaxValue, budget, out var offsets, out _);
             var batch = content[..length];
             content = content[length..];
             return ValueTask.FromResult(ReadResult.FromValidatedLines(batch, offsets, content.IsEmpty));
@@ -211,6 +211,8 @@ public sealed class AsyncLineReader : IDisposable
 
         static bool Unwrap((bool ReachedEof, ReadResult Failure) result)
         {
+            if (result.Failure.IsTooLarge)
+                throw new ByteMemoryBuilder.LimitExceededException();
             result.Failure.ThrowIfError();
             return result.ReachedEof;
         }
@@ -225,7 +227,7 @@ public sealed class AsyncLineReader : IDisposable
         if (_lineIndex < BufferedLineCount)
             return ValueTask.FromResult((false, ReadResult.EndOfFile));
 
-        if (_readFailure.IsError)
+        if (_readFailure.HasFailure)
             return ValueTask.FromResult((false, _readFailure));
         if (_reachedEof)
             return ValueTask.FromResult((true, ReadResult.EndOfFile));
@@ -242,7 +244,7 @@ public sealed class AsyncLineReader : IDisposable
                     batchMemory ?? reader._memoryBudget, token).ConfigureAwait(false);
             }
             catch { batchMemory?.Dispose(); throw; }
-            if (result.IsError)
+            if (result.HasFailure)
             {
                 batchMemory?.Dispose();
                 reader._readFailure = result;
@@ -330,6 +332,8 @@ public sealed class AsyncLineReader : IDisposable
             if (failure.Error is { } error)
                 return new BoundedReadResult.Failed(ByteReadResult.Failure(
                     0, error, failure.ReachedEoF));
+            if (failure.IsTooLarge)
+                return new BoundedReadResult.TooLarge();
             if (reachedEof)
             {
                 ReleaseCurrentBatch();

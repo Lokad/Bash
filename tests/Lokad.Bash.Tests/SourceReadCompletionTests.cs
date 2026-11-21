@@ -127,28 +127,49 @@ public sealed class SourceReadCompletionTests
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public async Task SourceEnforcesTheParserByteLimitBeforeExecuting(int extraBytes)
+    [InlineData(0, TestMemoryBudget.EvaluationBytes, false)]
+    [InlineData(1, TestMemoryBudget.EvaluationBytes, false)]
+    [InlineData(1, 128 * 1024L, false)]
+    [InlineData(1, 128 * 1024L, true)]
+    public async Task SourceEnforcesTheParserByteLimitBeforeExecuting(int extraBytes, long allowance, bool closeThrows)
     {
         var first = "value=changed\n"u8.ToArray();
         var tail = new byte[Parser.MaximumScriptBytes - first.Length + extraBytes];
         Array.Fill(tail, (byte)' ');
         tail[0] = (byte)'#';
         var state = new Eval(Parser.Parse("source file"));
-        var host = new TestOperationVisitor([]);
-        host.EnqueueFileOpenResult(FileOpenResult.Opened(new FileDescriptor(10), first.Length + tail.Length));
+        var memory = new MemoryGovernor(allowance);
+        using var owner = memory.CreateScope();
+        var host = new TestOperationVisitor([]) { MemoryBudget = memory, RecordAppends = true };
+        var descriptor = new FileDescriptor(10);
+        host.EnqueueFileOpenResult(FileOpenResult.Opened(descriptor, first.Length + tail.Length));
         host.EnqueueReadResult(ReadResult.Success(first, [], reachedEoF: false));
         host.EnqueueReadResult(ReadResult.Success(tail, [], reachedEoF: true));
+        if (closeThrows)
+            host.EnqueueCloseDescriptorException(new IOException("Close failed."));
         host.EnqueueCloseDescriptor();
         if (extraBytes > 0)
+        {
             host.EnqueueAppendResult(DescriptorWriteResult.Open);
+            host.BeforeAppend = (_, _) => Assert.Equal([descriptor], host.ClosedDescriptors);
+        }
 
-        await new Engine().RunAsync(state, host);
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
 
         Assert.Equal(extraBytes == 0 ? 0 : 2, state.LastExitCode);
         Assert.Equal(extraBytes == 0, state.Variables.ContainsKey("value"));
-        Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
+        Assert.Equal([descriptor], host.ClosedDescriptors);
+        if (extraBytes == 0)
+            Assert.Empty(host.Appends);
+        else
+        {
+            var diagnostic = Assert.Single(host.Appends);
+            var expected = new SyntaxError(Parser.ScriptSizeLimitMessage, 0);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
+            Assert.Equal(Utf8Text.EncodeLine(expected.ToDiagnosticMessage()).ToArray(), diagnostic.Content);
+        }
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
     }
 
     [Fact]

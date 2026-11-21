@@ -42,6 +42,11 @@ public readonly record struct ByteReadResult
     /// <summary>Gets a normal end-of-file result.</summary>
     public static ByteReadResult EndOfFile => default;
 
+    /// <summary>Internal outcome for a framed batch that exceeds its destination's byte limit.</summary>
+    internal static ByteReadResult TooLarge => new(ByteReadKind.TooLarge, 0, error: null, reachedEoF: false);
+
+    internal bool IsTooLarge => _kind == ByteReadKind.TooLarge;
+
     /// <summary>A closed, missing or unreadable descriptor, without bytes.</summary>
     public static ByteReadResult ReadFailure =>
         Failure(0, OperationError.BadFileDescriptor, reachedEoF: true);
@@ -74,6 +79,7 @@ public readonly record struct ByteReadResult
     {
         EndOfFile,
         Success,
-        Failure
+        Failure,
+        TooLarge
     }
 }

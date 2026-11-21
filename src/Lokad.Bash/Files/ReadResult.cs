@@ -44,6 +44,12 @@ public readonly record struct ReadResult
     /// <summary>Normal EOF without data.</summary>
     public static ReadResult EndOfFile => default;
 
+    internal static ReadResult TooLarge => new(ReadOnlyMemory<byte>.Empty, Array.Empty<int>(), ByteReadResult.TooLarge);
+
+    internal bool IsTooLarge => _read.IsTooLarge;
+
+    internal bool HasFailure => IsError || IsTooLarge;
+
     /// <summary>A closed, missing or unreadable descriptor.</summary>
     public static ReadResult ReadFailure => Failure(OperationError.BadFileDescriptor);
 

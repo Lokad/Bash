@@ -8,6 +8,36 @@ namespace Lokad.Bash.Tests;
 public sealed class BoundedReadTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SizeRejectedSourceBatchSkipsBothCopiesAndPreservesTheBorrowOutcome(bool readFails)
+    {
+        var memory = new MemoryGovernor(0);
+        using var budget = memory.CreateScope();
+        using var output = ByteMemoryBuilder.CreateUnaccounted(4).Append("#\n"u8);
+        var destination = new SourceLineDestination(output, 6);
+        var consumed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(consumed.Add, budget);
+        var content = "ab\ncd\nef\n"u8.ToArray();
+        var error = new OperationError("read failed\n");
+        var result = readFails ? ByteReadResult.Failure(content.Length, error, reachedEoF: false)
+            : ByteReadResult.Success(content.Length, reachedEoF: true);
+
+        var batch = await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, destination, CancellationToken.None);
+
+        Assert.Empty(batch.Content.ToArray());
+        Assert.Empty(batch.LineStartOffsets);
+        Assert.Equal(!readFails, batch.IsTooLarge);
+        Assert.Equal(readFails ? error : (OperationError?)null, batch.Error);
+        Assert.Equal([readFails ? 0 : 6], consumed);
+        Assert.Equal("#\n"u8.ToArray(), output.ToMemory().ToArray());
+        Assert.Equal(0, memory.PeakBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner source, DescriptorReadRequest _, CancellationToken __) =>
+            ValueTask.FromResult(source.Borrow(content, result, canRetain: false));
+    }
+
+    [Theory]
     [InlineData(1, 2, 1)]
     [InlineData(2, 2, 2)]
     [InlineData(3, 2, 3)]
