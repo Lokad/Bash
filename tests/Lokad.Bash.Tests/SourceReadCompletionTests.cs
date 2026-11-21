@@ -1,5 +1,6 @@
 using Lokad.Bash.Files;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
@@ -148,6 +149,65 @@ public sealed class SourceReadCompletionTests
         Assert.Equal(extraBytes == 0 ? 0 : 2, state.LastExitCode);
         Assert.Equal(extraBytes == 0, state.Variables.ContainsKey("value"));
         Assert.Equal([new FileDescriptor(10)], host.ClosedDescriptors);
+    }
+
+    [Fact]
+    public async Task SourceGrowsTheParserBufferAfterReleasingBorrowedReadStorage()
+    {
+        const int WindowBytes = 16 * 1024;
+        var memory = new MemoryGovernor(2 * WindowBytes);
+        using var evaluationMemory = memory.CreateScope();
+        using var readMemory = memory.CreateScope();
+        var first = Record("value=prefix", 8 * 1024);
+        var last = Record("value+=-tail; value+=$'\\377\\r'", 4 * 1024);
+        var consumed = new List<int>();
+        var buffer = new DescriptorReadBufferOwner(consumed.Add, readMemory);
+        var released = false;
+        var host = new TestOperationVisitor([])
+        {
+            MemoryBudget = memory,
+            RecordAppends = true,
+            ReadOverride = Read
+        };
+        var descriptor = new FileDescriptor(10);
+        host.EnqueueFileOpenResult(FileOpenResult.Opened(descriptor, first.Length + last.Length));
+        host.EnqueueCloseDescriptor();
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        var state = new Eval(Parser.Parse("source /input"));
+
+        await new Engine().RunAsync(state, host, evaluationMemory, CancellationToken.None);
+
+        Assert.True(state.LastExitCode == 0, string.Concat(host.Appends.Select(append => Utf8Text.Decode(append.Content))));
+        Assert.True(released);
+        Assert.Equal([first.Length, last.Length], consumed);
+        Assert.Equal([descriptor], host.ClosedDescriptors);
+        Assert.Empty(host.Appends);
+        Assert.Equal<byte>([.. "prefix-tail"u8, 0xff, 13], state.Variables["value"].Bytes.ToArray());
+        evaluationMemory.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(CancellationToken _)
+        {
+            if (consumed.Count == 0)
+                return ValueTask.FromResult(buffer.Borrow(first, ByteReadResult.Success(first.Length, reachedEoF: false), canRetain: true));
+
+            Assert.Single(consumed);
+            // This window can coexist with staging, and the parser can grow after its refund.
+            var reservation = readMemory.Reserve(WindowBytes);
+            var scratch = new byte[WindowBytes];
+            last.CopyTo(scratch);
+            var borrow = buffer.Borrow(scratch.AsMemory(0, last.Length), ByteReadResult.Success(last.Length, reachedEoF: true), canRetain: false);
+            borrow.ReleaseWith(() =>
+            {
+                Array.Clear(scratch);
+                reservation.Dispose();
+                released = true;
+            });
+            return ValueTask.FromResult(borrow);
+        }
+
+        static ReadOnlyMemory<byte> Record(string text, int length) =>
+            Utf8Text.Encode((text + " #").PadRight(length - 1, 'x') + "\n");
     }
 
     [Theory]
