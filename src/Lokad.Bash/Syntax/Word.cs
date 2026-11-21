@@ -24,13 +24,25 @@ public sealed class Word
             if (parts[index] is not SourceWordPart source)
                 continue;
             HasIncompleteQuotedParameterSubscript |= source.ParameterSubscriptFailure != ParameterSubscriptFailure.None;
-            if (!MayExpandUnquotedPositionalStar && source.Kind == WordPartKind.Unquoted)
-            {
-                var bytes = source.Source.AsSpan();
-                MayExpandUnquotedPositionalStar = bytes.IndexOf("$*"u8) >= 0 || bytes.IndexOf("${*"u8) >= 0;
-            }
-            if (HasIncompleteQuotedParameterSubscript && MayExpandUnquotedPositionalStar)
+            if (!MayExpandUnquotedAggregate && source.Kind == WordPartKind.Unquoted)
+                MayExpandUnquotedAggregate = ContainsAggregate(source.Source.AsSpan());
+            if (HasIncompleteQuotedParameterSubscript && MayExpandUnquotedAggregate)
                 break;
+        }
+
+        static bool ContainsAggregate(ReadOnlySpan<byte> bytes)
+        {
+            var start = 0;
+            while (start < bytes.Length && bytes[start..].IndexOfAny((byte)'@', (byte)'*') is >= 0 and var offset)
+            {
+                var index = start + offset;
+                if (index > 0 && (bytes[index - 1] == (byte)'$'
+                    || bytes[index - 1] == (byte)'{' && index > 1 && bytes[index - 2] == (byte)'$'
+                    || bytes[index - 1] == (byte)'[' && index + 1 < bytes.Length && bytes[index + 1] == (byte)']'))
+                    return true;
+                start = index + 1;
+            }
+            return false;
         }
 
         static IReadOnlyList<ExpandedWord>? PrepareLiteral(IReadOnlyList<WordPart> parts)
@@ -64,8 +76,8 @@ public sealed class Word
     /// <summary>Frozen literal expansion scaffolding borrowing immutable syntax bytes.</summary>
     internal IReadOnlyList<ExpandedWord>? LiteralFields { get; }
     internal bool HasIncompleteQuotedParameterSubscript { get; }
-    /// <summary>Conservative lexical check for direct positional star in an ordinary word.</summary>
-    internal bool MayExpandUnquotedPositionalStar { get; }
+    /// <summary>Conservative lexical check for an unquoted aggregate in an ordinary word.</summary>
+    internal bool MayExpandUnquotedAggregate { get; }
 
     /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
     internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)

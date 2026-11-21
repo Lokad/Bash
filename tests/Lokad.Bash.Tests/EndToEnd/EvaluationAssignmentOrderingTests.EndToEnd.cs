@@ -310,4 +310,23 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
     }
+
+    [Theory]
+    [InlineData("IFS=; set -- east west; printf '<%s>' $@${IFS:=,}; printf '|<%s>' \"$IFS\"", "<east west>|<,>")]
+    [InlineData("IFS=; set -- 'a b' c,d; data='x y'; printf '<%s>' ${@}${IFS:=' '}$data", "<a b><c,d><x><y>")]
+    [InlineData("unset IFS; set -- 'a b' c,d; data='x y'; printf '<%s>' $@${IFS:=}$data", "<a><b><c,dx y>")]
+    [InlineData("IFS=; set -- '' ''; printf '<%s>' $@${IFS:=,}", "< >")]
+    [InlineData("IFS=; a=('a b' '' c,d); printf '<%s>' ${a[@]}${IFS:=,}", "<a b  c><d>")]
+    [InlineData("IFS=; a=('skip me' '' c,d); printf '<%s>' ${a[*]:1:2}${IFS:=,}", "< c><d>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' $@${IFS:=,},tail", "<a b c><d><,tail>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' $@ ${IFS:=,}", "<a b><c,d><>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' ${IFS:=,}$@", "<><a b><c><d>")]
+    public async Task WordExpansion_UnquotedAggregateRetainsJoinAcrossIfsAssignment(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
 }

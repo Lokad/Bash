@@ -154,7 +154,7 @@ internal static partial class WordExpansion
             scope.Variables, scope.Effects.Memory, purpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken,
             storage)
         {
-            TrackSpacesForPositionalStar = purpose == ExpansionPurpose.Normal && word.MayExpandUnquotedPositionalStar,
+            TrackExpansionSpaces = purpose == ExpansionPurpose.Normal && word.MayExpandUnquotedAggregate,
         };
         await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, tildeExpansion)
             .ConfigureAwait(false);
