@@ -29,6 +29,30 @@ public class ParserTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Parse_ScalarAssignmentOwnsExactNameBacking(bool append, bool continued)
+    {
+        var name = new string('x', 513);
+        var spelling = continued ? name.Insert(255, "\\\n") : name;
+        var operation = append ? "+=" : "=";
+        byte[] source = [.. Encoding.ASCII.GetBytes(spelling + operation), 0xff, .. "\" tail\"\n"u8];
+
+        var command = AssertSingleCommand(Parser.Parse(source));
+        var assignment = Assert.Single(command.Assignments);
+        Assert.Equal(append ? AssignmentOperator.Append : AssignmentOperator.Replace, assignment.Operator);
+        Assert.Equal(name, assignment.Target.ToUtf8String());
+        Assert.True(MemoryMarshal.TryGetArray(assignment.Target.Bytes, out var backing));
+        Assert.NotNull(backing.Array);
+        Assert.Equal(name.Length, backing.Array.Length);
+        Assert.Collection(assignment.Value.Parts,
+            part => Assert.Equal(new byte[] { 0xff }, part.GetUnexpandedValue().Bytes.ToArray()),
+            part => Assert.Equal(" tail", part.GetUnexpandedValue().ToUtf8String()));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void Parse_SimpleCommandsShareOnlyTheirAbsentCollections(bool streamed)

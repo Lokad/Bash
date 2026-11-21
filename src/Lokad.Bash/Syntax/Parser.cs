@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -1076,46 +1077,33 @@ public static class Parser
         bool TrySplitScalarAssignment(Word word, out AssignmentWord assignment)
         {
             assignment = default;
+            // The tokenizer keeps the leading unquoted run in one part, including across backslash-LF.
+            if (word.Parts is not [SourceWordPart { Kind: WordPartKind.Unquoted } part, ..])
+                return false;
+            var source = part.Source;
+            var equals = source.AsSpan().IndexOf((byte)'=');
+            if (equals < 0)
+                return false;
 
-            var nameBuilder = tokenizer.ScanContext.CreateByteBuilder(0);
-            for (var partIndex = 0; partIndex < word.Parts.Count; partIndex++)
-            {
-                var part = word.Parts[partIndex];
-                if (part.Kind != WordPartKind.Unquoted)
-                    return false;
+            var append = equals > 0 && source[equals - 1] == (byte)'+';
+            var name = source.AsSpan(0, append ? equals - 1 : equals);
+            if (!VariableNames.IsValidVariableName(name))
+                return false;
 
-                var source = ShellSource.FromBytes(part.GetUnexpandedValue().Bytes);
-                var equals = source.AsSpan().IndexOf((byte)'=');
-                if (equals < 0)
-                {
-                    nameBuilder.Append(source.Bytes);
-                    continue;
-                }
+            var memory = tokenizer.ScanContext.SyntaxMemory;
+            // Keep the retained name independent of the original assignment word's value bytes.
+            memory?.Grow(MemoryCapacity.ArrayBackingBytes<byte>(name.Length));
+            var target = ShellSource.FromBytes(name.ToArray());
 
-                nameBuilder.Append(source.Bytes[..equals]);
-                var operation = AssignmentOperator.Replace;
-                if (nameBuilder.Length > 0 && nameBuilder.ToMemory().Span[^1] == (byte)'+')
-                {
-                    nameBuilder.Truncate(nameBuilder.Length - 1);
-                    operation = AssignmentOperator.Append;
-                }
-                if (!ShellValue.FromBytes(nameBuilder.ToMemory()).TryGetUtf8Text(out var name)
-                    || !VariableNames.IsValidVariableName(name.AsSpan()))
-                    return false;
+            var valueParts = new List<WordPart>();
+            if (equals + 1 < source.Length)
+                valueParts.Add(part.Slice(equals + 1, source.Length - equals - 1, memory));
+            for (var index = 1; index < word.Parts.Count; index++)
+                valueParts.Add(word.Parts[index]);
 
-                var valueParts = new List<WordPart>();
-                if (equals + 1 < source.Length)
-                    valueParts.Add(part is SourceWordPart prepared
-                        ? prepared.Slice(equals + 1, source.Length - equals - 1, tokenizer.ScanContext.SyntaxMemory)
-                        : WordPart.FromSource(WordPartKind.Unquoted, source.Slice(equals + 1), tokenizer.ScanContext.SyntaxMemory));
-                for (var j = partIndex + 1; j < word.Parts.Count; j++)
-                    valueParts.Add(word.Parts[j]);
-
-                assignment = new AssignmentWord(ShellSource.FromBytes(nameBuilder.ToCompactMemory(tokenizer.ScanContext.SyntaxMemory)), new Word(valueParts), operation);
-                return true;
-            }
-
-            return false;
+            var operation = append ? AssignmentOperator.Append : AssignmentOperator.Replace;
+            assignment = new AssignmentWord(target, new Word(valueParts), operation);
+            return true;
         }
 
         // <summary>
