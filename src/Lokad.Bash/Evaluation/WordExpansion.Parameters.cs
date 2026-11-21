@@ -1147,7 +1147,7 @@ internal static partial class WordExpansion
                         return;
                     case ParameterSource.Associative associative:
                         // Keep the platform's unsigned byte order rather than native Bash hash traversal.
-                        Emit(associative.Array.PresentValues.Skip((int)Math.Max(0, start - 1)).Take(count));
+                        Emit(associative.Array.ValuesFrom((int)Math.Max(0, start - 1), count));
                         return;
                     case ParameterSource.Positional positional:
                         Emit(positional.ValuesFrom(start, count));

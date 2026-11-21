@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Linq;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
@@ -105,6 +106,88 @@ public sealed class ShellVariableValueTests
         Assert.Equal(0, clone.Count);
         Assert.Empty(clone.Entries);
         Assert.Equal(1, array.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AssociativeRangesFollowByteOrderThroughUpdatesAndRemovals(bool reverse)
+    {
+        var array = new AssociativeArray(isInitialized: false);
+        var expected = new SortedDictionary<ShellValue, ShellValue?>(ShellValue.ByteOrder);
+        var keys = Enumerable.Range(1, 192).Select(index =>
+        {
+            Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromBytes(new[] { (byte)index }), out var key));
+            return key;
+        }).ToArray();
+        if (reverse)
+            Array.Reverse(keys);
+
+        foreach (var key in keys)
+            Set(key, key.Value);
+        var clone = array.Clone();
+        var cloneEntries = expected.ToArray();
+        var random = new Random(112);
+        for (var step = 0; step < 1200; step++)
+        {
+            var key = keys[random.Next(keys.Length)];
+            if (step % 4 == 0)
+                Set(key, null);
+            else if (step % 4 == 1)
+                Set(key, ShellValue.Empty);
+            else if (step % 4 == 2)
+                Set(key, ShellValue.FromText("replacement"));
+            else
+            {
+                array.Remove(key);
+                expected.Remove(key.Value);
+            }
+
+            var first = random.Next(expected.Count + 1);
+            var count = random.Next(6);
+            Assert.Equal(expected.Values.Skip(first).Take(count).Select(value => value.GetValueOrDefault()),
+                array.ValuesFrom(first, count));
+            Assert.Equal(expected.Count, array.Count);
+            var assigned = expected.TryGetValue(key.Value, out var stored) && stored.HasValue;
+            Assert.Equal(assigned, array.TryGet(key, out var actual));
+            Assert.Equal(stored.GetValueOrDefault(), actual);
+        }
+
+        Assert.Equal(expected.ToArray(), array.Entries);
+        Assert.Equal(cloneEntries, clone.Entries);
+        foreach (var key in keys)
+            array.Remove(key);
+        Assert.True(array.IsInitialized);
+        Assert.Equal(0, array.EstimatedMemoryBytes);
+        Assert.Empty(array.ValuesFrom(0, int.MaxValue));
+
+        void Set(AssociativeArrayKey key, ShellValue? value)
+        {
+            array.Set(key, value);
+            expected[key.Value] = value;
+        }
+    }
+
+    [Fact]
+    public void AssociativeRefusedInsertionAndReplacementKeepExistingEntries()
+    {
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("a"), out var a));
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("b"), out var b));
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("c"), out var c));
+        var array = new AssociativeArray(isInitialized: false);
+        array.Set(a, a.Value);
+        array.Set(c, c.Value);
+        var before = array.EstimatedMemoryBytes;
+        var budget = new MemoryGovernor(0);
+        using var owner = budget.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        Assert.Throws<MemoryBudgetExceededException>(() => array.Set(b, b.Value, memory));
+        Assert.Throws<MemoryBudgetExceededException>(() => array.Set(a, ShellValue.FromText("longer"), memory));
+
+        Assert.Equal(new[] { a.Value, c.Value }, array.ValuesFrom(0, 2));
+        Assert.Equal(before, array.EstimatedMemoryBytes);
+        Assert.Equal(0, budget.ReservedBytes);
     }
 
     [Fact]

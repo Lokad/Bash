@@ -355,20 +355,14 @@ internal sealed class IndexedArray
 /// <summary>Stores associative-array entries in deterministic byte order, not Bash hash-table order.</summary>
 internal sealed class AssociativeArray
 {
-    private readonly SortedDictionary<ShellValue, ShellValue?> _elements;
+    // Subtree sizes let slices seek by ordinal without walking the preceding keys.
+    private Entry? _root;
     private long _valueBytes;
-    internal long EstimatedMemoryBytes => (long)_elements.Count * IndexedArray.ElementMemoryBytes + _valueBytes;
+    internal long EstimatedMemoryBytes => (long)Count * IndexedArray.ElementMemoryBytes + _valueBytes;
 
     /// <summary>Creates an empty array, retaining whether it has received an assignment.</summary>
     public AssociativeArray(bool isInitialized)
     {
-        _elements = new SortedDictionary<ShellValue, ShellValue?>(ShellValue.ByteOrder);
-        IsInitialized = isInitialized;
-    }
-
-    private AssociativeArray(SortedDictionary<ShellValue, ShellValue?> elements, bool isInitialized)
-    {
-        _elements = elements;
         IsInitialized = isInitialized;
     }
 
@@ -383,10 +377,15 @@ internal sealed class AssociativeArray
         AssociativeArrayKey key,
         out ShellValue value)
     {
-        if (_elements.TryGetValue(key.Value, out var assigned) && assigned is { } stored)
+        for (var entry = _root; entry != null;)
         {
-            value = stored;
-            return true;
+            var order = ShellValue.ByteOrder.Compare(key.Value, entry.Key);
+            if (order == 0)
+            {
+                value = entry.Value.GetValueOrDefault();
+                return entry.Value.HasValue;
+            }
+            entry = order < 0 ? entry.Left : entry.Right;
         }
         value = ShellValue.Empty;
         return false;
@@ -397,41 +396,198 @@ internal sealed class AssociativeArray
 
     internal void Set(AssociativeArrayKey key, ShellValue? value, EvaluationMemory? memory)
     {
-        var present = _elements.TryGetValue(key.Value, out var previous);
-        var keyBytes = present ? 0 : Variables.EstimateValueBytes(key.Value);
-        var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
-            - Variables.EstimateValueBytes(previous.GetValueOrDefault());
-        var valueBytes = checked(_valueBytes + keyBytes + valueDelta);
-        memory?.Charge(checked(Math.Max(0, valueDelta) + (present ? 0 : IndexedArray.ElementMemoryBytes + keyBytes)));
-        _elements[key.Value] = value;
-        _valueBytes = valueBytes;
+        _root = Insert(_root);
         MarkInitialized();
+
+        Entry Insert(Entry? entry)
+        {
+            if (entry == null)
+            {
+                var added = checked(Variables.EstimateValueBytes(key.Value) + Variables.EstimateValueBytes(value.GetValueOrDefault()));
+                var nextBytes = checked(_valueBytes + added);
+                memory?.Charge(checked(IndexedArray.ElementMemoryBytes + added));
+                var inserted = new Entry(key.Value, value);
+                _valueBytes = nextBytes;
+                return inserted;
+            }
+
+            var order = ShellValue.ByteOrder.Compare(key.Value, entry.Key);
+            if (order == 0)
+            {
+                var delta = Variables.EstimateValueBytes(value.GetValueOrDefault())
+                    - Variables.EstimateValueBytes(entry.Value.GetValueOrDefault());
+                var nextBytes = checked(_valueBytes + delta);
+                memory?.Charge(Math.Max(0, delta));
+                entry.Value = value;
+                _valueBytes = nextBytes;
+                return entry;
+            }
+
+            if (order < 0)
+                entry.Left = Insert(entry.Left);
+            else
+                entry.Right = Insert(entry.Right);
+            return Balance(entry);
+        }
     }
 
     /// <summary>Removes one key without changing the array's declaration or initialization state.</summary>
     public void Remove(AssociativeArrayKey key)
     {
-        if (_elements.TryGetValue(key.Value, out var previous) && _elements.Remove(key.Value))
-            _valueBytes -= Variables.EstimateValueBytes(key.Value) + Variables.EstimateValueBytes(previous.GetValueOrDefault());
+        _root = Delete(_root);
+
+        Entry? Delete(Entry? entry)
+        {
+            if (entry == null)
+                return null;
+            var order = ShellValue.ByteOrder.Compare(key.Value, entry.Key);
+            if (order < 0)
+                entry.Left = Delete(entry.Left);
+            else if (order > 0)
+                entry.Right = Delete(entry.Right);
+            else
+            {
+                _valueBytes -= Variables.EstimateValueBytes(entry.Key) + Variables.EstimateValueBytes(entry.Value.GetValueOrDefault());
+                if (entry.Left == null)
+                    return entry.Right;
+                if (entry.Right == null)
+                    return entry.Left;
+                var right = DetachFirst(entry.Right, out var successor);
+                successor.Left = entry.Left;
+                successor.Right = right;
+                return Balance(successor);
+            }
+            return Balance(entry);
+        }
+
+        static Entry? DetachFirst(Entry entry, out Entry first)
+        {
+            if (entry.Left == null)
+            {
+                first = entry;
+                return entry.Right;
+            }
+            entry.Left = DetachFirst(entry.Left, out first);
+            return Balance(entry);
+        }
     }
 
     /// <summary>Enumerates values by byte-ordered key without copying; consume before mutating.</summary>
-    public IEnumerable<ShellValue> PresentValues => _elements.Values.Select(value => value.GetValueOrDefault());
+    public IEnumerable<ShellValue> PresentValues => ValuesFrom(0, int.MaxValue);
+
+    /// <summary>Seeks to a zero-based ordinal and yields a bounded byte-ordered range without copying.</summary>
+    internal IEnumerable<ShellValue> ValuesFrom(int first, int count) =>
+        Enumerate(first, count).Select(static entry => entry.Value.GetValueOrDefault());
 
     /// <summary>Enumerates keys and values together in byte order, including unassigned keys.</summary>
-    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => _elements;
+    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries =>
+        Enumerate(0, int.MaxValue).Select(static entry => KeyValuePair.Create(entry.Key, entry.Value));
 
     /// <summary>Gets the number of present entries.</summary>
-    public int Count => _elements.Count;
+    public int Count => _root?.Count ?? 0;
 
     /// <summary>Enumerates keys in the same deterministic order as their values.</summary>
-    public IEnumerable<ShellValue> PresentKeys => _elements.Keys;
+    public IEnumerable<ShellValue> PresentKeys => Enumerate(0, int.MaxValue).Select(static entry => entry.Key);
 
     /// <summary>Captures a detached dictionary whose enumeration follows byte key order.</summary>
-    public Dictionary<ShellValue, ShellValue> CaptureValues() =>
-        _elements.ToDictionary(entry => entry.Key, entry => entry.Value.GetValueOrDefault());
+    public Dictionary<ShellValue, ShellValue> CaptureValues()
+    {
+        var values = new Dictionary<ShellValue, ShellValue>(Count);
+        foreach (var entry in Enumerate(0, int.MaxValue))
+            values.Add(entry.Key, entry.Value.GetValueOrDefault());
+        return values;
+    }
 
     /// <summary>Creates an independent associative array with the same entries.</summary>
-    public AssociativeArray Clone() =>
-        new(new SortedDictionary<ShellValue, ShellValue?>(_elements, ShellValue.ByteOrder), IsInitialized) { _valueBytes = _valueBytes };
+    public AssociativeArray Clone() => new(IsInitialized) { _root = _root?.Clone(), _valueBytes = _valueBytes };
+
+    private IEnumerable<Entry> Enumerate(int first, int count)
+    {
+        if (_root is not { } root || count <= 0 || first >= root.Count)
+            yield break;
+
+        var pending = new Stack<Entry>(root.Height);
+        for (Entry? entry = root; entry != null;)
+        {
+            var leftCount = entry.Left?.Count ?? 0;
+            if (first > leftCount)
+            {
+                first -= leftCount + 1;
+                entry = entry.Right;
+            }
+            else
+            {
+                pending.Push(entry);
+                if (first == leftCount)
+                    break;
+                entry = entry.Left;
+            }
+        }
+
+        while (pending.TryPop(out var next))
+        {
+            yield return next;
+            if (--count == 0)
+                yield break;
+            for (var entry = next.Right; entry != null; entry = entry.Left)
+                pending.Push(entry);
+        }
+    }
+
+    private static Entry Balance(Entry entry)
+    {
+        entry.Refresh();
+        var difference = Height(entry.Left) - Height(entry.Right);
+        if (difference > 1 && entry.Left is { } left)
+        {
+            if (left.Right is { } inner && inner.Height > Height(left.Left))
+                left = RotateLeft(left, inner);
+            return RotateRight(entry, left);
+        }
+        if (difference < -1 && entry.Right is { } right)
+        {
+            if (right.Left is { } inner && inner.Height > Height(right.Right))
+                right = RotateRight(right, inner);
+            return RotateLeft(entry, right);
+        }
+        return entry;
+
+        static Entry RotateLeft(Entry entry, Entry right)
+        {
+            entry.Right = right.Left;
+            right.Left = entry;
+            entry.Refresh();
+            right.Refresh();
+            return right;
+        }
+
+        static Entry RotateRight(Entry entry, Entry left)
+        {
+            entry.Left = left.Right;
+            left.Right = entry;
+            entry.Refresh();
+            left.Refresh();
+            return left;
+        }
+    }
+
+    private static int Height(Entry? entry) => entry?.Height ?? 0;
+
+    private sealed class Entry(ShellValue key, ShellValue? value)
+    {
+        public ShellValue Key { get; } = key;
+        public ShellValue? Value { get; set; } = value;
+        public Entry? Left { get; set; }
+        public Entry? Right { get; set; }
+        public int Height { get; private set; } = 1;
+        public int Count { get; private set; } = 1;
+
+        public void Refresh()
+        {
+            Height = 1 + Math.Max(AssociativeArray.Height(Left), AssociativeArray.Height(Right));
+            Count = 1 + (Left?.Count ?? 0) + (Right?.Count ?? 0);
+        }
+
+        public Entry Clone() => new(Key, Value) { Left = Left?.Clone(), Right = Right?.Clone(), Height = Height, Count = Count };
+    }
 }

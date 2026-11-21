@@ -471,6 +471,11 @@ Positional substring expansion resolves the bounds before reading the selected
 arguments. It indexes the active window from the selected position and includes
 the captured `$0` when a nonempty slice starts at zero.
 
+Associative slices seek by ordinal in unsigned-byte key order. The same tree
+provides key lookup, ordered traversal and range selection. Its subtree counts
+stay current through inserts and removals. Slice enumeration starts after the
+reached bounds have expanded and sees changes to the selected array.
+
 `caller` merges active sourced invocations with the function chain.
 Each source command owns its immutable frame across execution and child
 cleanup. Child evaluations borrow the frame chain and preserve the order

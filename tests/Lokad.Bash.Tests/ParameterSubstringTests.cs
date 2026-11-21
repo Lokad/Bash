@@ -21,6 +21,18 @@ public sealed class ParameterSubstringTests
     }
 
     [Theory]
+    [InlineData("declare -A a=([z]=last); printf '<%s>' \"${a[@]:1:${a[a]:=2}}\"", "<2><last>")]
+    [InlineData("declare -A a=([z]=last [a]=first [m]=middle); unset 'a[a]'; declare -n b=a; printf '<%s>' \"${b[@]:2:1}\"", "<last>")]
+    public async Task AssociativeSliceUsesByteOrdinalsAfterEntryChanges(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:${a[@]:0:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
     [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:0:${a[@]:0:2}}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
     [InlineData("x=abc; set -- 1 2; eval 'printf \"%s\" \"${x:${@:1:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
