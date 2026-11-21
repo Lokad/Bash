@@ -39,7 +39,8 @@ public static class DescriptorReader
             Copy(await pending.ConfigureAwait(false), destination);
     }
 
-    /// <summary>Retains a complete LF batch, consuming nothing until the batch is ready.</summary>
+    /// <summary>Retains up to the line limit and consumes nothing until the batch is ready.
+    /// A final unterminated record counts toward the limit when EOF is known.</summary>
     /// <param name="destinationBudget">Owns copied bytes and line offsets when supplied;
     /// otherwise the descriptor's owner retains the batch.</param>
     /// <param name="cancellationToken">Cancels computation and pending reads.</param>
@@ -105,7 +106,7 @@ public static class DescriptorReader
             if (position != buffer.Position)
                 examined = 0;
             var found = ByteLines.FindCompleteRecords(bytes.Span[examined..], delimiter, examined == 0 ? limit : 1,
-                destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
+                result.ReachedEoF, destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
             var length = found == 0 ? 0 : examined + found;
             if (examined > 0 && (length == 0 ? bytes.Length : length) > ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();

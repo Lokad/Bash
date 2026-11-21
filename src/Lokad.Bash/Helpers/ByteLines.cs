@@ -18,12 +18,13 @@ public static class ByteLines
         IMemoryBudget memoryBudget,
         out int[] lineStartOffsets,
         out IMemoryReservation? reservation) =>
-        FindCompleteRecords(content, (byte)'\n', limit, memoryBudget, out lineStartOffsets, out reservation);
+        FindCompleteRecords(content, (byte)'\n', limit, reachedEof: false, memoryBudget, out lineStartOffsets, out reservation);
 
     internal static int FindCompleteRecords(
         ReadOnlySpan<byte> content,
         byte delimiter,
         int limit,
+        bool reachedEof,
         IMemoryBudget memoryBudget,
         out int[] recordStartOffsets,
         out IMemoryReservation? reservation)
@@ -43,6 +44,13 @@ public static class ByteLines
             consumed += delimiterOffset + 1;
             if (recordCount < cachedStarts.Length)
                 cachedStarts[recordCount] = consumed;
+            recordCount++;
+        }
+
+        if (reachedEof && consumed < content.Length && recordCount < limit)
+        {
+            // The last delimiter has already supplied the start of the final record.
+            consumed = content.Length;
             recordCount++;
         }
         if (recordCount <= 1)

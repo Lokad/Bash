@@ -14,15 +14,17 @@ public sealed class SourceMemoryLifetimeTests
 {
     private const int PaddingBytes = 32768;
 
-    [Fact]
-    public async Task TerminalSourceBatchFillsTheParserBufferAndReleasesOffsetsBeforeClose()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TerminalSourceBatchFillsTheParserBufferAndReleasesOffsetsBeforeClose(bool terminated)
     {
         var governor = new MemoryGovernor(1024 * 1024);
         var scopes = new ConcurrentBag<RecordedScope>();
         var budget = new RecordingBudget(governor, depth: 0, scopes);
         using var owner = budget.CreateScope();
         await using var host = new TestHost { MemoryBudget = budget };
-        var body = "probe(){ printf '%s' $'\\377\\r'; }\n#" + new string('x', PaddingBytes) + "\n";
+        var body = "probe(){ printf '%s' $'\\377\\r'; }\n#" + new string('x', PaddingBytes) + (terminated ? "\n" : "x");
         host.AddFile("/a", body);
         var beforeRead = 0L;
         host.BeforeRead = () => beforeRead = governor.ReservedBytes;

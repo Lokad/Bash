@@ -7,6 +7,39 @@ namespace Lokad.Bash.Tests;
 public sealed class BoundedReadTests
 {
     [Theory]
+    [InlineData(2, int.MaxValue, true)]
+    [InlineData(1, int.MaxValue, false)]
+    [InlineData(2, 4, false)]
+    public async Task LineBatchIncludesUnterminatedTailOnlyAtEofWithRoom(int limit, int window, bool includesTail)
+    {
+        var governor = new MemoryGovernor(1024);
+        await using var host = new MockFileSystem { MemoryBudget = governor, MaximumReadWindowBytes = window };
+        byte[] first = [(byte)'a', 13, 10];
+        byte[] tail = [0xff, 13];
+        byte[] input = [.. first, .. tail];
+        host.SetStandardInputBytes(input);
+        using var owner = governor.CreateScope();
+
+        var batch = await host.ReadLinesAsync(FileDescriptor.StdIn, limit, owner, CancellationToken.None);
+
+        Assert.Equal(includesTail ? input : first, batch.Content.ToArray());
+        Assert.Equal(includesTail ? [first.Length] : Array.Empty<int>(), batch.LineStartOffsets);
+        Assert.Equal(includesTail, batch.ReachedEoF);
+        Assert.Equal(includesTail ? input.Length + 32 + sizeof(int) : first.Length, governor.ReservedBytes);
+        Assert.Equal(1, host.ReadCallCount);
+        if (!includesTail)
+        {
+            var remaining = await host.ReadLinesAsync(FileDescriptor.StdIn, limit, owner, CancellationToken.None);
+            Assert.Equal(tail, remaining.Content.ToArray());
+            Assert.Empty(remaining.LineStartOffsets);
+            Assert.True(remaining.ReachedEoF);
+            Assert.Equal(2, host.ReadCallCount);
+        }
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(0, false)]
     [InlineData(0, true)]
     [InlineData(4096, false)]
