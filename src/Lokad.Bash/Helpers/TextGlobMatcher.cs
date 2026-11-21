@@ -646,7 +646,7 @@ public static class TextGlobMatcher
             if (!_utf8) return HasSurrogatePair(index) ? 2 : 1;
             if (_byteCharacters) return 1;
             if (!_reverse) return Utf8Text.FirstCharacterLength(_bytes[index..]);
-            return Rune.DecodeLastFromUtf8(_bytes[..(_bytes.Length - index)], out _, out var width) == OperationStatus.Done ? width : 1;
+            return Utf8Text.LastCharacterLength(_bytes[..(_bytes.Length - index)]);
         }
         public int this[int index]
         {

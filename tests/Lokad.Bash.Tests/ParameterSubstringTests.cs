@@ -144,6 +144,8 @@ public sealed class ParameterSubstringTests
         "bad substitution: no closing `)' in (1:2\n", 1)]
     [InlineData("x=abc; printf '%s' \"${x:(1+\r2:2}\"\nprintf 'after:%s' \"$?\"", "after:1",
         "bad substitution: no closing `)' in (1+\r2:2\n", 0)]
+    [InlineData("x=$'a\\u03bb\\U0001f642z'; printf '<%s><%s><%s>\\n' \"${x:4:$(printf end >&2; printf 1)}\""
+        + " \"${x:5:$(printf skipped >&2; printf 1)}\" \"${x: -5:$(printf skipped >&2; printf 1)}\"", "<><><>\n", "end", 0)]
     public async Task SubstringsPreserveFieldsAndOperandEffects(string script, string expected, string error, int status)
     {
         var result = await EvaluationTestHelper.RunAsync(script);
@@ -160,6 +162,7 @@ public sealed class ParameterSubstringTests
     [InlineData("x=$'\\377'; printf '%s' \"${x:9:$(printf bad >&2; printf 1)}\"; printf after\n", "6166746572", "", 0)]
     [InlineData("x=$'\\377'; printf '%s' \"${x:1:$(printf effect >&2; printf 0)}\"; printf after\n", "6166746572", "656666656374", 0)]
     [InlineData("x=$'\\377'; message=$'\\377'; printf '%s' \"${x:0:${missing:?$message}}$(printf bad >&2)\"; printf after\n", "", "6D697373696E673A20FF0A", 1)]
+    [InlineData("x=$'a\\360\\237z\\316\\273b'; printf '%s|%s|%s' \"${x:2:2}\" \"${x:3:-1}\" \"${x: -4:-2}\"", "9F7A7C7ACEBB7C9F7A", "", 0)]
     public async Task SubstringsPreserveValueBytes(string script, string expectedHex, string errorHex, int status)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));

@@ -13,6 +13,10 @@ public static class Utf8Text
     public static int FirstCharacterLength(ReadOnlySpan<byte> bytes) =>
         Rune.DecodeFromUtf8(bytes, out _, out var length) == OperationStatus.Done ? length : 1;
 
+    /// <summary>Consumes the final UTF-8 character from nonempty input, or one byte if malformed or incomplete.</summary>
+    internal static int LastCharacterLength(ReadOnlySpan<byte> bytes) =>
+        Rune.DecodeLastFromUtf8(bytes, out _, out var length) == OperationStatus.Done ? length : 1;
+
     public static string Decode(ReadOnlyMemory<byte> bytes)
     {
         if (bytes.IsEmpty)

@@ -1067,27 +1067,39 @@ internal static partial class WordExpansion
                 return;
 
             var source = parameter.RangeSource;
-            var characters = source == null ? CountParameterCharacters(parameter.Value, scope) : 0;
-            // Offset effects precede the negative-origin lookup; length effects precede enumeration.
-            var maximum = source switch
+            var value = source == null ? parameter.Value.Bytes : default;
+            var scalarStart = 0;
+            if (source == null)
             {
-                ParameterSource.Indexed indexed => indexed.Array.MaxIndex ?? -1,
-                ParameterSource.Associative associative => associative.Array.Count,
-                ParameterSource.Positional positional => (long)positional.Arguments.Count + 1,
-                _ => characters,
-            };
-            if (start < 0)
-                start = source switch
+                if (FindScalarBoundary(value.Span, start) is not { } position)
                 {
-                    // Add the negative offset first to avoid overflow at long.MaxValue.
-                    ParameterSource.Indexed or ParameterSource.Associative => maximum + start + 1,
-                    _ => maximum + start,
-                };
-
-            if (start < 0 || start > maximum)
+                    Emit([ShellValue.Empty]);
+                    return;
+                }
+                scalarStart = position;
+            }
+            else
             {
-                Emit(source == null ? [ShellValue.Empty] : []);
-                return;
+                // Offset effects precede the negative-origin lookup; length effects precede enumeration.
+                var maximum = source switch
+                {
+                    ParameterSource.Indexed indexed => indexed.Array.MaxIndex ?? -1,
+                    ParameterSource.Associative associative => associative.Array.Count,
+                    ParameterSource.Positional positional => (long)positional.Arguments.Count + 1,
+                    _ => 0,
+                };
+                if (start < 0)
+                    start = source switch
+                    {
+                        // Add the negative offset first to avoid overflow at long.MaxValue.
+                        ParameterSource.Indexed or ParameterSource.Associative => maximum + start + 1,
+                        _ => maximum + start,
+                    };
+                if (start < 0 || start > maximum)
+                {
+                    Emit([]);
+                    return;
+                }
             }
 
             long? length = null;
@@ -1125,27 +1137,47 @@ internal static partial class WordExpansion
                 }
             }
 
-            var end = length is { } amount
-                ? amount < 0 ? characters + amount : start + Math.Min(characters - start, amount)
-                : characters;
-            if (end < start)
+            var selected = value[scalarStart..];
+            if (length is { } amount)
             {
-                await ReportInvalidLengthAsync().ConfigureAwait(false);
-                return;
+                int selectedBytes;
+                if (amount < 0)
+                {
+                    if (FindScalarBoundary(value.Span, amount) is not { } end || end < scalarStart)
+                    {
+                        await ReportInvalidLengthAsync().ConfigureAwait(false);
+                        return;
+                    }
+                    selectedBytes = end - scalarStart;
+                }
+                else
+                    selectedBytes = AdvanceParameterCharacters(selected.Span, (int)Math.Min(amount, selected.Length),
+                        scope, out _);
+                selected = selected[..selectedBytes];
             }
-            var bytes = parameter.Value.Bytes;
-            var position = 0;
-            var from = 0;
-            for (var character = 0; character < end; character++)
+            Emit([ShellValue.FromBytes(selected)]);
+
+            int? FindScalarBoundary(ReadOnlySpan<byte> bytes, long offset)
             {
-                scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                if (character == start)
-                    from = position;
-                position += Utf8Text.FirstCharacterLength(bytes.Span[position..]);
+                if (offset < -bytes.Length || offset > bytes.Length)
+                    return null;
+                if (offset >= 0)
+                {
+                    var size = AdvanceParameterCharacters(bytes, (int)offset, scope, out var reached);
+                    return reached == offset ? size : null;
+                }
+
+                var cancellationToken = scope.Effects.CancellationToken;
+                var position = bytes.Length;
+                for (var remaining = -(int)offset; remaining > 0; remaining--)
+                {
+                    if (position == 0)
+                        return null;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    position -= Utf8Text.LastCharacterLength(bytes[..position]);
+                }
+                return position;
             }
-            if (start == end)
-                from = position;
-            Emit([ShellValue.FromBytes(bytes.Slice(from, position - from))]);
 
             // Enumerate into the budgeted builder; never copy the full array or allocate its holes.
             void Emit(IEnumerable<ShellValue> fields)
@@ -1212,6 +1244,21 @@ internal static partial class WordExpansion
             position += Utf8Text.FirstCharacterLength(value.Bytes.Span[position..]);
         }
         return count;
+    }
+
+    private static int AdvanceParameterCharacters(ReadOnlySpan<byte> bytes, int limit, ScopedEvaluation scope,
+        out int characters)
+    {
+        var cancellationToken = scope.Effects.CancellationToken;
+        var position = 0;
+        var count = 0;
+        for (; count < limit && position < bytes.Length; count++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            position += Utf8Text.FirstCharacterLength(bytes[position..]);
+        }
+        characters = count;
+        return position;
     }
 
     private enum BracedParameterOperatorKind
