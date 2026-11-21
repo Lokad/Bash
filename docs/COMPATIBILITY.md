@@ -698,8 +698,11 @@ zero-to-four argument rules precede the `!`, parenthesis, `-a` and `-o` expressi
 grammar. Numeric operands must be signed 64-bit decimal integers, with optional
 surrounding ASCII whitespace; they do not evaluate arithmetic expressions or base
 prefixes. Invalid integers, malformed expressions and a missing closing `]` report
-a diagnostic and status 2. `-o` queries recognize `errexit` and the fixed `pipefail`
-policy; unknown option names are false. File predicates retain the UTF-8 path boundary.
+a diagnostic and status 2. File predicates retain the UTF-8 path boundary.
+
+The unary `-o` predicate in `[[ … ]]`, `test` and `[` reports the current
+`errexit` state and the always-enabled `braceexpand` and `pipefail` options.
+All other option names return false.
 
 `[[ … ]]`, `test` and `[` recognize `-v` and `-R`. An assigned empty value counts as
 set. `-v` accepts variable names, array selectors and numeric positional parameters.

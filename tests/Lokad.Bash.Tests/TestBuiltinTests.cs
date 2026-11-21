@@ -27,13 +27,27 @@ public sealed class TestBuiltinTests
     [InlineData("test -9223372036854775808 -lt 9223372036854775807", 0)]
     [InlineData("[ -z ]", 0)]
     [InlineData("[ ]", 1)]
+    [InlineData("test '(' -o 1 ')'", 1)]
+    public async Task ArgumentCountAndDecimalRulesMatchGnu(string script, int exitCode)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("test -o braceexpand", 0)]
+    [InlineData("[ -o braceexpand ]", 0)]
+    [InlineData("option=braceexpand; [[ -o \"$option\" ]]", 0)]
     [InlineData("test -o unknown", 1)]
     [InlineData("test -o pipefail", 0)]
     [InlineData("test -o errexit", 1)]
     [InlineData("set -e; test -o errexit", 0)]
     [InlineData("set -e; [[ -o errexit ]]", 0)]
-    [InlineData("test '(' -o 1 ')'", 1)]
-    public async Task ArgumentCountAndDecimalRulesMatchGnu(string script, int exitCode)
+    public async Task OptionPredicates_ReportFixedAndMutableOptions(string script, int exitCode)
     {
         await using var host = new TestHost();
         var result = await host.RunAsync(script, CancellationToken.None);
