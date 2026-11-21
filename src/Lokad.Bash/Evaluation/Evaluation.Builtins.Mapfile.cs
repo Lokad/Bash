@@ -249,7 +249,7 @@ public sealed partial class Evaluation
         Memory.Charge(prepaidBytes);
         CheckCancellation();
         using var assignment = new Variables.IndexedInputAssignment(scope.Variables, name, origin.HasValue, Memory);
-        var first = (long)origin.GetValueOrDefault();
+        var first = origin.GetValueOrDefault();
         for (var offset = 0; offset < values.Count; offset++)
         {
             CheckCancellation();
@@ -262,8 +262,9 @@ public sealed partial class Evaluation
                 assignment.Commit();
                 return false;
             }
-            if (!IndexedArrayIndex.TryCreate(first + offset, out var position)
-                || !scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value, Memory, prepaidBytes))
+            // Like ordinary mapfile input, the destination wraps at the unsigned 32-bit boundary.
+            var position = IndexedArrayIndex.FromUnsigned(unchecked(first + (uint)offset));
+            if (!scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value, Memory, prepaidBytes))
                 return false;
             // Keep consumed credit with the written positions and decimal values.
             prepaidBytes -= RecordMemoryBytes;

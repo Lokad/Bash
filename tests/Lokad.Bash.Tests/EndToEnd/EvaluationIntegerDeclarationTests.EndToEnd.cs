@@ -54,6 +54,57 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Fact]
+    public async Task MapfileIntegerOriginWrapsWhilePreservingUnrelatedSparsePositions()
+    {
+        const string script = """
+            declare -ai a=([0]=90 [2]=12 [4294967296]=80)
+            mapfile -t -O 4294967295 a <<< $'2+3\n4+5\na[0]+4'
+            printf '<%s:%s:%s:%s:%s:%s>' "$?" "${a[4294967295]}" "${a[0]}" "${a[1]}" "${a[2]}" "${a[4294967296]}"
+            """;
+
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:5:9:13:12:80>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task MapfileIntegerOriginWrapsAcrossInputBatches()
+    {
+        const string script = """
+            declare -ai a=([0]=80)
+            { mapfile -t -O 4294967168 -n 129 a; status=$?; IFS= read -r tail; } <records
+            printf '<%s:%s:%s:%s:%s>' "$status" "${a[4294967168]}" "${a[4294967295]}" "${a[0]}" "$tail"
+            """;
+        var records = string.Concat(Enumerable.Repeat("2+3\n", 127)) + "4+5\na[4294967295]+1\ntail\n";
+        await using var host = EndToEndHarness.BuildTree([], [("/records", records)]);
+
+        var result = await EvaluationTestHelper.RunAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:5:9:10:tail>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task ReadarrayIntegerOriginWrapsWithACustomDelimiter()
+    {
+        const string script = """
+            declare -ai a=([0]=80 [2]=9)
+            { readarray -td: -O 4294967294 -n 3 a; status=$?; IFS= read -rd: tail; } <records
+            printf '<%s:%s:%s:%s:%s:%s>' "$status" "${a[4294967294]}" "${a[4294967295]}" "${a[0]}" "${a[2]}" "$tail"
+            """;
+        await using var host = EndToEndHarness.BuildTree([], [("/records", "1+2:3+4:a[4294967295]+1:tail:")]);
+
+        var result = await EvaluationTestHelper.RunAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:3:7:8:9:tail>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Theory]
     [InlineData("""declare -ix n=2; f(){ local -I n; n='3+4'; declare -p n; }; f; declare -p n""",
         "declare -ix n=\"7\"\ndeclare -ix n=\"2\"\n", "")]
