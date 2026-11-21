@@ -23,6 +23,16 @@ public readonly struct ShellSource
     /// <summary>Encodes text once at the script boundary.</summary>
     public static ShellSource FromText(string text) => new(Utf8Text.Encode(text));
 
+    /// <summary>Encodes text with its previously measured UTF-8 byte count.</summary>
+    internal static ShellSource FromMeasuredText(string text, int byteCount)
+    {
+        if (byteCount == 0)
+            return Empty;
+        var bytes = new byte[byteCount];
+        Utf8Text.StrictUtf8.GetBytes(text.AsSpan(), bytes);
+        return FromBytes(bytes);
+    }
+
     public ShellSource Slice(int start) => new(Bytes[start..]);
     public ShellSource Slice(int start, int length) => new(Bytes.Slice(start, length));
     public ReadOnlySpan<byte> AsSpan() => Bytes.Span;

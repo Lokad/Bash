@@ -1,4 +1,3 @@
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Evaluation;
@@ -13,9 +12,7 @@ public static class BashScript
     public static async Task<RunResult> RunAsync(
         IBashHost host, string source, EvaluationOptions options, CancellationToken cancel)
     {
-        // An already oversized UTF-16 count proves the byte bound without scanning it.
-        var byteCount = source.Length > Parser.MaximumScriptBytes ? source.Length : Encoding.UTF8.GetByteCount(source);
-        if (byteCount > Parser.MaximumScriptBytes)
+        if (!Parser.TryMeasureTextSource(source, out var byteCount))
         {
             var error = new SyntaxError(Parser.ScriptSizeLimitMessage, 0);
             await host.WriteLineAsync(FileDescriptor.StdErr, error.ToDiagnosticMessage(), cancel).ConfigureAwait(false);
@@ -32,7 +29,7 @@ public static class BashScript
                 await host.WriteLineAsync(FileDescriptor.StdErr, "shell: shared memory budget exhausted", cancel).ConfigureAwait(false);
                 return new RunResult(1, options.CurrentDirectory);
             }
-            var script = new ParsedScript([new ScriptCommand(ShellSource.FromText(source))]);
+            var script = new ParsedScript([new ScriptCommand(ShellSource.FromMeasuredText(source, byteCount))]);
             var evaluation = ShellEvaluationStartup.CreateForNewHost(script, options, sourceMemory);
             try { return await new Engine().RunAsync(evaluation, host, memory, cancel).ConfigureAwait(false); }
             finally { evaluation.ReleaseFunctions(); }

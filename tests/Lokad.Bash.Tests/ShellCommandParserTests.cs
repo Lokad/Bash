@@ -1,10 +1,46 @@
 using System.Collections.Generic;
+using System.Text;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
 
 public class ShellCommandParserTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void CommandChainUsesTheParserUtf8SourceLimit(bool multibyte, bool exceedsLimit)
+    {
+        var argument = multibyte ? "λ" : "text";
+        var command = $"show '{argument}'";
+        var header = command + "\n#";
+        var bytes = Parser.MaximumScriptBytes - Encoding.UTF8.GetByteCount(header)
+            + (exceedsLimit ? 1 : 0);
+        var source = multibyte
+            ? header + new string('é', bytes / 2) + new string(' ', bytes % 2)
+            : header + new string(' ', bytes);
+
+        var chain = ShellCommandParser.TryParseChain(source);
+
+        if (exceedsLimit)
+        {
+            Assert.Null(chain);
+        }
+        else
+        {
+            Assert.NotNull(chain);
+            var segment = Assert.Single(chain);
+            Assert.Equal(command, segment.Text);
+            Assert.NotNull(segment.Stages);
+            var stage = Assert.Single(segment.Stages);
+            Assert.Equal("show", stage.Name);
+            Assert.Equal(argument, Assert.Single(stage.Arguments));
+        }
+    }
+
     [Theory]
     [InlineData(512)]
     [InlineData(20000)]

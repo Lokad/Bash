@@ -64,14 +64,19 @@ public static class ShellCommandParser
     /// Ordered segments with flattened simple pipeline stages where possible. Valid
     /// compound commands and substitutions retain their source but have null stages;
     /// headers sharing pending here-document bodies form one unflattened segment.
-    /// Malformed or unaccounted-for input returns null for the whole chain.
+    /// Malformed input and input exceeding the parser's source limit return null for the whole chain.
     /// </returns>
     public static IReadOnlyList<ShellCommandChainSegment>? TryParseChain(string commandLine)
     {
+        if (string.IsNullOrEmpty(commandLine))
+            return Array.Empty<ShellCommandChainSegment>();
+        if (!Parser.TryMeasureTextSource(commandLine, out var byteCount))
+            return null;
+
         // Token source ranges survive speculative lookahead and pushback. Reuse the
         // grammar's quote, expansion, comment, group, and heredoc handling instead of
         // maintaining a second character walker or reparsing each sliced pipeline.
-        var source = ShellSource.FromText(commandLine);
+        var source = ShellSource.FromMeasuredText(commandLine, byteCount);
         var tokenizer = new Tokenizer(source);
         var result = new List<ShellCommandChainSegment>();
         var start = 0;

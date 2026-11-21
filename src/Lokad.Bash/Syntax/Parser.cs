@@ -70,6 +70,14 @@ public static class Parser
         return false;
     }
 
+    /// <summary>Measures text that fits the script limit before allocating its byte representation.</summary>
+    internal static bool TryMeasureTextSource(string input, out int byteCount)
+    {
+        // An oversized UTF-16 count already establishes that the bytes exceed the limit.
+        byteCount = input.Length > MaximumScriptBytes ? input.Length : Encoding.UTF8.GetByteCount(input);
+        return byteCount <= MaximumScriptBytes;
+    }
+
     /// <summary>
     /// Parses the provided script text into a <see cref="ParsedScript"/>.
     /// </summary>
@@ -84,13 +92,13 @@ public static class Parser
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error)
     {
         script = null;
-        if (input.Length > MaximumScriptBytes || Encoding.UTF8.GetByteCount(input) > MaximumScriptBytes)
+        if (!TryMeasureTextSource(input, out var byteCount))
         {
             error = new SyntaxError(ScriptSizeLimitMessage, 0);
             return false;
         }
 
-        var source = ShellSource.FromText(input);
+        var source = ShellSource.FromMeasuredText(input, byteCount);
         if (!TryParse(source.Bytes, out script, out var byteError))
         {
             // Text callers retain UTF-16 coordinates; the shared grammar uses byte offsets.
