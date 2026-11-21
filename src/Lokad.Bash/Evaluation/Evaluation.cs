@@ -633,10 +633,10 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope,
         bool negated)
     {
-        var persistence = redirectedCommand.Body is SubshellCommand
-            ? RedirectionPersistence.Allocations : RedirectionPersistence.AllocationsAndMoves;
+        if (redirectedCommand.Body is SubshellCommand subshell)
+            return await EvaluateSubshellAsync(subshell, scope, negated, redirectedCommand.Redirections).ConfigureAwait(false);
         var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope,
-            persistence, RedirectionLifetime.Command, inputSubstitution: false)
+            RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, inputSubstitution: false)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var result = EvaluationResult.FromExitCode(0);
@@ -669,7 +669,8 @@ public sealed partial class Evaluation : IFileTester
     private async Task<EvaluationResult> EvaluateSubshellAsync(
         SubshellCommand subshellCommand,
         ScopedEvaluation scope,
-        bool negated)
+        bool negated,
+        IReadOnlyList<Redirection>? redirections)
     {
         PreparePipelineStatusStorage(1);
         var parentState = _state;
@@ -709,10 +710,23 @@ public sealed partial class Evaluation : IFileTester
                 Timing = null,
                 InNestedCommandUnits = false
             };
-            result = await EvaluateCommandAsync(subshellCommand.Body, childScope, negated: false)
-                .ConfigureAwait(false);
-            result = CompleteDiscardInChild(result);
-            result = await RunExitTrapAsync(childScope, result).ConfigureAwait(false);
+            if (redirections != null)
+            {
+                // The child owns this frame through EXIT and descriptor cleanup below.
+                _ = await OpenRedirectionScopeAsync(redirections, childScope,
+                    RedirectionPersistence.Allocations, RedirectionLifetime.Command, inputSubstitution: false)
+                    .ConfigureAwait(false);
+                if (_state.TryConsumeExpansionError(out var redirectionExitCode))
+                    result = EvaluationResult.FromExitCode(redirectionExitCode);
+            }
+
+            if (result.ExitCode == 0)
+            {
+                result = await EvaluateCommandAsync(subshellCommand.Body, childScope, negated: false)
+                    .ConfigureAwait(false);
+                result = CompleteDiscardInChild(result);
+                result = await RunExitTrapAsync(childScope, result).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {

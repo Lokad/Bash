@@ -639,9 +639,10 @@ public class EngineTests
     }
 
     [Theory]
-    [InlineData("echo value >/out 3>/fails")]
-    [InlineData(": {fd}>/out 3>/fails")]
-    public async Task Engine_RunAsync_PreservesRedirectionSetupFailureWhenCleanupFails(string script)
+    [InlineData("echo value >/out 3>/fails", null)]
+    [InlineData(": {fd}>/out 3>/fails", "10")]
+    [InlineData("fd=outer; (:) {fd}>/out 3>/fails", "outer")]
+    public async Task Engine_RunAsync_PreservesRedirectionSetupFailureWhenCleanupFails(string script, string? expectedFd)
     {
         var state = new Eval(Parser.Parse(script));
         var visitor = new TestOperationVisitor([]);
@@ -656,6 +657,7 @@ public class EngineTests
         Assert.Same(setupFailure, exception);
         Assert.Equal([new FileDescriptor(10)], visitor.ClosedDescriptors);
         Assert.Empty(state.GetDescriptorsForCleanup());
+        Assert.Equal(expectedFd, state.Variables.TryGetValue("fd", out var fd) ? fd.ToUtf8String() : null);
     }
 
     [Fact]

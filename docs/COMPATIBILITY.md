@@ -11,6 +11,8 @@ The runtime supports deterministic, non-interactive shell workflows:
   Adjacent unquoted `{name}` supports file open modes, duplication/moves and
   here-inputs; variable closes follow ordinary command restoration. External
   command allocations and selector effects do not change caller bindings.
+  A subshell expands its trailing redirections in its own scope, including
+  binding changes made by the operands and allocated descriptor variables.
 - Control, directory, variable, input and formatting builtins, including `read`,
   `mapfile`, `printf -v`, `source`, `eval`, `command`, `type`, `getopts` and `help`.
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT

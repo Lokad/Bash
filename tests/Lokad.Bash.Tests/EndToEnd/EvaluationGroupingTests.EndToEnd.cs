@@ -149,6 +149,88 @@ public sealed class EvaluationGroupingTestsEndToEnd
         Assert.Equal(string.Empty, await EndToEndHarness.ReadFileAsync(result.Host, "/out"));
     }
 
+    [Theory]
+    [InlineData("", "unset")]
+    [InlineData("fd=before; ", "before")]
+    public async Task TrailingSubshellRedirectionKeepsTheAllocatedBindingInTheChild(string prefix, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(prefix +
+            "(printf child) {fd}>out 1>&\"$fd\"; printf '<%s:%s>' \"$?\" \"${fd-unset}\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:{expected}>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+        Assert.Equal("child", await EndToEndHarness.ReadFileAsync(result.Host, "/out"));
+    }
+
+    [Fact]
+    public async Task TrailingSubshellAllocationKeepsTheParentDescriptorUsable()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "exec {fd}>outer; (printf child >&\"$fd\") {fd}>inner; printf parent >&\"$fd\"; exec {fd}>&-");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+        Assert.Equal("child", await EndToEndHarness.ReadFileAsync(result.Host, "/inner"));
+        Assert.Equal("parent", await EndToEndHarness.ReadFileAsync(result.Host, "/outer"));
+    }
+
+    [Fact]
+    public async Task TrailingSubshellPathExpansionChangesOnlyTheChildBinding()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "i=0; (printf '%s' \"$i\") >\"item-$((i++))\"; printf '<%s:%s>' \"$?\" \"$i\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+        Assert.Equal("1", await EndToEndHarness.ReadFileAsync(result.Host, "/item-0"));
+    }
+
+    [Theory]
+    [InlineData("<<<\"${value:=payload}\";")]
+    [InlineData("<<EOF\n${value:=payload}\nEOF\n")]
+    public async Task TrailingSubshellHereInputChangesOnlyTheChildBinding(string redirection)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "(IFS= read -r line; printf '<%s:%s>' \"$line\" \"$value\") " + redirection +
+            " printf '<%s>' \"${value-unset}\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<payload:payload><unset>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task FailingTestedSubshellRedirectionAllowsTheParentToContinue()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "set -e; (printf unreached) >\"${name:?missing}\" || printf '<%s>' \"$?\"; printf after");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>after", result.StdOut);
+        Assert.Equal("name: missing\n", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task TrailingSubshellRedirectionStaysActiveThroughTheExitHandler()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "(trap 'printf trap' EXIT; printf body; exit 7) >out; printf '<%s>' \"$?\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<7>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+        Assert.Equal("bodytrap", await EndToEndHarness.ReadFileAsync(result.Host, "/out"));
+    }
+
     [Fact]
     public async Task Evaluation_SubshellCommand_ExitDoesNotExitParent()
     {

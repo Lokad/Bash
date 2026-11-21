@@ -345,6 +345,9 @@ up to an earlier temporary restoration boundary; external-command allocations an
 their selector effects stay in the command scope. `{name}>&-` and `{name}<&-` read
 the current binding without assignment, including readonly names and selected
 nameref elements. Their closes are temporary unless `exec` preserves them.
+Trailing subshell redirections expand within the child bindings. The child
+keeps their descriptor frame through its EXIT handler and closes its own
+handles before returning to the parent.
 
 An explicit attribute promotion of a temporary prefix can survive local
 restoration, including through nested functions. Direct unset in the owning local

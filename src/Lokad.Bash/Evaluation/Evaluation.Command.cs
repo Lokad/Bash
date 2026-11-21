@@ -116,7 +116,7 @@ public sealed partial class Evaluation
                     return await EvaluateRedirectedCommandAsync(redirectedCommand, scope, negated)
                         .ConfigureAwait(false);
                 case SubshellCommand subshellCommand:
-                    return await EvaluateSubshellAsync(subshellCommand, scope, negated).ConfigureAwait(false);
+                    return await EvaluateSubshellAsync(subshellCommand, scope, negated, redirections: null).ConfigureAwait(false);
                 case IfCommand ifCommand:
                     return await EvaluateIfAsync(ifCommand, scope, negated).ConfigureAwait(false);
                 case WhileCommand whileCommand:
