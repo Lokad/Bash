@@ -74,8 +74,14 @@ internal sealed class ExpandedWordBuilder
     private List<FieldSeparators.ByteMembership>? _sourceSeparators;
     private InputWord _current;
     private DoubleQuoteState _doubleQuote;
+    private int _doubleQuoteFirstWord;
+    private int _doubleQuoteFirstPart;
+    private bool _doubleQuoteFirstEmptyField;
+    private bool _doubleQuoteHasAggregate;
+    private bool _doubleQuoteHasNumber;
     private bool _hereDocumentHasAt;
     private bool _hasQuotedAggregate;
+    private bool _hasNormalQuotedAggregate;
     private bool _hasUnquotedAggregate;
     private bool _positionalStarSplitsOnSpaces;
 
@@ -124,17 +130,79 @@ internal sealed class ExpandedWordBuilder
 
     public ExpansionPurpose Purpose { get; }
     internal bool AssigningHereDocumentOperand { get; init; }
-    internal bool TrackExpansionSpaces { get; init; }
 
     /// <summary>Whether substitutions contributed data, even if their output was empty.</summary>
 
-    internal void BeginDoubleQuote() => _doubleQuote = DoubleQuoteState.Open;
+    internal void BeginDoubleQuote()
+    {
+        _doubleQuote = DoubleQuoteState.Open;
+        _doubleQuoteFirstWord = _words.Count - 1;
+        _doubleQuoteFirstPart = _current.Parts.Count;
+        _doubleQuoteFirstEmptyField = _current.HasEmptyAggregateField;
+        _doubleQuoteHasAggregate = false;
+        _doubleQuoteHasNumber = false;
+    }
 
     internal void EndDoubleQuote()
     {
         if (_doubleQuote == DoubleQuoteState.EmptyExpansion)
             MarkCurrentWordForEmission();
         _doubleQuote = DoubleQuoteState.Outside;
+
+        if (!_doubleQuoteHasAggregate || !_doubleQuoteHasNumber && _doubleQuoteFirstWord == _words.Count - 1)
+            return;
+
+        // A quoted group selects its fields before rejoining them for the enclosing word.
+        var separators = FieldSeparators.FromVariables(_variables);
+        var join = AggregateSeparator(separators);
+        if (_doubleQuoteHasNumber && HasNumericSeparator(ref separators))
+        {
+            using var groupStorage = new MemoryCapacity(_memory.Budget, 0);
+            var fields = new List<ExpandedWord>();
+            AppendTo(fields, separators, firstFieldOnly: false, _doubleQuoteFirstWord, _doubleQuoteFirstPart,
+                quotedGroup: true, groupStorage);
+            _current = _words[_doubleQuoteFirstWord];
+            _current.Parts.RemoveRange(_doubleQuoteFirstPart, _current.Parts.Count - _doubleQuoteFirstPart);
+            _current.HasEmptyAggregateField = _doubleQuoteFirstEmptyField;
+            var following = _doubleQuoteFirstWord + 1;
+            _words.RemoveRange(following, _words.Count - following);
+            for (var index = 0; index < fields.Count; index++)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                if (index != 0)
+                    StartNewWord(join, WordBoundary.QuotedAggregate);
+                var field = fields[index];
+                if (field.Segments.Count == 0)
+                    AppendEmptyAggregateField();
+                else
+                    foreach (var segment in field.Segments)
+                        AppendValue(segment.Content, globQuoted: true);
+            }
+            return;
+        }
+
+        for (var index = _doubleQuoteFirstWord + 1; index < _words.Count; index++)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            var boundary = _words[index];
+            if (boundary.BoundaryBefore != WordBoundary.QuotedAggregate)
+                continue;
+            if (ContainsAggregateSeparator(ref separators, join, boundary.SeparatorBefore))
+                boundary.SeparatorBefore = join;
+            else
+                boundary.BoundaryBefore = WordBoundary.ProtectedQuoteSeparator;
+        }
+
+        bool HasNumericSeparator(ref FieldSeparators ifs)
+        {
+            var membership = FieldSeparators.CaptureSourceBytes(ref ifs, _variables, _memory, _cancellationToken);
+            if (membership.Contains((byte)'-'))
+                return true;
+            for (var digit = (byte)'0'; digit <= (byte)'9'; digit++)
+                if (membership.Contains(digit))
+                    return true;
+            return false;
+        }
     }
 
     /// <summary>Retains literal-source provenance before field splitting.</summary>
@@ -181,7 +249,7 @@ internal sealed class ExpandedWordBuilder
         if (!value.IsEmpty)
         {
             var origin = ExpansionOrigin(allowWordSplitting, globQuoted);
-            if (TrackExpansionSpaces && allowWordSplitting && value.Bytes.Span.Contains((byte)' '))
+            if (Purpose == ExpansionPurpose.Normal && allowWordSplitting && value.Bytes.Span.Contains((byte)' '))
             {
                 if (FieldSeparators.FromVariables(_variables).IsEmpty)
                     origin = PartOrigin.ExpansionWithProtectedSpaces;
@@ -197,7 +265,20 @@ internal sealed class ExpandedWordBuilder
     public void AppendIntegerExpansion(long value, bool allowWordSplitting, bool globQuoted)
     {
         _current.NeedsSplitting |= allowWordSplitting;
-        GetPart(ExpansionOrigin(allowWordSplitting, globQuoted), globQuoted).AppendInteger(value);
+        GetPart(IntegerExpansionOrigin(allowWordSplitting, globQuoted), globQuoted).AppendInteger(value);
+    }
+
+    internal void AppendIntegerExpansion(ShellValue value, bool allowWordSplitting, bool globQuoted)
+    {
+        _current.NeedsSplitting |= allowWordSplitting;
+        GetPart(IntegerExpansionOrigin(allowWordSplitting, globQuoted), globQuoted).AppendValue(value);
+    }
+
+    private PartOrigin IntegerExpansionOrigin(bool allowWordSplitting, bool globQuoted)
+    {
+        var quotedNumber = Purpose == ExpansionPurpose.Normal && globQuoted && _doubleQuote != DoubleQuoteState.Outside;
+        _doubleQuoteHasNumber |= quotedNumber;
+        return quotedNumber ? PartOrigin.QuotedNumber : ExpansionOrigin(allowWordSplitting, globQuoted);
     }
 
     private PartOrigin ExpansionOrigin(bool allowWordSplitting, bool globQuoted) =>
@@ -247,8 +328,8 @@ internal sealed class ExpandedWordBuilder
             || Purpose == ExpansionPurpose.IndexedCompoundOperand && quoteContext == ExpansionQuoteContext.DoubleQuoted)
         {
             // Compound @ joins use IFS except in unquoted parameter operands; empty IFS uses a space.
-            var separator = fieldSeparators.IsEmpty ? Space : fieldSeparators.First;
-            return AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
+            var compoundSeparator = fieldSeparators.IsEmpty ? Space : fieldSeparators.First;
+            return AppendSeparatedFields(fields, compoundSeparator, allowWordSplitting, globQuoted);
         }
         var unquotedAggregate = Purpose == ExpansionPurpose.Normal && allowWordSplitting && !positionalStarWithEmptyIfs;
         _hasUnquotedAggregate |= unquotedAggregate;
@@ -263,21 +344,20 @@ internal sealed class ExpandedWordBuilder
                 && !fieldSeparators.IsEmpty && fieldSeparators.Bytes.Span[0] != (byte)' ');
         // Non-space IFS can protect aggregate bytes from field selection while retaining glob activity.
         var protectCaseFields = Purpose == ExpansionPurpose.CasePattern && HasNonSpaceSeparator(fieldSeparators);
-        var caseSeparator = Purpose == ExpansionPurpose.CasePattern ? CasePatternSeparator(fieldSeparators) : default;
-        var quotedJoinSeparator = _positionalStarSplitsOnSpaces
-            && quoteContext == ExpansionQuoteContext.DoubleQuoted && HasNonSpaceSeparator(fieldSeparators)
-                ? fieldSeparators.First : default;
+        var quotedAggregate = Purpose == ExpansionPurpose.Normal && quoteContext == ExpansionQuoteContext.DoubleQuoted
+            && _doubleQuote != DoubleQuoteState.Outside;
+        _doubleQuoteHasAggregate |= quotedAggregate;
+        _hasNormalQuotedAggregate |= quotedAggregate;
+        var separator = unquotedAggregate ? Space
+            : Purpose == ExpansionPurpose.CasePattern || quotedAggregate ? AggregateSeparator(fieldSeparators) : default;
+        var boundary = unquotedAggregate ? WordBoundary.UnquotedAggregate
+            : quotedAggregate ? WordBoundary.QuotedAggregate : WordBoundary.Fixed;
         var first = true;
         foreach (var value in fields)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (!first)
-            {
-                if (quotedJoinSeparator.IsEmpty)
-                    StartNewWord(caseSeparator, unquotedAggregate);
-                else
-                    AppendValue(quotedJoinSeparator, globQuoted: false);
-            }
+                StartNewWord(separator, boundary);
             first = false;
 
             if (protectFields)
@@ -362,12 +442,12 @@ internal sealed class ExpandedWordBuilder
         }
 
         var caseSeparator = Purpose == ExpansionPurpose.CasePattern && words.Count > 1
-            ? CasePatternSeparator(FieldSeparators.FromVariables(_variables)) : default;
+            ? AggregateSeparator(FieldSeparators.FromVariables(_variables)) : default;
         for (var index = 0; index < words.Count; index++)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (index > 0)
-                StartNewWord(caseSeparator, joinPreviousWithSpace: false);
+                StartNewWord(caseSeparator, WordBoundary.Fixed);
             var word = words[index];
             if (word.IsEmptyAggregateField)
             {
@@ -387,13 +467,13 @@ internal sealed class ExpandedWordBuilder
         }
     }
 
-    private void StartNewWord(ShellValue casePatternSeparator, bool joinPreviousWithSpace)
+    private void StartNewWord(ShellValue separator, WordBoundary boundary)
     {
         _memory.Charge(_storage, 256);
         _current = new InputWord
         {
-            CasePatternSeparator = casePatternSeparator,
-            JoinPreviousWithSpace = joinPreviousWithSpace,
+            SeparatorBefore = separator,
+            BoundaryBefore = boundary,
         };
         _words.Add(_current);
     }
@@ -483,7 +563,7 @@ internal sealed class ExpandedWordBuilder
         for (var index = 1; index < _words.Count; index++)
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            if (!_words[index].CasePatternSeparator.Bytes.Span.SequenceEqual(separator.Bytes.Span))
+            if (!_words[index].SeparatorBefore.Bytes.Span.SequenceEqual(separator.Bytes.Span))
             {
                 // An expansion changed IFS. The previously emitted separators still
                 // participate with their original bytes in the final pattern.
@@ -501,7 +581,7 @@ internal sealed class ExpandedWordBuilder
         {
             _cancellationToken.ThrowIfCancellationRequested();
             var word = _words[index];
-            AppendExpansion(word.CasePatternSeparator, allowWordSplitting: false, globQuoted: false);
+            AppendExpansion(word.SeparatorBefore, allowWordSplitting: false, globQuoted: false);
             _memory.Charge(_storage, 32L * word.Parts.Count);
             _current.Parts.AddRange(word.Parts);
         }
@@ -521,13 +601,30 @@ internal sealed class ExpandedWordBuilder
     private static bool HasNonSpaceSeparator(FieldSeparators separators) =>
         !separators.IsEmpty && separators.Bytes.Span[0] != (byte)' ';
 
-    private static ShellValue CasePatternSeparator(FieldSeparators separators)
+    private static ShellValue AggregateSeparator(FieldSeparators separators)
     {
         if (separators.IsEmpty || separators.Bytes.Span[0] == (byte)' ')
             return Space;
         var first = separators.First;
         // A later expansion can replace IFS. Retain only the separator bytes from its old value.
         return first.Bytes.Length == separators.Bytes.Length ? first : ShellValue.FromBytes(first.Bytes.Span.ToArray());
+    }
+
+    private bool ContainsAggregateSeparator(ref FieldSeparators separators, ShellValue first, ShellValue value)
+    {
+        if (value.Bytes.Span.SequenceEqual(first.Bytes.Span))
+            return true;
+        if (separators.IsEmpty)
+            return false;
+
+        var bytes = value.Bytes.Span;
+        if (Rune.DecodeFromUtf8(bytes, out var character, out _) == OperationStatus.Done)
+        {
+            separators = separators.PrepareCharacters(_variables, _memory, _cancellationToken);
+            return separators.Contains(character);
+        }
+        separators = separators.PrepareBytes(_variables, _memory, _cancellationToken);
+        return separators.Contains(bytes[0]);
     }
 
     private IReadOnlyList<ExpandedWord> Build(FieldSeparators fieldSeparators, bool firstFieldOnly)
@@ -541,33 +638,41 @@ internal sealed class ExpandedWordBuilder
     internal void AppendTo(List<ExpandedWord> results) =>
         AppendTo(results, FieldSeparators.FromVariables(_variables), firstFieldOnly: false);
 
-    private void AppendTo(List<ExpandedWord> results, FieldSeparators fieldSeparators, bool firstFieldOnly)
+    private void AppendTo(List<ExpandedWord> results, FieldSeparators fieldSeparators, bool firstFieldOnly) =>
+        AppendTo(results, fieldSeparators, firstFieldOnly, firstWord: 0, firstPart: 0, quotedGroup: false, _storage);
+
+    private void AppendTo(List<ExpandedWord> results, FieldSeparators fieldSeparators, bool firstFieldOnly,
+        int firstWord, int firstPart, bool quotedGroup, MemoryCapacity fieldStorage)
     {
-        var splitHereDocument = _hereDocumentHasAt && !AssigningHereDocumentOperand;
-        var splitAggregateOnSpace = _positionalStarSplitsOnSpaces || _hasUnquotedAggregate && fieldSeparators.IsEmpty;
+        var splitHereDocument = !quotedGroup && _hereDocumentHasAt && !AssigningHereDocumentOperand;
+        var splitAggregateOnSpace = (!quotedGroup && _positionalStarSplitsOnSpaces)
+            || (_hasUnquotedAggregate || _hasNormalQuotedAggregate) && fieldSeparators.IsEmpty;
         var splitOnSpace = splitAggregateOnSpace || splitHereDocument && fieldSeparators.IsEmpty;
         // Preserve the original space joins when the word finishes with a different IFS.
-        var joinUnquotedAggregate = _hasUnquotedAggregate && !splitAggregateOnSpace;
+        var joinUnquotedAggregate = !quotedGroup && _hasUnquotedAggregate && !splitAggregateOnSpace;
+        var quotedSplitSeparator = _hasNormalQuotedAggregate
+            ? splitOnSpace ? Space : fieldSeparators.First : default;
         FieldSeparators.ByteMembership? finalSourceSeparators = null;
-        for (var inputIndex = 0; inputIndex < _words.Count;)
+        for (var inputIndex = firstWord; inputIndex < _words.Count;)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             var first = inputIndex;
             var word = _words[inputIndex++];
-            if (joinUnquotedAggregate)
+            if (joinUnquotedAggregate || _hasNormalQuotedAggregate)
             {
-                while (inputIndex < _words.Count && _words[inputIndex].JoinPreviousWithSpace)
+                while (inputIndex < _words.Count && JoinBoundary(_words[inputIndex]))
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
                     inputIndex++;
                 }
             }
             var joinWords = inputIndex > first + 1;
-            if (!joinWords && word.Parts.Count == 0)
+            if (!joinWords && word.Parts.Count == (first == firstWord ? firstPart : 0))
                 continue;
-            var split = joinWords
+            var split = quotedGroup || joinWords
                 || (splitHereDocument || firstFieldOnly) && word.Parts.Exists(static part => part.Origin == PartOrigin.Expansion)
-                || (splitAggregateOnSpace ? word.HasUnquotedSpaces : word.NeedsSplitting && !fieldSeparators.IsEmpty);
+                || (splitAggregateOnSpace ? word.HasUnquotedSpaces : !fieldSeparators.IsEmpty
+                    && (word.NeedsSplitting || _hasNormalQuotedAggregate && HasExposedSource(word)));
             if (!split)
             {
                 // Retain completed buffers and decide whether to emit the field in the same pass.
@@ -595,7 +700,7 @@ internal sealed class ExpandedWordBuilder
                 continue;
             }
 
-            _memory.Charge(_storage, 256);
+            _memory.Charge(fieldStorage, 256);
             var field = new List<SegmentBuilder>();
             var emitEmpty = false;
             var pendingBreak = false;
@@ -608,13 +713,18 @@ internal sealed class ExpandedWordBuilder
                 if (wordIndex > first)
                 {
                     FlushExpansion();
-                    QueueExpansion(Space.Bytes, globQuoted: false);
+                    var boundary = _words[wordIndex];
+                    if (boundary.BoundaryBefore == WordBoundary.ProtectedQuoteSeparator)
+                        AppendLiteral(boundary.SeparatorBefore.Bytes, globQuoted: true);
+                    else
+                        QueueExpansion(boundary.SeparatorBefore.Bytes, globQuoted: false);
                 }
-                foreach (var part in _words[wordIndex].Parts)
+                var parts = _words[wordIndex].Parts;
+                for (var partIndex = wordIndex == firstWord ? firstPart : 0; partIndex < parts.Count; partIndex++)
                 {
                     if (HasFirstCasePatternField())
                         return;
-                    AppendPart(part);
+                    AppendPart(parts[partIndex]);
                 }
             }
             if (HasFirstCasePatternField())
@@ -642,7 +752,7 @@ internal sealed class ExpandedWordBuilder
                 }
                 var value = part.Segment.ToValue();
                 var quoted = part.Segment.IsGlobQuoted;
-                if (part.Origin == PartOrigin.Protected
+                if (part.Origin == PartOrigin.Protected || !quotedGroup && part.Origin == PartOrigin.QuotedNumber
                     || splitAggregateOnSpace && part.Origin == PartOrigin.ExpansionWithProtectedSpaces)
                 {
                     if (value.IsEmpty)
@@ -656,10 +766,10 @@ internal sealed class ExpandedWordBuilder
                         AppendLiteral(value.Bytes, quoted);
                     }
                 }
-                else if (part.Origin is PartOrigin.Expansion or PartOrigin.ExpansionWithProtectedSpaces)
+                else if (part.Origin is PartOrigin.Expansion or PartOrigin.ExpansionWithProtectedSpaces or PartOrigin.QuotedNumber)
                 {
                     var bytes = value.Bytes;
-                    if (joinUnquotedAggregate && part.Origin == PartOrigin.ExpansionWithProtectedSpaces)
+                    if (part.Origin == PartOrigin.ExpansionWithProtectedSpaces)
                     {
                         while (bytes.Span.IndexOf((byte)' ') is >= 0 and var space)
                         {
@@ -676,20 +786,7 @@ internal sealed class ExpandedWordBuilder
                 else
                 {
                     var bytes = value.Bytes;
-                    FieldSeparators.ByteMembership? sourceSeparators = null;
-                    if (!splitOnSpace && part.SourceSeparators != UntrackedSourceSeparators)
-                    {
-                        sourceSeparators = part.SourceSeparators switch
-                        {
-                            EmptySourceSeparators => default(FieldSeparators.ByteMembership),
-                            DefaultSourceSeparators => FieldSeparators.ByteMembership.Default,
-                            _ => _sourceSeparators?[part.SourceSeparators - 1],
-                        };
-                        finalSourceSeparators ??= FieldSeparators.CaptureSourceBytes(
-                            ref fieldSeparators, _variables, _memory, _cancellationToken);
-                        if (sourceSeparators == finalSourceSeparators)
-                            sourceSeparators = null;
-                    }
+                    var sourceSeparators = EarlierSourceSeparators(part);
                     if (sourceSeparators == default(FieldSeparators.ByteMembership))
                     {
                         QueueExpansion(bytes, quoted);
@@ -742,7 +839,7 @@ internal sealed class ExpandedWordBuilder
             void AppendBytes(ReadOnlyMemory<byte> bytes, bool globQuoted)
             {
                 if (field.Count == 0 || field[^1].IsGlobQuoted != globQuoted)
-                    field.Add(new SegmentBuilder(globQuoted, _memory, _storage));
+                    field.Add(new SegmentBuilder(globQuoted, _memory, fieldStorage));
                 field[^1].AppendCopy(bytes.Span);
             }
 
@@ -840,7 +937,7 @@ internal sealed class ExpandedWordBuilder
 
             void StartNewField()
             {
-                _memory.Charge(_storage, 256);
+                _memory.Charge(fieldStorage, 256);
                 pendingBreak = false;
                 CompleteField();
             }
@@ -860,6 +957,42 @@ internal sealed class ExpandedWordBuilder
         }
 
         bool HasFirstCasePatternField() => firstFieldOnly && results.Count != 0;
+
+        FieldSeparators.ByteMembership? EarlierSourceSeparators(InputPart part)
+        {
+            if (splitOnSpace || part.SourceSeparators == UntrackedSourceSeparators)
+                return null;
+            var earlier = part.SourceSeparators switch
+            {
+                EmptySourceSeparators => default(FieldSeparators.ByteMembership),
+                DefaultSourceSeparators => FieldSeparators.ByteMembership.Default,
+                _ => _sourceSeparators?[part.SourceSeparators - 1],
+            };
+            finalSourceSeparators ??= FieldSeparators.CaptureSourceBytes(
+                ref fieldSeparators, _variables, _memory, _cancellationToken);
+            return earlier == finalSourceSeparators ? null : earlier;
+        }
+
+        bool HasExposedSource(InputWord word)
+        {
+            foreach (var part in word.Parts)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                if (EarlierSourceSeparators(part) != null)
+                    return true;
+            }
+            return false;
+        }
+
+        bool JoinBoundary(InputWord word) => word.BoundaryBefore switch
+        {
+            WordBoundary.UnquotedAggregate => joinUnquotedAggregate,
+            WordBoundary.QuotedAggregate => quotedGroup || (splitOnSpace
+                ? !word.SeparatorBefore.Bytes.Span.SequenceEqual(Space.Bytes.Span)
+                : !ContainsAggregateSeparator(ref fieldSeparators, quotedSplitSeparator, word.SeparatorBefore)),
+            WordBoundary.ProtectedQuoteSeparator => true,
+            _ => false,
+        };
     }
 
     private SegmentBuilder GetPart(PartOrigin origin, bool globQuoted) =>
@@ -868,6 +1001,8 @@ internal sealed class ExpandedWordBuilder
     private SegmentBuilder GetPart(PartOrigin origin, bool globQuoted, int sourceSeparators)
     {
         if (_current.Parts.Count == 0
+            || Purpose == ExpansionPurpose.Normal && _doubleQuote != DoubleQuoteState.Outside
+                && _current.Parts.Count == _doubleQuoteFirstPart && _words.Count - 1 == _doubleQuoteFirstWord
             || _current.Parts[^1].Origin != origin
             || _current.Parts[^1].SourceSeparators != sourceSeparators
             || _current.Parts[^1].Segment.IsGlobQuoted != globQuoted)
@@ -885,9 +1020,13 @@ internal sealed class ExpandedWordBuilder
         Protected,
         /// <summary>Unquoted expansion bytes that can join across adjacent parts before splitting.</summary>
         Expansion,
-        /// <summary>Spaces in values expanded with empty IFS survive aggregate splitting.</summary>
+        /// <summary>Spaces in values expanded with empty IFS stay protected during splitting.</summary>
         ExpansionWithProtectedSpaces,
+        /// <summary>Numeric bytes can delimit fields inside a quoted aggregate before they are protected.</summary>
+        QuotedNumber,
     }
+
+    private enum WordBoundary : byte { Fixed, UnquotedAggregate, QuotedAggregate, ProtectedQuoteSeparator }
 
     private sealed class InputWord
     {
@@ -895,8 +1034,8 @@ internal sealed class ExpandedWordBuilder
         public bool NeedsSplitting { get; set; }
         public bool HasUnquotedSpaces { get; set; }
         public bool HasEmptyAggregateField { get; set; }
-        public bool JoinPreviousWithSpace { get; init; }
-        public ShellValue CasePatternSeparator { get; init; }
+        public WordBoundary BoundaryBefore { get; set; }
+        public ShellValue SeparatorBefore { get; set; }
     }
 
     private readonly record struct InputPart(PartOrigin Origin, int SourceSeparators, SegmentBuilder Segment);

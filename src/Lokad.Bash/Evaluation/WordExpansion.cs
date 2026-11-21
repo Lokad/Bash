@@ -152,10 +152,7 @@ internal static partial class WordExpansion
 
         var builder = new ExpandedWordBuilder(
             scope.Variables, scope.Effects.Memory, purpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken,
-            storage)
-        {
-            TrackExpansionSpaces = purpose == ExpansionPurpose.Normal && word.MayExpandUnquotedAggregate,
-        };
+            storage);
         await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, tildeExpansion)
             .ConfigureAwait(false);
 

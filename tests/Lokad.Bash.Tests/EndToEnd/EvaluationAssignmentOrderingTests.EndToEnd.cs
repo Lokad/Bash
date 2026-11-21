@@ -348,4 +348,36 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
     }
+
+    [Theory]
+    [InlineData("IFS=; set -- 'a b' '' c,d; printf '<%s>' \"$@${IFS:=,}\"", "<a b  c,d,>")]
+    [InlineData("IFS=; set -- 'a b' '' c,d; printf '<%s>' \"$@\"${IFS:=,}", "<a b  c,d>")]
+    [InlineData("IFS=; a=('a b' '' c,d); printf '<%s>' \"${a[@]}${IFS:=,}\"", "<a b  c,d,>")]
+    [InlineData("IFS=1; set -- 'a b' c2d; printf '<%s>' \"$@$((IFS=2))$@\"", "<a b1c2d><a b><c2d>")]
+    [InlineData("IFS=1; set -- east west; printf '<%s>' \"prefix2\"\"$@$((IFS=2))\"suffix", "<prefix2east1westsuffix>")]
+    [InlineData("IFS=2; set -- east west; printf '<%s>' \"p${#@}q$@r\"", "<p><qeast><westr>")]
+    [InlineData("IFS=2; set -- east west; printf '<%s>' \"p$((2))q\"", "<p2q>")]
+    [InlineData("IFS=; set -- 'a b' '' c,d; printf '<%s>' \"$@\" ${IFS:=,}", "<a b><><c,d><>")]
+    [InlineData("unset IFS; v='left right '; set -- east west; printf '<%s>' $v\"$@${IFS:=}\"", "<left><right><east><west>")]
+    [InlineData("IFS=; set -- 'a b' '' c,d; printf '<%s>' \"$@${IFS:=,}\"\"$@\"", "<a b  c,d,a b><><c,d>")]
+    public async Task WordExpansion_ResolvesQuotedAggregateBeforeSplittingTheWord(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("IFS=; v='a b'; w='c d'; printf '<%s>' $v${IFS:=' '}$w", "<a b><c><d>")]
+    [InlineData("unset IFS; v='a b'; printf '<%s>' $v${IFS:=' '}", "<a><b>")]
+    public async Task WordExpansion_ProtectsSpacesFromAnExpansionWithEmptyIfs(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
 }

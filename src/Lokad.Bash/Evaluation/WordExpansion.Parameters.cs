@@ -801,6 +801,13 @@ internal static partial class WordExpansion
 
         void Emit(IEnumerable<ShellValue> fields)
         {
+            if (parsed.Modifier == ParameterModifier.Length
+                || parsed.Modifier == ParameterModifier.None && parsed.Kind == BracedParameterOperatorKind.None
+                    && GetSpecialParameterKind(parsed.Name.AsSpan()) is SpecialParameterKind.Status or SpecialParameterKind.Count)
+            {
+                output.AppendIntegerExpansion(parameter.Value, allowWordSplitting, globQuoted);
+                return;
+            }
             if (output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
                 return;
             if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
