@@ -28,6 +28,9 @@ internal enum HereDocumentJoin
 
 internal enum ParameterFieldJoin { Default, IfsOrSpace, Space }
 
+/// <summary>Controls whether an unquoted positional star selects spaces with empty IFS.</summary>
+internal enum PositionalStarSplit { Default, WhenPresent, EvenWhenEmpty }
+
 /// <summary>Controls aggregate handling and operand syntax for values, diagnostics and arithmetic.</summary>
 internal enum ExpansionPurpose
 {
@@ -194,7 +197,7 @@ internal sealed class ExpandedWordBuilder
             positionalStarWithEmptyIfs: false);
     }
 
-    private void AppendFields(
+    private bool AppendFields(
         IEnumerable<ShellValue> fields,
         bool allowWordSplitting,
         bool globQuoted,
@@ -209,13 +212,11 @@ internal sealed class ExpandedWordBuilder
         {
             // Compound @ joins use IFS except in unquoted parameter operands; empty IFS uses a space.
             var separator = fieldSeparators.IsEmpty ? Space : fieldSeparators.First;
-            AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
-            return;
+            return AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
         }
         if (allowWordSplitting && !fieldSeparators.IsEmpty)
         {
-            AppendSeparatedFields(fields, fieldSeparators.First, allowWordSplitting, globQuoted);
-            return;
+            return AppendSeparatedFields(fields, fieldSeparators.First, allowWordSplitting, globQuoted);
         }
 
         // In diagnostic parameter words, @ protects its fields when IFS does not start with a space.
@@ -260,6 +261,7 @@ internal sealed class ExpandedWordBuilder
         }
         if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted && _doubleQuote != DoubleQuoteState.Outside)
             _doubleQuote = DoubleQuoteState.EmptyAggregate;
+        return !first;
     }
 
     /// <summary>Records the protected text and exposed separators until the complete body is expanded.</summary>
@@ -352,29 +354,24 @@ internal sealed class ExpandedWordBuilder
         IEnumerable<ShellValue> fields,
         bool allowWordSplitting,
         bool globQuoted) =>
-        AppendJoinedFields(fields, allowWordSplitting, globQuoted, positionalStar: false);
+        AppendJoinedFields(fields, allowWordSplitting, globQuoted, PositionalStarSplit.Default);
 
-    internal void AppendPositionalStar(
-        IEnumerable<ShellValue> fields,
-        bool allowWordSplitting,
-        bool globQuoted) =>
-        AppendJoinedFields(fields, allowWordSplitting, globQuoted, positionalStar: true);
-
-    private void AppendJoinedFields(
+    internal void AppendJoinedFields(
         IEnumerable<ShellValue> fields,
         bool allowWordSplitting,
         bool globQuoted,
-        bool positionalStar)
+        PositionalStarSplit positionalStar)
     {
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (fieldSeparators.IsEmpty && allowWordSplitting)
         {
-            var positionalStarWithEmptyIfs = positionalStar && Purpose == ExpansionPurpose.Normal;
+            var positionalStarWithEmptyIfs = positionalStar != PositionalStarSplit.Default && Purpose == ExpansionPurpose.Normal;
+            var hasFields = AppendFields(fields, allowWordSplitting, globQuoted, ExpansionQuoteContext.Unquoted, fieldSeparators,
+                positionalStarWithEmptyIfs);
             // An unquoted positional star expanded with empty IFS selects spaces
             // for this word, even if a later expansion assigns another separator.
-            _positionalStarSplitsOnSpaces |= positionalStarWithEmptyIfs;
-            AppendFields(fields, allowWordSplitting, globQuoted, ExpansionQuoteContext.Unquoted, fieldSeparators,
-                positionalStarWithEmptyIfs);
+            _positionalStarSplitsOnSpaces |= positionalStarWithEmptyIfs
+                && (hasFields || positionalStar == PositionalStarSplit.EvenWhenEmpty);
             return;
         }
 
@@ -382,7 +379,7 @@ internal sealed class ExpandedWordBuilder
         AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
     }
 
-    internal void AppendSeparatedFields(
+    internal bool AppendSeparatedFields(
         IEnumerable<ShellValue> fields,
         ShellValue separator,
         bool allowWordSplitting,
@@ -399,6 +396,7 @@ internal sealed class ExpandedWordBuilder
         }
         if (first && !allowWordSplitting)
             AppendEmptyExpansion(globQuoted: true);
+        return !first;
     }
 
     internal bool TryAppendSelectedFields(ParameterFieldJoin join, IEnumerable<ShellValue> fields,

@@ -110,9 +110,20 @@ internal static partial class WordExpansion
                 .ConfigureAwait(false);
             return;
         }
+        var positionalStar = parsed.Modifier == ParameterModifier.None && parameter.Kind == VariableReferenceKind.Star
+            && parameter.RangeSource is ParameterSource.Positional;
+        var starSplit = PositionalStarSplit.Default;
+        if (positionalStar)
+        {
+            starSplit = parsed.Kind is BracedParameterOperatorKind.Substring or BracedParameterOperatorKind.Replace
+                or BracedParameterOperatorKind.Transform or BracedParameterOperatorKind.UpperFirst
+                or BracedParameterOperatorKind.UpperAll or BracedParameterOperatorKind.LowerFirst
+                or BracedParameterOperatorKind.LowerAll
+                ? PositionalStarSplit.WhenPresent : PositionalStarSplit.EvenWhenEmpty;
+        }
         if (inspection)
         {
-            ExpandInspectionTransform(transform, parameter, scope, output, allowWordSplitting, globQuoted, quoteContext);
+            ExpandInspectionTransform(transform, parameter, scope, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
             return;
         }
 
@@ -131,7 +142,7 @@ internal static partial class WordExpansion
                 }
                 var nameLength = parsed.Name.Length + (parsed.Modifier == ParameterModifier.Indirect ? 1 : 0);
                 await ExpandSubstringAsync(parsed.Word, content[..nameLength].ToValue(), parameter, scope, output,
-                        allowWordSplitting, globQuoted, quoteContext, arithmeticPurpose)
+                        allowWordSplitting, globQuoted, quoteContext, arithmeticPurpose, starSplit)
                     .ConfigureAwait(false);
                 return;
             case BracedParameterOperatorKind.Replace:
@@ -163,6 +174,8 @@ internal static partial class WordExpansion
                     // An unavailable @ aggregate retains zero versus one empty field.
                     if (parameter.Kind == VariableReferenceKind.At)
                         Emit(parameter.SelectedFields);
+                    else if (positionalStar && allowWordSplitting && output.Purpose == ExpansionPurpose.Normal)
+                        Emit([]);
                     else
                         output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
                 }
@@ -809,12 +822,7 @@ internal static partial class WordExpansion
                     return;
                 }
             }
-            if (parsed.Kind == BracedParameterOperatorKind.None && parsed.Modifier == ParameterModifier.None
-                && parameter.Kind == VariableReferenceKind.Star
-                && parameter.RangeSource is ParameterSource.Positional)
-                output.AppendPositionalStar(fields, allowWordSplitting, globQuoted);
-            else
-                AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
+            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
         }
 
         // Operand expansion may have changed which values the selected array holds.
@@ -1062,7 +1070,7 @@ internal static partial class WordExpansion
         static async Task ExpandSubstringAsync(
             ShellSource expression, ShellValue name, ParameterValue parameter, ScopedEvaluation scope,
             ExpandedWordBuilder output, bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext,
-            ExpansionPurpose arithmeticPurpose)
+            ExpansionPurpose arithmeticPurpose, PositionalStarSplit starSplit)
         {
             if (!parameter.IsSet && parameter.RangeSource is not ParameterSource.Positional)
             {
@@ -1211,7 +1219,7 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
                     output.AppendHereDocumentFields(fields, HereDocumentJoin.SpaceBetweenProtectedValues);
                 else
-                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
+                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
             }
 
             Task ReportInvalidLengthAsync() => scope.Effects.ReportFatalExpansionAsync(
@@ -1379,12 +1387,12 @@ internal static partial class WordExpansion
 
     private static void AppendParameterFields(
         VariableReferenceKind kind, IEnumerable<ShellValue> fields, ExpandedWordBuilder output,
-        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext)
+        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit)
     {
         if (kind == VariableReferenceKind.At)
             output.AppendFields(fields, allowWordSplitting, globQuoted, quoteContext);
         else if (kind == VariableReferenceKind.Star)
-            output.AppendJoinedFields(fields, allowWordSplitting, globQuoted);
+            output.AppendJoinedFields(fields, allowWordSplitting, globQuoted, starSplit);
         else
             foreach (var field in fields)
                 output.AppendExpansion(field, allowWordSplitting, globQuoted);

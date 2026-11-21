@@ -27,7 +27,7 @@ public sealed class Word
             if (!MayExpandUnquotedPositionalStar && source.Kind == WordPartKind.Unquoted)
             {
                 var bytes = source.Source.AsSpan();
-                MayExpandUnquotedPositionalStar = bytes.IndexOf("$*"u8) >= 0 || bytes.IndexOf("${*}"u8) >= 0;
+                MayExpandUnquotedPositionalStar = bytes.IndexOf("$*"u8) >= 0 || bytes.IndexOf("${*"u8) >= 0;
             }
             if (HasIncompleteQuotedParameterSubscript && MayExpandUnquotedPositionalStar)
                 break;

@@ -870,7 +870,7 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument)
                     output.AppendHereDocumentFields(arguments, HereDocumentJoin.PositionalStar);
                 else
-                    output.AppendPositionalStar(arguments, allowWordSplitting, globQuoted);
+                    output.AppendJoinedFields(arguments, allowWordSplitting, globQuoted, PositionalStarSplit.EvenWhenEmpty);
                 index++;
                 continue;
             }

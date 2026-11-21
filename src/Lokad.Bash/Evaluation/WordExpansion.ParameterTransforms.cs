@@ -45,7 +45,7 @@ internal static partial class WordExpansion
 
     private static void ExpandInspectionTransform(
         byte transform, ParameterValue parameter, ScopedEvaluation scope, ExpandedWordBuilder output,
-        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext)
+        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit)
     {
         var assignmentContext = output.Purpose is ExpansionPurpose.Assignment
             or ExpansionPurpose.IndexedCompound or ExpansionPurpose.IndexedCompoundOperand;
@@ -131,7 +131,7 @@ internal static partial class WordExpansion
         void Emit(IEnumerable<ShellValue> fields)
         {
             if (!output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
-                AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
+                AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
         }
 
         void EmitValues(IEnumerable<ShellValue> fields)
@@ -234,6 +234,8 @@ internal static partial class WordExpansion
                 output.AppendExpansion(PositionalAssignmentPrefix, allowWordSplitting, globQuoted);
                 output.AppendFields(quoted, allowWordSplitting, globQuoted, quoteContext);
             }
+            else if (separators.IsEmpty && output.Purpose == ExpansionPurpose.Normal && starSplit != PositionalStarSplit.Default)
+                output.AppendJoinedFields(PrefixedFields(quoted), allowWordSplitting, globQuoted, starSplit);
             else
                 output.AppendFields(PrefixedFields(quoted), allowWordSplitting, globQuoted, quoteContext);
 
