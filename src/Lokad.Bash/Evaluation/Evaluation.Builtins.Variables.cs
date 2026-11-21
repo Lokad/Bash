@@ -62,15 +62,17 @@ public sealed partial class Evaluation
             var directSelector = canSelectElement && !literalBinding && nameValue.Bytes.Span.Contains((byte)'[')
                 && VariableReference.TryParse(ShellSource.FromBytes(nameValue.Bytes), Memory, out directReference)
                 && directReference.Kind != VariableReferenceKind.Name && !directReference.Subscript.IsEmpty;
-            var resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out var binding);
+            var mayFallBackToFunction = !variables && (!namerefs || !isIdentifier) && !directSelector;
+            var binding = default(VariableBinding);
+            var resolvedBinding = (!namerefs || mayFallBackToFunction)
+                && commandVars.TryResolveBinding(name, selectOwner: null, out binding);
             // Explicit selectors never fall back to functions; element namerefs still can.
             // Whole-name lookup follows namerefs and retains unset locals' namespace protection.
-            var hidesFunction = directSelector || resolvedBinding && binding.Reference.Kind == VariableReferenceKind.Name
+            var hidesFunction = mayFallBackToFunction && resolvedBinding && binding.Reference.Kind == VariableReferenceKind.Name
                 && !binding.IsUnsetNameref && (binding.Owner.HasBinding(binding.Name)
                     || context.FunctionContext?.IsLocal(binding.Name) == true);
             // -n is a no-op for valid non-nameref names; other spellings can still select a function.
-            if (!variables && (!namerefs || !isIdentifier)
-                && !hidesFunction && _state.Functions.ContainsKey(nameValue))
+            if (mayFallBackToFunction && !hidesFunction && _state.Functions.ContainsKey(nameValue))
             {
                 await UnsetFunctionAsync(nameValue).ConfigureAwait(false);
                 continue;
@@ -95,18 +97,19 @@ public sealed partial class Evaluation
                 if (HasPendingExpansionError) break;
                 if (!elementResult.Succeeded || elementResult.ScalarToUnset.IsEmpty)
                     continue;
-                // Scalar [0] removal needs the same local/prefix cleanup as a whole-name unset.
+                // Selector evaluation can change bindings before whole-name cleanup of scalar [0].
                 name = elementResult.ScalarToUnset;
+                resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out binding);
                 unsetFlags = UnsetFlags.ScalarOnly;
             }
-            var resolved = namerefs ? name : commandVars.ResolveNamerefName(name);
-            var removedName = resolved.IsEmpty ? name : resolved;
+            var target = commandVars.SelectUnsetTarget(name, !namerefs && resolvedBinding ? binding : null);
+            var removedName = target.Name;
             var keepExport = commandVars.IsExported(removedName)
                 && context.FunctionContext?.Locals.IsDeclaredPrefix(removedName) == true;
-            if (!commandVars.TryUnset(name, unsetFlags))
+            if (!commandVars.TryUnsetSelected(target, unsetFlags))
             {
                 exitCode = 1;
-                if (namerefs || commandVars.IsReadonly(name))
+                if (target.IsReadonly)
                     await ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
                         [removedName.ToValue(), ShellValue.FromText(": cannot unset: readonly variable")]).ConfigureAwait(false);
                 continue;

@@ -21,6 +21,7 @@ internal readonly record struct VariableBinding(VariableReference Reference, Var
     public bool IsUnsetNameref => Reference.Kind == VariableReferenceKind.Name
         && Owner.TryGetNameref(Name, out var target) && target.IsEmpty;
 }
+internal readonly record struct VariableUnsetTarget(BindingName Name, bool RequiresSelector, bool IsReadonly);
 
 /// <summary>Declarations include attributes/unset names; assignment listings include assigned values only.</summary>
 internal enum VariableDisplayStyle { Declaration, DeclarationName, Assignment }
@@ -1046,25 +1047,34 @@ public sealed partial class Variables
         if (name.IsEmpty)
             return false;
 
+        VariableBinding? referent = flags != UnsetFlags.NamerefOnly
+            && TryResolveBinding(name, selectOwner: null, out var binding) ? binding : null;
+        return TryUnsetSelected(SelectUnsetTarget(name, referent), flags);
+    }
+
+    internal VariableUnsetTarget SelectUnsetTarget(BindingName name, VariableBinding? referent)
+    {
+        // An absent resolution (including a cycle) or an unset nameref keeps the operand's name.
+        if (referent is not { } binding)
+            return new(name, false, IsReadonlyBinding(name));
+        var requiresSelector = binding.Reference.Kind != VariableReferenceKind.Name;
+        if (!requiresSelector && !binding.IsUnsetNameref)
+            return new(binding.Name, false, IsReadonlyBinding(binding.Name));
+        return new(name, requiresSelector, IsReadonlyBinding(name) || IsReadonlyBinding(binding.Name));
+    }
+
+    internal bool TryUnsetSelected(VariableUnsetTarget target, UnsetFlags flags)
+    {
+        if (target.Name.IsEmpty || target.RequiresSelector || target.IsReadonly)
+            return false;
+
+        var name = target.Name;
         if (flags == UnsetFlags.NamerefOnly)
         {
-            if (IsReadonlyBinding(name))
-                return false;
             if (RemoveValue<NamerefSlot>(name))
                 SetAttribute(name, BindingAttributes.Exported, false);
             return true;
         }
-
-        // Follow a referent when possible; an unbound or cyclic nameref removes the named binding.
-        // Element selectors require scoped evaluation, not deletion of the alias itself.
-        if (TryResolveBinding(name, selectOwner: null, out var binding)
-            && binding.Reference.Kind != VariableReferenceKind.Name)
-            return false;
-        if (TryResolveWholeName(name, out var resolved) && !resolved.IsEmpty)
-            name = resolved;
-
-        if (IsReadonly(name))
-            return false;
 
         if (flags == UnsetFlags.None)
             ClearBinding(name);

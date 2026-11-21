@@ -13,6 +13,35 @@ namespace Lokad.Bash.Tests;
 public sealed partial class ComplexityRegressionTests
 {
     [Fact]
+    public void WholeVariableUnsetAllocatesOnlyOneReferenceWalk()
+    {
+        const int repetitions = 64;
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetNameref("first", ShellValue.FromText("second")));
+        Assert.True(variables.TrySetNameref("second", ShellValue.FromText("missing")));
+        Assert.True(variables.TryResolveBinding("first", selectOwner: null, out _));
+        Assert.True(variables.TryUnset("first"));
+
+        var resolved = true;
+        var beforeLookup = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < repetitions; index++)
+            resolved &= variables.TryResolveBinding("first", selectOwner: null, out _);
+        var lookupBytes = GC.GetAllocatedBytesForCurrentThread() - beforeLookup;
+
+        var unset = true;
+        var beforeUnset = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < repetitions; index++)
+            unset &= variables.TryUnset("first");
+        var unsetBytes = GC.GetAllocatedBytesForCurrentThread() - beforeUnset;
+
+        Assert.True(resolved);
+        Assert.True(unset);
+        Assert.True(variables.TryGetNameref("first", out _));
+        Assert.True(unsetBytes <= lookupBytes + 1_024,
+            $"Unset allocated {unsetBytes:N0} bytes for the same reference walks that used {lookupBytes:N0} bytes.");
+    }
+
+    [Fact]
     public async Task ExplicitFunctionUnsetDoesNotAdmitVariableNameCopies()
     {
         const int operandCount = 64;

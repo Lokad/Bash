@@ -82,6 +82,37 @@ public sealed class DeclarationInspectionTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnsetCircularReferenceUsesTheNamedBinding(bool isReadonly)
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetNameref("first", ShellValue.FromText("second")));
+        Assert.True(variables.TrySetNameref("second", ShellValue.FromText("first")));
+        if (isReadonly)
+            variables.SetReadonly("first");
+
+        Assert.Equal(!isReadonly, variables.TryUnset("first"));
+        Assert.Equal(isReadonly, variables.TryGetNameref("first", out _));
+        Assert.True(variables.TryGetNameref("second", out var secondTarget));
+        Assert.Equal(ShellValue.FromText("first"), secondTarget);
+    }
+
+    [Fact]
+    public void WholeVariableUnsetLeavesAnElementReferenceIntact()
+    {
+        var variables = Variables.CreateEmpty();
+        var target = ShellValue.FromText("array[0]");
+        Assert.True(variables.TrySetNameref("item", target));
+
+        Assert.False(variables.TryUnset("item"));
+        Assert.True(variables.TryGetNameref("item", out var retained));
+        Assert.Equal(target, retained);
+        Assert.True(variables.TryUnset("item", UnsetFlags.NamerefOnly));
+        Assert.False(variables.TryGetNameref("item", out _));
+    }
+
+    [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]
     public void UnsetArray_OnlyRemovesAssignmentIdentityWithItsContainer(ArrayKind kind)
