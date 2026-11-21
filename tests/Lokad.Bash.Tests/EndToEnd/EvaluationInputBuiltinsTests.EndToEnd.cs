@@ -214,7 +214,7 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_PrintfBuiltin_EmitsWriteOperation()
+    public async Task Evaluation_PrintfBuiltin_WritesWithoutAddingNewline()
     {
         // This test verifies that printf writes formatted output without adding a newline.
         // The script "printf %s a" must output "a" with no STDERR and exit code 0.
@@ -242,7 +242,7 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_ReadBuiltin_EmitsReadLineOperation()
+    public async Task Evaluation_ReadBuiltin_AssignsTheInputLine()
     {
         // This test verifies that "read" consumes a line from STDIN.
         // With default input "value\n", the script "read name; echo $name" must output "value\n".
@@ -516,7 +516,7 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_MapfileBuiltin_EmitsReadLineOperation()
+    public async Task Evaluation_MapfileBuiltin_AssignsTheFirstArrayElement()
     {
         // This test verifies that mapfile reads a line into an array.
         // With input "line\n", the script must output "line\n".
@@ -541,7 +541,7 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_ReadarrayBuiltin_EmitsReadLineOperation()
+    public async Task Evaluation_ReadarrayBuiltin_AssignsTheFirstArrayElement()
     {
         // This test verifies that readarray behaves like mapfile.
         // With input "line\n", the script must output "line\n".

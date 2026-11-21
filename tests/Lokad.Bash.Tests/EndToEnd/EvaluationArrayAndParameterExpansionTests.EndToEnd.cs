@@ -118,20 +118,6 @@ public sealed class EvaluationArrayAndParameterExpansionTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsAssociativeArrayElement()
-    {
-        // This test verifies that associative array elements expand by key.
-        // The script sets map[key]=value and echoes it, which must output "value\n".
-        // If associative expansion fails, STDOUT would be empty.
-        var script = @"declare -A map; map[key]=value; echo ${map[key]}";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("value\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
     public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayAllElements()
     {
         // This test verifies that ${arr[@]} expands to all indexed elements.

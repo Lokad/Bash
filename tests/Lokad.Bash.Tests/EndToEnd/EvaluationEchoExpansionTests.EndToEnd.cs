@@ -71,7 +71,7 @@ public sealed class EvaluationEchoExpansionTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_EchoBuiltin_EmitsWriteOperation()
+    public async Task Evaluation_EchoBuiltin_WritesArgumentsWithNewline()
     {
         // This test verifies that echo writes its arguments to STDOUT with a trailing newline.
         // The script "echo a b" must output "a b\n" with no STDERR and exit code 0.

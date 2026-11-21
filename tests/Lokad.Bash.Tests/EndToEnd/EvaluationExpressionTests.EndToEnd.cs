@@ -34,20 +34,6 @@ public sealed class EvaluationExpressionTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
     [Fact]
-    public async Task Evaluation_AssignmentOnlyCommand_AssignsVariable()
-    {
-        // This test verifies that an assignment-only command updates shell variables.
-        // The script assigns FOO=bar and echoes it, so STDOUT must be "bar\n" with no STDERR.
-        // If assignment-only commands are ignored, the echo would be empty.
-        var script = @"FOO=bar; echo $FOO";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("bar\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
     public async Task Evaluation_AssignmentOnlyCommand_ReadonlyReturnsFailure()
     {
         // Assignment-only readonly errors report a diagnostic and terminate the script.

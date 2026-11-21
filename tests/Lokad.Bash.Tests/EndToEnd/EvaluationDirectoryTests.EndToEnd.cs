@@ -73,7 +73,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
     [Fact]
-    public async Task Evaluation_PwdBuiltin_EmitsWriteOperation()
+    public async Task Evaluation_PwdBuiltin_PrintsTheCurrentDirectory()
     {
         // This test verifies that "pwd" prints the current directory.
         // The initial directory is "/", so STDOUT must be "/\n" with no STDERR and exit code 0.

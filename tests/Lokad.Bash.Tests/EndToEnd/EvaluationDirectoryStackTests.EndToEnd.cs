@@ -117,7 +117,7 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
     [Fact]
-    public async Task Evaluation_DirsBuiltin_EmitsWriteOperation()
+    public async Task Evaluation_DirsBuiltin_PrintsTheInitialStack()
     {
         // This test verifies that "dirs" prints the current directory stack.
         // With the initial stack containing only "/", STDOUT must be "/\n".
