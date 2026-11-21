@@ -139,7 +139,8 @@ public sealed partial class Evaluation
         }
         if (words[first].IsEmpty)
         {
-            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("empty filename")).ConfigureAwait(false);
+            await ReportSourceOpenFailureAsync(commandName, string.Empty, new OperationError("No such file or directory\n"))
+                .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
 
@@ -157,7 +158,7 @@ public sealed partial class Evaluation
             ? PositionalParametersRestorePolicy.UnlessReplaced : PositionalParametersRestorePolicy.Always;
         using var positionalScope = argumentCount == 0 ? null : scope.Variables.EnterPositionalParametersScope(
             words, argumentStart, restorePolicy);
-        return ApplyNegation(await ExecuteSourceAsync(path, scope).ConfigureAwait(false), negated);
+        return ApplyNegation(await ExecuteSourceAsync(commandName, path, scope).ConfigureAwait(false), negated);
 
         async Task<EvaluationResult> FinishUsageErrorAsync()
         {
@@ -165,6 +166,17 @@ public sealed partial class Evaluation
                 + BuiltinDocumentation.For(kind).Synopsis(commandName))], _builtinDiagnostics).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
+    }
+
+    private Task ReportSourceOpenFailureAsync(string commandName, string path, OperationError error)
+    {
+        var standardError = GetStdErrDescriptor();
+        if (standardError.IsClosed)
+            return Task.CompletedTask;
+
+        return error.Kind == OperationErrorKind.IsDirectory
+            ? WriteOperationDiagnosticAsync(standardError, commandName + ": ", path, new OperationError("is a directory\n"))
+            : WriteOperationDiagnosticAsync(standardError, string.Empty, path, error);
     }
 
     private enum ScriptExecutionKind { Root, LegacyCapture, Source, Eval, Trap }

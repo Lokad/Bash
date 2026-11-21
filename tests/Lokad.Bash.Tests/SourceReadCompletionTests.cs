@@ -10,6 +10,26 @@ namespace Lokad.Bash.Tests;
 public sealed class SourceReadCompletionTests
 {
     [Fact]
+    public async Task SourceOpenFailureReportsTheHostCauseBeforeContinuing()
+    {
+        var state = new Eval(Parser.Parse("source ./target temporary; after=$?"));
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        Assert.Equal(FileOpenMode.Read, open.Mode);
+        open.SetResult(FileOpenResult.Failed(new OperationError("input policy refused\n")
+            { Kind = OperationErrorKind.PermissionDenied }));
+
+        var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("./target: input policy refused\n"u8.ToArray(), diagnostic.Content.ToArray());
+        Assert.False(state.Variables.ContainsKey("after"));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(ShellValue.FromText("1"), state.Variables["after"]);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+    }
+
+    [Fact]
     public async Task CancelledSourceReadKeepsTheBatchBudgetAndDescriptorUntilTheHostSettles()
     {
         var state = new Eval(Parser.Parse("source file; after=1"));

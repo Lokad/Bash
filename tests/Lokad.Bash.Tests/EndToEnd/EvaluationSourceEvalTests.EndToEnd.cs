@@ -7,6 +7,23 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationSourceEvalTestsEndToEnd
 {
     [Theory]
+    [InlineData("source -- ./missing", "./missing: No such file or directory\n")]
+    [InlineData(". ''", ": No such file or directory\n")]
+    [InlineData("source ./folder", "source: ./folder: is a directory\n")]
+    [InlineData(". ./folder", ".: ./folder: is a directory\n")]
+    [InlineData("source ./missing 2>&-", "")]
+    public async Task SourceReportsReachedFilenameFailures(string invocation, string diagnostic)
+    {
+        var host = EndToEndHarness.BuildTree([("/folder/file", "")]);
+        var result = await EndToEndHarness.RunScriptAsync(invocation, host);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("export x=body", "body")]
     [InlineData("readonly x=body", "body")]
     [InlineData("unset x; export x=body", "body")]

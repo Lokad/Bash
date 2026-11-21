@@ -3785,11 +3785,16 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Reads bounded source, then executes complete command units in the caller's context.
     /// </summary>
-    private async Task<EvaluationResult> ExecuteSourceAsync(string path, ScopedEvaluation scope)
+    private async Task<EvaluationResult> ExecuteSourceAsync(string commandName, string path, ScopedEvaluation scope)
     {
-        var descriptor = (await ExecuteOpenFileAsync(path, FileOpenMode.Read).ConfigureAwait(false)).FileDescriptor;
+        var open = await ExecuteOpenFileAsync(path, FileOpenMode.Read).ConfigureAwait(false);
+        var descriptor = open.FileDescriptor;
         if (!descriptor.HasValue)
+        {
+            if (open.Error is { Message.Length: > 0 } error)
+                await ReportSourceOpenFailureAsync(commandName, path, error).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(1);
+        }
 
         var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
         OperationError? closeError = null;
