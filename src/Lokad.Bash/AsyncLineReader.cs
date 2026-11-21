@@ -306,14 +306,20 @@ public sealed class AsyncLineReader : IDisposable
 
     /// <summary>Reads remaining bytes without materializing more than the caller's byte limit.</summary>
     /// <param name="maximumBytes">The largest accepted payload, below the CLR array length limit.</param>
-    /// <remarks>Consumes remaining buffered input first. Rejection does not rewind previously consumed batches.</remarks>
+    /// <remarks>
+    /// Consumes remaining buffered input first and releases each owned batch after copying its bytes.
+    /// Rejection does not rewind previously consumed batches.
+    /// </remarks>
     public async ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
         using var output = new ByteMemoryBuilder(0, _memoryBudget);
+        ReleasePreviousBatch();
+        if (_lineIndex >= BufferedLineCount)
+            ReleaseCurrentBatch();
+
         while (true)
         {
-            ReleasePreviousBatch();
             _cancellationToken.ThrowIfCancellationRequested();
             var (reachedEof, failure) = await TryReachedEofCore(_cancellationToken).ConfigureAwait(false);
             _cancellationToken.ThrowIfCancellationRequested();
@@ -321,14 +327,16 @@ public sealed class AsyncLineReader : IDisposable
                 return new BoundedReadResult.Failed(ByteReadResult.Failure(
                     0, error, failure.ReachedEoF));
             if (reachedEof)
+            {
+                ReleaseCurrentBatch();
                 return new BoundedReadResult.Complete(output.DetachSnapshot());
+            }
 
             // Consume the remaining batch directly; line boundaries were already scanned by its producer.
             if (_content.Length - _lineStart > maximumBytes - output.Length)
                 return new BoundedReadResult.TooLarge();
             output.Append(_content.Span[_lineStart..]);
-            _lineStart = _content.Length;
-            _lineIndex = BufferedLineCount;
+            ReleaseCurrentBatch();
         }
     }
 
@@ -341,14 +349,21 @@ public sealed class AsyncLineReader : IDisposable
         _previousBatchMemory = null;
     }
 
+    private void ReleaseCurrentBatch()
+    {
+        _content = default;
+        _lineStartOffsets = Array.Empty<int>();
+        _lineStart = 0;
+        _lineIndex = 0;
+        _batchMemory?.Dispose();
+        _batchMemory = null;
+    }
+
     /// <summary>Discards owned read batches; whole-input results retain their caller's budget.</summary>
     public void Dispose()
     {
         _disposed = true;
-        _content = default;
-        _lineStartOffsets = Array.Empty<int>();
         ReleasePreviousBatch();
-        _batchMemory?.Dispose();
-        _batchMemory = null;
+        ReleaseCurrentBatch();
     }
 }

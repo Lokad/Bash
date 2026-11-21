@@ -7,6 +7,54 @@ namespace Lokad.Bash.Tests;
 public sealed class BoundedReadTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task WholeLineReadReleasesConsumedBatchesBeforeRefill(bool readFirstLine, bool finalDataIsEof)
+    {
+        var governor = new MemoryGovernor(16 * 1024);
+        using var owner = governor.CreateScope();
+        var first = new byte[4096];
+        first[0] = 0xff;
+        first[^2] = 13;
+        first[^1] = 10;
+        var second = new byte[4096];
+        second[^1] = (byte)'a';
+        IMemoryReservation? lastBatch = null;
+        var next = 0;
+        using var reader = AsyncLineReader.CreateStreaming((_, budget, _) =>
+        {
+            if (lastBatch is { } consumed)
+                Assert.Equal(0, consumed.Bytes);
+            if (++next == 3)
+                return ValueTask.FromResult(ReadResult.EndOfFile);
+            var content = ScopedMemory.Copy(next == 1 ? first : second, budget, out lastBatch);
+            return ValueTask.FromResult(ReadResult.Success(content, [], reachedEoF: next == 2 && finalDataIsEof));
+        }, CancellationToken.None, 1, owner);
+
+        if (readFirstLine)
+        {
+            Assert.False(await reader.ReachedEof());
+            Assert.Equal(first, reader.ReadLine().Raw.ToArray());
+            Assert.Equal(4096, Assert.IsAssignableFrom<IMemoryReservation>(lastBatch).Bytes);
+        }
+
+        var result = await reader.TryReadToEndAsync(8192);
+
+        byte[] expected = readFirstLine ? second : [.. first, .. second];
+        Assert.Equal(expected, Assert.IsType<BoundedReadResult.Complete>(result).Content.ToArray());
+        Assert.Equal(finalDataIsEof ? 2 : 3, next);
+        Assert.Equal(0, Assert.IsAssignableFrom<IMemoryReservation>(lastBatch).Bytes);
+        Assert.True(await reader.ReachedEof());
+        Assert.Equal(expected.Length, governor.ReservedBytes);
+        reader.Dispose();
+        Assert.Equal(expected.Length, governor.ReservedBytes);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(0, true)]
     [InlineData(1, true)]
     [InlineData(1, false)]
