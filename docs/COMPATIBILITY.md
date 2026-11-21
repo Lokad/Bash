@@ -692,6 +692,8 @@ Associative arrays enumerate keys in ascending lexicographic order of unsigned
 bytes. Key and value aggregates follow that order, and value slices select
 entries in the same order. GNU Bash can enumerate the same keys in a different
 order.
+An in-range associative value slice with length zero emits its selected entry.
+Zero-length indexed-array and positional slices emit no entries.
 
 Prefix and suffix removal apply the expanded pattern to the array's current
 entries. The pattern can change or add entries before matching. Scalar values

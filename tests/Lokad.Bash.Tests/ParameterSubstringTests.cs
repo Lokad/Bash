@@ -33,6 +33,23 @@ public sealed class ParameterSubstringTests
     }
 
     [Theory]
+    [InlineData("declare -A a=([key]=value); show left \"${a[@]:1:0}\" right", "[3]<left><value><right>")]
+    [InlineData("declare -A a=([key]=''); show \"${a[@]: -1:0}\"", "[1]<>")]
+    [InlineData("declare -A a=([key]=value); i=1; j=0; show \"${a[*]:i++:j++}\" \"$i\" \"$j\"", "[3]<value><2><1>")]
+    [InlineData("declare -A a=([key]='two words'); show ${a[@]:0:0}", "[2]<two><words>")]
+    [InlineData("declare -A a=([key]=value); i=0; show \"${a[@]:2:i++}\" \"$i\"", "[1]<0>")]
+    [InlineData("a=(value); set -- value; show \"${a[@]:1:0}\" \"${@:1:0}\"", "[0]")]
+    public async Task ZeroLengthAssociativeSliceIncludesTheReachedEntry(string body, string expected)
+    {
+        const string Show = "show(){ printf '[%s]' \"$#\"; for field; do printf '<%s>' \"$field\"; done; }\n";
+        var result = await EvaluationTestHelper.RunAsync(Show + body);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:${a[@]:0:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
     [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:0:${a[@]:0:2}}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
     [InlineData("x=abc; set -- 1 2; eval 'printf \"%s\" \"${x:${@:1:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
