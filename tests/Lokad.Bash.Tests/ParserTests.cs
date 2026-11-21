@@ -199,6 +199,32 @@ public class ParserTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Parse_ArrayAssignmentKeepsCompactNameAndPhysicalSelector(bool continued, bool append)
+    {
+        var name = new string('x', 513);
+        var spelling = continued ? name.Insert(250, "\\\n") + "\\\n" : name;
+        byte[] selector = [.. "[\"part\\\n"u8, 0xff, (byte)'\r', .. "\"]"u8];
+        var operation = append ? "+=" : "=";
+        byte[] input = [.. Encoding.ASCII.GetBytes(spelling), .. selector,
+            .. Encoding.ASCII.GetBytes(operation), .. "'value part'\n"u8];
+
+        var command = AssertSingleCommand(Parser.Parse(input));
+        var assignment = Assert.Single(command.Assignments);
+        byte[] expectedTarget = [.. Encoding.ASCII.GetBytes(name), .. selector];
+        Assert.Empty(command.Words);
+        Assert.Equal(append ? AssignmentOperator.Append : AssignmentOperator.Replace, assignment.Operator);
+        Assert.Equal(expectedTarget, assignment.Target.Bytes.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(assignment.Target.Bytes, out var backing));
+        Assert.NotNull(backing.Array);
+        Assert.Equal(expectedTarget.Length, backing.Array.Length);
+        Assert.Equal("value part", WordText(assignment.Value));
+    }
+
+    [Theory]
     [InlineData("files=(a b)\\\n")]
     [InlineData("files=(a b)\\\n\\\n")]
     [InlineData("files=(a b)\\\n;")]

@@ -259,10 +259,10 @@ internal sealed class Tokenizer
         if (position >= source.Length || !VariableNames.IsNameStart((char)source[position]))
             return false;
 
-        var name = _scanContext.CreateByteBuilder(0);
+        var nameLength = 0;
         while (position < source.Length && VariableNames.IsNamePart((char)source[position]))
         {
-            name.Append(source[position]);
+            nameLength++;
             position = ShellSourceCursor.SkipLineContinuations(source, position + 1);
         }
 
@@ -273,8 +273,15 @@ internal sealed class Tokenizer
             || !TryReadSubscriptAssignment(position, closing, out var element))
             return false;
 
-        name.Append(source.Slice(position, closing - position + 1));
-        assignment = new AssignmentWord(ShellSource.FromBytes(name.ToCompactMemory(_scanContext.SyntaxMemory)), element.Value, element.Operator);
+        // The leading word part already has the logical name. Selector spelling still needs its
+        // physical bytes, including quotes and continuations, for the eventual array kind.
+        var selector = source.Slice(position, closing - position + 1);
+        var targetLength = checked(nameLength + selector.Length);
+        _scanContext.SyntaxMemory?.Grow(MemoryCapacity.ArrayBackingBytes<byte>(targetLength));
+        var target = new byte[targetLength];
+        first.Source.AsSpan(0, nameLength).CopyTo(target);
+        selector.CopyTo(target.AsSpan(nameLength));
+        assignment = new AssignmentWord(ShellSource.FromBytes(target), element.Value, element.Operator);
         return true;
     }
 
