@@ -764,6 +764,9 @@ its next field before the scan can reach help.
 `unset` follows the same help status and output rules. Leading option groups
 are scanned in order. An earlier invalid option reports usage, and `--`
 ends the option scan. Reached help preserves the operand bindings.
+`unset -v` accepts identifiers, valid array selectors and existing literal
+bindings. Invalid operands report their original bytes and set status 1 while
+later operands still run. An empty operand to plain `unset` has no effect.
 
 `help --help` uses the same output and status rules. A list of topics succeeds
 when any topic matches. If all topics miss, status 1 accompanies a diagnostic

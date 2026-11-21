@@ -36,6 +36,40 @@ public sealed class UnsetFunctionTestsEndToEnd
         Assert.Equal(expectedError, result.StdErr);
     }
 
+    [Theory]
+    [InlineData("keep=value; unset '' bad-name keep; printf '<%s><%s>' \"$?\" \"${keep-unset}\"",
+        "<0><unset>", "")]
+    [InlineData("function bad-name { printf body; }; unset -v bad-name; printf '<%s>' \"$?\"; bad-name",
+        "<1>body", "unset: `bad-name': not a valid identifier\n")]
+    [InlineData("a=(one); unset -v '' 'a[]'; printf '<%s><%s>' \"$?\" \"${a[0]}\"",
+        "<1><one>", "unset: `': not a valid identifier\nunset: `a[]': not a valid identifier\n")]
+    [InlineData("a=(one two); i=1; unset -v 'a[i++]'; printf '<%s><%s><%s>' \"$?\" \"$i\" \"${a[1]-unset}\"",
+        "<0><2><unset>", "")]
+    [InlineData("keep=value; unset -v bad-name keep 2>&-; printf '<%s><%s>' \"$?\" \"${keep-unset}\"",
+        "<1><unset>", "")]
+    public async Task InvalidNamesFollowTheSelectedNamespace(string script, string expectedOutput, string expectedError)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+    }
+
+    [Fact]
+    public async Task UnsetVariableWritesRawIdentifierBytesToTheReachedDescriptor()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "first=one; last=two; unset -v -- first $'\\377' last 2>diag; printf '<%s><%s><%s>' \"$?\" \"${first-unset}\" \"${last-unset}\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1><unset><unset>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal<byte>([.. "unset: `"u8, 0xff, .. "': not a valid identifier\n"u8], host.ReadFileBytes("/diag"));
+    }
+
     // Git Bash 5.2.37, isolated environment; omit only script-path/line diagnostic prefixes.
     [Theory]
     [InlineData("x=global; f(){ local x=local; unset 'x[0]'; export x; printf '<%s>\\n' \"${x-unset}\"; }; x=prefix f; declare -p x", "<unset>\ndeclare -- x=\"global\"\n", "", 0)]

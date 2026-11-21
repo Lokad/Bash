@@ -48,9 +48,12 @@ public sealed partial class Evaluation
         {
             var nameValue = words[index];
             var name = BindingNameExpansion.FromValue(nameValue, Memory);
+            var isIdentifier = name.IsIdentifier;
+            var canSelectElement = !functions && !namerefs && !isIdentifier;
+            var literalBinding = canSelectElement
+                && (commandVars.HasBinding(name) || context.FunctionContext?.IsLocal(name) == true);
             var directReference = default(VariableReference);
-            var directSelector = !functions && !namerefs && !commandVars.HasBinding(name)
-                && context.FunctionContext?.IsLocal(name) != true && nameValue.Bytes.Span.Contains((byte)'[')
+            var directSelector = canSelectElement && !literalBinding && nameValue.Bytes.Span.Contains((byte)'[')
                 && VariableReference.TryParse(ShellSource.FromBytes(nameValue.Bytes), Memory, out directReference)
                 && directReference.Kind != VariableReferenceKind.Name && !directReference.Subscript.IsEmpty;
             var resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out var binding);
@@ -60,7 +63,7 @@ public sealed partial class Evaluation
                 && !binding.IsUnsetNameref && (binding.Owner.HasBinding(binding.Name)
                     || context.FunctionContext?.IsLocal(binding.Name) == true);
             // -n is a no-op for valid non-nameref names; other spellings can still select a function.
-            if (functions || !variables && (!namerefs || !name.IsIdentifier)
+            if (functions || !variables && (!namerefs || !isIdentifier)
                 && !hidesFunction && _state.Functions.ContainsKey(nameValue))
             {
                 if (!_state.TryUnsetFunction(nameValue))
@@ -71,17 +74,15 @@ public sealed partial class Evaluation
                 }
                 continue;
             }
-            if (namerefs && !commandVars.TryGetNameref(name, out _))
+            if (variables && !isIdentifier && !directSelector && !literalBinding)
             {
-                if (variables && !name.IsIdentifier)
-                {
-                    exitCode = 1;
-                    await WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("unset"), nameValue,
-                        _builtinDiagnostics, ClosedStderrHandling.AttemptWrite)
-                        .ConfigureAwait(false);
-                }
+                exitCode = 1;
+                await WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("unset"), nameValue,
+                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
                 continue;
             }
+            if (name.IsEmpty || namerefs && !commandVars.TryGetNameref(name, out _))
+                continue;
             var unsetFlags = namerefs ? UnsetFlags.NamerefOnly : UnsetFlags.None;
             if (!namerefs && (directSelector || resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name))
             {
