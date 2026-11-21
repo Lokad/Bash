@@ -468,6 +468,8 @@ internal sealed class ShellScanContext
     // No completed unit can need a later lookup of its consumed source positions.
     internal void ClearCommandUnitLookahead() => _commandSubstitutions = null;
 
+    internal bool HasCommandSubstitutionLookahead => _commandSubstitutions is { Count: > 0 };
+
     internal bool TryScanLateSubscript(ShellSource source, int opening, int earlyBrace, out int closing)
     {
         if (!source.Bytes.Equals(_lateSubscriptSource.Bytes))

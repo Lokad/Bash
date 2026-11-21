@@ -1045,7 +1045,22 @@ internal static partial class WordExpansion
                 return;
             }
 
-            var separator = FindSeparator(expression);
+            var boundsScan = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
+            if (!TryFindSeparator(out var separator))
+            {
+                if (boundsScan.HasCommandSubstitutionLookahead)
+                {
+                    using var spelling = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+                    if (!FunctionDefinitionFormatter.TryAppendSourceWithCaptures(expression, boundsScan, spelling,
+                            scope.Effects.Memory.Budget, scope.Effects.CancellationToken))
+                        throw new ByteMemoryBuilder.LimitExceededException();
+                    await ReportUnclosedOffsetAsync(ShellValue.FromBytes(spelling.ToMemory())).ConfigureAwait(false);
+                }
+                else
+                    await ReportUnclosedOffsetAsync(expression.ToValue()).ConfigureAwait(false);
+                return;
+            }
+
             var offset = await ExpandArithmeticOperandAsync(
                 separator < 0 ? expression : expression[..separator], scope, arithmeticPurpose, name).ConfigureAwait(false);
             if (offset is not { } start)
@@ -1147,10 +1162,14 @@ internal static partial class WordExpansion
                 ShellValue.FromInteger(length.GetValueOrDefault()), ShellValue.FromText("substring expression < 0"),
                 ExpansionFailureKind.Arithmetic);
 
-            int FindSeparator(ShellSource text)
+            Task ReportUnclosedOffsetAsync(ShellValue spelling) => scope.Effects.ReportUnitExpansionFailureAsync(
+                [ShellValue.FromText("bad substitution")], [ShellValue.FromText("no closing `)' in "), spelling],
+                scope, ExpansionFailureKind.WordSyntax);
+
+            bool TryFindSeparator(out int position)
             {
-                var cursor = new ShellSourceCursor(text, 0,
-                    new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace });
+                position = -1;
+                var cursor = new ShellSourceCursor(expression, 0, boundsScan);
                 var parentheses = 0;
                 var conditional = 0;
                 while (!cursor.IsAtEnd)
@@ -1162,7 +1181,7 @@ internal static partial class WordExpansion
                     {
                         var current = cursor.Current;
                         if (current == '(') parentheses++;
-                        else if (current == ')') parentheses--;
+                        else if (current == ')' && parentheses > 0) parentheses--;
                         else if (parentheses == 0 && current == '?') conditional++;
                         else if (parentheses == 0 && current == ':' && conditional > 0)
                         {
@@ -1171,11 +1190,14 @@ internal static partial class WordExpansion
                             continue;
                         }
                         if (current == ':' && parentheses == 0)
-                            return cursor.Position;
+                        {
+                            position = cursor.Position;
+                            return true;
+                        }
                     }
                     cursor.Advance();
                 }
-                return -1;
+                return parentheses == 0;
             }
         }
     }

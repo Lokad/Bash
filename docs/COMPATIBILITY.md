@@ -672,6 +672,12 @@ Arithmetic parser diagnostics preserve the failing operand and token bytes,
 including significant trailing whitespace. Arithmetic commands, `let`, numeric
 conditionals and substring bounds identify the reached caller in the diagnostic.
 
+The substring offset scan finds the length delimiter outside balanced
+parentheses. A stray closing parenthesis leaves the scan at the current level.
+An unmatched opening parenthesis reports a bad substitution before either
+bound runs. Its diagnostic keeps the operand bytes and renders parsed
+command substitutions.
+
 `let` consumes one leading `--` after operand expansion. A leading `--help`
 requests help on stdout and returns status 2 even with closed stdout. Later
 fields are arithmetic expressions. If no expressions remain, `let` reports

@@ -135,6 +135,15 @@ public sealed class ParameterSubstringTests
     [InlineData("x=abc; i=0; printf '<%s>\\n' \"${x:3:i++}\" \"$i\"; printf '<%s>\\n' \"${x:3:-1}\"; printf after\n", "<>\n<1>\n", "-1: substring expression < 0\n", 1)]
     [InlineData("x=abcdef; i=1; printf '<%s>\\n' \"${x:$(printf 2):i?2:1}\" \"$i\"\n", "<cd>\n<1>\n", "", 0)]
     [InlineData("declare -A a; a[one]=ONE; a[two]=TWO; printf '<%s>\\n' \"${a[@]:0:1}\" \"${a[@]:1:1}\" \"${a[@]:2:1}\"", "<ONE>\n<ONE>\n<TWO>\n", "", 0)]
+    [InlineData("x=abcdef; declare -A m=(['a)b']=1); printf '<%s>' \"${x:m[a)b]:$(printf length >&2; printf 1)}\"", "<b>", "length", 0)]
+    [InlineData("x=abcdef; declare -A m=(['a)(b)c']=3); printf '<%s>' \"${x:m[a)(b)c]:1}\"", "<d>", "", 0)]
+    [InlineData("x=abcdef; declare -A m=(['a(b']=2); printf '<%s>' \"${x:m[a(b]}\"\nprintf 'after:%s' \"$?\"", "after:1", "bad substitution: no closing `)' in m[a(b]\n", 0)]
+    [InlineData("x=abcdef; declare -A m=(['a(b']=2); printf '<%s>' \"${x:$(printf 0; : >offset)+m[a(b]:$(printf 1; : >length)}\"\nprintf 'after:%s' \"$?\"; if [[ -e offset || -e length ]]; then printf side; fi",
+        "after:1", "bad substitution: no closing `)' in $(printf 0; : > offset)+m[a(b]:$(printf 1; : > length)\n", 0)]
+    [InlineData("x=abc; set -e\nif printf '%s' \"${x:(1:2}\"; then printf inside; fi\nprintf after", "",
+        "bad substitution: no closing `)' in (1:2\n", 1)]
+    [InlineData("x=abc; printf '%s' \"${x:(1+\r2:2}\"\nprintf 'after:%s' \"$?\"", "after:1",
+        "bad substitution: no closing `)' in (1+\r2:2\n", 0)]
     public async Task SubstringsPreserveFieldsAndOperandEffects(string script, string expected, string error, int status)
     {
         var result = await EvaluationTestHelper.RunAsync(script);

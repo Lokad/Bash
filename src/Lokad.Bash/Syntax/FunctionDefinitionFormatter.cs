@@ -628,7 +628,8 @@ internal static class FunctionDefinitionFormatter
                 new Step.Line(indent, Terminate: true), new Step.Text("done"));
     }
 
-    private static bool TryAppendSourceWithCaptures(ShellSource source, ShellScanContext captures,
+    /// <summary>Appends source with cached command substitutions rendered at their original positions.</summary>
+    internal static bool TryAppendSourceWithCaptures(ShellSource source, ShellScanContext captures,
         IByteMemoryWriter output, IMemoryBudget? budget, CancellationToken cancellationToken)
     {
         var bytes = source.AsSpan();
