@@ -68,6 +68,7 @@ internal sealed class ExpandedWordBuilder
     private DoubleQuoteState _doubleQuote;
     private bool _hereDocumentHasAt;
     private bool _hasQuotedAggregate;
+    private bool _positionalStarSplitsOnSpaces;
 
     private enum DoubleQuoteState : byte { Outside, Open, EmptyExpansion, EmptyAggregate }
 
@@ -114,6 +115,7 @@ internal sealed class ExpandedWordBuilder
 
     public ExpansionPurpose Purpose { get; }
     internal bool AssigningHereDocumentOperand { get; init; }
+    internal bool TrackSpacesForPositionalStar { get; init; }
 
     /// <summary>Whether substitutions contributed data, even if their output was empty.</summary>
 
@@ -138,7 +140,17 @@ internal sealed class ExpandedWordBuilder
     {
         _current.NeedsSplitting |= allowWordSplitting;
         if (!value.IsEmpty)
-            GetPart(ExpansionOrigin(allowWordSplitting, globQuoted), globQuoted).AppendValue(value);
+        {
+            var origin = ExpansionOrigin(allowWordSplitting, globQuoted);
+            if (TrackSpacesForPositionalStar && allowWordSplitting && value.Bytes.Span.Contains((byte)' '))
+            {
+                if (FieldSeparators.FromVariables(_variables).IsEmpty)
+                    origin = PartOrigin.ExpansionWithProtectedSpaces;
+                else
+                    _current.HasUnquotedSpaces = true;
+            }
+            GetPart(origin, globQuoted).AppendValue(value);
+        }
         else if (!allowWordSplitting && (globQuoted || _implicitEmptyPolicy == ImplicitEmptyPolicy.Preserve))
             AppendEmptyExpansion(globQuoted);
     }
@@ -178,7 +190,8 @@ internal sealed class ExpandedWordBuilder
             return;
         }
 
-        AppendFields(fields, allowWordSplitting, globQuoted, quoteContext, FieldSeparators.FromVariables(_variables));
+        AppendFields(fields, allowWordSplitting, globQuoted, quoteContext, FieldSeparators.FromVariables(_variables),
+            positionalStarWithEmptyIfs: false);
     }
 
     private void AppendFields(
@@ -186,7 +199,8 @@ internal sealed class ExpandedWordBuilder
         bool allowWordSplitting,
         bool globQuoted,
         ExpansionQuoteContext quoteContext,
-        FieldSeparators fieldSeparators)
+        FieldSeparators fieldSeparators,
+        bool positionalStarWithEmptyIfs)
     {
         _hasQuotedAggregate |= Purpose == ExpansionPurpose.CasePattern
             && quoteContext == ExpansionQuoteContext.DoubleQuoted;
@@ -211,12 +225,20 @@ internal sealed class ExpandedWordBuilder
         // Non-space IFS can protect aggregate bytes from field selection while retaining glob activity.
         var protectCaseFields = Purpose == ExpansionPurpose.CasePattern && HasNonSpaceSeparator(fieldSeparators);
         var caseSeparator = Purpose == ExpansionPurpose.CasePattern ? CasePatternSeparator(fieldSeparators) : default;
+        var quotedJoinSeparator = _positionalStarSplitsOnSpaces
+            && quoteContext == ExpansionQuoteContext.DoubleQuoted && HasNonSpaceSeparator(fieldSeparators)
+                ? fieldSeparators.First : default;
         var first = true;
         foreach (var value in fields)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (!first)
-                StartNewWord(caseSeparator);
+            {
+                if (quotedJoinSeparator.IsEmpty)
+                    StartNewWord(caseSeparator);
+                else
+                    AppendValue(quotedJoinSeparator, globQuoted: false);
+            }
             first = false;
 
             if (protectFields)
@@ -226,8 +248,11 @@ internal sealed class ExpandedWordBuilder
                 else
                     AppendValue(value, globQuoted: true);
             }
-            else if (protectCaseFields)
-                AppendValue(value, globQuoted);
+            else if (protectCaseFields || positionalStarWithEmptyIfs)
+            {
+                if (!positionalStarWithEmptyIfs || !value.IsEmpty)
+                    AppendValue(value, globQuoted);
+            }
             else
             {
                 AppendExpansion(value, allowWordSplitting, globQuoted);
@@ -326,12 +351,30 @@ internal sealed class ExpandedWordBuilder
     public void AppendJoinedFields(
         IEnumerable<ShellValue> fields,
         bool allowWordSplitting,
-        bool globQuoted)
+        bool globQuoted) =>
+        AppendJoinedFields(fields, allowWordSplitting, globQuoted, positionalStar: false);
+
+    internal void AppendPositionalStar(
+        IEnumerable<ShellValue> fields,
+        bool allowWordSplitting,
+        bool globQuoted) =>
+        AppendJoinedFields(fields, allowWordSplitting, globQuoted, positionalStar: true);
+
+    private void AppendJoinedFields(
+        IEnumerable<ShellValue> fields,
+        bool allowWordSplitting,
+        bool globQuoted,
+        bool positionalStar)
     {
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (fieldSeparators.IsEmpty && allowWordSplitting)
         {
-            AppendFields(fields, allowWordSplitting, globQuoted, ExpansionQuoteContext.Unquoted, fieldSeparators);
+            var positionalStarWithEmptyIfs = positionalStar && Purpose == ExpansionPurpose.Normal;
+            // An unquoted positional star expanded with empty IFS selects spaces
+            // for this word, even if a later expansion assigns another separator.
+            _positionalStarSplitsOnSpaces |= positionalStarWithEmptyIfs;
+            AppendFields(fields, allowWordSplitting, globQuoted, ExpansionQuoteContext.Unquoted, fieldSeparators,
+                positionalStarWithEmptyIfs);
             return;
         }
 
@@ -454,14 +497,14 @@ internal sealed class ExpandedWordBuilder
     private void AppendTo(List<ExpandedWord> results, FieldSeparators fieldSeparators, bool firstFieldOnly)
     {
         var splitHereDocument = _hereDocumentHasAt && !AssigningHereDocumentOperand;
-        var splitOnSpace = splitHereDocument && fieldSeparators.IsEmpty;
+        var splitOnSpace = _positionalStarSplitsOnSpaces || splitHereDocument && fieldSeparators.IsEmpty;
         foreach (var word in _words)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (word.Parts.Count == 0)
                 continue;
             var split = (splitHereDocument || firstFieldOnly) && word.Parts.Exists(static part => part.Origin == PartOrigin.Expansion)
-                || word.NeedsSplitting && !fieldSeparators.IsEmpty;
+                || (_positionalStarSplitsOnSpaces ? word.HasUnquotedSpaces : word.NeedsSplitting && !fieldSeparators.IsEmpty);
             if (!split)
             {
                 // Retain completed buffers and decide whether to emit the field in the same pass.
@@ -515,7 +558,8 @@ internal sealed class ExpandedWordBuilder
                 }
                 var value = part.Segment.ToValue();
                 var quoted = part.Segment.IsGlobQuoted;
-                if (part.Origin == PartOrigin.Protected)
+                if (part.Origin == PartOrigin.Protected
+                    || _positionalStarSplitsOnSpaces && part.Origin == PartOrigin.ExpansionWithProtectedSpaces)
                 {
                     if (value.IsEmpty)
                     {
@@ -528,7 +572,7 @@ internal sealed class ExpandedWordBuilder
                         AppendLiteral(value.Bytes, quoted);
                     }
                 }
-                else if (part.Origin == PartOrigin.Expansion)
+                else if (part.Origin is PartOrigin.Expansion or PartOrigin.ExpansionWithProtectedSpaces)
                 {
                     QueueExpansion(value.Bytes, quoted);
                 }
@@ -725,13 +769,16 @@ internal sealed class ExpandedWordBuilder
         /// <summary>Quoted values or literal expansion results; every byte is protected.</summary>
         Protected,
         /// <summary>Unquoted expansion bytes that can join across adjacent parts before splitting.</summary>
-        Expansion
+        Expansion,
+        /// <summary>Spaces in values expanded with empty IFS survive the positional star split.</summary>
+        ExpansionWithProtectedSpaces,
     }
 
     private sealed class InputWord
     {
         public List<InputPart> Parts { get; } = [];
         public bool NeedsSplitting { get; set; }
+        public bool HasUnquotedSpaces { get; set; }
         public bool HasEmptyAggregateField { get; set; }
         public ShellValue CasePatternSeparator { get; init; }
     }

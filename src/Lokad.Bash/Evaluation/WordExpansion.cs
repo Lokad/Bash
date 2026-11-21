@@ -152,7 +152,10 @@ internal static partial class WordExpansion
 
         var builder = new ExpandedWordBuilder(
             scope.Variables, scope.Effects.Memory, purpose, ImplicitEmptyPolicy.Preserve, scope.Effects.CancellationToken,
-            storage);
+            storage)
+        {
+            TrackSpacesForPositionalStar = purpose == ExpansionPurpose.Normal && word.MayExpandUnquotedPositionalStar,
+        };
         await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, tildeExpansion)
             .ConfigureAwait(false);
 
@@ -867,7 +870,7 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument)
                     output.AppendHereDocumentFields(arguments, HereDocumentJoin.PositionalStar);
                 else
-                    output.AppendJoinedFields(arguments, allowWordSplitting, globQuoted);
+                    output.AppendPositionalStar(arguments, allowWordSplitting, globQuoted);
                 index++;
                 continue;
             }

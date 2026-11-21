@@ -268,4 +268,24 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
     }
+
+    [Theory]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' $*${IFS:=,}; printf '|<%s>' \"$IFS\"", "<a b><c,d,>|<,>")]
+    [InlineData("IFS=; set --; printf '<%s>' ${*}${IFS:=,}", "<,>")]
+    [InlineData("IFS=; set -- a b ''; printf '<%s>' $*${IFS:=$'\\t\\n '}", "<a><b><\t\n>")]
+    [InlineData("IFS=; set -- 'a b' c,d; data='x, y z'; printf '<%s>' $*${IFS:=,}$data", "<a b><c,d,x,><y><z>")]
+    [InlineData("unset IFS; set -- 'a b' c,d; data='p q,'; printf '<%s>' $data${IFS:=}$*", "<p><q,a b><c,d>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' $*${IFS:=,}\"$@\"", "<a b><c,d,a b,c,d>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' $*${IFS:=,}$@", "<a b><c,d,a><b,c,d>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' $* ${IFS:=,}", "<a b><c,d><>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' \"$*${IFS:=,}\"", "<a bc,d,>")]
+    [InlineData("IFS=; set -- 'a b' c,d; printf '<%s>' ${IFS:=,}$*", "<><a b><c><d>")]
+    public async Task WordExpansion_PositionalStarWithEmptyIfsSplitsOnSpaces(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
 }

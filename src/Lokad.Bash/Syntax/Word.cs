@@ -21,11 +21,16 @@ public sealed class Word
             return;
         for (var index = 0; index < parts.Count; index++)
         {
-            if (parts[index] is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None })
+            if (parts[index] is not SourceWordPart source)
+                continue;
+            HasIncompleteQuotedParameterSubscript |= source.ParameterSubscriptFailure != ParameterSubscriptFailure.None;
+            if (!MayExpandUnquotedPositionalStar && source.Kind == WordPartKind.Unquoted)
             {
-                HasIncompleteQuotedParameterSubscript = true;
-                break;
+                var bytes = source.Source.AsSpan();
+                MayExpandUnquotedPositionalStar = bytes.IndexOf("$*"u8) >= 0 || bytes.IndexOf("${*}"u8) >= 0;
             }
+            if (HasIncompleteQuotedParameterSubscript && MayExpandUnquotedPositionalStar)
+                break;
         }
 
         static IReadOnlyList<ExpandedWord>? PrepareLiteral(IReadOnlyList<WordPart> parts)
@@ -59,6 +64,8 @@ public sealed class Word
     /// <summary>Frozen literal expansion scaffolding borrowing immutable syntax bytes.</summary>
     internal IReadOnlyList<ExpandedWord>? LiteralFields { get; }
     internal bool HasIncompleteQuotedParameterSubscript { get; }
+    /// <summary>Conservative lexical check for direct positional star in an ordinary word.</summary>
+    internal bool MayExpandUnquotedPositionalStar { get; }
 
     /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
     internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)

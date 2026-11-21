@@ -809,7 +809,12 @@ internal static partial class WordExpansion
                     return;
                 }
             }
-            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
+            if (parsed.Kind == BracedParameterOperatorKind.None && parsed.Modifier == ParameterModifier.None
+                && parameter.Kind == VariableReferenceKind.Star
+                && parameter.RangeSource is ParameterSource.Positional)
+                output.AppendPositionalStar(fields, allowWordSplitting, globQuoted);
+            else
+                AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext);
         }
 
         // Operand expansion may have changed which values the selected array holds.
