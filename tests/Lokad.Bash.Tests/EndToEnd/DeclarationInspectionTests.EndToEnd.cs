@@ -129,6 +129,72 @@ public sealed class DeclarationInspectionTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("last")]
+    [InlineData("first")]
+    public void SetReadonlySelectsTheUninitializedTerminalBinding(string name)
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetNameref("first", ShellValue.FromText("last")));
+        Assert.True(variables.TrySetNameref("last", ShellValue.Empty));
+
+        variables.SetReadonly(name);
+
+        Assert.Equal(new[] { (BindingName)"last" }, variables.ReadonlyNames);
+        Assert.True(variables.IsReadonly("first"));
+        Assert.True(variables.IsReadonly("last"));
+        Assert.False(variables.TrySetNameref("last", ShellValue.FromText("value")));
+        Assert.True(variables.TryGetNameref("last", out var terminal));
+        Assert.True(terminal.IsEmpty);
+    }
+
+    [Fact]
+    public void SetReadonlySelectsAnAssignedReferentAndIgnoresAnEmptyOperand()
+    {
+        var variables = Variables.CreateEmpty();
+        var value = ShellValue.FromText("value");
+        Assert.True(variables.TrySetScalar("last", value));
+        Assert.True(variables.TrySetNameref("first", ShellValue.FromText("last")));
+
+        variables.SetReadonly(BindingName.Empty);
+        Assert.Empty(variables.ReadonlyNames);
+        variables.SetReadonly("first");
+
+        Assert.Equal(new[] { (BindingName)"last" }, variables.ReadonlyNames);
+        Assert.True(variables.TryGetScalar("first", out var stored));
+        Assert.Equal(value, stored);
+        Assert.False(variables.TrySetScalar("first", ShellValue.Empty));
+    }
+
+    [Fact]
+    public void ScalarSeedDoesNotPublishAValueThroughAnUninitializedReference()
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetNameref("first", ShellValue.Empty));
+        Assert.True(variables.TrySetNameref("other", ShellValue.Empty));
+
+        variables.SetScalarIgnoringReadonly("first", ShellValue.FromText("seed"));
+
+        Assert.False(variables.TryGetScalar("first", out _));
+        Assert.False(variables.TryGetScalar("other", out _));
+        Assert.Empty(variables.Scalars);
+        Assert.True(variables.TryGetNameref("first", out var target));
+        Assert.True(target.IsEmpty);
+    }
+
+    [Fact]
+    public void ScalarReadIgnoresEmptyNameDataForAnUninitializedReference()
+    {
+        var scalars = new Dictionary<BindingName, ShellValue>
+        {
+            [BindingName.Empty] = ShellValue.FromText("existing")
+        };
+        var variables = Variables.CreateInitial(scalars, []);
+        Assert.True(variables.TrySetNameref("first", ShellValue.Empty));
+
+        Assert.False(variables.TryGetScalar("first", out _));
+    }
+
+    [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]
     public void UnsetArray_OnlyRemovesAssignmentIdentityWithItsContainer(ArrayKind kind)

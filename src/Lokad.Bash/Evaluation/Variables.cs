@@ -859,7 +859,7 @@ public sealed partial class Variables
             return false;
         }
 
-        if (!TryResolveWholeName(name, out var resolved))
+        if (!TryResolveWholeName(name, out var resolved) || resolved.IsEmpty)
         {
             value = ShellValue.Empty;
             return false;
@@ -957,14 +957,14 @@ public sealed partial class Variables
     }
 
     /// <summary>
-    /// Sets a scalar value while bypassing readonly checks, still honoring nameref resolution.
+    /// Sets a resolved scalar value while bypassing readonly checks.
     /// </summary>
     internal void SetScalarIgnoringReadonly(BindingName name, ShellValue value)
     {
         if (name.IsEmpty)
             return;
 
-        if (!TryResolveWholeName(name, out var resolved))
+        if (!TryResolveWholeName(name, out var resolved) || resolved.IsEmpty)
             return;
 
         SetResolvedScalar(resolved, value);
@@ -1110,7 +1110,7 @@ public sealed partial class Variables
         if (name.IsEmpty)
             return false;
 
-        if (!TryResolveWholeName(name, out var resolved))
+        if (!TryResolveWholeName(name, out var resolved) || resolved.IsEmpty)
             return false;
 
         if (IndexedArrays.TryGetValue(resolved, out var indexed))
@@ -1797,20 +1797,17 @@ public sealed partial class Variables
     }
 
     /// <summary>
-    /// Marks a name as readonly.
+    /// Marks the selected whole binding as readonly, including an uninitialized nameref.
     /// </summary>
+    /// <remarks>A circular reference or an element reference selects the original name.</remarks>
     public void SetReadonly(BindingName name)
     {
         if (name.IsEmpty)
             return;
 
-        if (TryResolveWholeName(name, out var resolved))
-        {
-            SetAttribute(resolved, BindingAttributes.Readonly, true);
-            return;
-        }
-
-        SetAttribute(name, BindingAttributes.Readonly, true);
+        var target = TryResolveBinding(name, selectOwner: null, out var binding)
+            && binding.Reference.Kind == VariableReferenceKind.Name ? binding.Name : name;
+        SetReadonlyBinding(target);
     }
 
     /// <summary>
@@ -1832,6 +1829,7 @@ public sealed partial class Variables
     /// <summary>
     /// Resolves whole bindings, leaving element selection to the scoped evaluator.
     /// </summary>
+    /// <remarks>An uninitialized nameref resolves successfully with an empty scalar or array destination.</remarks>
     private bool TryResolveWholeName(BindingName name, out BindingName resolved)
     {
         resolved = name;
