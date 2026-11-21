@@ -573,7 +573,11 @@ return 2 when stderr is closed. Later fields are ordinary operands.
 `eval` joins its remaining fields with spaces and succeeds on empty input.
 `source` and `.` require a filename and use any following fields as positional
 parameters for that file. The filename must be valid UTF-8 for the host path
-boundary. Open failures report the filename and host reason through the reached
+boundary. A filename containing a slash goes directly to the host. A bare
+filename searches the current scalar `PATH` in order, then the working
+directory. Empty `PATH` components select the working directory at their
+position in the search. Search directories use the shell's supported tilde
+prefixes. Open failures report the filename and host reason through the reached
 stderr and return 1. A directory failure includes the builtin's spelling. An
 explicitly empty filename reports the missing-file diagnostic during operand
 validation. A source call without additional fields uses the caller's current

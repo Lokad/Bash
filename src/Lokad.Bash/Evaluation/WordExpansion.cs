@@ -419,7 +419,7 @@ internal static partial class WordExpansion
             && !TryFindLiteralTailEnd(end, out suffix))
             return false;
 
-        if (!TryResolveTildePrefix(sign, ordinal, scope, out var value))
+        if (!TryResolveTildePrefix(sign, ordinal, scope, pathMemory: null, out var value))
             return false;
 
         output.AppendValue(value, globQuoted: true);
@@ -522,29 +522,56 @@ internal static partial class WordExpansion
                     suffix = new WordPosition(partIndex, offset);
                     return true;
                 }
-                else if (sign == 0 && ordinal == null && current is (byte)'+' or (byte)'-')
-                {
-                    sign = current;
-                }
-                else if (current is >= (byte)'0' and <= (byte)'9')
-                {
-                    // Arbitrary zero padding needs no buffer.
-                    var next = 10L * ordinal.GetValueOrDefault() + current - (byte)'0';
-                    if (next > int.MaxValue)
-                        return false;
-                    ordinal = (int)next;
-                }
-                else
+                else if (!TryAppendTildeSelector(current, ref sign, ref ordinal))
                     return false;
             }
         }
         return startsWithTilde;
     }
 
+    /// <summary>Expands the leading tilde of an already split search-path component.</summary>
+    internal static (ReadOnlyMemory<byte> Prefix, ReadOnlyMemory<byte> Suffix) ExpandPathTilde(
+        ReadOnlyMemory<byte> path, ScopedEvaluation scope, MemoryCapacity pathMemory)
+    {
+        if (path.Span is not [(byte)'~', ..])
+            return (path, default);
+
+        byte sign = 0;
+        int? ordinal = null;
+        var end = 1;
+        for (; end < path.Length && path.Span[end] != (byte)'/'; end++)
+        {
+            scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+            if (!TryAppendTildeSelector(path.Span[end], ref sign, ref ordinal))
+                return (path, default);
+        }
+        return TryResolveTildePrefix(sign, ordinal, scope, pathMemory, out var expanded)
+            ? (expanded.Bytes, path[end..]) : (path, default);
+    }
+
+    private static bool TryAppendTildeSelector(byte current, ref byte sign, ref int? ordinal)
+    {
+        if (sign == 0 && ordinal == null && current is (byte)'+' or (byte)'-')
+        {
+            sign = current;
+            return true;
+        }
+        if (current is < (byte)'0' or > (byte)'9')
+            return false;
+
+        // Arbitrary zero padding needs no buffer.
+        var next = 10L * ordinal.GetValueOrDefault() + current - (byte)'0';
+        if (next > int.MaxValue)
+            return false;
+        ordinal = (int)next;
+        return true;
+    }
+
     private static bool TryResolveTildePrefix(
         byte sign,
         int? ordinal,
         ScopedEvaluation scope,
+        MemoryCapacity? pathMemory,
         out ShellValue expanded)
     {
         if (ordinal is { } index)
@@ -566,7 +593,11 @@ internal static partial class WordExpansion
                 return true;
             }
             var path = resolved.Path;
-            scope.Effects.Memory.Charge(checked(24L + 3L * path.Length));
+            var bytes = checked(24L + 3L * path.Length);
+            if (pathMemory == null)
+                scope.Effects.Memory.Charge(bytes);
+            else
+                scope.Effects.Memory.Charge(pathMemory, bytes);
             scope.Effects.CancellationToken.ThrowIfCancellationRequested();
             expanded = ShellValue.FromText(path);
             return true;
@@ -577,7 +608,10 @@ internal static partial class WordExpansion
             if (scope.Variables.TryGetExpansionValue("PWD", out expanded))
                 return true;
 
-            expanded = ShellValue.FromText(scope.Effects.CurrentDirectory.Path);
+            var directory = scope.Effects.CurrentDirectory.Path;
+            if (pathMemory != null)
+                scope.Effects.Memory.Charge(pathMemory, checked(24L + 3L * directory.Length));
+            expanded = ShellValue.FromText(directory);
             return true;
         }
 

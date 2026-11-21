@@ -10,6 +10,67 @@ namespace Lokad.Bash.Tests;
 public sealed class SourceReadCompletionTests
 {
     [Fact]
+    public async Task SourceSearchSkipsUnavailableCandidatesAndClosesTheSelectedFile()
+    {
+        var state = new Eval(Parser.Parse("PATH=first::second; source item argument"));
+        var first = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        Assert.Equal("/first/item", first.Path.Path);
+        first.SetResult(FileOpenResult.Failed(new OperationError("Permission denied\n")
+            { Kind = OperationErrorKind.PermissionDenied }));
+        var current = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        Assert.Equal("/item", current.Path.Path);
+        current.SetResult(FileOpenResult.Failed(new OperationError("No such file or directory\n")
+            { Kind = OperationErrorKind.NotFound }));
+        var second = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        Assert.Equal("/second/item", second.Path.Path);
+        var descriptor = new FileDescriptor(10);
+        second.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+
+        var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, read.FileDescriptor);
+        read.SetResult(ReadResult.Success("selected=$1"u8.ToArray(), [], reachedEoF: true));
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+        Assert.Equal(descriptor, close.Descriptor);
+        Assert.False(state.Variables.ContainsKey("selected"));
+        close.SetResult(null);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(ShellValue.FromText("argument"), state.Variables["selected"]);
+        Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Fact]
+    public async Task SourceSearchReusesCandidateStorageAndTheCurrentDirectoryMiss()
+    {
+        var directories = Enumerable.Range(0, 32).Select(index => $"dir{index:00}").ToArray();
+        var state = new Eval(Parser.Parse("PATH=:" + string.Join(':', directories) + ": source item"));
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        var missing = FileOpenResult.Failed(new OperationError("No such file or directory\n")
+            { Kind = OperationErrorKind.NotFound });
+
+        var current = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+        Assert.Equal("/item", current.Path.Path);
+        current.SetResult(missing);
+        long? admitted = null;
+        foreach (var directory in directories)
+        {
+            var candidate = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+            Assert.Equal($"/{directory}/item", candidate.Path.Path);
+            admitted ??= governor.ReservedBytes;
+            Assert.Equal(admitted.Value, governor.ReservedBytes);
+            candidate.SetResult(missing);
+        }
+
+        var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal("item: No such file or directory\n"u8.ToArray(), diagnostic.Content.ToArray());
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(1, state.LastExitCode);
+    }
+
+    [Fact]
     public async Task SourceOpenFailureReportsTheHostCauseBeforeContinuing()
     {
         var state = new Eval(Parser.Parse("source ./target temporary; after=$?"));

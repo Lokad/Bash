@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Unicode;
 using System.Threading.Tasks;
+using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
@@ -177,6 +179,71 @@ public sealed partial class Evaluation
         return error.Kind == OperationErrorKind.IsDirectory
             ? WriteOperationDiagnosticAsync(standardError, commandName + ": ", path, new OperationError("is a directory\n"))
             : WriteOperationDiagnosticAsync(standardError, string.Empty, path, error);
+    }
+
+    private async Task<(FileOpenResult Result, string Path)> SearchSourcePathAsync(
+        RawShellPath fileName, ReadOnlyMemory<byte> searchPath, ScopedEvaluation scope, MemoryCapacity lookupMemory)
+    {
+        FileOpenResult? currentDirectoryAttempt = null;
+        while (true)
+        {
+            CheckCancellation();
+            var separator = searchPath.Span.IndexOf((byte)':');
+            var component = separator < 0 ? searchPath : searchPath[..separator];
+            if (BuildCandidate(component) is { } candidate)
+            {
+                var workingDirectory = ReferenceEquals(candidate, fileName);
+                var open = workingDirectory && currentDirectoryAttempt is { } previous
+                    ? previous : await OpenCandidateAsync(candidate).ConfigureAwait(false);
+                if (workingDirectory)
+                    currentDirectoryAttempt = open;
+                if (open.Error is not { Kind: OperationErrorKind.NotFound or OperationErrorKind.NotDirectory
+                    or OperationErrorKind.IsDirectory or OperationErrorKind.PermissionDenied })
+                    return (open, candidate.Raw);
+            }
+
+            lookupMemory.Resize(0);
+            if (separator < 0)
+                break;
+            searchPath = searchPath[(separator + 1)..];
+        }
+
+        return (currentDirectoryAttempt ?? await OpenCandidateAsync(fileName).ConfigureAwait(false),
+            fileName.Raw);
+
+        Task<FileOpenResult> OpenCandidateAsync(RawShellPath candidate)
+        {
+            if (!candidate.Raw.StartsWith('/'))
+                Memory.Charge(lookupMemory, 32L + 2L * (CurrentDirectory.Path.Length + 1L + candidate.Raw.Length));
+            return ExecuteOpenFileAsync(candidate, FileOpenMode.Read);
+        }
+
+        RawShellPath? BuildCandidate(ReadOnlyMemory<byte> component)
+        {
+            var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope, lookupMemory);
+            if (suffix.IsEmpty && (prefix.IsEmpty || prefix.Span.SequenceEqual("."u8)))
+                return fileName;
+            if (!Utf8.IsValid(prefix.Span) || !Utf8.IsValid(suffix.Span))
+                return null;
+
+            var last = suffix.IsEmpty ? prefix.Span[^1] : suffix.Span[^1];
+            var addSlash = last != (byte)'/';
+            var encoding = Utf8Text.StrictUtf8;
+            var length = (long)encoding.GetCharCount(prefix.Span) + encoding.GetCharCount(suffix.Span)
+                + (addSlash ? 1 : 0) + fileName.Raw.Length;
+            if (length > PathResolution.MaximumPathCharacters)
+                return null;
+            Memory.Charge(lookupMemory, checked(96L + 2L * length));
+            var joined = string.Create((int)length, (prefix, suffix, addSlash, fileName.Raw), static (target, parts) =>
+            {
+                var position = Utf8Text.StrictUtf8.GetChars(parts.prefix.Span, target);
+                position += Utf8Text.StrictUtf8.GetChars(parts.suffix.Span, target[position..]);
+                if (parts.addSlash)
+                    target[position++] = '/';
+                parts.Raw.AsSpan().CopyTo(target[position..]);
+            });
+            return TryReadFileOperand(joined, CurrentDirectory, out var raw) ? raw : null;
+        }
     }
 
     private enum ScriptExecutionKind { Root, LegacyCapture, Source, Eval, Trap }

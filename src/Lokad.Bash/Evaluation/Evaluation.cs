@@ -3787,12 +3787,17 @@ public sealed partial class Evaluation : IFileTester
     /// </summary>
     private async Task<EvaluationResult> ExecuteSourceAsync(string commandName, string path, ScopedEvaluation scope)
     {
-        var open = await ExecuteOpenFileAsync(path, FileOpenMode.Read).ConfigureAwait(false);
+        var searchPath = !path.Contains('/') && scope.Variables.TryGetScalar("PATH", out var value)
+            ? value.Bytes : ReadOnlyMemory<byte>.Empty;
+        using var lookupMemory = searchPath.IsEmpty ? null : new MemoryCapacity(Memory.Budget, 0);
+        var (open, openedPath) = lookupMemory != null && RawShellPath.TryParse(path, out var fileName)
+            ? await SearchSourcePathAsync(fileName, searchPath, scope, lookupMemory).ConfigureAwait(false)
+            : (await ExecuteOpenFileAsync(path, FileOpenMode.Read).ConfigureAwait(false), path);
         var descriptor = open.FileDescriptor;
         if (!descriptor.HasValue)
         {
             if (open.Error is { Message.Length: > 0 } error)
-                await ReportSourceOpenFailureAsync(commandName, path, error).ConfigureAwait(false);
+                await ReportSourceOpenFailureAsync(commandName, openedPath, error).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(1);
         }
 
@@ -3823,7 +3828,7 @@ public sealed partial class Evaluation : IFileTester
 
             if (closeError is { } closeFailure)
             {
-                await WriteOperationDiagnosticAsync(GetStdErrDescriptor(), "shell: ", path, closeFailure).ConfigureAwait(false);
+                await WriteOperationDiagnosticAsync(GetStdErrDescriptor(), "shell: ", openedPath, closeFailure).ConfigureAwait(false);
                 return EvaluationResult.FromExitCode(1);
             }
             if (input is BoundedReadResult.Failed)
@@ -3834,6 +3839,8 @@ public sealed partial class Evaluation : IFileTester
                 return EvaluationResult.FromExitCode(2);
             }
 
+            openedPath = path;
+            lookupMemory?.Dispose();
             // The active command owns the frame until the sourced invocation and its children settle.
             Memory.Charge(48);
             var sourceScope = scope with
@@ -3942,10 +3949,15 @@ public sealed partial class Evaluation : IFileTester
     {
         if (!RawShellPath.TryParse(path, out var raw))
             return Task.FromResult(FileOpenResult.Failed(new OperationError("Invalid file path\n")));
+        return ExecuteOpenFileAsync(raw, mode);
+    }
+
+    private Task<FileOpenResult> ExecuteOpenFileAsync(RawShellPath path, FileOpenMode mode)
+    {
         CheckCancellation();
         // A successful open transfers ownership even if cancellation races its completion.
         return OpenFileOperation.AsTask(PublishOperation,
-            new FilePathLookup(raw, _state.CurrentDirectory, FileLinkFollowing.Follow), mode);
+            new FilePathLookup(path, _state.CurrentDirectory, FileLinkFollowing.Follow), mode);
     }
 
     /// <summary>Transfers an owned descriptor to the host and awaits cleanup without cancellation.</summary>

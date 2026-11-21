@@ -80,7 +80,7 @@ public static class PathResolution
 
     public const string PathLimitMessage = "path exceeds the 4096-character or 64-component limit";
 
-    private const int MaximumPathCharacters = 4096;
+    internal const int MaximumPathCharacters = 4096;
     private const int MaximumPathDepth = 64;
     private static readonly OperationError UnsafeMutationPath =
         new("Cannot safely modify this path; use a path without '..'\n");
