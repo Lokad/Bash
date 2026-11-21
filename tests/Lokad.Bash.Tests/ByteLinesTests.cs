@@ -19,15 +19,16 @@ public sealed class ByteLinesTests
     }
 
     [Theory]
-    [InlineData((byte)'\n', 1, false)]
-    [InlineData((byte)'\n', 128, false)]
-    [InlineData((byte)'\n', 129, false)]
-    [InlineData((byte)0, 257, false)]
-    [InlineData((byte)'\n', 206, true)]
-    [InlineData((byte)0, 257, true)]
-    public void FindCompleteRecordsKeepsVariableWidthOffsetsAcrossBatches(byte delimiter, int limit, bool reachedEof)
+    [InlineData((byte)'\n', 1, false, 0)]
+    [InlineData((byte)'\n', 128, false, 0)]
+    [InlineData((byte)'\n', 129, false, 0)]
+    [InlineData((byte)0, 257, false, 0)]
+    [InlineData((byte)'\n', 206, true, 0)]
+    [InlineData((byte)0, 257, true, 0)]
+    [InlineData((byte)0, 257, true, 17)]
+    public void FindCompleteRecordsKeepsVariableWidthOffsetsAcrossBatches(byte delimiter, int limit, bool reachedEof, int examined)
     {
-        var source = new List<byte>();
+        var source = Enumerable.Repeat((byte)0xff, examined).ToList();
         var ends = new List<int>();
         for (var index = 0; index < 205; index++)
         {
@@ -42,7 +43,7 @@ public sealed class ByteLinesTests
         var expectedAdmission = count == 1 ? 0 : 32 + sizeof(int) * (count - 1);
         var governor = new MemoryGovernor(expectedAdmission);
 
-        var consumed = ByteLines.FindCompleteRecords(source.ToArray(), delimiter, limit, reachedEof, governor,
+        var consumed = ByteLines.FindCompleteRecords(source.ToArray(), delimiter, limit, examined, reachedEof, governor,
             out var starts, out var admission);
 
         Assert.Equal(ends[count - 1], consumed);

@@ -149,7 +149,7 @@ public sealed class AsyncLineReader : IDisposable
             token.ThrowIfCancellationRequested();
             if (content.IsEmpty)
                 return ValueTask.FromResult(ReadResult.EndOfFile);
-            var length = ByteLines.FindCompleteRecords(content.Span, (byte)'\n', limit, reachedEof: true,
+            var length = ByteLines.FindCompleteRecords(content.Span, (byte)'\n', limit, examined: 0, reachedEof: true,
                 budget, out var offsets, out _);
             var batch = content[..length];
             content = content[length..];

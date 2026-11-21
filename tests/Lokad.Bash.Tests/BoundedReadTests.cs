@@ -1,11 +1,90 @@
 using System.Runtime.InteropServices;
 using Lokad.Bash.Files;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class BoundedReadTests
 {
+    [Theory]
+    [InlineData(1, 2, 1)]
+    [InlineData(2, 2, 2)]
+    [InlineData(3, 2, 3)]
+    [InlineData(3, DescriptorReader.BufferSize, 1)]
+    public async Task ExtendedLineWindowKeepsOffsetsAndTheUnreadSuffix(int limit, int tailLength, int expectedRecords)
+    {
+        var governor = new MemoryGovernor(8 * DescriptorReader.BufferSize);
+        await using var host = new MockFileSystem { MemoryBudget = governor };
+        var first = new byte[DescriptorReader.BufferSize + 1];
+        Array.Fill(first, (byte)'a');
+        first[^2] = 13;
+        first[^1] = 10;
+        byte[] second = [0xff, 10];
+        var tail = new byte[tailLength];
+        Array.Fill(tail, (byte)'z');
+        byte[] input = [.. first, .. second, .. tail];
+        host.SetStandardInputBytes(input);
+        using var owner = governor.CreateScope();
+
+        var batch = await host.ReadLinesAsync(FileDescriptor.StdIn, limit, owner, CancellationToken.None);
+
+        var expectedLength = expectedRecords switch
+        {
+            1 => first.Length,
+            2 => first.Length + second.Length,
+            _ => input.Length
+        };
+        Assert.Equal(input[..expectedLength], batch.Content.ToArray());
+        Assert.Equal(new[] { first.Length, first.Length + second.Length }.Take(expectedRecords - 1), batch.LineStartOffsets);
+        Assert.Equal(expectedRecords == 3, batch.ReachedEoF);
+        var offsetBytes = expectedRecords == 1 ? 0 : 32 + sizeof(int) * (expectedRecords - 1);
+        Assert.Equal(expectedLength + offsetBytes, governor.ReservedBytes);
+        Assert.Equal(2, host.ReadCallCount);
+        if (!batch.ReachedEoF)
+        {
+            var remainder = await host.TryReadAllBytesAsync(FileDescriptor.StdIn, input.Length,
+                static _ => { }, owner, CancellationToken.None);
+            Assert.Equal(input[expectedLength..], Assert.IsType<BoundedReadResult.Complete>(remainder).Content.ToArray());
+        }
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ExtendedLineReadRestartsWhenAnotherAliasConsumesTheExaminedPrefix()
+    {
+        var governor = new MemoryGovernor(1024);
+        using var budget = governor.CreateScope();
+        var position = 0;
+        var owner = new DescriptorReadBufferOwner(consumed => position += consumed, budget);
+        byte[] input = [.. "prefix"u8, (byte)'x', 10, 0xff, 13];
+        var reads = 0;
+
+        var batch = await DescriptorReader.ReadLinesAsync(input, Read, 2, budget, CancellationToken.None);
+
+        Assert.Equal(new byte[] { (byte)'x', 10, 0xff, 13 }, batch.Content.ToArray());
+        Assert.Equal(new[] { 2 }, batch.LineStartOffsets);
+        Assert.True(batch.ReachedEoF);
+        Assert.Equal(input.Length, position);
+        Assert.Equal(2, reads);
+        budget.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(byte[] data, DescriptorReadRequest request, CancellationToken token)
+        {
+            var prefix = data.AsMemory(0, "prefix"u8.Length);
+            token.ThrowIfCancellationRequested();
+            if (reads++ == 0)
+                return ValueTask.FromResult(owner.Borrow(prefix, ByteReadResult.Success(prefix.Length, false), canRetain: true));
+            using (var alias = owner.Borrow(prefix, ByteReadResult.Success(prefix.Length, false), canRetain: true))
+                alias.Consume(prefix.Length);
+            Assert.Equal(1, request.MinimumBytes);
+            var remaining = data.AsMemory(position);
+            return ValueTask.FromResult(owner.Borrow(remaining, ByteReadResult.Success(remaining.Length, true), canRetain: true));
+        }
+    }
+
     [Theory]
     [InlineData(2, int.MaxValue, true)]
     [InlineData(1, int.MaxValue, false)]

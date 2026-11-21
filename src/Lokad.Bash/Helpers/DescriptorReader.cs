@@ -105,9 +105,11 @@ public static class DescriptorReader
             // Lookahead preserves the prefix. Scan it once unless another alias advanced the cursor.
             if (position != buffer.Position)
                 examined = 0;
-            var found = ByteLines.FindCompleteRecords(bytes.Span[examined..], delimiter, examined == 0 ? limit : 1,
-                result.ReachedEoF, destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
-            var length = found == 0 ? 0 : examined + found;
+            // A resumed batch may include following records from one transfer window of new bytes.
+            var batchLimit = examined > 0 && (bytes.Length - examined > BufferSize || bytes.Length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                ? 1 : limit;
+            var length = ByteLines.FindCompleteRecords(bytes.Span, delimiter, batchLimit, examined, result.ReachedEoF,
+                destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
             if (examined > 0 && (length == 0 ? bytes.Length : length) > ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
             if (length != 0 || result.ReachedEoF)

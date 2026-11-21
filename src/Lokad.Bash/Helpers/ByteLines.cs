@@ -18,12 +18,15 @@ public static class ByteLines
         IMemoryBudget memoryBudget,
         out int[] lineStartOffsets,
         out IMemoryReservation? reservation) =>
-        FindCompleteRecords(content, (byte)'\n', limit, reachedEof: false, memoryBudget, out lineStartOffsets, out reservation);
+        FindCompleteRecords(content, (byte)'\n', limit, examined: 0, reachedEof: false,
+            memoryBudget, out lineStartOffsets, out reservation);
 
+    /// <summary>Skips an examined delimiter-free prefix and returns offsets relative to the full input.</summary>
     internal static int FindCompleteRecords(
         ReadOnlySpan<byte> content,
         byte delimiter,
         int limit,
+        int examined,
         bool reachedEof,
         IMemoryBudget memoryBudget,
         out int[] recordStartOffsets,
@@ -35,7 +38,7 @@ public static class ByteLines
         // Ordinary 128-record batches fit here. Large requests still allocate one exact array.
         Span<int> cachedStarts = stackalloc int[Math.Min(limit - 1, 127)];
         var recordCount = 0;
-        var consumed = 0;
+        var consumed = examined;
         while (recordCount < limit)
         {
             var delimiterOffset = content[consumed..].IndexOf(delimiter);
@@ -56,7 +59,7 @@ public static class ByteLines
         if (recordCount <= 1)
         {
             recordStartOffsets = Array.Empty<int>();
-            return consumed;
+            return recordCount == 0 ? 0 : consumed;
         }
 
         // The returned offsets can outlive this read just like its retained byte snapshot.

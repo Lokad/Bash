@@ -171,6 +171,7 @@ public sealed class EvaluationMapfileByteTests
         Assert.Equal(0, state.LastExitCode);
         Assert.Equal(new[] { ShellValue.FromText(prefix), ShellValue.Empty, ShellValue.FromText("tail") },
             state.IndexedArrays["arr"]);
+        Assert.Equal(2, host.ReadCallCount);
     }
 
     [Theory]
