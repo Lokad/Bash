@@ -22,6 +22,9 @@ The runtime supports deterministic, non-interactive shell workflows:
 A reached `--help` prints help and returns 2. With closed stdout it returns 2 silently.
 Invalid options report the first invalid flag and usage on stderr. A shell-closed
 stderr suppresses the message and preserves status 2.
+When conditions follow, an all-digit first operand from 0 through 64 selects
+the historical reset form. Larger decimal operands remain literal actions.
+The supported conditions are `EXIT`, `HUP`, `INT` and `TERM`.
 
 `mapfile` and `readarray` split standard input on LF by default. `-u fd`
 selects an existing logical descriptor after redirections are applied. Each

@@ -72,9 +72,14 @@ public sealed partial class Evaluation
             return EvaluationResult.FromExitCode(status);
         }
 
+        // The pinned Bash builds use this numeric range for the legacy reset syntax,
+        // including numbers outside the emulator's supported condition set.
+        const int MaximumLegacySignalNumber = 64;
         var action = words[index++];
-        var numericReset = !action.Bytes.IsEmpty && action.Bytes.Span.IndexOfAnyExceptInRange((byte)'0', (byte)'9') < 0;
-        var reset = numericReset || action.Bytes.Span.SequenceEqual("-"u8);
+        var actionBytes = action.Bytes.Span;
+        var numericReset = actionBytes.IndexOfAnyExceptInRange((byte)'0', (byte)'9') < 0
+            && Integers.TryParseNumber(actionBytes, out var number) && number <= MaximumLegacySignalNumber;
+        var reset = numericReset || actionBytes.SequenceEqual("-"u8);
         if (index == words.Count)
         {
             if (!ShellTraps.TryParse(action, out _))

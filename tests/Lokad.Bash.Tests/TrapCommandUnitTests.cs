@@ -111,6 +111,43 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData("65")]
+    [InlineData("00065")]
+    [InlineData("9223372036854775808")]
+    public async Task OutOfRangeDecimalTrapActionsPreserveTheirSpelling(string action)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"trap ':' EXIT; trap -- '{action}' EXIT TERM; printf '<%s>' \"$?\"; trap -p EXIT TERM; trap - EXIT TERM");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0>trap -- '{action}' EXIT\ntrap -- '{action}' SIGTERM\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("000", 0, "")]
+    [InlineData("64", 1, "trap: 64: invalid signal specification\n")]
+    public async Task LegacyDecimalResetStillProcessesLaterConditions(string selector, int status, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"trap 'printf old' EXIT; trap {selector} EXIT; printf '<%s>' \"$?\"; trap -p EXIT");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}>", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+    }
+
+    [Fact]
+    public async Task OutOfRangeDecimalActionRunsTheNamedFunctionOnExit()
+    {
+        var result = await EvaluationTestHelper.RunAsync("function 65 { printf reached; }; trap 65 EXIT; exit 7");
+
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal("reached", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task TrapListingReleasesTheFirstRecordBeforeWritingTheSecond(bool manyQuotes)
