@@ -83,7 +83,7 @@ internal sealed class ExpandedWordBuilder
     private bool _hasQuotedAggregate;
     private bool _hasNormalQuotedAggregate;
     private bool _hasUnquotedAggregate;
-    private bool _positionalStarSplitsOnSpaces;
+    private bool _splitOnSpaces;
 
     private enum DoubleQuoteState : byte { Outside, Open, EmptyExpansion, EmptyAggregate }
 
@@ -213,7 +213,7 @@ internal sealed class ExpandedWordBuilder
     /// <summary>Records the source run's IFS membership before later expansions can change it.</summary>
     internal void AppendUnquotedSource(ShellSource source, ref int sourceSeparators)
     {
-        if (_positionalStarSplitsOnSpaces)
+        if (_splitOnSpaces)
         {
             AppendSource(source, globQuoted: false);
             return;
@@ -430,24 +430,36 @@ internal sealed class ExpandedWordBuilder
         GetPart(PartOrigin.Expansion, globQuoted: true).AppendValue(value);
 
     /// <summary>Splices operand fields into the enclosing word without flattening their quote metadata.</summary>
-    public void AppendExpandedWords(
-        IReadOnlyList<ExpandedWord> words,
+    internal void AppendSelectedOperand(
+        ExpandedWordBuilder? operand,
         bool allowWordSplitting,
-        bool globQuoted)
+        bool globQuoted,
+        ExpansionQuoteContext quoteContext)
     {
+        var separators = FieldSeparators.FromVariables(_variables);
+        var words = operand == null ? [] : SelectFields(operand);
         if (words.Count == 0)
         {
             AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
             return;
         }
 
-        var caseSeparator = Purpose == ExpansionPurpose.CasePattern && words.Count > 1
-            ? AggregateSeparator(FieldSeparators.FromVariables(_variables)) : default;
+        var quotedAggregate = words.Count > 1 && operand?._hasNormalQuotedAggregate == true;
+        if (quotedAggregate)
+        {
+            // The selected operand has already chosen its fields. Its exposed join still belongs to the enclosing word.
+            _hasNormalQuotedAggregate = true;
+            _doubleQuoteHasAggregate |= globQuoted && _doubleQuote != DoubleQuoteState.Outside;
+            if (!globQuoted && separators.IsEmpty)
+                _splitOnSpaces = true;
+        }
+        var separator = quotedAggregate || Purpose == ExpansionPurpose.CasePattern && words.Count > 1
+            ? AggregateSeparator(separators) : default;
         for (var index = 0; index < words.Count; index++)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (index > 0)
-                StartNewWord(caseSeparator, WordBoundary.Fixed);
+                StartNewWord(separator, quotedAggregate ? WordBoundary.QuotedAggregate : WordBoundary.Fixed);
             var word = words[index];
             if (word.IsEmptyAggregateField)
             {
@@ -464,6 +476,13 @@ internal sealed class ExpandedWordBuilder
                 else
                     AppendExpansion(segment.Content, allowWordSplitting && !segment.IsGlobQuoted, quoted);
             }
+        }
+
+        IReadOnlyList<ExpandedWord> SelectFields(ExpandedWordBuilder selected)
+        {
+            IncludeOperand(selected);
+            return Purpose == ExpansionPurpose.CasePattern && quoteContext == ExpansionQuoteContext.Unquoted
+                ? selected.BuildUnquotedCasePatternOperand() : selected.Build(separators, firstFieldOnly: false);
         }
     }
 
@@ -498,7 +517,7 @@ internal sealed class ExpandedWordBuilder
                 positionalStarWithEmptyIfs);
             // An unquoted positional star expanded with empty IFS selects spaces
             // for this word, even if a later expansion assigns another separator.
-            _positionalStarSplitsOnSpaces |= positionalStarWithEmptyIfs
+            _splitOnSpaces |= positionalStarWithEmptyIfs
                 && (hasFields || positionalStar == PositionalStarSplit.EvenWhenEmpty);
             return;
         }
@@ -645,7 +664,7 @@ internal sealed class ExpandedWordBuilder
         int firstWord, int firstPart, bool quotedGroup, MemoryCapacity fieldStorage)
     {
         var splitHereDocument = !quotedGroup && _hereDocumentHasAt && !AssigningHereDocumentOperand;
-        var splitAggregateOnSpace = (!quotedGroup && _positionalStarSplitsOnSpaces)
+        var splitAggregateOnSpace = (!quotedGroup && _splitOnSpaces)
             || (_hasUnquotedAggregate || _hasNormalQuotedAggregate) && fieldSeparators.IsEmpty;
         var splitOnSpace = splitAggregateOnSpace || splitHereDocument && fieldSeparators.IsEmpty;
         // Preserve the original space joins when the word finishes with a different IFS.

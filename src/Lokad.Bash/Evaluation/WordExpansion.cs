@@ -1077,8 +1077,8 @@ internal static partial class WordExpansion
         return ExpandedWord.JoinWithSpaces(words, scope.Effects.Memory);
     }
 
-    /// <summary>Expands a selected operand once, retaining fields and quotes until its consumer joins or splits them.</summary>
-    private static async Task<IReadOnlyList<ExpandedWord>> ExpandOperatorWordAsync(
+    /// <summary>Expands a selected operand once, retaining field provenance for its consumer.</summary>
+    private static async Task<ExpandedWordBuilder?> ExpandOperatorWordAsync(
         ShellSource expression,
         ShellScanContext scanContext,
         ScopedEvaluation scope,
@@ -1086,10 +1086,10 @@ internal static partial class WordExpansion
         ExpansionPurpose purpose,
         ImplicitEmptyPolicy implicitEmptyPolicy,
         TildeExpansion tildeExpansion,
-        ExpandedWordBuilder? operandParent)
+        ExpandedWordBuilder? assigningHereDocumentParent)
     {
         if (expression.Length == 0)
-            return [];
+            return null;
 
         var word = quoteContext == ExpansionQuoteContext.HereDocument ? null
             : Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose),
@@ -1097,7 +1097,7 @@ internal static partial class WordExpansion
         var builder = new ExpandedWordBuilder(
             scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken)
         {
-            AssigningHereDocumentOperand = quoteContext == ExpansionQuoteContext.HereDocument && operandParent != null,
+            AssigningHereDocumentOperand = assigningHereDocumentParent != null,
         };
         if (word == null)
         {
@@ -1110,11 +1110,9 @@ internal static partial class WordExpansion
             await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, tildeExpansion).ConfigureAwait(false);
         }
         if (!scope.CanExpand)
-            return [];
-        operandParent?.IncludeOperand(builder);
-        if (purpose == ExpansionPurpose.CasePattern && quoteContext == ExpansionQuoteContext.Unquoted)
-            return builder.BuildUnquotedCasePatternOperand();
-        return builder.Build();
+            return null;
+        assigningHereDocumentParent?.IncludeOperand(builder);
+        return builder;
     }
 
     private static Task ExpandHereDocumentOperandAsync(ShellSource expression, ScopedEvaluation scope, ExpandedWordBuilder builder) =>

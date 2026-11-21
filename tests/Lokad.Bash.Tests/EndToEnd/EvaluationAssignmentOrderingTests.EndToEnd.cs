@@ -370,6 +370,25 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("IFS=; unset v; set -- 'a b' c,d ''; printf '<%s>' ${v:-\"$@\"}${IFS:=,}", "<a b><c,d><,>")]
+    [InlineData("unset IFS v; set -- 'a b' c,d ''; printf '<%s>' ${v:-\"$@\"}${IFS:=,}", "<a b c,d >")]
+    [InlineData("IFS=; unset v; set -- 'a b' c,d ''; printf '<%s>' \"${v:-$@}\"${IFS:=,}", "<a b c,d >")]
+    [InlineData("IFS=; ok=1; a=('a b' c,d ''); printf '<%s>' ${ok:+\"${a[@]}\"}${IFS:=,}", "<a b><c,d><,>")]
+    [InlineData("IFS=; unset v w; set -- '' '' ''; printf '<%s>' p${v:-${w:-\"$@\"}}${IFS:=,}q", "<p><><,q>")]
+    [InlineData("IFS=; unset v; set -- 'a b' c,d ''; r='t u,v'; printf '<%s>' ${v:-\"$@\"}${IFS:=,}$r", "<a b><c,d><,t><u,v>")]
+    [InlineData("IFS=; unset v; set -- 'a b' c,d ''; printf '<%s>' ${v:-\"$@\"${IFS:=,}}", "<a b c,d >")]
+    [InlineData("IFS=,; unset v; set -- 'a b' c,d ''; printf '<%s>' ${v:-\"$@\"}${IFS:=,}", "<a b><c,d><>")]
+    [InlineData("IFS=; unset v; set --; set -- ${v:-\"$@\"}; printf '%s' \"$#\"", "0")]
+    public async Task WordExpansion_RetainsQuotedAggregateJoinFromSelectedOperand(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("IFS=; v='a b'; w='c d'; printf '<%s>' $v${IFS:=' '}$w", "<a b><c><d>")]
     [InlineData("unset IFS; v='a b'; printf '<%s>' $v${IFS:=' '}", "<a><b>")]
     public async Task WordExpansion_ProtectsSpacesFromAnExpansionWithEmptyIfs(string script, string expected)

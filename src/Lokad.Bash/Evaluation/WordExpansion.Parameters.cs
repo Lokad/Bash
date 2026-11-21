@@ -196,7 +196,7 @@ internal static partial class WordExpansion
                             .ConfigureAwait(false);
                         return;
                     }
-                    var words = await ExpandOperatorWordAsync(
+                    var operand = await ExpandOperatorWordAsync(
                             parsed.Word, scanContext, scope, quoteContext,
                             output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? output.Purpose : ExpansionPurpose.Scalar,
                             ImplicitEmptyPolicy.Preserve, TildeExpansion.AssignDefault,
@@ -206,7 +206,7 @@ internal static partial class WordExpansion
                         return;
 
                     var budget = scope.Effects.Memory;
-                    var expanded = ExpandedWord.JoinValuesWithSpaces(words, budget);
+                    var expanded = ExpandedWord.JoinValuesWithSpaces(operand?.Build() ?? [], budget);
                     // Indirect defaults can assign bare names only, after the RHS has expanded.
                     if (parsed.Modifier == ParameterModifier.Indirect
                         && parameter.Source is not { Kind: VariableReferenceKind.Name })
@@ -303,14 +303,14 @@ internal static partial class WordExpansion
                     return;
                 }
 
-                var words = await ExpandOperatorWordAsync(
+                var operand = await ExpandOperatorWordAsync(
                         parsed.Word, scanContext, scope, ExpansionQuoteContext.Unquoted, ExpansionPurpose.Scalar,
-                        ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, operandParent: null)
+                        ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, assigningHereDocumentParent: null)
                     .ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
                 var budget = scope.Effects.Memory;
-                var pattern = ShellPattern.FromWords(words, budget, scope.Effects.CancellationToken);
+                var pattern = ShellPattern.FromWords(operand?.Build() ?? [], budget, scope.Effects.CancellationToken);
                 EmitTransformedFields(RemoveField);
                 return;
 
@@ -379,17 +379,17 @@ internal static partial class WordExpansion
                 ExpansionPurpose.ParameterReplacement => ExpansionPurpose.Scalar,
                 _ => output.Purpose,
             };
-            var expanded = await ExpandOperatorWordAsync(
+            var operand = await ExpandOperatorWordAsync(
                     parsed.Word, scanContext, scope, quoteContext, purpose,
                     purpose is ExpansionPurpose.Scalar or ExpansionPurpose.CasePattern
                         or ExpansionPurpose.Assignment or ExpansionPurpose.IndexedCompoundOperand
                         or ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource
                         ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove,
                     assignmentTildes ? TildeExpansion.Assignment : TildeExpansion.Leading,
-                    purpose == ExpansionPurpose.CasePattern ? output : null)
+                    assigningHereDocumentParent: null)
                 .ConfigureAwait(false);
             if (scope.CanExpand)
-                output.AppendExpandedWords(expanded, allowWordSplitting, globQuoted);
+                output.AppendSelectedOperand(operand, allowWordSplitting, globQuoted, quoteContext);
         }
 
         BracedParameterExpression ParseBracedParameterExpression(ShellSource content)
@@ -1052,9 +1052,9 @@ internal static partial class WordExpansion
 
             async Task<ParameterOperand> ExpandOperandAsync(ShellSource source, ExpansionPurpose purpose)
             {
-                var words = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
-                    purpose, ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, operandParent: null).ConfigureAwait(false);
-                var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, budget);
+                var operand = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
+                    purpose, ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, assigningHereDocumentParent: null).ConfigureAwait(false);
+                var (value, mask) = ExpandedWord.JoinPatternWithSpaces(operand?.Build() ?? [], budget);
                 return new ParameterOperand(value, mask);
             }
 
