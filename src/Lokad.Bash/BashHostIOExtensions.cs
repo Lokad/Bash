@@ -213,19 +213,19 @@ public static class BashHostIOExtensions
     /// <summary>Frames retained LF-delimited batches above the host's byte-read contract.</summary>
     public static ValueTask<ReadResult> ReadLinesAsync(this IBashHost host,
         FileDescriptor descriptor, int limit, CancellationToken cancellationToken) =>
-        ReadLinesAsync(host, descriptor, limit, destinationBudget: null, terminalDestination: null, cancellationToken);
+        ReadLinesAsync(host, descriptor, limit, destinationBudget: null, sourceDestination: null, cancellationToken);
 
     /// <summary>Copies LF-delimited batches into the supplied owner, including their line offsets.
     /// All consumers of the returned bytes must finish before that owner is disposed.</summary>
     public static ValueTask<ReadResult> ReadLinesAsync(this IBashHost host,
         FileDescriptor descriptor, int limit, IMemoryBudget destinationBudget, CancellationToken cancellationToken) =>
-        ReadLinesAsync(host, descriptor, limit, destinationBudget, terminalDestination: null, cancellationToken);
+        ReadLinesAsync(host, descriptor, limit, destinationBudget, sourceDestination: null, cancellationToken);
 
     internal static ValueTask<ReadResult> ReadLinesAsync(this IBashHost host, FileDescriptor descriptor, int limit,
-        IMemoryBudget? destinationBudget, TerminalLineDestination? terminalDestination, CancellationToken cancellationToken) =>
+        IMemoryBudget? destinationBudget, SourceLineDestination? sourceDestination, CancellationToken cancellationToken) =>
         DescriptorReader.ReadLinesAsync((host, descriptor),
             static (state, request, token) => state.host.ReadAsync(state.descriptor, request, token),
-            limit, destinationBudget, terminalDestination, cancellationToken);
+            limit, destinationBudget, sourceDestination, cancellationToken);
 
     /// <summary>
     /// Reads a single line from a descriptor, preserving the previous single-line behavior.

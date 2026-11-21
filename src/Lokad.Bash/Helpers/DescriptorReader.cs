@@ -50,32 +50,32 @@ public static class DescriptorReader
     public static ValueTask<ReadResult> ReadLinesAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         int limit, IMemoryBudget? destinationBudget, CancellationToken cancellationToken)
-        => ReadLinesAsync(source, read, limit, destinationBudget, terminalDestination: null, cancellationToken);
+        => ReadLinesAsync(source, read, limit, destinationBudget, sourceDestination: null, cancellationToken);
 
     internal static ValueTask<ReadResult> ReadLinesAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
-        int limit, IMemoryBudget? destinationBudget, TerminalLineDestination? terminalDestination, CancellationToken cancellationToken)
-        => ReadRecordsCoreAsync(source, read, (byte)'\n', limit, destinationBudget, reusableLine: null, terminalDestination,
+        int limit, IMemoryBudget? destinationBudget, SourceLineDestination? sourceDestination, CancellationToken cancellationToken)
+        => ReadRecordsCoreAsync(source, read, (byte)'\n', limit, destinationBudget, reusableLine: null, sourceDestination,
             static batch => batch.AsLines(), cancellationToken);
 
     /// <summary>Copies one LF record into caller-owned storage, valid until the next read.</summary>
     public static ValueTask<ReadResult> ReadReusableLineAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         ByteMemoryBuilder output, CancellationToken cancellationToken) =>
-        ReadRecordsCoreAsync(source, read, (byte)'\n', 1, destinationBudget: null, output, terminalDestination: null,
+        ReadRecordsCoreAsync(source, read, (byte)'\n', 1, destinationBudget: null, output, sourceDestination: null,
             static batch => batch.AsLines(), cancellationToken);
 
     /// <summary>Retains records and offsets in the supplied destination budget.</summary>
     internal static ValueTask<DescriptorRecordBatch> ReadRecordBatchAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         byte delimiter, int limit, IMemoryBudget destinationBudget, CancellationToken cancellationToken) =>
-        ReadRecordsCoreAsync(source, read, delimiter, limit, destinationBudget, reusableLine: null, terminalDestination: null,
+        ReadRecordsCoreAsync(source, read, delimiter, limit, destinationBudget, reusableLine: null, sourceDestination: null,
             static batch => batch, cancellationToken);
 
     private static async ValueTask<TBatch> ReadRecordsCoreAsync<T, TBatch>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         byte delimiter, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine,
-        TerminalLineDestination? terminalDestination,
+        SourceLineDestination? sourceDestination,
         Func<DescriptorRecordBatch, TBatch> project, CancellationToken cancellationToken)
     {
         if (limit <= 0)
@@ -116,6 +116,7 @@ public static class DescriptorReader
             {
                 if (length == 0)
                     length = bytes.Length;
+                var reachedEof = result.ReachedEoF && length == bytes.Length;
                 ReadOnlyMemory<byte> content;
                 try
                 {
@@ -125,12 +126,15 @@ public static class DescriptorReader
                         reusableLine.Append(bytes[..length]);
                         content = reusableLine.ToMemory();
                     }
-                    else if (terminalDestination is { } destination && destination.Buffer.Length == 0
-                        && result.ReachedEoF && length == bytes.Length && length <= destination.MaximumBytes)
+                    else if (sourceDestination is { } destination
+                        && length <= destination.MaximumBytes - destination.Buffer.Length
+                        && (length <= destination.Buffer.Capacity - destination.Buffer.Length
+                            || destination.Buffer.Length == 0 && reachedEof))
                     {
-                        // A single terminal batch can go straight into the parser's owner.
-                        destination.Buffer.Append(bytes.Span[..length], exactCapacity: true);
-                        content = destination.Buffer.ToMemory();
+                        // Use admitted capacity, or allocate the final exact buffer for a complete first batch.
+                        var start = destination.Buffer.Length;
+                        destination.Buffer.Append(bytes.Span[..length], exactCapacity: reachedEof);
+                        content = destination.Buffer.ToMemory()[start..];
                     }
                     else
                         content = destinationBudget == null
@@ -140,7 +144,7 @@ public static class DescriptorReader
                 catch { offsetsMemory?.Dispose(); throw; }
                 buffer.Consume(length);
                 return project(new DescriptorRecordBatch(content, offsets,
-                    ByteReadResult.Success(length, result.ReachedEoF && length == bytes.Length)));
+                    ByteReadResult.Success(length, reachedEof)));
             }
             if (bytes.Length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
@@ -151,8 +155,8 @@ public static class DescriptorReader
     }
 }
 
-/// <summary>Receives a first line batch that contains the complete bounded input.</summary>
-internal readonly record struct TerminalLineDestination(ByteMemoryBuilder Buffer, int MaximumBytes);
+/// <summary>Accepts line batches directly into the parser's bounded source buffer.</summary>
+internal readonly record struct SourceLineDestination(ByteMemoryBuilder Buffer, int MaximumBytes);
 
 /// <summary>A framed byte batch with starts after the first record, or a terminal read outcome.</summary>
 internal readonly record struct DescriptorRecordBatch(ReadOnlyMemory<byte> Content, int[] RecordStartOffsets, ByteReadResult Result)

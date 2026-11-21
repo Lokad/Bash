@@ -311,7 +311,7 @@ public sealed class AsyncLineReader : IDisposable
     /// </remarks>
     public ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes) => TryReadToEndAsync(maximumBytes, destination: null);
 
-    /// <summary>Reads remaining bytes, allowing the dispatcher to fill the supplied empty buffer for a single terminal batch.</summary>
+    /// <summary>Reads remaining bytes, allowing the dispatcher to append batches to the supplied source buffer.</summary>
     /// <remarks>Takes ownership of the supplied builder. Completed bytes remain charged to its enclosing scope.</remarks>
     internal async ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes, ByteMemoryBuilder? destination)
     {
@@ -339,7 +339,7 @@ public sealed class AsyncLineReader : IDisposable
             // Consume the remaining batch directly; line boundaries were already scanned by its producer.
             if (_content.Length - _lineStart > maximumBytes - earlierBytes)
                 return new BoundedReadResult.TooLarge();
-            // The dispatcher can fill the destination while producing the first and final batch.
+            // The dispatcher may have copied this batch directly into the destination.
             if (output.Length == earlierBytes)
                 output.Append(_content.Span[_lineStart..], exactCapacity: _reachedEof);
             ReleaseCurrentBatch();

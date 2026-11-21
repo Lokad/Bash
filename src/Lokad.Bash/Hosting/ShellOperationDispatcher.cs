@@ -48,7 +48,7 @@ internal static class ShellOperationDispatcher
                         static (source, read, token) => source.Host.ReadAsync(source.FileDescriptor, read, token),
                         reusableLine, state.CancellationToken)
                     : state.Host.ReadLinesAsync(request.FileDescriptor, request.Limit, request.DestinationBudget,
-                        request.TerminalDestination, state.CancellationToken))),
+                        request.SourceDestination, state.CancellationToken))),
             ReadRecordBatchOperation batch => HandleReadLimitAsync(batch.UseResult(state, static (request, state) =>
                 DescriptorReader.ReadRecordBatchAsync((state.Host, request.Descriptor),
                     static (source, read, token) => source.Host.ReadAsync(source.Descriptor, read, token),

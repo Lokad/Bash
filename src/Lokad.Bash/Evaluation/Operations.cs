@@ -161,8 +161,8 @@ public sealed class ReadLineOperation(
     /// <summary>Optional single-line storage, borrowed until its next dispatch or disposal.</summary>
     internal ByteMemoryBuilder? ReusableLine { get; private init; }
 
-    /// <summary>Optional final source buffer, owned by the evaluator through completion of the read.</summary>
-    internal TerminalLineDestination? TerminalDestination { get; private init; }
+    /// <summary>Optional source buffer, owned by the evaluator through completion of the read.</summary>
+    internal SourceLineDestination? SourceDestination { get; private init; }
 
     public static Task<ReadResult> AsTask(
         Action<EvaluationOperation> use,
@@ -170,10 +170,10 @@ public sealed class ReadLineOperation(
         int limit,
         IMemoryBudget? destinationBudget,
         ByteMemoryBuilder? reusableLine) =>
-        AsTask(use, fileDescriptor, limit, destinationBudget, reusableLine, terminalDestination: null);
+        AsTask(use, fileDescriptor, limit, destinationBudget, reusableLine, sourceDestination: null);
 
     internal static Task<ReadResult> AsTask(Action<EvaluationOperation> use, FileDescriptor fileDescriptor, int limit,
-        IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine, TerminalLineDestination? terminalDestination)
+        IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine, SourceLineDestination? sourceDestination)
     {
         if (reusableLine != null && (limit != 1 || destinationBudget != null))
             throw new ArgumentException("Reusable line storage requires one record and no copied-batch owner.");
@@ -181,7 +181,7 @@ public sealed class ReadLineOperation(
         use(new ReadLineOperation(tcs, fileDescriptor, limit, destinationBudget)
         {
             ReusableLine = reusableLine,
-            TerminalDestination = terminalDestination
+            SourceDestination = sourceDestination
         });
         return tcs.Task;
     }
