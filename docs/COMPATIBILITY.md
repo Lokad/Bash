@@ -188,7 +188,9 @@ Locale-quoted words `$"…"` use their original text under the invariant profile
 They follow the same expansion and quoting rules as ordinary double-quoted words.
 Standalone unquoted braces are words in operand positions, including command
 arguments, loop items, case subjects and patterns, array entries and redirection
-operands. Brace groups require a semicolon or LF before their closing delimiter.
+operands. A simple command or trailing redirection needs a semicolon or LF
+before a brace group's closing delimiter. A compound command's closing token
+can supply the boundary itself, as in `{ (printf value) }`.
 Brace expansion can join alternatives across quoted or escaped fragments and
 substitutions. Protected commas are data and alternatives retain their original
 quoting through splitting and pathname expansion. A backslash or backtick generated
