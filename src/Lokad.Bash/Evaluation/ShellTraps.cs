@@ -122,12 +122,12 @@ internal sealed class ShellTraps
         return true;
     }
 
-    public static string GetName(TrapCondition condition) => condition switch
+    public static ReadOnlySpan<byte> GetNameBytes(TrapCondition condition) => condition switch
     {
-        TrapCondition.Exit => "EXIT",
-        TrapCondition.Hangup => "SIGHUP",
-        TrapCondition.Interrupt => "SIGINT",
-        TrapCondition.Terminate => "SIGTERM",
+        TrapCondition.Exit => "EXIT"u8,
+        TrapCondition.Hangup => "SIGHUP"u8,
+        TrapCondition.Interrupt => "SIGINT"u8,
+        TrapCondition.Terminate => "SIGTERM"u8,
         _ => throw new ArgumentOutOfRangeException(nameof(condition))
     };
 }

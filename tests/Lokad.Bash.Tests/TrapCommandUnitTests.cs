@@ -148,6 +148,19 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData("trap -p", "trap -- ':' EXIT\ntrap -- ':' SIGHUP\ntrap -- ':' SIGINT\ntrap -- ':' SIGTERM\n")]
+    [InlineData("trap -p term INT 1 0 term",
+        "trap -- ':' SIGTERM\ntrap -- ':' SIGINT\ntrap -- ':' SIGHUP\ntrap -- ':' EXIT\ntrap -- ':' SIGTERM\n")]
+    public async Task TrapListingUsesCanonicalNamesInTheRequestedOrder(string listing, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync("trap ':' EXIT HUP INT TERM; " + listing + "; trap - EXIT HUP INT TERM");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task TrapListingReleasesTheFirstRecordBeforeWritingTheSecond(bool manyQuotes)

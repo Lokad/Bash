@@ -130,7 +130,7 @@ public sealed partial class Evaluation
         {
             if (traps == null || !traps.ListedHandlers.TryGetValue(condition, out var handler))
                 return true;
-            var name = Utf8Text.Encode(ShellTraps.GetName(condition));
+            var name = ShellTraps.GetNameBytes(condition);
             var length = "trap -- "u8.Length + ShellArgumentEscaping.GetLiteralSingleQuotedLength(handler.Bytes.Span)
                 + 1 + name.Length + 1;
             if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
@@ -139,7 +139,7 @@ public sealed partial class Evaluation
             if (!output.TryAppend("trap -- "u8)
                 || !ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, handler.Bytes.Span)
                 || !output.TryAppend((byte)' ')
-                || !output.TryAppend(name.Span)
+                || !output.TryAppend(name)
                 || !output.TryAppend((byte)'\n'))
                 throw new InvalidOperationException("Trap listing exceeded its reserved size.");
             return !(await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false)).IsError;
