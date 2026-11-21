@@ -144,44 +144,32 @@ public sealed partial class Evaluation
     {
         var outputMode = CommandQueryOutputMode.TypeDescription;
         var lookupMode = CommandLookupMode.Normal;
-        var nameIndex = 1;
-        for (; nameIndex < words.Count; nameIndex++)
+        var options = new ShortOptionCursor(words);
+        while (options.TryReadFlag(out var flag))
         {
-            var operand = words[nameIndex].Bytes;
-            if (operand.Length < 2 || operand.Span[0] != (byte)'-')
-                break;
-            if (operand.Span.SequenceEqual("--"u8))
+            switch (flag.Span[0])
             {
-                nameIndex++;
-                break;
-            }
-            if (operand.Span.SequenceEqual("--help"u8))
-                return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Type, "type", negated)
-                    .ConfigureAwait(false);
-            for (var optionIndex = 1; optionIndex < operand.Length; optionIndex++)
-            {
-                switch (operand.Span[optionIndex])
-                {
-                    case (byte)'t': outputMode = CommandQueryOutputMode.TypeKind; break;
-                    case (byte)'p': outputMode = CommandQueryOutputMode.TypePath; break;
-                    case (byte)'P':
-                        lookupMode = CommandLookupMode.HostOnly;
-                        outputMode = CommandQueryOutputMode.TypePath;
-                        break;
-                    case (byte)'f':
-                        if (lookupMode == CommandLookupMode.Normal)
-                            lookupMode = CommandLookupMode.BypassFunctions;
-                        break;
-                    default: return await InvalidOptionAsync(ShellValue.FromBytes(operand.Slice(optionIndex, 1)))
-                        .ConfigureAwait(false);
-                }
+                case (byte)'t': outputMode = CommandQueryOutputMode.TypeKind; break;
+                case (byte)'p': outputMode = CommandQueryOutputMode.TypePath; break;
+                case (byte)'P':
+                    lookupMode = CommandLookupMode.HostOnly;
+                    outputMode = CommandQueryOutputMode.TypePath;
+                    break;
+                case (byte)'f':
+                    if (lookupMode == CommandLookupMode.Normal)
+                        lookupMode = CommandLookupMode.BypassFunctions;
+                    break;
+                default: return await InvalidOptionAsync(ShellValue.FromBytes(flag)).ConfigureAwait(false);
             }
         }
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Type, "type", negated)
+                .ConfigureAwait(false);
 
         var exitCode = await EvaluateCommandQueryAsync(
                 BuiltinKind.Type,
                 words,
-                nameIndex,
+                options.ArgumentIndex,
                 outputMode,
                 lookupMode,
                 commandVars,
@@ -376,31 +364,17 @@ public sealed partial class Evaluation
                     CheckCancellation();
                     var value = arguments[firstName + index];
                     // Keywords take precedence in queries, even when a function shadows their spelling.
-                    var hasTextName = Utf8.IsValid(value.Bytes.Span);
-                    var decodeBytes = hasTextName && !value.IsEmpty
-                        ? Math.Max(0, 32 + 2L * value.Bytes.Length
-                            - (builtin == BuiltinKind.Command ? PreparedQueryDecodeBytes(value) : 0))
-                        : 0;
-                    // Only names selected for the host keep their text across iterations.
-                    lookupMemory.Resize(checked(retainedLookupBytes + decodeBytes));
-                    var name = hasTextName ? value.ToUtf8String() : string.Empty;
-                    if (lookupMode != CommandLookupMode.HostOnly && hasTextName && Parser.IsSupportedKeyword(name.AsSpan()))
+                    if (lookupMode != CommandLookupMode.HostOnly && Parser.IsSupportedKeyword(value.Bytes.Span))
                     {
                         resolutions[index] = new CommandQueryResolution.Keyword();
                         continue;
                     }
-                    var resolution = ResolveCommandName(value, name, lookupMode);
+                    var resolution = ResolveCommandName(value, lookupMode);
                     if (resolution is CommandResolution.Function function)
                     {
                         (functionOwners ??= []).Add(function.Binding);
                         function.Binding.Retain();
                         resolutions[index] = new CommandQueryResolution.Function(function.Binding.Definition);
-                        continue;
-                    }
-                    // Host command names are UTF-8 paths; malformed bytes and empty names cannot resolve.
-                    if (value.IsEmpty || !hasTextName)
-                    {
-                        resolutions[index] = new CommandQueryResolution.Missing();
                         continue;
                     }
                     if (resolution is CommandResolution.EvaluatorBuiltin)
@@ -409,7 +383,8 @@ public sealed partial class Evaluation
                         continue;
                     }
 
-                    if (resolution is CommandResolution.Missing)
+                    // Host command names must be nonempty UTF-8. Local names stay byte-valued.
+                    if (resolution is CommandResolution.Missing || value.IsEmpty || !Utf8.IsValid(value.Bytes.Span))
                     {
                         resolutions[index] = new CommandQueryResolution.Missing();
                         continue;
@@ -419,15 +394,16 @@ public sealed partial class Evaluation
                     if (resolution is CommandResolution.HostBuiltin)
                         resolutions[index] = new CommandQueryResolution.Builtin();
 
+                    var decodeBytes = Math.Max(0, 32 + 2L * value.Bytes.Length
+                        - (builtin == BuiltinKind.Command ? PreparedQueryDecodeBytes(value) : 0));
                     retainedLookupBytes = checked(retainedLookupBytes + decodeBytes + HostRequestBytesPerName);
                     lookupMemory.Resize(retainedLookupBytes);
-                    hostNames.Add(name);
+                    hostNames.Add(value.ToUtf8String());
                     hostIndexes.Add(index);
                 }
 
                 if (hostNames.Count > 0)
                 {
-                    lookupMemory.Resize(retainedLookupBytes);
                     lookupMemory.ReleaseUnusedCapacity();
                     var environment = BuildExportedEnvironment(vars, context);
                     CheckCancellation();

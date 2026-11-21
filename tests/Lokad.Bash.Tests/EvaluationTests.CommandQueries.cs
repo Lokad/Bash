@@ -10,6 +10,24 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Fact]
+    public async Task Evaluation_TypeBuiltin_OnlySendsTextNamesRequiringHostLookup()
+    {
+        var state = new Eval(Parser.Parse(
+            "function café { :; }; type -t café echo 'if' 'host-é' $'\\xff' ''"));
+        var lookup = await NextResolveCommandsAsync(state);
+        Assert.Equal(["host-é"], lookup.CommandNames);
+        lookup.SetResult([new CommandLookupResult.Found("/synthetic/host-é")]);
+
+        var output = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, output.FileDescriptor);
+        Assert.Equal("function\nbuiltin\nkeyword\nfile\n", Text(output.Content));
+        output.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
+    [Fact]
     public async Task Evaluation_TypeBuiltin_ForcedPathBatchesShadowedNamesThroughTheHost()
     {
         var state = new Eval(Parser.Parse(

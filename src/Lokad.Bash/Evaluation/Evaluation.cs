@@ -2757,7 +2757,7 @@ public sealed partial class Evaluation : IFileTester
         return EvaluationResult.Exit(result.ExitCode);
     }
 
-    private CommandResolution ResolveCommandName(ShellValue commandName, string text, CommandLookupMode lookupMode)
+    private CommandResolution ResolveCommandName(ShellValue commandName, CommandLookupMode lookupMode)
     {
         if (lookupMode == CommandLookupMode.HostOnly)
             return new CommandResolution.Host();
@@ -2768,7 +2768,7 @@ public sealed partial class Evaluation : IFileTester
             return new CommandResolution.Function(function);
         }
 
-        if (BuiltinClassification.TryResolve(text.AsSpan(), out var builtin))
+        if (BuiltinClassification.TryResolve(commandName.Bytes.Span, out var builtin))
         {
             return builtin == BuiltinKind.ApplyPatch
                 ? new CommandResolution.HostBuiltin(builtin)

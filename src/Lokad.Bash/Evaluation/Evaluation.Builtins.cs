@@ -279,7 +279,7 @@ public sealed partial class Evaluation
             words,
             commandValue,
             commandName,
-            ResolveCommandName(commandValue, commandName, lookupMode),
+            ResolveCommandName(commandValue, lookupMode),
             executionOptions,
             completion,
             RedirectionLifetime.Command);
