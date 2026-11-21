@@ -72,9 +72,15 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     /// <param name="bytes">The bytes to append.</param>
     public ByteMemoryBuilder Append(ReadOnlySpan<byte> bytes)
     {
-        if (!TryAppend(bytes, int.MaxValue))
-            throw new LimitExceededException();
+        Append(bytes, exactCapacity: false);
         return this;
+    }
+
+    /// <summary>Appends bytes, optionally growing without spare capacity when the final length is known.</summary>
+    internal void Append(ReadOnlySpan<byte> bytes, bool exactCapacity)
+    {
+        if (!TryAppend(bytes, int.MaxValue, exactCapacity))
+            throw new LimitExceededException();
     }
 
     /// <summary> Appends a memory block of bytes to the buffer. </summary>
@@ -92,21 +98,21 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
 
     // Display keeps its previous payload limit; ordinary appends may fill existing
     // capacity. Parser/export writers apply their own smaller bounds.
-    public bool TryAppend(ReadOnlySpan<byte> bytes) => TryAppend(bytes, MaxMemoryBuilderBytes - 1);
+    public bool TryAppend(ReadOnlySpan<byte> bytes) => TryAppend(bytes, MaxMemoryBuilderBytes - 1, exactCapacity: false);
 
     public bool TryAppend(byte value) => TryAppend(value, MaxMemoryBuilderBytes - 1);
 
     /// <summary>Preflights display bytes before allocating encoded names or diagnostics.</summary>
     public bool CanAppend(int count) => CanAppend(count, MaxMemoryBuilderBytes - 1);
 
-    private bool TryAppend(ReadOnlySpan<byte> bytes, int maximumLength)
+    private bool TryAppend(ReadOnlySpan<byte> bytes, int maximumLength, bool exactCapacity)
     {
         if (!CanAppend(bytes.Length, maximumLength))
             return false;
         if (bytes.IsEmpty)
             return true;
 
-        EnsureCapacity(_length + bytes.Length);
+        EnsureCapacity(_length + bytes.Length, exactCapacity);
         bytes.CopyTo(_buffer.AsSpan(_length));
         _length += bytes.Length;
         return true;
@@ -117,7 +123,7 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
         if (!CanAppend(1, maximumLength))
             return false;
 
-        EnsureCapacity(_length + 1);
+        EnsureCapacity(_length + 1, exactCapacity: false);
         _buffer[_length++] = value;
         return true;
     }
@@ -147,7 +153,7 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
         if (length < 0)
             throw new ArgumentOutOfRangeException(nameof(length));
 
-        EnsureCapacity(checked(_length + length));
+        EnsureCapacity(checked(_length + length), exactCapacity: false);
         var span = _buffer.AsSpan(_length, length);
         _length += length;
         return span;
@@ -184,24 +190,27 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     /// <summary>
     /// Ensures the backing buffer can hold the requested capacity.
     /// </summary>
-    private void EnsureCapacity(int capacity)
+    private void EnsureCapacity(int capacity, bool exactCapacity)
     {
-        if (!TryEnsureCapacity(capacity))
+        if (!TryEnsureCapacity(capacity, exactCapacity))
             throw new MemoryBudgetExceededException();
     }
 
     /// <summary>Admits replacement overlap before growing, leaving content unchanged on refusal.</summary>
-    public bool TryEnsureCapacity(int capacity)
+    public bool TryEnsureCapacity(int capacity) => TryEnsureCapacity(capacity, exactCapacity: false);
+
+    private bool TryEnsureCapacity(int capacity, bool exactCapacity)
     {
         if (capacity <= _buffer.Length) return true;
         if (capacity >= MaxMemoryBuilderBytes)
             throw new LimitExceededException();
 
-        var newSize = _buffer.Length == 0 ? 16 : _buffer.Length;
-        while (newSize < capacity) newSize = (int)Math.Min(MaxMemoryBuilderBytes, 2L * newSize);
-
-        if (newSize > MaxMemoryBuilderBytes)
-            newSize = MaxMemoryBuilderBytes;
+        var newSize = capacity;
+        if (!exactCapacity)
+        {
+            newSize = _buffer.Length == 0 ? 16 : _buffer.Length;
+            while (newSize < capacity) newSize = (int)Math.Min(MaxMemoryBuilderBytes, 2L * newSize);
+        }
 
         // Reserve the replacement before allocating: the old array still exists during growth.
         // Prepaid owners conservatively retain earlier arrays until their result batch ends.

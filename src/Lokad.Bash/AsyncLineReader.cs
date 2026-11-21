@@ -335,7 +335,7 @@ public sealed class AsyncLineReader : IDisposable
             // Consume the remaining batch directly; line boundaries were already scanned by its producer.
             if (_content.Length - _lineStart > maximumBytes - output.Length)
                 return new BoundedReadResult.TooLarge();
-            output.Append(_content.Span[_lineStart..]);
+            output.Append(_content.Span[_lineStart..], exactCapacity: _reachedEof);
             ReleaseCurrentBatch();
         }
     }
