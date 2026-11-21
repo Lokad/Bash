@@ -1423,6 +1423,9 @@ public sealed partial class Evaluation : IFileTester
 
                 var builtinResult = evaluatorBuiltin.Kind switch
                 {
+                    BuiltinKind.Colon or BuiltinKind.True or BuiltinKind.False => await FinalizeResultAsync(
+                        EvaluationResult.FromExitCode(evaluatorBuiltin.Kind == BuiltinKind.False ? 1 : 0), false)
+                        .ConfigureAwait(false),
                     BuiltinKind.Break or BuiltinKind.Continue => await EvaluateBuiltinLoopControlAsync(
                         evaluatorBuiltin.Kind, byteOperands, builtinScope, false).ConfigureAwait(false),
                     BuiltinKind.Exit => await EvaluateBuiltinExitAsync(byteOperands, builtinScope, executable.Completion).ConfigureAwait(false),
@@ -1464,10 +1467,7 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Shift => await AwaitWordExpansionAsync(EvaluateBuiltinShiftAsync(
                         byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
                     BuiltinKind.Hash => await EvaluateBuiltinHashAsync(byteOperands).ConfigureAwait(false),
-                    _ => await EvaluateBuiltinAsync(
-                        evaluatorBuiltin.Kind,
-                        commandName,
-                        false).ConfigureAwait(false)
+                    _ => throw new InvalidOperationException($"Builtin '{commandName}' has no evaluator dispatch.")
                 };
                 if (scriptFunction != null)
                     CompletePromotions(scriptFunction, enclosingFunction, commandVars, bindings);
@@ -2766,55 +2766,6 @@ public sealed partial class Evaluation : IFileTester
         return lookupMode == CommandLookupMode.BuiltinOnly
             ? new CommandResolution.Missing()
             : new CommandResolution.Host();
-    }
-
-    /// <summary>Executes the builtins that ignore their expanded operands.</summary>
-    private async Task<EvaluationResult> EvaluateBuiltinAsync(
-        BuiltinKind builtin,
-        string commandName,
-        bool negated)
-    {
-        switch (builtin)
-        {
-            case BuiltinKind.Colon:
-            case BuiltinKind.True:
-            case BuiltinKind.False:
-                if (BuiltinClassification.TryGetFixedExitCode(builtin, out var fixedExitCode))
-                {
-                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(fixedExitCode), negated)
-                        .ConfigureAwait(false);
-                }
-
-                throw new InvalidOperationException($"Builtin '{commandName}' has no fixed exit code.");
-            case BuiltinKind.Echo:
-            case BuiltinKind.Dirs:
-            case BuiltinKind.Pushd:
-            case BuiltinKind.Popd:
-            case BuiltinKind.Caller:
-            case BuiltinKind.Help:
-            case BuiltinKind.Printf:
-            case BuiltinKind.Read:
-            case BuiltinKind.Mapfile:
-            case BuiltinKind.Export:
-            case BuiltinKind.Readonly:
-            case BuiltinKind.Declare:
-            case BuiltinKind.Local:
-            case BuiltinKind.Set:
-            case BuiltinKind.Source:
-            case BuiltinKind.Getopts:
-            case BuiltinKind.Return:
-            case BuiltinKind.Hash:
-            case BuiltinKind.Trap:
-                throw new InvalidOperationException("Builtin operands reached dispatch that ignores operands.");
-            case BuiltinKind.ApplyPatch:
-                throw new InvalidOperationException("Host-backed builtin reached evaluator dispatch.");
-            case BuiltinKind.Command:
-            case BuiltinKind.Builtin:
-            case BuiltinKind.Exec:
-                throw new InvalidOperationException($"Builtin '{commandName}' was not prepared before dispatch.");
-            default:
-                throw new ArgumentOutOfRangeException(nameof(builtin));
-        }
     }
 
     /// <summary>

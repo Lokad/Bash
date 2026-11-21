@@ -6,47 +6,20 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationBuiltinControlTestsEndToEnd
 {
-    [Fact]
-    public async Task Evaluation_BuiltinColon_ReturnsSuccessWithoutOperation()
+    [Theory]
+    [InlineData(": --help", 0)]
+    [InlineData("true --help", 0)]
+    [InlineData("false --help", 1)]
+    [InlineData("command true -- --help", 0)]
+    [InlineData("builtin false -z --help", 1)]
+    [InlineData("! builtin false --help", 0)]
+    public async Task FixedStatusBuiltins_IgnoreOptionLookingOperands(string script, int expectedStatus)
     {
-        // This test verifies that the ":" builtin is a no-op that succeeds without producing output.
-        // The script contains only ":" so a correct implementation must leave STDOUT and STDERR empty
-        // and return exit code 0.
-        // Any execution of unintended commands or an error path would change output or exit code.
-        var script = @":";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_BuiltinTrue_ReturnsSuccessWithoutOperation()
-    {
-        // This test verifies that the "true" builtin succeeds without emitting output.
-        // The script contains only "true" so a correct run yields empty STDOUT/STDERR and exit code 0.
-        // If "true" were mis-evaluated or caused output, the assertions would fail.
-        var script = @"true";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_BuiltinFalse_ReturnsFailureWithoutOperation()
-    {
-        // This test verifies that the "false" builtin fails without emitting output.
-        // The script contains only "false" so a correct run yields empty STDOUT/STDERR and exit code 1.
-        // If "false" returned success or produced output, the assertions would fail.
-        var script = @"false";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(expectedStatus, result.ExitCode);
     }
 
     [Fact]

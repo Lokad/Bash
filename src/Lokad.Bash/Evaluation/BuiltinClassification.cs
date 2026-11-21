@@ -125,24 +125,6 @@ internal static class BuiltinClassification
         }
         return TryResolve(name[..word.Length], out kind);
     }
-
-    public static bool TryGetFixedExitCode(BuiltinKind kind, out int exitCode)
-    {
-        if (kind is BuiltinKind.Colon or BuiltinKind.True)
-        {
-            exitCode = 0;
-            return true;
-        }
-
-        if (kind == BuiltinKind.False)
-        {
-            exitCode = 1;
-            return true;
-        }
-
-        exitCode = 0;
-        return false;
-    }
 }
 
 /// <summary>A classified builtin name, with its UTF-8 spelling retained for help pattern matching.</summary>
