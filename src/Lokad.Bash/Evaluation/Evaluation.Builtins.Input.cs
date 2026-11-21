@@ -269,7 +269,8 @@ public sealed partial class Evaluation
                     ReadResult result;
                     try
                     {
-                        result = await ExecuteReadAsync(inputDescriptor, 1, destinationBudget: null, reusableLine: physicalLine)
+                        result = await ExecuteReadAsync(inputDescriptor, 1, destinationBudget: null, reusableLine: physicalLine,
+                                terminalDestination: null)
                             .ConfigureAwait(false);
                     }
                     catch (ByteMemoryBuilder.LimitExceededException)

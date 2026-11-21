@@ -3769,14 +3769,16 @@ public sealed partial class Evaluation : IFileTester
     /// <param name="fileDescriptor">The host descriptor to read.</param>
     /// <param name="limit">The positive maximum number of records to return.</param>
     public Task<ReadResult> ExecuteReadAsync(FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget) =>
-        ExecuteReadAsync(fileDescriptor, limit, destinationBudget, reusableLine: null);
+        ExecuteReadAsync(fileDescriptor, limit, destinationBudget, reusableLine: null, terminalDestination: null);
 
     private async Task<ReadResult> ExecuteReadAsync(
-        FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine)
+        FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine,
+        TerminalLineDestination? terminalDestination)
     {
         CheckCancellation();
         // The host may still be reading into storage owned by the caller after cancellation.
-        var result = await ReadLineOperation.AsTask(PublishOperation, fileDescriptor, limit, destinationBudget, reusableLine)
+        var result = await ReadLineOperation.AsTask(PublishOperation, fileDescriptor, limit, destinationBudget, reusableLine,
+                terminalDestination)
             .ConfigureAwait(false);
         CheckCancellation();
         return result;
@@ -3810,10 +3812,13 @@ public sealed partial class Evaluation : IFileTester
             Exception? readException = null;
             try
             {
+                var output = new ByteMemoryBuilder(0, sourceMemory.Budget);
+                var terminalDestination = new TerminalLineDestination(output, Parser.MaximumScriptBytes);
                 using var reader = AsyncLineReader.CreateStreaming(
-                    (limit, memory, _) => new ValueTask<ReadResult>(ExecuteReadAsync(descriptor.Value, limit, memory)),
+                    (limit, memory, _) => new ValueTask<ReadResult>(
+                        ExecuteReadAsync(descriptor.Value, limit, memory, reusableLine: null, terminalDestination)),
                     _cancellationToken, batchSize: 128, sourceMemory.Budget);
-                input = await reader.TryReadToEndAsync(Parser.MaximumScriptBytes).ConfigureAwait(false);
+                input = await reader.TryReadToEndAsync(Parser.MaximumScriptBytes, output).ConfigureAwait(false);
                 readFailed = input is not BoundedReadResult.Complete;
             }
             catch (Exception error)

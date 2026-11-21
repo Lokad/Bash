@@ -302,6 +302,11 @@ bytes with the parsed redirection, for collection and later function serializati
 Contiguous here-document bodies borrow their input source bytes. Tab removal or
 continuation joining uses the existing syntax owner for normalized backing.
 
+A dispatched source read writes a complete first batch that reports EOF directly
+into the parser's source buffer when it fits the byte limit. The read batch owns
+its line offsets and releases them before descriptor close. Fragmented input and
+externally completed line operations use bounded aggregation.
+
 A sourced input scope stays admitted while parsing/executing the file, while a
 function namespace retains its definitions, and through active function preparation,
 execution and cleanup. Shared definitions and attribute copies share this coarse

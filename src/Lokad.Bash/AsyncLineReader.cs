@@ -310,10 +310,14 @@ public sealed class AsyncLineReader : IDisposable
     /// Consumes remaining buffered input first and releases each owned batch after copying its bytes.
     /// Rejection does not rewind previously consumed batches.
     /// </remarks>
-    public async ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes)
+    public ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes) => TryReadToEndAsync(maximumBytes, destination: null);
+
+    /// <summary>Reads remaining bytes, allowing the dispatcher to fill the supplied empty buffer for a single terminal batch.</summary>
+    /// <remarks>Takes ownership of the supplied builder. Completed bytes remain charged to its enclosing scope.</remarks>
+    internal async ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes, ByteMemoryBuilder? destination)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
-        using var output = new ByteMemoryBuilder(0, _memoryBudget);
+        using var output = destination ?? new ByteMemoryBuilder(0, _memoryBudget);
         ReleasePreviousBatch();
         if (_lineIndex >= BufferedLineCount)
             ReleaseCurrentBatch();
@@ -321,6 +325,7 @@ public sealed class AsyncLineReader : IDisposable
         while (true)
         {
             _cancellationToken.ThrowIfCancellationRequested();
+            var earlierBytes = output.Length;
             var (reachedEof, failure) = await TryReachedEofCore(_cancellationToken).ConfigureAwait(false);
             _cancellationToken.ThrowIfCancellationRequested();
             if (failure.Error is { } error)
@@ -333,9 +338,11 @@ public sealed class AsyncLineReader : IDisposable
             }
 
             // Consume the remaining batch directly; line boundaries were already scanned by its producer.
-            if (_content.Length - _lineStart > maximumBytes - output.Length)
+            if (_content.Length - _lineStart > maximumBytes - earlierBytes)
                 return new BoundedReadResult.TooLarge();
-            output.Append(_content.Span[_lineStart..], exactCapacity: _reachedEof);
+            // The dispatcher can fill the destination while producing the first and final batch.
+            if (output.Length == earlierBytes)
+                output.Append(_content.Span[_lineStart..], exactCapacity: _reachedEof);
             ReleaseCurrentBatch();
         }
     }

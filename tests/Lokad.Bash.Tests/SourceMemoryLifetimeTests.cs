@@ -14,6 +14,51 @@ public sealed class SourceMemoryLifetimeTests
 {
     private const int PaddingBytes = 32768;
 
+    [Fact]
+    public async Task TerminalSourceBatchFillsTheParserBufferAndReleasesOffsetsBeforeClose()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        using var owner = budget.CreateScope();
+        await using var host = new TestHost { MemoryBudget = budget };
+        var body = "probe(){ printf '%s' $'\\377\\r'; }\n#" + new string('x', PaddingBytes) + "\n";
+        host.AddFile("/a", body);
+        var beforeRead = 0L;
+        host.BeforeRead = () => beforeRead = governor.ReservedBytes;
+        var state = new Eval(Parser.Parse("source /a; probe; unset -f probe"));
+        state.Memory.Budget = owner;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var token = deadline.Token;
+
+        var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep(token));
+        await ShellOperationDispatcher.DispatchAsync(open, host, token);
+        var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep(token));
+        var batch = Assert.IsType<RecordedScope>(read.DestinationBudget);
+        await ShellOperationDispatcher.DispatchAsync(read, host, token);
+        var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep(token));
+
+        Assert.Equal(read.FileDescriptor, close.Descriptor);
+        Assert.Equal(1, host.ReadCallCount);
+        Assert.Equal(0, batch.OwnBytes);
+        var source = Assert.Single(scopes, scope => scope.OwnBytes >= PaddingBytes);
+        Assert.Equal(body.Length, source.OwnBytes);
+        Assert.Equal(body.Length + 32 + sizeof(int), governor.PeakBytes - beforeRead);
+        await ShellOperationDispatcher.DispatchAsync(close, host, token);
+
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep(token));
+        Assert.Equal(new byte[] { 0xff, 13 }, write.Content.ToArray());
+        Assert.Equal(body.Length, source.OwnBytes);
+        Assert.Equal(0, host.OpenFileCount);
+        await ShellOperationDispatcher.DispatchAsync(write, host, token);
+        Assert.Null(await state.GetNextStep(token));
+        await state.Completion;
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(0, source.OwnBytes);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     public static IEnumerable<object[]> Lifetimes()
     {
         var cases = new (string Name, string Script, string A, string B, string[] Marks, int[] Owners)[]
