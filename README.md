@@ -6,11 +6,12 @@ admission through `IBashHost`. The runtime has no third-party runtime dependenci
 and does not supply a filesystem or process host.
 
 This checkout prepares version 0.2.0, including the public API migrations in
-[the changelog][changelog]. Build the package locally and point your consumer's
-NuGet source to the resulting `artifacts/nuget/` directory; publication is separate.
+[the changelog][changelog]. Build the package locally using the steps below.
+From your consumer project directory, use the absolute path to the resulting
+`artifacts/nuget/` directory in the Lokad.Bash checkout.
 
 ```powershell
-dotnet add package Lokad.Bash --version 0.2.0 --source ./artifacts/nuget
+dotnet add package Lokad.Bash --version 0.2.0 --source '<absolute path to the Lokad.Bash checkout>/artifacts/nuget'
 ```
 
 ```csharp
