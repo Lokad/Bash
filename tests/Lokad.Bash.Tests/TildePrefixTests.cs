@@ -50,6 +50,31 @@ public sealed partial class TildePrefixTests
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
+    [Theory]
+    [InlineData("outer=${v:=head:~}:~; printf '<%s>' \"$v\" \"$outer\"", "<head:~><head:~:home>")]
+    [InlineData("outer=${v=~:~}; printf '<%s>' \"$v\" \"$outer\"", "<home:~><home:~>")]
+    [InlineData("i=0; printf '<%s>' ${v:=~:$((++i))} \"$v\" \"$i\"", "<home:1><home:1><1>")]
+    [InlineData("printf '<%s>' ${v:=${inner:-head:~}} \"$v\"", "<head:home><head:home>")]
+    [InlineData("outer=${v:=\"head\":~}; printf '<%s>' \"$v\" \"$outer\"", "<head:~><head:~>")]
+    [InlineData("i=0; v=kept; outer=${v:=head:~:$((++i))}:~; printf '<%s>' \"$v\" \"$outer\" \"$i\"",
+        "<kept><kept:home><0>")]
+    public async Task AssigningDefaultUsesLeadingTildeAndExpandsItsSuffix(string source, string expected)
+    {
+        var script = "HOME=home; unset v inner\n" + source;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Fact]
     public async Task AssignmentTildePreservesInsertedBytesWithoutExpandingThemAgain()
     {

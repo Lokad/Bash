@@ -8,7 +8,7 @@ using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
-internal enum TildeExpansion { None, Leading, Assignment, Argument }
+internal enum TildeExpansion { None, Leading, Assignment, Argument, AssignDefault }
 
 /// <summary>
 /// Expands source and literal parts into byte-valued words with preserved quoting.
@@ -203,12 +203,16 @@ internal static partial class WordExpansion
         var assignmentEquals = tildeExpansion == TildeExpansion.Argument ? FindAssignmentEquals(word, scope) : -1;
         var assignmentValue = tildeExpansion == TildeExpansion.Assignment;
         var assignment = assignmentValue || assignmentEquals >= 0
-            ? new AssignmentTildes(word, assignmentEquals, InheritInParameterWords: assignmentValue
-                && builder.Purpose != ExpansionPurpose.IndexedCompound)
+            ? new AssignmentTildes(word, assignmentEquals)
             : (AssignmentTildes?)null;
+        // An assigning default expands its own leading tilde and leaves its suffix active.
+        // Nested parameter words still inherit an assignment context.
+        var assigningDefault = tildeExpansion == TildeExpansion.AssignDefault;
+        var inheritAssignmentTildes = assigningDefault || assignmentValue && builder.Purpose != ExpansionPurpose.IndexedCompound;
         var position = new WordPosition(firstPart, 0);
         if (tildeExpansion != TildeExpansion.None
-            && TryAppendTildePrefix(word, position, scope, builder, assignment.HasValue, out var suffix))
+            && TryAppendTildePrefix(word, position, scope, builder,
+                literalColonTail: !assignment.HasValue && !assigningDefault, out var suffix))
             position = suffix;
         while (position.Part < endPart && scope.CanExpand)
         {
@@ -216,7 +220,8 @@ internal static partial class WordExpansion
             if (part is SourceWordPart { Kind: WordPartKind.Unquoted } source)
             {
                 var next = await ExpandSegmentAsync(source.Source, source, scope, builder, allowWordSplitting, globQuoted: false,
-                        ExpansionQuoteContext.Unquoted, position, assignment, word, inHereDocumentOperand: false)
+                        ExpansionQuoteContext.Unquoted, position, assignment, word, inHereDocumentOperand: false,
+                        inheritAssignmentTildes)
                     .ConfigureAwait(false);
                 if (next is { } selected)
                 {
@@ -317,7 +322,7 @@ internal static partial class WordExpansion
 
     private readonly record struct WordPosition(int Part, int Offset);
 
-    private readonly record struct AssignmentTildes(Word Word, int EqualsOffset, bool InheritInParameterWords);
+    private readonly record struct AssignmentTildes(Word Word, int EqualsOffset);
 
     private static async Task ExpandPartAsync(
         WordPart part,
@@ -399,7 +404,7 @@ internal static partial class WordExpansion
         WordPosition start,
         ScopedEvaluation scope,
         ExpandedWordBuilder output,
-        bool assignment,
+        bool literalColonTail,
         out WordPosition suffix)
     {
         suffix = start;
@@ -408,8 +413,8 @@ internal static partial class WordExpansion
 
         suffix = end;
         // In an ordinary word, Bash carries the unquoted colon tail up to the
-        // slash as literal text. Assignment-style expansion resumes at the colon.
-        if (!assignment && end.Part < word.Parts.Count
+        // slash as literal text. Other consumers can resume at the colon.
+        if (literalColonTail && end.Part < word.Parts.Count
             && ((SourceWordPart)word.Parts[end.Part]).Source[end.Offset] == (byte)':'
             && !TryFindLiteralTailEnd(end, out suffix))
             return false;
@@ -583,7 +588,7 @@ internal static partial class WordExpansion
         SourceWordPart part, ScopedEvaluation scope, ExpandedWordBuilder output,
         bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext) =>
         ExpandSegmentAsync(part.Source, part, scope, output, allowWordSplitting, globQuoted, quoteContext,
-            new WordPosition(0, 0), null, null, inHereDocumentOperand: false);
+            new WordPosition(0, 0), null, null, inHereDocumentOperand: false, inheritAssignmentTildes: false);
 
     private static async Task<WordPosition?> ExpandSegmentAsync(
         ShellSource content,
@@ -596,7 +601,8 @@ internal static partial class WordExpansion
         WordPosition start,
         AssignmentTildes? assignment,
         Word? originalWord,
-        bool inHereDocumentOperand)
+        bool inHereDocumentOperand,
+        bool inheritAssignmentTildes)
     {
         var length = content.Length;
         ShellScanContext? parameterScan = null;
@@ -696,7 +702,7 @@ internal static partial class WordExpansion
                     && (start.Part == 0 && index == tildes.EqualsOffset
                         || value == (byte)':' && (start.Part != 0 || index > tildes.EqualsOffset))
                     && TryAppendTildePrefix(tildes.Word, new WordPosition(start.Part, index + 1),
-                        scope, output, assignment: true, out var suffix))
+                        scope, output, literalColonTail: false, out var suffix))
                 {
                     if (suffix.Part != start.Part)
                         return suffix;
@@ -906,7 +912,7 @@ internal static partial class WordExpansion
                         allowWordSplitting,
                         globQuoted,
                         quoteContext,
-                        assignment?.InheritInParameterWords == true,
+                        inheritAssignmentTildes,
                         content, originalWord, closure)
                     .ConfigureAwait(false);
                 index = closingIndex;
@@ -1031,7 +1037,7 @@ internal static partial class WordExpansion
         ExpansionQuoteContext quoteContext,
         ExpansionPurpose purpose,
         ImplicitEmptyPolicy implicitEmptyPolicy,
-        bool assignmentTildes,
+        TildeExpansion tildeExpansion,
         ExpandedWordBuilder? operandParent)
     {
         if (expression.Length == 0)
@@ -1051,8 +1057,8 @@ internal static partial class WordExpansion
         }
         else
         {
-            var tildeExpansion = purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? TildeExpansion.None
-                : assignmentTildes ? TildeExpansion.Assignment : TildeExpansion.Leading;
+            if (purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)
+                tildeExpansion = TildeExpansion.None;
             await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, tildeExpansion).ConfigureAwait(false);
         }
         if (!scope.CanExpand)
@@ -1066,7 +1072,7 @@ internal static partial class WordExpansion
     private static Task ExpandHereDocumentOperandAsync(ShellSource expression, ScopedEvaluation scope, ExpandedWordBuilder builder) =>
         ExpandSegmentAsync(expression, syntax: null, scope, builder,
             allowWordSplitting: false, globQuoted: true, ExpansionQuoteContext.HereDocument, new WordPosition(0, 0),
-            assignment: null, originalWord: null, inHereDocumentOperand: true);
+            assignment: null, originalWord: null, inHereDocumentOperand: true, inheritAssignmentTildes: false);
 
     private static ExpansionWordSyntax GetOperandSyntax(ExpansionPurpose purpose) => purpose switch
     {

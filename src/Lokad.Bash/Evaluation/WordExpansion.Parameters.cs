@@ -167,7 +167,7 @@ internal static partial class WordExpansion
                     var words = await ExpandOperatorWordAsync(
                             parsed.Word, scanContext, scope, quoteContext,
                             output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? output.Purpose : ExpansionPurpose.Scalar,
-                            ImplicitEmptyPolicy.Preserve, assignmentTildes,
+                            ImplicitEmptyPolicy.Preserve, TildeExpansion.AssignDefault,
                             quoteContext == ExpansionQuoteContext.HereDocument ? output : null)
                         .ConfigureAwait(false);
                     if (!scope.CanExpand)
@@ -273,7 +273,7 @@ internal static partial class WordExpansion
 
                 var words = await ExpandOperatorWordAsync(
                         parsed.Word, scanContext, scope, ExpansionQuoteContext.Unquoted, ExpansionPurpose.Scalar,
-                        ImplicitEmptyPolicy.Preserve, assignmentTildes: false, operandParent: null)
+                        ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, operandParent: null)
                     .ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
@@ -352,7 +352,8 @@ internal static partial class WordExpansion
                     purpose is ExpansionPurpose.Scalar or ExpansionPurpose.CasePattern
                         or ExpansionPurpose.Assignment or ExpansionPurpose.IndexedCompoundOperand
                         or ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource
-                        ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove, assignmentTildes,
+                        ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove,
+                    assignmentTildes ? TildeExpansion.Assignment : TildeExpansion.Leading,
                     purpose == ExpansionPurpose.CasePattern ? output : null)
                 .ConfigureAwait(false);
             if (scope.CanExpand)
@@ -1013,7 +1014,7 @@ internal static partial class WordExpansion
             async Task<ParameterOperand> ExpandOperandAsync(ShellSource source, ExpansionPurpose purpose)
             {
                 var words = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
-                    purpose, ImplicitEmptyPolicy.Preserve, assignmentTildes: false, operandParent: null).ConfigureAwait(false);
+                    purpose, ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, operandParent: null).ConfigureAwait(false);
                 var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, budget);
                 return new ParameterOperand(value, mask);
             }

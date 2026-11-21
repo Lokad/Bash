@@ -82,6 +82,10 @@ indexed compound values use only the leading prefix. For example, the ordinary
 word `~:~` expands to the HOME value followed by literal `:~`. Associative compound
 elements retain their existing literal tilde behavior. Quoted, escaped, or
 expanded colons and here-document text do not start tilde prefixes.
+An assigning parameter default (`${name=word}` or `${name:=word}`) expands a
+leading unquoted tilde and continues expanding its suffix. Subsequent tilde
+prefixes after colons in its own operand stay literal. Nested unquoted default
+and alternate words use the assignment tilde rules.
 
 Function-call prefixes such as `x=prefix f` supply the initial value of a first
 local declaration, including through unprefixed helper calls. Unsetting that
