@@ -114,6 +114,10 @@ and Lokad.Bash's builtin documentation to stdout with status 2. At script
 scope, a leading `local --help` still prints help. Other `local` invocations
 require function context before reporting option errors.
 
+In function listings without named operands, a positive `-a` or `-A`
+array filter selects no rows and returns success. This applies alongside
+function attribute filters and `-p`.
+
 `declare`, `typeset` and `local` support `-l`, `-u` and `-c` case
 attributes. They affect later assignments, including compound arrays,
 appends, case-aware parameter-default results, and values read by `read`

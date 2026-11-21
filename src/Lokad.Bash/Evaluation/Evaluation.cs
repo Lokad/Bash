@@ -1930,7 +1930,11 @@ public sealed partial class Evaluation : IFileTester
 
             async Task<int> EvaluateFunctionsAsync()
             {
+                const DeclarationListingAttributes ArrayFilters =
+                    DeclarationListingAttributes.Indexed | DeclarationListingAttributes.Associative;
                 var noOperands = declaration.Operands.Count == 0;
+                if (noOperands && (options.ListingAttributes & ArrayFilters) != DeclarationListingAttributes.None)
+                    return 0;
                 if (!noOperands && !options.Print && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local
                     && options.InvalidFunctionAttribute.Length != 0)
                 {
