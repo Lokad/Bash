@@ -31,6 +31,8 @@ public static class ByteLines
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
         reservation = null;
 
+        // Ordinary 128-record batches fit here. Large requests still allocate one exact array.
+        Span<int> cachedStarts = stackalloc int[Math.Min(limit - 1, 127)];
         var recordCount = 0;
         var consumed = 0;
         while (recordCount < limit)
@@ -38,8 +40,10 @@ public static class ByteLines
             var delimiterOffset = content[consumed..].IndexOf(delimiter);
             if (delimiterOffset < 0)
                 break;
-            recordCount++;
             consumed += delimiterOffset + 1;
+            if (recordCount < cachedStarts.Length)
+                cachedStarts[recordCount] = consumed;
+            recordCount++;
         }
         if (recordCount <= 1)
         {
@@ -47,15 +51,16 @@ public static class ByteLines
             return consumed;
         }
 
-        // Count first so admission covers one exact array, with no growing scratch collection.
         // The returned offsets can outlive this read just like its retained byte snapshot.
         const int ArrayOverheadBytes = 32;
         reservation = memoryBudget.Reserve(ArrayOverheadBytes + sizeof(int) * (long)(recordCount - 1));
         try
         {
             recordStartOffsets = new int[recordCount - 1];
-            var position = 0;
-            for (var index = 0; index < recordStartOffsets.Length; index++)
+            var cachedCount = Math.Min(cachedStarts.Length, recordStartOffsets.Length);
+            cachedStarts[..cachedCount].CopyTo(recordStartOffsets);
+            var position = recordStartOffsets[cachedCount - 1];
+            for (var index = cachedCount; index < recordStartOffsets.Length; index++)
             {
                 position += content[position..].IndexOf(delimiter) + 1;
                 recordStartOffsets[index] = position;
