@@ -1975,13 +1975,9 @@ public sealed partial class Evaluation : IFileTester
                             await ReportDeclarationOperandAsync(name, "not found").ConfigureAwait(false);
                         continue;
                     }
-                    var attributes = function.Attributes;
-                    // Function lists select the union of attributes, unlike variable lists.
-                    if (noOperands && (options.ListingAttributes != DeclarationListingAttributes.None || caseAttributes != FunctionAttributes.None)
-                        && (attributes & filter) == 0)
-                        continue;
                     if (!inspect)
                     {
+                        var attributes = function.Attributes;
                         // Export validates transport names; declare/local only set the attribute.
                         if (options.Builtin == BuiltinKind.Export && options.ExportChange == DeclarationAttributeChange.Set
                             && !function.Definition.Name.CanExport)
@@ -2022,16 +2018,33 @@ public sealed partial class Evaluation : IFileTester
 
                 IEnumerable<ShellValue> GetListedFunctionNames(MemoryCapacity listingMemory)
                 {
-                    var sorted = new List<ShellValue>();
-                    Memory.PrepareListCapacity(listingMemory, sorted, _state.Functions.Count);
-                    foreach (var name in _state.Functions.Keys)
+                    var functions = _state.Functions;
+                    var filterByAttributes = options.ListingAttributes != DeclarationListingAttributes.None
+                        || caseAttributes != FunctionAttributes.None;
+                    // The namespace is stable until output starts. Count the selected union so the
+                    // snapshot has exact backing even when most functions match.
+                    var selected = filterByAttributes ? functions.Where(MatchesFilter) : functions;
+                    var count = filterByAttributes ? selected.Count() : functions.Count;
+                    if (count == 0)
+                        return [];
+
+                    Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<ShellValue>(count));
+                    var sorted = new ShellValue[count];
+                    var index = 0;
+                    foreach (var (name, _) in selected)
                     {
                         // A sorted name snapshot can outlive a source-backed binding during host writes.
                         Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<byte>(name.Bytes.Length));
-                        sorted.Add(ShellValue.FromBytes(name.Bytes.ToArray()));
+                        sorted[index++] = ShellValue.FromBytes(name.Bytes.ToArray());
                     }
-                    sorted.Sort(ShellValue.ByteOrder);
+                    Array.Sort(sorted, ShellValue.ByteOrder);
                     return sorted;
+
+                    bool MatchesFilter(KeyValuePair<ShellValue, FunctionBinding> entry)
+                    {
+                        CheckCancellation();
+                        return (entry.Value.Attributes & filter) != FunctionAttributes.None;
+                    }
                 }
             }
 

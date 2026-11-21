@@ -179,6 +179,51 @@ public sealed class ByteDeclarationInspectionTests
     }
 
     [Fact]
+    public async Task FilteredFunctionListingKeepsOnlySelectedNamesThroughOutput()
+    {
+        const int Count = 128;
+        var names = Enumerable.Range(0, Count)
+            .Select(index => "probe_" + new string('x', 118) + $"{index:D4}").ToArray();
+        var setup = string.Join('\n', names.Reverse().Select(name => name + "(){ :; }"))
+            + $"\nexport -f {names[0]}\nreadonly -f {names[^1]}\n";
+        var all = await ObserveFirstWriteAsync("declare -F  ", Count);
+        var selected = await ObserveFirstWriteAsync("declare -Frx", 2);
+
+        Assert.True(all.Allowance - selected.Allowance >= 12 * 1024,
+            $"Full listing held {all.Allowance} bytes and filtered listing held {selected.Allowance} bytes.");
+        Assert.Equal($"declare -fx {names[0]}\ndeclare -fr {names[^1]}\n", selected.Output);
+
+        async Task<(long Allowance, string Output)> ObserveFirstWriteAsync(string listing, int expectedRows)
+        {
+            var state = new Eval(Parser.Parse(setup + listing));
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = governor };
+            long allowance = 0;
+            var rows = 0;
+            host.BeforeAppend = (descriptor, content, _) =>
+            {
+                if (descriptor != FileDescriptor.StdOut || !content.Span.StartsWith("declare -f"u8))
+                    return;
+                if (rows == 0)
+                    allowance = governor.ReservedBytes;
+                rows++;
+            };
+
+            var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(expectedRows, rows);
+            Assert.True(allowance > 0);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return (allowance, host.StandardOutput.TextContent);
+        }
+    }
+
+    [Fact]
     public async Task ExportListingUsesEachSavedPrefixBindingOnce()
     {
         var result = await EndToEndHarness.RunScriptAsync("""
