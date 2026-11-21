@@ -466,6 +466,11 @@ that forms a complete command list there. The prefix supplies the unit's final s
 resolution. They validate leading options before performing a file lookup or
 allocating copied script source. `source` decodes its selected filename and
 copies its positional argument tail directly into the callee frame.
+
+Positional substring expansion resolves the bounds before reading the selected
+arguments. It indexes the active window from the selected position and includes
+the captured `$0` when a nonempty slice starts at zero.
+
 `caller` merges active sourced invocations with the function chain.
 Each source command owns its immutable frame across execution and child
 cleanup. Child evaluations borrow the frame chain and preserve the order

@@ -19,7 +19,26 @@ internal static partial class WordExpansion
     {
         internal sealed record Indexed(IndexedArray Array) : ParameterSource;
         internal sealed record Associative(AssociativeArray Array) : ParameterSource;
-        internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource;
+        internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource
+        {
+            internal IEnumerable<ShellValue> ValuesFrom(long first, int count)
+            {
+                if (count == 0)
+                    yield break;
+                if (first == 0)
+                {
+                    yield return ArgumentZero;
+                    first = 1;
+                    count--;
+                }
+
+                // The positional window supports direct indexing after shift.
+                var start = (int)(first - 1);
+                var end = (int)Math.Min(start + (long)count, Arguments.Count);
+                for (var index = start; index < end; index++)
+                    yield return Arguments[index];
+            }
+        }
         internal sealed record Keys(IEnumerable<ShellValue> Values, int KeyCount) : ParameterSource;
 
         public int Count => this switch
@@ -1131,9 +1150,7 @@ internal static partial class WordExpansion
                         Emit(associative.Array.PresentValues.Skip((int)Math.Max(0, start - 1)).Take(count));
                         return;
                     case ParameterSource.Positional positional:
-                        Emit((start == 0
-                            ? Enumerable.Repeat(positional.ArgumentZero, 1).Concat(positional.Arguments)
-                            : positional.Arguments.Skip((int)(start - 1))).Take(count));
+                        Emit(positional.ValuesFrom(start, count));
                         return;
                 }
             }

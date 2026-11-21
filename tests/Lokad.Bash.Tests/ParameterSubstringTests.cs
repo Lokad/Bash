@@ -4,6 +4,21 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ParameterSubstringTests
 {
+    [Theory]
+    [InlineData("set -- dropped '' $'\\377' tail; shift; printf '<%s>' \"${@:1:2}\"", "3C3E3CFF3E")]
+    [InlineData("set -- dropped '' tail; shift; IFS=:; printf '<%s>' \"${*: -2:2}\"", "3C3A7461696C3E")]
+    [InlineData("set -- value; f(){ printf '<%s>' \"$#\"; }; f \"${@:0:0}\"; f \"${@:0:1}\"; f \"${@:2:1}\"",
+        "3C303E3C313E3C303E")]
+    public async Task PositionalSliceUsesTheShiftedWindowAndArity(string script, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, Convert.ToHexString(host.StandardOutput.Content.Span));
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
 
     [Theory]
     [InlineData("x=abc; a=(1 2); eval 'printf \"%s\" \"${x:${a[@]:0:2}:1}\"'; printf 'after:%s' \"$?\"", "after:1", "x: 1 2: syntax error in expression (error token is \"2\")\n")]
