@@ -7,7 +7,7 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
-    private enum BuiltinHelpFormat { Detailed, Description, Synopsis, Manual }
+    private enum BuiltinHelpFormat { Catalog, Detailed, Description, Synopsis, Manual }
 
     /// <summary>Prints builtin documentation through the current command's stdout and redirections.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinHelpAsync(IReadOnlyList<ShellValue> words, bool negated)
@@ -41,9 +41,9 @@ public sealed partial class Evaluation
         var matched = false;
         if (firstPattern == words.Count)
         {
-            Append("Supported shell builtins (use help name for details):\n");
+            output.Append("Supported shell builtins (use help name for details):\n"u8);
             foreach (var (name, kind) in BuiltinClassification.Entries)
-                Append(BuiltinDocumentation.For(kind).Synopsis(name) + "\n");
+                AppendTopic(name, kind, BuiltinHelpFormat.Catalog);
             matched = true;
         }
         else
@@ -71,17 +71,7 @@ public sealed partial class Evaluation
                                 requireEnd: true, Memory.Workspace, _cancellationToken, out _) == GlobMatchResult.Match))
                             continue;
                         found = true;
-                        var (name, kind) = registration;
-                        var documentation = BuiltinDocumentation.For(kind);
-                        var synopsis = format == BuiltinHelpFormat.Description ? name : documentation.Synopsis(name);
-                        Append(format switch
-                        {
-                            BuiltinHelpFormat.Description => name + " - " + documentation.Summary + "\n",
-                            BuiltinHelpFormat.Synopsis => name + ": " + synopsis + "\n",
-                            BuiltinHelpFormat.Manual => "NAME\n    " + name + " - " + documentation.Summary
-                                + "\n\nSYNOPSIS\n    " + synopsis + "\n\nDESCRIPTION\n    " + documentation.Description + "\n\n",
-                            _ => name + ": " + synopsis + "\n    " + documentation.Description + "\n"
-                        });
+                        AppendTopic(registration.Name, registration.Kind, format);
                     }
                     return found;
                 }
@@ -99,11 +89,49 @@ public sealed partial class Evaluation
         var result = await WriteBuiltinOutputAsync(command, output.ToMemory()).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 0), negated).ConfigureAwait(false);
 
-        void Append(string text)
+        void AppendTopic(string name, BuiltinKind kind, BuiltinHelpFormat topicFormat)
+        {
+            var documentation = BuiltinDocumentation.For(kind);
+            var topic = name.AsMemory();
+            var newline = "\n".AsMemory();
+            if (topicFormat == BuiltinHelpFormat.Description)
+            {
+                AppendRecord([topic, " - ".AsMemory(), documentation.Summary, newline]);
+                return;
+            }
+
+            var arguments = documentation.SynopsisArguments(name).AsMemory();
+            var separator = arguments.IsEmpty ? default : " ".AsMemory();
+            switch (topicFormat)
+            {
+                case BuiltinHelpFormat.Catalog:
+                    AppendRecord([topic, separator, arguments, newline]);
+                    break;
+                case BuiltinHelpFormat.Synopsis:
+                    AppendRecord([topic, ": ".AsMemory(), topic, separator, arguments, newline]);
+                    break;
+                case BuiltinHelpFormat.Manual:
+                    AppendRecord(["NAME\n    ".AsMemory(), topic, " - ".AsMemory(), documentation.Summary,
+                        "\n\nSYNOPSIS\n    ".AsMemory(), topic, separator, arguments,
+                        "\n\nDESCRIPTION\n    ".AsMemory(), documentation.Description.AsMemory(), "\n\n".AsMemory()]);
+                    break;
+                default:
+                    AppendRecord([topic, ": ".AsMemory(), topic, separator, arguments, "\n    ".AsMemory(),
+                        documentation.Description.AsMemory(), newline]);
+                    break;
+            }
+        }
+
+        void AppendRecord(ReadOnlySpan<ReadOnlyMemory<char>> fragments)
         {
             var encoding = Utf8Text.StrictUtf8;
-            var byteCount = encoding.GetByteCount(text);
-            encoding.GetBytes(text.AsSpan(), output.AppendSpan(byteCount));
+            // Admit each complete record as one append before encoding its borrowed fragments.
+            var byteCount = 0;
+            foreach (var fragment in fragments)
+                byteCount += encoding.GetByteCount(fragment.Span);
+            var destination = output.AppendSpan(byteCount);
+            foreach (var fragment in fragments)
+                destination = destination[encoding.GetBytes(fragment.Span, destination)..];
         }
     }
 }

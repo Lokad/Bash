@@ -8,17 +8,22 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
     private const string CaseAttributeDescription =
         "\n    -l lowercases assigned values, -u uppercases them, and -c uppercases the first character and lowercases the rest.";
 
-    public string Summary
+    public ReadOnlyMemory<char> Summary
     {
         get
         {
             var end = Description.IndexOf('\n');
-            return end < 0 ? Description : Description[..end];
+            return end < 0 ? Description.AsMemory() : Description.AsMemory(0, end);
         }
     }
 
-    public string Synopsis(string name) => name == "[" ? "[ expression ]"
-        : Arguments.Length == 0 ? name : name + " " + Arguments;
+    internal string SynopsisArguments(string name) => name == "[" ? "expression ]" : Arguments;
+
+    public string Synopsis(string name)
+    {
+        var arguments = SynopsisArguments(name);
+        return arguments.Length == 0 ? name : name + " " + arguments;
+    }
 
     internal static string DeclarationOptionSynopsis(BuiltinKind kind, string name) => kind switch
     {

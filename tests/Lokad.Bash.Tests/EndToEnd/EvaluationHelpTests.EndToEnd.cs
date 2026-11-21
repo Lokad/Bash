@@ -47,9 +47,12 @@ public sealed class EvaluationHelpTestsEndToEnd
     [Theory]
     [InlineData("help true", "true: true\n    Return success.\n")]
     [InlineData("help -d true tru", "true - Return success.\ntrue - Return success.\n")]
+    [InlineData("help -d read", "read - Read one record and split it into fields using IFS; without names, assign REPLY.\n")]
     [InlineData("help -s '['", "[: [ expression ]\n")]
     [InlineData("help -s 'tr?e'", "true: true\n")]
     [InlineData("help -m true", "NAME\n    true - Return success.\n\nSYNOPSIS\n    true\n\nDESCRIPTION\n    Return success.\n\n")]
+    [InlineData("help -m '['", "NAME\n    [ - Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax.\n\n"
+        + "SYNOPSIS\n    [ expression ]\n\nDESCRIPTION\n    Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax.\n\n")]
     public async Task HelpKeepsTopicOrderAndExactRecordBytes(string source, string expected)
     {
         var result = await EvaluationTestHelper.RunAsync(source);
