@@ -142,9 +142,10 @@ charged through pending operations and is refunded when traversal unwinds.
 Case selection holds its expanded subject across reached alternatives and any
 body chain that resumes matching. Each alternative keeps its expanded word and
 prepared matcher through comparison, then reuses the same command workspace for
-the next alternative. Pattern scratch retires before a body runs. The subject
-retires before the final body chain or when matching ends. Retained binding
-effects survive workspace reuse.
+the next alternative. Pattern scratch retires before a body runs. When matching
+will resume, compact subject backing keeps its charge and the expansion scratch
+retires before the first body. The subject retires before the final body chain
+or when matching ends. Retained binding effects survive workspace reuse.
 
 Command-prefix preparation and isolated external redirection expansion borrow
 the caller's store and positional frame.

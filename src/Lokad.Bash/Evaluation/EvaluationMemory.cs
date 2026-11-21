@@ -119,10 +119,13 @@ internal sealed class EvaluationMemory
 
         /// <summary>Reuses the active frame after its temporary results have been consumed.</summary>
         /// <remarks>Nested frames must have finished before resetting their caller.</remarks>
-        internal void ResetWorkspace()
+        internal void ResetWorkspace() => ResetWorkspace(0);
+
+        /// <summary>Retires scratch while preserving the charge for a result still owned by this frame.</summary>
+        internal void ResetWorkspace(long liveWorkspaceBytes)
         {
             var retained = RetainedBytes(scope);
-            owner._memory.Resize(checked(baseline + retained));
+            owner._memory.Resize(checked(baseline + retained + liveWorkspaceBytes));
             if (owner._refused)
             {
                 owner._memory.ReleaseUnusedCapacity();

@@ -4298,7 +4298,8 @@ public partial class EvaluationTests
         var fallThrough = await MeasureAsync(";&");
         var retest = await MeasureAsync(";;&");
 
-        Assert.True(retest.First - fallThrough.First >= 8192);
+        var subjectBytes = 128 * 64 + 127;
+        Assert.Equal(MemoryCapacity.ArrayBackingBytes<byte>(subjectBytes), retest.First - fallThrough.First);
         Assert.Equal(fallThrough.Second, retest.Second);
 
         static async Task<(long First, long Second)> MeasureAsync(string terminator)

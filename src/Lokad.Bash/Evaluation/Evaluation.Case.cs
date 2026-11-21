@@ -1,4 +1,5 @@
 using System.Threading.Tasks;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -23,6 +24,7 @@ public sealed partial class Evaluation
 
             var items = caseCommand.Items;
             var result = EvaluationResult.FromExitCode(0);
+            var subjectScratchRetired = false;
             for (var index = 0; index < items.Count;)
             {
                 index = await FindMatchAsync(subject, index).ConfigureAwait(false);
@@ -45,6 +47,15 @@ public sealed partial class Evaluation
                     var owner = subjectMemory;
                     subjectMemory = null;
                     owner?.Dispose();
+                }
+                else if (!subjectScratchRetired)
+                {
+                    // A later match needs the bytes, while preparation scratch has already finished.
+                    if (caseCommand.Subject.LiteralFields != null || subject.IsEmpty)
+                        subjectMemory?.ResetWorkspace();
+                    else if (subject.TryGetCompactArrayCapacity(out var capacity))
+                        subjectMemory?.ResetWorkspace(MemoryCapacity.ArrayBackingBytes<byte>(capacity));
+                    subjectScratchRetired = true;
                 }
                 for (; index <= last; index++)
                 {
