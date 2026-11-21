@@ -136,9 +136,15 @@ internal sealed class IndexedArray
     {
         if (!IsInitialized || count <= 0 || _maximumIndex is not { } maximum || first.Value > maximum)
             yield break;
+        if (count == 1 && _elements.TryGetValue(first.Value, out var exact))
+        {
+            yield return exact.GetValueOrDefault();
+            yield break;
+        }
         // Seek into the existing position tree. Do not ask the subset for Count:
         // that would enumerate its entire range before a small window can be read.
-        foreach (var position in _positions.GetViewBetween(first.Value, maximum))
+        var positions = first.Value == 0 ? _positions : _positions.GetViewBetween(first.Value, maximum);
+        foreach (var position in positions)
         {
             yield return _elements[position].GetValueOrDefault();
             if (--count == 0)

@@ -118,6 +118,23 @@ public sealed class IndexedArrayRangeTests
         Assert.Empty(new IndexedArray(isInitialized: false).ValuesFrom(default, 2));
     }
 
+    [Fact]
+    public void ValuesFrom_SingletonIncludesAnUnassignedPositionUntilItIsRemoved()
+    {
+        var array = new IndexedArray(isInitialized: false);
+        Assert.True(IndexedArrayIndex.TryCreate(2, out var two));
+        Assert.True(IndexedArrayIndex.TryCreate(8, out var eight));
+        var last = ShellValue.FromText("last");
+        array.Set(eight, last);
+
+        var selected = array.ValuesFrom(two, 1);
+        array.Set(two, null);
+        Assert.Equal(ShellValue.Empty, Assert.Single(selected));
+
+        array.Remove(two);
+        Assert.Equal(last, Assert.Single(selected));
+    }
+
     [Theory]
     [InlineData(0, -1, "")]
     [InlineData(0, 0, "")]
