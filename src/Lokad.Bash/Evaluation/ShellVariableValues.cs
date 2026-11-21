@@ -240,6 +240,11 @@ internal sealed class IndexedArray
                 array.Set(position, values[index++], memory: null, prepaidBytes: 0);
             }
         }
+        else if (values.Count > 1)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            array._elements.EnsureCapacity(values.Count);
+        }
         for (; index < values.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -253,36 +258,38 @@ internal sealed class IndexedArray
     internal void SetSequential(
         uint origin, IReadOnlyList<ShellValue> values, EvaluationMemory? memory, CancellationToken cancellationToken)
     {
-        if (memory != null)
+        var capacity = _elements.EnsureCapacity(0);
+        if (capacity == 0 && values.Count > 1)
         {
-            var capacity = _elements.EnsureCapacity(0);
-            if (capacity != 0 && values.Count > capacity - _elements.Count)
+            // The already admitted batch supplies every position in a fresh table.
+            _elements.EnsureCapacity(values.Count);
+        }
+        else if (memory != null && capacity != 0 && values.Count > capacity - _elements.Count)
+        {
+            var added = 0;
+            for (var index = 0; index < values.Count; index++)
             {
-                var added = 0;
-                for (var index = 0; index < values.Count; index++)
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_elements.ContainsKey(unchecked(origin + (uint)index)))
+                    added++;
+            }
+
+            // Keep the new position nodes covered by the existing per-record admission.
+            var prepaid = (long)values.Count * ElementMemoryBytes - added * PositionNodeBytes;
+            var (replacementCapacity, overlap) = EstimateDictionaryGrowth(
+                capacity, checked(_elements.Count + added), prepaid);
+            if (replacementCapacity != 0)
+            {
+                memory.Charge(overlap);
+                try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (!_elements.ContainsKey(unchecked(origin + (uint)index)))
-                        added++;
+                    _elements.EnsureCapacity(replacementCapacity);
                 }
-
-                // Keep the new position nodes covered by the existing per-record admission.
-                var prepaid = (long)values.Count * ElementMemoryBytes - added * PositionNodeBytes;
-                var (replacementCapacity, overlap) = EstimateDictionaryGrowth(
-                    capacity, checked(_elements.Count + added), prepaid);
-                if (replacementCapacity != 0)
+                finally
                 {
-                    memory.Charge(overlap);
-                    try
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        _elements.EnsureCapacity(replacementCapacity);
-                    }
-                    finally
-                    {
-                        if (overlap != 0)
-                            memory.Workspace.Resize(memory.Workspace.Bytes - overlap);
-                    }
+                    if (overlap != 0)
+                        memory.Workspace.Resize(memory.Workspace.Bytes - overlap);
                 }
             }
         }
