@@ -160,7 +160,7 @@ public sealed class ReadTargetBindingTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ReadDelimitedScratchFollowsThePendingRecord(bool cancel)
+    public async Task ReadDelimitedKeepsTheBufferOwnerThroughThePendingBorrow(bool cancel)
     {
         var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
         using var owner = governor.CreateScope();
@@ -170,35 +170,108 @@ public sealed class ReadTargetBindingTests
         var state = new Eval(Parser.Parse("value=old; read -d : value; printf '%s' \"$value\""));
         state.Memory.Budget = owner;
         var evaluation = state.EnsureRunning(cancellation.Token);
-        var read = Assert.IsType<ReadRecordOperation>(await state.GetNextStep());
+        var read = Assert.IsType<ReadInputOperation>(await state.GetNextStep());
+        var before = governor.ReservedBytes;
         var dispatch = ShellOperationDispatcher.DispatchAsync(read, host, cancellation.Token);
         await host.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var whilePending = governor.ReservedBytes;
         if (cancel)
             cancellation.Cancel();
-        var pendingBytes = read.Memory.Bytes;
         var endedBeforeHost = evaluation.IsCompleted;
         host.Release.SetResult();
-        await dispatch;
 
-        Assert.True(pendingBytes > 0);
+        Assert.Equal(before, whilePending);
         Assert.False(endedBeforeHost);
         if (cancel)
         {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatch);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => state.GetNextStep());
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
             Assert.Equal(ShellValue.FromText("old"), state.Variables["value"]);
+            Assert.Equal(0, host.ReadBytesConsumed);
         }
         else
         {
+            await dispatch;
             var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
-            Assert.Equal(0, read.Memory.Bytes);
             Assert.Equal(FileDescriptor.StdOut, write.FileDescriptor);
             Assert.True(write.Content.Span.SequenceEqual("value"u8));
+            Assert.Equal(6, host.ReadBytesConsumed);
             write.SetResult(DescriptorWriteResult.Open);
             Assert.Null(await state.GetNextStep());
             await evaluation;
         }
-        Assert.Equal(0, read.Memory.Bytes);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ReadDelimitedPublishesAShortRecordWithinTheBudget()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        await using var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), governor);
+        host.SetStandardInput("a\\:b:tail\n");
+        using var owner = governor.CreateScope();
+        var state = new Eval(Parser.Parse("IFS= read -d: value; status=$?; IFS= read -r tail"));
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(ShellValue.FromText("a:b"), state.Variables["value"]);
+        Assert.Equal(ShellValue.FromText("tail"), state.Variables["tail"]);
+        Assert.Equal(ShellValue.FromText("0"), state.Variables["status"]);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ReadDelimitedCarriesAnEscapeIntoTheNextWindow()
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        await using var host = new MockFileSystem { MemoryBudget = governor, MaximumReadWindowBytes = 2 };
+        host.SetStandardInput("a\\:b:tail\n");
+        using var owner = governor.CreateScope();
+        var state = new Eval(Parser.Parse("IFS= read -d: value; status=$?; IFS= read -r tail"));
+
+        await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(ShellValue.FromText("a:b"), state.Variables["value"]);
+        Assert.Equal(ShellValue.FromText("tail"), state.Variables["tail"]);
+        Assert.Equal(ShellValue.FromText("0"), state.Variables["status"]);
+        Assert.Equal(10, host.ReadBytesConsumed);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ReadDelimitedFailureConsumesOnlyTheFailedPhysicalRecord()
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        var bytes = "a\\:tail"u8.ToArray();
+        var error = new OperationError("fixture read failure\n");
+        var borrow = new DescriptorReadBufferOwner(static _ => { }, owner);
+        var host = new TestOperationVisitor([])
+        {
+            ReadOverride = _ => ValueTask.FromResult(borrow.Borrow(bytes,
+                ByteReadResult.Failure(bytes.Length, error, false), canRetain: true))
+        };
+        var state = new Eval(Parser.Parse("value=old; read -d: value"));
+        state.Memory.Budget = owner;
+        var read = await state.GetNextStep();
+        Assert.NotNull(read);
+        await ShellOperationDispatcher.DispatchAsync(read, host, CancellationToken.None);
+        var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.True(diagnostic.Content.Span.SequenceEqual("read: read error: 0: fixture read failure\n"u8));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("old"), state.Variables["value"]);
+        Assert.Equal(3, borrow.Position);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]
@@ -219,20 +292,23 @@ public sealed class ReadTargetBindingTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    [Fact]
-    public async Task ReadCountKeepsItsTargetOnInputBufferRefusal()
+    [Theory]
+    [InlineData("-rN81920")]
+    [InlineData("-rd:")]
+    public async Task ReadKeepsItsTargetOnInputBufferRefusal(string options)
     {
         var governor = new MemoryGovernor(96 * 1024);
         await using var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), governor);
         host.SetStandardInput(new string('x', 80 * 1024));
         using var owner = governor.CreateScope();
-        var state = new Eval(Parser.Parse("value=old; read -rN81920 value; status=$?"));
+        var state = new Eval(Parser.Parse($"value=old; read {options} value; status=$?"));
 
         await new Engine().RunAsync(state, host, owner, CancellationToken.None);
 
         Assert.Equal(ShellValue.FromText("old"), state.Variables["value"]);
         Assert.Equal(ShellValue.FromText("1"), state.Variables["status"]);
         Assert.Equal("read: shared memory budget exhausted\n", host.StandardError.TextContent);
+        Assert.Equal(64 * 1024, host.ReadBytesConsumed);
         owner.Dispose();
         Assert.Equal(0, governor.ReservedBytes);
     }
@@ -248,7 +324,7 @@ public sealed class ReadTargetBindingTests
         var state = new Eval(Parser.Parse("value=old; read -N2 value"));
         state.Memory.Budget = owner;
         var evaluation = state.EnsureRunning(cancellation.Token);
-        var read = Assert.IsType<ReadCountedRecordOperation>(await state.GetNextStep());
+        var read = Assert.IsType<ReadInputOperation>(await state.GetNextStep());
         var dispatch = ShellOperationDispatcher.DispatchAsync(read, host, cancellation.Token);
         await host.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         cancellation.Cancel();

@@ -54,10 +54,8 @@ internal static class ShellOperationDispatcher
                 DescriptorReader.ReadRecordBatchAsync((state.Host, request.Descriptor),
                     static (source, read, token) => source.Host.ReadAsync(source.Descriptor, read, token),
                     request.Delimiter, request.Limit, request.DestinationBudget, state.CancellationToken))),
-            ReadRecordOperation record => record.UseResult(state, static (request, state) =>
-                ReadRecordAsync(request, state.Host, state.CancellationToken)),
-            ReadCountedRecordOperation counted => HandleReadLimitAsync(counted.UseResult(state, static (request, state) =>
-                ReadCountedRecordAsync(request, state.Host, state.CancellationToken))),
+            ReadInputOperation input => HandleReadLimitAsync(input.UseResult(state, static (request, state) =>
+                ReadInputAsync(request, state.Host, state.CancellationToken))),
             ReadSubstitutionInputOperation input => input.UseResult(state, static (request, state) =>
                 state.Host.TryReadAllBytesAsync(request.Descriptor, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1,
                     static _ => { }, request.DestinationBudget, state.CancellationToken)),
@@ -164,37 +162,36 @@ internal static class ShellOperationDispatcher
             }
         }
 
-        static async ValueTask<ReadRecordResult> ReadRecordAsync(
-            ReadRecordOperation request, IBashHost host, CancellationToken cancellationToken)
-        {
-            using var reader = new DelimitedRecordReader(host, request.Descriptor, request.Delimiter,
-                DelimitedRecordStorage.Reusable, request.Memory.Grow, keepBorrow: false, cancellationToken);
-            var record = await reader.ReadNextBoundedAsync(request.MaximumBytes, DelimitedRecordOverflow.Stop)
-                .ConfigureAwait(false);
-            // Return only this record's bytes; do not allocate or retain a full reader buffer per read builtin.
-            if (record is { } value)
-            {
-                const int ArrayHeaderBytes = 32;
-                request.Memory.Grow(value.Content.Length + ArrayHeaderBytes);
-                record = value with { Content = value.Content.ToArray() };
-            }
-            return new ReadRecordResult(record, reader.ReadFailure);
-        }
-
-        static async ValueTask<(bool Complete, OperationError? Error)> ReadCountedRecordAsync(
-            ReadCountedRecordOperation request, IBashHost host, CancellationToken cancellationToken)
+        static async ValueTask<(bool Complete, OperationError? Error)> ReadInputAsync(
+            ReadInputOperation request, IBashHost host, CancellationToken cancellationToken)
         {
             var input = new ReadInputBuffer(request.Content, request.BackslashMode);
-            var remaining = request.Count;
+            var remaining = request.Count ?? int.MaxValue;
+            // Uncounted custom records also bound source bytes skipped by normalization.
+            int? sourceRemaining = request.Count.HasValue ? null : ByteMemoryBuilder.MaxMemoryBuilderBytes;
             while (true)
             {
                 using var buffer = await host.ReadAsync(request.Descriptor,
                     DescriptorReadRequest.UpTo(DescriptorReader.BufferSize), cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+                var bytes = buffer.Content.Span;
                 if (buffer.Result.Error is { } error)
+                {
+                    // Preserve the custom record reader's cursor at the failed physical record.
+                    if (request.Count == null && request.Delimiter is { } delimiter)
+                    {
+                        var stop = bytes.IndexOf(delimiter);
+                        buffer.Consume(stop < 0 ? bytes.Length : stop + 1);
+                    }
                     return (false, error);
-                var complete = input.Append(buffer.Content.Span, request.Delimiter, ref remaining, out var consumed,
+                }
+
+                var window = sourceRemaining is { } limit && limit < bytes.Length ? bytes[..limit] : bytes;
+                var complete = input.Append(window, request.Delimiter, ref remaining, out var consumed,
                     cancellationToken);
+                if (!complete && consumed < bytes.Length)
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                sourceRemaining -= consumed;
                 buffer.Consume(consumed);
                 if (complete || buffer.Result.ReachedEoF)
                     return (complete, null);

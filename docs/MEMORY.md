@@ -207,6 +207,9 @@ uncovered growth at each reached write, using remaining batch credit and
 holding the original binding through rollback.
 `read` retains the normalized assignment prefix while consuming the complete
 logical record. The physical read keeps its ordinary admitted buffer lifetime.
+Custom-delimiter and counted reads normalize borrowed descriptor windows
+directly into the reusable content buffer. Each successful window commits
+only the accepted prefix. The window borrow settles before field assignment.
 
 Tilde-prefix eligibility uses borrowed word metadata and bounded scalar state.
 It does not detach a HOME/PWD/OLDPWD binding for an ineligible prefix. Reached

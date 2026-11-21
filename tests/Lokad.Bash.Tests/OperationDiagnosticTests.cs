@@ -37,8 +37,8 @@ public sealed class OperationDiagnosticTests
             case ReadLineOperation line:
                 line.SetResult(ReadResult.Failure(error));
                 break;
-            case ReadRecordOperation record:
-                record.SetResult(new ReadRecordResult(null, ByteReadResult.Failure(0, error, false)));
+            case ReadInputOperation input:
+                input.SetResult((false, error));
                 break;
             case WriteOperation output:
                 output.SetResult(DescriptorWriteResult.Failure(error));

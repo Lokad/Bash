@@ -10,19 +10,14 @@ internal struct ReadInputBuffer(ByteMemoryBuilder content, ReadBackslashMode bac
     private bool _escaped;
     private bool _assignedContentEnded;
 
-    /// <summary>Appends a framed record and reports whether its delimiter was escaped.</summary>
-    public bool AppendRecord(ReadOnlySpan<byte> bytes, byte delimiter, bool hasTerminator, CancellationToken cancellationToken)
+    /// <summary>Appends a framed line and reports whether its LF was escaped.</summary>
+    public bool AppendLine(ReadOnlySpan<byte> bytes, bool hasTerminator, CancellationToken cancellationToken)
     {
         var remaining = int.MaxValue;
         Append(bytes, delimiter: null, ref remaining, out _, cancellationToken);
-        if (!hasTerminator || backslashMode == ReadBackslashMode.Preserve)
+        if (!hasTerminator || !_escaped)
             return false;
-        if (_escaped)
-            AppendEscapedByte(delimiter);
-        else if (delimiter == (byte)'\\')
-            _escaped = true;
-        else
-            return false;
+        _escaped = false;
         return true;
     }
 

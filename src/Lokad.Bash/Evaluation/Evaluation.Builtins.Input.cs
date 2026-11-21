@@ -239,13 +239,13 @@ public sealed partial class Evaluation
         async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectInputAsync()
         {
             var content = memory.Content;
-            if (count is { } length)
+            if (count.HasValue || delimiter != (byte)'\n')
             {
-                if (length == 0)
+                if (count == 0)
                     return (inputDescriptor.IsClosed ? 1 : 0, default, false);
                 var completion = new TaskCompletionSource<(bool Complete, OperationError? Error)>(TaskCreationOptions.RunContinuationsAsynchronously);
-                PublishOperation(new ReadCountedRecordOperation(completion, inputDescriptor,
-                    ignoreDelimiter ? null : delimiter, length, backslashMode, content));
+                PublishOperation(new ReadInputOperation(completion, inputDescriptor,
+                    ignoreDelimiter ? null : delimiter, count, backslashMode, content));
                 try
                 {
                     var (complete, failure) = await completion.Task.ConfigureAwait(false);
@@ -260,9 +260,6 @@ public sealed partial class Evaluation
             }
 
             var normalization = new ReadInputBuffer(content, backslashMode);
-            if (delimiter != (byte)'\n')
-                return await CollectDelimitedInputAsync().ConfigureAwait(false);
-
             var physicalLine = memory.PhysicalLine ??= new ByteMemoryBuilder(0, Memory.Budget);
             try
             {
@@ -293,8 +290,8 @@ public sealed partial class Evaluation
 
                     var line = result.Content;
                     var hasTerminator = line.Span[^1] == (byte)'\n';
-                    if (normalization.AppendRecord(hasTerminator ? line.Span[..^1] : line.Span,
-                            delimiter, hasTerminator, _cancellationToken))
+                    if (normalization.AppendLine(hasTerminator ? line.Span[..^1] : line.Span,
+                            hasTerminator, _cancellationToken))
                     {
                         if (result.ReachedEoF)
                         {
@@ -324,44 +321,6 @@ public sealed partial class Evaluation
                     physicalLine.Dispose();
                     memory.PhysicalLine = null;
                 }
-            }
-
-            async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectDelimitedInputAsync()
-            {
-                OperationError? readError = null;
-                using (var recordMemory = new MemoryCapacity(Memory.Budget, 0))
-                {
-                    var remaining = ByteMemoryBuilder.MaxMemoryBuilderBytes;
-                    while (true)
-                    {
-                        _cancellationToken.ThrowIfCancellationRequested();
-                        recordMemory.Resize(0);
-                        var completion = new TaskCompletionSource<ReadRecordResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        PublishOperation(new ReadRecordOperation(completion, inputDescriptor, delimiter, remaining, recordMemory));
-                        var result = await completion.Task.ConfigureAwait(false);
-                        _cancellationToken.ThrowIfCancellationRequested();
-                        if (result.Record is { ExceedsLimit: true })
-                            break;
-                        if (result.Failure.Error is { } error)
-                        {
-                            readError = error;
-                            break;
-                        }
-                        if (result.Record is not { } record)
-                            return (1, content.ToMemory(), false);
-
-                        var sourceBytes = record.Content.Length + (record.HasTerminator ? 1 : 0);
-                        if (sourceBytes > remaining)
-                            break;
-                        remaining -= sourceBytes;
-                        if (!normalization.AppendRecord(record.Content.Span, delimiter, record.HasTerminator, _cancellationToken))
-                            return (record.HasTerminator ? 0 : 1, content.ToMemory(), false);
-                    }
-                }
-
-                return readError is { } failure
-                    ? await ReadFailureAsync(failure).ConfigureAwait(false)
-                    : await RejectInputAsync().ConfigureAwait(false);
             }
 
             async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> ReadFailureAsync(OperationError error)
