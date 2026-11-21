@@ -232,32 +232,32 @@ internal sealed class IndexedArray
 
     /// <summary>Replaces foreground status values using the caller's admitted result backing.</summary>
     internal static IndexedArray FromForegroundStatuses(
-        IReadOnlyList<ShellValue> values, IndexedArray? previous, CancellationToken cancellationToken)
+        IReadOnlyList<int> statuses, IndexedArray? previous, CancellationToken cancellationToken)
     {
         var array = new IndexedArray(isInitialized: true);
         var index = 0;
         // When the old array fits, Bash updates its existing elements in index order before
         // appending at ordinal positions. A shorter status list rebuilds from position zero.
-        if (previous != null && previous._elements.Count <= values.Count && previous._maximumIndex >= previous._elements.Count)
+        if (previous != null && previous._elements.Count <= statuses.Count && previous._maximumIndex >= previous._elements.Count)
         {
             foreach (var position in previous._positions)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                array.Set(position, values[index++], memory: null, prepaidBytes: 0);
-            }
+                array.Set(position, FormatStatusAt(index++), memory: null, prepaidBytes: 0);
         }
-        else if (values.Count > 1)
+        else if (statuses.Count > 1)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            array._elements.EnsureCapacity(values.Count);
+            array._elements.EnsureCapacity(statuses.Count);
         }
-        for (; index < values.Count; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            array.Set(index, values[index], memory: null, prepaidBytes: 0);
-        }
+        for (; index < statuses.Count; index++)
+            array.Set(index, FormatStatusAt(index), memory: null, prepaidBytes: 0);
         array.IsInitialized = previous?.IsInitialized ?? true;
         return array;
+
+        ShellValue FormatStatusAt(int offset)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ShellValue.FromBytes(NumberFormatting.FormatNumber(statuses[offset]));
+        }
     }
 
     /// <summary>Publishes admitted records after checking dictionary growth for the whole batch.</summary>

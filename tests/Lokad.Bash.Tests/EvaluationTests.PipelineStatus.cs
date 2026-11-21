@@ -191,6 +191,22 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public void PipelineStatusCancellationDuringTheLastResultKeepsThePreviousArray()
+    {
+        var variables = Variables.CreateEmpty();
+        variables.SetPipelineStatuses([7, 3], default, CancellationToken.None);
+        var previous = variables.IndexedArrays["PIPESTATUS"];
+        using var cancellation = new CancellationTokenSource();
+        var statuses = new CancelOnLastStatus([1, 2, 3], cancellation);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            variables.SetPipelineStatuses(statuses, default, cancellation.Token));
+
+        Assert.Same(previous, variables.IndexedArrays["PIPESTATUS"]);
+        Assert.Equal(["7", "3"], previous.PresentValues.Select(status => status.ToUtf8String()));
+    }
+
+    [Fact]
     public async Task PipelineStatusRemainsAvailableUntilTheNextCommandCompletes()
     {
         var state = new Eval(Parser.Parse("false | true; printf '%s' \"${PIPESTATUS[*]}\""));
@@ -208,5 +224,24 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(ShellValue.FromText("0"), Assert.Single(state.IndexedArrays["PIPESTATUS"]));
+    }
+
+    private sealed class CancelOnLastStatus(int[] statuses, CancellationTokenSource cancellation) : IReadOnlyList<int>
+    {
+        public int Count => statuses.Length;
+
+        public int this[int index]
+        {
+            get
+            {
+                if (index == statuses.Length - 1)
+                    cancellation.Cancel();
+                return statuses[index];
+            }
+        }
+
+        public IEnumerator<int> GetEnumerator() => ((IEnumerable<int>)statuses).GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

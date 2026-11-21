@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Threading;
-using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -37,14 +36,9 @@ public sealed partial class Variables
         if (slot is not (null or IndexedSlot))
             return;
 
-        var values = new ShellValue[statuses.Count];
-        for (var index = 0; index < statuses.Count; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            values[index] = ShellValue.FromBytes(NumberFormatting.FormatNumber(statuses[index]));
-        }
         var previous = (slot as IndexedSlot)?.Value;
-        var array = IndexedArray.FromForegroundStatuses(values, previous, cancellationToken);
+        var array = IndexedArray.FromForegroundStatuses(statuses, previous, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         owner.StoreBinding(name, new IndexedSlot(array) { Attributes = slot?.Attributes ?? BindingAttributes.None });
     }
 }
