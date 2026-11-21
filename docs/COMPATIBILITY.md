@@ -456,9 +456,12 @@ on quotes, `]]` or CR.
 
 Extended shell patterns `?(...)`, `*(...)`, `+(...)`, `@(...)` and `!(...)` are
 unsupported in `[[`, case arms and parameter pattern operators. Case allows line
-breaks between the subject and `in`, an optional opening `(` before each arm's
-patterns and the `;;` terminator. Fallthrough `;&` and retesting `;;&` remain
-unsupported. Inside an explicitly parenthesized arm, an unquoted `esac` can be
+breaks between the subject and `in` and an optional opening `(` before each arm's
+patterns. A reached `;;` ends the case. A reached `;&` executes the next arm
+without expanding its patterns. A reached `;;&` resumes pattern matching against
+the original expanded subject. The case returns the last selected arm's status,
+with zero for an empty arm or when no arm is selected. Inside an explicitly
+parenthesized arm, an unquoted `esac` can be
 a literal pattern. Lokad.Bash applies that grammar inside command substitutions
 and captures the selected arm's output and status. In the recorded conformance
 case, both GNU Bash pins produce text from the arm's source inside the capture.

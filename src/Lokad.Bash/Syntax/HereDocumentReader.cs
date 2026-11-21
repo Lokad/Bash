@@ -119,7 +119,8 @@ internal sealed class HereDocumentReader
                 UntilCommand loop when Changed(loop.Condition) || Changed(loop.Body) => loop with { Condition = Get(loop.Condition), Body = Get(loop.Body) },
                 IfCommand conditional => ReplaceIf(conditional),
                 CaseCommand selection when ReplaceItems(selection.Items, item => Changed(item.Body)
-                    ? new CaseItem(item.Patterns, Get(item.Body)) : item) is { } items => selection with { Items = items },
+                    ? new CaseItem(item.Patterns, Get(item.Body)) { Continuation = item.Continuation }
+                    : item) is { } items => selection with { Items = items },
                 _ => command
             };
             if (!ReferenceEquals(result, command))

@@ -139,11 +139,12 @@ same root; command inheritance does not copy or create a memory allowance.
 Conditional evaluation admits its traversal buffer before growing it, including
 overlap during replacement. Reached predicates reuse the buffer, which stays
 charged through pending operations and is refunded when traversal unwinds.
-Case selection holds its expanded subject across reached alternatives. Each
-alternative keeps its expanded word and prepared matcher through comparison,
-then reuses the same command workspace for the next alternative. Retained
-binding effects survive workspace reuse. Selection releases subject and pattern
-workspace before evaluating the selected body.
+Case selection holds its expanded subject across reached alternatives and any
+body chain that resumes matching. Each alternative keeps its expanded word and
+prepared matcher through comparison, then reuses the same command workspace for
+the next alternative. Pattern scratch retires before a body runs. The subject
+retires before the final body chain or when matching ends. Retained binding
+effects survive workspace reuse.
 
 Command-prefix preparation and isolated external redirection expansion borrow
 the caller's store and positional frame.

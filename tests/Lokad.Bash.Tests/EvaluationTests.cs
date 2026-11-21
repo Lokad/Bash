@@ -4293,6 +4293,40 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task Case_RetainsSubjectDuringBodyOnlyWhenMatchingResumes()
+    {
+        var fallThrough = await MeasureAsync(";&");
+        var retest = await MeasureAsync(";;&");
+
+        Assert.True(retest.First - fallThrough.First >= 8192);
+        Assert.Equal(fallThrough.Second, retest.Second);
+
+        static async Task<(long First, long Second)> MeasureAsync(string terminator)
+        {
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            var state = new Eval(Parser.Parse("case \"$@\" in *) printf first" + terminator + " *) printf second;; esac"));
+            state.Memory.Budget = owner;
+            var field = ShellValue.FromText(new string('x', 64));
+            state.ReplacePositionalParameters(Enumerable.Repeat(field, 128).ToArray());
+
+            var first = await NextWriteAsync(state);
+            Assert.Equal("first", Text(first.Content));
+            var firstBytes = state.Memory.Workspace.Bytes;
+            first.SetResult(DescriptorWriteResult.Open);
+            var second = await NextWriteAsync(state);
+            Assert.Equal("second", Text(second.Content));
+            var secondBytes = state.Memory.Workspace.Bytes;
+            second.SetResult(DescriptorWriteResult.Open);
+            Assert.Null(await NextStepAsync(state));
+
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return (firstBytes, secondBytes);
+        }
+    }
+
+    [Fact]
     public async Task Case_PatternFieldsFitWithoutAJoinedSegmentList()
     {
         var state = new Eval(Parser.Parse("""case "$*" in $@) printf matched;; *) printf missed;; esac"""));

@@ -203,6 +203,31 @@ public sealed class EvaluationConditionalTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("case a in a) printf A;& ${missing:?skipped}) printf B;; esac", "AB", "", 0)]
+    [InlineData("value=a; case $value in a) value=b;;& b) printf wrong;; a) printf A;; esac; printf '/%s' \"$value\"", "A/b", "", 0)]
+    [InlineData("case a in a) printf A;& b) printf B;;& c) printf wrong;; a) printf C;& z) printf D;; esac", "ABCD", "", 0)]
+    [InlineData("case a in a) printf A; false;;& b) printf wrong;; esac; printf '/%s/%s' \"$?\" \"${PIPESTATUS[*]}\"", "A/1/1", "", 0)]
+    [InlineData("false; case a in a) ;& b) printf '%s' \"$?\";; esac", "1", "", 0)]
+    [InlineData("case a in a) printf A; false;& b) ;; esac; printf '/%s/%s' \"$?\" \"${PIPESTATUS[*]}\"", "A/0/1", "", 0)]
+    [InlineData("case a in a) printf A; false;;& $(printf '%s' \"$?\" >&2; printf a)) printf B;; esac", "AB", "1", 0)]
+    [InlineData("case a in a) printf A;;& ${missing:?retest}) printf wrong;; esac; printf after", "A", "missing: retest\n", 1)]
+    [InlineData("f(){ case a in a) return 7;& b) printf wrong;; esac; }; f", "", "", 7)]
+    [InlineData("for i in a b; do case $i in a) printf A; continue;& b) printf B;; esac; printf C; done", "ABC", "", 0)]
+    [InlineData("set -e; case a in a) false;& b) printf wrong;; esac; printf wrong", "", "", 1)]
+    [InlineData("set -e; case a in a) false;& b) printf B;; esac && printf C", "BC", "", 0)]
+    [InlineData("printf '<%s>' \"$(case a in a) printf A;\\\n;\\\n& a) printf B;; esac)\"", "<AB>", "", 0)]
+    [InlineData("f(){ case a in a) cat <<END;& b) printf B;;& a) printf C;; esac\nA\nEND\n}\neval \"$(declare -f f)\"; f", "A\nBC", "", 0)]
+    public async Task Evaluation_CaseCommand_ContinuesFromReachedArm(
+        string script, string output, string error, int exitCode)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+        Assert.Equal(exitCode, result.ExitCode);
+    }
+
     [Fact]
     public async Task Evaluation_ArithmeticForCommand_ExecutesSingleIteration()
     {

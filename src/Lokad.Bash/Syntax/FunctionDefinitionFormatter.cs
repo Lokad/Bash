@@ -433,9 +433,15 @@ internal static class FunctionDefinitionFormatter
                             for (var index = selection.Items.Count - 1; index >= 0; index--)
                             {
                                 var item = selection.Items[index];
+                                var terminator = item.Continuation switch
+                                {
+                                    CaseContinuation.FallThrough => ";&",
+                                    CaseContinuation.Retest => ";;&",
+                                    _ => ";;"
+                                };
                                 PrepareWork(checked(7 + Math.Max(0, 2 * item.Patterns.Count - 1)));
                                 Push(new Step.Text(")"), new Step.Layout(indent + 8), new Step.Command(item.Body, indent + 8),
-                                    new Step.Layout(indent + 4), new Step.Text(";;"), new Step.Layout(indent));
+                                    new Step.Layout(indent + 4), new Step.Text(terminator), new Step.Layout(indent));
                                 for (var pattern = item.Patterns.Count - 1; pattern >= 0; pattern--)
                                 {
                                     work.Push(new Step.Word(item.Patterns[pattern]));

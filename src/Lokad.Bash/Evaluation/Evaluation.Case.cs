@@ -5,50 +5,92 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
-    /// <summary>Expands case patterns only until the first match, then executes its body.</summary>
+    /// <summary>Matches a fixed subject and executes each reached arm through the ordinary command path.</summary>
     private async Task<EvaluationResult> EvaluateCaseAsync(
         CaseCommand caseCommand,
         ScopedEvaluation scope,
         bool negated)
     {
-        var body = await SelectBodyAsync().ConfigureAwait(false);
-        if (body == null)
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(_state.HasPendingExpansionError ? 1 : 0), negated)
-                .ConfigureAwait(false);
-
-        var result = await EvaluateCommandAsync(body, scope, negated: false).ConfigureAwait(false);
-        return ApplyNegation(result, negated);
-
-        async Task<ICommand?> SelectBodyAsync()
+        EvaluationMemory.Command? subjectMemory = Memory.BeginCommand(scope);
+        try
         {
-            using var subjectMemory = Memory.BeginCommand(scope);
-            var fields = await AwaitWordExpansionAsync(WordExpansion.ExpandWithoutBraceAsync(
-                caseCommand.Subject, scope, allowWordSplitting: false, ExpansionPurpose.Scalar, TildeExpansion.Argument))
-                .ConfigureAwait(false);
-            var subject = ExpandedWord.JoinValuesWithSpaces(fields, Memory);
+            var subject = ExpandedWord.JoinValuesWithSpaces(
+                await AwaitWordExpansionAsync(WordExpansion.ExpandWithoutBraceAsync(
+                    caseCommand.Subject, scope, allowWordSplitting: false, ExpansionPurpose.Scalar, TildeExpansion.Argument))
+                    .ConfigureAwait(false), Memory);
             if (_state.HasPendingExpansionError)
-                return null;
+                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
-            using var patternMemory = Memory.BeginCommand(scope);
-            foreach (var item in caseCommand.Items)
+            var items = caseCommand.Items;
+            var result = EvaluationResult.FromExitCode(0);
+            for (var index = 0; index < items.Count;)
             {
-                foreach (var pattern in item.Patterns)
+                index = await FindMatchAsync(subject, index).ConfigureAwait(false);
+                if (_state.HasPendingExpansionError)
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+                if (index == items.Count)
+                    break;
+
+                var last = index;
+                while (last + 1 < items.Count && items[last].Continuation == CaseContinuation.FallThrough)
+                {
+                    CheckCancellation();
+                    last++;
+                }
+                var retest = last + 1 < items.Count && items[last].Continuation == CaseContinuation.Retest;
+                if (!retest)
+                {
+                    // No later pattern uses the subject. Retire it before entering the body chain.
+                    subject = ShellValue.Empty;
+                    var owner = subjectMemory;
+                    subjectMemory = null;
+                    owner?.Dispose();
+                }
+                for (; index <= last; index++)
+                {
+                    CheckCancellation();
+                    var body = items[index].Body;
+                    // An empty arm contributes status zero without publishing a command status.
+                    result = body is SimpleCommand { Words.Count: 0, Assignments.Count: 0, Redirections.Count: 0 }
+                        ? EvaluationResult.FromExitCode(0)
+                        : await EvaluateCommandAsync(body, scope, negated: false).ConfigureAwait(false);
+                    if (result.Flow != FlowControlKind.None)
+                        return ApplyNegation(result, negated);
+                    if (_state.HasPendingExpansionError)
+                        return await FinalizeResultAsync(result, negated).ConfigureAwait(false);
+                }
+                if (!retest)
+                    break;
+            }
+            return ApplyNegation(result, negated);
+        }
+        finally
+        {
+            subjectMemory?.Dispose();
+        }
+
+        async ValueTask<int> FindMatchAsync(ShellValue subject, int first)
+        {
+            using var patternMemory = Memory.BeginCommand(scope);
+            for (var index = first; index < caseCommand.Items.Count; index++)
+            {
+                foreach (var pattern in caseCommand.Items[index].Patterns)
                 {
                     var expanded = await AwaitWordExpansionAsync(WordExpansion.ExpandWithoutBraceAsync(
                         pattern, scope, allowWordSplitting: false, ExpansionPurpose.CasePattern, TildeExpansion.Leading))
                         .ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
-                        return null;
+                        return caseCommand.Items.Count;
                     if (ShellPattern.FromWords(expanded, Memory, _cancellationToken)
                         .IsMatch(subject.Bytes.Span, _cancellationToken))
-                        return item.Body;
+                        return index;
 
                     // Each alternative consumes its expanded pattern. Binding effects
                     // and the subject snapshot survive reuse of the pattern workspace.
                     patternMemory.ResetWorkspace();
                 }
             }
-            return null;
+            return caseCommand.Items.Count;
         }
     }
 }

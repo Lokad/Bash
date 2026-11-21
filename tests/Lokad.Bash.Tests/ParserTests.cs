@@ -719,6 +719,7 @@ public class ParserTests
     [Theory]
     [InlineData(";; echo hidden")]
     [InlineData("echo visible ;; echo hidden")]
+    [InlineData("echo visible ;& echo hidden")]
     [InlineData("echo visible ;;& echo hidden")]
     [InlineData("echo visible ) echo hidden")]
     public void Parse_RejectsUnconsumedTopLevelTokens(string source)

@@ -447,11 +447,6 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return Located(Token.EndOfInput());
-            if (current == ';' && TryConsumeLogicalText(span, ";;"))
-            {
-                return Located(Token.CaseTerminator());
-            }
-
             if (current == (byte)'\n')
             {
                 Position++;
@@ -467,6 +462,12 @@ internal sealed class Tokenizer
 
             if (current == (byte)';')
             {
+                if (TryConsumeLogicalText(span, ";;&"))
+                    return Located(Token.CaseTerminator(CaseContinuation.Retest));
+                if (TryConsumeLogicalText(span, ";&"))
+                    return Located(Token.CaseTerminator(CaseContinuation.FallThrough));
+                if (TryConsumeLogicalText(span, ";;"))
+                    return Located(Token.CaseTerminator(CaseContinuation.Stop));
                 Position++;
                 return Located(Token.Semicolon());
             }
@@ -1589,6 +1590,8 @@ internal readonly struct Token
     /// </summary>
     public ShellSource CommandExpression { get; }
 
+    internal CaseContinuation CaseContinuation { get; private init; }
+
     public static Token None() =>
         new(TokenKind.None, null, null, null, null, ShellSource.Empty);
 
@@ -1628,8 +1631,8 @@ internal readonly struct Token
     public static Token ArithmeticCommand(ShellSource expression) =>
         new(TokenKind.ArithmeticCommand, null, null, null, null, expression);
 
-    public static Token CaseTerminator() =>
-        new(TokenKind.CaseTerminator, null, null, null, null, ShellSource.Empty);
+    public static Token CaseTerminator(CaseContinuation continuation) =>
+        new Token(TokenKind.CaseTerminator, null, null, null, null, ShellSource.Empty) { CaseContinuation = continuation };
 }
 
 /// <summary>

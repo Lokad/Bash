@@ -973,7 +973,10 @@ public static class Parser
             }
 
             // An empty matching branch succeeds without executing a command.
-            items.Add(new CaseItem(patterns, body ?? new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments)));
+            items.Add(new CaseItem(patterns, body ?? new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments))
+            {
+                Continuation = endToken.CaseContinuation
+            });
         }
 
         if (!TryConsumeKeyword(tokenizer, KeywordEsac, "esac"))
