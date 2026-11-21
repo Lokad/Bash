@@ -57,6 +57,10 @@ internal enum ImplicitEmptyPolicy
 /// <summary>Assembles word bytes and their provenance before applying IFS boundaries.</summary>
 internal sealed class ExpandedWordBuilder
 {
+    private const int UntrackedSourceSeparators = 0;
+    private const int EmptySourceSeparators = -1;
+    private const int DefaultSourceSeparators = -2;
+
     private static readonly ShellValue Space = ShellValue.FromText(" ");
     private static readonly ExpandedWord ReplacementEmptyField =
         new([new ExpandedSegment(ShellValue.FromText("\u007f"), isGlobQuoted: true)]);
@@ -67,6 +71,7 @@ internal sealed class ExpandedWordBuilder
     private readonly ImplicitEmptyPolicy _implicitEmptyPolicy;
     private readonly bool _casePatternStartsWithEmptyIfs;
     private readonly List<InputWord> _words = [];
+    private List<FieldSeparators.ByteMembership>? _sourceSeparators;
     private InputWord _current;
     private DoubleQuoteState _doubleQuote;
     private bool _hereDocumentHasAt;
@@ -136,6 +141,36 @@ internal sealed class ExpandedWordBuilder
     public void AppendSource(ShellSource source, bool globQuoted) =>
         GetPart(globQuoted ? PartOrigin.Protected : Purpose == ExpansionPurpose.CasePattern
             ? PartOrigin.Expansion : PartOrigin.Source, globQuoted).AppendValue(source.ToValue());
+
+    /// <summary>Records the source run's IFS membership before later expansions can change it.</summary>
+    internal void AppendUnquotedSource(ShellSource source, ref int sourceSeparators)
+    {
+        if (_positionalStarSplitsOnSpaces)
+        {
+            AppendSource(source, globQuoted: false);
+            return;
+        }
+        if (sourceSeparators == UntrackedSourceSeparators)
+        {
+            var ifs = FieldSeparators.FromVariables(_variables);
+            if (ifs.IsEmpty)
+                sourceSeparators = EmptySourceSeparators;
+            else if (ReferenceEquals(ifs, FieldSeparators.Default))
+                sourceSeparators = DefaultSourceSeparators;
+            else
+            {
+                var membership = FieldSeparators.CaptureSourceBytes(ref ifs, _variables, _memory, _cancellationToken);
+                var snapshots = _sourceSeparators;
+                if (snapshots == null || snapshots[^1] != membership)
+                {
+                    _memory.Charge(_storage, 128);
+                    (snapshots ??= _sourceSeparators = []).Add(membership);
+                }
+                sourceSeparators = snapshots.Count;
+            }
+        }
+        GetPart(PartOrigin.Source, globQuoted: false, sourceSeparators).AppendValue(source.ToValue());
+    }
 
     public void AppendValue(ShellValue value, bool globQuoted) =>
         GetPart(PartOrigin.Protected, globQuoted).AppendValue(value);
@@ -513,6 +548,7 @@ internal sealed class ExpandedWordBuilder
         var splitOnSpace = splitAggregateOnSpace || splitHereDocument && fieldSeparators.IsEmpty;
         // Preserve the original space joins when the word finishes with a different IFS.
         var joinUnquotedAggregate = _hasUnquotedAggregate && !splitAggregateOnSpace;
+        FieldSeparators.ByteMembership? finalSourceSeparators = null;
         for (var inputIndex = 0; inputIndex < _words.Count;)
         {
             _cancellationToken.ThrowIfCancellationRequested();
@@ -640,14 +676,36 @@ internal sealed class ExpandedWordBuilder
                 else
                 {
                     var bytes = value.Bytes;
+                    FieldSeparators.ByteMembership? sourceSeparators = null;
+                    if (!splitOnSpace && part.SourceSeparators != UntrackedSourceSeparators)
+                    {
+                        sourceSeparators = part.SourceSeparators switch
+                        {
+                            EmptySourceSeparators => default(FieldSeparators.ByteMembership),
+                            DefaultSourceSeparators => FieldSeparators.ByteMembership.Default,
+                            _ => _sourceSeparators?[part.SourceSeparators - 1],
+                        };
+                        finalSourceSeparators ??= FieldSeparators.CaptureSourceBytes(
+                            ref fieldSeparators, _variables, _memory, _cancellationToken);
+                        if (sourceSeparators == finalSourceSeparators)
+                            sourceSeparators = null;
+                    }
+                    if (sourceSeparators == default(FieldSeparators.ByteMembership))
+                    {
+                        QueueExpansion(bytes, quoted);
+                        return;
+                    }
                     for (var position = 0; position < bytes.Length;)
                     {
                         _cancellationToken.ThrowIfCancellationRequested();
                         var length = Utf8Text.FirstCharacterLength(bytes.Span[position..]);
-                        // Bash protects one source byte per literal character before field splitting.
-                        AppendLiteral(bytes.Slice(position, 1), quoted);
-                        if (length > 1)
-                            QueueExpansion(bytes.Slice(position + 1, length - 1), quoted);
+                        // With a changed IFS, protect only leading source bytes that belonged to the earlier IFS.
+                        var protectedLength = sourceSeparators == null || sourceSeparators.Value.Contains(bytes.Span[position])
+                            ? 1 : 0;
+                        if (protectedLength != 0)
+                            AppendLiteral(bytes.Slice(position, protectedLength), quoted);
+                        if (length > protectedLength)
+                            QueueExpansion(bytes.Slice(position + protectedLength, length - protectedLength), quoted);
                         position += length;
                     }
                 }
@@ -804,20 +862,24 @@ internal sealed class ExpandedWordBuilder
         bool HasFirstCasePatternField() => firstFieldOnly && results.Count != 0;
     }
 
-    private SegmentBuilder GetPart(PartOrigin origin, bool globQuoted)
+    private SegmentBuilder GetPart(PartOrigin origin, bool globQuoted) =>
+        GetPart(origin, globQuoted, UntrackedSourceSeparators);
+
+    private SegmentBuilder GetPart(PartOrigin origin, bool globQuoted, int sourceSeparators)
     {
         if (_current.Parts.Count == 0
             || _current.Parts[^1].Origin != origin
+            || _current.Parts[^1].SourceSeparators != sourceSeparators
             || _current.Parts[^1].Segment.IsGlobQuoted != globQuoted)
         {
-            _current.Parts.Add(new InputPart(origin, new SegmentBuilder(globQuoted, _memory, _storage)));
+            _current.Parts.Add(new InputPart(origin, sourceSeparators, new SegmentBuilder(globQuoted, _memory, _storage)));
         }
         return _current.Parts[^1].Segment;
     }
 
     private enum PartOrigin
     {
-        /// <summary>Literal source characters, each protecting its leading byte during splitting.</summary>
+        /// <summary>Literal source characters with leading-byte protection from the IFS at emission.</summary>
         Source,
         /// <summary>Quoted values or literal expansion results; every byte is protected.</summary>
         Protected,
@@ -837,7 +899,7 @@ internal sealed class ExpandedWordBuilder
         public ShellValue CasePatternSeparator { get; init; }
     }
 
-    private readonly record struct InputPart(PartOrigin Origin, SegmentBuilder Segment);
+    private readonly record struct InputPart(PartOrigin Origin, int SourceSeparators, SegmentBuilder Segment);
 
     /// <summary>A glob-quote run ending at a byte offset, independent of IFS character boundaries.</summary>
     private readonly record struct QuoteRun(int End, bool IsGlobQuoted);

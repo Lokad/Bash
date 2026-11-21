@@ -643,12 +643,18 @@ internal static partial class WordExpansion
     {
         var length = content.Length;
         ShellScanContext? parameterScan = null;
+        var trackSourceIfs = output.Purpose == ExpansionPurpose.Normal && allowWordSplitting && !globQuoted
+            && quoteContext == ExpansionQuoteContext.Unquoted;
+        var sourceSeparators = 0;
         for (var index = start.Offset; index < length; index++)
         {
             if (!scope.CanExpand)
                 return null;
 
             var value = content[index];
+            // Substitutions can change IFS before the next literal run.
+            if (trackSourceIfs && value is (byte)'$' or (byte)'`')
+                sourceSeparators = 0;
             // Modern Bash removes unescaped double quotes within the selected parameter operand.
             if (inHereDocumentOperand && value == (byte)'"')
                 continue;
@@ -732,7 +738,7 @@ internal static partial class WordExpansion
                 if (inHereDocumentOperand && value is (byte)':' or (byte)'=' or (byte)'~' or (byte)'\'')
                     output.AppendHereDocumentUnprotected(literal.ToValue());
                 else
-                    output.AppendSource(literal, globQuoted);
+                    AppendLiteral(literal);
                 // Only literal punctuation reached by this scan opens a prefix.
                 // A colon inside a substitution is consumed with that substitution.
                 if (assignment is { } tildes
@@ -750,7 +756,7 @@ internal static partial class WordExpansion
 
             if (index + 1 >= length)
             {
-                output.AppendSource(content.Slice(index, 1), globQuoted);
+                AppendLiteral(content.Slice(index, 1));
                 continue;
             }
 
@@ -930,7 +936,7 @@ internal static partial class WordExpansion
                             .ConfigureAwait(false);
                         return null;
                     }
-                    output.AppendSource(content.Slice(index, 1), globQuoted);
+                    AppendLiteral(content.Slice(index, 1));
                     continue;
                 }
 
@@ -975,9 +981,17 @@ internal static partial class WordExpansion
                 continue;
             }
 
-            output.AppendSource(content.Slice(index, 1), globQuoted);
+            AppendLiteral(content.Slice(index, 1));
         }
         return null;
+
+        void AppendLiteral(ShellSource literal)
+        {
+            if (trackSourceIfs)
+                output.AppendUnquotedSource(literal, ref sourceSeparators);
+            else
+                output.AppendSource(literal, globQuoted);
+        }
 
         static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, ParserFailure? error)
         {

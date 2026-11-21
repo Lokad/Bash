@@ -329,4 +329,23 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
         Assert.Equal(expected, result.StdOut);
         Assert.Empty(result.StdErr);
     }
+
+    [Theory]
+    [InlineData("IFS=; set -- east west; printf '<%s>' $@,${IFS:=,}tail", "<east west><><tail>")]
+    [InlineData("unset IFS; set -- east west; printf '<%s>' $@:${IFS:=:}tail", "<east west><><tail>")]
+    [InlineData("IFS=1; set -- east west; printf '<%s>' pre$@2$((IFS=2))2tail", "<preeast1west><><2tail>")]
+    [InlineData("IFS=12; set -- east west; printf '<%s>' pre$@2$((IFS=2))2tail", "<preeast1west2><2tail>")]
+    [InlineData("IFS=; printf '<%s>' pre,${IFS:=,}tail", "<pre><><tail>")]
+    [InlineData("IFS=; value=kept; set -- east west; printf '<%s>' ${value:-$@},${IFS:=,}tail", "<kept><><tail>")]
+    [InlineData("IFS=; set -- east west; printf '<%s>' $@\\,${IFS:=,}tail", "<east west,><tail>")]
+    [InlineData("IFS=; a=(east west); printf '<%s>' ${a[*]},${IFS:=,}tail", "<east west><><tail>")]
+    [InlineData("IFS=; set -- east west; printf '<%s>' $@2$((IFS=1))2$((IFS=2))2tail", "<east west><1><><2tail>")]
+    public async Task WordExpansion_ProtectsSourceBytesUsingTheIfsAtTheirPosition(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
 }

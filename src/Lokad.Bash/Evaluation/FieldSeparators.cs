@@ -148,11 +148,36 @@ internal sealed class FieldSeparators
         : !IsEmpty && (_characters ?? throw new InvalidOperationException("Scalar membership was not prepared.")).Contains(value);
 
     /// <summary>Queries prepared byte membership, including UTF-8 continuation bytes.</summary>
-    public bool Contains(byte value) => ReferenceEquals(this, Default) ? value is (byte)' ' or (byte)'\t' or (byte)'\n'
-        : !IsEmpty && (_byteMembership ?? throw new InvalidOperationException("Byte membership was not prepared.")).Contains(value);
+    public bool Contains(byte value) => PreparedBytes.Contains(value);
 
-    private readonly record struct ByteMembership(ulong First, ulong Second, ulong Third, ulong Fourth)
+    private ByteMembership PreparedBytes =>
+        ReferenceEquals(this, Default) ? ByteMembership.Default
+            : IsEmpty ? default : _byteMembership ?? throw new InvalidOperationException("Byte membership was not prepared.");
+
+    /// <summary>Copies byte membership without borrowing the variable's IFS value or cache.</summary>
+    internal static ByteMembership CaptureSourceBytes(
+        ref FieldSeparators separators, Variables variables, EvaluationMemory memory, CancellationToken cancellationToken)
     {
+        if (separators.Bytes.Span is [var single])
+        {
+            // A single delimiter fits directly in the capture without warming the variable cache.
+            var bit = 1UL << (single & 63);
+            return (single >> 6) switch
+            {
+                0 => new(bit, 0, 0, 0),
+                1 => new(0, bit, 0, 0),
+                2 => new(0, 0, bit, 0),
+                _ => new(0, 0, 0, bit),
+            };
+        }
+        separators = separators.PrepareBytes(variables, memory, cancellationToken);
+        return separators.PreparedBytes;
+    }
+
+    internal readonly record struct ByteMembership(ulong First, ulong Second, ulong Third, ulong Fourth)
+    {
+        internal static readonly ByteMembership Default = new((1UL << ' ') | (1UL << '\t') | (1UL << '\n'), 0, 0, 0);
+
         public bool Contains(byte value) => ((value >> 6) switch
         {
             0 => First,
