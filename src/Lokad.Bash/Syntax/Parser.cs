@@ -697,7 +697,7 @@ public static class Parser
         if (thenBody == null)
             return null;
 
-        var elifClauses = new List<ElifClause>();
+        List<ElifClause>? elifClauses = null;
         while (IsKeyword(tokenizer.PeekTokenCore(), KeywordElif))
         {
             if (!TryConsumeKeyword(tokenizer, KeywordElif, "elif"))
@@ -714,7 +714,7 @@ public static class Parser
                 KeywordFi);
             if (elifBody == null)
                 return null;
-            elifClauses.Add(new ElifClause(elifCondition, elifBody));
+            (elifClauses ??= new List<ElifClause>()).Add(new ElifClause(elifCondition, elifBody));
         }
 
         ICommand? elseBody = null;
@@ -729,7 +729,7 @@ public static class Parser
 
         if (!TryConsumeKeyword(tokenizer, KeywordFi, "fi"))
             return null;
-        return new IfCommand(condition, thenBody, elifClauses, elseBody);
+        return new IfCommand(condition, thenBody, elifClauses is null ? Array.Empty<ElifClause>() : elifClauses, elseBody);
     }
 
     /// <summary>
@@ -812,12 +812,13 @@ public static class Parser
         tokenizer.ScanContext.SyntaxMemory?.Grow(checked(32L + 2L * nameValue.Bytes.Length));
         nameValue.TryGetUtf8Text(out var name);
 
-        var items = new List<Word>();
+        IReadOnlyList<Word> items;
         var canUseBraceBody = tokenizer.PeekTokenCore().Kind == TokenKind.Newline;
         SkipNewlines(tokenizer);
         if (IsKeyword(tokenizer.PeekTokenCore(), KeywordIn))
         {
             tokenizer.NextTokenCore();
+            List<Word>? explicitItems = null;
             while (true)
             {
                 var token = tokenizer.PeekTokenCore();
@@ -830,7 +831,7 @@ public static class Parser
 
                 if (tokenizer.TryGetOperandWord(token, out var itemToken))
                 {
-                    items.Add(itemToken.Word);
+                    (explicitItems ??= new List<Word>()).Add(itemToken.Word);
                     tokenizer.NextTokenCore();
                     continue;
                 }
@@ -838,13 +839,15 @@ public static class Parser
                 tokenizer.RecordError("Expected word list or terminator after in.", tokenizer.Position);
                 return null;
             }
+            items = explicitItems is null ? Array.Empty<Word>() : explicitItems;
         }
         else
         {
             // Bash's implicit list is exactly the quoted positional expansion. Lower it
             // to the existing word path, including the snapshot taken before the body.
-            items.Add(Tokenizer.ReadExpansionWord(ShellSource.FromText("\"$@\""),
-                ExpansionWordSyntax.Parameter, ShellQuoteKind.None));
+            var positionalItems = Tokenizer.ReadExpansionWord(ShellSource.FromText("\"$@\""),
+                ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
+            items = [positionalItems];
             if (!canUseBraceBody && tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
             {
                 tokenizer.NextTokenCore();
@@ -924,7 +927,7 @@ public static class Parser
         if (!TryConsumeKeyword(tokenizer, KeywordIn, "in"))
             return null;
 
-        var items = new List<CaseItem>();
+        List<CaseItem>? items = null;
         while (true)
         {
             SkipNewlines(tokenizer);
@@ -974,16 +977,16 @@ public static class Parser
             }
 
             // An empty matching branch succeeds without executing a command.
-            items.Add(new CaseItem(patterns, body ?? new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments))
+            var item = new CaseItem(patterns, body ?? new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments))
             {
                 Continuation = endToken.CaseContinuation
-            });
+            };
+            (items ??= new List<CaseItem>()).Add(item);
         }
 
         if (!TryConsumeKeyword(tokenizer, KeywordEsac, "esac"))
-
             return null;
-        return new CaseCommand(subject, items);
+        return new CaseCommand(subject, items is null ? Array.Empty<CaseItem>() : items);
     }
 
     /// <summary>

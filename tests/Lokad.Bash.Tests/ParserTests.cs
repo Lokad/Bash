@@ -899,6 +899,34 @@ public class ParserTests
         Assert.IsType<SimpleCommand>(elif.Body);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Parse_CompoundCommands_ShareEmptyCollections(bool streamed)
+    {
+        var firstIf = Assert.IsType<IfCommand>(ParseOne("if :; then :; fi"));
+        var secondIf = Assert.IsType<IfCommand>(ParseOne("if :; then :; else :; fi"));
+        Assert.Empty(firstIf.ElifClauses);
+        Assert.Same(firstIf.ElifClauses, secondIf.ElifClauses);
+
+        var firstLoop = Assert.IsType<ForCommand>(ParseOne("for x in; do :; done"));
+        var secondLoop = Assert.IsType<ForCommand>(ParseOne("for y in\ndo :; done"));
+        var implicitLoop = Assert.IsType<ForCommand>(ParseOne("for x; do :; done"));
+        Assert.Empty(firstLoop.Items);
+        Assert.Same(firstLoop.Items, secondLoop.Items);
+        Assert.Equal("$@", WordText(Assert.Single(implicitLoop.Items)));
+
+        var firstCase = Assert.IsType<CaseCommand>(ParseOne("case x in esac"));
+        var secondCase = Assert.IsType<CaseCommand>(ParseOne("case y in\nesac"));
+        Assert.Empty(firstCase.Items);
+        Assert.Same(firstCase.Items, secondCase.Items);
+
+        ICommand ParseOne(string source) => streamed
+            ? Assert.IsType<CommandUnitParseResult.Parsed>(
+                Assert.Single(Parser.TryParseCommandUnits(Encoding.UTF8.GetBytes(source)))).Command
+            : Assert.Single(Parser.Parse(source).Commands);
+    }
+
     [Fact]
     public void Parse_While_Basic()
     {
