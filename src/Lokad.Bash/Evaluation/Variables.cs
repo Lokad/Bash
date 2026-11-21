@@ -21,7 +21,7 @@ internal readonly record struct VariableBinding(VariableReference Reference, Var
     public bool IsUnsetNameref => Reference.Kind == VariableReferenceKind.Name
         && Owner.TryGetNameref(Name, out var target) && target.IsEmpty;
 }
-internal readonly record struct VariableUnsetTarget(BindingName Name, bool RequiresSelector, bool IsReadonly);
+internal readonly record struct VariableUnsetTarget(BindingName Name, bool RequiresSelector, BindingName ReadonlyName);
 
 /// <summary>Declarations include attributes/unset names; assignment listings include assigned values only.</summary>
 internal enum VariableDisplayStyle { Declaration, DeclarationName, Assignment }
@@ -1049,23 +1049,28 @@ public sealed partial class Variables
 
         VariableBinding? referent = flags != UnsetFlags.NamerefOnly
             && TryResolveBinding(name, selectOwner: null, out var binding) ? binding : null;
-        return TryUnsetSelected(SelectUnsetTarget(name, referent), flags);
+        return TryUnsetSelected(SelectUnsetTarget(name, referent, checkUninitializedTerminal: true), flags);
     }
 
-    internal VariableUnsetTarget SelectUnsetTarget(BindingName name, VariableBinding? referent)
+    internal VariableUnsetTarget SelectUnsetTarget(BindingName name, VariableBinding? referent, bool checkUninitializedTerminal)
     {
         // An absent resolution (including a cycle) or an unset nameref keeps the operand's name.
         if (referent is not { } binding)
-            return new(name, false, IsReadonlyBinding(name));
+            return new(name, false, ReadonlyName(name));
         var requiresSelector = binding.Reference.Kind != VariableReferenceKind.Name;
         if (!requiresSelector && !binding.IsUnsetNameref)
-            return new(binding.Name, false, IsReadonlyBinding(binding.Name));
-        return new(name, requiresSelector, IsReadonlyBinding(name) || IsReadonlyBinding(binding.Name));
+            return new(binding.Name, false, ReadonlyName(binding.Name));
+        var readonlyName = ReadonlyName(name);
+        if (readonlyName.IsEmpty && (requiresSelector || checkUninitializedTerminal))
+            readonlyName = ReadonlyName(binding.Name);
+        return new(name, requiresSelector, readonlyName);
+
+        BindingName ReadonlyName(BindingName selected) => IsReadonlyBinding(selected) ? selected : BindingName.Empty;
     }
 
     internal bool TryUnsetSelected(VariableUnsetTarget target, UnsetFlags flags)
     {
-        if (target.Name.IsEmpty || target.RequiresSelector || target.IsReadonly)
+        if (target.Name.IsEmpty || target.RequiresSelector || !target.ReadonlyName.IsEmpty)
             return false;
 
         var name = target.Name;

@@ -112,6 +112,22 @@ public sealed class DeclarationInspectionTestsEndToEnd
         Assert.False(variables.TryGetNameref("item", out _));
     }
 
+    [Fact]
+    public void WholeVariableUnsetKeepsReadonlyProtectionForAnUninitializedReference()
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetNameref("first", ShellValue.FromText("last")));
+        Assert.True(variables.TrySetNameref("last", ShellValue.Empty));
+        variables.SetReadonlyBinding("last");
+
+        Assert.False(variables.TryUnset("first"));
+        Assert.True(variables.TryGetNameref("first", out _));
+        Assert.True(variables.TryUnset("first", UnsetFlags.NamerefOnly));
+        Assert.False(variables.TryGetNameref("first", out _));
+        Assert.True(variables.TryGetNameref("last", out var terminal));
+        Assert.True(terminal.IsEmpty);
+    }
+
     [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]

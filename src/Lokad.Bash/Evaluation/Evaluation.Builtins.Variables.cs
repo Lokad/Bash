@@ -102,16 +102,23 @@ public sealed partial class Evaluation
                 resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out binding);
                 unsetFlags = UnsetFlags.ScalarOnly;
             }
-            var target = commandVars.SelectUnsetTarget(name, !namerefs && resolvedBinding ? binding : null);
+            // An uninitialized terminal has no referent. After namespace fallback,
+            // ordinary unset can remove the named reference without touching the terminal.
+            var target = commandVars.SelectUnsetTarget(name,
+                !namerefs && resolvedBinding ? binding : null, checkUninitializedTerminal: false);
+            // -n removes the named reference. A readonly terminal with a target blocks that removal.
+            if (namerefs && commandVars.TryResolveBinding(name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
+                && !terminal.IsUnsetNameref && terminal.Owner.IsReadonlyBinding(terminal.Name))
+                target = target with { ReadonlyName = terminal.Name };
             var removedName = target.Name;
             var keepExport = commandVars.IsExported(removedName)
                 && context.FunctionContext?.Locals.IsDeclaredPrefix(removedName) == true;
             if (!commandVars.TryUnsetSelected(target, unsetFlags))
             {
                 exitCode = 1;
-                if (target.IsReadonly)
+                if (!target.ReadonlyName.IsEmpty)
                     await ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
-                        [removedName.ToValue(), ShellValue.FromText(": cannot unset: readonly variable")]).ConfigureAwait(false);
+                        [target.ReadonlyName.ToValue(), ShellValue.FromText(": cannot unset: readonly variable")]).ConfigureAwait(false);
                 continue;
             }
 

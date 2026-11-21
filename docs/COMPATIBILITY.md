@@ -773,6 +773,15 @@ ends the option scan. Reached help preserves the operand bindings.
 `unset -v` accepts identifiers, valid array selectors and existing literal
 bindings. Invalid operands report their original bytes and set status 1 while
 later operands still run. An empty operand to plain `unset` has no effect.
+When a nameref chain ends at an uninitialized reference, ordinary variable
+removal selects the originally named reference and preserves the terminal
+declaration. Function fallback still applies before that removal.
+`unset -n` selects the named reference for removal. A readonly last reference
+with an assigned target blocks removal and supplies the diagnostic name.
+Lokad.Bash also preserves a readonly reference when the command would
+remove that binding by its own name. Both pinned GNU Bash builds can remove
+the named readonly reference when a later writable reference supplies
+the check, or when the named reference is uninitialized.
 
 `help --help` uses the same output and status rules. A list of topics succeeds
 when any topic matches. If all topics miss, status 1 accompanies a diagnostic

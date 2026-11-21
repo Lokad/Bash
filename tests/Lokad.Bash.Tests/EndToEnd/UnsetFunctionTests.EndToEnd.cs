@@ -70,6 +70,64 @@ public sealed class UnsetFunctionTestsEndToEnd
         Assert.Equal<byte>([.. "unset: `"u8, 0xff, .. "': not a valid identifier\n"u8], host.ReadFileBytes("/diag"));
     }
 
+    [Theory]
+    [InlineData("-n")]
+    [InlineData("-vn")]
+    public async Task UnsetNamerefChecksTheLastReferenceAndContinues(string options)
+    {
+        var script = $$"""
+            target=kept
+            declare -rn tail=target
+            declare -n head=tail other=target
+            unset {{options}} head other
+            printf '<%s:%s>' "$?" "${PIPESTATUS[*]}"
+            declare -p head tail target
+            [[ -R other ]]; printf '<other:%s>' "$?"
+            """;
+
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:1>declare -n head=\"tail\"\ndeclare -nr tail=\"target\"\ndeclare -- target=\"kept\"\n<other:1>", result.StdOut);
+        Assert.Equal("unset: tail: cannot unset: readonly variable\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("unset")]
+    [InlineData("unset -v")]
+    public async Task UnsetThroughAnEmptyReferencePreservesTheReadonlyTerminal(string command)
+    {
+        var script = $$"""
+            declare -rn tail
+            declare -n head=tail
+            {{command}} head
+            printf '<%s:%s>' "$?" "${PIPESTATUS[*]}"
+            declare -p tail
+            [[ -R head ]]; printf '<head:%s>' "$?"
+            """;
+
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0>declare -nr tail\n<head:1>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("declare -n tail=target; declare -rn head=tail", "-n", "declare -nr head=\"tail\"\n")]
+    [InlineData("declare -rn head", "-v", "declare -nr head\n")]
+    [InlineData("declare -rn head", "-n", "declare -nr head\n")]
+    public async Task UnsetPreservesAnExplicitlyNamedReadonlyReference(string setup, string options, string declaration)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "target=kept; " + setup + "; unset " + options + " head; "
+            + """printf '<%s:%s>' "$?" "${PIPESTATUS[*]}"; declare -p head""");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:1>" + declaration, result.StdOut);
+        Assert.Equal("unset: head: cannot unset: readonly variable\n", result.StdErr);
+    }
+
     // Git Bash 5.2.37, isolated environment; omit only script-path/line diagnostic prefixes.
     [Theory]
     [InlineData("x=global; f(){ local x=local; unset 'x[0]'; export x; printf '<%s>\\n' \"${x-unset}\"; }; x=prefix f; declare -p x", "<unset>\ndeclare -- x=\"global\"\n", "", 0)]
