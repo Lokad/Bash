@@ -829,7 +829,9 @@ internal static partial class WordExpansion
                     return;
                 }
             }
-            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
+            var arrayOperand = parsed.Kind == BracedParameterOperatorKind.None
+                && parameter.RangeSource is ParameterSource.Indexed or ParameterSource.Associative;
+            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit, arrayOperand);
         }
 
         // Operand expansion may have changed which values the selected array holds.
@@ -1226,7 +1228,7 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
                     output.AppendHereDocumentFields(fields, HereDocumentJoin.SpaceBetweenProtectedValues);
                 else
-                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
+                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit, arrayOperand: false);
             }
 
             Task ReportInvalidLengthAsync() => scope.Effects.ReportFatalExpansionAsync(
@@ -1394,10 +1396,10 @@ internal static partial class WordExpansion
 
     private static void AppendParameterFields(
         VariableReferenceKind kind, IEnumerable<ShellValue> fields, ExpandedWordBuilder output,
-        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit)
+        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit, bool arrayOperand)
     {
         if (kind == VariableReferenceKind.At)
-            output.AppendFields(fields, allowWordSplitting, globQuoted, quoteContext);
+            output.AppendFields(fields, allowWordSplitting, globQuoted, quoteContext, arrayOperand);
         else if (kind == VariableReferenceKind.Star)
             output.AppendJoinedFields(fields, allowWordSplitting, globQuoted, starSplit);
         else

@@ -1098,6 +1098,10 @@ internal static partial class WordExpansion
             scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken)
         {
             AssigningHereDocumentOperand = assigningHereDocumentParent != null,
+            OperandFields = purpose == ExpansionPurpose.Normal && quoteContext == ExpansionQuoteContext.Unquoted
+                ? FieldSeparators.FromVariables(scope.Variables).IsEmpty
+                    ? ParameterOperandFields.UnquotedWithEmptyIfs : ParameterOperandFields.Unquoted
+                : ParameterOperandFields.Default,
         };
         if (word == null)
         {

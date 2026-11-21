@@ -211,4 +211,9 @@ internal readonly struct ExpandedSegment(ShellValue content, bool isGlobQuoted)
 
     /// <summary>Protects this segment's bytes from IFS when splicing a case pattern operand.</summary>
     internal bool IsCasePatternIfsProtected { get; init; }
+
+    /// <summary>Carries the treatment of spaces chosen while expanding a selected operand.</summary>
+    internal OperandSpaces Spaces { get; init; }
 }
+
+internal enum OperandSpaces : byte { Default, Exposed, Protected }
