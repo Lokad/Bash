@@ -3185,15 +3185,18 @@ public sealed partial class Evaluation : IFileTester
                         || visibleOwners.GetValueOrDefault(binding.Name, variables).IsExported(binding.Name))
                         yield return binding;
                 }
-                foreach (var name in functionPrefixes)
+                // A scope often saves only a few names, independently of the call depth.
+                var scanSavedNames = names.Count < functionPrefixes.Count;
+                var candidates = scanSavedNames ? names : functionPrefixes;
+                var other = scanSavedNames ? functionPrefixes : names;
+                foreach (var name in candidates)
                 {
                     CheckCancellation();
-                    if (names.Contains(name))
-                    {
-                        if (!visibleOwners.ContainsKey(name))
-                            selectionMemory.Grow(192); // Dictionary slots also hold a reference to the owner.
-                        visibleOwners[name] = saved;
-                    }
+                    if (!other.Contains(name))
+                        continue;
+                    if (!visibleOwners.ContainsKey(name))
+                        selectionMemory.Grow(192); // Dictionary slots also hold a reference to the owner.
+                    visibleOwners[name] = saved;
                 }
             }
         }
