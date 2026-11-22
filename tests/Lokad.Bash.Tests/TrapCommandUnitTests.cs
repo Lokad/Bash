@@ -161,6 +161,52 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData("trap -p", "trap: write error: Bad file descriptor\n")]
+    [InlineData("trap -p HUP unknown_name TERM", "trap: unknown_name: invalid signal specification\n"
+        + "trap: write error: Bad file descriptor\n")]
+    public async Task ShellClosedTrapListingReportsItsWriteFailureAfterNameDiagnostics(string listing, string diagnostic)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("trap ':' HUP TERM; " + listing + " >&- 2>diagnostic", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(diagnostic, host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("trap", false, false)]
+    [InlineData("trap -p unknown_name HUP TERM", true, false)]
+    [InlineData("trap -p HUP TERM", false, true)]
+    public async Task HostTrapListingStopsOnTheFirstTerminalWrite(
+        string listing, bool invalidName, bool writeFailure)
+    {
+        var evaluation = new Eval(Parser.Parse("trap ':' HUP TERM; " + listing));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        if (invalidName)
+            host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueueAppendResult(writeFailure
+            ? DescriptorWriteResult.Failure(new OperationError("Synthetic write failure\n"))
+            : DescriptorWriteResult.Closed);
+        if (writeFailure)
+            host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(invalidName || writeFailure ? 1 : 0, result.ExitCode);
+        FileDescriptor[] expected = invalidName ? [FileDescriptor.StdErr, FileDescriptor.StdOut]
+            : writeFailure ? [FileDescriptor.StdOut, FileDescriptor.StdErr] : [FileDescriptor.StdOut];
+        Assert.Equal(expected, host.Appends.Select(static append => append.Descriptor));
+        Assert.Equal("trap -- ':' SIGHUP\n"u8.ToArray(), host.Appends[invalidName ? 1 : 0].Content);
+        if (invalidName)
+            Assert.Equal("trap: unknown_name: invalid signal specification\n"u8.ToArray(), host.Appends[0].Content);
+        if (writeFailure)
+            Assert.Equal("trap: write error: Synthetic write failure\n"u8.ToArray(), host.Appends[1].Content);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task TrapListingReleasesTheFirstRecordBeforeWritingTheSecond(bool manyQuotes)

@@ -22,6 +22,10 @@ The runtime supports deterministic, non-interactive shell workflows:
 A reached `--help` prints help and returns 2. With closed stdout it returns 2 silently.
 Invalid options report the first invalid flag and usage on stderr. A shell-closed
 stderr suppresses the message and preserves status 2.
+Trap listings report a known output failure through the active stderr.
+With shell-closed stdout, named listings check the remaining signal names
+before reporting the write failure. Downstream reader closure stops output
+and keeps the status from any earlier invalid name.
 When conditions follow, an all-digit first operand from 0 through 64 selects
 the historical reset form. Larger decimal operands remain literal actions.
 The supported conditions are `EXIT`, `HUP`, `INT` and `TERM`.

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
@@ -48,13 +49,18 @@ public sealed partial class Evaluation
         var status = 0;
         if (list || index == words.Count)
         {
+            var stdout = GetStdOutDescriptor();
+            var output = DescriptorWriteResult.Open;
             if (index == words.Count)
             {
                 if (traps == null)
                     return EvaluationResult.FromExitCode(0);
                 foreach (var condition in ShellTraps.Conditions)
-                    if (!await PrintAsync(condition).ConfigureAwait(false))
-                        return EvaluationResult.FromExitCode(1);
+                {
+                    output = await PrintAsync(condition, stdout).ConfigureAwait(false);
+                    if (!output.CanAcceptMore)
+                        break;
+                }
             }
             else
             {
@@ -65,9 +71,19 @@ public sealed partial class Evaluation
                         await InvalidConditionAsync(words[index]).ConfigureAwait(false);
                         status = 1;
                     }
-                    else if (!await PrintAsync(condition).ConfigureAwait(false))
-                        return EvaluationResult.FromExitCode(1);
+                    else if (output.CanAcceptMore)
+                    {
+                        output = await PrintAsync(condition, stdout).ConfigureAwait(false);
+                        // Bash checks later signal names before reporting a shell-closed stdout.
+                        if (!output.CanAcceptMore && !(stdout.IsClosed && output.IsError))
+                            break;
+                    }
                 }
+            }
+            if (output.IsError)
+            {
+                await ReportBuiltinWriteFailureAsync(command, output).ConfigureAwait(false);
+                status = 1;
             }
             return EvaluationResult.FromExitCode(status);
         }
@@ -126,10 +142,10 @@ public sealed partial class Evaluation
         Task InvalidConditionAsync(ShellValue operand) =>
             ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(": invalid signal specification")]);
 
-        async Task<bool> PrintAsync(TrapCondition condition)
+        async ValueTask<DescriptorWriteResult> PrintAsync(TrapCondition condition, FileDescriptor stdout)
         {
             if (traps == null || !traps.ListedHandlers.TryGetValue(condition, out var handler))
-                return true;
+                return DescriptorWriteResult.Open;
             var name = ShellTraps.GetNameBytes(condition);
             var length = "trap -- "u8.Length + ShellArgumentEscaping.GetLiteralSingleQuotedLength(handler.Bytes.Span)
                 + 1 + name.Length + 1;
@@ -142,7 +158,7 @@ public sealed partial class Evaluation
                 || !output.TryAppend(name)
                 || !output.TryAppend((byte)'\n'))
                 throw new InvalidOperationException("Trap listing exceeded its reserved size.");
-            return !(await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false)).IsError;
+            return await ExecuteWriteAsync(stdout, output.ToMemory()).ConfigureAwait(false);
         }
     }
 
