@@ -549,9 +549,13 @@ public sealed class SourceMemoryLifetimeTests
     }
 
     [Theory]
-    [InlineData("type")]
-    [InlineData("type -a")]
-    public async Task CommandQueryRetainsItsSelectedDefinitionAcrossHostLookup(string query)
+    [InlineData("type", null)]
+    [InlineData("type -a", null)]
+    [InlineData("type -t", "function\nfile\n")]
+    [InlineData("type -at", "function\nfile\nfile\n")]
+    [InlineData("type -p", "/bin/other\n")]
+    [InlineData("command -v", "f\n/bin/other\n")]
+    public async Task CommandQueryKeepsTheSelectedOutputAcrossHostLookup(string query, string? expectedOutput)
     {
         var governor = new MemoryGovernor(1024 * 1024);
         var scopes = new ConcurrentBag<RecordedScope>();
@@ -571,9 +575,18 @@ public sealed class SourceMemoryLifetimeTests
         var result = await new Engine().RunAsync(evaluation, host, owner, cancel.Token);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(1, liveAtLookup);
-        Assert.Contains("old", host.GetOutput(FileDescriptor.StdOut));
-        Assert.DoesNotContain("new", host.GetOutput(FileDescriptor.StdOut));
+        var stdout = host.GetOutput(FileDescriptor.StdOut);
+        if (expectedOutput == null)
+        {
+            Assert.Equal(1, liveAtLookup);
+            Assert.Contains("old", stdout);
+            Assert.DoesNotContain("new", stdout);
+        }
+        else
+        {
+            Assert.Equal(0, liveAtLookup);
+            Assert.Equal(expectedOutput, stdout);
+        }
         Assert.Empty(host.GetOutput(FileDescriptor.StdErr));
         Assert.DoesNotContain(scopes, s => s.Depth > 1 && s.OwnBytes >= PaddingBytes);
         Assert.Equal(0, host.OpenFileCount);

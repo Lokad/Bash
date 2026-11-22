@@ -328,8 +328,8 @@ public sealed partial class Evaluation
                         _ => throw new ArgumentOutOfRangeException(nameof(outputMode))
                     };
                     return appended && output.TryAppend((byte)'\n')
-                        && (outputMode != CommandQueryOutputMode.TypeDescription || resolution is not CommandQueryResolution.Function function
-                            || FunctionDefinitionFormatter.TryAppend(function.Definition, output));
+                        && (resolution is not CommandQueryResolution.Function { Definition: { } definition }
+                            || FunctionDefinitionFormatter.TryAppend(definition, output));
                 }
 
                 void FinishRun(bool diagnostic)
@@ -427,37 +427,35 @@ public sealed partial class Evaluation
                         resolutions[index] = CommandQueryResolution.Keyword.Instance;
                         continue;
                     }
-                    var resolution = ResolveCommandName(value, lookupMode);
-                    if (localMatches != null)
+                    var function = FindCommandFunction(value, lookupMode);
+                    if (localMatches == null && function != null)
                     {
-                        CommandQueryResolution.Function? definition = null;
-                        if (resolution is CommandResolution.Function localFunction)
-                        {
-                            definition = RetainFunction(localFunction.Binding);
-                            resolution = ResolveCommandName(value, CommandLookupMode.BypassFunctions);
-                        }
-                        localMatches[index] = (keyword, definition, resolution is CommandResolution.EvaluatorBuiltin);
-                    }
-                    else if (resolution is CommandResolution.Function function)
-                    {
-                        resolutions[index] = RetainFunction(function.Binding);
+                        resolutions[index] = SelectFunction(function);
                         continue;
                     }
-                    else if (resolution is CommandResolution.EvaluatorBuiltin)
+                    var builtinKind = FindCommandBuiltin(value, lookupMode);
+                    var hostBuiltin = builtinKind == BuiltinKind.ApplyPatch;
+                    var evaluatorBuiltin = builtinKind.HasValue && !hostBuiltin;
+                    if (localMatches != null)
+                    {
+                        localMatches[index] = (keyword, function == null ? null : SelectFunction(function), evaluatorBuiltin);
+                    }
+                    else if (evaluatorBuiltin)
                     {
                         resolutions[index] = CommandQueryResolution.Builtin.Instance;
                         continue;
                     }
 
                     // Host command names must be nonempty UTF-8. Local names stay byte-valued.
-                    if (resolution is CommandResolution.Missing || value.IsEmpty || !Utf8.IsValid(value.Bytes.Span))
+                    if ((lookupMode == CommandLookupMode.BuiltinOnly && !hostBuiltin)
+                        || value.IsEmpty || !Utf8.IsValid(value.Bytes.Span))
                     {
                         resolutions[index] = CommandQueryResolution.Missing.Instance;
                         continue;
                     }
 
                     // Keep the builtin display classification, subject to the host confirming availability.
-                    if (resolution is CommandResolution.HostBuiltin)
+                    if (hostBuiltin)
                         resolutions[index] = CommandQueryResolution.Builtin.Instance;
 
                     var decodeBytes = Math.Max(0, 32 + 2L * value.Bytes.Length
@@ -497,8 +495,10 @@ public sealed partial class Evaluation
                 return resolutions;
             }
 
-            CommandQueryResolution.Function RetainFunction(FunctionBinding binding)
+            CommandQueryResolution.Function SelectFunction(FunctionBinding binding)
             {
+                if (outputMode != CommandQueryOutputMode.TypeDescription)
+                    return CommandQueryResolution.Function.Classification;
                 (functionOwners ??= []).Add(binding);
                 binding.Retain();
                 return new CommandQueryResolution.Function(binding.Definition);

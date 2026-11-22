@@ -332,8 +332,9 @@ by each run and shared by its forks. Deferred parsing of temporary operand
 fragments uses storage through nested execution and cleanup. Function namespace
 growth/copies are admitted separately from shared definitions and serialized exports.
 Namespace keys follow the current definition's storage. Sorted function-name
-snapshots admit compact copies, and pending command queries retain their selected
-source owners through host lookup and output completion.
+snapshots admit compact copies. Queries that display function definitions retain
+their selected source owners through host lookup and output completion.
+Name, kind and path queries keep the selected classification.
 Command queries borrow the expanded operands and admit their resolution records
 and output offsets as a batch. Decoded host names and result indexes remain
 admitted through the lookup. Lookup scratch retires before output formatting.
@@ -345,7 +346,7 @@ when publishing, because hosts can import definitions before Engine starts.
 Concurrent first readers may render independently without waiting; unpublished or
 refused candidates refund their own storage, and refusal does not retry a winner.
 Replacement, unset and settled temporary namespaces retire their references.
-Function calls, queries and host command payloads retain their selected bindings
+Function calls, descriptive queries and host command payloads retain their selected bindings
 through all consumers and descriptor cleanup; only the final owner refunds a cache.
 The function namespace admits its ordered export selection on first use. It
 borrows the selected bindings and refunds the selection when an exported binding

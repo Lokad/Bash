@@ -2765,16 +2765,10 @@ public sealed partial class Evaluation : IFileTester
 
     private CommandResolution ResolveCommandName(ShellValue commandName, CommandLookupMode lookupMode)
     {
-        if (lookupMode == CommandLookupMode.HostOnly)
-            return CommandResolution.Host.Instance;
-
-        if (lookupMode == CommandLookupMode.Normal
-            && _state.Functions.TryGetValue(commandName, out var function))
-        {
+        if (FindCommandFunction(commandName, lookupMode) is { } function)
             return new CommandResolution.Function(function);
-        }
 
-        if (BuiltinClassification.TryResolve(commandName.Bytes.Span, out var builtin))
+        if (FindCommandBuiltin(commandName, lookupMode) is { } builtin)
         {
             return builtin == BuiltinKind.ApplyPatch
                 ? new CommandResolution.HostBuiltin(builtin)
@@ -2785,6 +2779,14 @@ public sealed partial class Evaluation : IFileTester
             ? CommandResolution.Missing.Instance
             : CommandResolution.Host.Instance;
     }
+
+    private FunctionBinding? FindCommandFunction(ShellValue name, CommandLookupMode lookupMode) =>
+        lookupMode == CommandLookupMode.Normal && _state.Functions.TryGetValue(name, out var function)
+            ? function : null;
+
+    private static BuiltinKind? FindCommandBuiltin(ShellValue name, CommandLookupMode lookupMode) =>
+        lookupMode != CommandLookupMode.HostOnly && BuiltinClassification.TryResolve(name.Bytes.Span, out var builtin)
+            ? builtin : null;
 
     /// <summary>
     /// Opens a lexical redirection scope and records ownership of every descriptor it creates.
@@ -4286,8 +4288,11 @@ public sealed partial class Evaluation : IFileTester
     /// <summary> Describes how a queried command name resolves without executing it. </summary>
     private abstract record CommandQueryResolution
     {
-        /// <summary> The name resolves to a shell function. </summary>
-        public sealed record Function(FunctionDefinition Definition) : CommandQueryResolution;
+        /// <summary>The name resolves to a shell function. Descriptive output borrows its definition.</summary>
+        public sealed record Function(FunctionDefinition? Definition) : CommandQueryResolution
+        {
+            public static readonly Function Classification = new(Definition: null);
+        }
 
         /// <summary> The name resolves to an evaluator-owned or host-backed shell builtin. </summary>
         public sealed record Builtin : CommandQueryResolution
