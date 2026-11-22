@@ -1450,9 +1450,11 @@ public sealed partial class Evaluation : IFileTester
                         byteOperands, builtinScope with { Variables = commandVars }, executable.UsesCommandWrapper, false))
                         .ConfigureAwait(false),
                     BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local =>
-                        await AwaitWordExpansionAsync(EvaluateBuiltinDeclarationAsync(
-                            declaration ?? throw new InvalidOperationException("Declaration was not prepared."),
-                            commandVars, bindings, builtinScope, false)).ConfigureAwait(false),
+                        await AwaitWordExpansionAsync(declaration is { } prepared
+                            ? EvaluateBuiltinDeclarationAsync(prepared.Options, prepared.Operands, commandVars, bindings, builtinScope, false)
+                            : throw new InvalidOperationException("Declaration was not prepared.")).ConfigureAwait(false),
+                    BuiltinKind.Set when byteOperands.Count == 1 => await AwaitWordExpansionAsync(EvaluateBuiltinDeclarationAsync(
+                        new DeclarationOptions(BuiltinKind.Set), [], commandVars, bindings, builtinScope, false)).ConfigureAwait(false),
                     BuiltinKind.Set => await EvaluateBuiltinSetAsync(byteOperands, commandVars, false).ConfigureAwait(false),
                     BuiltinKind.Unset => await AwaitWordExpansionAsync(EvaluateBuiltinUnsetAsync(byteOperands, commandVars, builtinScope, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Eval or BuiltinKind.Source => await EvaluateBuiltinScriptingAsync(evaluatorBuiltin.Kind,
@@ -1796,9 +1798,9 @@ public sealed partial class Evaluation : IFileTester
 
         // Applies or inspects prepared declarations without replaying expansion effects.
         async Task<EvaluationResult> EvaluateBuiltinDeclarationAsync(
-            PreparedDeclaration declaration, Variables commandVars, Variables.CommandBindings? bindings, ScopedEvaluation declarationScope, bool declarationNegated)
+            DeclarationOptions options, IReadOnlyList<PreparedDeclarationOperand> operands,
+            Variables commandVars, Variables.CommandBindings? bindings, ScopedEvaluation declarationScope, bool declarationNegated)
         {
-            var options = declaration.Options;
             var executionScope = declarationScope with { Variables = commandVars };
             var functionContext = declarationScope.Context.FunctionContext;
             var localBuiltinFrame = options.Builtin == BuiltinKind.Local ? functionContext : null;
@@ -1826,15 +1828,16 @@ public sealed partial class Evaluation : IFileTester
                     + BuiltinDocumentation.DeclarationOptionSynopsis(options.Builtin, commandName))).ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), declarationNegated).ConfigureAwait(false);
             }
-            var listing = declaration.Operands.Count == 0;
+            var listing = operands.Count == 0;
             if (options.Functions && (!listing || options.Builtin != BuiltinKind.Local))
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(await EvaluateFunctionsAsync().ConfigureAwait(false)), declarationNegated).ConfigureAwait(false);
             if (listing || options.Print && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
             {
                 var listOptionSnapshot = listing && localBuiltinFrame?.HasOwnOptionSnapshot == true;
-                var style = listing && options.Builtin == BuiltinKind.Declare && !options.Print
-                    && options.ListingAttributes == DeclarationListingAttributes.None && options.CaseChange.Set == BindingAttributes.None
-                    ? VariableDisplayStyle.Assignment
+                var showAssignments = options.Builtin == BuiltinKind.Set
+                    || listing && options.Builtin == BuiltinKind.Declare && !options.Print
+                    && options.ListingAttributes == DeclarationListingAttributes.None && options.CaseChange.Set == BindingAttributes.None;
+                var style = showAssignments ? VariableDisplayStyle.Assignment
                     : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationWithoutScalarValues : VariableDisplayStyle.Declaration;
                 var preserveStatusOnClosedOutput = listing && (options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
                     && style != VariableDisplayStyle.Assignment;
@@ -1939,7 +1942,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 const DeclarationListingAttributes ArrayFilters =
                     DeclarationListingAttributes.Indexed | DeclarationListingAttributes.Associative;
-                var noOperands = declaration.Operands.Count == 0;
+                var noOperands = listing;
                 var preserveStatusOnClosedOutput = noOperands && options.Builtin == BuiltinKind.Declare && options.Functions;
                 if (noOperands && (options.ListingAttributes & ArrayFilters) != DeclarationListingAttributes.None)
                     return 0;
@@ -2018,7 +2021,7 @@ public sealed partial class Evaluation : IFileTester
                     }
 
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
-                    var style = !options.FunctionNamesOnly
+                    var style = !options.Functions ? FunctionDisplayStyle.Definition : !options.FunctionNamesOnly
                         ? noOperands || options.Print ? FunctionDisplayStyle.DefinitionWithAttributes : FunctionDisplayStyle.Definition
                         : noOperands || options.Print ? FunctionDisplayStyle.Attributes : FunctionDisplayStyle.Name;
                     if (!function.TryAppend(output, style))
@@ -2068,7 +2071,7 @@ public sealed partial class Evaluation : IFileTester
 
             async IAsyncEnumerable<T> GetNamesAsync<T>(Func<MemoryCapacity, IEnumerable<T>> listNames, Func<ShellValue, T> bindOperand)
             {
-                if (declaration.Operands.Count == 0)
+                if (listing)
                 {
                     // Keep the sorted snapshot through each awaited consumer and release it when enumeration ends.
                     using var listingMemory = new MemoryCapacity(Memory.Budget, 0);
@@ -2078,7 +2081,7 @@ public sealed partial class Evaluation : IFileTester
                 else
                 {
                     // Explicit operands remain literal and join through the shared budget/diagnostic path.
-                    foreach (var operand in declaration.Operands)
+                    foreach (var operand in operands)
                     {
                         var value = await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
                         if (HasPendingExpansionError)
@@ -2092,7 +2095,7 @@ public sealed partial class Evaluation : IFileTester
             var globalBindings = options.Global ? bindings : null;
             var exitCode = 0;
             List<Variables.CommandBindings>? exposedPrefixes = null;
-            foreach (var operand in declaration.Operands)
+            foreach (var operand in operands)
             {
                 if (operand.Value == null && TrySaveLocalOptions(operand.Name))
                     continue;

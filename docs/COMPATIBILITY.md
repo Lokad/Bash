@@ -436,7 +436,11 @@ physical source order across pipeline/list headers and completed through timing,
 negation and compound-command wrappers. An incomplete body is rejected rather
 than accepted with GNU's end-of-input warning. Builtins implement their documented option subsets;
 `set` sets positional parameters and supports `-e`/`+e` and
-`-o errexit`/`+o errexit`. A bare `+` continues the option scan. A bare `-` ends
+`-o errexit`/`+o errexit`. With no expanded operands, it lists visible variable
+assignments followed by function definitions. Each group uses byte-name
+order. Like bare `declare`, this listing hides the command's own temporary
+prefixes and prints function bodies without their declaration attributes.
+A bare `+` continues the option scan. A bare `-` ends
 the scan, with following operands becoming positional parameters. `--` replaces
 the parameters even when no operands follow. Errexit stops unhandled failures,
 including failed pipelines under the fixed pipefail policy. Tested conditions, logical-list

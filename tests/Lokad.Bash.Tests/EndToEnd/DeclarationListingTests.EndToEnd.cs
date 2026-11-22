@@ -38,6 +38,39 @@ public sealed class DeclarationListingTestsEndToEnd
         AssertResultAsync(Bindings + command + Projection, expectedOutput, expectedStatus);
 
     [Theory]
+    [InlineData("set")]
+    [InlineData("builtin set")]
+    [InlineData("command set")]
+    public Task OperandFreeSetListsVisibleAssignmentsInByteNameOrder(string command) =>
+        AssertResultAsync(Bindings + command + Projection,
+            "probe_a=([2]=\"a b\")\nprobe_export=exported\nprobe_m=([key]=\"m n\" )\n"
+            + "probe_readonly=read\nprobe_ref=probe_z\nprobe_z='two words'\n", 0);
+
+    [Fact]
+    public Task OperandFreeSetListsTheSavedBindingBehindItsCommandPrefix() =>
+        AssertResultAsync("probe_x=outer; probe_hidden=temporary probe_x=inner set" + Projection
+            + "; printf '<%s:%s>' \"$probe_x\" \"${probe_hidden-absent}\"", "probe_x=outer\n<outer:absent>", 0);
+
+    [Theory]
+    [InlineData("set")]
+    [InlineData("declare")]
+    [InlineData("declare +F")]
+    public Task AssignmentListingsRenderFunctionBodiesWithoutAttributeRows(string command) =>
+        AssertResultAsync("probe_f(){ printf '%s' 'two words'; }; export -f probe_f; readonly -f probe_f; capture=$("
+            + command + "); printf 'probe_f %s\\n' \"${capture##*probe_f }\"; declare -Fp probe_f",
+            "probe_f () \n{ \n    printf '%s' 'two words'\n}\ndeclare -frx probe_f\n", 0);
+
+    [Fact]
+    public async Task OperandFreeSetReportsClosedOutputAndFailsUnderErrexit()
+    {
+        var result = await EvaluationTestHelper.RunAsync("set -e; set >&-; printf unreachable");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("set: write error: Bad file descriptor\n", result.StdErr);
+    }
+
+    [Theory]
     [InlineData("f(){ local a=value; local -F >&-; }; f", "local", 0)]
     [InlineData("f(){ local a=value; local -p a >&-; }; f", "local", 1)]
     [InlineData("declare -a a=([7]=tail); declare -a >&-", "declare", 0)]
