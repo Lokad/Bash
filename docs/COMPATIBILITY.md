@@ -190,6 +190,9 @@ once the destination is reached. Missing HOME or OLDPWD is an error when
 selected. An empty destination revalidates the current directory. A spelling
 such as `./-` is an ordinary path. CDPATH and the `-L`/`-P` modes are outside
 the current path profile.
+Failed `cd`, `pushd` and `popd` lookups report the selected destination's
+spelling, including relative operands, values from OLDPWD and deferred
+stack entries. A saved resolved entry uses its stored path.
 
 A leading `cd --help` prints help and returns 2 before any navigation.
 `pwd` accepts leading `-L` and `-P` options, including bundles. Both use the

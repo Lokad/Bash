@@ -402,7 +402,8 @@ public sealed partial class Evaluation
         Variables variables, Variables.CommandBindings? bindings, EvaluationContext context)
     {
         if (entry.Path is { } path)
-            return await ExecuteDirectoryChangeAsync(kind, path, variables, bindings, context, default).ConfigureAwait(false);
+            return await ExecuteDirectoryChangeAsync(kind, path, path.Path, variables, bindings, context, default)
+                .ConfigureAwait(false);
 
         var target = await DecodeExpandedValueAsync(entry.DeferredPath).ConfigureAwait(false);
         if (HasPendingExpansionError)
@@ -417,7 +418,7 @@ public sealed partial class Evaluation
         var resolved = target.Length == 0 && kind is DirectoryChangeKind.ChangeDirectory or DirectoryChangeKind.PushDirectory
             ? _state.CurrentDirectory : ResolvePath(target);
         return resolved != null
-            ? ExecuteDirectoryChangeAsync(kind, resolved, variables, bindings, context, announcement)
+            ? ExecuteDirectoryChangeAsync(kind, resolved, target, variables, bindings, context, announcement)
             : InvalidPathAsync();
 
         async Task<EvaluationResult> InvalidPathAsync()
@@ -430,7 +431,7 @@ public sealed partial class Evaluation
 
     /// <summary>Every navigation route validates through the host before publishing its destination.</summary>
     private async Task<EvaluationResult> ExecuteDirectoryChangeAsync(
-        DirectoryChangeKind kind, ShellPath target, Variables variables, Variables.CommandBindings? bindings,
+        DirectoryChangeKind kind, ShellPath target, string diagnosticPath, Variables variables, Variables.CommandBindings? bindings,
         EvaluationContext context, ReadOnlyMemory<byte> announcement)
     {
         CheckCancellation();
@@ -446,7 +447,7 @@ public sealed partial class Evaluation
             var error = selected.Error ?? new OperationError(
                 selected.Info.Kind == FilePathKind.Missing ? "No such file or directory\n" : "Not a directory\n");
             await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
-                target.Path, error).ConfigureAwait(false);
+                diagnosticPath, error).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(1);
         }
 

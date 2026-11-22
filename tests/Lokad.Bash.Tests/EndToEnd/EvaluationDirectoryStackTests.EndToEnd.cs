@@ -86,6 +86,32 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("cd -", "/base/missing", "cd: ../missing: No such file or directory\n", "/base/alpha")]
+    [InlineData("pushd -- +1", "/base/alpha/+1", "pushd: +1: No such file or directory\n", "/base/alpha")]
+    [InlineData("pushd -n ../record >/dev/null; popd", "/base/record", "popd: ../record: Not a directory\n", "/base/alpha ../record")]
+    public async Task DirectoryLookupReportsTheSelectedSpelling(string command, string lookup, string diagnostic, string stack)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/base/alpha"], [("/base/record", "record")]);
+        var lookups = new List<string>();
+        host.BeforeGetPathInfo = path => lookups.Add(path.Path);
+        var source = $"""
+            cd /base/alpha
+            OLDPWD=../missing
+            {command}
+            printf '%s|%s|%s\n' "$?" "$PWD" "$OLDPWD"
+            dirs -l
+            """;
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new[] { "/base/alpha", lookup }, lookups);
+        Assert.Equal($"1|/base/alpha|../missing\n{stack}\n", host.StandardOutput.TextContent);
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task PopdHelpRunsBeforeTheEmptyStackCheck()
     {

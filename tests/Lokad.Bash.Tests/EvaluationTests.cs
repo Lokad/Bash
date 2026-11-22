@@ -1323,16 +1323,17 @@ public partial class EvaluationTests
     [Fact]
     public async Task Evaluation_CdBuiltin_FailureDoesNotUpdateDirectory()
     {
-        var script = Parser.Parse("cd target");
+        var script = Parser.Parse("cd ./target");
         var state = new Eval(script);
         var initialDirectory = state.CurrentDirectory;
 
         var operation = await NextPathKindsAsync(state);
+        Assert.Equal("/target", Assert.Single(operation.Paths).Path);
         operation.SetResult([PathKindResult(FilePathKind.Missing)]);
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("cd: /target: No such file or directory\n", Text(diagnostic.Content));
+        Assert.Equal("cd: ./target: No such file or directory\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

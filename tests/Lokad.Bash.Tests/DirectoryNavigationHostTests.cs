@@ -142,7 +142,7 @@ public sealed class DirectoryNavigationHostTests
     public static IEnumerable<object[]> Rejections()
     {
         foreach (var prepared in new[] { false, true })
-        foreach (var command in new[] { "cd /a", "popd", "pushd" })
+        foreach (var command in new[] { "cd ../a", "popd", "pushd" })
         foreach (var kind in new[] { OperationErrorKind.PermissionDenied, OperationErrorKind.NotDirectory, OperationErrorKind.Unknown })
             yield return [prepared, command, kind];
     }
@@ -169,7 +169,8 @@ public sealed class DirectoryNavigationHostTests
         Assert.Equal("/b", result.CurrentDirectory.Path);
         Assert.Equal(["/a", "/b", "/a"], host.PathInfoRequests.Select(p => p.Path));
         var prefix = command.StartsWith("cd", StringComparison.Ordinal) ? "cd" : command;
-        Assert.Equal(prefix + ": /a: synthetic denial\n", Encoding.UTF8.GetString(
+        var shownPath = prefix == "cd" ? "../a" : "/a";
+        Assert.Equal($"{prefix}: {shownPath}: synthetic denial\n", Encoding.UTF8.GetString(
             host.Appends.Where(a => a.Descriptor == FileDescriptor.StdErr).SelectMany(a => a.Content).ToArray()));
         Assert.Equal(command == "pushd" ? "/b /b\n" : "/b /a\n", Encoding.UTF8.GetString(
             host.Appends.Where(a => a.Descriptor == FileDescriptor.StdOut).SelectMany(a => a.Content).ToArray()));
