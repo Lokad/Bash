@@ -292,7 +292,11 @@ public sealed partial class Evaluation
         if (kind is not (ScriptExecutionKind.Root or ScriptExecutionKind.LegacyCapture))
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         if (IsNestedLoadedReader(kind))
-            scope = scope with { InNestedCommandUnits = true };
+            scope = scope with
+            {
+                InNestedCommandUnits = true,
+                LoadedReaderIgnoresErrexit = scope.Context.ErrexitIgnored
+            };
         var lineOffset = kind switch
         {
             ScriptExecutionKind.Eval => Math.Max(1, scope.Context.Coordinates.EndLine) - 1,
@@ -368,7 +372,9 @@ public sealed partial class Evaluation
                     .ConfigureAwait(false);
                 if (result.Flow == FlowControlKind.Return)
                     return kind == ScriptExecutionKind.Source ? EvaluationResult.FromExitCode(result.ExitCode) : result;
-                if (result.DiscardsCommandUnit && kind == ScriptExecutionKind.Root && _state.ForkKind == null)
+                if (_state.ForkKind == null
+                    && (kind == ScriptExecutionKind.Root && result.DiscardsCommandUnit
+                        || IsLoadedReader(kind) && result.DiscardsLoadedCommandUnit))
                     result = await RecoverDiscardedCommandUnitAsync(scope).ConfigureAwait(false);
                 else if (result.Flow == FlowControlKind.Exit)
                 {

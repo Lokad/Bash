@@ -9,7 +9,7 @@ namespace Lokad.Bash.Evaluation;
 
 internal static partial class WordExpansion
 {
-    internal enum DeclarationWrite { Ordinary, ActiveGlobalIndexed }
+    internal enum DeclarationWrite { Ordinary, ActiveGlobalIndexed, ReadonlyInitializer }
 
     /// <summary>A selected location; its typed index is not expanded again when read.</summary>
     internal abstract record ResolvedVariableReference(BindingName Name)
@@ -80,7 +80,7 @@ internal static partial class WordExpansion
             var attributes = destination.GetAssignmentAttributes(Name);
             if ((attributes & Variables.BindingAttributes.Integer) != 0)
             {
-                if (declarationWrite != DeclarationWrite.ActiveGlobalIndexed && destination.IsReadonly(Name))
+                if (declarationWrite == DeclarationWrite.Ordinary && destination.IsReadonly(Name))
                     return null;
                 var evaluated = await EvaluateIntegerAssignmentAsync(value, previous, scope, command).ConfigureAwait(false);
                 if (!evaluated.HasValue || !scope.CanExpand)
@@ -138,7 +138,7 @@ internal static partial class WordExpansion
 
             // Selection already resolved namerefs; local bindings can retain a literal name such as "a[1]".
             bool TryAssignTo(Variables variables, BindingName name) => !name.IsEmpty
-                && (declarationWrite == DeclarationWrite.ActiveGlobalIndexed || !variables.IsReadonly(name)) && this switch
+                && (declarationWrite != DeclarationWrite.Ordinary || !variables.IsReadonly(name)) && this switch
             {
                 Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory),
                 Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory),

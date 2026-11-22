@@ -181,7 +181,8 @@ public sealed partial class Evaluation
     /// <summary>Applies expanded items in order; selector effects observe earlier writes.</summary>
     private async Task<bool> ApplyCompoundArrayItemsAsync(
         BindingName name, AssignmentOperator operation, ArrayKind kind, IReadOnlyList<ExpandedArrayItem> expanded,
-        ScopedEvaluation scope, Variables targetVariables, BindingName sourceName, ShellValue command)
+        ScopedEvaluation scope, Variables targetVariables, BindingName sourceName, ShellValue command,
+        bool initializeReadonly = false)
     {
         var associative = kind == ArrayKind.Associative;
         // Word expansion sees the previous binding. Arithmetic selection and writes see
@@ -192,7 +193,7 @@ public sealed partial class Evaluation
             IReadOnlyList<ShellValue> initial = append && targetVariables.Scalars.TryGetValue(name, out var scalar)
                 ? [scalar]
                 : [];
-            if (!targetVariables.TryAssignResolvedArray(name, initial, kind))
+            if (!targetVariables.TryAssignResolvedArray(name, initial, kind, initializeReadonly))
                 return false;
         }
 
@@ -205,6 +206,7 @@ public sealed partial class Evaluation
         var lastIndex = append && targetVariables.IndexedArrays.TryGetValue(name, out var indexed)
             ? indexed.MaxIndex ?? -1
             : -1;
+        var write = initializeReadonly ? WordExpansion.DeclarationWrite.ReadonlyInitializer : WordExpansion.DeclarationWrite.Ordinary;
         foreach (var item in expanded)
         {
             WordExpansion.ResolvedVariableReference? target;
@@ -232,8 +234,8 @@ public sealed partial class Evaluation
             // Bash 5.2 prefixes reclassified += items with element zero, including earlier writes.
             if (item.PrefixWithElementZero && targetVariables.TryGetExpansionValue(name, out var previous))
                 value = WordExpansion.AppendAssignmentValue(previous, value, scope);
-            if (await target.AssignValueAsync(scope, targetVariables, sourceName, value, item.Operator, command,
-                    WordExpansion.DeclarationWrite.Ordinary).ConfigureAwait(false) is null)
+            if (await target.AssignValueAsync(scope, targetVariables, sourceName, value, item.Operator, command, write)
+                    .ConfigureAwait(false) is null)
                 return false;
             if (target is WordExpansion.ResolvedVariableReference.Indexed element)
                 lastIndex = element.Index.Value;

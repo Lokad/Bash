@@ -1188,13 +1188,17 @@ public sealed partial class Variables
     }
 
     /// <summary>Replaces an already selected array binding without following its nameref again.</summary>
-    internal bool TryAssignResolvedArray(BindingName resolved, IReadOnlyList<ShellValue> values, ArrayKind kind)
+    internal bool TryAssignResolvedArray(BindingName resolved, IReadOnlyList<ShellValue> values, ArrayKind kind,
+        bool initializeReadonly = false)
     {
-        if (resolved.IsEmpty || IsReadonly(resolved))
+        if (resolved.IsEmpty || !initializeReadonly && IsReadonly(resolved))
             return false;
 
         if (kind == ArrayKind.Indexed)
-            return TryAssignResolvedIndexedArray(resolved, IndexedArray.FromSequential(values));
+        {
+            ReplaceValue(resolved, new IndexedSlot(IndexedArray.FromSequential(values)));
+            return true;
+        }
 
         var array = new AssociativeArray(isInitialized: true);
         for (var index = 0; index < values.Count; index += 2)

@@ -131,6 +131,15 @@ With named operands, `readonly -n` processes assignments and preserves
 existing attributes. It skips adding the readonly attribute. Without operands,
 it lists readonly bindings.
 
+An expanded declaration operand such as `declare -a 'items=(one "two words")'`
+can initialize an array. Explicit array options select this form for declaration
+builtins. `declare`, `typeset`, and `local` also recognize it when the selected
+binding is already an array. The initializer uses the compound array grammar and
+expands its items after the other arguments, with the declaration's attributes
+and redirections in effect. A malformed list discards the current command unit.
+With errexit set it exits with status 2, except in a source or eval reader that
+was itself invoked as a tested command.
+
 `declare`, `typeset`, `local`, `export`, and `readonly` report usage after an
 unrecognized leading option. A reached `--help` writes the command's synopsis
 and Lokad.Bash's builtin documentation to stdout with status 2. At script

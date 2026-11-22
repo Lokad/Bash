@@ -708,7 +708,8 @@ public sealed partial class Evaluation : IFileTester
                 Context = childContext.WithLoopDepth(0),
                 ErrexitRedirections = null,
                 Timing = null,
-                InNestedCommandUnits = false
+                InNestedCommandUnits = false,
+                LoadedReaderIgnoresErrexit = false
             };
             if (redirections != null)
             {
@@ -2419,7 +2420,36 @@ public sealed partial class Evaluation : IFileTester
                 }
 
                 var elementAttributesApplied = false;
-                if (referentElement is { } elementReference && referentAttributes is { } elementAttributes
+                if (!operand.CompoundApplied && !localReferenceAssigned && !options.Nameref
+                    && operand.Value is { } expandedInitializer && expandedInitializer.Bytes.Span is [(byte)'(', .., (byte)')']
+                    && TrySelectExpandedInitializer(name, reference, targetVars, out var initializerTarget, out var initializerKind))
+                {
+                    // The declared attributes are visible to reads during item expansion.
+                    var initializeReadonly = options.Readonly && !initializerTarget.Owner.IsReadonlyBinding(initializerTarget.Name);
+                    SetAttributes(initializerTarget.Name, initializerTarget.Owner);
+                    var listSource = ShellSource.FromBytes(expandedInitializer.Bytes[1..^1]);
+                    using var syntaxMemory = new MemoryCapacity(Memory.Budget, 0);
+                    if (!Parser.TryParseCompoundInitializer(listSource, syntaxMemory, out var items, out var error))
+                    {
+                        var status = _state.ErrexitEnabled && !executionScope.LoadedReaderIgnoresErrexit ? 2 : 1;
+                        await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
+                            ShellValue.FromText("syntax error in array initializer: " + error.Message)).ConfigureAwait(false);
+                        _state.LastExitCode = status;
+                        PublishExpansionPipelineStatus(status, executionScope);
+                        return status == 2 ? EvaluationResult.Exit(status) : EvaluationResult.DiscardCompoundInitializerUnit();
+                    }
+                    if (!await ApplyExpandedInitializerAsync(initializerTarget, initializerKind, items,
+                            operand.Operator, sourceName, initializeReadonly)
+                            .ConfigureAwait(false))
+                    {
+                        exitCode = 1;
+                        if (HasPendingExpansionError)
+                            break;
+                        continue;
+                    }
+                    referentElement = null;
+                }
+                else if (referentElement is { } elementReference && referentAttributes is { } elementAttributes
                     && operand.Value is { } elementValue)
                 {
                     if (!await AwaitWordExpansionAsync(AssignReferencedElementAsync(
@@ -2573,6 +2603,38 @@ public sealed partial class Evaluation : IFileTester
             }
 
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
+
+            bool TrySelectExpandedInitializer(BindingName name, VariableReference reference, Variables variables,
+                out VariableBinding binding, out ArrayKind kind)
+            {
+                kind = default;
+                binding = default;
+                if (options.ArrayKind == ArrayAssignmentKind.Auto
+                    && (reference.Kind != VariableReferenceKind.Name || options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly))
+                    return false;
+                if (!variables.TryResolveBinding(name, selectOwner: null, out binding)
+                    || options.ArrayKind == ArrayAssignmentKind.Auto && binding.Reference.Kind != VariableReferenceKind.Name)
+                    return false;
+                if (binding.Owner.AssociativeArrays.ContainsKey(binding.Name))
+                {
+                    kind = ArrayKind.Associative;
+                    return true;
+                }
+                kind = ArrayKind.Indexed;
+                return binding.Owner.IndexedArrays.ContainsKey(binding.Name);
+            }
+
+            async Task<bool> ApplyExpandedInitializerAsync(VariableBinding target, ArrayKind kind, IReadOnlyList<CompoundArrayItem> items,
+                AssignmentOperator operation, BindingName sourceName, bool initializeReadonly)
+            {
+                using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
+                var expanded = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(
+                    target.Name, items, kind, operation, AssignmentContext.Declaration, executionScope, itemMemory)).ConfigureAwait(false);
+                return expanded != null && await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
+                    target.Name, operation, kind, expanded, executionScope, target.Owner, sourceName,
+                    ShellValue.FromText(commandName), initializeReadonly))
+                    .ConfigureAwait(false);
+            }
 
             bool TrySaveLocalOptions(ShellValue operand)
             {

@@ -1099,6 +1099,61 @@ public static class Parser
         }
     }
 
+    /// <summary>Reads the interior of a reached declaration initializer as a compound word list.</summary>
+    internal static bool TryParseCompoundInitializer(ShellSource source, MemoryCapacity memory,
+        out IReadOnlyList<CompoundArrayItem> items, [NotNullWhen(false)] out SyntaxError? error)
+    {
+        if (source.Length > MaximumScriptBytes)
+        {
+            items = [];
+            error = new SyntaxError(ScriptSizeLimitMessage, 0);
+            return false;
+        }
+        var context = new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Temporary };
+        var tokenizer = new Tokenizer(source, 0, context);
+        items = ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput);
+        error = tokenizer.Error ?? tokenizer.QuotedEndOfInputFailure?.Error;
+        return error == null;
+    }
+
+    private static IReadOnlyList<CompoundArrayItem> ReadCompoundArrayValues(Tokenizer tokenizer, TokenKind terminator)
+    {
+        var values = new List<CompoundArrayItem>();
+
+        while (true)
+        {
+            var token = tokenizer.NextTokenCore();
+            if (tokenizer.Error != null || tokenizer.QuotedEndOfInputFailure != null)
+            {
+                tokenizer.MarkCompoundArrayFailure();
+                return values;
+            }
+            if (token.Kind == terminator)
+                return values;
+            switch (token.Kind)
+            {
+                case TokenKind.Newline:
+                    continue;
+                case TokenKind.Word:
+                case TokenKind.OpenBrace:
+                case TokenKind.CloseBrace:
+                    if (!tokenizer.TryGetOperandWord(token, out var wordToken))
+                    {
+                        tokenizer.RecordError("Expected word in array assignment.", tokenizer.Position);
+                        return values;
+                    }
+
+                    if (!tokenizer.TryReadCompoundArrayItem(wordToken, out var item, out _))
+                        return values;
+                    values.Add(item);
+                    continue;
+                default:
+                    tokenizer.RecordError("Unexpected token in array assignment.", tokenizer.Position);
+                    return values;
+            }
+        }
+    }
+
     /// <summary>
     /// Parses a simple command with assignments, words, and redirections.
     /// </summary>
@@ -1128,47 +1183,6 @@ public static class Parser
             var operation = append ? AssignmentOperator.Append : AssignmentOperator.Replace;
             assignment = new AssignmentWord(target, word.AfterSourcePrefix(part, equals + 1, memory), operation);
             return true;
-        }
-
-        // <summary>
-        // Reads compound array assignment values enclosed in parentheses.
-        // </summary>
-        static IReadOnlyList<CompoundArrayItem> ReadCompoundArrayValues(Tokenizer tokenizer)
-        {
-            var values = new List<CompoundArrayItem>();
-
-            while (true)
-            {
-                var token = tokenizer.NextTokenCore();
-                if (tokenizer.Error != null || tokenizer.QuotedEndOfInputFailure != null)
-                {
-                    tokenizer.MarkCompoundArrayFailure();
-                    return values;
-                }
-                switch (token.Kind)
-                {
-                    case TokenKind.CloseParen:
-                        return values;
-                    case TokenKind.Newline:
-                        continue;
-                    case TokenKind.Word:
-                    case TokenKind.OpenBrace:
-                    case TokenKind.CloseBrace:
-                        if (!tokenizer.TryGetOperandWord(token, out var wordToken))
-                        {
-                            tokenizer.RecordError("Expected word in array assignment.", tokenizer.Position);
-                            return values;
-                        }
-
-                        if (!tokenizer.TryReadCompoundArrayItem(wordToken, out var item, out _))
-                            return values;
-                        values.Add(item);
-                        continue;
-                    default:
-                        tokenizer.RecordError("Unexpected token in array assignment.", tokenizer.Position);
-                        return values;
-                }
-            }
         }
 
         List<AssignmentWord>? assignments = null;
@@ -1285,7 +1299,7 @@ public static class Parser
                                 return null;
                             }
 
-                            var arrayValues = ReadCompoundArrayValues(tokenizer);
+                            var arrayValues = ReadCompoundArrayValues(tokenizer, TokenKind.CloseParen);
                             if (tokenizer.Error != null)
                                 return null;
                             if (tokenizer.IsAtWordBoundary())

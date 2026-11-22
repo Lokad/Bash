@@ -7,6 +7,95 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationOperandTestsEndToEnd
 {
     [Theory]
+    [InlineData("""declare -a 'items=([2]=one [5]="two words")'; printf '<%s>' "${items[2]}" "${items[5]}" """, "<one><two words>")]
+    [InlineData("""arg='items=(one "two words")'; command declare -a "$arg"; printf '<%s>' "${items[@]}" """, "<one><two words>")]
+    [InlineData("""items=(old); declare 'items+=(one "two words")'; printf '<%s>' "${items[@]}" """, "<old><one><two words>")]
+    [InlineData("""readonly -A 'items=(left one right "two words")'; printf '<%s>' "${items[left]}" "${items[right]}" """, "<one><two words>")]
+    [InlineData("""items=(outer); f(){ local -I 'items=(one two)'; printf 'local<%s>' "${items[@]}"; }; f; printf 'outer<%s>' "${items[@]}" """, "local<one>local<two>outer<outer>")]
+    [InlineData("""items=(old); declare -n ref=items; declare 'ref=()'; printf '<%s>' "${#items[@]}" """, "<0>")]
+    public async Task ExpandedCompoundInitializerFollowsTheSelectedArray(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task ExpandedCompoundInitializerRunsAfterOuterArgumentsAndRedirection()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            unset mark
+            declare -a 'items=("${mark:=late}" "$(printf item; printf reached >&2)")' "earlier=$mark" 2>log
+            printf '<%s>' "$earlier" "$mark" "${items[@]}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<><late><late><item>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("reached", result.Host.ReadFile("/log"));
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task MalformedExpandedInitializerDiscardsItsCommandUnit()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            items=(keep)
+            declare -a 'items=(one ; two)' 'other=(unreached)'; printf unreached
+            printf '<%s>' "$?" "${items[@]}" "${other[0]-missing}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1><keep><missing>", result.StdOut);
+        Assert.Contains("syntax error", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("source fixture; printf '<%s>' \"$?\"", "loaded<0>")]
+    [InlineData("set -e; if source fixture; then printf yes; fi", "loadedyes")]
+    public async Task SourceResumesAfterMalformedExpandedInitializer(string script, string expected)
+    {
+        await using var host = EvaluationTestHelper.BuildDefaultTree();
+        host.AddFile("/fixture", "declare -a 'items=(one ; two)'; printf unreached\nprintf loaded\n");
+        var result = await EvaluationTestHelper.RunAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Contains("syntax error", result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ErrexitMakesMalformedExpandedInitializerASyntaxExitEvenWhenTested()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            set -e
+            if declare -a 'items=(one ; two)'; then printf yes; else printf no; fi
+            printf unreached
+            """);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Contains("syntax error", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("""declare -ar 'items=("${items@a}")'; printf '<%s>' "${items[@]}" """, "<ar>")]
+    [InlineData("""declare -ax 'items=("${items@a}")'; printf '<%s>' "${items[@]}" """, "<ax>")]
+    [InlineData("""declare -A items=([first]=before); declare -Ar 'items+=([second]="${items@a}")'; printf '<%s>' "${items[first]}" "${items[second]}" """, "<before><Ar>")]
+    [InlineData("""declare -air 'items=(1 2+3)'; printf '<%s>' "${items[@]}" """, "<1><5>")]
+    public async Task ExpandedCompoundInitializerSeesDeclarationAttributes(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("-a", "")]
     [InlineData("-A", "")]
     [InlineData("-a", "declare -a ")]
