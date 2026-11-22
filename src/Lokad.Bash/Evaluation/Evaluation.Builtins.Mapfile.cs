@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
@@ -11,7 +12,7 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
-    /// <summary>Collects bounded byte records before replacing the selected mapfile/readarray binding.</summary>
+    /// <summary>Collects bounded byte records and evaluates reached mapfile/readarray callbacks.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinMapfileAsync(
         IReadOnlyList<ShellValue> arguments, ScopedEvaluation scope, bool negated)
     {
@@ -25,6 +26,8 @@ public sealed partial class Evaluation
         uint count = 0;
         uint skip = 0;
         uint? origin = null;
+        ShellValue? callback = null;
+        uint quantum = 5000;
         var options = new ShortOptionCursor(arguments);
         while (options.TryReadFlag(out var flag))
         {
@@ -34,12 +37,14 @@ public sealed partial class Evaluation
                 trimDelimiter = true;
                 continue;
             }
-            if (option is not ((byte)'c' or (byte)'d' or (byte)'n' or (byte)'O' or (byte)'s' or (byte)'u'))
+            if (option is not ((byte)'C' or (byte)'c' or (byte)'d' or (byte)'n' or (byte)'O' or (byte)'s' or (byte)'u'))
                 return await InvalidArgumentsAsync(flag, ": invalid option").ConfigureAwait(false);
             if (!options.TryReadOperand(out var operand))
                 return await InvalidArgumentsAsync(flag, ": option requires an argument").ConfigureAwait(false);
 
-            if (option == (byte)'d')
+            if (option == (byte)'C')
+                callback = operand;
+            else if (option == (byte)'d')
                 delimiter = operand.Bytes.IsEmpty ? (byte)0 : operand.Bytes.Span[0];
             else if (option == (byte)'u')
             {
@@ -62,7 +67,8 @@ public sealed partial class Evaluation
                     skip = (uint)number;
                 else if (option == (byte)'O')
                     origin = (uint)number;
-                // The quantum affects callbacks only.
+                else
+                    quantum = (uint)number;
             }
         }
         if (options.RequestedHelp)
@@ -84,30 +90,39 @@ public sealed partial class Evaluation
         var convertCase = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Case) != 0;
         // Arithmetic consumes borrowed records after input settles. Ordinary records can
         // outlive their batch independently after publication.
-        using var integerInputMemory = integer ? Memory.Budget.CreateScope() : null;
+        using var integerInputMemory = integer && callback == null ? Memory.Budget.CreateScope() : null;
         var values = new List<ShellValue>();
         long stagedBytes = 0;
         using var inputMemory = Memory.Budget.Reserve(0);
+        Variables.IndexedInputAssignment? callbackAssignment = null;
+        var toCallback = quantum;
+        uint written = 0;
         var assigned = false;
         try
         {
             // Bash treats an explicitly closed stdin as empty input; actual host read failures remain failures.
             var reachedEof = descriptor.IsClosed;
-            while (!reachedEof && (count == 0 || (uint)values.Count < count))
+            while (!reachedEof && (count == 0 || CollectedCount() < count))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 var skipping = skip != 0;
-                var remaining = count == 0 ? ReadBatchRecords : count - (uint)values.Count;
+                var remaining = count == 0 ? ReadBatchRecords : count - CollectedCount();
+                // A callback may read the next record from the same descriptor.
+                if (callback.HasValue)
+                    remaining = Math.Min(remaining, toCallback);
                 var limit = (int)Math.Min(ReadBatchRecords, skipping ? skip : remaining);
                 // A skipped batch never reaches arithmetic or array publication.
                 var retainedInput = skipping ? null : integerInputMemory;
                 var readMemory = retainedInput ?? Memory.Budget.CreateScope();
                 using var batchMemory = retainedInput == null ? readMemory : null;
+                ReadOnlyMemory<byte> content;
+                IReadOnlyList<int> recordStarts;
                 if (delimiter == (byte)'\n')
                 {
                     var batch = await ExecuteReadAsync(descriptor, limit, readMemory).ConfigureAwait(false);
                     batch.ThrowIfError();
-                    AcceptBatch(batch.Content, batch.LineStartOffsets);
+                    content = batch.Content;
+                    recordStarts = batch.LineStartOffsets;
                     reachedEof = batch.ReachedEoF;
                 }
                 else
@@ -117,9 +132,17 @@ public sealed partial class Evaluation
                     var batch = await completion.Task.ConfigureAwait(false);
                     CheckCancellation();
                     batch.Result.ThrowIfError();
-                    AcceptBatch(batch.Content, batch.RecordStartOffsets);
+                    content = batch.Content;
+                    recordStarts = batch.RecordStartOffsets;
                     reachedEof = batch.Result.ReachedEoF;
                 }
+                if (await AcceptBatchAsync(content, recordStarts).ConfigureAwait(false) is { } stop)
+                    return stop;
+            }
+            if (callback.HasValue)
+            {
+                StartCallbackAssignment().Commit();
+                return await FinishAsync(0).ConfigureAwait(false);
             }
             if (integer)
                 return await FinishAsync(await AssignIntegerIndexedInputAsync(resolved, values, origin, scope, arguments[0])
@@ -146,7 +169,8 @@ public sealed partial class Evaluation
         }
         catch (Exception error) when (error is ByteMemoryBuilder.LimitExceededException or MemoryBudgetExceededException)
         {
-            // Refuse before committing any collected records to the target variable.
+            callbackAssignment?.Dispose();
+            callbackAssignment = null;
             values.Clear();
             values.Capacity = 0;
             inputMemory.Dispose();
@@ -155,15 +179,22 @@ public sealed partial class Evaluation
             Memory.ReleaseUnusedCapacity();
             return await RejectInputAsync().ConfigureAwait(false);
         }
+        finally { callbackAssignment?.Dispose(); }
         return await FinishAsync(assigned ? 0 : 1).ConfigureAwait(false);
 
-        void AcceptBatch(ReadOnlyMemory<byte> content, IReadOnlyList<int> recordStarts)
+        uint CollectedCount() => callback.HasValue ? written : (uint)values.Count;
+
+        Variables.IndexedInputAssignment StartCallbackAssignment() =>
+            callbackAssignment ??= new Variables.IndexedInputAssignment(variables, resolved, origin.HasValue,
+                resetAttributes: target.Kind == IndexedInputTargetKind.CircularNameref, Memory);
+
+        async ValueTask<EvaluationResult?> AcceptBatchAsync(ReadOnlyMemory<byte> content, IReadOnlyList<int> recordStarts)
         {
             if (skip != 0)
             {
                 if (!content.IsEmpty)
                     skip = checked(skip - (uint)recordStarts.Count - 1);
-                return;
+                return null;
             }
 
             var start = 0;
@@ -173,6 +204,16 @@ public sealed partial class Evaluation
                 var end = index < recordStarts.Count ? recordStarts[index] : content.Length;
                 var record = content[start..end];
                 start = end;
+                if (trimDelimiter && record.Span[^1] == delimiter)
+                    record = record[..^1];
+                var value = ShellValue.FromBytes(record).BeforeFirstNul();
+                if (callback is { } action)
+                {
+                    if (await AssignCallbackRecordAsync(action, value).ConfigureAwait(false) is { } stop)
+                        return stop;
+                    continue;
+                }
+
                 // Admit geometric list growth, including replacement overlap, before allocation.
                 if (values.Count == values.Capacity)
                 {
@@ -180,9 +221,6 @@ public sealed partial class Evaluation
                     inputMemory.Resize((long)RecordListEntryBytes * capacity);
                     values.Capacity = capacity;
                 }
-                if (trimDelimiter && record.Span[^1] == delimiter)
-                    record = record[..^1];
-                var value = ShellValue.FromBytes(record).BeforeFirstNul();
                 if (value.IsEmpty)
                     value = ShellValue.Empty;
                 else if (!integer)
@@ -211,6 +249,59 @@ public sealed partial class Evaluation
                 }
                 values.Add(value);
             }
+            return null;
+        }
+
+        async ValueTask<EvaluationResult?> AssignCallbackRecordAsync(ShellValue action, ShellValue value)
+        {
+            var assignment = StartCallbackAssignment();
+            var position = unchecked(origin.GetValueOrDefault() + written);
+            if (--toCallback == 0)
+            {
+                toCallback = quantum;
+                var result = await RunMapfileCallbackAsync(action, unchecked((int)position), value, scope).ConfigureAwait(false);
+                if (result.Flow != FlowControlKind.None)
+                {
+                    assignment.Commit();
+                    return result;
+                }
+                CheckCancellation();
+            }
+
+            long prepaidBytes;
+            var writesInteger = (variables.GetAssignmentAttributes(resolved)
+                & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0;
+            if (writesInteger)
+            {
+                // A signed decimal result uses at most 20 bytes.
+                Memory.PrepareRetainedStorage(assignment.SavedBytes
+                    + global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(20));
+                var coerced = await WordExpansion.EvaluateIntegerAssignmentAsync(value, null, scope, arguments[0])
+                    .ConfigureAwait(false);
+                if (!coerced.HasValue)
+                {
+                    assignment.Commit();
+                    return await FinishAsync(1).ConfigureAwait(false);
+                }
+                value = coerced.Value;
+                prepaidBytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value);
+            }
+            else
+            {
+                prepaidBytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value);
+                if (prepaidBytes != 0)
+                {
+                    Memory.PrepareRetainedStorage(assignment.SavedBytes + prepaidBytes);
+                    value = ShellValue.FromBytes(value.Bytes.ToArray());
+                }
+            }
+
+            CheckCancellation();
+            if (!variables.TrySetResolvedArrayElement(resolved, IndexedArrayIndex.FromUnsigned(position),
+                    value, Memory, prepaidBytes))
+                return await FinishAsync(1).ConfigureAwait(false);
+            written++;
+            return null;
         }
 
         Task<EvaluationResult> FinishAsync(int status) => FinalizeResultAsync(
@@ -247,6 +338,32 @@ public sealed partial class Evaluation
         }
     }
 
+    private async Task<EvaluationResult> RunMapfileCallbackAsync(
+        ShellValue action, int index, ShellValue record, ScopedEvaluation scope)
+    {
+        Span<byte> indexText = stackalloc byte[11];
+        if (!Utf8Formatter.TryFormat(index, indexText, out var digits))
+            throw new InvalidOperationException("The callback index did not fit.");
+        var length = action.Bytes.Length + 2L + digits + ShellArgumentEscaping.GetLiteralSingleQuotedLength(record.Bytes.Span);
+        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
+        try
+        {
+            using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
+            builder.Append(action.Bytes).Append((byte)' ').Append(indexText[..digits]).Append((byte)' ');
+            if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(builder, record.Bytes.Span))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            // Bash evaluates the callback with errexit active even if the mapfile status is tested.
+            var context = scope.Context with { SourceMemory = sourceMemory, ErrexitIgnored = false };
+            return await EvaluateCommandUnitsAsync(ShellSource.FromBytes(builder.DetachSnapshot()),
+                scope with { Context = context }, ScriptExecutionKind.Eval)
+                .ConfigureAwait(false);
+        }
+        finally { sourceMemory.Release(); }
+    }
+
     private async Task<bool> AssignIntegerIndexedInputAsync(
         BindingName name, IReadOnlyList<ShellValue> values, uint? origin, ScopedEvaluation scope, ShellValue command)
     {
@@ -256,7 +373,8 @@ public sealed partial class Evaluation
         var prepaidBytes = checked((long)values.Count * RecordMemoryBytes);
         Memory.Charge(prepaidBytes);
         CheckCancellation();
-        using var assignment = new Variables.IndexedInputAssignment(scope.Variables, name, origin.HasValue, Memory);
+        using var assignment = new Variables.IndexedInputAssignment(scope.Variables, name, origin.HasValue,
+            resetAttributes: false, Memory);
         var first = origin.GetValueOrDefault();
         for (var offset = 0; offset < values.Count; offset++)
         {

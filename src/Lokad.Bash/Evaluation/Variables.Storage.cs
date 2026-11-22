@@ -265,7 +265,7 @@ public sealed partial class Variables
         _ => false
     };
 
-    /// <summary>Stages integer input so later records can read earlier positions during coercion.</summary>
+    /// <summary>Stages indexed input so callbacks and arithmetic can see the preceding records.</summary>
     internal sealed class IndexedInputAssignment : IDisposable
     {
         private readonly Variables _owner;
@@ -274,19 +274,29 @@ public sealed partial class Variables
         private readonly GetoptsCursor _previousCursor;
         private bool _committed;
 
-        internal IndexedInputAssignment(Variables owner, BindingName name, bool preserve, EvaluationMemory memory)
+        internal long SavedBytes { get; }
+
+        internal IndexedInputAssignment(Variables owner, BindingName name, bool preserve, bool resetAttributes,
+            EvaluationMemory memory)
         {
             _owner = owner;
             _name = name;
             owner.TryGetBinding(name, out _previous);
             _previousCursor = owner._getoptsCursor;
             if (_previous != null)
-                memory.Charge(EstimateSlotBytes(name, _previous));
+            {
+                SavedBytes = EstimateSlotBytes(name, _previous);
+                memory.Charge(SavedBytes);
+            }
+            else
+                memory.PrepareRetainedStorage(BindingOverheadBytes + (long)ValueCapacityMultiplier * name.ByteLength);
             var staged = preserve && _previous is IndexedSlot indexed
                 ? indexed.Value.Clone() : new IndexedArray(isInitialized: true);
             if (preserve && _previous is ScalarSlot scalar)
                 staged.Set(default, scalar.Value);
             staged.MarkInitialized();
+            if (resetAttributes)
+                owner.ClearBinding(name);
             owner.ReplaceValue(name, new IndexedSlot(staged));
         }
 

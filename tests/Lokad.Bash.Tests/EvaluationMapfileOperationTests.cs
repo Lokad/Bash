@@ -11,7 +11,7 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
-    private const string MapfileUsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [-c quantum] [--] [array]";
+    private const string MapfileUsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [-C callback] [-c quantum] [--] [array]";
 
     [Fact]
     public async Task Evaluation_MapfileBuiltin_ReadsAllLinesInBatches()
@@ -50,6 +50,131 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
         Assert.Equal(new[] { ShellValue.FromText("old"), ShellValue.Empty,
             ShellValue.FromText("first"), ShellValue.FromText("second") }, state.IndexedArrays["arr"]);
+    }
+
+    [Fact]
+    public async Task MapfileCallbackSeesThePrefixBeforeReadingTheNextBatch()
+    {
+        var state = new Eval(Parser.Parse("""
+            cb(){ printf '<%s><%s><%s>' "$1" "$2" "${arr[0]}"; }
+            arr=(old)
+            mapfile -t -n3 -c2 -C cb arr
+            """));
+        var first = await NextReadAsync(state);
+        Assert.Equal(2, first.Limit);
+        using var batchMemory = Assert.IsAssignableFrom<IMemoryBudget>(first.DestinationBudget).Reserve(512);
+        first.SetResult(ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false));
+
+        var callback = await NextWriteAsync(state);
+        Assert.Equal("<1><second><first>", Text(callback.Content));
+        Assert.Equal(ShellValue.FromText("first"), Assert.Single(state.IndexedArrays["arr"]));
+        Assert.Equal(512, batchMemory.Bytes);
+        callback.SetResult(DescriptorWriteResult.Open);
+
+        var tail = await NextReadAsync(state);
+        Assert.Equal(1, tail.Limit);
+        Assert.Equal(0, batchMemory.Bytes);
+        Assert.Equal(ShellValue.FromText("second"), state.IndexedArrays["arr"][1]);
+        tail.SetResult(ReadResult.Success(Utf8Bytes("third\n"), [], reachedEoF: false));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("third"), state.IndexedArrays["arr"][2]);
+    }
+
+    [Fact]
+    public async Task ReadarrayCallbackCanConsumeTheNextRecordFromTheSelectedDescriptor()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "a\nb' with spaces\nc\nd\ne\n");
+        var result = await host.RunAsync("""
+            cb(){ IFS= read -r skipped <&3; printf '<%s><%s><%s>' "$1" "$2" "$skipped"; }
+            exec 3<input
+            readarray -tc2 -C cb -n3 arr <&3
+            printf '[%s]' "${arr[@]}"
+            IFS= read -r tail <&3
+            printf '<tail:%s>' "$tail"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1><b' with spaces><c>[a][b' with spaces][d]<tail:e>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task MapfileCancellationSettlesTheCallbackBeforeRestoringTheArray()
+    {
+        var state = new Eval(Parser.Parse("""
+            arr=(old)
+            mapfile -tc2 -C 'printf "<%s:%s>"' arr
+            """));
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var read = await NextReadAsync(state);
+        using var borrowed = Assert.IsAssignableFrom<IMemoryBudget>(read.DestinationBudget).Reserve(512);
+        read.SetResult(ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false));
+        var callback = await NextWriteAsync(state);
+        Assert.Equal("<1:second>", Text(callback.Content));
+
+        cancellation.Cancel();
+        var next = state.GetNextStep();
+        Assert.False(next.IsCompleted);
+        Assert.Equal(512, borrowed.Bytes);
+        Assert.Equal(ShellValue.FromText("first"), Assert.Single(state.IndexedArrays["arr"]));
+        callback.SetResult(DescriptorWriteResult.Open);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => next);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+        Assert.Equal(0, borrowed.Bytes);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+    }
+
+    [Fact]
+    public async Task MapfileRestoresTheArrayWhenTheCallbackSourceCannotBeAdmitted()
+    {
+        var state = new Eval(Parser.Parse("arr=(old); mapfile -tc2 -C : arr"));
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var first = await NextReadAsync(state);
+        first.SetResult(ReadResult.Success(Utf8Bytes("first\n"), [], reachedEoF: false));
+
+        var second = await NextReadAsync(state);
+        Assert.Equal(1, second.Limit);
+        Assert.Equal(ShellValue.FromText("first"), Assert.Single(state.IndexedArrays["arr"]));
+        var record = Utf8Bytes(new string('x', 4096) + "\n");
+        using var borrowed = Assert.IsAssignableFrom<IMemoryBudget>(second.DestinationBudget).Reserve(record.Length);
+        using var occupied = governor.Reserve(governor.LimitBytes - governor.ReservedBytes - 2048);
+        second.SetResult(ReadResult.Success(record, [], reachedEoF: false));
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
+        Assert.Equal(0, borrowed.Bytes);
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+        occupied.Dispose();
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(2, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task MapfileCallbackHonorsErrexitWhenTheReadIsTested()
+    {
+        var result = await EndToEndHarness.RunScriptAsync("""
+            set -e
+            if mapfile -t -c2 -C false arr <<< $'a\nb\nc'; then printf '<then>'; else printf '<else>'; fi
+            printf '<after>'
+            """, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
     }
 
     [Fact]
@@ -393,11 +518,10 @@ public partial class EvaluationTests
         Assert.Equal("old", state.AssociativeArrays["arr"][ShellValue.FromText("key")].ToUtf8String());
     }
 
-    [Theory]
-    [InlineData("mapfile -C callback arr")]
-    [InlineData("mapfile -x arr")]
-    public async Task Evaluation_MapfileBuiltin_RejectsUnsupportedShapeBeforeReading(string command)
+    [Fact]
+    public async Task Evaluation_MapfileBuiltin_RejectsUnsupportedShapeBeforeReading()
     {
+        const string command = "mapfile -x arr";
         var script = Parser.Parse($"arr=(old); {command}");
         var state = new Eval(script);
 
@@ -472,6 +596,7 @@ public partial class EvaluationTests
     [InlineData("readarray -tO", "readarray", "-O")]
     [InlineData("mapfile -u", "mapfile", "-u")]
     [InlineData("mapfile -s", "mapfile", "-s")]
+    [InlineData("mapfile -C", "mapfile", "-C")]
     [InlineData("readarray -tc", "readarray", "-c")]
     public async Task Evaluation_MapfileBuiltin_RejectsMissingOptionOperandBeforeReading(string command, string builtin, string option)
     {

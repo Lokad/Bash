@@ -40,9 +40,15 @@ record on the descriptor. EOF during skipping supplies empty input.
 `-O origin` overwrites consecutive entries starting at the supplied index and
 preserves the other entries. These three operands accept unsigned 32-bit
 decimal values. Destination indices continue from zero after index 4294967295.
-`-c quantum` accepts positive unsigned 32-bit decimal values. In the
-ordinary read path, the count and skip options determine which records are
-retained. An invalid quantum fails before input is consumed.
+`-C callback` evaluates shell text on every quantum-th retained record,
+after trimming the delimiter requested by `-t`. It appends the index and
+record as arguments. The callback sees the earlier assignments before the
+current record is stored and can consume input from the same descriptor.
+The index is spelled as signed decimal, while the array position uses
+the unsigned index. `-c quantum` accepts positive unsigned 32-bit decimal
+values and defaults to 5,000. Skipped records are excluded from the interval.
+An invalid quantum fails before input is consumed. The callback evaluates
+with the current errexit option, including when the array reader is tested.
 
 `read -a array` replaces an indexed array with all fields from one logical
 record using IFS and the ordinary delimiter and escape rules. It checks the

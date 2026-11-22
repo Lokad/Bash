@@ -64,6 +64,13 @@ Await child calls, canceled reads, borrowed writes, deferred enumeration and cle
 before disposal. Cancellation does not end ownership. Write completion ends a
 borrow only when the API guarantees consumption or copying.
 
+An array-reader callback holds its selected input batch through nested
+evaluation. Its generated command has a source owner that survives any
+function definition retained from that command. The saved array is charged
+through settlement while the visible array receives individually admitted
+records. Refusal by the array reader or cancellation restores the saved
+binding.
+
 Charge storage to its owner, including caller collections or caches grown by a child.
 Borrowed input retains its existing charge; substantial copies need their own.
 Returned/lazy results require an owner surviving consumption. Establish it before

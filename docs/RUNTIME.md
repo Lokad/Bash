@@ -83,14 +83,21 @@ advance their own cursor. The scanner retains only indexes and an offset.
 `mapfile` and `readarray` validate the target before reading. They collect
 bounded batches from the default or explicitly selected input descriptor.
 Skipping releases each discarded batch before the next read. A positive count
-caps the retained records and the final batch. The target is published after
-that count or successful EOF, once replacement storage is admitted. Ordinary array entries
+caps the retained records and the final batch. Without a callback, publication
+follows that count or successful EOF, once replacement storage is admitted. Ordinary array entries
 receive compact values whose storage can be reclaimed as entries are replaced
 or removed. An explicit origin updates existing sparse positions in place.
 Integer-array input evaluates records in order while the original binding is
 kept for refusal and cancellation. A shell arithmetic error retains preceding
 array writes and their arithmetic effects.
 A failed or canceled read leaves the prior array intact.
+
+With `-C`, a batch ends at the next callback record. Earlier records are
+visible during the callback and the current record is stored when it returns.
+The parsed callback uses the active bindings and descriptor frame. The reader
+settles the callback before dispatching more input. Cancellation or failure to
+read or admit input restores the saved target. Explicit flow out of the
+callback carries the completed prefix.
 
 `read -a` validates the array destination after consuming its logical record.
 It shares the field scanner with scalar `read` and publishes all split fields
