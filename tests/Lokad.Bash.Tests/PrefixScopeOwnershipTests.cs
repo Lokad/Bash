@@ -300,6 +300,27 @@ public sealed class PrefixScopeOwnershipTests
         Assert.InRange(governor.PeakBytes, 1, governor.LimitBytes);
     }
 
+    [Theory]
+    [InlineData("local", "-a", "i", "4095")]
+    [InlineData("declare", "-A", "key$i", "key4095")]
+    public async Task PrefixedLocalShadowNeedsRoomForOneSavedArray(
+        string declaration, string arrayFlag, string index, string lastIndex)
+    {
+        var governor = new MemoryGovernor(2600 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        var script = $"declare {arrayFlag} vector\n"
+            + $"for ((i=0;i<4096;i++)); do vector[{index}]=outer; done\n"
+            + $"f(){{ FLAG=temporary {declaration} vector=inner; printf '%s:%s/' \"$?\" \"$vector\"; }}; f\n"
+            + $"printf '%s:%s:%s' \"${{#vector[@]}}\" \"${{vector[{lastIndex}]}}\" \"${{FLAG-missing}}\"";
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0:inner/4096:outer:missing", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public void CancellationDuringReachedCopyAdmissionLeavesTheCallerIntact()
     {

@@ -344,9 +344,9 @@ substitutions and escapes. Function display and export preserve those boundaries
 when the definition is evaluated again.
 
 Prefix assignment preparation borrows caller state for the surrounding command.
-It admits and copies each reached binding once, retaining independent array
-containers and attributes. Unrelated names and containers remain with the caller;
-metadata enumeration does not copy their values. The existing expansion write
+It admits each detached binding once, retaining independent array containers
+and attributes. Read-only presence, attribute and nameref queries inspect
+the visible binding in its existing owner. The existing expansion write
 target forwards actual RHS effects, including same-value writes, with nameref and
 array-kind rules intact. In-process execution consumes only the prepared prefix
 slots and preserves the original slots in the saved store. An installation

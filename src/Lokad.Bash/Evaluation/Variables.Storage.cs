@@ -199,7 +199,7 @@ public sealed partial class Variables
     }
 
     private bool HasAttribute(BindingName name, BindingAttributes attribute) =>
-        TryGetBinding(name, out var slot) && (slot.Attributes & attribute) != 0;
+        TryGetBinding(name, detachBorrowed: false, out var slot) && (slot.Attributes & attribute) != 0;
 
     internal BindingAttributes GetAssignmentAttributes(BindingName name) =>
         TryGetBinding(name, out var slot) ? slot.Attributes : BindingAttributes.None;
@@ -320,20 +320,20 @@ public sealed partial class Variables
         }
     }
 
-    /// <summary>Live typed lookup; counts and enumeration scan bindings without copying their values.</summary>
+    /// <summary>Live typed lookup. Membership is read-only; value access can detach mutable storage.</summary>
     private sealed class BindingView<TSlot, TValue>(
-        Variables owner, Func<TSlot, TValue> select)
+        Variables owner, Func<TSlot, TValue> select, bool detachBorrowedValues)
         : IReadOnlyDictionary<BindingName, TValue> where TSlot : VariableSlot
     {
         public int Count => owner.EnumerateBindings().Count(entry => entry.Value is TSlot);
         public IEnumerable<BindingName> Keys => owner.EnumerateBindings().Where(entry => entry.Value is TSlot).Select(entry => entry.Key);
         public IEnumerable<TValue> Values => this.Select(entry => entry.Value);
         public TValue this[BindingName key] => TryGetValue(key, out var value) ? value : throw new KeyNotFoundException();
-        public bool ContainsKey(BindingName key) => owner.TryGetBinding(key, out var slot) && slot is TSlot;
+        public bool ContainsKey(BindingName key) => owner.TryGetBinding(key, detachBorrowed: false, out var slot) && slot is TSlot;
 
         public bool TryGetValue(BindingName key, [MaybeNullWhen(false)] out TValue value)
         {
-            if (owner.TryGetBinding(key, out var slot) && slot is TSlot typed)
+            if (owner.TryGetBinding(key, detachBorrowedValues, out var slot) && slot is TSlot typed)
             {
                 value = select(typed);
                 return true;
@@ -345,8 +345,8 @@ public sealed partial class Variables
         public IEnumerator<KeyValuePair<BindingName, TValue>> GetEnumerator()
         {
             foreach (var entry in owner.EnumerateBindings())
-                if (entry.Value is TSlot && owner.TryGetBinding(entry.Key, out var slot) && slot is TSlot typed)
-                    yield return new(entry.Key, select(typed));
+                if (entry.Value is TSlot && TryGetValue(entry.Key, out var value))
+                    yield return new(entry.Key, value);
         }
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();

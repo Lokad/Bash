@@ -190,9 +190,11 @@ handlers admitted through restoration. Directory output encodes directly into
 one admitted byte array that survives the host's write. Descriptor snapshots
 use the map writer's admitted capture headroom.
 
-Local declarations admit inherited temporary mutable containers before copying
-them. Unset can expose a saved prefix by moving its owned slot into the visible
-store. Final prefix and local restoration also move the selected slot, including
+Local declaration checks for binding presence, attributes and nameref targets
+read visible slots in their existing owner. Local declarations admit mutable
+containers copied for inheritance or restoration. Unset can expose a saved
+prefix by moving its owned slot into the visible store. Final prefix and local
+restoration also move the selected slot, including
 any retained output, after the last pending user settles. The retiring store
 drops the slot and any superseded value. Child snapshots still own independent
 mutable containers. The existing command workspace stays live through cleanup.

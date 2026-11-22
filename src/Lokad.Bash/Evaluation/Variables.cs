@@ -147,7 +147,7 @@ public sealed partial class Variables
         EnumerateBindings().Where(entry => IsAssigned(entry.Value)).Select(entry => entry.Key);
 
     internal bool HasBinding(BindingName name) =>
-        TryGetBinding(name, out var slot) && slot is not AttributeSlot;
+        TryGetBinding(name, detachBorrowed: false, out var slot) && slot is not AttributeSlot;
 
     internal bool IsUnassignedScalar(BindingName name) =>
         TryGetBinding(name, out var slot) && slot is UnassignedSlot;
@@ -196,10 +196,10 @@ public sealed partial class Variables
     private Variables()
     {
         _positionalView = new PositionalParametersView(this);
-        Scalars = new BindingView<ScalarSlot, ShellValue>(this, slot => slot.Value);
-        IndexedArrays = new BindingView<IndexedSlot, IndexedArray>(this, slot => slot.Value);
-        AssociativeArrays = new BindingView<AssociativeSlot, AssociativeArray>(this, slot => slot.Value);
-        NamerefTargets = new BindingView<NamerefSlot, NamerefTarget>(this, slot => slot.Value);
+        Scalars = new BindingView<ScalarSlot, ShellValue>(this, slot => slot.Value, detachBorrowedValues: true);
+        IndexedArrays = new BindingView<IndexedSlot, IndexedArray>(this, slot => slot.Value, detachBorrowedValues: true);
+        AssociativeArrays = new BindingView<AssociativeSlot, AssociativeArray>(this, slot => slot.Value, detachBorrowedValues: true);
+        NamerefTargets = new BindingView<NamerefSlot, NamerefTarget>(this, slot => slot.Value, detachBorrowedValues: false);
         ExportedNames = new ExportedNameView(this);
         ReadonlyNames = new AttributeView(this, BindingAttributes.Readonly);
     }

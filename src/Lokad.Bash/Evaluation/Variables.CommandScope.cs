@@ -20,8 +20,8 @@ public sealed partial class Variables
     }
 
     /// <summary>
-    /// Borrows caller state for prefix preparation or isolated redirection expansion. Each reached
-    /// binding is admitted and detached once. Positional values stay borrowed; this scope must not
+    /// Borrows caller state for prefix preparation or isolated redirection expansion. An owned
+    /// binding is admitted on first detachment. Positional values stay borrowed; this scope must not
     /// escape the surrounding command. A full Clone still creates independent child state.
     /// </summary>
     internal static Variables CreateCommandScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken)
