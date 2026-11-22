@@ -94,11 +94,17 @@ public sealed class DescriptorMemoryTests
     [InlineData(true)]
     public async Task DistinctPersistentMapsConsumeAdmissionWhileBoundedBindingsReuseIt(bool prepared)
     {
+        // Measure a short bounded run so startup bindings and parser overhead do not set the cutoff.
+        // The longer run has the same descriptor shape and a small allowance for its command values.
+        var boundedPeak = await RunAsync(dense: false, iterations: 16, limit: 128 * 1024);
         foreach (var dense in new[] { false, true })
+            await RunAsync(dense, iterations: 1024, limit: boundedPeak + 1024);
+
+        async Task<long> RunAsync(bool dense, int iterations, long limit)
         {
-            var script = "set -e; for ((i=0;i<1024;i++)); do eval \"exec $((10+i*"
+            var script = $"set -e; for ((i=0;i<{iterations};i++)); do eval \"exec $((10+i*"
                 + (dense ? "1" : "0") + "))>&1\"; done; printf ready";
-            var governor = new MemoryGovernor(32 * 1024);
+            var governor = new MemoryGovernor(limit);
             using var owner = governor.CreateScope();
             await using var host = new TestHost { MemoryBudget = owner };
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -114,6 +120,7 @@ public sealed class DescriptorMemoryTests
                 Assert.Equal(0, governor.ReservedBytes);
             owner.Dispose();
             Assert.Equal(0, governor.ReservedBytes);
+            return governor.PeakBytes;
         }
     }
 

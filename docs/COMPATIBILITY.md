@@ -245,6 +245,11 @@ single current directory tracked by the host model. Invalid leading flags
 report usage and return 2. A reached `--help` returns 2, including with
 shell-closed stdout. `--`, a lone `-` and the first operand end option scanning.
 
+A fresh evaluation starts with OLDPWD exported and unassigned. It appears in
+declaration listings and enters the command environment after it receives a value.
+Inherited startup preserves a captured OLDPWD value, including empty or opaque
+bytes, under the same environment contract as other captured variables.
+
 After successful navigation, directory bookkeeping writes OLDPWD before PWD,
 preserving array kinds, namerefs and attributes. A direct command prefix on
 either name retains its directory write. A prefixed scalar target reached

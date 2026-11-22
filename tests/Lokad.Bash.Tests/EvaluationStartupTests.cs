@@ -7,6 +7,104 @@ namespace Lokad.Bash.Tests;
 
 public sealed class EvaluationStartupTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OldPwdStartsExportedAndUnassigned(bool prepared)
+    {
+        const string script = """
+            declare -p OLDPWD
+            inspect "${OLDPWD-unset}"
+            OLDPWD=temporary inspect "${OLDPWD-unset}"
+            declare -p OLDPWD
+            OLDPWD=
+            inspect "${OLDPWD-unset}"
+            OLDPWD=previous
+            inspect "${OLDPWD-unset}"
+            export -n OLDPWD
+            inspect "${OLDPWD-unset}"
+            unset OLDPWD
+            (declare -p OLDPWD 2>/dev/null; printf 'fork=<%s>\n' "$?")
+            """;
+        await using var host = new MockFileSystem();
+        var result = prepared
+            ? await new Engine().RunAsync(ShellEvaluationStartup.CreateForNewHost(Parser.Parse(script),
+                EvaluationOptions.Default), host, CancellationToken.None)
+            : await BashScript.RunAsync(host, script, EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -x OLDPWD\ndeclare -x OLDPWD\nfork=<1>\n", host.GetOutput(FileDescriptor.StdOut));
+        Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+        Assert.Collection(host.CommandInvocations,
+            command => Verify(command, "unset", null),
+            command => Verify(command, "unset", "temporary"),
+            command => Verify(command, "", ""),
+            command => Verify(command, "previous", "previous"),
+            command => Verify(command, "previous", null));
+        Assert.Equal(0, host.OpenFileCount);
+
+        static void Verify(CommandInvocation command, string argument, string? exported)
+        {
+            Assert.Equal(ShellValue.FromText(argument), Assert.Single(command.Arguments));
+            var values = command.Environment.Where(variable => variable.Name == "OLDPWD");
+            if (exported is null)
+                Assert.Empty(values);
+            else
+                Assert.Equal(ShellValue.FromText(exported), Assert.Single(values).Value);
+        }
+    }
+
+    [Fact]
+    public async Task FirstDirectoryChangeExportsThePreviousPath()
+    {
+        var work = new ShellPath("/work");
+        var destination = new ShellPath("/leaf");
+        var evaluation = ShellEvaluationStartup.CreateForNewHost(
+            Parser.Parse("cd /leaf; inspect \"$OLDPWD\""), new EvaluationOptions(0, work));
+        var lookups = new List<ShellPath>();
+        await using var host = new MockFileSystem { BeforeGetPathInfo = lookups.Add };
+        host.AddDirectory(destination.Path);
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(new RunResult(0, destination), result);
+        Assert.Equal(destination, Assert.Single(lookups));
+        var command = Assert.Single(host.CommandInvocations);
+        Assert.Equal(ShellValue.FromText(work.Path), Assert.Single(command.Arguments));
+        Assert.Equal(ShellValue.FromText(work.Path), Assert.Single(command.Environment, variable => variable.Name == "OLDPWD").Value);
+        Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("empty")]
+    [InlineData("opaque")]
+    public async Task InheritedStartupPreservesCapturedOldPwd(string input)
+    {
+        ShellValue? value = input switch
+        {
+            "missing" => null,
+            "empty" => ShellValue.Empty,
+            "opaque" => ShellValue.FromBytes(new byte[] { 0xff, 0x20 }),
+            _ => throw new ArgumentOutOfRangeException(nameof(input))
+        };
+        IReadOnlyList<EnvironmentVariable> environment = value is { } assigned ? [new("OLDPWD", assigned)] : [];
+        var parent = new CommandInvocation("bash", [], ShellPath.Root, environment, null, null, null);
+        var evaluation = ShellEvaluationStartup.CreateInherited(parent, Parser.Parse("inspect \"${OLDPWD-unset}\""),
+            ShellValue.FromText("bash"), []);
+        var lookups = new List<ShellPath>();
+        await using var host = new MockFileSystem { BeforeGetPathInfo = lookups.Add };
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(lookups);
+        var command = Assert.Single(host.CommandInvocations);
+        Assert.Equal(value ?? ShellValue.FromText("unset"), Assert.Single(command.Arguments));
+        Assert.Equal(environment, command.Environment.Where(variable => variable.Name == "OLDPWD").ToArray());
+        Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+    }
+
     [Fact]
     public async Task DirectStartupUsesItsOwnStateAndStandardDescriptors()
     {
