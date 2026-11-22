@@ -51,6 +51,10 @@ public sealed class EvaluationHelpTestsEndToEnd
     [InlineData("help -d read", "read - Read one record and split it into fields using IFS; without names, assign REPLY.\n")]
     [InlineData("help -s '['", "[: [ expression ]\n")]
     [InlineData("help -s 'tr?e'", "true: true\n")]
+    [InlineData("help -s typ type", "type: type [-aftpP] [--] [name ...]\n"
+        + "typeset: typeset [-aAcfFgiIlnprux] [name[=value] ...]\ntype: type [-aftpP] [--] [name ...]\n")]
+    [InlineData("help -s 't\\ype' 'tr[ua]e' '['", "type: type [-aftpP] [--] [name ...]\ntrue: true\n[: [ expression ]\n")]
+    [InlineData("help -s apply_patch true", "true: true\n")]
     [InlineData("help -m true", "NAME\n    true - Return success.\n\nSYNOPSIS\n    true\n\nDESCRIPTION\n    Return success.\n\n")]
     [InlineData("help -m '['", "NAME\n    [ - Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax.\n\n"
         + "SYNOPSIS\n    [ expression ]\n\nDESCRIPTION\n    Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax.\n\n")]

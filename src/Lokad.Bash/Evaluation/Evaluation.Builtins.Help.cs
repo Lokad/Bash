@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Unicode;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
 
@@ -48,33 +49,23 @@ public sealed partial class Evaluation
         }
         else
         {
-            var allActive = new GlobMask(ReadOnlyMemory<byte>.Empty);
+            GlobMask? allActive = null;
             for (var index = firstPattern; index < words.Count; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                if (!allActive.TryUnescape(words[index], Memory, _cancellationToken,
-                        out var pattern, out var mask))
-                    continue;
-                var patternMatched = SelectTopics(prefix: false);
-                if (!patternMatched)
-                    patternMatched = SelectTopics(prefix: true);
-                matched |= patternMatched;
-
-                bool SelectTopics(bool prefix)
+                var topic = words[index];
+                if (topic.Bytes.Span.IndexOfAny("*?[\\"u8) >= 0)
                 {
-                    var found = false;
-                    var activity = mask.AsSpan();
-                    foreach (var registration in BuiltinClassification.Entries)
+                    allActive ??= new GlobMask(ReadOnlyMemory<byte>.Empty);
+                    if (!allActive.TryUnescape(topic, Memory, _cancellationToken, out var pattern, out var mask))
+                        continue;
+                    if (AppendPatternTopics(pattern, mask))
                     {
-                        if (!(prefix ? registration.NameBytes.Span.StartsWith(words[index].Bytes.Span)
-                            : TextGlobMatcher.MatchUtf8(pattern.Bytes.Span, in activity, registration.NameBytes.Span,
-                                requireEnd: true, Memory.Workspace, _cancellationToken, out _) == GlobMatchResult.Match))
-                            continue;
-                        found = true;
-                        AppendTopic(registration.Name, registration.Kind, format);
+                        matched = true;
+                        continue;
                     }
-                    return found;
                 }
+                matched |= AppendLiteralTopics(topic.Bytes.Span);
             }
         }
 
@@ -88,6 +79,56 @@ public sealed partial class Evaluation
         }
         var result = await WriteBuiltinOutputAsync(command, output.ToMemory()).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 0), negated).ConfigureAwait(false);
+
+        bool AppendPatternTopics(ShellValue pattern, GlobMask mask)
+        {
+            var found = false;
+            var activity = mask.AsSpan();
+            var bytes = pattern.Bytes.Span;
+            var byteCharacters = !Utf8.IsValid(bytes);
+            foreach (var registration in BuiltinClassification.Entries)
+            {
+                if (TextGlobMatcher.MatchUtf8(bytes, in activity, registration.NameBytes.Span,
+                        requireEnd: true, byteCharacters, Memory.Workspace, _cancellationToken, out _) != GlobMatchResult.Match)
+                    continue;
+                AppendTopic(registration.Name, registration.Kind, format);
+                found = true;
+            }
+            return found;
+        }
+
+        bool AppendLiteralTopics(ReadOnlySpan<byte> topic)
+        {
+            // The registry is sorted ordinally and its names are ASCII.
+            var entries = BuiltinClassification.Entries;
+            var first = 0;
+            var end = entries.Count;
+            while (first < end)
+            {
+                var middle = first + (end - first) / 2;
+                var entry = entries[middle];
+                var order = entry.NameBytes.Span.SequenceCompareTo(topic);
+                if (order == 0)
+                {
+                    AppendTopic(entry.Name, entry.Kind, format);
+                    return true;
+                }
+                if (order < 0)
+                    first = middle + 1;
+                else
+                    end = middle;
+            }
+
+            var index = first;
+            for (; index < entries.Count; index++)
+            {
+                var entry = entries[index];
+                if (!entry.NameBytes.Span.StartsWith(topic))
+                    break;
+                AppendTopic(entry.Name, entry.Kind, format);
+            }
+            return index != first;
+        }
 
         void AppendTopic(string name, BuiltinKind kind, BuiltinHelpFormat topicFormat)
         {
