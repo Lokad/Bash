@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
@@ -45,6 +46,10 @@ public static class Parser
     private const string KeywordCase = "case";
     /// <summary> Shell keyword for <c>esac</c>. </summary>
     private const string KeywordEsac = "esac";
+
+    // A missing arm body has no command location or source to retain.
+    private static readonly SimpleCommand EmptyCaseBody =
+        new([], [], [], ReadOnlyDictionary<Word, AssignmentWord>.Empty);
 
     private static readonly string[] SupportedKeywords =
     [
@@ -996,7 +1001,7 @@ public static class Parser
             }
 
             // An empty matching branch succeeds without executing a command.
-            var item = new CaseItem(patterns, body ?? new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments))
+            var item = new CaseItem(patterns, body ?? EmptyCaseBody)
             {
                 Continuation = endToken.CaseContinuation
             };

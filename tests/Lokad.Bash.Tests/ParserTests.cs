@@ -947,6 +947,32 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_EmptyCaseArmsShareAnUnlocatedReadOnlyBody()
+    {
+        var prepared = Parser.Parse("case x in x) ;& y) ;;& z) $missing;; esac");
+        var selection = Assert.IsType<CaseCommand>(Assert.Single(prepared.Commands));
+        var unit = Assert.IsType<CommandUnitParseResult.Parsed>(
+            Assert.Single(Parser.TryParseCommandUnits("case y in y) esac"u8.ToArray())));
+        var streamed = Assert.IsType<CaseCommand>(unit.Command);
+
+        var empty = Assert.IsType<SimpleCommand>(selection.Items[0].Body);
+        var present = Assert.IsType<SimpleCommand>(selection.Items[2].Body);
+        Assert.Same(empty, selection.Items[1].Body);
+        Assert.Same(empty, Assert.Single(streamed.Items).Body);
+        Assert.Equal(CaseContinuation.FallThrough, selection.Items[0].Continuation);
+        Assert.Equal(CaseContinuation.Retest, selection.Items[1].Continuation);
+        Assert.Equal(CaseContinuation.Stop, streamed.Items[0].Continuation);
+        var preparedLocations = Assert.IsType<CommandLocations>(prepared.Locations);
+        var streamedLocations = Assert.IsType<CommandLocations>(unit.Locations);
+        Assert.False(preparedLocations.TryGet(empty, out _));
+        Assert.False(streamedLocations.TryGet(empty, out _));
+        Assert.True(preparedLocations.TryGet(present, out _));
+        var word = Assert.Single(present.Words);
+        var declarations = Assert.IsAssignableFrom<IDictionary<Word, AssignmentWord>>(empty.DeclarationAssignments);
+        Assert.Throws<NotSupportedException>(() => declarations.Add(word, default));
+    }
+
+    [Fact]
     public void Parse_While_Basic()
     {
         var script = Parser.Parse("while echo a; do echo b; done");
