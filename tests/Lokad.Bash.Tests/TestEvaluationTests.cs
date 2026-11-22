@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
@@ -89,9 +90,10 @@ public sealed class TestEvaluationTests
     {
         const int Leaves = 64;
         const int Repetitions = 128;
-        var flat = TestEvaluation.Parse(string.Join(" -a ", Enumerable.Repeat("yes", Leaves)).Split(' '));
-        var nested = TestEvaluation.Parse((string.Concat(Enumerable.Repeat("yes -a ( ", Leaves - 1))
-            + "yes" + string.Concat(Enumerable.Repeat(" )", Leaves - 1))).Split(' '));
+        var flat = TestEvaluation.Parse(string.Join(" -a ", Enumerable.Repeat("-f file", Leaves)).Split(' '));
+        var nested = TestEvaluation.Parse((string.Concat(Enumerable.Repeat("-f file -a ( ", Leaves - 1))
+            + "-f file" + string.Concat(Enumerable.Repeat(" )", Leaves - 1))).Split(' '));
+        var results = Enumerable.Repeat(true, Leaves).ToArray();
 
         var flatBytes = Measure(flat);
         var nestedBytes = Measure(nested);
@@ -99,16 +101,45 @@ public sealed class TestEvaluationTests
         Assert.True(nestedBytes - flatBytes >= Repetitions * 32,
             $"Flat reduction allocated {flatBytes} bytes and nested reduction allocated {nestedBytes} bytes.");
 
-        static long Measure(TestEvaluation evaluation)
+        long Measure(TestEvaluation evaluation)
         {
-            Assert.True(evaluation.CompleteFileTests([]));
+            Assert.True(evaluation.CompleteFileTests(results));
             var passed = true;
             var before = GC.GetAllocatedBytesForCurrentThread();
             for (var index = 0; index < Repetitions; index++)
-                passed &= evaluation.CompleteFileTests([]);
+                passed &= evaluation.CompleteFileTests(results);
             var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.True(passed);
             return bytes;
+        }
+    }
+
+    [Fact]
+    public void TestEvaluation_ConstantChainKeepsBoundedReductionStorage()
+    {
+        var memory = new EvaluationMemory(new MemoryGovernor(long.MaxValue));
+        var shortChain = Arguments(8);
+        var longChain = Arguments(1_024);
+        var shortBytes = Measure(shortChain);
+        var longBytes = Measure(longChain);
+
+        Assert.True(longBytes - shortBytes < 512,
+            $"Short chain allocated {shortBytes} bytes and long chain allocated {longBytes} bytes.");
+
+        static ShellValue[] Arguments(int count) => string.Join(" -a ", Enumerable.Repeat("-n yes", count))
+            .Split(' ').Select(ShellValue.FromText).ToArray();
+
+        long Measure(ShellValue[] arguments)
+        {
+            Assert.True(ParseAndComplete());
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var matched = ParseAndComplete();
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(matched);
+            return bytes;
+
+            bool ParseAndComplete() => TestEvaluation.ParseValues(arguments, 0, arguments.Length,
+                CancellationToken.None, errexitEnabled: false, memory).CompleteFileTests([]);
         }
     }
 }

@@ -82,6 +82,26 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
     }
 
+    [Fact]
+    public async Task ConstantGroupsKeepBothFileLookupsAndTheVariableSelector()
+    {
+        var state = new Eval(Parser.Parse("a=(present); i=0; "
+            + "test \\( -n yes -a -z '' \\) -o \\( -e first -a -v 'a[i++]' -a -e last \\)"));
+
+        var first = await NextPathKindsAsync(state);
+        Assert.Equal("/first", Assert.Single(first.Paths).Path);
+        Assert.Equal(ShellValue.FromText("0"), state.Variables["i"]);
+        first.SetResult([PathKindResult(FilePathKind.Missing)]);
+
+        var last = await NextPathKindsAsync(state);
+        Assert.Equal("/last", Assert.Single(last.Paths).Path);
+        Assert.Equal(ShellValue.FromText("1"), state.Variables["i"]);
+        last.SetResult([PathKindResult(FilePathKind.File)]);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" '!'")]

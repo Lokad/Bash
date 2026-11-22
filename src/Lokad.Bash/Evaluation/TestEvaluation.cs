@@ -82,6 +82,12 @@ public sealed class TestEvaluation
         if (HasParseError)
             return false;
 
+        if (_steps.Count == 1 && _steps[0].Kind == StepKind.Constant)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            return _steps[0].Value != 0;
+        }
+
         var values = new bool[_maximumStackDepth];
         var count = 0;
         foreach (var step in _steps)
@@ -93,7 +99,7 @@ public sealed class TestEvaluation
                 case StepKind.File: values[count++] = fileResults[step.Value]; break;
                 case StepKind.Not: Negate(values, count); break;
                 case StepKind.And:
-                case StepKind.Or: Combine(values, --count, step.Kind == StepKind.And); break;
+                case StepKind.Or: ReduceBinary(values, --count, step.Kind); break;
             }
         }
         return count == 1 && values[0];
@@ -135,7 +141,7 @@ public sealed class TestEvaluation
                 case StepKind.And:
                 case StepKind.Or:
                     if (reduce)
-                        Combine(values, --count, step.Kind == StepKind.And);
+                        ReduceBinary(values, --count, step.Kind);
                     continue;
                 default: throw new InvalidOperationException("Unsupported test predicate step.");
             }
@@ -150,11 +156,12 @@ public sealed class TestEvaluation
     private static void Negate(bool[] values, int count) => values[count - 1] = !values[count - 1];
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Combine(bool[] values, int rightIndex, bool conjunction)
-    {
-        var right = values[rightIndex];
-        values[rightIndex - 1] = conjunction ? values[rightIndex - 1] && right : values[rightIndex - 1] || right;
-    }
+    private static void ReduceBinary(bool[] values, int right, StepKind kind) =>
+        values[right - 1] = Combine(values[right - 1], values[right], kind);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool Combine(bool left, bool right, StepKind kind) =>
+        kind == StepKind.And ? left && right : left || right;
 
     // The zero-to-four argument rules precede the ordinary -a/-o expression grammar.
     private void ParseArguments()
@@ -205,7 +212,7 @@ public sealed class TestEvaluation
                 {
                     _index++;
                     ParseArguments();
-                    _steps.Add(new(StepKind.Not, 0));
+                    AppendNegation();
                     return;
                 }
                 if (Is(_arguments[_index], "("u8) && Is(_arguments[_end - 1], ")"u8))
@@ -288,7 +295,7 @@ public sealed class TestEvaluation
                 Constant(!first.IsEmpty);
         }
         if (negated)
-            _steps.Add(new(StepKind.Not, 0));
+            AppendNegation();
     }
 
     private void Unary(UnaryPredicate predicate, bool consumeInvalidTerminalOperand)
@@ -396,9 +403,27 @@ public sealed class TestEvaluation
         _maximumStackDepth = Math.Max(_maximumStackDepth, ++_stackDepth);
     }
 
+    // Fold only operands already resolved by the parser. File and variable steps
+    // must still run in argument order, even when a constant determines the result.
+    private void AppendNegation()
+    {
+        if (!HasParseError && _steps[^1] is { Kind: StepKind.Constant } operand)
+            _steps[^1] = new(StepKind.Constant, operand.Value == 0 ? 1 : 0);
+        else
+            _steps.Add(new(StepKind.Not, 0));
+    }
+
     private void AppendBinaryOperator(StepKind kind)
     {
-        _steps.Add(new(kind, 0));
+        if (!HasParseError && _steps[^1] is { Kind: StepKind.Constant } right
+            && _steps[^2] is { Kind: StepKind.Constant } left)
+        {
+            var value = Combine(left.Value != 0, right.Value != 0, kind);
+            _steps[^2] = new(StepKind.Constant, value ? 1 : 0);
+            _steps.RemoveAt(_steps.Count - 1);
+        }
+        else
+            _steps.Add(new(kind, 0));
         _stackDepth--;
     }
     private void Fail(string message) => Fail(message, ShellValue.Empty, string.Empty);
