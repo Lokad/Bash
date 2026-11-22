@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -92,12 +93,9 @@ public sealed partial class Evaluation
             return await FailAsync("too many arguments").ConfigureAwait(false);
 
         var destination = first < words.Count ? words[first] : ShellValue.Empty;
-        var previous = destination.Bytes.Span.SequenceEqual("-"u8);
-        if (first == words.Count && !variables.TryGetExpansionValue("HOME", out destination))
-            return await FailAsync("HOME not set").ConfigureAwait(false);
-
+        var selection = first == words.Count ? DirectoryOperandKind.Home : ClassifyDirectoryOperand(destination);
         var result = await ChangeToDirectoryOperandAsync(
-                DirectoryChangeKind.ChangeDirectory, destination, previous, variables, bindings, context)
+                DirectoryChangeKind.ChangeDirectory, destination, selection, variables, bindings, context)
             .ConfigureAwait(false);
         return await FinalizeResultAsync(result, negated).ConfigureAwait(false);
 
@@ -223,7 +221,7 @@ public sealed partial class Evaluation
         }
 
         var pushResult = await ChangeToDirectoryOperandAsync(DirectoryChangeKind.PushDirectory, operand,
-                operand.Bytes.Span.SequenceEqual("-"u8), variables, bindings, context)
+                ClassifyDirectoryOperand(operand), variables, bindings, context)
             .ConfigureAwait(false);
         return await FinalizeResultAsync(pushResult, negated).ConfigureAwait(false);
     }
@@ -377,24 +375,35 @@ public sealed partial class Evaluation
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
     }
 
+    private enum DirectoryOperandKind { Explicit, Home, Previous }
+
+    private static DirectoryOperandKind ClassifyDirectoryOperand(ShellValue operand) =>
+        operand.Bytes.Span.SequenceEqual("-"u8) ? DirectoryOperandKind.Previous : DirectoryOperandKind.Explicit;
+
     private async Task<EvaluationResult> ChangeToDirectoryOperandAsync(
-        DirectoryChangeKind kind, ShellValue destination, bool previous, Variables variables,
+        DirectoryChangeKind kind, ShellValue destination, DirectoryOperandKind selection, Variables variables,
         Variables.CommandBindings? bindings, EvaluationContext context)
     {
-        if (previous && !variables.TryGetExpansionValue("OLDPWD", out destination))
+        if (selection != DirectoryOperandKind.Explicit)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)), ShellValue.FromText("OLDPWD not set"))
-                .ConfigureAwait(false);
-            return EvaluationResult.FromExitCode(1);
+            var variable = selection == DirectoryOperandKind.Home ? "HOME" : "OLDPWD";
+            if (!variables.TryGetExpansionValue(variable, out destination))
+            {
+                await ReportExpansionDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)),
+                    ShellValue.FromText(variable + " not set")).ConfigureAwait(false);
+                return EvaluationResult.FromExitCode(1);
+            }
         }
 
         var target = await DecodeExpandedValueAsync(destination).ConfigureAwait(false);
         if (HasPendingExpansionError)
             return EvaluationResult.FromExitCode(1);
-        using var announcement = previous ? new ByteMemoryBuilder(checked(destination.Bytes.Length + 1), Memory.Budget) : null;
+        using var announcement = selection == DirectoryOperandKind.Previous
+            ? new ByteMemoryBuilder(checked(destination.Bytes.Length + 1), Memory.Budget) : null;
         var output = announcement == null ? ReadOnlyMemory<byte>.Empty
             : announcement.Append(destination.Bytes).Append((byte)'\n').ToMemory();
-        return await ExecuteDirectoryChangeAsync(kind, target, variables, bindings, context, output).ConfigureAwait(false);
+        return await ExecuteDirectoryChangeAsync(kind, target, variables, bindings, context, output,
+            searchCdPath: selection == DirectoryOperandKind.Explicit).ConfigureAwait(false);
     }
 
     private async Task<EvaluationResult> ChangeToSavedDirectoryAsync(
@@ -408,39 +417,107 @@ public sealed partial class Evaluation
         var target = await DecodeExpandedValueAsync(entry.DeferredPath).ConfigureAwait(false);
         if (HasPendingExpansionError)
             return EvaluationResult.FromExitCode(1);
-        return await ExecuteDirectoryChangeAsync(kind, target, variables, bindings, context, default).ConfigureAwait(false);
+        return await ExecuteDirectoryChangeAsync(kind, target, variables, bindings, context, default,
+            searchCdPath: target != "-").ConfigureAwait(false);
     }
 
-    private Task<EvaluationResult> ExecuteDirectoryChangeAsync(
+    private async Task<EvaluationResult> ExecuteDirectoryChangeAsync(
         DirectoryChangeKind kind, string target, Variables variables, Variables.CommandBindings? bindings,
-        EvaluationContext context, ReadOnlyMemory<byte> announcement)
+        EvaluationContext context, ReadOnlyMemory<byte> announcement, bool searchCdPath)
     {
-        var resolved = target.Length == 0 && kind is DirectoryChangeKind.ChangeDirectory or DirectoryChangeKind.PushDirectory
-            ? _state.CurrentDirectory : ResolvePath(target);
-        return resolved != null
-            ? ExecuteDirectoryChangeAsync(kind, resolved, target, variables, bindings, context, announcement)
-            : InvalidPathAsync();
+        if (searchCdPath && target is not ("." or "..")
+            && !target.StartsWith('/') && !target.StartsWith("./", StringComparison.Ordinal)
+            && !target.StartsWith("../", StringComparison.Ordinal)
+            && variables.TryGetExpansionValue("CDPATH", out var cdPath) && !cdPath.IsEmpty
+            && await TryChangeThroughCdPathAsync(cdPath.Bytes).ConfigureAwait(false) is { } searched)
+            return searched;
 
-        async Task<EvaluationResult> InvalidPathAsync()
+        var resolved = target.Length == 0 && kind is DirectoryChangeKind.ChangeDirectory or DirectoryChangeKind.PushDirectory
+            ? _state.CurrentDirectory : ResolvePath(target, Memory.Workspace);
+        if (resolved != null)
+            return await ExecuteDirectoryChangeAsync(kind, resolved, target, variables, bindings, context, announcement)
+                .ConfigureAwait(false);
+        await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
+            target, new OperationError("invalid path\n")).ConfigureAwait(false);
+        return EvaluationResult.FromExitCode(1);
+
+        async Task<EvaluationResult?> TryChangeThroughCdPathAsync(ReadOnlyMemory<byte> remaining)
         {
-            await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
-                target, new OperationError("invalid path\n")).ConfigureAwait(false);
-            return EvaluationResult.FromExitCode(1);
+            using var lookupMemory = new MemoryCapacity(Memory.Budget, 0);
+            var scope = new ScopedEvaluation(this, variables, context);
+            while (true)
+            {
+                CheckCancellation();
+                var separator = remaining.Span.IndexOf((byte)':');
+                var component = separator < 0 ? remaining : remaining[..separator];
+                var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope, lookupMemory);
+                var joined = JoinSearchPathComponent(prefix, suffix, target, lookupMemory);
+                var candidate = joined is "" ? _state.CurrentDirectory
+                    : joined != null ? ResolvePath(joined, lookupMemory) : null;
+                if (candidate != null)
+                {
+                    var lookup = await LookupDirectoryAsync(candidate).ConfigureAwait(false);
+                    if (IsDirectory(lookup))
+                    {
+                        ReadOnlyMemory<byte> output = default;
+                        if (!component.IsEmpty)
+                        {
+                            Memory.Charge(lookupMemory, checked(33L + Utf8Text.StrictUtf8.GetByteCount(candidate.Path)));
+                            output = Utf8Text.EncodeLine(candidate.Path);
+                        }
+                        // The command holds the new retained head after the candidate workspace is retired.
+                        Memory.PrepareRetainedStorage(checked(48L + 2L * candidate.Path.Length));
+                        return await FinishDirectoryChangeAsync(kind, candidate, target, lookup,
+                            variables, bindings, context, output).ConfigureAwait(false);
+                    }
+                }
+                lookupMemory.Resize(0);
+                if (separator < 0)
+                    return null;
+                remaining = remaining[(separator + 1)..];
+            }
         }
     }
 
-    /// <summary>Every navigation route validates through the host before publishing its destination.</summary>
+    private static bool IsDirectory(FilePathResolutionResult result) =>
+        result.Error == null && result.Info.Kind == FilePathKind.Directory;
+
+    private ShellPath? ResolvePath(string path, MemoryCapacity owner)
+    {
+        if (!RawShellPath.TryParse(path, out var raw))
+            return null;
+        var current = _state.CurrentDirectory;
+        var length = (long)path.Length + (path[0] == '/' ? 0 : (long)current.Path.Length + 1);
+        // Cover the combined and normalized text plus overlapping segment buffers.
+        Memory.Charge(owner, checked(256 + 16 * length));
+        return raw.TryToAbsolute(current, jail: false, out var absolute) ? absolute : null;
+    }
+
+    /// <summary>Looks up the admitted candidate before any directory state is published.</summary>
+    private async Task<FilePathResolutionResult> LookupDirectoryAsync(ShellPath target)
+    {
+        CheckCancellation();
+        var result = await PathInfosOperation.AsTask(PublishOperation,
+            [new FilePathLookup(target, FileLinkFollowing.Follow)], FilePathInfoRequest.KindOnly).ConfigureAwait(false);
+        CheckCancellation();
+        return result[0];
+    }
+
     private async Task<EvaluationResult> ExecuteDirectoryChangeAsync(
         DirectoryChangeKind kind, ShellPath target, string diagnosticPath, Variables variables, Variables.CommandBindings? bindings,
         EvaluationContext context, ReadOnlyMemory<byte> announcement)
     {
-        CheckCancellation();
-        // The host borrows the admitted canonical path until the lookup settles.
-        var result = await PathInfosOperation.AsTask(PublishOperation,
-            [new FilePathLookup(target, FileLinkFollowing.Follow)], FilePathInfoRequest.KindOnly).ConfigureAwait(false);
-        CheckCancellation();
-        var selected = result[0];
-        var succeeded = selected.Error == null && selected.Info.Kind == FilePathKind.Directory;
+        var lookup = await LookupDirectoryAsync(target).ConfigureAwait(false);
+        return await FinishDirectoryChangeAsync(kind, target, diagnosticPath, lookup, variables, bindings, context, announcement)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Publishes the final settled lookup and applies its announcement and directory-variable effects.</summary>
+    private async Task<EvaluationResult> FinishDirectoryChangeAsync(
+        DirectoryChangeKind kind, ShellPath target, string diagnosticPath, FilePathResolutionResult selected,
+        Variables variables, Variables.CommandBindings? bindings, EvaluationContext context, ReadOnlyMemory<byte> announcement)
+    {
+        var succeeded = IsDirectory(selected);
         var previous = _state.ApplyDirectoryLookup(kind, target, succeeded, Memory);
         if (!succeeded)
         {
@@ -451,7 +528,7 @@ public sealed partial class Evaluation
             return EvaluationResult.FromExitCode(1);
         }
 
-        // A dash operand prints the selected spelling before PWD and OLDPWD bookkeeping.
+        // Announce the selected path before PWD and OLDPWD bookkeeping.
         var announced = DescriptorWriteResult.Open;
         if (!announcement.IsEmpty)
             announced = await ExecuteWriteAsync(GetStdOutDescriptor(), announcement).ConfigureAwait(false);

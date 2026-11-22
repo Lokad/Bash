@@ -3605,16 +3605,6 @@ public sealed partial class Evaluation : IFileTester
         return await task.WaitAsync(_cancellationToken).ConfigureAwait(false);
     }
 
-    private ShellPath? ResolvePath(string path)
-    {
-        if (!RawShellPath.TryParse(path, out var raw)) return null;
-        var current = _state.CurrentDirectory;
-        var length = (long)path.Length + (path[0] == '/' ? 0 : (long)current.Path.Length + 1);
-        // Cover the combined and normalized text plus overlapping segment buffers.
-        Memory.Charge(checked(256 + 16 * length));
-        return raw.TryToAbsolute(current, jail: false, out var absolute) ? absolute : null;
-    }
-
     internal async Task ReportSyntaxErrorAsync(SyntaxError error)
     {
         await ExecuteWriteAsync(GetStdErrDescriptor(), Utf8Text.EncodeLine(error.ToDiagnosticMessage()))

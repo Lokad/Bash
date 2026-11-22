@@ -7,6 +7,55 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationDirectoryTestsEndToEnd
 {
+    [Theory]
+    [InlineData("CDPATH=missing:search cd target", "/search/target", "/search/target\n")]
+    [InlineData("CDPATH=:search cd target", "/target", "")]
+    [InlineData("CDPATH=.:search cd target", "/target", "/target\n")]
+    [InlineData("CDPATH=search cd ./target", "/target", "")]
+    [InlineData("HOME=target CDPATH=search cd", "/target", "")]
+    [InlineData("HOME=/search CDPATH='~' cd target", "/search/target", "/search/target\n")]
+    [InlineData("CDPATH=search cd ''", "/search", "/search\n")]
+    public async Task CdSearchUpdatesDirectoryVariablesAndAnnouncesNonemptyComponents(
+        string command, string directory, string announcement)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/target", "/search", "/search/target"], []);
+        var result = await host.RunAsync("unset CDPATH; " + command
+            + " >announcement; printf '<%s><%s><%s><%s>' \"$?\" \"$PWD\" \"$OLDPWD\" \"${CDPATH-unset}\"",
+            CancellationToken.None);
+
+        Assert.Equal(directory, result.CurrentDirectory.Path);
+        Assert.Equal($"<0><{directory}></><unset>", host.StandardOutput.TextContent);
+        Assert.Equal(announcement, host.ReadFile("/announcement"));
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task CdPathAnnouncementFailureKeepsTheSelectedDirectory()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/search", "/search/target"], []);
+        var result = await host.RunAsync("CDPATH=search cd target >&-; status=$?; pwd; exit \"$status\"",
+            CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("/search/target\n", host.StandardOutput.TextContent);
+        Assert.Equal("cd: write error: Bad file descriptor\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("pushd target", "/search/target\n/search/target /\n")]
+    [InlineData("pushd -n target >/dev/null; popd", "/search/target\n/search/target\n")]
+    public async Task StackNavigationSearchesForReachedRelativeOperands(string command, string expected)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/target", "/search", "/search/target"], []);
+        var result = await host.RunAsync("CDPATH=search; " + command, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("/search/target", result.CurrentDirectory.Path);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
     [Fact]
     public async Task CdHelpUsesTheRedirectedOutputAndPreservesDirectoryState()
     {

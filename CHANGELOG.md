@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Search CDPATH for eligible relative directory operands and announce
+  destinations selected by nonempty components.
+
 - Recognize compound array initializers in quoted and expanded declaration
   operands. Expand the initializer after ordinary arguments and redirections.
 

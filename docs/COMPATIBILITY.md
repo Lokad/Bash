@@ -210,9 +210,18 @@ returns its selection status even if the write fails.
 splitting and pathname expansion apply as for ordinary arguments. With no
 field, `cd` uses HOME. A lone `-` uses OLDPWD and prints the selected spelling
 once the destination is reached. Missing HOME or OLDPWD is an error when
-selected. An empty destination revalidates the current directory. A spelling
-such as `./-` is an ordinary path. CDPATH and the `-L`/`-P` modes are outside
-the current path profile.
+selected. A spelling such as `./-` is an ordinary path. An empty destination
+revalidates the current directory when reached through the ordinary lookup.
+
+Explicit relative directory operands can use CDPATH. Absolute operands, a first
+component of `.` or `..`, and the HOME and OLDPWD forms use ordinary lookup.
+CDPATH components are tried in order with leading tilde expansion. An empty
+component tries cwd silently. A successful nonempty component announces the
+selected absolute directory. If all candidates fail, ordinary lookup supplies
+the result and any diagnostic. The same search applies to relative operands
+reached during stack navigation. The directory model uses one virtual absolute
+path. The logical and physical `cd -L`/`cd -P` modes remain outside this profile.
+
 Failed `cd`, `pushd` and `popd` lookups report the selected destination's
 spelling, including relative operands, values from OLDPWD and deferred
 stack entries. A saved resolved entry uses its stored path.

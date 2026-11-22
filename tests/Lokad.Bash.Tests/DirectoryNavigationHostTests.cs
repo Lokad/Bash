@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
@@ -10,6 +11,68 @@ namespace Lokad.Bash.Tests;
 
 public sealed class DirectoryNavigationHostTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CdPathSettlesCandidatesInOrderAndReportsOnlyTheFinalOutcome(bool fallback)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueuePathInfoError(new OperationError("candidate denied\n") { Kind = OperationErrorKind.PermissionDenied });
+        host.EnqueuePathInfo(FilePathInfo.FromKind(FilePathKind.File));
+        host.EnqueuePathInfo(fallback ? FilePathInfo.FromKind(FilePathKind.Missing) : FilePathInfo.FromKind(FilePathKind.Directory));
+        if (fallback)
+            host.EnqueuePathInfoError(new OperationError("fallback denied\n") { Kind = OperationErrorKind.PermissionDenied });
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        var result = await BashScript.RunAsync(host, "CDPATH=first:second:third cd target",
+            EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(fallback ? 1 : 0, result.ExitCode);
+        Assert.Equal(fallback ? "/" : "/third/target", result.CurrentDirectory.Path);
+        string[] expectedPaths = fallback ? ["/first/target", "/second/target", "/third/target", "/target"]
+            : ["/first/target", "/second/target", "/third/target"];
+        Assert.Equal(expectedPaths, host.PathInfoRequests.Select(path => path.Path));
+        var append = Assert.Single(host.Appends);
+        Assert.Equal(fallback ? FileDescriptor.StdErr : FileDescriptor.StdOut, append.Descriptor);
+        Assert.Equal(fallback ? "cd: target: fallback denied\n" : "/third/target\n", Encoding.UTF8.GetString(append.Content));
+    }
+
+    [Fact]
+    public async Task CdPathReusesCapacityAfterEachCandidateLookup()
+    {
+        const int misses = 96;
+        var padding = new string('x', 80);
+        var components = Enumerable.Range(0, misses).Select(index => index.ToString("D3", CultureInfo.InvariantCulture) + padding);
+        var path = string.Join(':', components.Append("/"));
+        var evaluation = new Eval(Parser.Parse("CDPATH=" + path + " cd target"));
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        evaluation.Memory.Budget = owner;
+        await using var host = new TestHost();
+        host.AddDirectory("/target");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var requests = 0;
+        long firstReservation = 0;
+        while (await evaluation.GetNextStep(deadline.Token) is { } operation)
+        {
+            if (operation is PathInfosOperation lookup && ++requests <= misses)
+            {
+                Assert.Equal(FilePathInfoRequest.KindOnly, lookup.Request);
+                if (requests == 1) firstReservation = memory.ReservedBytes;
+                Assert.Equal(firstReservation, memory.ReservedBytes);
+            }
+            await ShellOperationDispatcher.DispatchAsync(operation, host, deadline.Token);
+        }
+        await evaluation.Completion;
+
+        Assert.Equal(misses + 1, requests);
+        Assert.Equal(0, evaluation.LastExitCode);
+        Assert.Equal("/target\n", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -80,6 +143,12 @@ public sealed class DirectoryNavigationHostTests
     [InlineData(true)]
     public Task PreviousDirectoryAnnouncementStaysBorrowedUntilTheHostSettles(bool prepared) =>
         VerifyPendingDirectoryWriteAsync(prepared, "OLDPWD=a; cd - >/out; printf tail", "a\n");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task CdPathAnnouncementStaysBorrowedUntilTheHostSettles(bool prepared) =>
+        VerifyPendingDirectoryWriteAsync(prepared, "CDPATH=/ cd a >/out; printf tail", "/a\n");
 
     [Theory]
     [InlineData(false, "dirs", "/a\n")]
@@ -185,6 +254,8 @@ public sealed class DirectoryNavigationHostTests
     [InlineData(true, "popd")]
     [InlineData(false, "pushd")]
     [InlineData(true, "pushd")]
+    [InlineData(false, "CDPATH=/:/unused cd a")]
+    [InlineData(true, "CDPATH=/:/unused cd a")]
     public async Task CancellationAwaitsThePendingLookupAndDescriptorCleanup(bool prepared, string command)
     {
         using var cancellation = new CancellationTokenSource();

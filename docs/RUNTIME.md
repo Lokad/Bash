@@ -40,6 +40,13 @@ a failed swap still replaces the second stack entry, while a failed pop retains
 it. Pending lookup work and descriptor cleanup keep their command owner alive.
 This validation does not make a later filesystem change atomic with navigation.
 
+CDPATH tries candidates in component order using the same host lookup. A
+failed candidate leaves navigation and the stack alone. Each candidate's
+temporary path budget stays live until its lookup settles and can be reused
+for the next component. The selected candidate enters the shared publication
+path once. If the search finds no directory, the ordinary destination
+supplies the final lookup and any diagnostic.
+
 Successful lookup publishes cwd and the stack head before variable bookkeeping.
 The shared assignment path retains the selected binding kind, owner and attributes;
 OLDPWD receives PWD's prior assignment state before PWD receives the new path.

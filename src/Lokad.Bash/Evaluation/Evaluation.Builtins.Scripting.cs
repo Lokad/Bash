@@ -225,27 +225,37 @@ public sealed partial class Evaluation
             var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope, lookupMemory);
             if (suffix.IsEmpty && (prefix.IsEmpty || prefix.Span.SequenceEqual("."u8)))
                 return fileName;
-            if (!Utf8.IsValid(prefix.Span) || !Utf8.IsValid(suffix.Span))
-                return null;
 
-            var last = suffix.IsEmpty ? prefix.Span[^1] : suffix.Span[^1];
-            var addSlash = last != (byte)'/';
-            var encoding = Utf8Text.StrictUtf8;
-            var length = (long)encoding.GetCharCount(prefix.Span) + encoding.GetCharCount(suffix.Span)
-                + (addSlash ? 1 : 0) + fileName.Raw.Length;
-            if (length > PathResolution.MaximumPathCharacters)
-                return null;
-            Memory.Charge(lookupMemory, checked(96L + 2L * length));
-            var joined = string.Create((int)length, (prefix, suffix, addSlash, fileName.Raw), static (target, parts) =>
-            {
-                var position = Utf8Text.StrictUtf8.GetChars(parts.prefix.Span, target);
-                position += Utf8Text.StrictUtf8.GetChars(parts.suffix.Span, target[position..]);
-                if (parts.addSlash)
-                    target[position++] = '/';
-                parts.Raw.AsSpan().CopyTo(target[position..]);
-            });
-            return TryReadFileOperand(joined, CurrentDirectory, out var raw) ? raw : null;
+            var joined = JoinSearchPathComponent(prefix, suffix, fileName.Raw, lookupMemory);
+            return joined != null && TryReadFileOperand(joined, CurrentDirectory, out var raw) ? raw : null;
         }
+    }
+
+    /// <summary>Builds a host path from a tilde-expanded search component and a decoded operand.</summary>
+    private string? JoinSearchPathComponent(ReadOnlyMemory<byte> prefix, ReadOnlyMemory<byte> suffix,
+        string operand, MemoryCapacity lookupMemory)
+    {
+        if (prefix.IsEmpty && suffix.IsEmpty)
+            return operand;
+        if (!Utf8.IsValid(prefix.Span) || !Utf8.IsValid(suffix.Span))
+            return null;
+
+        var last = suffix.IsEmpty ? prefix.Span[^1] : suffix.Span[^1];
+        var addSlash = last != (byte)'/';
+        var encoding = Utf8Text.StrictUtf8;
+        var length = (long)encoding.GetCharCount(prefix.Span) + encoding.GetCharCount(suffix.Span)
+            + (addSlash ? 1 : 0) + operand.Length;
+        if (length > PathResolution.MaximumPathCharacters)
+            return null;
+        Memory.Charge(lookupMemory, checked(96L + 2L * length));
+        return string.Create((int)length, (prefix, suffix, addSlash, operand), static (target, parts) =>
+        {
+            var position = Utf8Text.StrictUtf8.GetChars(parts.prefix.Span, target);
+            position += Utf8Text.StrictUtf8.GetChars(parts.suffix.Span, target[position..]);
+            if (parts.addSlash)
+                target[position++] = '/';
+            parts.operand.AsSpan().CopyTo(target[position..]);
+        });
     }
 
     private enum ScriptExecutionKind { Root, LegacyCapture, Source, Eval, ArrayReaderCallback, Trap }
