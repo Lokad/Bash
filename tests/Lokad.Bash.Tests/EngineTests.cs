@@ -13,6 +13,17 @@ namespace Lokad.Bash.Tests;
 public class EngineTests
 {
     [Fact]
+    public async Task UnsupportedPreparedCommandReportsItsKind()
+    {
+        await using var host = new TestHost();
+        var state = new Eval(new ParsedScript([new UnsupportedCommand()]));
+
+        var failure = await Assert.ThrowsAsync<NotSupportedException>(() => new Engine().RunAsync(state, host));
+
+        Assert.Contains(nameof(UnsupportedCommand), failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task PipelineStagesOwnTheirAdjacentEndpointsInSourceOrder()
     {
         var state = new Eval(Parser.Parse("first |& second | third |& fourth"));
@@ -1179,4 +1190,6 @@ public class EngineTests
             visitor.ClosedDescriptors);
         Assert.Empty(state.GetDescriptorsForCleanup());
     }
+
+    private sealed record UnsupportedCommand : ICommand;
 }

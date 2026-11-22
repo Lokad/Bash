@@ -310,13 +310,13 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> RejectInputAsync()
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("mapfile"), ShellValue.FromText("shared memory budget exhausted")).ConfigureAwait(false);
+            await ReportExpansionDiagnosticAsync(arguments[0], ShellValue.FromText("shared memory budget exhausted"))
+                .ConfigureAwait(false);
             return await FinishAsync(2).ConfigureAwait(false);
         }
 
         async Task<EvaluationResult> InvalidArgumentsAsync(ReadOnlyMemory<byte> option, string detail)
         {
-            // Advertise the supported subset, not Bash options whose behavior is intentionally absent.
             var commandName = arguments[0];
             var result = await WriteDiagnosticUnlessStderrClosedAsync([commandName],
                 [ShellValue.FromText("-"), ShellValue.FromBytes(option), ShellValue.FromText(detail + "\n"),

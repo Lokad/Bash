@@ -168,7 +168,7 @@ public sealed partial class Evaluation
                     var simpleResult = await EvaluateSimpleCommandAsync(simpleCommand, scope).ConfigureAwait(false);
                     return ApplyNegation(simpleResult, negated);
                 default:
-                    throw new NotSupportedException("Only simple commands, list control operators, pipelines, groups, subshells, if/elif/else, loops, for-in, arithmetic for, case, function definitions, arithmetic commands, conditional commands, and ! negation are supported in this evaluation stage.");
+                    throw new NotSupportedException($"Cannot evaluate command kind {command.GetType().Name}.");
             }
 
             async Task<EvaluationResult> EvaluateTimedCommandAsync(TimedCommand timed)

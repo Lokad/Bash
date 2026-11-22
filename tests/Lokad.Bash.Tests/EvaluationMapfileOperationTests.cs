@@ -130,10 +130,12 @@ public partial class EvaluationTests
         Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
     }
 
-    [Fact]
-    public async Task MapfileRestoresTheArrayWhenTheCallbackSourceCannotBeAdmitted()
+    [Theory]
+    [InlineData("mapfile")]
+    [InlineData("readarray")]
+    public async Task ArrayReaderCallbackRefusalRestoresTheArrayAndReportsItsName(string builtin)
     {
-        var state = new Eval(Parser.Parse("arr=(old); mapfile -tc2 -C : arr"));
+        var state = new Eval(Parser.Parse($"arr=(old); {builtin} -tc2 -C : arr"));
         var governor = new MemoryGovernor(256 * 1024);
         using var owner = governor.CreateScope();
         state.Memory.Budget = owner;
@@ -150,7 +152,8 @@ public partial class EvaluationTests
         second.SetResult(ReadResult.Success(record, [], reachedEoF: false));
 
         var diagnostic = await NextWriteAsync(state);
-        Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal($"{builtin}: shared memory budget exhausted\n", Text(diagnostic.Content));
         Assert.Equal(0, borrowed.Bytes);
         Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
         occupied.Dispose();

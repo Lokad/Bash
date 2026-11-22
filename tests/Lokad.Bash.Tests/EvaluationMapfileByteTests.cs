@@ -83,7 +83,7 @@ public sealed class EvaluationMapfileByteTests
         Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
         var diagnostic = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdOut, diagnostic.Descriptor);
-        Assert.Equal("mapfile: shared memory budget exhausted\n",
+        Assert.Equal($"{command}: shared memory budget exhausted\n",
             System.Text.Encoding.UTF8.GetString(diagnostic.Content));
     }
 
