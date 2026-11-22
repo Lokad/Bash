@@ -1,10 +1,13 @@
 using System.Text;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ParserHereDocumentTests
 {
+    private const string TwoDocuments = "{\ncat <<LEFT\nleft\nLEFT\ncat <<RIGHT\nright\nRIGHT\n}\n";
+
     [Theory]
     [InlineData("cat <<END\n", "END\n")]
     [InlineData("cat <<-END\n", "\tEND\n")]
@@ -87,7 +90,7 @@ public sealed class ParserHereDocumentTests
         var reader = tokenizer.HereDocuments;
         Assert.NotNull(reader);
 
-        var completed = Assert.IsType<TimedCommand>(reader.Complete(provisional, tokenizer.Locations));
+        var completed = Assert.IsType<TimedCommand>(reader.Complete(provisional, tokenizer.Locations, budget: null));
         var command = Assert.IsType<SimpleCommand>(completed.Inner);
         var redirection = Assert.Single(command.Redirections);
         Assert.Equal(portable, completed.Portable);
@@ -114,7 +117,7 @@ public sealed class ParserHereDocumentTests
         var locations = tokenizer.Locations;
         Assert.NotNull(locations);
         Assert.True(locations.TryGet(left, out var sourceLocation));
-        var completed = Assert.IsType<PipelineCommand>(tokenizer.HereDocuments.Complete(provisional, locations));
+        var completed = Assert.IsType<PipelineCommand>(tokenizer.HereDocuments.Complete(provisional, locations, budget: null));
         var completedLeft = Assert.IsType<SimpleCommand>(completed.Left);
         Assert.False(locations.TryGet(left, out _));
         Assert.True(locations.TryGet(completedLeft, out var completedLocation));
@@ -137,7 +140,7 @@ public sealed class ParserHereDocumentTests
             + "elif true; then :; fi\n"));
         var provisional = Assert.IsType<IfCommand>(Parser.ParsePipeline(tokenizer));
         var reader = Assert.IsType<HereDocumentReader>(tokenizer.HereDocuments);
-        var completed = Assert.IsType<IfCommand>(reader.Complete(provisional, tokenizer.Locations));
+        var completed = Assert.IsType<IfCommand>(reader.Complete(provisional, tokenizer.Locations, budget: null));
 
         Assert.Equal(2, completed.ElifClauses.Count);
         Assert.Same(provisional.ElifClauses[1], completed.ElifClauses[1]);
@@ -153,6 +156,51 @@ public sealed class ParserHereDocumentTests
             Assert.Equal(delimiter, Assert.Single(original.Target.Parts).GetUtf8Text());
             Assert.Equal(body, Assert.Single(replacement.Target.Parts).GetUtf8Text());
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ParserRefundsCompletionBackingWhileTheSyntaxOwnerIsLive(bool streamed)
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        using var syntaxMemory = new MemoryCapacity(owner, 0);
+        var context = new ShellScanContext { SyntaxMemory = syntaxMemory };
+        var source = Encoding.UTF8.GetBytes(TwoDocuments);
+        var command = streamed
+            ? Assert.IsType<CommandUnitParseResult.Parsed>(Assert.Single(Parser.TryParseCommandUnits(source, context))).Command
+            : Assert.Single(Parser.Parse(source, context).Commands);
+
+        Assert.True(governor.ReservedBytes > 0);
+        Assert.True(governor.PeakBytes > governor.ReservedBytes);
+        var list = Assert.IsType<ListCommand>(Assert.IsType<GroupCommand>(command).Body);
+        Assert.Equal("left\n", Body(list.Left));
+        Assert.Equal("right\n", Body(list.Right));
+        syntaxMemory.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        static string Body(ICommand command) =>
+            Assert.Single(Assert.Single(Assert.IsType<SimpleCommand>(command).Redirections).Target.Parts).GetUtf8Text();
+    }
+
+    [Fact]
+    public void RefusedCompletionKeepsProvisionalLocationsAndRefundsScratch()
+    {
+        var tokenizer = new Tokenizer(ShellSource.FromText(TwoDocuments)) { TrackCommandLocations = true };
+        var provisional = Assert.IsType<GroupCommand>(Parser.ParsePipeline(tokenizer));
+        var body = Assert.IsType<ListCommand>(provisional.Body);
+        var reader = Assert.IsType<HereDocumentReader>(tokenizer.HereDocuments);
+        var locations = Assert.IsType<CommandLocations>(tokenizer.Locations);
+        var governor = new MemoryGovernor(512);
+        using var owner = governor.CreateScope();
+
+        Assert.Throws<MemoryBudgetExceededException>(() => reader.Complete(provisional, locations, owner));
+        Assert.True(governor.PeakBytes > 0);
+        Assert.Equal(0, governor.ReservedBytes);
+        Assert.True(locations.TryGet(provisional, out _));
+        Assert.True(locations.TryGet(body.Left, out _));
+        Assert.True(locations.TryGet(body.Right, out _));
     }
 
     [Fact]

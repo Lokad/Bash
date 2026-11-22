@@ -214,7 +214,7 @@ public static class Parser
             if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
             {
                 var prefix = tokenizer.Error == null && command != null && tokenizer.HereDocuments is not { HasPending: true }
-                    ? tokenizer.HereDocuments?.Complete(command, tokenizer.Locations) ?? command : null;
+                    ? CompleteHereDocuments(tokenizer, command) : null;
                 yield return new CommandUnitParseResult.Failed(quotedFailure)
                     { CompletedPrefix = prefix, Locations = prefix != null ? tokenizer.Locations : null };
                 yield break;
@@ -227,7 +227,7 @@ public static class Parser
             if (command == null)
                 yield break;
 
-            var completed = tokenizer.HereDocuments?.Complete(command, tokenizer.Locations) ?? command;
+            var completed = CompleteHereDocuments(tokenizer, command);
             tokenizer.HereDocuments = null;
             if (trailing.Kind == TokenKind.Newline)
                 tokenizer.NextTokenCore();
@@ -350,10 +350,13 @@ public static class Parser
 
     private static ParsedScript CompleteScript(Tokenizer tokenizer, ICommand? command) =>
         command == null ? new ParsedScript([]) :
-        new ParsedScript([tokenizer.HereDocuments?.Complete(command, tokenizer.Locations) ?? command])
+        new ParsedScript([CompleteHereDocuments(tokenizer, command)])
         {
             Locations = tokenizer.Locations
         };
+
+    private static ICommand CompleteHereDocuments(Tokenizer tokenizer, ICommand command) =>
+        tokenizer.HereDocuments?.Complete(command, tokenizer.Locations, tokenizer.ScanContext.SyntaxMemory?.Budget) ?? command;
 
     private static bool EndsInBareTime(ICommand? command)
     {

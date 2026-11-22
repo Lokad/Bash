@@ -63,19 +63,21 @@ internal sealed class HereDocumentReader
     }
 
     /// <summary>Rebuilds only changed nodes, without recursive traversal of left-associated command lists.</summary>
-    internal ICommand Complete(ICommand root, CommandLocations? locations)
+    internal ICommand Complete(ICommand root, CommandLocations? locations, IMemoryBudget? budget)
     {
         if (_completed.Count == 0) return root;
 
+        using var scratch = budget == null ? null : new MemoryCapacity(budget, 0);
         var replacements = new Dictionary<ICommand, ICommand>(ReferenceEqualityComparer.Instance);
-        var work = new Stack<(ICommand Command, bool Visited)>();
-        work.Push((root, false));
-        while (work.TryPop(out var step))
+        var work = new List<(ICommand Command, bool Visited)>();
+        Push(root, false);
+        while (work.Count != 0)
         {
-            var command = step.Command;
-            if (!step.Visited)
+            var (command, visited) = work[^1];
+            work.RemoveAt(work.Count - 1);
+            if (!visited)
             {
-                work.Push((command, true));
+                Push(command, true);
                 switch (command)
                 {
                     case ListCommand list: Visit(list.Left); Visit(list.Right); break;
@@ -126,13 +128,23 @@ internal sealed class HereDocumentReader
             };
             if (!ReferenceEquals(result, command))
             {
-                locations?.Replace(command, result);
+                // Two references, hash and chain fields, bucket storage and alignment.
+                scratch?.PrepareDictionaryCapacity(replacements, bytesPerEntry: 32);
                 replacements.Add(command, result);
             }
         }
+        // Publish location changes once all scratch growth has succeeded.
+        if (locations != null)
+            foreach (var replacement in replacements)
+                locations.Replace(replacement.Key, replacement.Value);
         return Get(root);
 
-        void Visit(ICommand command) => work.Push((command, false));
+        void Visit(ICommand command) => Push(command, false);
+        void Push(ICommand command, bool visited)
+        {
+            scratch?.PrepareListCapacity(work, 1);
+            work.Add((command, visited));
+        }
         bool Changed(ICommand command) => replacements.ContainsKey(command);
         ICommand Get(ICommand command) => replacements.TryGetValue(command, out var replacement) ? replacement : command;
 

@@ -131,6 +131,24 @@ public sealed class MemoryCapacity : IDisposable
         Resize(Bytes - ArrayBackingBytes<T>(previous));
     }
 
+    /// <summary>Admits room for one dictionary entry and any overlapping backing arrays.</summary>
+    internal void PrepareDictionaryCapacity<TKey, TValue>(Dictionary<TKey, TValue> dictionary, long bytesPerEntry)
+        where TKey : notnull
+    {
+        var previous = dictionary.EnsureCapacity(0);
+        if (dictionary.Count < previous)
+            return;
+
+        var target = (int)Math.Min(int.MaxValue, Math.Max(3L, 2L * previous));
+        // Account for prime rounding and the previous index until EnsureCapacity returns.
+        var replacement = IndexBackingBytes(2L * target + 1);
+        Grow(replacement);
+        var capacity = dictionary.EnsureCapacity(target);
+        Resize(Bytes - replacement - IndexBackingBytes(previous) + IndexBackingBytes(capacity));
+
+        long IndexBackingBytes(long count) => count == 0 ? 0 : checked(64L + bytesPerEntry * count);
+    }
+
     /// <summary>Returns large amounts of unused credit after a batch has relinquished its storage.</summary>
     public void TrimExcess()
     {

@@ -303,6 +303,11 @@ Structured here-document delimiters keep admitted compact spelling and closing
 bytes with the parsed redirection, for collection and later function serialization.
 Contiguous here-document bodies borrow their input source bytes. Tab removal or
 continuation joining uses the existing syntax owner for normalized backing.
+Here-document completion admits the traversal stack and node replacement map
+under a temporary allowance on the active syntax budget. It includes overlapping
+backing during growth and refunds the allowance before publishing the completed
+unit. Source locations transfer after the traversal succeeds. The coarse syntax
+owner continues to cover the resulting tree and body data.
 
 A dispatched source read writes into the parser's admitted spare capacity.
 A complete first batch that reports EOF can allocate its exact final buffer.
