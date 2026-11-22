@@ -889,8 +889,12 @@ seconds. Numeric year rendering follows the pinned Linux profile, including its
 signed 32-bit year display. Ordinary numeric directives keep a digit when the
 `_` flag selects space padding. The `-` flag suppresses default numeric padding
 and still honors an explicit width. Composite directives apply width to the
-complete value and retain their internal padding. An out-of-range operand falls
-back to the Unix epoch at the configured offset. The missing, `-1` and `-2` operands
+complete value and retain their internal padding. The `%z` offset applies an
+explicit width separately to the sign field and to the digits. Its default
+output uses four zero-padded digits after the sign. For `%Z`, the fixed-offset
+profile uses `UTC` at zero and a signed `HH:MM` offset elsewhere. An out-of-range
+operand falls back to the Unix epoch at the configured offset. The missing,
+`-1` and `-2` operands
 select the configured timestamp. Each `%(...)T` conversion uses GNU's 128-byte
 buffer profile: a result requiring 128 or more bytes becomes an empty value with
 successful status. Outer field width and precision apply afterward. This conversion

@@ -122,16 +122,66 @@ public sealed class PrintfTimeFormatTests
 
     [Theory]
     [MemberData(nameof(Cases))]
-    public async Task TimeFormatsPreserveBytesFieldsCountsAndStatus(
-        bool prepared, string name, string source, string outputHex, bool redirected)
+    public Task TimeFormatsPreserveBytesFieldsCountsAndStatus(
+        bool prepared, string name, string source, string outputHex, bool redirected) =>
+        AssertTimeFormatAsync(prepared, name, source, outputHex, redirected, EvaluationOptions.Default);
+
+    public static IEnumerable<object[]> OffsetCases()
+    {
+        object[][] samples =
+        [
+            ["utc-offset-flags", 0, "printf '<%(%z|%_z|%-z|%0z|%1z|%2z|%02z|%-2z)T>' 946684800",
+                Convert.ToHexString("<+0000|+   0|+0|+0000|+0000| +0000|0+0000| + 0>"u8)],
+            ["positive-offset", 330, "printf '<%(%F|%H:%M|%z|%_z|%-z|%4z|%5z|%05z|%_5z|%-5z)T>' 946684800",
+                Convert.ToHexString("<2000-01-01|05:30|+0530|+ 530|+530|   +0530|    +00530|0000+00530|    +  530|    +  530>"u8)],
+            ["negative-offset", -210, "printf '<%(%F|%H:%M|%z|%_z|%-z|%4z|%5z|%05z|%_5z|%-5z)T>' 946684800",
+                Convert.ToHexString("<1999-12-31|20:30|-0330|- 330|-330|   -0330|    -00330|0000-00330|    -  330|    -  330>"u8)],
+            ["offset-modifiers", 345, "printf '<%(%Ez|%Oz|%05Ez|%-5Oz|%_Ez|%_Oz)T>' 946684800",
+                Convert.ToHexString("<+0545|+0545|0000+00545|    +  545|+ 545|+ 545>"u8)],
+            ["offset-flag-precedence", 0, "printf '<%(%0-5z|%-05z|%_05z|%0_5z|%_-5z|%-_5z)T>' 946684800",
+                Convert.ToHexString("<    +    0|0000+00000|0000+00000|    +    0|    +    0|    +    0>"u8)],
+            ["literal-offset-colons-and-name", 0, "printf '<%(%Z|%:z|%::z|%:::z|%_:z)T>' 946684800",
+                Convert.ToHexString("<UTC|%:z|%::z|%:::z|%_:z>"u8)],
+            ["offset-with-outer-fields", 15, "printf '<%8.4(%05z)T><%-7.4(%_z)T>' 946684800 946684800",
+                Convert.ToHexString("<    0000><+  1   >"u8)],
+            ["offset-count", -720, "printf -v out 'x%(%05z)T%n' 946684800 count; printf '<%s><%s><%s>' \"$?\" \"$out\" \"$count\"",
+                Convert.ToHexString("<0><x0000-01200><11>"u8)],
+            ["offset-limit-126", 0, "printf '<%(%63z)T>' 946684800",
+                Convert.ToHexString(System.Text.Encoding.ASCII.GetBytes("<" + new string(' ', 62) + "+" + new string('0', 63) + ">"))],
+            ["offset-limit-127", 0, "printf '<%(x%63z)T>' 946684800",
+                Convert.ToHexString(System.Text.Encoding.ASCII.GetBytes("<x" + new string(' ', 62) + "+" + new string('0', 63) + ">"))],
+            ["offset-limit-128", 0, "printf '<%(%64z)T>' 946684800", "3C3E"],
+            ["offset-limit-with-literals", 0, "printf '<%(xx%63z)T>' 946684800", "3C3E"],
+            ["offset-with-raw-bytes", -30, "printf $'<%(\\377%_Ez\\376%02z\\300)T>' 946684800",
+                "3CFF2D20203330FE302D30303330C03E"],
+        ];
+        foreach (var prepared in new[] { false, true })
+        foreach (var sample in samples)
+            yield return [prepared, ..sample];
+    }
+
+    [Theory]
+    [MemberData(nameof(OffsetCases))]
+    public Task TimeOffsetsUseTheConfiguredClockAndPinnedFieldWidths(
+        bool prepared, string name, int offsetMinutes, string source, string outputHex)
+    {
+        var options = EvaluationOptions.Default with
+        {
+            Timestamp = DateTimeOffset.UnixEpoch.ToOffset(TimeSpan.FromMinutes(offsetMinutes))
+        };
+        return AssertTimeFormatAsync(prepared, name, source, outputHex, redirected: false, options);
+    }
+
+    private static async Task AssertTimeFormatAsync(
+        bool prepared, string name, string source, string outputHex, bool redirected, EvaluationOptions options)
     {
         var governor = new MemoryGovernor(1024 * 1024);
         using var owner = governor.CreateScope();
         await using var host = new TestHost { MemoryBudget = owner };
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var result = prepared
-            ? await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, cancellation.Token)
-            : await BashScript.RunAsync(host, source, EvaluationOptions.Default, cancellation.Token);
+            ? await new Engine().RunAsync(new Eval(Parser.Parse(source), options: options), host, owner, cancellation.Token)
+            : await BashScript.RunAsync(host, source, options, cancellation.Token);
         Assert.True(result.ExitCode == 0, name);
         Assert.Equal(Convert.FromHexString(outputHex), host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());

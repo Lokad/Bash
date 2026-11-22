@@ -250,7 +250,7 @@ public static class GnuDateFormatting
                 text = SwapCase(text);
             }
 
-            if (dialect == GnuDateFormatDialect.Strftime && formatted.Supported && specifier != 'z')
+            if (dialect == GnuDateFormatDialect.Strftime && formatted.Supported)
             {
                 if (!TryAppendStrftime(text.AsSpan(), specifier, noPadding, padding, formatted.DefaultPadding, width))
                 {
@@ -315,6 +315,9 @@ public static class GnuDateFormatting
         bool TryAppendStrftime(
             ReadOnlySpan<char> text, char specifier, bool noPadding, char? padding, char defaultPadding, int width)
         {
+            if (specifier == 'z')
+                return TryAppendStrftimeOffset(text, noPadding, padding, width);
+
             var pad = noPadding ? ' ' : padding ?? defaultPadding;
             if ((noPadding || pad != defaultPadding) && specifier is
                 'd' or 'e' or 'g' or 'H' or 'I' or 'j' or 'k' or 'l' or 'm' or 'M' or 'S' or 'u' or 'U' or 'V' or 'w' or 'W' or 'y')
@@ -341,6 +344,29 @@ public static class GnuDateFormatting
 
             builder.Append(pad, padCount);
             builder.Append(text);
+            return true;
+        }
+
+        bool TryAppendStrftimeOffset(ReadOnlySpan<char> text, bool noPadding, char? padding, int width)
+        {
+            var sign = text[0];
+            var digits = text[1..].TrimStart('0');
+            if (digits.IsEmpty)
+                digits = "0";
+
+            // The width applies separately to the sign field and to the offset digits.
+            var signWidth = Math.Max(1, width);
+            var minimumDigitWidth = noPadding ? digits.Length : text.Length - 1;
+            var digitWidth = Math.Max(width, minimumDigitWidth);
+            var available = maximumLength - builder.Length;
+            if (signWidth > available || digitWidth > available - signWidth)
+                return false;
+
+            EnsureCharacters(builder.Length + signWidth + digitWidth);
+            builder.Append(noPadding ? ' ' : padding ?? ' ', signWidth - 1);
+            builder.Append(sign);
+            builder.Append(noPadding ? ' ' : padding ?? '0', digitWidth - digits.Length);
+            builder.Append(digits);
             return true;
         }
 
