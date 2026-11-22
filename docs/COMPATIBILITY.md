@@ -885,9 +885,12 @@ locale governs which directives accept the `E` and `O` modifiers and the
 spelling of unknown directives. Explicit seconds use the configured fixed
 offset with a Gregorian calendar. The calendar admits local years whose difference
 from 1900 fits in a signed 32-bit field. Within that range `%s` retains the supplied
-seconds. Numeric year rendering and padding follow the pinned Linux profile,
-including its signed 32-bit year display. An out-of-range operand falls back to
-the Unix epoch at the configured offset. The missing, `-1` and `-2` operands
+seconds. Numeric year rendering follows the pinned Linux profile, including its
+signed 32-bit year display. Ordinary numeric directives keep a digit when the
+`_` flag selects space padding. The `-` flag suppresses default numeric padding
+and still honors an explicit width. Composite directives apply width to the
+complete value and retain their internal padding. An out-of-range operand falls
+back to the Unix epoch at the configured offset. The missing, `-1` and `-2` operands
 select the configured timestamp. Each `%(...)T` conversion uses GNU's 128-byte
 buffer profile: a result requiring 128 or more bytes becomes an empty value with
 successful status. Outer field width and precision apply afterward. This conversion

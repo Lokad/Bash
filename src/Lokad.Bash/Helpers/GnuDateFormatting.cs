@@ -250,8 +250,17 @@ public static class GnuDateFormatting
                 text = SwapCase(text);
             }
 
-            var strftimeWidth = dialect == GnuDateFormatDialect.Strftime && specifier is 'C' or 'F' or 'G' or 'Y' or 's';
-            var directiveLength = formatted.Supported && (!noPadding || strftimeWidth)
+            if (dialect == GnuDateFormatDialect.Strftime && formatted.Supported && specifier != 'z')
+            {
+                if (!TryAppendStrftime(text.AsSpan(), specifier, noPadding, padding, formatted.DefaultPadding, width))
+                {
+                    result = string.Empty;
+                    return false;
+                }
+                continue;
+            }
+
+            var directiveLength = formatted.Supported && !noPadding
                 ? Math.Max(width, text.Length) : text.Length;
             if (directiveLength > maximumLength - builder.Length)
             {
@@ -267,8 +276,7 @@ public static class GnuDateFormatting
                     formatted.DefaultPadding,
                     width,
                     maximumLength - builder.Length,
-                    specifier,
-                    strftimeWidth))
+                    specifier))
             {
                 result = string.Empty;
                 return false;
@@ -301,6 +309,38 @@ public static class GnuDateFormatting
 
             EnsureCharacters(builder.Length + appended.Length);
             builder.Append(appended);
+            return true;
+        }
+
+        bool TryAppendStrftime(
+            ReadOnlySpan<char> text, char specifier, bool noPadding, char? padding, char defaultPadding, int width)
+        {
+            var pad = noPadding ? ' ' : padding ?? defaultPadding;
+            if ((noPadding || pad != defaultPadding) && specifier is
+                'd' or 'e' or 'g' or 'H' or 'I' or 'j' or 'k' or 'l' or 'm' or 'M' or 'S' or 'u' or 'U' or 'V' or 'w' or 'W' or 'y')
+            {
+                if (!noPadding)
+                    width = Math.Max(width, text.Length);
+
+                // Ordinary numeric directives include their default padding in the rendered text.
+                while (text.Length > 1 && text[0] is '0' or ' ')
+                    text = text[1..];
+            }
+
+            var length = Math.Max(width, text.Length);
+            if (length > maximumLength - builder.Length)
+                return false;
+
+            EnsureCharacters(builder.Length + length);
+            var padCount = length - text.Length;
+            if (padCount > 0 && pad == '0' && specifier is 'C' or 'G' or 'Y' && text[0] == '-')
+            {
+                builder.Append('-');
+                text = text[1..];
+            }
+
+            builder.Append(pad, padCount);
+            builder.Append(text);
             return true;
         }
 
@@ -450,20 +490,9 @@ public static class GnuDateFormatting
             char defaultPadding,
             int width,
             int maximumLength,
-            char specifier,
-            bool strftimeWidth)
+            char specifier)
         {
-            if (strftimeWidth)
-            {
-                if (width > maximumLength)
-                    return false;
-                var pad = noPadding ? ' ' : padding ?? defaultPadding;
-                if (width > input.Length)
-                    input = pad == '0' && input[0] == '-' && specifier is 'C' or 'G' or 'Y'
-                        ? "-" + input[1..].PadLeft(width - 1, pad)
-                        : input.PadLeft(width, pad);
-            }
-            else if (specifier == 'N')
+            if (specifier == 'N')
             {
                 // %N widths select fractional precision; padding and trimming apply on the right.
                 width = width == 0 ? input.Length : width;
