@@ -14,8 +14,42 @@ public sealed class ReadOptionDiagnosticTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2><data>", result.StdOut);
-        Assert.Equal("read: -a: option requires an argument\nread: usage: read [-r] [-a array] [-d delim] [-n count] [-N count] [-u fd] [name ...]\n",
+        Assert.Equal("read: -a: option requires an argument\nread: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n",
             result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("-sep", "p")]
+    [InlineData("-i", "i")]
+    public async Task MissingNonInteractiveReadOperandLeavesInputUntouched(string options, string flag)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(
+            "{ read " + options + "; printf '<%s>' \"$?\"; read next; printf '<%s>' \"$next\"; } <<< data",
+            EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2><data>", result.StdOut);
+        Assert.Equal($"read: -{flag}: option requires an argument\n"
+            + "read: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n",
+            result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("-sreprompt")]
+    [InlineData("-p --help -s")]
+    [InlineData("-i -- -e")]
+    [InlineData("-s -e -p '' -i seed")]
+    public async Task ReadAcceptsNonInteractiveOptionsWithoutWritingAPrompt(string options)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(
+            "{ read " + options + " first 2>diagnostic; printf '<%s><%s>' \"$?\" \"$first\";"
+            + " IFS= read -r second; printf '<%s><%s>' \"$?\" \"$second\"; } <<< $'one two\\nnext'",
+            EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><one two><0><next>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Empty(result.Host.ReadFileBytes("/diagnostic"));
     }
 
     // Recorded error-byte/status/effect contracts; usage lists only supported options.
@@ -36,7 +70,7 @@ public sealed class ReadOptionDiagnosticTests
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
         byte[] diagnostic = [.. "read: -"u8, .. Convert.FromHexString(optionHex),
-            .. ": invalid option\nread: usage: read [-r] [-a array] [-d delim] [-n count] [-N count] [-u fd] [name ...]\n"u8];
+            .. ": invalid option\nread: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n"u8];
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(Convert.FromHexString(outputHex), result.Host.StandardOutput.Content.ToArray());

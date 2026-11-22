@@ -71,13 +71,19 @@ public sealed partial class Evaluation
                 backslashMode = ReadBackslashMode.Preserve;
                 continue;
             }
-            if (flag is not ((byte)'u' or (byte)'d' or (byte)'a' or (byte)'n' or (byte)'N'))
+            // The non-interactive stream has no line editing or terminal echo.
+            if (flag is (byte)'e' or (byte)'s')
+                continue;
+            if (flag is not ((byte)'u' or (byte)'d' or (byte)'a' or (byte)'n' or (byte)'N' or (byte)'i' or (byte)'p'))
                 return await FailUsageAsync([ShellValue.FromText("-"), ShellValue.FromBytes(option),
                     ShellValue.FromText(": invalid option\n" + Usage())]).ConfigureAwait(false);
             if (!options.TryReadOperand(out var operand))
                 return await FailUsageAsync([ShellValue.FromText($"-{(char)flag}: option requires an argument\n" + Usage())])
                     .ConfigureAwait(false);
 
+            // Consume the editor text or prompt without changing the input stream.
+            if (flag is (byte)'i' or (byte)'p')
+                continue;
             if (flag is (byte)'n' or (byte)'N')
             {
                 if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var length) || length is < 0 or > int.MaxValue)

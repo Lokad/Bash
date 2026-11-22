@@ -65,6 +65,11 @@ Unquoted NUL does not count toward either limit. Zero assigns an empty value
 without consuming bytes. EOF before the requested boundary publishes partial
 input and returns failure.
 
+`read` accepts `-e`, `-i text`, `-p prompt` and `-s` in its non-interactive
+input profile. The option scanner consumes the text and prompt and resumes at
+the next field. Reads use the same descriptor and assignment rules, with no
+line editing, prompt output or terminal echo changes.
+
 `$(<file)` and its backtick form read a single input-file redirection on
 descriptor zero. Filename expansion runs in the caller. The result removes
 NUL bytes with a diagnostic and strips trailing LF bytes. CR is preserved.
