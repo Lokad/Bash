@@ -9,6 +9,20 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    /// <summary>Expands and applies an initializer whose destination has already been selected.</summary>
+    private async Task<bool> ExpandAndApplyCompoundArrayItemsAsync(
+        VariableBinding target, ArrayKind kind, AssignmentOperator operation, IReadOnlyList<CompoundArrayItem> items,
+        AssignmentContext context, ScopedEvaluation scope, BindingName sourceName, ShellValue command,
+        bool initializeReadonly)
+    {
+        using var itemMemory = items.Count == 0 ? null : new MemoryCapacity(Memory.Budget, 0);
+        IReadOnlyList<ExpandedArrayItem>? expanded = itemMemory is null ? []
+            : await ExpandCompoundArrayItemsAsync(target.Name, items, kind, operation, context, scope, itemMemory)
+                .ConfigureAwait(false);
+        return expanded != null && await ApplyCompoundArrayItemsAsync(target.Name, operation, kind, expanded,
+            scope, target.Owner, sourceName, command, initializeReadonly).ConfigureAwait(false);
+    }
+
     /// <summary>Expands compound operands against the old binding, before replacement starts.</summary>
     private async Task<List<ExpandedArrayItem>?> ExpandCompoundArrayItemsAsync(
         BindingName name, IReadOnlyList<CompoundArrayItem> items, ArrayKind kind, AssignmentOperator operation,

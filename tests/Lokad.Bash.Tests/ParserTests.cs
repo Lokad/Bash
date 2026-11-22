@@ -117,6 +117,29 @@ public class ParserTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Parse_EmptyCompoundInitializersShareTheirItemList(bool streamed)
+    {
+        var empty = ReadItems("items=()");
+        var commentOnly = ReadItems("items=( # comment\n)");
+        var populated = ReadItems("items=(one two)");
+
+        Assert.Empty(empty);
+        Assert.Same(empty, commentOnly);
+        Assert.Equal(2, populated.Count);
+
+        IReadOnlyList<CompoundArrayItem> ReadItems(string source)
+        {
+            var command = streamed
+                ? Assert.IsType<SimpleCommand>(Assert.IsType<CommandUnitParseResult.Parsed>(
+                    Assert.Single(Parser.TryParseCommandUnits(Encoding.UTF8.GetBytes(source)))).Command)
+                : AssertSingleCommand(Parser.Parse(source));
+            return Assert.IsAssignableFrom<IReadOnlyList<CompoundArrayItem>>(Assert.Single(command.Assignments).ArrayValues);
+        }
+    }
+
+    [Theory]
     [InlineData(1024)]
     [InlineData(4096)]
     public void Parse_UnmatchedBracketWordsDoNotHideALaterAssignment(int count)

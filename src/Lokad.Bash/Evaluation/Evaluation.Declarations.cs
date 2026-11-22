@@ -52,21 +52,26 @@ public sealed partial class Evaluation
                     var existingLocal = scope.Context.FunctionContext?.Locals.Declares(declaredName) == true;
                     var resolved = SelectTarget(out var name, out var targetVariables, out var targetLocal);
                     var kind = SelectKind();
-                    var context = options.Global && kind == ArrayKind.Indexed && targetVariables.AssociativeArrays.ContainsKey(name)
-                        ? AssignmentContext.QuotedIndexedDeclaration : AssignmentContext.Declaration;
-                    using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
-                    var expanded = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(
+                    using var itemMemory = items.Count == 0 ? null : new MemoryCapacity(Memory.Budget, 0);
+                    IReadOnlyList<ExpandedArrayItem> expanded = [];
+                    if (itemMemory != null)
+                    {
+                        var context = options.Global && kind == ArrayKind.Indexed && targetVariables.AssociativeArrays.ContainsKey(name)
+                            ? AssignmentContext.QuotedIndexedDeclaration : AssignmentContext.Declaration;
+                        var expandedItems = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(
                             name, items, kind, assignment.Operator, context, scope, itemMemory))
-                        .ConfigureAwait(false);
-                    if (expanded == null)
-                        break;
+                            .ConfigureAwait(false);
+                        if (expandedItems == null)
+                            break;
 
-                    // RHS defaults can initialize a nameref. Bind after expansion without replaying its effects.
-                    resolved = SelectTarget(out name, out targetVariables, out targetLocal);
-                    var expansionKind = kind;
-                    kind = SelectKind();
-                    if (expansionKind != kind && kind == ArrayKind.Associative)
-                        await ReclassifyAssociativeItemsAsync(expanded).ConfigureAwait(false);
+                        // RHS defaults can initialize a nameref. Bind after expansion without replaying its effects.
+                        resolved = SelectTarget(out name, out targetVariables, out targetLocal);
+                        var expansionKind = kind;
+                        kind = SelectKind();
+                        if (expansionKind != kind && kind == ArrayKind.Associative)
+                            await ReclassifyAssociativeItemsAsync(expandedItems).ConfigureAwait(false);
+                        expanded = expandedItems;
+                    }
 
                     if (!resolved)
                     {

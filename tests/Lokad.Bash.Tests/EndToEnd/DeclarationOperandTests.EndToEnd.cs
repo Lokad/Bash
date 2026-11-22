@@ -22,6 +22,20 @@ public sealed class DeclarationOperandTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData("declare -Ar 'items=()'")]
+    [InlineData("declare -Ar 'items=( # comment\n)'")]
+    [InlineData("declare -Ar items=( # comment\n)")]
+    public async Task EmptyCompoundDeclarationReplacesEntriesAndPublishesReadonly(string declaration)
+    {
+        var result = await EvaluationTestHelper.RunAsync("declare -A items=([key]=value)\n"
+            + declaration + "\ndeclare -p items");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -Ar items=()\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task ExpandedCompoundInitializerRunsAfterOuterArgumentsAndRedirection()
     {

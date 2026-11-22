@@ -2438,8 +2438,9 @@ public sealed partial class Evaluation : IFileTester
                         PublishExpansionPipelineStatus(status, executionScope);
                         return status == 2 ? EvaluationResult.Exit(status) : EvaluationResult.DiscardCompoundInitializerUnit();
                     }
-                    if (!await ApplyExpandedInitializerAsync(initializerTarget, initializerKind, items,
-                            operand.Operator, sourceName, initializeReadonly)
+                    if (!await AwaitWordExpansionAsync(ExpandAndApplyCompoundArrayItemsAsync(initializerTarget, initializerKind,
+                            operand.Operator, items, AssignmentContext.Declaration, executionScope, sourceName,
+                            ShellValue.FromText(commandName), initializeReadonly))
                             .ConfigureAwait(false))
                     {
                         exitCode = 1;
@@ -2624,18 +2625,6 @@ public sealed partial class Evaluation : IFileTester
                 return binding.Owner.IndexedArrays.ContainsKey(binding.Name);
             }
 
-            async Task<bool> ApplyExpandedInitializerAsync(VariableBinding target, ArrayKind kind, IReadOnlyList<CompoundArrayItem> items,
-                AssignmentOperator operation, BindingName sourceName, bool initializeReadonly)
-            {
-                using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
-                var expanded = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(
-                    target.Name, items, kind, operation, AssignmentContext.Declaration, executionScope, itemMemory)).ConfigureAwait(false);
-                return expanded != null && await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
-                    target.Name, operation, kind, expanded, executionScope, target.Owner, sourceName,
-                    ShellValue.FromText(commandName), initializeReadonly))
-                    .ConfigureAwait(false);
-            }
-
             bool TrySaveLocalOptions(ShellValue operand)
             {
                 if (localBuiltinFrame == null || !operand.Bytes.Span.SequenceEqual("-"u8))
@@ -2806,12 +2795,9 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var kind = scope.Variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
-            using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
-            var expanded = await ExpandCompoundArrayItemsAsync(
-                name, items, kind, assignment.Operator, AssignmentContext.Direct, scope, itemMemory).ConfigureAwait(false);
-            return expanded != null && await ApplyCompoundArrayItemsAsync(
-                name, assignment.Operator, kind, expanded, scope, scope.Variables, compoundTarget.Name,
-                ShellValue.Empty, initializeReadonly: false).ConfigureAwait(false);
+            return await ExpandAndApplyCompoundArrayItemsAsync(
+                new VariableBinding(VariableReference.ForName(name), scope.Variables), kind, assignment.Operator, items,
+                AssignmentContext.Direct, scope, compoundTarget.Name, ShellValue.Empty, initializeReadonly: false).ConfigureAwait(false);
         }
     }
 
