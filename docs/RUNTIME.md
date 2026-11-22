@@ -377,6 +377,10 @@ Host calls can overlap while pipeline stages execute. Allow producers and consum
 to progress independently: never await descriptor I/O while holding a host-wide
 filesystem lock. Pipes must preserve byte order and apply backpressure. A consumer
 closing early is distinct from a write failure.
+An exceptional stage failure requests cancellation from the other stages while
+their cleanup is still active. The first reported failure survives cancellation
+and cleanup. The dispatcher waits for all stages and their endpoint closes before
+returning. Ordinary shell exit statuses still settle independently.
 
 Here-input producers start independently before their consumers. Their payload
 copies have separate admitted ownership, surviving command workspace reuse when

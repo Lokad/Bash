@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
@@ -149,7 +150,7 @@ internal static class ShellOperationDispatcher
             {
                 try
                 {
-                    return await ExecuteStageAsync(request.Stage, host, lifetime.Token).ConfigureAwait(false);
+                    return await ExecuteStageAsync(request.Stage, host, lifetime.Token, reportFailure: null).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -215,52 +216,90 @@ internal static class ShellOperationDispatcher
             IBashHost host,
             CancellationToken cancellationToken)
         {
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Exception? firstFailure = null;
+            var stopCallbacks = Task.CompletedTask;
+            Action<Exception> reportFailure = StopStages;
             var tasks = new Task<int>[stages.Count];
             for (var index = 0; index < stages.Count; index++)
-                tasks[index] = ExecuteStageAsync(stages[index], host, cancellationToken);
+                tasks[index] = ExecuteStageAsync(stages[index], host, lifetime.Token, reportFailure);
 
-            return await Task.WhenAll(tasks).ConfigureAwait(false);
+            try
+            {
+                return await Task.WhenAll(tasks).ConfigureAwait(false);
+            }
+            catch
+            {
+                try { await stopCallbacks.ConfigureAwait(false); }
+                catch (AggregateException) { /* A cancellation callback cannot replace the stage failure. */ }
+                if (firstFailure != null)
+                    ExceptionDispatchInfo.Capture(firstFailure).Throw();
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
+            }
+
+            void StopStages(Exception failure)
+            {
+                if (failure is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                    return;
+                if (Interlocked.CompareExchange(ref firstFailure, failure, null) == null)
+                    stopCallbacks = lifetime.CancelAsync();
+            }
         }
     }
 
     private static async Task<int> ExecuteStageAsync(
         PipelineEvaluationStage stage,
         IBashHost host,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Exception>? reportFailure)
     {
-        Exception? stageException = null;
-        var exitCode = 0;
-        var closeFailure = new DescriptorCloseResult(true, null, null);
         try
         {
-            var result = await new Engine().RunAsync(stage.Evaluation, host, stage.Evaluation.Memory.Budget, cancellationToken).ConfigureAwait(false);
-            exitCode = result.ExitCode;
-        }
-        catch (Exception ex)
-        {
-            stageException = ex;
-            throw;
-        }
-        finally
-        {
-            foreach (var descriptor in stage.DescriptorsToClose)
+            int? exitCode = null;
+            var closeFailure = new DescriptorCloseResult(true, null, null);
+            try
             {
-                // The request owns these streams through this awaited close;
-                // cleanup must not acquire new tracking storage after execution.
-                var result = await ShellDescriptorCleanup.TryCloseOwnedAsync(host, descriptor).ConfigureAwait(false);
-                stage.Evaluation.MarkDescriptorCleanupCompleted(descriptor);
-                closeFailure = DescriptorCloseResult.FirstFailure(closeFailure, result);
+                var result = await new Engine().RunAsync(stage.Evaluation, host, stage.Evaluation.Memory.Budget,
+                    cancellationToken, reportFailure).ConfigureAwait(false);
+                exitCode = result.ExitCode;
+            }
+            catch (Exception error)
+            {
+                reportFailure?.Invoke(error);
+                throw;
+            }
+            finally
+            {
+                foreach (var descriptor in stage.DescriptorsToClose)
+                {
+                    // The request owns these streams through this awaited close;
+                    // cleanup must not acquire new tracking storage after execution.
+                    var result = await ShellDescriptorCleanup.TryCloseOwnedAsync(host, descriptor).ConfigureAwait(false);
+                    stage.Evaluation.MarkDescriptorCleanupCompleted(descriptor);
+                    if (exitCode == 0 && closeFailure.Closed && result.Exception is { } failure)
+                        reportFailure?.Invoke(failure.SourceException);
+                    closeFailure = DescriptorCloseResult.FirstFailure(closeFailure, result);
+                }
             }
 
-            if (stageException == null && exitCode == 0)
+            if (exitCode == 0)
+            {
                 closeFailure.Exception?.Throw();
+                if (closeFailure.Error is { } error)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await host.WriteAsync(stage.Evaluation.GetStdErrDescriptor(), Utf8Text.Encode($"shell: {error.Message}"),
+                        cancellationToken).ConfigureAwait(false);
+                    return 1;
+                }
+            }
+            return exitCode.GetValueOrDefault();
         }
-        if (exitCode == 0 && closeFailure.Error is { } error)
+        catch (Exception error)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await host.WriteAsync(stage.Evaluation.GetStdErrDescriptor(), Utf8Text.Encode($"shell: {error.Message}"), cancellationToken).ConfigureAwait(false);
-            return 1;
+            reportFailure?.Invoke(error);
+            throw;
         }
-        return exitCode;
     }
 }

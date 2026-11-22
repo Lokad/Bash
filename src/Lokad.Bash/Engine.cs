@@ -42,11 +42,21 @@ public sealed class Engine
 
     /// <summary>Runs with a separate owner for evaluation values; host effects keep their host's owners.</summary>
     /// <remarks>The caller keeps evaluationMemory alive through this call and any retained evaluation values.</remarks>
-    public async Task<RunResult> RunAsync(
+    public Task<RunResult> RunAsync(
         global::Lokad.Bash.Evaluation.Evaluation state,
         IBashHost visitor,
         IMemoryBudget evaluationMemory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        RunAsync(state, visitor, evaluationMemory, cancellationToken, reportFailure: null);
+
+    /// <summary>A pipeline stage can report an escaping failure before draining its local resources.</summary>
+    /// <remarks>The callback signals its peers and must return without throwing or waiting for them.</remarks>
+    internal async Task<RunResult> RunAsync(
+        global::Lokad.Bash.Evaluation.Evaluation state,
+        IBashHost visitor,
+        IMemoryBudget evaluationMemory,
+        CancellationToken cancellationToken,
+        Action<Exception>? reportFailure)
     {
         state.Memory.Budget = evaluationMemory;
         using var timing = visitor.Timing.BeginEvaluation();
@@ -86,6 +96,7 @@ public sealed class Engine
         catch (Exception ex)
         {
             runFailure = ex;
+            reportFailure?.Invoke(ex);
             if (state.HasStarted)
                 await DrainCleanupAsync().ConfigureAwait(false);
         }
@@ -125,7 +136,11 @@ public sealed class Engine
         }
         catch (Exception ex)
         {
-            runFailure ??= ex;
+            if (runFailure == null)
+            {
+                runFailure = ex;
+                reportFailure?.Invoke(ex);
+            }
         }
 
         var cleanupFailure = await TryCleanupDescriptorsAsync().ConfigureAwait(false);
@@ -154,6 +169,9 @@ public sealed class Engine
                 var result = await ShellDescriptorCleanup.CloseAsync(actualVisitor, descriptor, earlierException: null)
                     .ConfigureAwait(false);
                 state.MarkDescriptorCleanupCompleted(descriptor);
+                if (reportFailure != null && runFailure == null && (state.LastExitCode ?? 0) == 0
+                    && failure.Closed && result.Exception is { } closeFailure)
+                    reportFailure(closeFailure.SourceException);
                 failure = DescriptorCloseResult.FirstFailure(failure, result);
             }
 

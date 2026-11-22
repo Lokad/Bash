@@ -949,6 +949,114 @@ public class EngineTests
         Assert.Equal([new FileDescriptor(10)], visitor.ClosedDescriptors);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task PipelineFailureStopsSiblingAndPreservesItsCause(bool prepared, bool failDuringClose)
+    {
+        var failure = new InvalidOperationException("Synthetic stage failure.");
+        var readEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readCanceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var close = new TaskCompletionSource<OperationError?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        using var emergency = new CancellationTokenSource();
+        var host = new TestOperationVisitor([])
+        {
+            MemoryBudget = owner,
+            ReadOverride = async token =>
+            {
+                readEntered.TrySetResult();
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+                catch (OperationCanceledException)
+                {
+                    readCanceled.TrySetResult();
+                    await releaseRead.Task;
+                    throw new IOException("Synthetic sibling failure during cancellation.");
+                }
+                throw new InvalidOperationException("The fixture read should wait for cancellation.");
+            },
+            RunCommandOverride = async () =>
+            {
+                await readEntered.Task;
+                throw failure;
+            }
+        };
+        var pipe = new PipeDescriptors(new FileDescriptor(10), new FileDescriptor(11));
+        var redirected = new FileDescriptor(9);
+        host.EnqueuePipeDescriptors(pipe);
+        if (!failDuringClose)
+            host.EnqueueOpenFileDescriptor(redirected.Id);
+        host.EnqueueCloseDescriptorTask(close.Task);
+        host.EnqueueCloseDescriptor();
+        if (!failDuringClose)
+            host.EnqueueCloseDescriptor();
+        var script = failDuringClose ? "read -n1 value | :" : "read -n1 value | fault 2>diagnostic";
+        var running = prepared
+            ? new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, emergency.Token)
+            : BashScript.RunAsync(host, script, EvaluationOptions.Default, emergency.Token);
+        try
+        {
+            await readEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (failDuringClose)
+                close.SetException(failure);
+            await readCanceled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(running.IsCompleted);
+            Assert.True(memory.ReservedBytes > 0);
+            Assert.DoesNotContain(pipe.Write, host.ClosedDescriptors);
+        }
+        finally
+        {
+            if (!readCanceled.Task.IsCompleted)
+                await emergency.CancelAsync();
+            releaseRead.TrySetResult();
+            close.TrySetResult(null);
+            try { await running.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (Exception) when (running.IsCompleted) { }
+        }
+
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => running));
+        Assert.Equal(failDuringClose ? 2 : 3, host.ClosedDescriptors.Count);
+        Assert.Contains(pipe.Read, host.ClosedDescriptors);
+        Assert.Contains(pipe.Write, host.ClosedDescriptors);
+        if (!failDuringClose)
+            Assert.Contains(redirected, host.ClosedDescriptors);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task PipelinePreservesCallerCancellationTokenAfterTheStagesSettle()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = new TestOperationVisitor([])
+        {
+            ReadOverride = async token =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return DescriptorReadBuffer.EndOfFile;
+            }
+        };
+        var pipe = new PipeDescriptors(new FileDescriptor(10), new FileDescriptor(11));
+        host.EnqueuePipeDescriptors(pipe);
+        host.EnqueueCloseDescriptor();
+        host.EnqueueCloseDescriptor();
+        var running = BashScript.RunAsync(host, ": | read -n1 value", EvaluationOptions.Default, cancellation.Token);
+        try { await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally { await cancellation.CancelAsync(); }
+
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => running.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(cancellation.Token, canceled.CancellationToken);
+        Assert.Equal(2, host.ClosedDescriptors.Count);
+        Assert.Contains(pipe.Read, host.ClosedDescriptors);
+        Assert.Contains(pipe.Write, host.ClosedDescriptors);
+    }
+
     [Fact]
     public async Task Engine_RunAsync_DoesNotWrapLoggingHostTwice()
     {
