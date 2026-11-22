@@ -1,6 +1,7 @@
 using Lokad.Bash.Memory;
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
@@ -180,7 +181,7 @@ public sealed partial class ComplexityRegressionTests
     }
 
     [Fact]
-    public void ExportedEnvironmentAllocationIsLinearInExportedBindings()
+    public void StandaloneExportSnapshotAllocatesOnlyOutputAndFixedOverhead()
     {
         var variables = Variables.CreateEmpty();
         for (var index = 0; index < 2_000; index++)
@@ -196,9 +197,12 @@ public sealed partial class ComplexityRegressionTests
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(2_000, environment.Count);
+        var entries = Assert.IsType<List<EnvironmentVariable>>(environment);
+        var outputBytes = (long)entries.Capacity * Unsafe.SizeOf<EnvironmentVariable>();
+        // The list's geometric growth uses less than twice its final backing, plus headers.
         Assert.True(
-            allocated < 4 * 1024 * 1024,
-            $"A 2,000-entry child environment allocated {allocated:N0} bytes; expected one linear projection.");
+            allocated <= 2 * outputBytes + 4096,
+            $"A 2,000-entry child environment allocated {allocated:N0} bytes for {outputBytes:N0} bytes of final backing.");
     }
 
     [Fact]

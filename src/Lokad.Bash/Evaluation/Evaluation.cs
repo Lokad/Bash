@@ -3272,6 +3272,9 @@ public sealed partial class Evaluation : IFileTester
     private IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
         Variables variables, EvaluationContext context)
     {
+        if (context.FunctionContext == null && context.GlobalPrefixes == null)
+            return variables.BuildExportedEnvironment(Memory, _cancellationToken);
+
         using var selectionMemory = new MemoryCapacity(Memory.Budget, 0);
         return global::Lokad.Bash.Evaluation.Variables.BuildExportedEnvironment(
             ExportBindings(), Memory, selectionMemory, _cancellationToken);
@@ -3280,8 +3283,6 @@ public sealed partial class Evaluation : IFileTester
         {
             foreach (var binding in variables.ExportedBindings)
                 yield return binding;
-            if (context.FunctionContext == null && context.GlobalPrefixes == null)
-                yield break;
 
             var functionPrefixes = new HashSet<BindingName>();
             for (var function = context.FunctionContext; function != null; function = function.Enclosing)

@@ -1790,9 +1790,13 @@ public sealed partial class Variables
     /// Builds the exported environment list.
     /// </summary>
     public IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment() =>
-        BuildExportedEnvironment(ExportedBindings, memory: null, selectionMemory: null, CancellationToken.None);
+        BuildExportedEnvironment(memory: null, CancellationToken.None);
 
-    /// <summary>Selects the first assigned export of each name, from innermost to outermost scope.</summary>
+    internal IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(EvaluationMemory? memory, CancellationToken cancellationToken) =>
+        BuildExportedEnvironment(ExportedBindings, memory, selectionMemory: null, cancellationToken);
+
+    /// <summary>Projects a unique name sequence or selects the first assigned export from overlapping scopes.</summary>
+    /// <remarks>Overlapping scopes supply an owner for the name selection backing.</remarks>
     internal static IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
         IEnumerable<VariableBinding> bindings, EvaluationMemory? memory, MemoryCapacity? selectionMemory,
         CancellationToken cancellationToken)
@@ -1800,13 +1804,13 @@ public sealed partial class Variables
         const long EnvironmentEntryBytes = 40;
         const long ArrayHeaderBytes = 32;
         var results = new List<EnvironmentVariable>();
-        var selected = new HashSet<BindingName>();
+        var selected = selectionMemory == null ? null : new HashSet<BindingName>();
         foreach (var binding in bindings)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var name = binding.Name;
             var scope = binding.Owner;
-            if (selected.Contains(name) || !scope.TryGetBinding(name, out var slot)) continue;
+            if (selected?.Contains(name) == true || !scope.TryGetBinding(name, out var slot)) continue;
             ShellValue value;
             switch (slot)
             {
@@ -1818,7 +1822,7 @@ public sealed partial class Variables
                     break;
                 case IndexedSlot or AssociativeSlot:
                     // Assigned arrays shadow outer exports, but cannot themselves enter the environment.
-                    if (IsAssigned(slot)) Select(name);
+                    if (selected != null && IsAssigned(slot)) Select(name);
                     continue;
                 default:
                     continue;
@@ -1840,6 +1844,7 @@ public sealed partial class Variables
 
         void Select(BindingName name)
         {
+            if (selected == null) return;
             selectionMemory?.Grow(BindingNameSelectionBytes);
             selected.Add(name);
         }

@@ -395,11 +395,13 @@ public sealed class CommandInvocationTests
     }
 
     [Theory]
-    [InlineData(false, true, true)]
-    [InlineData(true, true, true)]
-    [InlineData(false, false, true)]
-    [InlineData(true, true, false)]
-    public async Task RuntimeEnvironmentAdmitsTheSelectedExportSnapshot(bool query, bool exported, bool limited)
+    [InlineData(false, true, 96, true)]
+    [InlineData(true, true, 96, true)]
+    [InlineData(false, false, 96, false)]
+    [InlineData(true, true, 0, false)]
+    [InlineData(false, true, 640, false)]
+    [InlineData(true, true, 640, false)]
+    public async Task RuntimeEnvironmentAdmitsTheSelectedExportSnapshot(bool query, bool exported, int headroomKiB, bool refuses)
     {
         const int BindingCount = 4096;
         var state = new ShellEvaluation(Parser.Parse(query ? "type -t inspect" : "inspect"));
@@ -419,7 +421,7 @@ public sealed class CommandInvocationTests
         state.Memory.Budget = owner;
         // Admit the namespace itself and leave space for command overhead.
         var namespaceBytes = variables.EstimatedMemoryBytes;
-        using var hold = budget.Reserve(limited ? budget.LimitBytes - namespaceBytes - 96 * 1024 : 0);
+        using var hold = budget.Reserve(headroomKiB == 0 ? 0 : budget.LimitBytes - namespaceBytes - headroomKiB * 1024L);
         var step = await state.GetNextStep();
         var workspace = state.Memory.Workspace.Bytes - namespaceBytes;
         IReadOnlyList<EnvironmentVariable> environment = [];
@@ -443,7 +445,7 @@ public sealed class CommandInvocationTests
             Assert.Fail($"Unexpected operation {step}.");
         Assert.Null(await state.GetNextStep());
 
-        if (exported && limited)
+        if (refuses)
         {
             Assert.True(environment.Count == 0, $"Published {environment.Count} exports with {workspace} B of command workspace.");
             Assert.Equal(1, state.LastExitCode);
