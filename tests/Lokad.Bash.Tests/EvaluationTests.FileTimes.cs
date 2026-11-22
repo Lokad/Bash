@@ -8,7 +8,7 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Theory]
-    [InlineData("test -r new -a old -ot new -a new -nt ./old -a ! old -nt new -a ! new -ot old -a ! -t invalid -a ! old -nt '\r' -a -w old")]
+    [InlineData("test -r new -a old -ot new -a new -nt ./old -a ! old -nt new -a ! new -ot old -a ! -t -1 -a ! old -nt '\r' -a -w old")]
     public async Task FileTimeComparisons_BatchDistinctOperandsAndKeepAccessPredicatePositions(string script)
     {
         var state = new Eval(Parser.Parse(script));

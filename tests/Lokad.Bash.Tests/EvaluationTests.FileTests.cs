@@ -9,8 +9,8 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Theory]
-    [InlineData("test -t 0 -a ! -t 1 -a -t 3 -a ! -t invalid -a ! -t 99 3<&0", false)]
-    [InlineData("test -t 0 -a ! -t 1 -a -t 3 -a ! -t invalid -a ! -t 99 3<&0", true)]
+    [InlineData("test -t 0 -a ! -t 1 -a -t 3 -a ! -t -1 -a ! -t 99 3<&0", false)]
+    [InlineData("test -t 0 -a ! -t 1 -a -t 3 -a ! -t -1 -a ! -t 99 3<&0", true)]
     public async Task TerminalStatuses_DispatchAliasesAndPreserveResultOrder(string script, bool logging)
     {
         var basic = new TestOperationVisitor([]);
@@ -49,8 +49,8 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("test -d before -a ! -t invalid -a ! -d missing -a ! -e '\r' -a -f after -a ! -t -1")]
-    [InlineData("test ! -t invalid -a -d before -a ! -d missing -a -f after")]
+    [InlineData("test -d before -a ! -t 2147483648 -a ! -d missing -a ! -e '\r' -a -f after -a ! -t -1")]
+    [InlineData("test ! -t -1 -a -d before -a ! -d missing -a -f after")]
     public async Task FileTests_KeepResultPositionsWhenInvalidOperandsAreOmitted(string script)
     {
         var state = new Eval(Parser.Parse(script));
@@ -103,11 +103,26 @@ public partial class EvaluationTests
         Assert.Equal(2, state.LastExitCode);
     }
 
+    [Fact]
+    public async Task TerminalGrammarErrorKeepsEarlierVariableTestsAndSkipsLaterOnes()
+    {
+        var state = new Eval(Parser.Parse("a=([0]=present); i=0; test -v 'a[i++]' -a -t invalid -a -v 'a[i++]'"));
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(ShellValue.FromText("1"), state.Variables["i"]);
+        Assert.Equal("test: too many arguments\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(2, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData("test -t invalid", 1)]
+    [InlineData("test yes -a yes -a -t", 0)]
+    [InlineData("test -t $'\\xff'", 1)]
     [InlineData("test -t -1", 1)]
     [InlineData("test -t 2147483648", 1)]
     [InlineData("[[ ! -t invalid ]]", 0)]
+    [InlineData("[[ ! -t $'\\xff' ]]", 0)]
     [InlineData("test -d ''", 1)]
     [InlineData("test -e '\r'", 1)]
     [InlineData("[[ ! -e '\r' ]]", 0)]
@@ -120,6 +135,36 @@ public partial class EvaluationTests
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(exitCode, state.LastExitCode);
+    }
+
+    [Theory]
+    [InlineData("[ yes -a -t $'\\r+0\\t' ]", 0)]
+    [InlineData("test -t '+0'", 0)]
+    [InlineData("[[ -t '+0' ]]", 0)]
+    public async Task TerminalPredicates_RequestTheSelectedDescriptor(string script, int descriptor)
+    {
+        var state = new Eval(Parser.Parse(script));
+        var operation = await NextTerminalStatusesAsync(state);
+        Assert.Equal(new FileDescriptor(descriptor), Assert.Single(operation.Descriptors));
+        operation.SetResult([true]);
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Theory]
+    [InlineData("test -t invalid -a yes", "test: too many arguments\n")]
+    [InlineData("[ yes -o -t '' ]", "[: too many arguments\n")]
+    [InlineData("test -t -x -a yes", "test: syntax error: `-x' unexpected\n")]
+    [InlineData("test yes -a \\( -t invalid \\)", "test: `)' expected, found invalid\n")]
+    public async Task TerminalPredicates_LeaveNonnumericTokensForTheExpression(string script, string message)
+    {
+        var state = new Eval(Parser.Parse(script));
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal(message, Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(2, state.LastExitCode);
     }
 
     [Theory]
@@ -140,7 +185,7 @@ public partial class EvaluationTests
 
     [Theory]
     [InlineData("test -t 0", true)]
-    [InlineData("test ! -t invalid -a -e path", false)]
+    [InlineData("test ! -t -1 -a -e path", false)]
     public async Task FileTests_RetainTheirAllowanceUntilTheHostSettles(string command, bool terminal)
     {
         var state = new Eval(Parser.Parse(command + "; after=1"));
@@ -247,7 +292,7 @@ public partial class EvaluationTests
     [Fact]
     public async Task FileTests_SeparateRequestKindsWhenComparisonsShareMetadata()
     {
-        var state = new Eval(Parser.Parse("test ! -t invalid -a -t 0 -a -s file -a file -ef alias"
+        var state = new Eval(Parser.Parse("test ! -t 2147483648 -a -t 0 -a -s file -a file -ef alias"
             + " -a -r file -a file -nt missing -a -e file -a ! -s empty"));
         var kinds = await NextPathKindsAsync(state);
         Assert.Equal("/file", Assert.Single(kinds.Paths).Path);

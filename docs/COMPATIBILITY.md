@@ -746,6 +746,15 @@ with optional surrounding ASCII whitespace. Invalid integers, malformed
 expressions and a missing closing `]` report a diagnostic and status 2. File
 predicates retain the UTF-8 path boundary.
 
+For `-t`, a descriptor operand is a signed decimal with leading ASCII
+whitespace and trailing spaces or tabs allowed. Only numbers in the
+nonnegative descriptor range can reach the host. In the compound `test` and
+`[` grammar, a final `-t` is a nonempty string term. If a token follows `-t`
+in unary position, the predicate consumes it only when it is a signed 64-bit
+decimal. A nonnumeric token stays in the expression and the predicate is false. Short-arity
+`test` and `[` rules still take precedence. `[[ -t operand ]]` expands its
+required operand and returns false for an invalid descriptor.
+
 The unary `-o` predicate in `[[ … ]]`, `test` and `[` reports the current
 `errexit` state and the always-enabled `braceexpand` and `pipefail` options.
 All other option names return false.

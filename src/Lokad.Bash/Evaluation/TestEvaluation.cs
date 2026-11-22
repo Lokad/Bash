@@ -169,7 +169,7 @@ public sealed class TestEvaluation
                 if (Is(first, "!"u8))
                     Constant(Next().IsEmpty);
                 else if (TryUnary(first, out var unary))
-                    Unary(unary);
+                    Unary(unary, consumeInvalidTerminalOperand: true);
                 else
                     Fail(first, ": unary operator expected");
                 return;
@@ -283,7 +283,7 @@ public sealed class TestEvaluation
         {
             var first = Next();
             if (_index < _end && TryUnary(first, out var unary))
-                Unary(unary);
+                Unary(unary, consumeInvalidTerminalOperand: false);
             else
                 Constant(!first.IsEmpty);
         }
@@ -291,8 +291,21 @@ public sealed class TestEvaluation
             _steps.Add(new(StepKind.Not, 0));
     }
 
-    private void Unary(UnaryPredicate predicate)
+    private void Unary(UnaryPredicate predicate, bool consumeInvalidTerminalOperand)
     {
+        if (predicate.FileKind.IsTerminal)
+        {
+            // In the expression grammar, a nonnumeric token remains available to the parser.
+            var isNumber = Integers.TryParseBuiltinNumber(_arguments[_index].Bytes.Span, out var number);
+            if (isNumber || consumeInvalidTerminalOperand)
+                _index++;
+            if (isNumber && UnresolvedFileTest.TryCreateTerminal(number, out var test))
+                AppendFileTest(test);
+            else
+                Constant(false);
+            return;
+        }
+
         var operandIndex = _index;
         var operand = Next();
         if (predicate.IsFilePredicate)
@@ -368,8 +381,13 @@ public sealed class TestEvaluation
             Fail(right.Value, ": file operand is not valid UTF-8");
             return;
         }
+        AppendFileTest(new(kind, path, otherPath));
+    }
+
+    private void AppendFileTest(UnresolvedFileTest test)
+    {
         AppendPredicate(StepKind.File, _files.Count);
-        _files.Add(new(kind, path, otherPath));
+        _files.Add(test);
     }
 
     private static bool TryTestBinary(ShellValue token, out BinaryPredicate predicate) =>

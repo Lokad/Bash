@@ -133,13 +133,24 @@ public sealed partial class Evaluation
 
         async Task<int> FileAsync(FilePredicateKind kind, ShellValue left, ShellValue? right)
         {
-            Memory.Charge(checked(4L * (left.Bytes.Length + (long)(right?.Bytes.Length ?? 0))));
-            if (!left.TryGetUtf8Text(out var path))
-                return await ErrorAsync("file operand is not valid UTF-8").ConfigureAwait(false);
-            string? other = null;
-            if (right.HasValue && !right.Value.TryGetUtf8Text(out other))
-                return await ErrorAsync("file operand is not valid UTF-8").ConfigureAwait(false);
-            return await ExecuteFileTestsForEvaluationAsync([new(kind, path, other)], results => results[0]).ConfigureAwait(false);
+            UnresolvedFileTest test;
+            if (kind.IsTerminal)
+            {
+                if (!Integers.TryParseBuiltinNumber(left.Bytes.Span, out var number)
+                    || !UnresolvedFileTest.TryCreateTerminal(number, out test))
+                    return 1;
+            }
+            else
+            {
+                Memory.Charge(checked(4L * (left.Bytes.Length + (long)(right?.Bytes.Length ?? 0))));
+                if (!left.TryGetUtf8Text(out var path))
+                    return await ErrorAsync("file operand is not valid UTF-8").ConfigureAwait(false);
+                string? other = null;
+                if (right.HasValue && !right.Value.TryGetUtf8Text(out other))
+                    return await ErrorAsync("file operand is not valid UTF-8").ConfigureAwait(false);
+                test = new(kind, path, other);
+            }
+            return await ExecuteFileTestsForEvaluationAsync([test], results => results[0]).ConfigureAwait(false);
         }
 
         async Task<int> MatchRegexAsync(ShellValue input, ExpandedWord patternWord)

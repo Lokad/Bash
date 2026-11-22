@@ -3597,13 +3597,10 @@ public sealed partial class Evaluation : IFileTester
             var test = tests[index];
             if (test.Kind.IsTerminal)
             {
-                if (LogicalDescriptor.TryParse(test.Operand.AsSpan(), out var descriptor))
-                {
-                    lookupMemory.PrepareListCapacity(terminalDescriptors ??= [], 1);
-                    lookupMemory.PrepareListCapacity(terminalResultIndices ??= [], 1);
-                    terminalDescriptors.Add(_state.CurrentRedirectionTable?.Resolve(descriptor) ?? FileDescriptor.Closed);
-                    terminalResultIndices.Add(index);
-                }
+                lookupMemory.PrepareListCapacity(terminalDescriptors ??= [], 1);
+                lookupMemory.PrepareListCapacity(terminalResultIndices ??= [], 1);
+                terminalDescriptors.Add(_state.CurrentRedirectionTable?.Resolve(test.TerminalDescriptor) ?? FileDescriptor.Closed);
+                terminalResultIndices.Add(index);
             }
             else if (test.Kind.ComparesIdentity)
             {
