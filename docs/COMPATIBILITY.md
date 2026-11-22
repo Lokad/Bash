@@ -881,12 +881,14 @@ and budget limits.
 
 Printf time-format literals preserve bytes, including malformed UTF-8. Directives
 and widths use ASCII grammar with invariant date text. The pinned Linux C
-locale governs which directives accept the `E` and `O` modifiers and the
-spelling of unknown directives. Explicit seconds use the configured fixed
-offset with a Gregorian calendar. The calendar admits local years whose difference
-from 1900 fits in a signed 32-bit field. Within that range `%s` retains the supplied
-seconds. Numeric year rendering follows the pinned Linux profile, including its
-signed 32-bit year display. Ordinary numeric directives keep a digit when the
+locale governs which directives accept the `E` and `O` modifiers and how
+they apply `^` and `#`. Unknown and incomplete directives retain their literal
+spelling with the parsed width and applicable ASCII case. Explicit seconds use
+the configured fixed offset with a Gregorian calendar. The calendar admits
+local years whose difference from 1900 fits in a signed 32-bit field. Within
+that range `%s` retains the supplied seconds. Numeric year rendering follows
+the pinned Linux profile, including its signed 32-bit year display. Ordinary
+numeric directives keep a digit when the
 `_` flag selects space padding. The `-` flag suppresses default numeric padding
 and still honors an explicit width. Composite directives apply width to the
 complete value and retain their internal padding. The `%z` offset applies an

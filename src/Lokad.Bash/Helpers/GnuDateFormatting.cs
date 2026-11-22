@@ -23,10 +23,7 @@ public static class GnuDateFormatting
 
     private static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
 
-    private readonly record struct FormattedDirective(
-        string Text,
-        bool Supported,
-        char DefaultPadding);
+    private readonly record struct FormattedDirective(string Text, char DefaultPadding);
 
     // Weekdays and leap days repeat in a 400-year Gregorian cycle.
     private readonly record struct CalendarTime(DateTimeOffset Local, long YearOffset, long UnixSeconds)
@@ -127,6 +124,7 @@ public static class GnuDateFormatting
         if (initialCapacity != 0)
             reserveCharacters(initialCapacity);
         var builder = new StringBuilder(initialCapacity);
+        var strftime = dialect == GnuDateFormatDialect.Strftime;
 
         for (var index = 0; index < format.Length; index++)
         {
@@ -156,7 +154,7 @@ public static class GnuDateFormatting
             var noPadding = false;
             char? padding = null;
             var uppercase = false;
-            var swapCase = false;
+            var changeCase = false;
 
             while (index < format.Length)
             {
@@ -181,7 +179,7 @@ public static class GnuDateFormatting
                         index++;
                         continue;
                     case '#':
-                        swapCase = true;
+                        changeCase = true;
                         index++;
                         continue;
                     default:
@@ -192,7 +190,7 @@ public static class GnuDateFormatting
             }
 
             var colonCount = 0;
-            while (index < format.Length && format[index] == ':')
+            while (!strftime && index < format.Length && format[index] == ':')
             {
                 colonCount++;
                 index++;
@@ -227,7 +225,23 @@ public static class GnuDateFormatting
                 index++;
             }
 
-            if (index >= format.Length)
+            var complete = index < format.Length;
+            var specifier = complete ? format[index] : '\0';
+            if (strftime && (!complete || !IsStrftimeSpecifier(specifier, modifier)))
+            {
+                var end = complete ? index + 1 : index;
+                var literal = format.AsSpan(directiveStart - 1, end - directiveStart + 1);
+                // The abbreviated month directives select uppercase before rejecting their E modifier.
+                var upperLiteral = uppercase || (changeCase && specifier is 'b' or 'h');
+                if (!TryAppendStrftimeLiteral(literal, noPadding ? ' ' : padding ?? ' ', width, upperLiteral))
+                {
+                    result = string.Empty;
+                    return false;
+                }
+                continue;
+            }
+
+            if (!complete)
             {
                 if (!TryAppend('%') || !TryAppendText(format.AsSpan(directiveStart)))
                 {
@@ -237,21 +251,12 @@ public static class GnuDateFormatting
                 break;
             }
 
-            var specifier = format[index];
-            var directive = format[directiveStart..(index + 1)];
-            var formatted = FormatDirective(value, specifier, colonCount, modifier, directive, dialect);
-            var text = formatted.Text;
-            if (formatted.Supported && uppercase)
-            {
-                text = text.ToUpperInvariant();
-            }
-            else if (formatted.Supported && swapCase)
-            {
-                text = SwapCase(text);
-            }
+            var directive = format.AsSpan(directiveStart, index - directiveStart + 1);
+            var formatted = FormatDirective(value, specifier, colonCount, directive, dialect);
 
-            if (dialect == GnuDateFormatDialect.Strftime && formatted.Supported)
+            if (strftime)
             {
+                var text = ApplyStrftimeCase(formatted.Text, specifier, uppercase, changeCase);
                 if (!TryAppendStrftime(text.AsSpan(), specifier, noPadding, padding, formatted.DefaultPadding, width))
                 {
                     result = string.Empty;
@@ -260,17 +265,17 @@ public static class GnuDateFormatting
                 continue;
             }
 
-            var directiveLength = formatted.Supported && !noPadding
-                ? Math.Max(width, text.Length) : text.Length;
+            var dateText = uppercase ? formatted.Text.ToUpperInvariant()
+                : changeCase ? SwapCase(formatted.Text) : formatted.Text;
+            var directiveLength = noPadding ? dateText.Length : Math.Max(width, dateText.Length);
             if (directiveLength > maximumLength - builder.Length)
             {
                 result = string.Empty;
                 return false;
             }
             EnsureCharacters(builder.Length + directiveLength);
-            if (formatted.Supported
-                && !TryApplyPadding(
-                    ref text,
+            if (!TryApplyPadding(
+                    ref dateText,
                     noPadding,
                     padding,
                     formatted.DefaultPadding,
@@ -282,7 +287,7 @@ public static class GnuDateFormatting
                 return false;
             }
 
-            if (!TryAppendText(text.AsSpan()))
+            if (!TryAppendText(dateText.AsSpan()))
             {
                 result = string.Empty;
                 return false;
@@ -330,12 +335,9 @@ public static class GnuDateFormatting
                     text = text[1..];
             }
 
-            var length = Math.Max(width, text.Length);
-            if (length > maximumLength - builder.Length)
+            if (!TryBeginField(text.Length, width, out var padCount))
                 return false;
 
-            EnsureCharacters(builder.Length + length);
-            var padCount = length - text.Length;
             if (padCount > 0 && pad == '0' && specifier is 'C' or 'G' or 'Y' && text[0] == '-')
             {
                 builder.Append('-');
@@ -344,6 +346,35 @@ public static class GnuDateFormatting
 
             builder.Append(pad, padCount);
             builder.Append(text);
+            return true;
+        }
+
+        bool TryAppendStrftimeLiteral(ReadOnlySpan<char> literal, char padding, int width, bool uppercase)
+        {
+            if (!TryBeginField(literal.Length, width, out var padCount))
+                return false;
+
+            builder.Append(padding, padCount);
+            if (uppercase && literal[^1] is >= 'a' and <= 'z')
+            {
+                builder.Append(literal[..^1]);
+                builder.Append((char)(literal[^1] - 'a' + 'A'));
+            }
+            else
+            {
+                builder.Append(literal);
+            }
+            return true;
+        }
+
+        bool TryBeginField(int textLength, int width, out int paddingCount)
+        {
+            var length = Math.Max(width, textLength);
+            paddingCount = length - textLength;
+            if (length > maximumLength - builder.Length)
+                return false;
+
+            EnsureCharacters(builder.Length + length);
             return true;
         }
 
@@ -380,22 +411,26 @@ public static class GnuDateFormatting
             builder.EnsureCapacity(capacity);
         }
 
+        static string ApplyStrftimeCase(string text, char specifier, bool uppercase, bool changeCase)
+        {
+            if (specifier == 'P')
+                return text;
+            if (changeCase && specifier is 'p' or 'Z')
+                return text.ToLowerInvariant();
+            if (uppercase || (changeCase && specifier is 'a' or 'A' or 'b' or 'B' or 'h'))
+                return text.ToUpperInvariant();
+            return text;
+        }
+
         static FormattedDirective FormatDirective(
             CalendarTime calendar,
             char specifier,
             int colonCount,
-            char? modifier,
-            string directive,
+            ReadOnlySpan<char> directive,
             GnuDateFormatDialect directiveDialect)
         {
-            if (directiveDialect == GnuDateFormatDialect.Strftime
-                && (colonCount > 0 || !IsStrftimeSpecifier(specifier, modifier)))
-            {
-                return new FormattedDirective("%" + directive, false, ' ');
-            }
-
             if (colonCount > 0 && specifier != 'z')
-                throw new GnuDateFormatException(directive);
+                throw new GnuDateFormatException(directive.ToString());
 
             var directiveValue = calendar.Local;
             var strftime = directiveDialect == GnuDateFormatDialect.Strftime;
@@ -451,9 +486,9 @@ public static class GnuDateFormatting
                 'y' => directiveValue.ToString("yy", Culture),
                 'Y' when strftime => calendar.StrftimeYear.ToString(Culture),
                 'Y' => directiveValue.ToString("yyyy", Culture),
-                _ => throw new GnuDateFormatException(directive)
+                _ => throw new GnuDateFormatException(directive.ToString())
             };
-            return new FormattedDirective(text, true, GetDefaultPadding(specifier));
+            return new FormattedDirective(text, GetDefaultPadding(specifier));
 
             static int LastTwoDigits(long year)
             {
@@ -466,25 +501,25 @@ public static class GnuDateFormatting
                     or 'S' or 'u' or 'U' or 'V' or 'w' or 'W' or 'y' or 'Y'
                 ? '0'
                 : ' ';
+        }
 
-            static bool IsStrftimeSpecifier(char value, char? alternativeModifier)
+        static bool IsStrftimeSpecifier(char value, char? alternativeModifier)
+        {
+            // The Linux C locale accepts either modifier on these directives.
+            if (value is '%' or 'n' or 't' or 'p' or 'P' or 'r' or 'R' or 's' or 'T' or 'z' or 'Z')
+                return true;
+
+            return alternativeModifier switch
             {
-                // The Linux C locale accepts either modifier on these directives.
-                if (value is '%' or 'n' or 't' or 'p' or 'P' or 'r' or 'R' or 's' or 'T' or 'z' or 'Z')
-                    return true;
-
-                return alternativeModifier switch
-                {
-                    'E' => value is 'c' or 'C' or 'u' or 'x' or 'X' or 'y' or 'Y',
-                    'O' => value is 'H' or 'I' or 'k' or 'l' or 'M' or 'S'
-                        or 'b' or 'B' or 'C' or 'd' or 'e' or 'g' or 'G' or 'h' or 'j' or 'm'
-                        or 'u' or 'U' or 'V' or 'w' or 'W' or 'y',
-                    null => value is 'H' or 'I' or 'k' or 'l' or 'M' or 'S' or 'X'
-                        or 'a' or 'A' or 'b' or 'B' or 'c' or 'C' or 'd' or 'D' or 'e' or 'F'
-                        or 'g' or 'G' or 'h' or 'j' or 'm' or 'u' or 'U' or 'V' or 'w' or 'W' or 'x' or 'y' or 'Y',
-                    _ => false
-                };
-            }
+                'E' => value is 'c' or 'C' or 'u' or 'x' or 'X' or 'y' or 'Y',
+                'O' => value is 'H' or 'I' or 'k' or 'l' or 'M' or 'S'
+                    or 'b' or 'B' or 'C' or 'd' or 'e' or 'g' or 'G' or 'h' or 'j' or 'm'
+                    or 'u' or 'U' or 'V' or 'w' or 'W' or 'y',
+                null => value is 'H' or 'I' or 'k' or 'l' or 'M' or 'S' or 'X'
+                    or 'a' or 'A' or 'b' or 'B' or 'c' or 'C' or 'd' or 'D' or 'e' or 'F'
+                    or 'g' or 'G' or 'h' or 'j' or 'm' or 'u' or 'U' or 'V' or 'w' or 'W' or 'x' or 'y' or 'Y',
+                _ => false
+            };
         }
 
         static string FormatNanoseconds(DateTimeOffset directiveValue)
