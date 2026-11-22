@@ -288,6 +288,23 @@ public sealed class ByteStoredValueTests
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("0A", "303A307C")]
+    [InlineData("5C000A", "303A317C")]
+    [InlineData("635C5C5CC3A95CFF010A", "303A317C635CC3A9FF01")]
+    public async Task ReadArrayWithEmptyIfsDistinguishesEmptyRecordsAndEscapedValues(string inputHex, string outputHex)
+    {
+        const string script = "values=(old); IFS= read -a values; " +
+            "printf '%s:%s|%s' \"$?\" \"${#values[@]}\" \"${values[0]-}\"";
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host, Convert.FromHexString(inputHex));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(outputHex), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public void AssociativeAssignment_RejectsEmptyKeysWithoutReplacingExistingValues()
     {

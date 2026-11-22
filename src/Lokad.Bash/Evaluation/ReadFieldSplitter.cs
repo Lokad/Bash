@@ -66,6 +66,14 @@ internal static class ReadFieldSplitter
 
             bool TryReadField(ref int index, out int start, out int end)
             {
+                if (fieldSeparators.IsEmpty)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    start = index;
+                    end = index = contentEnd;
+                    return start < end;
+                }
+
                 SkipIfsWhitespace(ref index);
                 start = end = index;
 
@@ -187,26 +195,32 @@ internal static class ReadFieldSplitter
                 if (start >= valueEnd)
                     return ShellValue.Empty;
 
-                if (options.BackslashMode == ReadBackslashMode.Preserve
-                    || !content.Span[start..valueEnd].Contains((byte)'\\'))
-                {
-                    return ShellValue.FromBytes(content[start..valueEnd]);
-                }
+                var source = content[start..valueEnd];
+                if (options.BackslashMode == ReadBackslashMode.Preserve)
+                    return ShellValue.FromBytes(source);
+                var remaining = source.Span;
+                var runEnd = remaining.IndexOfAny((byte)'\\', (byte)0);
+                if (runEnd < 0)
+                    return ShellValue.FromBytes(source);
 
-                var rawLength = valueEnd - start;
-                scratch.Grow(rawLength);
-                var value = new byte[rawLength];
+                scratch.Grow(remaining.Length);
+                var value = new byte[remaining.Length];
                 var written = 0;
-                var index = start;
-                while (index < valueEnd && TryReadCharacter(index, out var character, out var next))
+                while (true)
                 {
-                    // A quoted NUL affects splitting before it terminates the assigned field.
-                    var bytes = character.Bytes.Span;
-                    if (bytes[0] == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    remaining[..runEnd].CopyTo(value.AsSpan(written));
+                    written += runEnd;
+                    remaining = remaining[runEnd..];
+                    // A quoted NUL can create a field but ends the assigned bytes.
+                    if (remaining.Length <= 1 || remaining[0] == 0 || remaining[1] == 0)
                         break;
-                    bytes.CopyTo(value.AsSpan(written));
-                    written += bytes.Length;
-                    index = next;
+                    // Removing an escape preserves the rest of the original byte spelling.
+                    value[written++] = remaining[1];
+                    remaining = remaining[2..];
+                    runEnd = remaining.IndexOfAny((byte)'\\', (byte)0);
+                    if (runEnd < 0)
+                        runEnd = remaining.Length;
                 }
 
                 return written == 0 ? ShellValue.Empty : ShellValue.FromBytes(value.AsMemory(0, written));
