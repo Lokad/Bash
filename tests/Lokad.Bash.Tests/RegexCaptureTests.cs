@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
@@ -29,18 +30,22 @@ public sealed class RegexCaptureTests
     }
 
     [Theory]
-    [InlineData(64 * 1024, false)]
-    [InlineData(2 * 1024 * 1024, true)]
-    public async Task CaptureOwnershipIsAdmittedBeforeReplacingEarlierResults(long limit, bool fits)
+    [InlineData(64 * 1024, false, false)]
+    [InlineData(2 * 1024 * 1024, true, false)]
+    [InlineData(64 * 1024, false, true)]
+    [InlineData(2 * 1024 * 1024, true, true)]
+    public async Task CaptureOwnershipIsAdmittedBeforeReplacingEarlierResults(long limit, bool fits, bool partialUnicode)
     {
         var governor = new MemoryGovernor(limit);
         await using var host = new TestHost { MemoryBudget = governor };
-        var pattern = new string('(', 100) + "a+" + new string(')', 100);
-        var script = "[[ old =~ (o) ]]; value='" + new string('a', 1024) + "'; [[ $value =~ " + pattern + " ]]; "
+        var value = partialUnicode ? new string('é', 512) : new string('a', 1024);
+        var subject = partialUnicode ? "x" + value + "y" : value;
+        var pattern = new string('(', 100) + (partialUnicode ? "é+" : "a+") + new string(')', 100);
+        var script = "[[ old =~ (o) ]]; value='" + subject + "'; [[ $value =~ " + pattern + " ]]; "
             + "printf '%s:%s:<%s>' \"$?\" \"${#BASH_REMATCH[@]}\" \"${BASH_REMATCH[1]}\"";
         var result = await host.RunAsync(script, CancellationToken.None);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(fits ? "0:101:<" + new string('a', 1024) + ">" : "1:2:<o>", host.StandardOutput.TextContent);
+        Assert.Equal(fits ? "0:101:<" + value + ">" : "1:2:<o>", host.StandardOutput.TextContent);
         if (fits) Assert.Empty(host.StandardError.Content.ToArray());
         else Assert.Contains("memory", host.StandardError.TextContent, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, governor.ReservedBytes);
@@ -88,12 +93,56 @@ public sealed class RegexCaptureTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public async Task RepeatedPartialCapturesKeepIndependentCompactBacking()
+    {
+        var evaluation = new Eval(Parser.Parse("[[ 'xé😀漢y' =~ ((é😀漢))(z)?() ]]"));
+        await using var host = new TestHost();
+        using var owner = host.MemoryBudget.CreateScope();
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        var captures = evaluation.IndexedArrays["BASH_REMATCH"];
+        var expected = ShellValue.FromText("é😀漢");
+        Assert.Equal<ShellValue>([expected, expected, expected, ShellValue.Empty, ShellValue.Empty], captures);
+        var backing = new HashSet<byte[]>();
+        foreach (var capture in captures.Take(3))
+        {
+            Assert.True(MemoryMarshal.TryGetArray(capture.Bytes, out var slice));
+            Assert.NotNull(slice.Array);
+            Assert.Equal(expected.Bytes.Length, slice.Array.Length);
+            Assert.True(backing.Add(slice.Array));
+        }
+    }
+
+    [Theory]
+    [InlineData(127)]
+    [InlineData(128)]
+    public async Task DistinctUnicodeSpansSurviveAcrossTheLengthCacheBoundary(int groups)
+    {
+        var values = Enumerable.Range(0, groups).Select(index => index % 2 == 0 ? "é" : "漢").ToArray();
+        var subject = "x" + string.Concat(values) + "y";
+        var expression = "^x" + string.Concat(values.Select(value => "(" + value + ")")) + "y$";
+        var evaluation = new Eval(Parser.Parse($"pattern='{expression}'; [[ '{subject}' =~ $pattern ]]"));
+        await using var host = new TestHost();
+        using var owner = host.MemoryBudget.CreateScope();
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal<ShellValue>(values.Prepend(subject).Select(ShellValue.FromText), evaluation.IndexedArrays["BASH_REMATCH"]);
+    }
+
     [Theory]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:unknown:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:ascii:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[:word:]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ x =~ [[.x.]] ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     [InlineData("[[ abc =~ (a) ]]; [[ '😀' =~ . ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
+    [InlineData("[[ abc =~ (a) ]]; [[ 'é😀' =~ ^(é)(.)(.)$ ]]; printf '%s:<%s>' \"$?\" \"${BASH_REMATCH[*]}\"")]
     public async Task UnsupportedOrInvalidMatchingPreservesPriorCaptures(string script)
     {
         await using var host = new TestHost();

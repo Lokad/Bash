@@ -184,6 +184,12 @@ public sealed partial class Evaluation
             var inputBytes = input.Bytes;
             // Valid UTF-8 has one byte per UTF-16 code unit only for ASCII.
             var ascii = inputBytes.Length == text.Length;
+            const int MaximumCachedCaptureLengths = 128;
+            // Bound stack scratch. Larger matches size new partial spans on demand.
+            Span<int> partialLengths = stackalloc int[!ascii && groups.Count <= MaximumCachedCaptureLengths
+                ? groups.Count : 0];
+            Group? previousPartial = null;
+            var previousByteLength = 0;
             var bytes = 0L;
             for (var index = 0; index < groups.Count; index++)
             {
@@ -195,12 +201,26 @@ public sealed partial class Evaluation
                     // .NET matches UTF-16 code units. Captures splitting a scalar are unsupported.
                     if (!IsScalarBoundary(group.Index) || !IsScalarBoundary(group.Index + length))
                         return 2;
-                    length = length == text.Length ? inputBytes.Length : Encoding.UTF8.GetByteCount(group.ValueSpan);
+                    if (length == text.Length)
+                        length = inputBytes.Length;
+                    else if (length != 0)
+                    {
+                        if (!SameSpan(group, previousPartial))
+                        {
+                            previousByteLength = Encoding.UTF8.GetByteCount(group.ValueSpan);
+                            previousPartial = group;
+                        }
+                        length = previousByteLength;
+                        if (!partialLengths.IsEmpty)
+                            partialLengths[index] = length;
+                    }
                 }
                 bytes = checked(bytes + length);
             }
             Memory.Charge(checked(256L * groups.Count + 2L * bytes));
             var captures = new ShellValue[groups.Count];
+            previousPartial = null;
+            var previousBytes = ReadOnlyMemory<byte>.Empty;
             for (var index = 0; index < captures.Length; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
@@ -214,16 +234,34 @@ public sealed partial class Evaluation
                     continue;
                 }
 
-                var value = group.ValueSpan;
-                var content = new byte[Encoding.UTF8.GetByteCount(value)];
-                Encoding.UTF8.GetBytes(value, content);
+                // Equal consecutive partial spans share encoding work. Each result still owns its buffer.
+                var content = SameSpan(group, previousPartial) ? previousBytes.ToArray()
+                    : CopyPartialCapture(group, partialLengths.IsEmpty
+                        ? Encoding.UTF8.GetByteCount(group.ValueSpan) : partialLengths[index]);
                 captures[index] = ShellValue.FromBytes(content);
+                previousPartial = group;
+                previousBytes = content;
             }
             owner.SetRegexCaptures(captures);
             return 0;
 
             bool IsScalarBoundary(int position) => position == 0 || position == text.Length
                 || !char.IsHighSurrogate(text[position - 1]) || !char.IsLowSurrogate(text[position]);
+
+            static bool SameSpan(Group group, Group? previous) =>
+                previous != null && group.Index == previous.Index && group.Length == previous.Length;
+
+            byte[] CopyPartialCapture(Group group, int length)
+            {
+                if (group.Index == 0)
+                    return inputBytes[..length].ToArray();
+                if (group.Index + group.Length == text.Length)
+                    return inputBytes[^length..].ToArray();
+
+                var content = new byte[length];
+                Encoding.UTF8.GetBytes(group.ValueSpan, content);
+                return content;
+            }
 
             bool TryPreparePattern(ExpandedWord word, ReadOnlyMemory<byte> patternBytes, out string expression)
             {
