@@ -130,6 +130,32 @@ public sealed class ParserHereDocumentTests
     }
 
     [Fact]
+    public void CompletingElifBodies_ReusesTheOtherClauses()
+    {
+        var tokenizer = new Tokenizer(ShellSource.FromText("if false; then :;\n"
+            + "elif cat <<CHECK; then cat <<BODY\ncheck\nCHECK\nbody\nBODY\n"
+            + "elif true; then :; fi\n"));
+        var provisional = Assert.IsType<IfCommand>(Parser.ParsePipeline(tokenizer));
+        var reader = Assert.IsType<HereDocumentReader>(tokenizer.HereDocuments);
+        var completed = Assert.IsType<IfCommand>(reader.Complete(provisional, tokenizer.Locations));
+
+        Assert.Equal(2, completed.ElifClauses.Count);
+        Assert.Same(provisional.ElifClauses[1], completed.ElifClauses[1]);
+        Assert.Same(provisional.ThenBody, completed.ThenBody);
+        AssertBody(provisional.ElifClauses[0].Condition, completed.ElifClauses[0].Condition, "CHECK", "check\n");
+        AssertBody(provisional.ElifClauses[0].Body, completed.ElifClauses[0].Body, "BODY", "body\n");
+
+        static void AssertBody(ICommand provisional, ICommand completed, string delimiter, string body)
+        {
+            var original = Assert.Single(Assert.IsType<SimpleCommand>(provisional).Redirections);
+            var replacement = Assert.Single(Assert.IsType<SimpleCommand>(completed).Redirections);
+            Assert.Same(original.Target, replacement.HereDocumentDelimiter);
+            Assert.Equal(delimiter, Assert.Single(original.Target.Parts).GetUtf8Text());
+            Assert.Equal(body, Assert.Single(replacement.Target.Parts).GetUtf8Text());
+        }
+    }
+
+    [Fact]
     public void LongListsWithBodies_CompleteWithoutRecursiveTreeTraversal()
     {
         var source = "f(){ " + string.Concat(Enumerable.Repeat(":; ", 10000)) + "cat <<END; }\nbody\nEND\n";

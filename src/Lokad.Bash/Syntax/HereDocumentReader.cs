@@ -104,7 +104,7 @@ internal sealed class HereDocumentReader
 
             var result = command switch
             {
-                SimpleCommand simple when ReplaceItems(simple.Redirections, ReplaceRedirection) is { } redirections => simple with { Redirections = redirections },
+                SimpleCommand simple when ReplaceRedirections(simple.Redirections) is { } redirections => simple with { Redirections = redirections },
                 ListCommand list when Changed(list.Left) || Changed(list.Right) => list with { Left = Get(list.Left), Right = Get(list.Right) },
                 PipelineCommand pipe when Changed(pipe.Left) || Changed(pipe.Right) => pipe with { Left = Get(pipe.Left), Right = Get(pipe.Right) },
                 GroupCommand group when Changed(group.Body) => group with { Body = Get(group.Body) },
@@ -118,8 +118,9 @@ internal sealed class HereDocumentReader
                 WhileCommand loop when Changed(loop.Condition) || Changed(loop.Body) => loop with { Condition = Get(loop.Condition), Body = Get(loop.Body) },
                 UntilCommand loop when Changed(loop.Condition) || Changed(loop.Body) => loop with { Condition = Get(loop.Condition), Body = Get(loop.Body) },
                 IfCommand conditional => ReplaceIf(conditional),
-                CaseCommand selection when ReplaceItems(selection.Items, item => Changed(item.Body)
-                    ? new CaseItem(item.Patterns, Get(item.Body)) { Continuation = item.Continuation }
+                CaseCommand selection when ReplaceItems(selection.Items, replacements, static (item, commands) =>
+                    commands.TryGetValue(item.Body, out var body)
+                    ? new CaseItem(item.Patterns, body) { Continuation = item.Continuation }
                     : item) is { } items => selection with { Items = items },
                 _ => command
             };
@@ -135,12 +136,13 @@ internal sealed class HereDocumentReader
         bool Changed(ICommand command) => replacements.ContainsKey(command);
         ICommand Get(ICommand command) => replacements.TryGetValue(command, out var replacement) ? replacement : command;
 
-        Redirection ReplaceRedirection(Redirection redirection) =>
-            _completed.TryGetValue(redirection, out var replacement) ? replacement : redirection;
+        IReadOnlyList<Redirection>? ReplaceRedirections(IReadOnlyList<Redirection> redirections) =>
+            ReplaceItems(redirections, _completed, static (redirection, completed) =>
+                completed.TryGetValue(redirection, out var replacement) ? replacement : redirection);
 
         ICommand ReplaceRedirected(RedirectedCommand command)
         {
-            var redirections = ReplaceItems(command.Redirections, ReplaceRedirection);
+            var redirections = ReplaceRedirections(command.Redirections);
             return redirections != null || Changed(command.Body)
                 ? command with { Body = Get(command.Body), Redirections = redirections ?? command.Redirections }
                 : command;
@@ -148,8 +150,14 @@ internal sealed class HereDocumentReader
 
         ICommand ReplaceIf(IfCommand command)
         {
-            var clauses = ReplaceItems(command.ElifClauses, clause => Changed(clause.Condition) || Changed(clause.Body)
-                ? new ElifClause(Get(clause.Condition), Get(clause.Body)) : clause);
+            var clauses = ReplaceItems(command.ElifClauses, replacements, static (clause, commands) =>
+            {
+                var conditionChanged = commands.TryGetValue(clause.Condition, out var condition);
+                var bodyChanged = commands.TryGetValue(clause.Body, out var body);
+                return conditionChanged || bodyChanged
+                    ? new ElifClause(condition ?? clause.Condition, body ?? clause.Body)
+                    : clause;
+            });
             return clauses != null || Changed(command.Condition) || Changed(command.ThenBody)
                 || command.ElseBody is { } elseBody && Changed(elseBody)
                 ? command with { Condition = Get(command.Condition), ThenBody = Get(command.ThenBody),
@@ -157,13 +165,14 @@ internal sealed class HereDocumentReader
                 : command;
         }
 
-        static IReadOnlyList<T>? ReplaceItems<T>(IReadOnlyList<T> items, Func<T, T> replace) where T : class
+        static IReadOnlyList<T>? ReplaceItems<T, TState>(IReadOnlyList<T> items, TState state, Func<T, TState, T> replace)
+            where T : class
         {
             List<T>? result = null;
             for (var index = 0; index < items.Count; index++)
             {
                 var item = items[index];
-                var replacement = replace(item);
+                var replacement = replace(item, state);
                 if (!ReferenceEquals(replacement, item))
                 {
                     if (result == null)
