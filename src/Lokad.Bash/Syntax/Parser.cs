@@ -1179,6 +1179,8 @@ public static class Parser
         var allowDeclarationAssignments = false;
         var sawAny = false;
         var firstElementEndLine = 0;
+        var trackWrapperOperand = false;
+        var wrapperOperandEndLine = 0;
 
         while (true)
         {
@@ -1231,6 +1233,13 @@ public static class Parser
             }
 
             var token = tokenizer.NextTokenCore();
+            if (trackWrapperOperand)
+            {
+                var operandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
+                if (operandLine != firstElementEndLine)
+                    wrapperOperandEndLine = operandLine;
+                trackWrapperOperand = false;
+            }
             switch (token.Kind)
             {
                 case TokenKind.Redirection:
@@ -1312,10 +1321,12 @@ public static class Parser
                         continue;
                     }
 
-                    if (words == null && TryGetPlainUnquotedSource(wordToken.Word, out var commandName))
+                    if (words == null)
                     {
-                        allowDeclarationAssignments = BuiltinClassification.TryResolve(commandName.AsSpan(), out var kind)
-                            && kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local;
+                        trackWrapperOperand = tokenizer.TrackCommandLocations && assignments == null && redirections == null;
+                        if (TryGetPlainUnquotedSource(wordToken.Word, out var commandName))
+                            allowDeclarationAssignments = BuiltinClassification.TryResolve(commandName.AsSpan(), out var kind)
+                                && kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local;
                     }
                     allowAssignments = false;
                     (words ??= []).Add(wordToken.Word);
@@ -1333,7 +1344,7 @@ public static class Parser
                 words is null ? Array.Empty<Word>() : words,
                 redirections is null ? Array.Empty<Redirection>() : redirections,
                 declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
-            tokenizer.RecordLocation(command, startLine, firstElementEndLine);
+            tokenizer.RecordLocation(command, startLine, firstElementEndLine, wrapperOperandEndLine);
             return command;
         }
 

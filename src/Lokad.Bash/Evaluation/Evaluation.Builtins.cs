@@ -281,6 +281,7 @@ public sealed partial class Evaluation
             commandName,
             ResolveCommandName(commandValue, lookupMode),
             executionOptions,
+            UsesCommandWrapper: lookupMode != CommandLookupMode.Normal && executionOptions == null,
             completion,
             RedirectionLifetime.Command);
 

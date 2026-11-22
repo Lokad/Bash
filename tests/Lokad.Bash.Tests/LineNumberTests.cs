@@ -44,6 +44,55 @@ public sealed class LineNumberTests
         CheckBothEntryPointsAsync(">\\\n out printf '<%s>' \"$LINENO\"", "",
             check: host => Assert.Equal("<2>", host.ReadFile("/out")));
 
+    [Fact]
+    public Task MultilineArrayReaderCallbackStartsAtTheInvocationLine() =>
+        CheckBothEntryPointsAsync("""
+            :
+            :
+            mapfile -tc1 -C 'printf "<%s>" "$LINENO"
+            printf "<%s>" "$LINENO"; :' rows <input
+            printf '[%s]' "$LINENO"
+            """, "<3><4><3><4>[5]", host => host.AddFile("/input", "a\nb\n"));
+
+    [Fact]
+    public Task ContinuedArrayReaderOperandsKeepTheFirstElementLine() =>
+        CheckBothEntryPointsAsync("""
+            :
+            readarray -tc1 \
+              -C 'printf "<%s>" "$LINENO"; :' rows <input
+            printf '[%s]' "$LINENO"
+            """, "<2><2>[4]", host => host.AddFile("/input", "a\nb\n"));
+
+    [Theory]
+    [InlineData("command \\\n mapfile \\\n -tc1 -n1", "<3>[5]")]
+    [InlineData("command -p \\\n mapfile \\\n -tc1 -n1", "<2>[5]")]
+    [InlineData("builtin \\\n < \\\n input \\\n mapfile -tc1 -n1", "<3>[6]")]
+    [InlineData("prefix=value \\\n command \\\n mapfile -tc1 -n1", "<2>[5]")]
+    public Task ArrayReaderWrapperUsesTheNextTokenAfterAnInitialWord(string invocation, string expected) =>
+        CheckBothEntryPointsAsync(
+            ":\n" + invocation + " -C 'printf \"<%s>\" \"$LINENO\"; :' rows <input\nprintf '[%s]' \"$LINENO\"",
+            expected, host => host.AddFile("/input", "a\n"));
+
+    [Fact]
+    public Task ArrayReaderCallbackUsesProjectedCaptureCoordinates() =>
+        CheckBothEntryPointsAsync("""
+            :
+            result=$(command -p \
+              mapfile \
+              -tc1 -C 'printf "<%s>" "$LINENO"; :' rows <input)
+            printf '%s[%s]' "$result" "$LINENO"
+            """, "<4>[5]", host => host.AddFile("/input", "a\n"));
+
+    [Fact]
+    public Task FunctionDefinedByArrayReaderCallbackKeepsItsDefiningLine() =>
+        CheckBothEntryPointsAsync("""
+            mapfile -tc1 -n1 -C 'stashed(){
+              printf "<%s>" "$LINENO"
+            }; :' rows <input
+            stashed
+            printf '[%s]' "$LINENO"
+            """, "<2>[5]", host => host.AddFile("/input", "a\n"));
+
     private static async Task CheckBothEntryPointsAsync(string script, string expected,
         Action<TestHost>? setup = null, Action<TestHost>? check = null)
     {

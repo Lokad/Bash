@@ -14,7 +14,7 @@ public sealed partial class Evaluation
 {
     /// <summary>Collects bounded byte records and evaluates reached mapfile/readarray callbacks.</summary>
     private async Task<EvaluationResult> EvaluateBuiltinMapfileAsync(
-        IReadOnlyList<ShellValue> arguments, ScopedEvaluation scope, bool negated)
+        IReadOnlyList<ShellValue> arguments, ScopedEvaluation scope, bool usesCommandWrapper, bool negated)
     {
         var variables = scope.Variables;
         const int ReadBatchRecords = 128;
@@ -259,7 +259,8 @@ public sealed partial class Evaluation
             if (--toCallback == 0)
             {
                 toCallback = quantum;
-                var result = await RunMapfileCallbackAsync(action, unchecked((int)position), value, scope).ConfigureAwait(false);
+                var result = await RunMapfileCallbackAsync(action, unchecked((int)position), value, scope, usesCommandWrapper)
+                    .ConfigureAwait(false);
                 if (result.Flow != FlowControlKind.None)
                 {
                     assignment.Commit();
@@ -339,7 +340,7 @@ public sealed partial class Evaluation
     }
 
     private async Task<EvaluationResult> RunMapfileCallbackAsync(
-        ShellValue action, int index, ShellValue record, ScopedEvaluation scope)
+        ShellValue action, int index, ShellValue record, ScopedEvaluation scope, bool usesCommandWrapper)
     {
         Span<byte> indexText = stackalloc byte[11];
         if (!Utf8Formatter.TryFormat(index, indexText, out var digits))
@@ -355,10 +356,13 @@ public sealed partial class Evaluation
             builder.Append(action.Bytes).Append((byte)' ').Append(indexText[..digits]).Append((byte)' ');
             if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(builder, record.Bytes.Span))
                 throw new ByteMemoryBuilder.LimitExceededException();
+            var coordinates = scope.Context.Coordinates;
+            if (usesCommandWrapper && coordinates.WrapperOperandLine != 0)
+                coordinates = coordinates with { Line = coordinates.WrapperOperandLine };
             // Bash evaluates the callback with errexit active even if the mapfile status is tested.
-            var context = scope.Context with { SourceMemory = sourceMemory, ErrexitIgnored = false };
+            var context = scope.Context with { SourceMemory = sourceMemory, Coordinates = coordinates, ErrexitIgnored = false };
             return await EvaluateCommandUnitsAsync(ShellSource.FromBytes(builder.DetachSnapshot()),
-                scope with { Context = context }, ScriptExecutionKind.Eval)
+                scope with { Context = context }, ScriptExecutionKind.ArrayReaderCallback)
                 .ConfigureAwait(false);
         }
         finally { sourceMemory.Release(); }

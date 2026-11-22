@@ -331,6 +331,7 @@ internal static class FunctionDefinitionFormatter
                 case Step.Command(var command, var indent):
                     if (locations?.TryGet(command, out _) == true)
                     {
+                        // Capture callbacks use the projected first element, including through wrappers.
                         locations.Update(command, new CommandLocation(lines!.Line, lines.Line, lines.Line));
                         PushStep(new Step.Location(command, FirstElement: false));
                     }

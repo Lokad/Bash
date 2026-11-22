@@ -1444,7 +1444,8 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Read => await AwaitWordExpansionAsync(EvaluateBuiltinReadAsync(
                         byteOperands, new ScopedEvaluation(this, commandVars, builtinScope.Context), bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Mapfile => await AwaitWordExpansionAsync(EvaluateBuiltinMapfileAsync(
-                        byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
+                        byteOperands, builtinScope with { Variables = commandVars }, executable.UsesCommandWrapper, false))
+                        .ConfigureAwait(false),
                     BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local =>
                         await AwaitWordExpansionAsync(EvaluateBuiltinDeclarationAsync(
                             declaration ?? throw new InvalidOperationException("Declaration was not prepared."),
@@ -4178,6 +4179,7 @@ public sealed partial class Evaluation : IFileTester
             string CommandName,
             CommandResolution Resolution,
             ExecOptions? ExecutionOptions,
+            bool UsesCommandWrapper,
             CommandCompletion Completion,
             RedirectionLifetime RedirectionLifetime)
             : PreparedCommand(Completion, RedirectionLifetime);

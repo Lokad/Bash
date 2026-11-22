@@ -4,7 +4,11 @@ using Lokad.Bash.Memory;
 namespace Lokad.Bash.Syntax;
 
 /// <summary>LF coordinates in the source from which a command runs.</summary>
-internal readonly record struct CommandLocation(int StartLine, int FirstElementEndLine, int EndLine);
+internal readonly record struct CommandLocation(int StartLine, int FirstElementEndLine, int EndLine)
+{
+    /// <summary>End of the next token after an initial word, when it changes the callback anchor.</summary>
+    internal int WrapperOperandEndLine { get; init; }
+}
 
 /// <summary>Parser-owned locations that use node identity and leave public AST equality intact.</summary>
 internal sealed class CommandLocations

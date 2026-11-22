@@ -248,7 +248,7 @@ public sealed partial class Evaluation
         }
     }
 
-    private enum ScriptExecutionKind { Root, LegacyCapture, Source, Eval, Trap }
+    private enum ScriptExecutionKind { Root, LegacyCapture, Source, Eval, ArrayReaderCallback, Trap }
     private const int BuiltinSyntaxErrorStatus = 257;
 
     /// <summary>Copies eval/trap input into an owner retained by any syntax that survives execution.</summary>
@@ -291,11 +291,12 @@ public sealed partial class Evaluation
         // independently of the caller's function/eval execution depth.
         if (kind is not (ScriptExecutionKind.Root or ScriptExecutionKind.LegacyCapture))
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-        if (kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval)
+        if (IsNestedLoadedReader(kind))
             scope = scope with { InNestedCommandUnits = true };
         var lineOffset = kind switch
         {
             ScriptExecutionKind.Eval => Math.Max(1, scope.Context.Coordinates.EndLine) - 1,
+            ScriptExecutionKind.ArrayReaderCallback => Math.Max(1, scope.Context.Coordinates.Line) - 1,
             ScriptExecutionKind.Source or ScriptExecutionKind.Trap => 0,
             _ => scope.Context.Coordinates.Offset
         };
@@ -331,7 +332,7 @@ public sealed partial class Evaluation
                     {
                         if (kind == ScriptExecutionKind.LegacyCapture && failedUnit.Failure.ExitsSubstitution)
                             return EvaluationResult.Exit(1);
-                        if (kind is (ScriptExecutionKind.Source or ScriptExecutionKind.Eval) && failedUnit.Failure.ExitsSubstitution)
+                        if (IsNestedLoadedReader(kind) && failedUnit.Failure.ExitsSubstitution)
                         {
                             // These child boundaries unwind the builtin before running their EXIT action.
                             if (_state.ForkKind is ShellForkKind.CommandSubstitution or ShellForkKind.PipelineSimpleCommand)
@@ -432,7 +433,10 @@ public sealed partial class Evaluation
     }
 
     private static bool IsLoadedReader(ScriptExecutionKind kind) =>
-        kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap;
+        kind == ScriptExecutionKind.Trap || IsNestedLoadedReader(kind);
+
+    private static bool IsNestedLoadedReader(ScriptExecutionKind kind) =>
+        kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.ArrayReaderCallback;
 
     private bool CanRecoverCommandSubstitutionSyntax =>
         _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1 };

@@ -48,12 +48,18 @@ internal sealed class Tokenizer
         return _line;
     }
 
-    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine)
+    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine) =>
+        RecordLocation(command, startLine, firstElementEndLine, 0);
+
+    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine, int wrapperOperandEndLine)
     {
         if (!TrackCommandLocations)
             return;
         (Locations ??= new CommandLocations()).Add(command,
-            new CommandLocation(startLine, firstElementEndLine, GetLine(ConsumedPosition)), _scanContext.SyntaxMemory);
+            new CommandLocation(startLine, firstElementEndLine, GetLine(ConsumedPosition))
+            {
+                WrapperOperandEndLine = wrapperOperandEndLine
+            }, _scanContext.SyntaxMemory);
     }
 
     private ParserFailure? _failure;
