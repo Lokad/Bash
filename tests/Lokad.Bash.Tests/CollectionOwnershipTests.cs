@@ -319,6 +319,62 @@ public sealed class CollectionOwnershipTests
         Assert.Equal(0, budget.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(255)]
+    [InlineData(256)]
+    public void DirectoryOutputFitsWithBoundedHomeDecoding(int homeBytes)
+    {
+        var home = "/" + new string('a', homeBytes - 5) + "𐐀";
+        var state = new EvaluationState(Parser.Parse(":"), new ShellPath(home), inheritedDescriptorTable: null);
+        var budget = new MemoryGovernor(64);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            Assert.Equal("~\n", Utf8Text.Decode(state.FormatDirectoryStack(
+                0, DirectoryStackLayout.Compact, ShellValue.FromText(home), memory, CancellationToken.None)));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void DirectoryOutputAdmitsLongDecodedHomeBeforeFormatting()
+    {
+        var home = "/" + new string('a', 252) + "𐐀";
+        var state = new EvaluationState(Parser.Parse(":"), new ShellPath(home), inheritedDescriptorTable: null);
+        var budget = new MemoryGovernor(64);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => state.FormatDirectoryStack(
+                0, DirectoryStackLayout.Compact, ShellValue.FromText(home), memory, CancellationToken.None));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void SelectedDeferredDirectoryFormatsLongHomeAsBytesWithoutDecoding()
+    {
+        var home = "/" + new string('é', 512);
+        var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var setup = new EvaluationMemory(new MemoryGovernor(4096));
+        try
+        {
+            state.PushDeferredDirectory(ShellValue.FromText(home + "/saved"), setup);
+            var budget = new MemoryGovernor(64);
+            var outputMemory = new EvaluationMemory(budget);
+            try
+            {
+                Assert.Equal("~/saved\n", Utf8Text.Decode(state.FormatDirectoryStack(
+                    1, DirectoryStackLayout.Compact, ShellValue.FromText(home), outputMemory, CancellationToken.None)));
+            }
+            finally { outputMemory.Finish(retainVariables: false); }
+            Assert.Equal(0, budget.ReservedBytes);
+        }
+        finally { setup.Finish(retainVariables: false); }
+    }
+
     [Fact]
     public void SyntaxCollections_RetainCompletedConstructorInputs()
     {

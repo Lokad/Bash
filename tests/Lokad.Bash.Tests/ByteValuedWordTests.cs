@@ -262,6 +262,23 @@ public sealed class ByteValuedWordTests
         Assert.Equal(expectedError, result.Host.StandardError.Content.ToArray());
     }
 
+    [Fact]
+    public async Task DirsUsesMalformedHomePrefixOnlyForDeferredPaths()
+    {
+        var host = new TestHost();
+        host.AddDirectory("/home");
+        var result = await EndToEndHarness.RunScriptAsync("""
+            cd /home
+            pushd -n $'/home\377/leaf' >/dev/null
+            HOME=$'/home\377' dirs -p
+            """, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("/home\n~/leaf\n"u8.ToArray(), result.Host.StandardOutput.Content.ToArray());
+        Assert.Empty(result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
     // Bash 5.2.37: ignored mapfile operands still expand once before the builtin reads input.
     [Theory]
     [InlineData("mapfile")]

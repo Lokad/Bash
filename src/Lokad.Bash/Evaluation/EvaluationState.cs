@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Text.Unicode;
@@ -702,19 +703,32 @@ internal sealed class EvaluationState
         if (homeBytes.Length <= 1)
             homeBytes = default;
         var encoding = Utf8Text.StrictUtf8;
-        var homeText = string.Empty;
-        using var homeMemory = !homeBytes.IsEmpty && Utf8.IsValid(homeBytes) ? new MemoryCapacity(memory.Budget, 0) : null;
-        if (homeMemory != null)
+        const int MaxStackHomeBytes = 256;
+        // Resolved paths are absolute. A deferred selection compares the original bytes directly.
+        var decodeHome = homeBytes is [(byte)'/', ..] && (!selected.HasValue || GetDirectoryStackEntry(start).Path != null);
+        // Valid UTF-8 needs at most one UTF-16 code unit per input byte.
+        scoped Span<char> homeCharacters = decodeHome && homeBytes.Length <= MaxStackHomeBytes
+            ? stackalloc char[homeBytes.Length] : default;
+        scoped ReadOnlySpan<char> homeText = default;
+        using var homeMemory = decodeHome && homeCharacters.IsEmpty && Utf8.IsValid(homeBytes)
+            ? new MemoryCapacity(memory.Budget, 0) : null;
+        if (!homeCharacters.IsEmpty)
+        {
+            if (Utf8.ToUtf16(homeBytes, homeCharacters, out _, out var written, replaceInvalidSequences: false)
+                == OperationStatus.Done)
+                homeText = homeCharacters[..written];
+        }
+        else if (homeMemory != null)
         {
             memory.Charge(homeMemory, 32L + 2L * encoding.GetCharCount(homeBytes));
-            homeText = encoding.GetString(homeBytes);
+            homeText = encoding.GetString(homeBytes).AsSpan();
         }
 
         long bytes = end - start;
         for (var index = start; index < end; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            bytes += FormatEntry(index, homeBytes, default);
+            bytes += FormatEntry(index, homeBytes, homeText, default);
         }
         if (bytes >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
@@ -725,12 +739,12 @@ internal sealed class EvaluationState
         for (var index = start; index < end; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            offset += FormatEntry(index, homeBytes, output.AsSpan(offset));
+            offset += FormatEntry(index, homeBytes, homeText, output.AsSpan(offset));
             output[offset++] = layout == DirectoryStackLayout.Compact && index + 1 < end ? (byte)' ' : (byte)'\n';
         }
         return output;
 
-        int FormatEntry(int index, ReadOnlySpan<byte> homePrefix, Span<byte> destination)
+        int FormatEntry(int index, ReadOnlySpan<byte> homePrefix, ReadOnlySpan<char> homeText, Span<byte> destination)
         {
             var writing = !destination.IsEmpty;
             var position = 0;
@@ -754,7 +768,7 @@ internal sealed class EvaluationState
             var raw = path == null ? entry.DeferredPath.Bytes.Span : default;
             var abbreviate = path == null
                 ? MatchesHome(raw, homePrefix, (byte)'/')
-                : MatchesHome(text, homeText.AsSpan(), '/');
+                : MatchesHome(text, homeText, '/');
             if (abbreviate)
             {
                 if (writing)
