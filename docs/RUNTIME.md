@@ -39,6 +39,11 @@ path or the current cwd. A failed lookup preserves cwd and directory variables;
 a failed swap still replaces the second stack entry, while a failed pop retains
 it. Pending lookup work and descriptor cleanup keep their command owner alive.
 This validation does not make a later filesystem change atomic with navigation.
+When `..` would remove a directory component supplied by an operand, the
+evaluator checks that directory before continuing lexical normalization.
+Consecutive parent components reuse the checked prefix. Each settled prefix
+retains only its normalized spelling as the basis of the next segment.
+The final normalized destination still receives its own directory lookup.
 
 CDPATH tries candidates in component order using the same host lookup. A
 failed candidate leaves navigation and the stack alone. Each candidate's

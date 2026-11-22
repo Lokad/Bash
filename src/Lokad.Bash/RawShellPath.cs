@@ -24,6 +24,9 @@ public sealed class RawShellPath : IParsable<RawShellPath>
 
     private RawShellPath(string raw) { Raw = raw; }
 
+    /// <summary>Copies a nonempty slice of the validated path.</summary>
+    internal RawShellPath Slice(int start, int length) => new(Raw.Substring(start, length));
+
     /// <summary> Returns true if <paramref name="s"/> satisfies all RawShellPath constraints. </summary>
     public static bool IsValid(string? s) =>
         !string.IsNullOrEmpty(s) && s.All(c => !ShellPath.IsForbiddenChar(c));

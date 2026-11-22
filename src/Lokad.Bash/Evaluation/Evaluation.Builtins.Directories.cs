@@ -432,10 +432,10 @@ public sealed partial class Evaluation
             && await TryChangeThroughCdPathAsync(cdPath.Bytes).ConfigureAwait(false) is { } searched)
             return searched;
 
-        var resolved = target.Length == 0 && kind is DirectoryChangeKind.ChangeDirectory or DirectoryChangeKind.PushDirectory
-            ? _state.CurrentDirectory : ResolvePath(target, Memory.Workspace);
-        if (resolved != null)
-            return await ExecuteDirectoryChangeAsync(kind, resolved, target, variables, bindings, context, announcement)
+        if ((target.Length != 0 || kind is DirectoryChangeKind.ChangeDirectory or DirectoryChangeKind.PushDirectory)
+            && await ResolveDirectoryCandidateAsync(target, Memory.Workspace).ConfigureAwait(false) is { } resolved)
+            return await FinishDirectoryChangeAsync(kind, resolved.Path, target, resolved.Lookup,
+                variables, bindings, context, announcement)
                 .ConfigureAwait(false);
         await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
             target, new OperationError("invalid path\n")).ConfigureAwait(false);
@@ -452,24 +452,20 @@ public sealed partial class Evaluation
                 var component = separator < 0 ? remaining : remaining[..separator];
                 var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope, lookupMemory);
                 var joined = JoinSearchPathComponent(prefix, suffix, target, lookupMemory);
-                var candidate = joined is "" ? _state.CurrentDirectory
-                    : joined != null ? ResolvePath(joined, lookupMemory) : null;
-                if (candidate != null)
+                if (joined != null && await ResolveDirectoryCandidateAsync(joined, lookupMemory).ConfigureAwait(false)
+                    is { } candidate && IsDirectory(candidate.Lookup))
                 {
-                    var lookup = await LookupDirectoryAsync(candidate).ConfigureAwait(false);
-                    if (IsDirectory(lookup))
+                    var (path, lookup) = candidate;
+                    ReadOnlyMemory<byte> output = default;
+                    if (!component.IsEmpty)
                     {
-                        ReadOnlyMemory<byte> output = default;
-                        if (!component.IsEmpty)
-                        {
-                            Memory.Charge(lookupMemory, checked(33L + Utf8Text.StrictUtf8.GetByteCount(candidate.Path)));
-                            output = Utf8Text.EncodeLine(candidate.Path);
-                        }
-                        // The command holds the new retained head after the candidate workspace is retired.
-                        Memory.PrepareRetainedStorage(checked(48L + 2L * candidate.Path.Length));
-                        return await FinishDirectoryChangeAsync(kind, candidate, target, lookup,
-                            variables, bindings, context, output).ConfigureAwait(false);
+                        Memory.Charge(lookupMemory, checked(33L + Utf8Text.StrictUtf8.GetByteCount(path.Path)));
+                        output = Utf8Text.EncodeLine(path.Path);
                     }
+                    // The command holds the new retained head after the candidate workspace is retired.
+                    Memory.PrepareRetainedStorage(checked(48L + 2L * path.Path.Length));
+                    return await FinishDirectoryChangeAsync(kind, path, target, lookup,
+                        variables, bindings, context, output).ConfigureAwait(false);
                 }
                 lookupMemory.Resize(0);
                 if (separator < 0)
@@ -482,15 +478,67 @@ public sealed partial class Evaluation
     private static bool IsDirectory(FilePathResolutionResult result) =>
         result.Error == null && result.Info.Kind == FilePathKind.Directory;
 
-    private ShellPath? ResolvePath(string path, MemoryCapacity owner)
+    private async ValueTask<(ShellPath Path, FilePathResolutionResult Lookup)?> ResolveDirectoryCandidateAsync(
+        string target, MemoryCapacity owner)
     {
-        if (!RawShellPath.TryParse(path, out var raw))
-            return null;
         var current = _state.CurrentDirectory;
-        var length = (long)path.Length + (path[0] == '/' ? 0 : (long)current.Path.Length + 1);
-        // Cover the combined and normalized text plus overlapping segment buffers.
-        Memory.Charge(owner, checked(256 + 16 * length));
-        return raw.TryToAbsolute(current, jail: false, out var absolute) ? absolute : null;
+        if (target.Length == 0)
+            return (current, await LookupDirectoryAsync(current).ConfigureAwait(false));
+        if (!RawShellPath.TryParse(target, out var raw))
+            return null;
+
+        var outerBytes = owner.Bytes;
+        var start = 0;
+        if (target.Contains("..", StringComparison.Ordinal))
+        {
+            var hasNewDirectory = false;
+            for (var offset = 0; offset < target.Length;)
+            {
+                CheckCancellation();
+                var end = target.IndexOf('/', offset);
+                if (end < 0)
+                    end = target.Length;
+                var segment = target.AsSpan(offset, end - offset);
+                if (segment.SequenceEqual(".."))
+                {
+                    if (hasNewDirectory)
+                    {
+                        var checkpoint = Normalize(SlicePath(start, offset), current);
+                        var lookup = await LookupDirectoryAsync(checkpoint).ConfigureAwait(false);
+                        if (!IsDirectory(lookup))
+                            return (checkpoint, lookup);
+
+                        current = checkpoint;
+                        start = offset;
+                        hasNewDirectory = false;
+                        // Keep only the normalized basis across successive checkpoint lookups.
+                        owner.Resize(checked(outerBytes + 48L + 2L * checkpoint.Path.Length));
+                    }
+                }
+                else if (!segment.IsEmpty && !segment.SequenceEqual("."))
+                {
+                    hasNewDirectory = true;
+                }
+                offset = end + 1;
+            }
+        }
+
+        var resolved = Normalize(start == 0 ? raw : SlicePath(start, target.Length), current);
+        return (resolved, await LookupDirectoryAsync(resolved).ConfigureAwait(false));
+
+        RawShellPath SlicePath(int from, int to)
+        {
+            Memory.Charge(owner, checked(48L + 2L * (to - from)));
+            return raw.Slice(from, to - from);
+        }
+
+        ShellPath Normalize(RawShellPath path, ShellPath basis)
+        {
+            var length = (long)path.Raw.Length + (path.Raw[0] == '/' ? 0 : (long)basis.Path.Length + 1);
+            // Cover the combined and normalized text plus overlapping segment buffers.
+            Memory.Charge(owner, checked(256 + 16 * length));
+            return path.ToAbsoluteClamped(basis, requiredDirectories: null);
+        }
     }
 
     /// <summary>Looks up the admitted candidate before any directory state is published.</summary>

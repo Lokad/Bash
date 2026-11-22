@@ -73,6 +73,45 @@ public sealed class DirectoryNavigationHostTests
         Assert.Equal(0, memory.ReservedBytes);
     }
 
+    [Fact]
+    public async Task CdReusesPathScratchAcrossSuccessiveParentComponents()
+    {
+        const int checkpoints = 64;
+        var operand = string.Concat(Enumerable.Repeat("step/../", checkpoints)) + "finish";
+        var evaluation = new Eval(Parser.Parse("cd " + operand));
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        evaluation.Memory.Budget = owner;
+        await using var host = new TestHost();
+        host.AddDirectory("/step");
+        host.AddDirectory("/finish");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var requests = 0;
+        long scratch = 0;
+        while (await evaluation.GetNextStep(deadline.Token) is { } operation)
+        {
+            if (operation is PathInfosOperation lookup)
+            {
+                requests++;
+                Assert.Equal(FilePathInfoRequest.KindOnly, lookup.Request);
+                Assert.Equal(requests <= checkpoints ? "/step" : "/finish", Assert.Single(lookup.Paths).Path);
+                if (requests == 2)
+                    scratch = evaluation.Memory.Workspace.Bytes;
+                if (requests > 2 && requests <= checkpoints)
+                    Assert.Equal(scratch, evaluation.Memory.Workspace.Bytes);
+            }
+            await ShellOperationDispatcher.DispatchAsync(operation, host, deadline.Token);
+        }
+        await evaluation.Completion;
+
+        Assert.Equal(checkpoints + 1, requests);
+        Assert.Equal(0, evaluation.LastExitCode);
+        Assert.Equal("/finish", evaluation.CurrentDirectory.Path);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -250,6 +289,8 @@ public sealed class DirectoryNavigationHostTests
     [Theory]
     [InlineData(false, "cd /a")]
     [InlineData(true, "cd /a")]
+    [InlineData(false, "cd /a/../b")]
+    [InlineData(true, "cd /a/../b")]
     [InlineData(false, "popd")]
     [InlineData(true, "popd")]
     [InlineData(false, "pushd")]

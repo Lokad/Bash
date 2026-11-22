@@ -217,6 +217,10 @@ field, `cd` uses HOME. A lone `-` uses OLDPWD and prints the selected spelling
 once the destination is reached. Missing HOME or OLDPWD is an error when
 selected. A spelling such as `./-` is an ordinary path. An empty destination
 revalidates the current directory when reached through the ordinary lookup.
+Before a `..` component removes a directory supplied by the operand, that
+directory must exist and be a directory. This also applies to CDPATH
+candidates and deferred directory stack entries. A failed traversal reports
+the original operand spelling. A parent component at root stays at root.
 
 Explicit relative directory operands can use CDPATH. Absolute operands, a first
 component of `.` or `..`, and the HOME and OLDPWD forms use ordinary lookup.

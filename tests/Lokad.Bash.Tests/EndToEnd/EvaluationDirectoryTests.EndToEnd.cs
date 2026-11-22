@@ -30,6 +30,72 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("absent", "No such file or directory")]
+    [InlineData("plain", "Not a directory")]
+    public async Task CdChecksComponentsBeforeRemovingThem(string component, string cause)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/start", "/start/finish"], []);
+        host.AddFile("/start/plain", "sample");
+        var result = await host.RunAsync($"""
+            PWD=/
+            cd /start
+            cd {component}/../finish 2>/reason
+            status=$?
+            printf '<%s><%s>' "$PWD" "$OLDPWD"
+            exit "$status"
+            """, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("/start", result.CurrentDirectory.Path);
+        Assert.Equal("</start></>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal($"cd: {component}/../finish: {cause}\n", host.ReadFile("/reason"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task CdPathSkipsCandidatesWithMissingComponentsBeforeParentSelectors()
+    {
+        await using var host = EndToEndHarness.BuildTree(
+            ["/first", "/first/finish", "/second", "/second/step", "/second/finish"], []);
+        var lookups = new List<string>();
+        host.BeforeGetPathInfo = path => lookups.Add(path.Path);
+        var result = await host.RunAsync("CDPATH=first:second cd step/../finish", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("/second/finish", result.CurrentDirectory.Path);
+        Assert.Equal(["/first/step", "/second/step", "/second/finish"], lookups);
+        Assert.Equal("/second/finish\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task CdClampsRepeatedParentComponentsAtRoot()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("cd ../..", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("/", result.CurrentDirectory.Path);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task PopdKeepsDeferredEntryWhenAComponentBeforeAParentSelectorIsMissing()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/finish"], []);
+        var result = await host.RunAsync("pushd -n absent/../finish >/dev/null; popd; status=$?; dirs -l; exit \"$status\"",
+            CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("/", result.CurrentDirectory.Path);
+        Assert.Equal("/ absent/../finish\n", host.StandardOutput.TextContent);
+        Assert.Equal("popd: absent/../finish: No such file or directory\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task CdPathAnnouncementFailureKeepsTheSelectedDirectory()
     {
