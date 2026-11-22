@@ -246,9 +246,13 @@ report usage and return 2. A reached `--help` returns 2, including with
 shell-closed stdout. `--`, a lone `-` and the first operand end option scanning.
 
 After successful navigation, directory bookkeeping writes OLDPWD before PWD,
-preserving array kinds, namerefs and attributes. Readonly failures diagnose and
-return 1 after changing cwd; eligible writes still occur, while push/pop completion
-and stack output are suppressed. With errexit enabled, a readonly bookkeeping
+preserving array kinds, namerefs and attributes. A direct command prefix on
+either name retains its directory write. A prefixed scalar target reached
+through a global nameref restores its saved value after the command.
+A function-local nameref can publish the write to its selected caller binding.
+Readonly failures diagnose and return 1 after changing cwd. Eligible writes
+still occur, while push/pop completion and stack output are suppressed.
+With errexit enabled, a readonly bookkeeping
 failure exits immediately, including tested command positions, before remaining
 writes or redirection restoration; EXIT sees the active scope and descriptors.
 An unset PWD makes OLDPWD unassigned rather than assigning the prior actual cwd.

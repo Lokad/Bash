@@ -551,10 +551,15 @@ public sealed partial class Evaluation
         }
         if (assigned)
         {
-            if (kind == BuiltinAssignmentKind.Directory)
-                persistentOutputs?.Retain(sourceName, Memory, _cancellationToken);
-            else
+            if (kind != BuiltinAssignmentKind.Directory)
                 persistentOutputs?.CompleteOutput(reference.Name, destination);
+            else if (persistentOutputs?.Contains(target.Name) == true && ReferenceEquals(destination, scope.Variables)
+                && reference.Kind == VariableReferenceKind.Name && reference.Name == target.Name)
+            {
+                // Local namerefs were selected before resolving the write. Global nameref writes stay temporary.
+                if (persistentOutputs.CanRetainOutput(sourceName) || scope.Context.FunctionContext?.IsLocal(sourceName) == true)
+                    persistentOutputs.RetainBinding(target.Name, Memory, _cancellationToken);
+            }
         }
         return assigned ? BuiltinAssignmentResult.Assigned : BuiltinAssignmentResult.Failed;
 

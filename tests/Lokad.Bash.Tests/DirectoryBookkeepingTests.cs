@@ -9,6 +9,66 @@ namespace Lokad.Bash.Tests;
 
 public sealed class DirectoryBookkeepingTests
 {
+    public static IEnumerable<object[]> DirectoryPrefixWrites()
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            yield return [prepared, "PWD=temporary OLDPWD=ignored cd /leaf",
+                "<0></leaf><temporary><stored><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, "declare -n PWD=mark; PWD=temporary cd /leaf",
+                "<0><stored><temporary><stored><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, "declare -n OLDPWD=older; older=temporary cd /leaf",
+                "<0></leaf><saved><stored><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, "declare -n PWD=link link=mark OLDPWD=mark; mark=temporary cd /leaf",
+                "<0><stored><stored><stored><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, "declare -n PWD=mark; spare=temporary cd /leaf",
+                "<0></leaf><stored></leaf><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, "mark=(word stored); declare -n PWD='mark[1]'; PWD=temporary cd /leaf",
+                "<0><stored><temporary><word><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, "unset OLDPWD; declare -n OLDPWD; OLDPWD=temporary cd /leaf",
+                "<0></leaf><><stored><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, "declare -n PWD=mark; mark=temporary pushd /leaf >/dev/null",
+                "<0><stored><temporary><stored><saved>\n/leaf /start\n", "/leaf"];
+            yield return [prepared, "pushd /other >/dev/null; declare -n PWD=mark; mark=temporary popd >/dev/null",
+                "<0><stored><temporary><stored><saved>\n/start\n", "/start"];
+            yield return [prepared, """f(){ local mark=local; local -n PWD=mark; mark=temporary cd /leaf; printf 'local=<%s>\n' "$mark"; }; f""",
+                "local=</leaf>\n<0></start><temporary><stored><saved>\n/leaf\n", "/leaf"];
+            yield return [prepared, """f(){ local -n OLDPWD=older; older=temporary cd /leaf; printf 'local=<%s>\n' "$older"; }; f""",
+                "local=</start>\n<0></leaf><initial><stored></start>\n/leaf\n", "/leaf"];
+            yield return [prepared, """declare -n PWD=mark; mark=outer eval 'mark=temporary cd /leaf; printf "outer=<%s>\n" "$mark"'""",
+                "outer=<outer>\n<0><stored><temporary><stored><saved>\n/leaf\n", "/leaf"];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(DirectoryPrefixWrites))]
+    public async Task DirectoryWritesRespectDirectAndNamerefPrefixOwners(
+        bool prepared, string commands, string output, string currentDirectory)
+    {
+        var memory = new MemoryGovernor(1024 * 1024);
+        using var owner = memory.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        host.AddDirectory("/start");
+        host.AddDirectory("/leaf");
+        host.AddDirectory("/other");
+        var script = "cd /start\nmark=stored; older=saved; OLDPWD=initial\n" + commands + "\n" + """
+            printf '<%s><%s><%s><%s><%s>\n' "$?" "${PWD-}" "${OLDPWD-}" "$mark" "$older"
+            dirs -l
+            """;
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var result = prepared
+            ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, cancel.Token)
+            : await BashScript.RunAsync(host, script, EvaluationOptions.Default, cancel.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(currentDirectory, result.CurrentDirectory.Path);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
     // Bash 5.2.21 / 5.2.37, file-backed C-locale controls. Keep ordinary
     // bookkeeping, declaration shape, nullable entries and early EXIT distinct.
     public static IEnumerable<object[]> Bookkeeping()
