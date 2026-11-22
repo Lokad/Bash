@@ -110,18 +110,13 @@ public sealed partial class ComplexityRegressionTests
             variables = variables.Clone();
 
         Assert.True(variables.TryGetScalar("root_value", out _));
-        var before = GC.GetAllocatedBytesForCurrentThread();
         var value = ShellValue.Empty;
         var foundEveryTime = true;
-        for (var iteration = 0; iteration < 10_000; iteration++)
-            foundEveryTime &= variables.TryGetScalar("root_value", out value);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        AllocationAssert.SustainedReuse(() => foundEveryTime &= variables.TryGetScalar("root_value", out value),
+            iterations: 10_000, maximumBytes: 1_024);
 
         Assert.True(foundEveryTime);
         Assert.Equal(expected, value);
-        Assert.True(
-            allocated <= 1_024,
-            $"Named lookup allocated {allocated:N0} bytes after repeated scope copies.");
     }
 
     [Fact]
