@@ -70,6 +70,45 @@ public sealed class ByteDeclarationInspectionTests
     }
 
     [Fact]
+    public void IndexedRenderingReusesScratchAcrossPositions()
+    {
+        const int count = 512;
+        const int outputCapacity = 16 * 1024;
+        var variables = Variables.CreateEmpty();
+        var values = Enumerable.Repeat(ShellValue.FromText("value"), count).ToArray();
+        Assert.True(variables.TryAssignArray("vector", values, ArrayKind.Indexed));
+        using var output = ByteMemoryBuilder.CreateUnaccounted(outputCapacity);
+
+        Render();
+        AllocationAssert.SustainedReuse(Render, iterations: 12, maximumBytes: 8192);
+        Assert.Equal(outputCapacity, output.Capacity);
+
+        void Render()
+        {
+            output.Truncate(0);
+            Assert.True(variables.TryAppendArrayAssignment("vector", output, CancellationToken.None));
+        }
+    }
+
+    [Fact]
+    public void IndexedRenderingDistinguishesHolesUnassignedAndEmptyPositions()
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TryAssignArray("vector", [], ArrayKind.Indexed));
+        var array = variables.IndexedArrays["vector"];
+        Assert.True(IndexedArrayIndex.TryCreate(long.MaxValue, out var last));
+        Assert.True(IndexedArrayIndex.TryCreate(17, out var unassigned));
+        array.Set(last, ShellValue.FromBytes(new byte[] { 0xff }));
+        array.Set(unassigned, null);
+        array.Set(default, ShellValue.Empty);
+        using var output = ByteMemoryBuilder.CreateUnaccounted(0);
+
+        Assert.True(variables.TryAppendArrayAssignment("vector", output, CancellationToken.None));
+
+        Assert.Equal("=([0]=\"\" [17]= [9223372036854775807]=$'\\377')"u8.ToArray(), output.ToMemory().ToArray());
+    }
+
+    [Fact]
     public async Task InspectionRefusesUnadmittedOutputWithoutChangingTheBinding()
     {
         const int InputBytes = 128 * 1024;

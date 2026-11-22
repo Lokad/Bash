@@ -275,8 +275,9 @@ builder independently admits the compact backing it keeps or the buffer it copie
 into, which keeps emitted bytes charged through use.
 
 Variable declaration rendering reads the visible slot synchronously in its
-existing owner. The rendered byte buffer has its own admission through output
-or field consumption.
+existing owner. It formats sparse indexed positions into reusable stack
+storage before appending them. The rendered byte buffer has its own admission
+through output or field consumption.
 
 Aggregate operand lists admit replacement backing before growth and keep the
 current backing charged through command completion. Byte consumers append

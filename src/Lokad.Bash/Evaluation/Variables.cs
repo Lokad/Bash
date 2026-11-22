@@ -1523,33 +1523,49 @@ public sealed partial class Variables
     {
         return slot switch
         {
-            IndexedSlot { Value.IsInitialized: true } indexed => AppendArray(indexed.Value.Entries, ArrayKind.Indexed),
-            AssociativeSlot { Value.IsInitialized: true } associative => AppendArray(associative.Value.Entries, ArrayKind.Associative),
+            IndexedSlot { Value.IsInitialized: true } indexed => AppendIndexed(indexed.Value),
+            AssociativeSlot { Value.IsInitialized: true } associative => AppendAssociative(associative.Value),
             _ => true
         };
 
-        bool AppendArray(IEnumerable<KeyValuePair<ShellValue, ShellValue?>> entries, ArrayKind kind)
+        bool AppendIndexed(IndexedArray array)
         {
             if (!output.TryAppend("=("u8))
                 return false;
+            Span<byte> digits = stackalloc byte[NumberFormatting.MaximumNumberLength];
             var first = true;
-            foreach (var (key, value) in entries)
+            foreach (var (position, value) in array.EntriesByPosition)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!first && kind == ArrayKind.Indexed && !output.TryAppend((byte)' '))
+                if ((!first && !output.TryAppend((byte)' '))
+                    || !output.TryAppend((byte)'[')
+                    || !output.TryAppend(NumberFormatting.FormatNumber(position, digits))
+                    || !AppendArrayValue(value))
                     return false;
                 first = false;
+            }
+            return output.TryAppend((byte)')');
+        }
+
+        bool AppendAssociative(AssociativeArray array)
+        {
+            if (!output.TryAppend("=("u8))
+                return false;
+            foreach (var (key, value) in array.Entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!output.TryAppend((byte)'[')
-                    || !ShellArgumentEscaping.TryAppendQuoted(output, key.Bytes.Span,
-                        kind == ArrayKind.Indexed ? ShellQuoteStyle.Backslash : ShellQuoteStyle.AssociativeKey)
-                    || !output.TryAppend((byte)']') || !output.TryAppend((byte)'=')
-                    || value is { } assigned && !ShellArgumentEscaping.TryAppendQuoted(output, assigned.Bytes.Span, ShellQuoteStyle.DoubleQuoted))
-                    return false;
-                if (kind == ArrayKind.Associative && !output.TryAppend((byte)' '))
+                    || !ShellArgumentEscaping.TryAppendQuoted(output, key.Bytes.Span, ShellQuoteStyle.AssociativeKey)
+                    || !AppendArrayValue(value)
+                    || !output.TryAppend((byte)' '))
                     return false;
             }
             return output.TryAppend((byte)')');
         }
+
+        bool AppendArrayValue(ShellValue? value) => output.TryAppend((byte)']') && output.TryAppend((byte)'=')
+            && (value is not { } assigned
+                || ShellArgumentEscaping.TryAppendQuoted(output, assigned.Bytes.Span, ShellQuoteStyle.DoubleQuoted));
     }
 
     /// <summary>Copies one complete binding, including its value kind and attributes.</summary>

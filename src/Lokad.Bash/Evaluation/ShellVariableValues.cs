@@ -128,6 +128,11 @@ internal sealed class IndexedArray
         ? _positions.Select(position => KeyValuePair.Create(FormatPosition(position), _elements[position]))
         : [];
 
+    /// <summary>Enumerates stored entries by numeric position, including unassigned entries.</summary>
+    internal IEnumerable<KeyValuePair<long, ShellValue?>> EntriesByPosition => IsInitialized
+        ? _positions.Select(position => KeyValuePair.Create(position, _elements[position]))
+        : [];
+
     /// <summary>Gets the number of visible entries, excluding holes.</summary>
     public int Count => IsInitialized ? _elements.Count : 0;
 
