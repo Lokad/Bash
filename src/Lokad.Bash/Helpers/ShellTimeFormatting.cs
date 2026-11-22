@@ -29,12 +29,23 @@ public static class ShellTimeFormatting
         try
         {
             var bytes = format.Bytes.Span;
+            // Short formats typically interleave brief literals with conversions.
+            var scanLiteralRuns = bytes.Length >= 64;
             for (var index = 0; index < bytes.Length; index++)
             {
                 var current = bytes[index];
                 if (current != '%' || index + 1 == bytes.Length)
                 {
-                    builder.Append(current);
+                    if (!scanLiteralRuns)
+                    {
+                        builder.Append(current);
+                        continue;
+                    }
+                    var literal = bytes[index..];
+                    var next = literal[1..].IndexOf((byte)'%');
+                    var count = next < 0 ? literal.Length : next + 1;
+                    builder.Append(literal[..count]);
+                    index += count - 1;
                     continue;
                 }
 

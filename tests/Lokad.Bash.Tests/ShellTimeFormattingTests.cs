@@ -31,6 +31,56 @@ public sealed class ShellTimeFormattingTests
     }
 
     [Fact]
+    public void LiteralRunsPreserveRawBytesAroundDirectivesAndTrailingPercent()
+    {
+        var prefix = Enumerable.Repeat((byte)0xff, 4093).ToArray();
+        var suffix = Enumerable.Repeat((byte)'\r', 261).ToArray();
+        byte[] format = [.. prefix, .. "%0R%%"u8, .. suffix, (byte)'%'];
+        byte[] expected = [.. prefix, .. "1%"u8, .. suffix, .. "%\n"u8];
+        var timing = new ShellTimingSnapshot(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.Zero);
+        var memory = new MemoryGovernor(16 * 1024);
+        using var owner = memory.CreateScope();
+
+        Assert.True(ShellTimeFormatting.TryFormat(ShellValue.FromBytes(format), timing, out var result, out var error, owner));
+        Assert.Equal(expected, result.ToArray());
+        Assert.True(error.IsEmpty);
+        Assert.True(memory.ReservedBytes >= result.Length);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public void InvalidTimingDirectiveDiscardsTheCopiedPrefix()
+    {
+        var format = ShellValue.FromText(new string('x', 4093) + "%2lQ");
+        var memory = new MemoryGovernor(16 * 1024);
+        using var owner = memory.CreateScope();
+
+        Assert.False(ShellTimeFormatting.TryFormat(format, default, out var result, out var error, owner));
+        Assert.True(result.IsEmpty);
+        Assert.Equal("TIMEFORMAT: `Q': invalid format character\n"u8.ToArray(), error.ToArray());
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public void LongLiteralFitsWithoutIntermediateBacking()
+    {
+        const int Capacity = 4096;
+        var format = ShellValue.FromText(new string('x', Capacity - 1));
+        var memory = new MemoryGovernor(Capacity);
+        using var owner = memory.CreateScope();
+
+        Assert.True(ShellTimeFormatting.TryFormat(format, default, out var result, out var error, owner));
+        Assert.True(error.IsEmpty);
+        Assert.Equal(Capacity, result.Length);
+        Assert.True(result.Span[..^1].SequenceEqual(format.Bytes.Span));
+        Assert.Equal((byte)'\n', result.Span[^1]);
+        Assert.Equal(Capacity, memory.PeakBytes);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
     public async Task TimingWritesTheFormattedRecordAndReturnsTheTimedStatus()
     {
         var memory = new MemoryGovernor(1024 * 1024);
