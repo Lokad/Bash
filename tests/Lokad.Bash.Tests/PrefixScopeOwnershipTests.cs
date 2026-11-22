@@ -385,6 +385,36 @@ public sealed class PrefixScopeOwnershipTests
     }
 
     [Fact]
+    public void RefusedIndexedDirectoryWriteLeavesTheSavedAssociativeBinding()
+    {
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromText("saved");
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("key"), out var key));
+        Assert.True(caller.TrySetArrayElement("x", key, value));
+        var original = caller.AssociativeArrays["x"];
+        var prepared = Variables.CreateEmpty();
+        Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
+        var budget = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(budget);
+        try
+        {
+            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+                memory, CancellationToken.None);
+            var location = new WordExpansion.ResolvedVariableReference.Indexed("x", default) { ReplaceAssociative = true };
+            memory.ReleaseUnusedCapacity();
+            using var hold = budget.Reserve(budget.LimitBytes - budget.ReservedBytes);
+            Assert.Throws<MemoryBudgetExceededException>(() => location.TryAssignUnassigned(bindings.SavedVariables, memory));
+            Assert.Same(original, bindings.SavedVariables.AssociativeArrays["x"]);
+        }
+        finally { memory.Finish(retainVariables: false); }
+
+        Assert.Same(original, caller.AssociativeArrays["x"]);
+        Assert.True(original.TryGet(key, out var restored));
+        Assert.Equal(value, restored);
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
     public void UnrelatedAttributeResultDoesNotReservePrefixCopyStorage()
     {
         var caller = Variables.CreateEmpty();

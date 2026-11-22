@@ -42,8 +42,60 @@ public sealed class DirectoryBookkeepingTests
 
     [Theory]
     [MemberData(nameof(DirectoryPrefixWrites))]
-    public async Task DirectoryWritesRespectDirectAndNamerefPrefixOwners(
+    public Task DirectoryWritesRespectDirectAndNamerefPrefixOwners(
         bool prepared, string commands, string output, string currentDirectory)
+    {
+        var script = "cd /start\nmark=stored; older=saved; OLDPWD=initial\n" + commands + "\n" + """
+            printf '<%s><%s><%s><%s><%s>\n' "$?" "${PWD-}" "${OLDPWD-}" "$mark" "$older"
+            dirs -l
+            """;
+        return VerifyDirectoryBindingsAsync(prepared, script, output, currentDirectory, "");
+    }
+
+    public static IEnumerable<object[]> DirectoryElementWrites()
+    {
+        const string indexed = "mark=([0]=zero [1]=one [8]=tail)";
+        const string associative = "declare -A mark=([0]=zero [key]=one [tail]=tail)";
+        const string cells = """printf '<%s><%s><%s>' "${mark[0]-unset}" "${mark[1]-unset}" "${mark[8]-unset}" """;
+        foreach (var prepared in new[] { false, true })
+        {
+            yield return [prepared, indexed, """local -n PWD='mark[1]'; mark=temporary pushd /leaf >/dev/null; dirs -l; """, cells,
+                "/leaf /start\n<zero></leaf><tail>", ""];
+            yield return [prepared, indexed, """local -n PWD='mark[-1]'; mark=temporary cd /leaf; """, cells,
+                "</leaf><one><tail>", ""];
+            yield return [prepared, indexed, """local -n PWD='mark[-1]'; PWD=temporary cd /leaf; declare -p PWD; printf 'old=<%s>\n' "$OLDPWD"; """, cells,
+                "declare -nx PWD=\"mark[-1]\"\nold=<temporary>\n<zero><one></leaf>", ""];
+            yield return [prepared, indexed, """local -n OLDPWD='mark[-1]'; OLDPWD=ignored mark=temporary cd /leaf; """, cells,
+                "</start><one><tail>", ""];
+            yield return [prepared, indexed, """local -n PWD='mark[-1]' OLDPWD='mark[8]'; mark=temporary cd /leaf; """, "declare -p mark",
+                "declare -a mark=([0]=\"/leaf\" [1]=\"one\" [8]=)\n", ""];
+            yield return [prepared, associative, """local -n PWD='mark[key]'; mark=temporary cd /leaf; """, "declare -p mark",
+                "declare -a mark=([0]=\"/leaf\")\n", ""];
+            yield return [prepared, associative, """local -n PWD='mark[key]'; PWD=temporary cd /leaf; """,
+                """printf '<%s><%s><%s>' "${mark[0]}" "${mark[key]}" "${mark[tail]}" """, "<zero></leaf><tail>", ""];
+            yield return [prepared, indexed + "; i=1", """local -n PWD='mark[i++]'; mark=temporary cd /leaf; printf 'index=<%s>\n' "$i"; """, cells,
+                "index=<2>\n<zero></leaf><tail>", ""];
+            yield return [prepared, "readonly -a mark=([0]=zero [1]=one [8]=tail)",
+                """local -n PWD='mark[1]'; PWD=temporary cd /leaf; printf 'status=<%s>\n' "$?"; """, cells,
+                "status=<1>\n<zero><one><tail>", "mark: readonly variable\n"];
+            yield return [prepared, "declare mark", """local -n PWD='mark[1]'; mark=temporary cd /leaf; """, cells,
+                "<unset></leaf><unset>", ""];
+            yield return [prepared, "unset mark", """local -n PWD='mark[1]'; mark=temporary cd /leaf; """, cells,
+                "<unset><unset><unset>", ""];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(DirectoryElementWrites))]
+    public Task LocalDirectoryNamerefsWriteTheSelectedCallerElement(
+        bool prepared, string setup, string commands, string inspect, string output, string diagnostic)
+    {
+        var script = "cd /start\nOLDPWD=initial\n" + setup + "\nf(){ " + commands + "}; f\n" + inspect;
+        return VerifyDirectoryBindingsAsync(prepared, script, output, "/leaf", diagnostic);
+    }
+
+    private static async Task VerifyDirectoryBindingsAsync(
+        bool prepared, string script, string output, string currentDirectory, string diagnostic)
     {
         var memory = new MemoryGovernor(1024 * 1024);
         using var owner = memory.CreateScope();
@@ -51,10 +103,6 @@ public sealed class DirectoryBookkeepingTests
         host.AddDirectory("/start");
         host.AddDirectory("/leaf");
         host.AddDirectory("/other");
-        var script = "cd /start\nmark=stored; older=saved; OLDPWD=initial\n" + commands + "\n" + """
-            printf '<%s><%s><%s><%s><%s>\n' "$?" "${PWD-}" "${OLDPWD-}" "$mark" "$older"
-            dirs -l
-            """;
         using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var result = prepared
             ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, cancel.Token)
@@ -63,7 +111,7 @@ public sealed class DirectoryBookkeepingTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(currentDirectory, result.CurrentDirectory.Path);
         Assert.Equal(output, host.StandardOutput.TextContent);
-        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);

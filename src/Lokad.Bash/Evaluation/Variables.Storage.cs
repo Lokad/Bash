@@ -304,7 +304,8 @@ public sealed partial class Variables
 
         /// <summary>Promotes a borrowed record without retaining the source batch.</summary>
         internal bool TryStoreBorrowedRecord(IndexedArrayIndex index, ShellValue value, EvaluationMemory memory) =>
-            _owner.TrySetResolvedArrayElement(_name, index, value, memory, prepaidBytes: 0, savedInputBytes: SavedBytes);
+            _owner.TrySetResolvedArrayElement(_name, index, value, memory, prepaidBytes: 0,
+                savedInputBytes: SavedBytes, replaceAssociative: false);
 
         public void Dispose()
         {

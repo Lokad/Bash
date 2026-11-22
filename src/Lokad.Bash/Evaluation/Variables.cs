@@ -1310,17 +1310,21 @@ public sealed partial class Variables
 
     internal bool TrySetResolvedArrayElement(
         BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes) =>
-        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes, savedInputBytes: null);
+        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes, savedInputBytes: null, replaceAssociative: false);
+
+    internal bool TrySetResolvedArrayElement(
+        BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, bool replaceAssociative) =>
+        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes: 0, savedInputBytes: null, replaceAssociative);
 
     private bool TrySetResolvedArrayElement(
         BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes,
-        long? savedInputBytes)
+        long? savedInputBytes, bool replaceAssociative)
     {
         if (resolved.IsEmpty)
             return false;
 
         TryGetBinding(resolved, out var slot);
-        if (slot is AssociativeSlot)
+        if (slot is AssociativeSlot && !replaceAssociative)
             return false;
         if (value is { } assigned)
         {
@@ -1350,6 +1354,10 @@ public sealed partial class Variables
         {
             memory?.Charge(BindingOverheadBytes);
             var array = CreatePromotedIndexedArray(resolved, memory);
+            if (index.Value != 0 && slot is AssociativeSlot previous
+                && AssociativeArrayKey.TryCreate(ShellValue.FromText("0"), out var zero)
+                && previous.Value.TryGet(zero, out var element))
+                array.Set(default, element, memory);
             array.Set(index, value, memory, prepaidBytes);
             ReplaceValue(resolved, new IndexedSlot(array));
         }

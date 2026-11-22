@@ -250,6 +250,11 @@ preserving array kinds, namerefs and attributes. A direct command prefix on
 either name retains its directory write. A prefixed scalar target reached
 through a global nameref restores its saved value after the command.
 A function-local nameref can publish the write to its selected caller binding.
+For an element nameref, the active binding supplies the selector kind and
+bounds. A matching prefix retains the selected write in the saved caller
+binding when that binding exists. An indexed selection through a temporary
+scalar can convert a saved associative array to indexed storage. A prefix
+on the local element nameref itself leaves the nameref intact.
 Readonly failures diagnose and return 1 after changing cwd. Eligible writes
 still occur, while push/pop completion and stack output are suppressed.
 With errexit enabled, a readonly bookkeeping

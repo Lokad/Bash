@@ -19,7 +19,11 @@ internal static partial class WordExpansion
         internal Variables? ReadOwner { get; init; }
         internal bool IsWholeBindingRead { get; init; }
         internal sealed record Scalar(BindingName VariableName) : ResolvedVariableReference(VariableName);
-        internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName);
+        internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName)
+        {
+            // A local directory write can select an index in a temporary scalar and publish it to the saved binding.
+            internal bool ReplaceAssociative { get; init; }
+        }
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
 
         public bool TryRead(Variables variables, out ShellValue value)
@@ -59,7 +63,7 @@ internal static partial class WordExpansion
             return this switch
             {
                 Scalar => variables.TrySetResolvedUnassigned(Name),
-                Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null, memory),
+                Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null, memory, indexed.ReplaceAssociative),
                 Associative associative => variables.TrySetResolvedArrayElement(Name, associative.Key, null, memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
@@ -141,7 +145,7 @@ internal static partial class WordExpansion
                 && (declarationWrite != DeclarationWrite.Ordinary || !variables.IsReadonly(name)) && this switch
             {
                 Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory),
-                Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory),
+                Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory, indexed.ReplaceAssociative),
                 Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value, scope.Effects.Memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };

@@ -407,7 +407,8 @@ public sealed partial class Evaluation
             {
                 if (selected.Reference.Kind == VariableReferenceKind.Name)
                 {
-                    var resolution = SelectBuiltinReference(reference, commandVars, context, out var binding);
+                    var resolution = SelectBuiltinReference(reference, commandVars, context,
+                        context.FunctionContext?.IsLocal(reference.Name) == true, out var binding);
                     if (resolution != BuiltinReferenceResolution.Write)
                         return resolution == BuiltinReferenceResolution.NoWrite;
                     return bindings != null && ReferenceEquals(binding.Owner, commandVars)
@@ -429,10 +430,10 @@ public sealed partial class Evaluation
 
     /// <summary>Local namerefs select caller bindings; indirect unset chains may create a local shadow.</summary>
     private BuiltinReferenceResolution SelectBuiltinReference(
-        VariableReference reference, Variables variables, EvaluationContext context, out VariableBinding selected)
+        VariableReference reference, Variables variables, EvaluationContext context, bool localName, out VariableBinding selected)
     {
         selected = new VariableBinding(reference, variables);
-        if (context.FunctionContext?.IsLocal(reference.Name) != true || !variables.TryGetNameref(reference.Name, out _))
+        if (!localName || !variables.TryGetNameref(reference.Name, out _))
             return BuiltinReferenceResolution.Write;
         if (!variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
             && !context.TryResolveCircularBinding(reference.Name, variables, out binding)
@@ -465,7 +466,8 @@ public sealed partial class Evaluation
             && !scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out _)
             && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
         var activeCycle = circular;
-        var resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, out var binding);
+        var localName = scope.Context.FunctionContext?.IsLocal(sourceName) == true;
+        var resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, localName, out var binding);
         if (resolution == BuiltinReferenceResolution.NoWrite)
             return BuiltinAssignmentResult.NoWrite;
         if (resolution == BuiltinReferenceResolution.Invalid)
@@ -473,6 +475,16 @@ public sealed partial class Evaluation
                 ? BuiltinAssignmentResult.Failed : await InvalidElementTargetAsync().ConfigureAwait(false);
         var destination = binding.Owner;
         reference = binding.Reference;
+        var localDirectoryOutput = kind == BuiltinAssignmentKind.Directory && localName
+            && ReferenceEquals(destination, scope.Variables);
+        if (localDirectoryOutput && reference.Kind == VariableReferenceKind.Name
+            && persistentOutputs?.Contains(sourceName) == true
+            && persistentOutputs.SavedVariables.TryResolveBinding(sourceName, SelectCallerOwner, out var savedBinding)
+            && savedBinding.Reference.Kind != VariableReferenceKind.Name)
+        {
+            // A prefix on the nameref spelling shadows its value, but bookkeeping still writes its saved element.
+            reference = savedBinding.Reference;
+        }
         if (kind == BuiltinAssignmentKind.Read)
         {
             // Only a whole-name local nameref output selects the binding saved by this read's prefix.
@@ -513,6 +525,15 @@ public sealed partial class Evaluation
         var target = await WordExpansion.ResolveBuiltinReferenceAsync(reference, scope, destination, binding.Owner).ConfigureAwait(false);
         if (HasPendingExpansionError || !BuiltinDiagnosticsOpen || target == null || target.Name.IsEmpty)
             return BuiltinAssignmentResult.Failed;
+        if (localDirectoryOutput && ReferenceEquals(destination, scope.Variables)
+            && reference.Kind != VariableReferenceKind.Name && persistentOutputs?.Contains(target.Name) == true
+            && persistentOutputs.SavedVariables.HasBinding(target.Name))
+        {
+            // The selector uses the active kind and bounds. The selected element reaches the saved caller.
+            destination = persistentOutputs.SavedVariables;
+            if (target is WordExpansion.ResolvedVariableReference.Indexed indexed && destination.AssociativeArrays.ContainsKey(target.Name))
+                target = indexed with { ReplaceAssociative = true };
+        }
         if (destination.IsReadonly(target.Name))
         {
             await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
@@ -557,7 +578,7 @@ public sealed partial class Evaluation
                 && reference.Kind == VariableReferenceKind.Name && reference.Name == target.Name)
             {
                 // Local namerefs were selected before resolving the write. Global nameref writes stay temporary.
-                if (persistentOutputs.CanRetainOutput(sourceName) || scope.Context.FunctionContext?.IsLocal(sourceName) == true)
+                if (persistentOutputs.CanRetainOutput(sourceName) || localName)
                     persistentOutputs.RetainBinding(target.Name, Memory, _cancellationToken);
             }
         }
