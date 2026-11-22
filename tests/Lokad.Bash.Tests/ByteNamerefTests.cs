@@ -7,6 +7,50 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteNamerefTests
 {
+    [Fact]
+    public void SingleHopLookupStaysWithinAllocationBudget()
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("value");
+        Assert.True(variables.TrySetScalar("target", original));
+        Assert.True(variables.TrySetNameref("reference", ShellValue.FromText("target")));
+
+        AllocationAssert.SustainedReuse(() =>
+        {
+            if (!variables.TryGetScalar("reference", out var value) || !value.Equals(original))
+                throw new InvalidOperationException("Expected the referred scalar.");
+        }, iterations: 1024, maximumBytes: 1024);
+    }
+
+    [Fact]
+    public void SameNamedBindingsInDifferentOwnersDoNotFormACycle()
+    {
+        var local = Variables.CreateEmpty();
+        var outer = Variables.CreateEmpty();
+        Assert.True(local.TrySetNameref("reference", ShellValue.FromText("reference")));
+        Assert.True(outer.TrySetNameref("reference", ShellValue.FromText("target")));
+        Assert.True(outer.TrySetScalar("target", ShellValue.FromText("value")));
+
+        Assert.True(local.TryResolveBinding("reference", _ => outer, out var binding));
+        Assert.Same(outer, binding.Owner);
+        Assert.Equal("target", binding.Name);
+    }
+
+    [Theory]
+    [InlineData("first")]
+    [InlineData("second")]
+    public void CycleResolutionStopsAtTheFirstRepeatedBinding(string target)
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetNameref("first", ShellValue.FromText("second")));
+        Assert.True(variables.TrySetNameref("second", ShellValue.FromText("third")));
+        Assert.True(variables.TrySetNameref("third", ShellValue.FromText(target)));
+
+        Assert.False(variables.TryResolveBinding("first", selectOwner: null, out var binding));
+        Assert.Same(variables, binding.Owner);
+        Assert.Equal((BindingName)target, binding.Name);
+    }
+
     // Recorded byte contracts; target inspection never evaluates its stored selector.
     [Theory]
     [InlineData("declare -A a=([$'\\377']=2); declare -n ref=$'a[\\377]'; printf '<%s><%s>' \"$((ref+=3))\" \"${a[$'\\377']}\"", "3C353E3C353E")]

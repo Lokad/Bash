@@ -1633,30 +1633,44 @@ public sealed partial class Variables
         binding = new VariableBinding(VariableReference.ForName(name), this);
         if (name.IsEmpty)
             return false;
-        HashSet<VariableBinding>? visited = null;
-        while (binding.Reference.Kind == VariableReferenceKind.Name
-            && binding.Owner.NamerefTargets.TryGetValue(binding.Name, out var next) && next.Reference is { } reference)
+        if (!NamerefTargets.TryGetValue(name, out var target) || target.Reference is not { } reference)
+            return true;
+        return TryFollowReferences(this, name, target, reference, selectOwner, resolution, ref binding);
+
+        static bool TryFollowReferences(Variables start, BindingName name, NamerefTarget target, VariableReference reference,
+            Func<BindingName, Variables>? selectOwner, BindingResolution resolution, ref VariableBinding binding)
         {
-            visited ??= [];
-            if (!visited.Add(binding))
-                return false;
-            var owner = selectOwner?.Invoke(reference.Name) ?? this;
-            if (next.LiteralName is { } literalName)
+            HashSet<(Variables Owner, BindingName Name)>? visited = null;
+            while (true)
             {
-                var literalOwner = selectOwner?.Invoke(literalName) ?? this;
-                if (literalOwner.HasBinding(literalName))
+                var owner = selectOwner?.Invoke(reference.Name) ?? start;
+                if (target.LiteralName is { } literalName)
                 {
-                    reference = VariableReference.ForName(literalName);
-                    owner = literalOwner;
+                    var literalOwner = selectOwner?.Invoke(literalName) ?? start;
+                    if (literalOwner.HasBinding(literalName))
+                    {
+                        reference = VariableReference.ForName(literalName);
+                        owner = literalOwner;
+                    }
                 }
+
+                var isNameref = reference.Kind == VariableReferenceKind.Name
+                    && owner.NamerefTargets.TryGetValue(reference.Name, out target);
+                if (resolution == BindingResolution.LastNameref && !isNameref)
+                    return true;
+
+                binding = new VariableBinding(reference, owner);
+                if (!isNameref || target.Reference is not { } following)
+                    return true;
+
+                // Only whole names can continue the walk. Keep the starting owner and name inline.
+                if (ReferenceEquals(owner, start) && reference.Name == name
+                    || !(visited ??= []).Add((owner, reference.Name)))
+                    return false;
+
+                reference = following;
             }
-            var nextBinding = new VariableBinding(reference, owner);
-            if (resolution == BindingResolution.LastNameref
-                && (reference.Kind != VariableReferenceKind.Name || !nextBinding.Owner.NamerefTargets.ContainsKey(reference.Name)))
-                break;
-            binding = nextBinding;
         }
-        return true;
     }
 
     internal NamerefAssignmentFailure GetNamerefAssignmentFailure(
