@@ -141,6 +141,8 @@ public sealed partial class Evaluation
         }
         if (words[first].IsEmpty)
         {
+            // A supplied filename reaches the source boundary even when it is empty.
+            scope.Variables.ClearPositionalReplacement();
             await ReportSourceOpenFailureAsync(commandName, string.Empty, new OperationError("No such file or directory\n"))
                 .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);

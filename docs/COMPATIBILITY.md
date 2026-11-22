@@ -587,9 +587,10 @@ directory. Empty `PATH` components select the working directory at their
 position in the search. Search directories use the shell's supported tilde
 prefixes. Open failures report the filename and host reason through the reached
 stderr and return 1. A directory failure includes the builtin's spelling. An
-explicitly empty filename reports the missing-file diagnostic during operand
-validation. A source call without additional fields uses the caller's current
-parameters directly. Given additional fields, a source call in a function
+explicitly empty filename clears the positional replacement decision and
+reports the missing-file diagnostic during operand validation. A source call
+without additional fields uses the caller's current parameters directly.
+Given additional fields, a source call in a function
 restores the function's parameters on return. At the top level, a reached `set`
 can keep a replacement after an argument-bearing source returns. A later source
 entry or in-process function return clears that replacement decision. A `shift`

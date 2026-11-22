@@ -244,6 +244,27 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(". ''", "<1:new><root>", ": No such file or directory\n")]
+    [InlineData("builtin source -- '' temporary", "<1:new><root>", ": No such file or directory\n")]
+    [InlineData("empty=; . \"$empty\" temporary 2>&-", "<1:new><root>", "")]
+    [InlineData("empty=; . $empty", "<2:new><new>", ".: filename argument required\n.: usage: . [--] filename [arguments]\n")]
+    [InlineData("( . '' temporary )", "<1:new><new>", ": No such file or directory\n")]
+    public async Task EmptySourceFilenameClearsTheReachedPositionalReplacement(
+        string command, string output, string diagnostic)
+    {
+        var host = EndToEndHarness.BuildTree([
+            ("/unit", "set -- new; " + command + "; printf '<%s:%s>' \"$?\" \"$1\"\n")
+        ]);
+        var result = await EndToEndHarness.RunScriptAsync(
+            "set -- root; source ./unit item; printf '<%s>' \"$1\"", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("source", "source")]
     [InlineData(".", ".")]
     [InlineData("source --", "source")]
