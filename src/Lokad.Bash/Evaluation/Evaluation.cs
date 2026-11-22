@@ -4306,18 +4306,23 @@ public sealed partial class Evaluation : IFileTester
             public static readonly Keyword Instance = new();
         }
 
-        /// <summary> The name resolves to a command provided by the shell host. </summary>
-        /// <param name="ResolvedName">The host-specific name or path reported for the command.</param>
-        public sealed record Host(string ResolvedName) : CommandQueryResolution;
+        /// <summary>The host batch supplies this operand's resolution.</summary>
+        public sealed record Host : CommandQueryResolution
+        {
+            public static readonly Host Instance = new();
+        }
+
+        /// <summary>The host batch confirms whether this hosted builtin is available.</summary>
+        public sealed record HostBuiltin : CommandQueryResolution
+        {
+            public static readonly HostBuiltin Instance = new();
+        }
 
         /// <summary> The name does not resolve to any function, builtin, keyword, or host command. </summary>
         public sealed record Missing : CommandQueryResolution
         {
             public static readonly Missing Instance = new();
         }
-
-        /// <summary>The host could not determine command availability.</summary>
-        public sealed record Failed(OperationError Error) : CommandQueryResolution;
     }
 
     private enum CommandQueryOutputMode

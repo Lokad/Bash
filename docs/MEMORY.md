@@ -336,8 +336,9 @@ snapshots admit compact copies. Queries that display function definitions retain
 their selected source owners through host lookup and output completion.
 Name, kind and path queries keep the selected classification.
 Command queries borrow the expanded operands and admit their resolution records
-and output offsets as a batch. Decoded host names and result indexes remain
-admitted through the lookup. Lookup scratch retires before output formatting.
+and output offsets as a batch. Decoded host names and their list remain admitted
+through the lookup. Request scratch retires before formatting, which consumes
+host replies in the order of the marked operands.
 
 Serialized function exports share one admitted cache owner across namespaces and
 attribute copies. Its scope belongs to the binding's creator, even when a pipeline

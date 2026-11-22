@@ -28,6 +28,40 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task Evaluation_TypeBuiltin_ConsumesHostRepliesInOperandOrder()
+    {
+        var state = new Eval(Parser.Parse(
+            "f(){ :; }; type -t first echo if apply_patch f absent second $'\\xff' last"));
+        var lookup = await NextResolveCommandsAsync(state);
+        Assert.Equal(["first", "apply_patch", "absent", "second", "last"], lookup.CommandNames);
+        lookup.SetResult([
+            new CommandLookupResult.Found("/synthetic/first"),
+            new CommandLookupResult.Found("/synthetic/apply_patch"),
+            new CommandLookupResult.Missing(),
+            new CommandLookupResult.Failed(new OperationError("lookup unavailable\n")),
+            new CommandLookupResult.Found("/synthetic/last")
+        ]);
+
+        var first = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, first.FileDescriptor);
+        Assert.Equal("file\nbuiltin\nkeyword\nbuiltin\nfunction\n", Text(first.Content));
+        first.SetResult(DescriptorWriteResult.Open);
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("type: second: lookup unavailable\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        var last = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, last.FileDescriptor);
+        Assert.Equal("file\n", Text(last.Content));
+        last.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
+    [Fact]
     public async Task Evaluation_TypeBuiltin_ForcedPathBatchesShadowedNamesThroughTheHost()
     {
         var state = new Eval(Parser.Parse(

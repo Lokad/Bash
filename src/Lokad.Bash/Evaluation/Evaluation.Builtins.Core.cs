@@ -247,7 +247,8 @@ public sealed partial class Evaluation
         List<FunctionBinding>? functionOwners = null;
         try
         {
-            var resolutions = await ResolveCommandQueriesAsync().ConfigureAwait(false);
+            var resolutions = new CommandQueryResolution[nameCount];
+            var hostResults = await ResolveCommandQueriesAsync(resolutions).ConfigureAwait(false);
             using var output = new ByteMemoryBuilder(0, Memory.Budget);
             try
             {
@@ -257,21 +258,45 @@ public sealed partial class Evaluation
                 var foundCount = 0;
                 var unresolvedCount = 0;
                 var lookupFailed = false;
+                var hostIndex = 0;
                 for (var index = 0; index < nameCount; index++)
                 {
                     CheckCancellation();
                     var name = arguments[firstName + index];
+                    var resolution = resolutions[index];
+                    CommandLookupResult.Found? hostCommand = null;
+                    OperationError? error = null;
+                    if (resolution is CommandQueryResolution.Host or CommandQueryResolution.HostBuiltin)
+                    {
+                        switch (hostResults[hostIndex++])
+                        {
+                            case CommandLookupResult.Found when resolution is CommandQueryResolution.HostBuiltin:
+                                resolution = CommandQueryResolution.Builtin.Instance;
+                                break;
+                            case CommandLookupResult.Found found:
+                                hostCommand = found;
+                                break;
+                            case CommandLookupResult.Missing:
+                                resolution = CommandQueryResolution.Missing.Instance;
+                                break;
+                            case CommandLookupResult.Failed failed:
+                                resolution = CommandQueryResolution.Missing.Instance;
+                                error = failed.Error;
+                                break;
+                            default:
+                                throw new InvalidOperationException("Host returned an unknown command lookup result.");
+                        }
+                    }
+
                     var local = localMatches == null ? default : localMatches[index];
                     var hasLocalMatch = local.Keyword || local.Function != null || local.Builtin;
-                    if ((local.Keyword && !AppendFound(name, CommandQueryResolution.Keyword.Instance))
-                        || (local.Function != null && !AppendFound(name, local.Function))
-                        || (local.Builtin && !AppendFound(name, CommandQueryResolution.Builtin.Instance)))
+                    if ((local.Keyword && !AppendFound(name, CommandQueryResolution.Keyword.Instance, null))
+                        || (local.Function != null && !AppendFound(name, local.Function, null))
+                        || (local.Builtin && !AppendFound(name, CommandQueryResolution.Builtin.Instance, null)))
                         return await OutputLimitAsync().ConfigureAwait(false);
 
-                    var resolution = resolutions[index] ?? throw new InvalidOperationException("Command query was not resolved.");
-                    if (resolution is CommandQueryResolution.Missing or CommandQueryResolution.Failed)
+                    if (resolution is CommandQueryResolution.Missing)
                     {
-                        var error = (resolution as CommandQueryResolution.Failed)?.Error;
                         if (hasLocalMatch && !error.HasValue)
                         {
                             foundCount++;
@@ -294,19 +319,21 @@ public sealed partial class Evaluation
                     }
 
                     foundCount++;
-                    if (!AppendFound(name, resolution))
+                    if (!AppendFound(name, resolution, hostCommand))
                         return await OutputLimitAsync().ConfigureAwait(false);
                     FinishRun(diagnostic: false);
                 }
+                // The output buffer owns the rendered bytes before the first write.
+                hostResults = [];
 
-                bool AppendFound(ShellValue name, CommandQueryResolution resolution)
+                bool AppendFound(ShellValue name, CommandQueryResolution resolution, CommandLookupResult.Found? hostCommand)
                 {
-                    if (outputMode == CommandQueryOutputMode.TypePath && resolution is not CommandQueryResolution.Host)
+                    if (outputMode == CommandQueryOutputMode.TypePath && hostCommand == null)
                         return true;
                     var appended = outputMode switch
                     {
                         CommandQueryOutputMode.CommandName or CommandQueryOutputMode.TypePath =>
-                            resolution is CommandQueryResolution.Host hostCommand
+                            hostCommand != null
                             ? AppendText(hostCommand.ResolvedName)
                             : output.TryAppend(name.Bytes.Span),
                         CommandQueryOutputMode.TypeKind => output.TryAppend(resolution switch
@@ -322,7 +349,7 @@ public sealed partial class Evaluation
                                 CommandQueryResolution.Function => output.TryAppend(" is a function"u8),
                                 CommandQueryResolution.Builtin => output.TryAppend(" is a shell builtin"u8),
                                 CommandQueryResolution.Keyword => output.TryAppend(" is a shell keyword"u8),
-                                CommandQueryResolution.Host hostDescription => output.TryAppend(" is "u8) && AppendText(hostDescription.ResolvedName),
+                                CommandQueryResolution.Host when hostCommand != null => output.TryAppend(" is "u8) && AppendText(hostCommand.ResolvedName),
                                 _ => throw new InvalidOperationException("Missing command reached found query output.")
                             }),
                         _ => throw new ArgumentOutOfRangeException(nameof(outputMode))
@@ -407,15 +434,10 @@ public sealed partial class Evaluation
                 return 1;
             }
 
-            async Task<CommandQueryResolution?[]> ResolveCommandQueriesAsync()
+            async Task<IReadOnlyList<CommandLookupResult>> ResolveCommandQueriesAsync(CommandQueryResolution[] resolutions)
             {
-                // Name and index list capacities include both generations during growth.
-                const long HostRequestBytesPerName = 48;
                 using var lookupMemory = new MemoryCapacity(Memory.Budget, 0);
-                long retainedLookupBytes = 0;
-                var resolutions = new CommandQueryResolution?[nameCount];
-                var hostNames = new List<string>();
-                var hostIndexes = new List<int>();
+                List<string>? hostNames = null;
                 for (var index = 0; index < nameCount; index++)
                 {
                     CheckCancellation();
@@ -454,45 +476,35 @@ public sealed partial class Evaluation
                         continue;
                     }
 
-                    // Keep the builtin display classification, subject to the host confirming availability.
-                    if (hostBuiltin)
-                        resolutions[index] = CommandQueryResolution.Builtin.Instance;
-
+                    resolutions[index] = hostBuiltin ? CommandQueryResolution.HostBuiltin.Instance : CommandQueryResolution.Host.Instance;
                     var decodeBytes = Math.Max(0, 32 + 2L * value.Bytes.Length
                         - (builtin == BuiltinKind.Command ? PreparedQueryDecodeBytes(value) : 0));
-                    retainedLookupBytes = checked(retainedLookupBytes + decodeBytes + HostRequestBytesPerName);
-                    lookupMemory.Resize(retainedLookupBytes);
-                    hostNames.Add(value.ToUtf8String());
-                    hostIndexes.Add(index);
-                }
-
-                if (hostNames.Count > 0)
-                {
-                    lookupMemory.ReleaseUnusedCapacity();
-                    var environment = BuildExportedEnvironment(vars, context);
-                    CheckCancellation();
-                    var hostResults = await ResolveCommandsOperation.AsTask(PublishOperation, hostNames, _state.CurrentDirectory, environment)
-                        .ConfigureAwait(false);
-                    CheckCancellation();
-                    if (hostResults.Count != hostNames.Count)
-                        throw new InvalidOperationException("Host returned an unexpected number of command lookup results.");
-
-                    for (var index = 0; index < hostResults.Count; index++)
+                    if (hostNames == null)
                     {
-                        CheckCancellation();
-                        resolutions[hostIndexes[index]] = hostResults[index] switch
-                        {
-                            CommandLookupResult.Found
-                                when resolutions[hostIndexes[index]] is CommandQueryResolution.Builtin builtin => builtin,
-                            CommandLookupResult.Found found => new CommandQueryResolution.Host(found.ResolvedName),
-                            CommandLookupResult.Missing => CommandQueryResolution.Missing.Instance,
-                            CommandLookupResult.Failed failed => new CommandQueryResolution.Failed(failed.Error),
-                            _ => throw new InvalidOperationException("Host returned an unknown command lookup result.")
-                        };
+                        lookupMemory.Grow(checked(decodeBytes + MemoryCapacity.ArrayBackingBytes<string>(1)));
+                        hostNames = new List<string>(1);
                     }
+                    else
+                    {
+                        lookupMemory.PrepareListCapacity(hostNames, 1);
+                        if (decodeBytes > 0)
+                            lookupMemory.Grow(decodeBytes);
+                    }
+                    hostNames.Add(value.ToUtf8String());
                 }
 
-                return resolutions;
+                if (hostNames == null)
+                    return [];
+
+                lookupMemory.ReleaseUnusedCapacity();
+                var environment = BuildExportedEnvironment(vars, context);
+                CheckCancellation();
+                var results = await ResolveCommandsOperation.AsTask(PublishOperation, hostNames, _state.CurrentDirectory, environment)
+                    .ConfigureAwait(false);
+                CheckCancellation();
+                if (results.Count != hostNames.Count)
+                    throw new InvalidOperationException("Host returned an unexpected number of command lookup results.");
+                return results;
             }
 
             CommandQueryResolution.Function SelectFunction(FunctionBinding binding)
