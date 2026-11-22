@@ -274,6 +274,10 @@ scratch admits generated backing while projecting and appending each field. The
 builder independently admits the compact backing it keeps or the buffer it copies
 into, which keeps emitted bytes charged through use.
 
+Variable declaration rendering reads the visible slot synchronously in its
+existing owner. The rendered byte buffer has its own admission through output
+or field consumption.
+
 Aggregate operand lists admit replacement backing before growth and keep the
 current backing charged through command completion. Byte consumers append
 reached fields directly to that list.

@@ -90,6 +90,30 @@ public sealed class ByteDeclarationInspectionTests
         Assert.True(state.Variables["saved"].Bytes.Span.SequenceEqual(input.AsSpan(0, InputBytes)));
     }
 
+    [Theory]
+    [InlineData("-a", "i", "4095", "[0]", "[4095]")]
+    [InlineData("-A", "key$i", "key4095", "[key0]", "[key4095]")]
+    public async Task PrefixedInspectionRendersBorrowedArraysWithinTheOutputAllowance(
+        string kind, string selector, string lastIndex, string firstEntry, string lastEntry)
+    {
+        var governor = new MemoryGovernor(1800 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        var script = $"declare {kind} vector\n"
+            + $"for ((i=0;i<4096;i++)); do vector[{selector}]=outer; done\n"
+            + "f(){ FLAG=temporary declare -p vector; }; f\n"
+            + $"printf '%s:%s:%s:%s' \"$?\" \"${{#vector[@]}}\" \"${{vector[{lastIndex}]}}\" \"${{FLAG-missing}}\"";
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        var output = host.StandardOutput.TextContent;
+        Assert.Equal(0, result.ExitCode);
+        Assert.StartsWith($"declare {kind} vector=({firstEntry}=\"outer\"", output);
+        Assert.Contains($"{lastEntry}=\"outer\"", output, StringComparison.Ordinal);
+        Assert.EndsWith(")\n0:4096:outer:missing", output);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task InspectionStopsAfterAnOutputFailureWithoutChangingBindings()
     {

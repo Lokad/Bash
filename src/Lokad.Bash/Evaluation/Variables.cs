@@ -1440,7 +1440,7 @@ public sealed partial class Variables
     /// <remarks>False leaves an incomplete row; the caller must discard it.</remarks>
     internal bool TryAppendVariable(BindingName name, ByteMemoryBuilder output, VariableDisplayStyle style)
     {
-        TryGetBinding(name, out var slot);
+        TryGetBinding(name, detachBorrowed: false, out var slot);
         if (style == VariableDisplayStyle.Assignment && slot is not (null or AttributeSlot) && !IsAssigned(slot))
             return true;
         if (style != VariableDisplayStyle.Assignment)
@@ -1477,7 +1477,7 @@ public sealed partial class Variables
 
     internal ShellValue GetDeclarationAttributes(BindingName name)
     {
-        TryGetBinding(name, out var slot);
+        TryGetBinding(name, detachBorrowed: false, out var slot);
         Span<byte> flags = stackalloc byte[8];
         var count = WriteDeclarationAttributes(slot, flags);
         return count == 0 ? ShellValue.Empty : ShellValue.FromBytes(flags[..count].ToArray());
@@ -1514,7 +1514,7 @@ public sealed partial class Variables
 
     internal bool TryAppendArrayAssignment(BindingName name, ByteMemoryBuilder output, CancellationToken cancellationToken)
     {
-        TryGetBinding(name, out var slot);
+        TryGetBinding(name, detachBorrowed: false, out var slot);
         return TryAppendArrayAssignment(slot, output, cancellationToken);
     }
 
