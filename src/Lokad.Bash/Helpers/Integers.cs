@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Text;
 using System.Globalization;
 using System.Numerics;
+using System.Threading;
 
 namespace Lokad.Bash.Helpers;
 
@@ -127,7 +128,24 @@ public static class Integers
 
     /// <summary>Parses a builtin decimal operand with leading ASCII whitespace and trailing space or tab.</summary>
     internal static bool TryParseBuiltinNumber(ReadOnlySpan<byte> span, out long value) =>
-        TryParseNumber(span.TrimStart(" \t\r\n\v\f"u8).TrimEnd(" \t"u8), out value);
+        TryParseBuiltinNumber(span, CancellationToken.None, out value);
+
+    internal static bool TryParseBuiltinNumber(ReadOnlySpan<byte> span, CancellationToken cancellationToken, out long value)
+    {
+        var start = 0;
+        var end = span.Length;
+        while (start < end && AsciiByte.IsPosixWhitespace(span[start]))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            start++;
+        }
+        while (end > start && span[end - 1] is (byte)' ' or (byte)'\t')
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            end--;
+        }
+        return TryParseNumber(span[start..end], out value);
+    }
 
     /// <summary>
     /// Parses a signed decimal with surrounding ASCII whitespace and an optional

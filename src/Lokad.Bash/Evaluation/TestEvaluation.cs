@@ -328,9 +328,9 @@ public sealed class TestEvaluation
             File(predicate.FileKind, left, right);
         else if (predicate.IsNumeric)
         {
-            if (!TryInteger(left, out var l))
+            if (!Integers.TryParseBuiltinNumber(left.Bytes.Span, _cancellationToken, out var l))
                 Fail(left, ": integer expression expected");
-            else if (!TryInteger(right, out var r))
+            else if (!Integers.TryParseBuiltinNumber(right.Bytes.Span, _cancellationToken, out var r))
                 Fail(right, ": integer expression expected");
             else
                 Constant(CompareNumbers(predicate.Operator, l, r));
@@ -346,24 +346,6 @@ public sealed class TestEvaluation
                 BinaryPredicateKind.StringGreater => comparison > 0,
                 _ => throw new InvalidOperationException("Unsupported test predicate.")
             });
-        }
-
-        bool TryInteger(ShellValue value, out long number)
-        {
-            var span = value.Bytes.Span;
-            var start = 0;
-            var end = span.Length;
-            while (start < end && AsciiByte.IsPosixWhitespace(span[start]))
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-                start++;
-            }
-            while (end > start && AsciiByte.IsPosixWhitespace(span[end - 1]))
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-                end--;
-            }
-            return Integers.TryParseNumber(span[start..end], out number);
         }
     }
 

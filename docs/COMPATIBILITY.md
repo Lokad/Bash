@@ -742,9 +742,9 @@ grammar. In the expression grammar, `!` requires a following term. The short
 argument-count rules can treat it as a literal string. In the three-argument
 fallback, a first operand beginning with `(` and a third beginning with `)`
 select the middle string. Numeric operands accept signed 64-bit decimal integers
-with optional surrounding ASCII whitespace. Invalid integers, malformed
-expressions and a missing closing `]` report a diagnostic and status 2. File
-predicates retain the UTF-8 path boundary.
+with leading ASCII whitespace and trailing spaces or tabs allowed. Invalid
+integers, malformed expressions and a missing closing `]` report a diagnostic
+and status 2. File predicates retain the UTF-8 path boundary.
 
 For `-t`, a descriptor operand is a signed decimal with leading ASCII
 whitespace and trailing spaces or tabs allowed. Only numbers in the
