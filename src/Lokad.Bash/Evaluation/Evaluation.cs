@@ -1312,6 +1312,7 @@ public sealed partial class Evaluation : IFileTester
                         firstName: 0,
                         query.OutputMode,
                         CommandLookupMode.Normal,
+                        listAll: false,
                         queryScope.Variables,
                         queryScope.Context)
                     .ConfigureAwait(false);

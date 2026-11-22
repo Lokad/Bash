@@ -8,8 +8,9 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationHelpTestsEndToEnd
 {
-    private const string TypeDocumentation = "type: type [-ftpP] [--] [name ...]\n"
-        + "    Describe how names resolve. -t prints the kind. -p prints the path of an external command."
+    private const string TypeDocumentation = "type: type [-aftpP] [--] [name ...]\n"
+        + "    Describe how names resolve. -a lists all matching shell definitions and the host result."
+        + " -t prints the kind. -p prints the path of an external command."
         + " -P forces host lookup. -f skips shell functions.\n";
 
     [Theory]

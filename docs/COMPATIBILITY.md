@@ -394,6 +394,11 @@ with `-p` or `-t`. `type -P` sends valid nonempty names directly to the host's
 command lookup, including names that are also functions, builtins or keywords.
 The last `-p`, `-P` or `-t` selects path or kind output. Once `-P` is supplied,
 host-only lookup applies regardless of the output mode or the placement of `-f`.
+`type -a` lists each matching keyword, function and builtin in lookup order,
+followed by the command resolution returned by the host for that name. The
+host interface supplies one result per name. With `-p`, local matches count
+toward the status and only the host path is printed. `-f` skips shell functions
+and `-P` selects host-only lookup with or without `-a`.
 During option scanning, `--help` writes the builtin synopsis and returns 2.
 It returns 2 silently with closed stdout. After `--` or the first name,
 `--help` is an ordinary name.

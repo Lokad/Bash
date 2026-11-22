@@ -548,13 +548,15 @@ public sealed class SourceMemoryLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    [Fact]
-    public async Task CommandQueryRetainsItsSelectedDefinitionAcrossHostLookup()
+    [Theory]
+    [InlineData("type")]
+    [InlineData("type -a")]
+    public async Task CommandQueryRetainsItsSelectedDefinitionAcrossHostLookup(string query)
     {
         var governor = new MemoryGovernor(1024 * 1024);
         var scopes = new ConcurrentBag<RecordedScope>();
         var budget = new RecordingBudget(governor, depth: 0, scopes);
-        var evaluation = new Eval(Parser.Parse("source /a; type f other; unset -f f"));
+        var evaluation = new Eval(Parser.Parse($"source /a; {query} f other; unset -f f"));
         var replacement = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ printf new; }").Commands));
         var liveAtLookup = -1;
         await using var host = new LookupHost(() =>

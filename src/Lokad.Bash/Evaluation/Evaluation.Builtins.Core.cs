@@ -168,11 +168,13 @@ public sealed partial class Evaluation
     {
         var outputMode = CommandQueryOutputMode.TypeDescription;
         var lookupMode = CommandLookupMode.Normal;
+        var listAll = false;
         var options = new ShortOptionCursor(words);
         while (options.TryReadFlag(out var flag))
         {
             switch (flag.Span[0])
             {
+                case (byte)'a': listAll = true; break;
                 case (byte)'t': outputMode = CommandQueryOutputMode.TypeKind; break;
                 case (byte)'p': outputMode = CommandQueryOutputMode.TypePath; break;
                 case (byte)'P':
@@ -196,6 +198,7 @@ public sealed partial class Evaluation
                 options.ArgumentIndex,
                 outputMode,
                 lookupMode,
+                listAll,
                 commandVars,
                 context)
             .ConfigureAwait(false);
@@ -217,6 +220,7 @@ public sealed partial class Evaluation
         int firstName,
         CommandQueryOutputMode outputMode,
         CommandLookupMode lookupMode,
+        bool listAll,
         Variables vars,
         EvaluationContext context)
     {
@@ -225,11 +229,21 @@ public sealed partial class Evaluation
         if (nameCount == 0)
             return 0;
 
-        // Cover the resolution reference and record, output offset, and function-owner
+        // Cover the resolution reference and record, output run, and function-owner
         // list capacity including growth. Definitions and host result text stay borrowed.
         const long ResolutionBytesPerName = 72;
+        // An all-matches operand can also hold a local definition record and a second output run.
+        const long ExtraResolutionBytesPerName = 40;
+        var collectLocalMatches = listAll && lookupMode != CommandLookupMode.HostOnly;
+        var extraBytes = collectLocalMatches
+            ? checked(ExtraResolutionBytesPerName * nameCount + MemoryCapacity.ArrayBackingBytes<
+                (bool, CommandQueryResolution.Function?, bool)>(nameCount))
+            : 0;
         CheckCancellation();
-        using var resolutionMemory = new MemoryCapacity(Memory.Budget, 128 + ResolutionBytesPerName * nameCount);
+        using var resolutionMemory = new MemoryCapacity(Memory.Budget, 128 + ResolutionBytesPerName * nameCount + extraBytes);
+        var localMatches = collectLocalMatches
+            ? new (bool Keyword, CommandQueryResolution.Function? Function, bool Builtin)[nameCount]
+            : null;
         List<FunctionBinding>? functionOwners = null;
         try
         {
@@ -238,7 +252,8 @@ public sealed partial class Evaluation
             try
             {
                 // Build the whole display payload before emitting any channel; endpoints retain operand order.
-                var endOffsets = new int[nameCount];
+                var runs = new (int End, bool Diagnostic)[localMatches == null ? nameCount : checked(2 * nameCount)];
+                var runCount = 0;
                 var foundCount = 0;
                 var unresolvedCount = 0;
                 var lookupFailed = false;
@@ -246,29 +261,48 @@ public sealed partial class Evaluation
                 {
                     CheckCancellation();
                     var name = arguments[firstName + index];
+                    var local = localMatches == null ? default : localMatches[index];
+                    var hasLocalMatch = local.Keyword || local.Function != null || local.Builtin;
+                    if ((local.Keyword && !AppendFound(name, CommandQueryResolution.Keyword.Instance))
+                        || (local.Function != null && !AppendFound(name, local.Function))
+                        || (local.Builtin && !AppendFound(name, CommandQueryResolution.Builtin.Instance)))
+                        return await OutputLimitAsync().ConfigureAwait(false);
+
                     var resolution = resolutions[index] ?? throw new InvalidOperationException("Command query was not resolved.");
                     if (resolution is CommandQueryResolution.Missing or CommandQueryResolution.Failed)
                     {
-                        unresolvedCount++;
                         var error = (resolution as CommandQueryResolution.Failed)?.Error;
+                        if (hasLocalMatch && !error.HasValue)
+                        {
+                            foundCount++;
+                            FinishRun(diagnostic: false);
+                            continue;
+                        }
+                        unresolvedCount++;
                         lookupFailed |= error.HasValue;
-                        if ((error.HasValue || outputMode == CommandQueryOutputMode.TypeDescription)
-                            && (!output.TryAppend(builtinName.Bytes.Span) || !output.TryAppend(": "u8)
+                        FinishRun(diagnostic: false);
+                        if (error.HasValue || outputMode == CommandQueryOutputMode.TypeDescription)
+                        {
+                            if (!output.TryAppend(builtinName.Bytes.Span) || !output.TryAppend(": "u8)
                                 || !output.TryAppend(name.Bytes.Span) || !output.TryAppend(": "u8)
                                 || !(error?.Message is { } message
-                                    ? AppendText(message) : output.TryAppend("not found\n"u8))))
-                            return await OutputLimitAsync().ConfigureAwait(false);
-
-                        endOffsets[index] = output.Length;
+                                    ? AppendText(message) : output.TryAppend("not found\n"u8)))
+                                return await OutputLimitAsync().ConfigureAwait(false);
+                            FinishRun(diagnostic: true);
+                        }
                         continue;
                     }
 
                     foundCount++;
+                    if (!AppendFound(name, resolution))
+                        return await OutputLimitAsync().ConfigureAwait(false);
+                    FinishRun(diagnostic: false);
+                }
+
+                bool AppendFound(ShellValue name, CommandQueryResolution resolution)
+                {
                     if (outputMode == CommandQueryOutputMode.TypePath && resolution is not CommandQueryResolution.Host)
-                    {
-                        endOffsets[index] = output.Length;
-                        continue;
-                    }
+                        return true;
                     var appended = outputMode switch
                     {
                         CommandQueryOutputMode.CommandName or CommandQueryOutputMode.TypePath =>
@@ -293,11 +327,19 @@ public sealed partial class Evaluation
                             }),
                         _ => throw new ArgumentOutOfRangeException(nameof(outputMode))
                     };
-                    if (!appended || !output.TryAppend((byte)'\n')
-                        || outputMode == CommandQueryOutputMode.TypeDescription && resolution is CommandQueryResolution.Function function
-                            && !FunctionDefinitionFormatter.TryAppend(function.Definition, output))
-                        return await OutputLimitAsync().ConfigureAwait(false);
-                    endOffsets[index] = output.Length;
+                    return appended && output.TryAppend((byte)'\n')
+                        && (outputMode != CommandQueryOutputMode.TypeDescription || resolution is not CommandQueryResolution.Function function
+                            || FunctionDefinitionFormatter.TryAppend(function.Definition, output));
+                }
+
+                void FinishRun(bool diagnostic)
+                {
+                    if (runCount == 0 ? output.Length == 0 : runs[runCount - 1].End == output.Length)
+                        return;
+                    if (runCount > 0 && runs[runCount - 1].Diagnostic == diagnostic)
+                        runs[runCount - 1] = (output.Length, diagnostic);
+                    else
+                        runs[runCount++] = (output.Length, diagnostic);
                 }
 
                 var queryExitCode = lookupFailed ? 1 : builtin == BuiltinKind.Command
@@ -313,15 +355,10 @@ public sealed partial class Evaluation
                 var stderr = GetStdErrDescriptor();
                 var outputClosed = false;
                 var errorClosed = false;
-                for (var first = 0; first < nameCount;)
+                for (var index = 0; index < runCount; index++)
                 {
-                    var diagnostic = IsDiagnostic(first);
-                    var last = first;
-                    while (last + 1 < nameCount && IsDiagnostic(last + 1) == diagnostic)
-                        last++;
-
-                    var endOffset = endOffsets[last];
-                    if (endOffset > startOffset && !(diagnostic ? errorClosed : outputClosed))
+                    var (endOffset, diagnostic) = runs[index];
+                    if (!(diagnostic ? errorClosed : outputClosed))
                     {
                         var descriptor = diagnostic ? stderr : stdout;
                         var result = await ExecuteWriteAsync(
@@ -339,7 +376,6 @@ public sealed partial class Evaluation
                             appendResult = result;
                     }
                     startOffset = endOffset;
-                    first = last + 1;
                 }
                 if (builtin == BuiltinKind.Type && !errorClosed)
                     await ReportBuiltinWriteFailureAsync(builtinName, appendResult).ConfigureAwait(false);
@@ -353,9 +389,6 @@ public sealed partial class Evaluation
                     .ConfigureAwait(false);
                 return 1;
             }
-
-            bool IsDiagnostic(int index) => resolutions[index] is CommandQueryResolution.Failed
-                || outputMode == CommandQueryOutputMode.TypeDescription && resolutions[index] is CommandQueryResolution.Missing;
 
             bool AppendText(string text)
             {
@@ -387,21 +420,30 @@ public sealed partial class Evaluation
                 {
                     CheckCancellation();
                     var value = arguments[firstName + index];
-                    // Keywords take precedence in queries, even when a function shadows their spelling.
-                    if (lookupMode != CommandLookupMode.HostOnly && Parser.IsSupportedKeyword(value.Bytes.Span))
+                    // Keywords take precedence when the query requests a single resolution.
+                    var keyword = lookupMode != CommandLookupMode.HostOnly && Parser.IsSupportedKeyword(value.Bytes.Span);
+                    if (localMatches == null && keyword)
                     {
                         resolutions[index] = CommandQueryResolution.Keyword.Instance;
                         continue;
                     }
                     var resolution = ResolveCommandName(value, lookupMode);
-                    if (resolution is CommandResolution.Function function)
+                    if (localMatches != null)
                     {
-                        (functionOwners ??= []).Add(function.Binding);
-                        function.Binding.Retain();
-                        resolutions[index] = new CommandQueryResolution.Function(function.Binding.Definition);
+                        CommandQueryResolution.Function? definition = null;
+                        if (resolution is CommandResolution.Function localFunction)
+                        {
+                            definition = RetainFunction(localFunction.Binding);
+                            resolution = ResolveCommandName(value, CommandLookupMode.BypassFunctions);
+                        }
+                        localMatches[index] = (keyword, definition, resolution is CommandResolution.EvaluatorBuiltin);
+                    }
+                    else if (resolution is CommandResolution.Function function)
+                    {
+                        resolutions[index] = RetainFunction(function.Binding);
                         continue;
                     }
-                    if (resolution is CommandResolution.EvaluatorBuiltin)
+                    else if (resolution is CommandResolution.EvaluatorBuiltin)
                     {
                         resolutions[index] = CommandQueryResolution.Builtin.Instance;
                         continue;
@@ -453,6 +495,13 @@ public sealed partial class Evaluation
                 }
 
                 return resolutions;
+            }
+
+            CommandQueryResolution.Function RetainFunction(FunctionBinding binding)
+            {
+                (functionOwners ??= []).Add(binding);
+                binding.Retain();
+                return new CommandQueryResolution.Function(binding.Definition);
             }
         }
         finally

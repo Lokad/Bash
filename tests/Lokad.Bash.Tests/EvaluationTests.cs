@@ -3581,6 +3581,37 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task Evaluation_TypeAll_ReportsLocalMatchesEvenWhenTheHostLookupFails()
+    {
+        var state = new Eval(Parser.Parse("echo(){ :; }; type -at echo if more"));
+        var lookup = await NextResolveCommandsAsync(state);
+        Assert.Equal(["echo", "if", "more"], lookup.CommandNames);
+        lookup.SetResult([
+            new CommandLookupResult.Failed(new OperationError("lookup unavailable\n")),
+            new CommandLookupResult.Missing(),
+            new CommandLookupResult.Found("/synthetic/more")
+        ]);
+
+        var local = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, local.FileDescriptor);
+        Assert.Equal("function\nbuiltin\n", Text(local.Content));
+        local.SetResult(DescriptorWriteResult.Open);
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("type: echo: lookup unavailable\n", Text(diagnostic.Content));
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        var remaining = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdOut, remaining.FileDescriptor);
+        Assert.Equal("keyword\nfile\n", Text(remaining.Content));
+        remaining.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
+    [Fact]
     public async Task Evaluation_TypeBuiltin_PathOnlyUsesTheSelectedClassWithoutFallback()
     {
         var state = new Eval(Parser.Parse("cat(){ :; }; type -p cat printf if"));

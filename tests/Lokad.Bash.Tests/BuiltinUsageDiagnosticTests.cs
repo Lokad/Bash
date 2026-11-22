@@ -69,7 +69,7 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("eval", "-", "[--] [arg ...]", false)]
     [InlineData("source", "-", "[--] filename [arguments]", false)]
     [InlineData(".", "-", "[--] filename [arguments]", false)]
-    [InlineData("type", "-t", "[-ftpP] [--] [name ...]", true)]
+    [InlineData("type", "-t", "[-aftpP] [--] [name ...]", true)]
     public async Task InvalidOptionPreservesRawByteAndUsageWriteBoundaries(
         string name, string optionPrefix, string arguments, bool combined)
     {

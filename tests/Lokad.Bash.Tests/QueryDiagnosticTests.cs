@@ -64,9 +64,15 @@ public sealed class QueryDiagnosticTests
     [InlineData("type -tP printf", "/usr/bin/printf\n", "", 0)]
     [InlineData("type -Pp printf : if", "/usr/bin/printf\n", "", 1)]
     [InlineData("type -P -- -t printf", "/usr/bin/printf\n", "", 1)]
+    [InlineData("echo(){ :; }; type -at echo if", "function\nbuiltin\nfile\nkeyword\n", "", 0)]
+    [InlineData("echo(){ :; }; type -aft echo", "builtin\nfile\n", "", 0)]
+    [InlineData("f(){ :; }; type -ap f echo if", "/usr/bin/echo\n", "", 0)]
+    [InlineData("function if { :; }; type -at if", "keyword\nfunction\n", "", 0)]
+    [InlineData("type -aPt echo if", "file\n", "", 1)]
+    [InlineData("type -t -- -a shift", "builtin\n", "", 1)]
     [InlineData("type -- --help", "", "type: --help: not found\n", 1)]
     [InlineData("type echo --help", "echo is a shell builtin\n", "type: --help: not found\n", 1)]
-    [InlineData("type -tz --help", "", "type: -z: invalid option\ntype: usage: type [-ftpP] [--] [name ...]\n", 2)]
+    [InlineData("type -taz --help", "", "type: -z: invalid option\ntype: usage: type [-aftpP] [--] [name ...]\n", 2)]
     [InlineData("command -v printf qdg_missing", "printf\n", "", 0)]
     [InlineData("command -V -- -v printf", "printf is a shell builtin\n", "command: -v: not found\n", 0)]
     [InlineData("command -V printf -v", "printf is a shell builtin\n", "command: -v: not found\n", 0)]
@@ -94,7 +100,7 @@ public sealed class QueryDiagnosticTests
     [InlineData("command -V $'a\\n\\xff\\r' 2>&1",
         "636F6D6D616E643A20610AFF0D3A206E6F7420666F756E640A", "", 1)]
     [InlineData("type -t $'\\xff'", "", "", 1)]
-    [InlineData("type $'-t\\xff'", "", "747970653A202DFF3A20696E76616C6964206F7074696F6E0A747970653A2075736167653A2074797065205B2D667470505D205B2D2D5D205B6E616D65202E2E2E5D0A", 2)]
+    [InlineData("type $'-t\\xff'", "", "747970653A202DFF3A20696E76616C6964206F7074696F6E0A747970653A2075736167653A2074797065205B2D61667470505D205B2D2D5D205B6E616D65202E2E2E5D0A", 2)]
     [InlineData("command -v $'\\xff'", "", "", 1)]
     public async Task QueriesRetainInvalidUtf8InDiagnostics(
         string script, string outputHex, string errorHex, int expectedExitCode)
@@ -129,7 +135,7 @@ public sealed class QueryDiagnosticTests
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.StdOut);
         Assert.Empty(result.StdErr);
-        Assert.Equal("type: -z: invalid option\ntype: usage: type [-ftpP] [--] [name ...]\n",
+        Assert.Equal("type: -z: invalid option\ntype: usage: type [-aftpP] [--] [name ...]\n",
             await EndToEndHarness.ReadFileAsync(result.Host, "/errors"));
     }
 }
