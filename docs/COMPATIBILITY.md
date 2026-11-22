@@ -160,6 +160,9 @@ and leaves only the current directory on the stack without writing output.
 retain the working directory and its variables. They finish option validation
 before navigation. Ordinary `pushd` accepts one path, and `popd` rejects stray
 operands before `--`. The terminator ends option scanning.
+`pushd` reports the first out-of-range selector. An empty `popd` field ends
+option scanning and uses the preceding selector's count to choose a saved
+entry from the bottom. With no preceding selector it removes the bottom entry.
 A leading `--help` for `dirs`, `pushd` or `popd` returns 2 and leaves the stack
 intact, including when stdout is closed. Usage errors retain status 2 when
 stderr is closed.

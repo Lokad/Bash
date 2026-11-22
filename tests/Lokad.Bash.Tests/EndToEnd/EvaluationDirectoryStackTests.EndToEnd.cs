@@ -9,6 +9,9 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
     [Theory]
     [InlineData("pushd /alpha /beta", 1, "pushd: too many arguments\n")]
     [InlineData("pushd -n -x", 2, "pushd: -x: invalid number\npushd: usage: pushd [-n] [+N | -N | dir]\n")]
+    [InlineData("pushd +7 +1", 1, "pushd: +7: directory stack index out of range\n")]
+    [InlineData("pushd +07 -q", 1, "pushd: +07: directory stack index out of range\n")]
+    [InlineData("pushd -7 -n +1", 1, "pushd: -7: directory stack index out of range\n")]
     [InlineData("popd +1 stray", 2, "popd: stray: invalid argument\npopd: usage: popd [-n] [+N | -N]\n")]
     [InlineData("popd -n --help", 2, "popd: --help: invalid number\npopd: usage: popd [-n] [+N | -N]\n")]
     public async Task InvalidStackOperandsLeavePathsAndBindingsUntouched(string command, int status, string error)
@@ -53,6 +56,33 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expected, host.StandardOutput.TextContent);
         Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("popd '' +1", "/beta /alpha\n0|/beta|/alpha\n/beta /alpha\n", false)]
+    [InlineData("popd +1 ''", "/beta /\n0|/beta|/alpha\n/beta /\n", false)]
+    [InlineData("popd +7 +1", "/beta /\n0|/beta|/alpha\n/beta /\n", false)]
+    [InlineData("popd -- ''", "/alpha /\n0|/alpha|/beta\n/alpha /\n", true)]
+    public async Task PopdEmptyFieldSelectsFromTheBottomAndEndsScanning(string command, string output, bool navigates)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/alpha", "/beta"], []);
+        var lookups = new List<string>();
+        host.BeforeGetPathInfo = path => lookups.Add(path.Path);
+        var source = $"""
+            pushd /alpha >/dev/null
+            pushd /beta >/dev/null
+            {command}
+            printf '%s|%s|%s\n' "$?" "$PWD" "$OLDPWD"
+            dirs
+            """;
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(navigates ? new[] { "/alpha", "/beta", "/alpha" } : new[] { "/alpha", "/beta" }, lookups);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 

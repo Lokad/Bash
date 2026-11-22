@@ -270,6 +270,7 @@ public sealed partial class Evaluation
             return new DirectoryStackOperands(1, false, null, ShellValue.Empty, DirectoryStackOperandOutcome.Help);
 
         var push = kind == BuiltinKind.Pushd;
+        var size = _state.DirectoryStackCount;
         var keep = false;
         int? index = null;
         var selected = ShellValue.Empty;
@@ -287,6 +288,17 @@ public sealed partial class Evaluation
                 next++;
                 break;
             }
+            if (!push && operand.IsEmpty)
+            {
+                // An empty popd operand ends scanning and selects a saved entry from the bottom.
+                if (index == null)
+                    index = size - 1;
+                else if (index >= 0 && selected.Bytes.Span[0] == (byte)'+')
+                    index = size - index.Value - 1;
+                if (index == 0)
+                    index = -1;
+                break;
+            }
             if (operand.Bytes.Span is not [(byte)'+' or (byte)'-', ..]
                 || push && operand.Bytes.Span.SequenceEqual("-"u8))
             {
@@ -294,11 +306,13 @@ public sealed partial class Evaluation
                     return new DirectoryStackOperands(next, keep, index, selected, DirectoryStackOperandOutcome.InvalidArgument);
                 break;
             }
-            if (!TryReadDirectoryStackIndex(operand.Bytes.Span, _state.DirectoryStackCount, out var logicalIndex))
+            if (!TryReadDirectoryStackIndex(operand.Bytes.Span, size, out var logicalIndex))
                 return new DirectoryStackOperands(next, keep, index, selected, DirectoryStackOperandOutcome.InvalidNumber);
 
             index = logicalIndex;
             selected = operand;
+            if (push && logicalIndex < 0)
+                break;
         }
         var outcome = push && !keep && !index.HasValue && words.Count - next > 1
             ? DirectoryStackOperandOutcome.TooManyArguments : DirectoryStackOperandOutcome.Run;
