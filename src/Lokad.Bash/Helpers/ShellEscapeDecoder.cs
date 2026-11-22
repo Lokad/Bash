@@ -22,37 +22,84 @@ public static class ShellEscapeDecoder
     /// <summary>Retains decoded backing capacities in the supplied parser or expansion owner.</summary>
     internal static ShellValue DecodeAnsiCValue(ReadOnlySpan<byte> source, MemoryCapacity? memory)
     {
-        var capacity = Math.Min(source.Length, 256);
-        using var output = memory is null ? ByteMemoryBuilder.CreateUnaccounted(capacity)
-            : new ByteMemoryBuilder(capacity, memory);
+        if (DecodeAnsiCEscapes(source, memory) is { } decoded)
+            return decoded;
+
+        if (source.Length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
+            throw new ByteMemoryBuilder.LimitExceededException();
+        memory?.Grow(source.Length);
+        return ShellValue.FromBytes(source.ToArray());
+    }
+
+    /// <summary>Reuses an already owned value when no escape changes it.</summary>
+    internal static ShellValue DecodeAnsiCValue(ShellValue source, MemoryCapacity memory) =>
+        DecodeAnsiCEscapes(source.Bytes.Span, memory) ?? source;
+
+    private static ShellValue? DecodeAnsiCEscapes(ReadOnlySpan<byte> source, MemoryCapacity? memory)
+    {
         Span<byte> encoded = stackalloc byte[MaximumEscapeBytes];
-        for (var index = 0; index < source.Length;)
+        for (var scan = 0; scan < source.Length;)
         {
-            if (source[index] != (byte)'\\' || index + 1 == source.Length)
-            {
-                var textStart = index++;
-                while (index < source.Length && source[index] != (byte)'\\')
-                    index++;
-                output.Append(source[textStart..index]);
-                continue;
-            }
+            var relativeSlash = source[scan..].IndexOf((byte)'\\');
+            if (relativeSlash < 0)
+                break;
+            var slash = scan + relativeSlash;
+            if (slash + 1 == source.Length)
+                break;
+            var escape = Decode(source[(slash + 1)..], ShellEscapeMode.AnsiCQuoted, encoded);
+            if (escape.Status != ShellEscapeStatus.Literal)
+                return BuildChangedValue(source, slash, escape, encoded, memory);
+            scan = slash + 1;
+        }
+        return null;
 
-            var result = Decode(source[(index + 1)..], ShellEscapeMode.AnsiCQuoted, encoded);
-            index += 1 + result.Consumed;
-            if (result.Status == ShellEscapeStatus.Literal)
+        static ShellValue BuildChangedValue(ReadOnlySpan<byte> source, int slash, ShellEscapeResult first,
+            Span<byte> encoded, MemoryCapacity? memory)
+        {
+            var capacity = Math.Min(source.Length, ByteMemoryBuilder.DefaultCapacity);
+            using var output = memory is null ? ByteMemoryBuilder.CreateUnaccounted(capacity)
+                : new ByteMemoryBuilder(capacity, memory);
+            output.Append(source[..slash]);
+            var index = AppendEscape(first, encoded, output) ? slash + 1 + first.Consumed : source.Length;
+            while (index < source.Length)
             {
-                output.Append((byte)'\\');
-                continue;
-            }
+                if (source[index] != (byte)'\\' || index + 1 == source.Length)
+                {
+                    var textStart = index++;
+                    while (index < source.Length && source[index] != (byte)'\\')
+                        index++;
+                    output.Append(source[textStart..index]);
+                    continue;
+                }
 
-            var bytes = encoded[..result.Written];
+                var result = Decode(source[(index + 1)..], ShellEscapeMode.AnsiCQuoted, encoded);
+                index += 1 + result.Consumed;
+                if (result.Status == ShellEscapeStatus.Literal)
+                {
+                    output.Append((byte)'\\');
+                    continue;
+                }
+                if (!AppendEscape(result, encoded, output))
+                    break;
+            }
+            return ShellValue.FromBytes(output.ToCompactMemory(memory));
+        }
+
+        static bool AppendEscape(ShellEscapeResult escape, ReadOnlySpan<byte> encoded, ByteMemoryBuilder output)
+        {
+            // NUL ends this value; callers retain their lexical span, adjacent parts and other fields.
+            if (escape.Written == 1)
+            {
+                if (encoded[0] == 0)
+                    return false;
+                output.Append(encoded[0]);
+                return true;
+            }
+            var bytes = encoded[..escape.Written];
             var nul = bytes.IndexOf((byte)0);
             output.Append(nul < 0 ? bytes : bytes[..nul]);
-            // NUL ends this value; callers retain their lexical span, adjacent parts and other fields.
-            if (nul >= 0)
-                break;
+            return nul < 0;
         }
-        return ShellValue.FromBytes(output.ToCompactMemory(memory));
     }
 
     /// <summary>Decodes echo escapes, whose octal form requires a zero and whose unknown escapes are literal.</summary>

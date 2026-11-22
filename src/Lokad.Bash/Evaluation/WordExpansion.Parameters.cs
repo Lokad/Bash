@@ -852,8 +852,7 @@ internal static partial class WordExpansion
             {
                 EmitTransformedFields((value, scratch) => transform switch
                 {
-                    (byte)'E' => value.Bytes.Span.Contains((byte)'\\')
-                        ? ShellEscapeDecoder.DecodeAnsiCValue(value.Bytes.Span, scratch) : value,
+                    (byte)'E' => ShellEscapeDecoder.DecodeAnsiCValue(value, scratch),
                     (byte)'Q' => QuoteParameterField(value, scratch),
                     _ => ChangeCase(value, transform != (byte)'L', transform == (byte)'u', null, scratch)
                 });

@@ -264,8 +264,9 @@ Parameter case conversion passes unchanged values through to field expansion.
 Changed values join original byte ranges with the converted characters in an
 admitted buffer. Parameter replacement expands both operands before matching. It
 borrows literal replacement bytes and reserves any quoted escape encoding as
-scratch from the first match through the last field. Escape decoding borrows
-inputs with no backslashes. Value transforms, pattern removal and inspection forms
+scratch from the first match through the last field. The escape transform reuses
+already owned values when the scan finds no decoded escapes. Value transforms,
+pattern removal and inspection forms
 that quote individual fields stream their results into the word builder. Their
 scratch admits generated backing while projecting and appending each field. The
 builder independently admits the compact backing it keeps or the buffer it copies
@@ -302,7 +303,8 @@ subshell can use an already prepared tree within the same syntax owner when the
 receiving command and expansion depths have enough headroom.
 Literal payloads, assignment-name slices and completed expansion segments avoid
 pinning disproportionately large builder buffers after their parsing/command
-owner ends. Retained scalar, array, nameref and positional values keep the ordinary
+owner ends. An unchanged ANSI-C literal takes one exact copy of its payload.
+Retained scalar, array, nameref and positional values keep the ordinary
 value estimate; syntax slices share immutable arithmetic metadata without reparsing.
 An unedited unquoted or double-quoted part takes one exact-sized copy. Edited
 parts assemble their bytes in the admitted builder as their spelling changes.

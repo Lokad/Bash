@@ -1,6 +1,7 @@
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 
@@ -139,5 +140,37 @@ public sealed class AnsiCQuotedWordTests
     public void ValueDecoder_PreservesNativeBytes(string value, byte[] expected)
     {
         Assert.Equal(expected, ShellEscapeDecoder.DecodeAnsiCValue(ShellSource.FromText(value).AsSpan()).Bytes.ToArray());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\\q\\xg\\")]
+    public void UnchangedLiteralOwnsOneExactCopy(string suffix)
+    {
+        var expected = ShellSource.FromText(new string('x', 4096) + suffix).Bytes.ToArray();
+        var input = expected.ToArray();
+        var governor = new MemoryGovernor(input.Length);
+        using var memory = new MemoryCapacity(governor, 0);
+
+        var decoded = ShellEscapeDecoder.DecodeAnsiCValue(input, memory);
+
+        Assert.Equal(input.Length, memory.Bytes);
+        input.AsSpan().Clear();
+        Assert.Equal(expected, decoded.Bytes.ToArray());
+        memory.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void UnchangedEscapedValueKeepsItsAlreadyOwnedBacking()
+    {
+        var input = ShellValue.FromText("text\\q\\xg\\");
+        var governor = new MemoryGovernor(0);
+        using var memory = new MemoryCapacity(governor, 0);
+
+        var decoded = ShellEscapeDecoder.DecodeAnsiCValue(input, memory);
+
+        Assert.True(decoded.Bytes.Equals(input.Bytes));
+        Assert.Equal(0, governor.ReservedBytes);
     }
 }
