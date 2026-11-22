@@ -345,11 +345,13 @@ public sealed class PrefixScopeOwnershipTests
     [InlineData("output")]
     [InlineData("selector")]
     [InlineData("promotion")]
+    [InlineData("resolved promotion")]
     public void RefusingAnOutputCopyKeepsTheSavedArraySelected(string route)
     {
         var caller = Variables.CreateEmpty();
         var element = ShellValue.FromText("saved");
         Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(element, 512).ToArray(), ArrayKind.Indexed));
+        Assert.True(caller.TrySetNameref("link", ShellValue.FromText("x")));
         var array = caller.IndexedArrays["x"];
         var prepared = Variables.CreateEmpty();
         var replacement = ShellValue.FromText("active");
@@ -368,6 +370,7 @@ public sealed class PrefixScopeOwnershipTests
                     case "output": bindings.SelectOutputVariables("x", memory, CancellationToken.None); break;
                     case "selector": bindings.RetainSelectorBinding("x", memory, CancellationToken.None); break;
                     case "promotion": bindings.RetainBinding("x", memory, CancellationToken.None); break;
+                    case "resolved promotion": bindings.Retain("link", memory, CancellationToken.None); break;
                     default: throw new ArgumentOutOfRangeException(nameof(route));
                 }
             });
@@ -379,6 +382,81 @@ public sealed class PrefixScopeOwnershipTests
         Assert.True(array.TryGet(default, out var restored));
         Assert.Equal(element, restored);
         Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void UnrelatedAttributeResultDoesNotReservePrefixCopyStorage()
+    {
+        var caller = Variables.CreateEmpty();
+        var saved = ShellValue.FromText("saved");
+        Assert.True(caller.TrySetScalar("prefix", saved));
+        var prepared = Variables.CreateEmpty();
+        Assert.True(prepared.TrySetScalar("prefix", ShellValue.FromText("temporary")));
+        var name = new string('v', 1024);
+        Assert.True(caller.TrySetScalar(name, ShellValue.FromText("unrelated")));
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "prefix" },
+                memory, CancellationToken.None);
+            memory.ReleaseUnusedCapacity();
+            var workspace = memory.Workspace.Bytes;
+            using var hold = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
+            bindings.Retain(name, memory, CancellationToken.None);
+            Assert.Equal(workspace, memory.Workspace.Bytes);
+        }
+        finally { memory.Finish(retainVariables: false); }
+
+        Assert.Equal(saved, caller.Scalars["prefix"]);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("raw selector", true)]
+    [InlineData("literal referent", true)]
+    [InlineData("element referent", false)]
+    [InlineData("uninitialized referent", false)]
+    [InlineData("circular referent", false)]
+    public void RetentionSelectsTheWholePrefixWithoutEvaluatingSelectors(string route, bool retained)
+    {
+        var caller = Variables.CreateEmpty();
+        var saved = ShellValue.FromText("saved");
+        var tail = ShellValue.FromText("tail");
+        Assert.True(caller.TryAssignArray("x", [saved, tail], ArrayKind.Indexed));
+        var prepared = Variables.CreateEmpty();
+        var replacement = ShellValue.FromText("temporary");
+        Assert.True(prepared.TrySetScalar("x", replacement));
+        var spelling = ShellValue.FromBytes(new byte[] { (byte)'x', (byte)'[', 0xff, (byte)']' });
+        var literal = BindingName.FromValue(spelling);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            if (route == "literal referent")
+                Assert.True(caller.TrySetResolvedScalar(literal, ShellValue.FromText("opaque"), memory));
+            if (route == "circular referent")
+                Assert.True(caller.TrySetNameref("next", ShellValue.FromText("link")));
+            if (route != "raw selector")
+                Assert.True(caller.TrySetNameref("link", route switch
+                {
+                    "uninitialized referent" => ShellValue.Empty,
+                    "circular referent" => ShellValue.FromText("next"),
+                    _ => spelling
+                }));
+
+            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+                memory, CancellationToken.None);
+            bindings.Retain(route == "raw selector" ? literal : (BindingName)"link", memory, CancellationToken.None);
+        }
+        finally { memory.Finish(retainVariables: false); }
+
+        var array = caller.IndexedArrays["x"];
+        Assert.True(array.TryGet(default, out var first));
+        Assert.Equal(retained ? replacement : saved, first);
+        Assert.True(array.TryGet(IndexedArrayIndex.FromUnsigned(1), out var second));
+        Assert.Equal(tail, second);
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]

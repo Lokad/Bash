@@ -372,13 +372,27 @@ public sealed partial class Variables
         /// <summary>Retains an explicit builtin write even when its target was a temporary prefix.</summary>
         public void Retain(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken)
         {
-            memory.Charge(checked(4L * name.ByteLength));
-            if (VariableReference.TryParse(ShellSource.FromBytes(name.ToValue().Bytes), memory, out var reference)
-                && _owner.TryResolveWholeName(reference.Name, out var resolved))
+            if (!TrySelectName(name, out var source) || !_owner.TryResolveWholeName(source, out var resolved))
+                return;
+
+            // An ordinary binding keeps its already selected identity.
+            if (resolved == source || TrySelectName(resolved, out resolved))
+                RetainBinding(resolved, memory, cancellationToken);
+
+            bool TrySelectName(BindingName spelling, out BindingName selected)
             {
-                memory.Charge(checked(4L * resolved.ByteLength));
-                if (VariableReference.TryParse(ShellSource.FromBytes(resolved.ToValue().Bytes), memory, out var target))
-                    RetainBinding(target.Name, memory, cancellationToken);
+                selected = spelling;
+                if (spelling.IsIdentifier)
+                    return true;
+                if (spelling.IsEmpty)
+                    return false;
+
+                // Literal local names can include a selector. Keep the byte parser for that spelling.
+                memory.Charge(checked(4L * spelling.ByteLength));
+                if (!VariableReference.TryParse(ShellSource.FromBytes(spelling.ToValue().Bytes), memory, out var reference))
+                    return false;
+                selected = reference.Name;
+                return true;
             }
         }
 
