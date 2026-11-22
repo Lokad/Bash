@@ -20,7 +20,7 @@ public sealed partial class Evaluation
         const int ReadBatchRecords = 128;
         const int RecordListEntryBytes = 64; // Includes list capacity and resize overlap.
         using var diagnostics = new BuiltinDiagnosticScope(this);
-        var descriptor = GetStdInDescriptor();
+        var input = ResolveInputBinding(LogicalDescriptor.StdIn);
         var delimiter = (byte)'\n';
         var trimDelimiter = false;
         uint count = 0;
@@ -54,7 +54,7 @@ public sealed partial class Evaluation
                     await ReportInvalidInputDescriptorAsync(arguments[0], operand, number).ConfigureAwait(false);
                     return await FinishAsync(1).ConfigureAwait(false);
                 }
-                descriptor = binding.Handle;
+                input = binding;
             }
             else
             {
@@ -100,8 +100,8 @@ public sealed partial class Evaluation
         bool assigned;
         try
         {
-            // Bash treats an explicitly closed stdin as empty input; actual host read failures remain failures.
-            var reachedEof = descriptor.IsClosed;
+            // A closed default input or a known write-only binding supplies an empty record sequence.
+            var reachedEof = input.CannotRead;
             while (!reachedEof && (count == 0 || CollectedCount() < count))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
@@ -119,7 +119,7 @@ public sealed partial class Evaluation
                 IReadOnlyList<int> recordStarts;
                 if (delimiter == (byte)'\n')
                 {
-                    var batch = await ExecuteReadAsync(descriptor, limit, readMemory).ConfigureAwait(false);
+                    var batch = await ExecuteReadAsync(input.Handle, limit, readMemory).ConfigureAwait(false);
                     batch.ThrowIfError();
                     content = batch.Content;
                     recordStarts = batch.LineStartOffsets;
@@ -128,7 +128,7 @@ public sealed partial class Evaluation
                 else
                 {
                     var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    PublishOperation(new ReadRecordBatchOperation(completion, descriptor, delimiter, limit, readMemory));
+                    PublishOperation(new ReadRecordBatchOperation(completion, input.Handle, delimiter, limit, readMemory));
                     var batch = await completion.Task.ConfigureAwait(false);
                     CheckCancellation();
                     batch.Result.ThrowIfError();

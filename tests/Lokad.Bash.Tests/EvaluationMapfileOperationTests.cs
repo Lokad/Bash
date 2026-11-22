@@ -394,13 +394,13 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_MapfileBuiltin_PropagatesReadFailureWithoutReplacingArray()
+    public async Task Evaluation_MapfileBuiltin_PreservesArrayWhenOpaqueInputReportsBadDescriptor()
     {
         var script = Parser.Parse("arr=(old); mapfile arr");
         var state = new Eval(script);
 
         var read = await NextReadAsync(state);
-        read.SetResult(ReadResult.Failure(error: new OperationError("read error\n")));
+        read.SetResult(ReadResult.Failure(error: OperationError.BadFileDescriptor));
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);

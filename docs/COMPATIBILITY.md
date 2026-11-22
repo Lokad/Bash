@@ -33,7 +33,9 @@ The supported conditions are `EXIT`, `HUP`, `INT` and `TERM`.
 `mapfile` and `readarray` split standard input on LF by default. `-u fd`
 selects an existing logical descriptor after redirections are applied. Each
 explicit selector must name an open descriptor, and the last one supplies the
-input. The command borrows the selected handle. `-d delim`
+input. Closed default input and known write-only handles supply empty input
+without a host read. With empty input the reader clears the array, preserves
+its entries when `-O` is present, and invokes no callbacks. `-d delim`
 uses the first byte of `delim`, with an empty operand selecting NUL. `-t`
 removes a record's final delimiter when present. Array values end at the first
 NUL byte, including when NUL is the delimiter.

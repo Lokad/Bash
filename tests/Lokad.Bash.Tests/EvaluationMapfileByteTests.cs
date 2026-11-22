@@ -40,6 +40,78 @@ public sealed class EvaluationMapfileByteTests
     }
 
     [Theory]
+    [InlineData("mapfile rows 0>out")]
+    [InlineData("readarray -td: -u3 rows 3>>out")]
+    [InlineData("mapfile -u2 rows 2>/dev/null")]
+    public async Task KnownWriteOnlyDescriptorClearsTheArrayWithoutReading(string command)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("rows=(old prior); " + command +
+            """; printf '<%s><%s>' "$?" "${#rows[@]}" """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><0>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.ReadCallCount);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task EmptyWriteOnlyInputWithAnOriginKeepsSparseEntries()
+    {
+        var host = EndToEndHarness.BuildTree([]);
+        const string script = """
+            rows=([1]=old [9]=other)
+            mapfile -O0 rows 0>out
+            printf '<%s><%s><%s><%s>' "$?" "${#rows[@]}" "${rows[1]}" "${rows[9]}"
+            """;
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><2><old><other>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.ReadCallCount);
+    }
+
+    [Fact]
+    public async Task EmptyWriteOnlyInputPublishesAnEmptyArrayWithoutInvokingTheCallback()
+    {
+        var host = EndToEndHarness.BuildTree([]);
+        const string script = """
+            rows=(old prior)
+            readarray -C 'printf reached' -c1 -s1 -n2 rows 0>out
+            printf '<%s><%s>' "$?" "${#rows[@]}"
+            """;
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><0>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.ReadCallCount);
+    }
+
+    [Fact]
+    public async Task LastDescriptorSelectsTheEmptyInputAndLeavesTheEarlierReaderUntouched()
+    {
+        var host = EndToEndHarness.BuildTree([("/input", "next\n")]);
+        const string script = """
+            rows=(old)
+            exec 3<input 4>out
+            mapfile -tu3 -u4 rows
+            printf '<%s><%s>' "$?" "${#rows[@]}"
+            read -ru3 next
+            printf '<%s><%s>' "$?" "$next"
+            """;
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><0><0><next>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(1, host.ReadCallCount);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData('\n', "")]
     [InlineData(':', " -d :")]
     public async Task RetainedArrayStoragePreventsAnotherMapfileFromReusingItsAllowance(char delimiter, string option)
