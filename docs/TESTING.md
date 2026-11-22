@@ -53,6 +53,11 @@ original tight-allowance witness separately from controls requiring room for
 coarse prepaid capacity growth. Native IFS nameref results differ by reference
 version; do not present the managed target-lookup profile as agreement with either.
 
+For input builtins, distinguish an unset destination, an empty assignment at
+EOF, and a preserved binding after a host read failure. Quote the record
+expansions when asserting retained delimiter bytes. Help tests check the
+selected destination and the next unread record.
+
 Use the pinned SDK and run `dotnet test Lokad.Bash.slnx -c Release`. CI builds,
 tests both target frameworks and packs on Windows and Linux. A focused test run
 is useful during an edit; release qualification requires the complete boundary

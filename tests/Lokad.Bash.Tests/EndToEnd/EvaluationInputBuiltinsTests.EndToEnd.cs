@@ -13,13 +13,13 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     [InlineData("readarray -t", "readarray")]
     public async Task InputBuiltinHelpStopsBeforeReadingOrAssigning(string invocation, string name)
     {
-        var script = "values=(old); option=--help; " + invocation + " \"$option\" -z; status=$?; "
-            + "read -r next; printf '<%s><%s><%s>' \"$status\" \"${values[0]}\" \"$next\"";
+        var script = "values=(named); MAPFILE=(default); option=--help; " + invocation + " \"$option\" -z; status=$?; "
+            + "read -r next; printf '<%s><%s><%s><%s>' \"$status\" \"${values[0]}\" \"${MAPFILE[0]}\" \"$next\"";
         var result = await EvaluationTestHelper.RunAsync(script, standardInput: "first\nsecond\n");
 
         Assert.Equal(0, result.ExitCode);
         Assert.StartsWith(name + ": " + name + " ", result.StdOut);
-        Assert.EndsWith("<2><old><first>", result.StdOut);
+        Assert.EndsWith("<2><named><default><first>", result.StdOut);
         Assert.Empty(result.StdErr);
     }
 
@@ -490,17 +490,21 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_ReadBuiltin_NonZeroExitCodeDoesNotAssign()
+    public async Task ReadAtEofAssignsEmptyToAnUnsetTargetAfterASuccessfulRead()
     {
-        // This test verifies that a failed read does not assign the target variable.
-        // The script performs two reads with only one line of input; the second read must fail,
-        // leave "value" unset, output "unset\n", and exit with code 1.
-        // If the failed read assigns anyway, the output would differ.
-        var script = @"read first; read value; status=$?; echo ${value:-unset}; exit $status";
-        var result = await EvaluationTestHelper.RunAsync(script);
+        var script = """
+            unset value
+            read first
+            first_status=$?
+            read value
+            status=$?
+            printf '<%s><%s><%s><%s>' "$first_status" "$first" "$status" "${value-unset}"
+            exit "$status"
+            """;
+        var result = await EvaluationTestHelper.RunAsync(script, standardInput: "first\n");
 
-        Assert.Equal("unset\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("<0><first><1><>", result.StdOut);
+        Assert.Empty(result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -515,42 +519,27 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
     }
 
-    [Fact]
-    public async Task Evaluation_MapfileBuiltin_AssignsTheFirstArrayElement()
+    [Theory]
+    [InlineData("mapfile")]
+    [InlineData("readarray")]
+    public async Task ArrayInputAliasesRetainRecordBytesWithoutTheTrimOption(string builtin)
     {
-        // This test verifies that mapfile reads a line into an array.
-        // With input "line\n", the script must output "line\n".
-        // If mapfile fails to assign, STDOUT would be empty.
-        var script = @"mapfile arr; echo ${arr[0]}";
-        var result = await EvaluationTestHelper.RunAsync(script, standardInput: "line\n");
+        var script = builtin + """ records; printf '<%s>' "${records[@]}" """;
+        var result = await EvaluationTestHelper.RunAsync(script, standardInput: "first\nlast");
 
-        Assert.Equal("line\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("<first\n><last>", result.StdOut);
+        Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
     [Fact]
-    public async Task Evaluation_MapfileBuiltin_AssignmentPrefixDoesNotHideTargetArray()
+    public async Task MapfileReadsRedirectedInputWithAnUnrelatedPrefix()
     {
-        var script = @"IFS= mapfile arr < /input; echo ${arr[0]}";
+        var script = """IFS= mapfile arr < /input; printf '<%s>' "${arr[0]}" """;
         var result = await EvaluationTestHelper.RunAsync(script, standardInput: string.Empty);
 
-        Assert.Equal("input\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_ReadarrayBuiltin_AssignsTheFirstArrayElement()
-    {
-        // This test verifies that readarray behaves like mapfile.
-        // With input "line\n", the script must output "line\n".
-        // If readarray fails to assign, STDOUT would be empty.
-        var script = @"readarray arr; echo ${arr[0]}";
-        var result = await EvaluationTestHelper.RunAsync(script, standardInput: "line\n");
-
-        Assert.Equal("line\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
+        Assert.Equal("<input\n>", result.StdOut);
+        Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 }

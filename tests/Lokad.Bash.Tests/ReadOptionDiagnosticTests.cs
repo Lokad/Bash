@@ -5,23 +5,11 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ReadOptionDiagnosticTests
 {
-    [Fact]
-    public async Task MissingReadArrayOperandIsAnOptionErrorBeforeInput()
-    {
-        var result = await EndToEndHarness.RunScriptAsync(
-            "{ read -ra; printf '<%s>' \"$?\"; read next; printf '<%s>' \"$next\"; } <<< data",
-            EndToEndHarness.BuildTree([]));
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.Equal("<2><data>", result.StdOut);
-        Assert.Equal("read: -a: option requires an argument\nread: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n",
-            result.StdErr);
-    }
-
     [Theory]
+    [InlineData("-ra", "a")]
     [InlineData("-sep", "p")]
     [InlineData("-i", "i")]
-    public async Task MissingNonInteractiveReadOperandLeavesInputUntouched(string options, string flag)
+    public async Task MissingReadOptionOperandsLeaveInputUntouched(string options, string flag)
     {
         var result = await EndToEndHarness.RunScriptAsync(
             "{ read " + options + "; printf '<%s>' \"$?\"; read next; printf '<%s>' \"$next\"; } <<< data",
@@ -65,7 +53,7 @@ public sealed class ReadOptionDiagnosticTests
     [InlineData("read --unknown value <<< data; printf '<%s>' \"$?\"", "3C323E", "2D")]
     [InlineData("read -r -z value <<< data; printf '<%s>' \"$?\"", "3C323E", "7A")]
     [InlineData("! read -z value <<< data; printf '<%s>' \"$?\"", "3C303E", "7A")]
-    public async Task InvalidOptionsDiagnoseWithoutConsumingInput(
+    public async Task InvalidOptionsRetainTheirDiagnosticBytesStatusAndEffects(
         string script, string outputHex, string optionHex)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
