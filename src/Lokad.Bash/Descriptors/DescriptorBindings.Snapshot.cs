@@ -10,36 +10,45 @@ public partial struct DescriptorBindings
     public readonly struct Snapshot
     {
         private readonly DescriptorMap? _additional;
+        private readonly DescriptorBinding _stdIn;
+        private readonly DescriptorBinding _stdOut;
+        private readonly DescriptorBinding _stdErr;
 
-        public FileDescriptor StdIn { get; }
-        public FileDescriptor StdOut { get; }
-        public FileDescriptor StdErr { get; }
+        public FileDescriptor StdIn => _stdIn.Handle;
+        public FileDescriptor StdOut => _stdOut.Handle;
+        public FileDescriptor StdErr => _stdErr.Handle;
 
         public static Snapshot Standard { get; } =
-            new(FileDescriptor.StdIn, FileDescriptor.StdOut, FileDescriptor.StdErr, additional: null);
+            new(new DescriptorBinding(FileDescriptor.StdIn), new DescriptorBinding(FileDescriptor.StdOut),
+                new DescriptorBinding(FileDescriptor.StdErr), additional: null);
 
         public Snapshot(ref DescriptorBindings bindings)
-            : this(bindings.StdIn, bindings.StdOut, bindings.StdErr, bindings._writer?.Capture() ?? bindings._additional)
+            : this(bindings._stdIn, bindings._stdOut, bindings._stdErr, bindings._writer?.Capture() ?? bindings._additional)
         {
         }
 
-        private Snapshot(FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr,
+        private Snapshot(DescriptorBinding stdIn, DescriptorBinding stdOut, DescriptorBinding stdErr,
             DescriptorMap? additional)
         {
-            StdIn = stdIn;
-            StdOut = stdOut;
-            StdErr = stdErr;
+            _stdIn = stdIn;
+            _stdOut = stdOut;
+            _stdErr = stdErr;
             _additional = additional;
         }
 
         public Snapshot WithStandardStreams(FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr) =>
+            WithStandardStreams(_stdIn.WithHandle(stdIn), _stdOut.WithHandle(stdOut), _stdErr.WithHandle(stdErr));
+
+        internal Snapshot WithStandardStreams(DescriptorBinding stdIn, DescriptorBinding stdOut, DescriptorBinding stdErr) =>
             new(stdIn, stdOut, stdErr, _additional);
 
         /// <summary>Creates independent mutable bindings sharing immutable additional mappings.</summary>
-        public DescriptorBindings Fork() => new(StdIn, StdOut, StdErr, _additional);
+        public DescriptorBindings Fork() => new(_stdIn, _stdOut, _stdErr, _additional);
 
-        public FileDescriptor Resolve(LogicalDescriptor descriptor) =>
-            DescriptorBindings.Resolve(descriptor, StdIn, StdOut, StdErr, _additional);
+        public FileDescriptor Resolve(LogicalDescriptor descriptor) => ResolveBinding(descriptor).Handle;
+
+        internal DescriptorBinding ResolveBinding(LogicalDescriptor descriptor) =>
+            DescriptorBindings.ResolveBinding(descriptor, _stdIn, _stdOut, _stdErr, _additional);
 
         public bool HasMapping(LogicalDescriptor descriptor) => DescriptorBindings.HasMapping(descriptor, _additional);
 

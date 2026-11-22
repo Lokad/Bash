@@ -844,14 +844,16 @@ public sealed partial class Evaluation : IFileTester
             var bindings = CaptureDescriptorBindings();
             for (var index = 0; index < stageCount; index++)
             {
-                var stdIn = index > 0 ? pipes[index - 1].Read : GetStdInDescriptor();
-                var stdOut = index < links.Length ? pipes[index].Write : GetStdOutDescriptor();
+                var stdIn = index > 0 ? new DescriptorBinding(pipes[index - 1].Read)
+                    : bindings.ResolveBinding(LogicalDescriptor.StdIn);
+                var stdOut = index < links.Length ? new DescriptorBinding(pipes[index].Write, IsWriteOnly: true)
+                    : bindings.ResolveBinding(LogicalDescriptor.StdOut);
                 var command = index == 0 ? first : links[index - 1].Right;
                 if (index < links.Length && links[index].Operator == PipelineOperator.PipeAndError)
                     command = AppendPipeStandardError(command);
                 var script = new ParsedScript([command]);
                 var descriptors = new EvaluationDescriptorSetup(
-                    bindings.WithStandardStreams(stdIn, stdOut, GetStdErrDescriptor()), borrowedDescriptors);
+                    bindings.WithStandardStreams(stdIn, stdOut, bindings.ResolveBinding(LogicalDescriptor.StdErr)), borrowedDescriptors);
                 var forkKind = command is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
                 var (stageVars, stageContext) = scope.ForkBindings();
                 var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory);
@@ -868,9 +870,9 @@ public sealed partial class Evaluation : IFileTester
                     _preparedSyntaxRoot);
                 FileDescriptor[] descriptorsToClose = index switch
                 {
-                    0 => [stdOut],
-                    _ when index == links.Length => [stdIn],
-                    _ => [stdIn, stdOut]
+                    0 => [stdOut.Handle],
+                    _ when index == links.Length => [stdIn.Handle],
+                    _ => [stdIn.Handle, stdOut.Handle]
                 };
 
                 stage._retainCompletedMemory = true;
@@ -3028,7 +3030,9 @@ public sealed partial class Evaluation : IFileTester
     /// <param name="stdOut">The command-substitution capture descriptor.</param>
     internal EvaluationDescriptorSetup CreateCommandSubstitutionDescriptorSetup(FileDescriptor stdOut)
     {
-        var bindings = CaptureDescriptorBindings().WithStandardStreams(GetStdInDescriptor(), stdOut, GetStdErrDescriptor());
+        var inherited = CaptureDescriptorBindings();
+        var bindings = inherited.WithStandardStreams(inherited.ResolveBinding(LogicalDescriptor.StdIn),
+            new DescriptorBinding(stdOut, IsWriteOnly: true), inherited.ResolveBinding(LogicalDescriptor.StdErr));
 
         var borrowedDescriptors = CollectDescriptorsAvailable();
         bindings.AddReferencedHandlesTo(ref borrowedDescriptors);
@@ -3428,8 +3432,8 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Persists an allocated script binding through its enclosing restoration boundary.
     /// </summary>
-    internal void BindPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle) =>
-        _state.SetPersistentDescriptor(descriptor, handle, Memory, OwnsPersistentHandle(handle));
+    internal void BindPersistentDescriptor(LogicalDescriptor descriptor, DescriptorBinding binding) =>
+        _state.SetPersistentDescriptor(descriptor, binding, Memory, OwnsPersistentHandle(binding.Handle));
 
     private bool OwnsPersistentHandle(FileDescriptor descriptor)
     {

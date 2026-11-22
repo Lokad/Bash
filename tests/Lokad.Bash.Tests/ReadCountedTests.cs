@@ -67,6 +67,62 @@ public sealed class ReadCountedTests
     }
 
     [Theory]
+    [InlineData("value=old; read -n0 value 0>out", "<1><>")]
+    [InlineData("exec 3>>out; value=old; read -u3 -N0 value", "<1><>")]
+    [InlineData("exec 3>out; exec 8<&3-; read -u8 -N0 value", "<1><>")]
+    [InlineData(": {fd}>out; read -u \"$fd\" -n0 value", "<1><>")]
+    [InlineData("exec 3>out; : {fd}<&3; exec 3<&-; read -u \"$fd\" -n0 value", "<1><>")]
+    [InlineData("exec 3>out; exec 3<input; read -u3 -N0 value", "<0><>")]
+    [InlineData("exec 3<>input; read -u3 -N0 value", "<0><>")]
+    public async Task ZeroCountUsesTheSelectedFileAccessWithoutReading(string setupAndRead, string expected)
+    {
+        var host = EndToEndHarness.BuildTree([("/input", "next\n")]);
+        var result = await EndToEndHarness.RunScriptAsync(
+            setupAndRead + """; printf '<%s><%s>' "$?" "$value" """, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.ReadCallCount);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ZeroCountSeesTheSavedAccessAfterTemporaryRedirection()
+    {
+        var host = EndToEndHarness.BuildTree([("/input", "next\n")]);
+        var result = await EndToEndHarness.RunScriptAsync("""
+            exec 3>out
+            { read -u3 -n0 value; printf '<%s>' "$?"; } 3<input
+            read -u3 -N0 value
+            printf '<%s><%s>' "$?" "$value"
+            """, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><1><>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.ReadCallCount);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("exec 3>out; (read -u3 -n0 value; printf '<%s>' \"$?\")", "<1>")]
+    [InlineData("exec 0>out; printf '%s' \"$(read -N0 value; printf '<%s>' \"$?\")\"", "<1>")]
+    [InlineData("printf '%s' \"$(read -N0 value 0<&1; printf '<%s>' \"$?\")\"", "<1>")]
+    [InlineData("exec 0>out; bash -c 'read -N0 value; printf \"<%s>\" \"$?\"'", "<1>")]
+    [InlineData("(read -n0 value <&1; exit \"$?\") | :; printf '<%s><%s>' \"${PIPESTATUS[0]}\" \"${PIPESTATUS[1]}\"", "<1><0>")]
+    [InlineData("exec 0>out; : | { read -n0 value; printf '<%s>' \"$?\"; }", "<0>")]
+    public async Task ZeroCountUsesTheChildStreams(string script, string expected)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("-n6", "<><a:b:c>", "<><a><b><c>")]
     [InlineData("-N6", "<:a:b:c><>", "<:a:b:c>")]
     public async Task ExactCountDisablesScalarAndArrayFieldSplitting(string option, string scalar, string array)

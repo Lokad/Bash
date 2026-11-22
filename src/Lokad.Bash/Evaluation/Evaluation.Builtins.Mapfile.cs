@@ -48,13 +48,13 @@ public sealed partial class Evaluation
                 delimiter = operand.Bytes.IsEmpty ? (byte)0 : operand.Bytes.Span[0];
             else if (option == (byte)'u')
             {
-                var (number, handle) = ResolveInputDescriptorOperand(operand.Bytes.Span);
-                if (number == null || handle.IsClosed)
+                var (number, binding) = ResolveInputDescriptorOperand(operand.Bytes.Span);
+                if (number == null || binding.Handle.IsClosed)
                 {
                     await ReportInvalidInputDescriptorAsync(arguments[0], operand, number).ConfigureAwait(false);
                     return await FinishAsync(1).ConfigureAwait(false);
                 }
-                descriptor = handle;
+                descriptor = binding.Handle;
             }
             else
             {

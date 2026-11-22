@@ -112,12 +112,13 @@ internal struct RedirectionState
         var changedDescriptors = _changedDescriptors;
         foreach (var logicalDescriptor in changedDescriptors)
         {
-            var handle = committedTable.Resolve(logicalDescriptor);
+            var binding = committedTable.ResolveBinding(logicalDescriptor);
+            var handle = binding.Handle;
             var acquired = pending?.Contains(handle) ?? OwnsHandle(handle);
             if (acquired && borrowed != null)
                 foreach (var scope in borrowed)
                     if (scope.Contains(handle)) { acquired = false; break; }
-            SetPersistentDescriptor(logicalDescriptor, handle, memory, includeCurrent: false,
+            SetPersistentDescriptor(logicalDescriptor, binding, memory, includeCurrent: false,
                 acquired);
         }
 
@@ -127,12 +128,13 @@ internal struct RedirectionState
     }
 
     /// <summary>Persists a binding through enclosing scopes up to its temporary restoration boundary.</summary>
-    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory, bool acquired) =>
-        SetPersistentDescriptor(descriptor, handle, memory, includeCurrent: true, acquired);
+    public void SetPersistentDescriptor(LogicalDescriptor descriptor, DescriptorBinding binding, EvaluationMemory? memory, bool acquired) =>
+        SetPersistentDescriptor(descriptor, binding, memory, includeCurrent: true, acquired);
 
     private void SetPersistentDescriptor(
-        LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory, bool includeCurrent, bool acquired)
+        LogicalDescriptor descriptor, DescriptorBinding binding, EvaluationMemory? memory, bool includeCurrent, bool acquired)
     {
+        var handle = binding.Handle;
         var current = CurrentTable;
         var frames = _frames;
         var currentChanged = _changedDescriptors;
@@ -142,7 +144,7 @@ internal struct RedirectionState
         {
             var table = target.Table;
             var before = table.OwnedMemoryBytes;
-            try { table.PrepareSet(descriptor, handle, memory?.Workspace); }
+            try { table.PrepareSet(descriptor, binding, memory?.Workspace); }
             finally
             {
                 if (!ReferenceEquals(table, current))
@@ -162,7 +164,7 @@ internal struct RedirectionState
         foreach (var target in Targets())
         {
             var before = target.Table.OwnedMemoryBytes;
-            target.Table.Set(descriptor, handle);
+            target.Table.Set(descriptor, binding);
             if (!ReferenceEquals(target.Table, current))
                 _savedAdditionalBytes = checked(_savedAdditionalBytes + target.Table.OwnedMemoryBytes - before);
         }

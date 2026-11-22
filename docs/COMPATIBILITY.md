@@ -75,9 +75,12 @@ The last count applies, and any reached `-N` selects the exact-count mode.
 Counts use the C locale byte profile, including for UTF-8 input. Escape
 processing skips backslash-LF and counts the protected byte for other escapes.
 Unquoted NUL does not count toward either limit. Zero assigns an empty value
-without consuming bytes. A closed standard input or a write-only `/dev/null`
-handle returns failure after assigning empty input. An explicit `-u` for a
-closed descriptor fails before assignment. EOF before the requested boundary
+without consuming bytes. A closed standard input or a known write-only
+descriptor returns failure after assigning empty input. The shell keeps
+the access mode of its file opens and pipe endpoints through descriptor
+aliases and child evaluations. An opaque inherited host handle whose mode
+is unknown uses the open-descriptor result. An explicit `-u` for a closed
+descriptor fails before assignment. EOF before the requested boundary
 publishes partial input and returns failure.
 
 `read` accepts `-e`, `-i text`, `-p prompt` and `-s` in its non-interactive

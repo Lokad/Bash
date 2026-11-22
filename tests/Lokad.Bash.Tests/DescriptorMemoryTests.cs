@@ -21,7 +21,7 @@ public sealed class DescriptorMemoryTests
         using var owner = governor.CreateScope();
         var memory = new EvaluationMemory(owner);
 
-        child.Set(new LogicalDescriptor(300), FileDescriptor.DevNull, memory);
+        child.Set(new LogicalDescriptor(300), new DescriptorBinding(FileDescriptor.DevNull), memory);
         Assert.Equal(FileDescriptor.DevNull, child.Resolve(new LogicalDescriptor(300)));
         Assert.False(inherited.HasMapping(new LogicalDescriptor(300)));
         Assert.True(child.OwnedMemoryBytes <= governor.ReservedBytes);
@@ -38,7 +38,8 @@ public sealed class DescriptorMemoryTests
         var memory = new EvaluationMemory(owner);
         var number = new LogicalDescriptor(10);
 
-        table.PrepareSet(number, FileDescriptor.DevNull, memory.Workspace);
+        var replacement = new DescriptorBinding(FileDescriptor.DevNull);
+        table.PrepareSet(number, replacement, memory.Workspace);
         Assert.True(governor.ReservedBytes > 0);
         Assert.Equal(0, table.OwnedMemoryBytes);
         Assert.Equal(FileDescriptor.StdOut, table.Resolve(number));
@@ -50,7 +51,7 @@ public sealed class DescriptorMemoryTests
         Assert.Equal(0, governor.ReservedBytes);
         using var blocker = owner.Reserve(governor.LimitBytes);
         Assert.Throws<MemoryBudgetExceededException>(() =>
-            table.PrepareSet(number, FileDescriptor.DevNull, memory.Workspace));
+            table.PrepareSet(number, replacement, memory.Workspace));
         Assert.Equal(0, table.OwnedMemoryBytes);
         Assert.Equal(FileDescriptor.StdOut, table.Resolve(number));
     }
@@ -63,11 +64,11 @@ public sealed class DescriptorMemoryTests
         var memory = new EvaluationMemory(owner);
         var parent = new DescriptorTable();
         for (var index = 0; index < 128; index++)
-            parent.Set(new LogicalDescriptor(10 + index), new FileDescriptor(1000 + index), memory);
+            parent.Set(new LogicalDescriptor(10 + index), new DescriptorBinding(new FileDescriptor(1000 + index)), memory);
         var inherited = parent.Capture();
         var child = inherited.Fork();
         var number = new LogicalDescriptor(10);
-        child.Set(number, new FileDescriptor(2000), memory);
+        child.Set(number, new DescriptorBinding(new FileDescriptor(2000)), memory);
         var retained = parent.OwnedMemoryBytes + child.OwnedMemoryBytes;
         memory.Workspace.Resize(retained);
         Assert.True(governor.ReservedBytes >= retained);
@@ -80,7 +81,7 @@ public sealed class DescriptorMemoryTests
                 // Only this operation's old/new paths overlap; discarded snapshots
                 // have no pending user. Parent backing has its separate live owner.
                 _ = child.Capture();
-                child.Set(number, new FileDescriptor(3000 + index), memory);
+                child.Set(number, new DescriptorBinding(new FileDescriptor(3000 + index)), memory);
             }
         });
         Assert.Null(failure);
@@ -134,11 +135,12 @@ public sealed class DescriptorMemoryTests
         using var owner = governor.CreateScope();
         var memory = new EvaluationMemory(owner);
 
-        child.Set(new LogicalDescriptor(10), FileDescriptor.StdOut, memory);
-        child.Set(LogicalDescriptor.StdOut, FileDescriptor.DevNull, memory);
+        var standardOutput = new DescriptorBinding(FileDescriptor.StdOut);
+        child.Set(new LogicalDescriptor(10), standardOutput, memory);
+        child.Set(LogicalDescriptor.StdOut, new DescriptorBinding(FileDescriptor.DevNull), memory);
         Assert.Equal(0, child.OwnedMemoryBytes);
         Assert.Equal(0, governor.ReservedBytes);
-        Assert.Throws<MemoryBudgetExceededException>(() => child.Set(new LogicalDescriptor(9), FileDescriptor.StdOut, memory));
+        Assert.Throws<MemoryBudgetExceededException>(() => child.Set(new LogicalDescriptor(9), standardOutput, memory));
         Assert.False(child.HasMapping(new LogicalDescriptor(9)));
         Assert.Equal(FileDescriptor.StdOut, snapshot.StdOut);
         Assert.Equal(FileDescriptor.StdOut, snapshot.Resolve(new LogicalDescriptor(10)));
@@ -153,10 +155,11 @@ public sealed class DescriptorMemoryTests
         var table = new DescriptorTable();
         var accepted = new List<LogicalDescriptor>();
         var refused = false;
+        var binding = new DescriptorBinding(FileDescriptor.StdOut);
         for (var number = 10; number < 1000; number++)
         {
             var descriptor = new LogicalDescriptor(number);
-            try { table.Set(descriptor, FileDescriptor.StdOut, memory); }
+            try { table.Set(descriptor, binding, memory); }
             catch (MemoryBudgetExceededException)
             {
                 Assert.False(table.HasMapping(descriptor));
@@ -193,11 +196,15 @@ public sealed class DescriptorMemoryTests
         var memory = new EvaluationMemory(owner);
 
         var metadata = state.OwnedMemoryBytes - root.OwnedMemoryBytes - middle.OwnedMemoryBytes - current.OwnedMemoryBytes;
-        Assert.Throws<MemoryBudgetExceededException>(() => state.SetPersistentDescriptor(number, FileDescriptor.DevNull, memory, acquired: false));
+        var replacement = new DescriptorBinding(new FileDescriptor(4000), IsWriteOnly: true);
+        Assert.Throws<MemoryBudgetExceededException>(() => state.SetPersistentDescriptor(number, replacement, memory, acquired: false));
 
         Assert.Equal(FileDescriptor.StdOut, root.Resolve(number));
         Assert.Equal(FileDescriptor.StdOut, middle.Resolve(number));
         Assert.Equal(FileDescriptor.StdOut, current.Resolve(number));
+        Assert.False(root.ResolveBinding(number).CannotRead);
+        Assert.False(middle.ResolveBinding(number).CannotRead);
+        Assert.False(current.ResolveBinding(number).CannotRead);
         Assert.Equal(metadata + root.OwnedMemoryBytes + middle.OwnedMemoryBytes + current.OwnedMemoryBytes, state.OwnedMemoryBytes);
     }
 

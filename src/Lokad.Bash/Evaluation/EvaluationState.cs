@@ -486,8 +486,8 @@ internal sealed class EvaluationState
         _redirections.Preserve(memory, pending, borrowed);
 
     /// <summary>Persists a binding through enclosing scopes up to its temporary restoration boundary.</summary>
-    public void SetPersistentDescriptor(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory? memory, bool acquired) =>
-        _redirections.SetPersistentDescriptor(descriptor, handle, memory, acquired);
+    public void SetPersistentDescriptor(LogicalDescriptor descriptor, DescriptorBinding binding, EvaluationMemory? memory, bool acquired) =>
+        _redirections.SetPersistentDescriptor(descriptor, binding, memory, acquired);
 
     /// <summary>Transfers handles to their longest-lived referencing scope; returns unreferenced handles in reverse order.</summary>
     public IReadOnlyCollection<FileDescriptor> TransferRedirectionDescriptors(

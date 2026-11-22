@@ -135,14 +135,14 @@ internal sealed class RedirectionEvaluation
                     break;
                 case RedirectionKind.CloseOutput:
                 case RedirectionKind.CloseInput:
-                    SetDescriptor(scope, targetDescriptor, FileDescriptor.Closed);
+                    SetDescriptor(scope, targetDescriptor, DescriptorBinding.Closed);
                     break;
                 default:
                     throw new NotSupportedException($"Redirection kind '{redirection.Kind}' is not supported in this evaluation stage.");
             }
             if (allocate && !scope.Effects.HasPendingExpansionError)
                 await BindAllocatedDescriptorAsync(scope, redirection.VariableName,
-                    targetDescriptor, _descriptorTable.Resolve(targetDescriptor), previouslyTouched, persistAllocations).ConfigureAwait(false);
+                    targetDescriptor, _descriptorTable.ResolveBinding(targetDescriptor), previouslyTouched, persistAllocations).ConfigureAwait(false);
         }
 
         static LogicalDescriptor GetTargetDescriptor(Redirection redirection) => new(redirection.Kind switch
@@ -187,11 +187,7 @@ internal sealed class RedirectionEvaluation
     {
         if (string.Equals(path, FileDescriptor.DevNullPath.Path, StringComparison.Ordinal))
         {
-            var nullDescriptor = FileDescriptor.ForDevNull(mode);
-            SetDescriptor(scope, targetDescriptor, nullDescriptor);
-            if (secondaryTargetDescriptor.HasValue)
-                SetDescriptor(scope, secondaryTargetDescriptor.Value, nullDescriptor);
-
+            SetOpenedBinding(new DescriptorBinding(FileDescriptor.ForDevNull(mode)));
             return;
         }
 
@@ -207,9 +203,14 @@ internal sealed class RedirectionEvaluation
 
         scope.Effects.TrackOwnedDescriptor(descriptor.Value);
         _openedDescriptors.AddPrepared(descriptor.Value);
-        SetDescriptor(scope, targetDescriptor, descriptor.Value);
-        if (secondaryTargetDescriptor.HasValue)
-            SetDescriptor(scope, secondaryTargetDescriptor.Value, descriptor.Value);
+        SetOpenedBinding(new DescriptorBinding(descriptor.Value, mode is FileOpenMode.WriteTruncate or FileOpenMode.WriteAppend));
+
+        void SetOpenedBinding(DescriptorBinding binding)
+        {
+            SetDescriptor(scope, targetDescriptor, binding);
+            if (secondaryTargetDescriptor is { } secondary)
+                SetDescriptor(scope, secondary, binding);
+        }
     }
 
     /// <summary> Resolves and duplicates a descriptor redirection. </summary>
@@ -238,7 +239,7 @@ internal sealed class RedirectionEvaluation
         {
             if (allocate)
                 return await CloseVariableAsync(scope, redirection.VariableName).ConfigureAwait(false);
-            SetDescriptor(scope, targetDescriptor, FileDescriptor.Closed);
+            SetDescriptor(scope, targetDescriptor, DescriptorBinding.Closed);
             return RedirectionOutcome.Success;
         }
 
@@ -276,7 +277,8 @@ internal sealed class RedirectionEvaluation
         if (!allocate && targetDescriptor == sourceDescriptor)
             return RedirectionOutcome.Success;
 
-        var resolvedSource = _descriptorTable.Resolve(sourceDescriptor);
+        var sourceBinding = _descriptorTable.ResolveBinding(sourceDescriptor);
+        var resolvedSource = sourceBinding.Handle;
         if (resolvedSource.IsClosed)
         {
             await ReportFailureAsync(scope, new OperationError($"{sourceDescriptor}: Bad file descriptor\n"))
@@ -287,7 +289,7 @@ internal sealed class RedirectionEvaluation
         var previouslyTouched = _touchedDescriptors.Contains(targetDescriptor);
         var consumeSource = move && !allocate && persistence == RedirectionPersistence.AllocationsAndMoves
             && _descriptorTable.Resolve(targetDescriptor).IsClosed && !_touchedDescriptors.Contains(sourceDescriptor);
-        SetDescriptor(scope, targetDescriptor, resolvedSource);
+        SetDescriptor(scope, targetDescriptor, sourceBinding);
         if (consumeSource)
         {
             // An unopened destination contributes no saved source binding. Retire the source
@@ -298,13 +300,13 @@ internal sealed class RedirectionEvaluation
                 consumed.PrepareAdditional(1, scope.Effects.Memory.Workspace);
                 consumed.AddPrepared(resolvedSource);
             }
-            scope.Effects.BindPersistentDescriptor(sourceDescriptor, FileDescriptor.Closed);
+            scope.Effects.BindPersistentDescriptor(sourceDescriptor, DescriptorBinding.Closed);
         }
         else if (move)
-            SetDescriptor(scope, sourceDescriptor, FileDescriptor.Closed);
+            SetDescriptor(scope, sourceDescriptor, DescriptorBinding.Closed);
         if (allocate)
             await BindAllocatedDescriptorAsync(scope, redirection.VariableName,
-                targetDescriptor, resolvedSource, previouslyTouched, persistence != RedirectionPersistence.None).ConfigureAwait(false);
+                targetDescriptor, sourceBinding, previouslyTouched, persistence != RedirectionPersistence.None).ConfigureAwait(false);
         return RedirectionOutcome.Success;
 
     }
@@ -342,7 +344,7 @@ internal sealed class RedirectionEvaluation
             await ReportFailureAsync(scope, error).ConfigureAwait(false);
             return;
         }
-        SetDescriptor(scope, targetDescriptor, reader.Value);
+        SetDescriptor(scope, targetDescriptor, new DescriptorBinding(reader.Value));
     }
 
     /// <summary>Publishes one selected variable output and persists the acquired alias through restoration boundaries.</summary>
@@ -350,7 +352,7 @@ internal sealed class RedirectionEvaluation
         ScopedEvaluation scope,
         string variableName,
         LogicalDescriptor number,
-        FileDescriptor descriptor,
+        DescriptorBinding binding,
         bool previouslyTouched,
         bool persistAllocations)
     {
@@ -372,7 +374,7 @@ internal sealed class RedirectionEvaluation
         // Applying the operator touched this new target. Only an earlier redirection
         // establishes a restoration boundary; the allocation itself must persist.
         if (!previouslyTouched) _touchedDescriptors.Remove(number);
-        scope.Effects.BindPersistentDescriptor(number, descriptor);
+        scope.Effects.BindPersistentDescriptor(number, binding);
     }
 
     /// <summary>Closes the current value of a descriptor variable without assigning to it.</summary>
@@ -396,7 +398,7 @@ internal sealed class RedirectionEvaluation
             await ReportFailureAsync(scope, new OperationError($"{variableName}: ambiguous redirect\n")).ConfigureAwait(false);
             return RedirectionOutcome.Failure;
         }
-        SetDescriptor(scope, new LogicalDescriptor(number), FileDescriptor.Closed);
+        SetDescriptor(scope, new LogicalDescriptor(number), DescriptorBinding.Closed);
         return RedirectionOutcome.Success;
     }
 
@@ -448,14 +450,15 @@ internal sealed class RedirectionEvaluation
         scope.Effects.SetExpansionError(1);
     }
 
-    private void SetDescriptor(ScopedEvaluation scope, LogicalDescriptor logicalDescriptor, FileDescriptor resolvedDescriptor)
+    private void SetDescriptor(ScopedEvaluation scope, LogicalDescriptor logicalDescriptor, DescriptorBinding binding)
     {
         AddDescriptorToSet(_touchedDescriptors, logicalDescriptor, scope.Effects.Memory);
         var replaced = _replacedHandles;
         var previousDescriptor = replaced != null ? _descriptorTable.Resolve(logicalDescriptor) : FileDescriptor.Closed;
-        _descriptorTable.Set(logicalDescriptor, resolvedDescriptor, scope.Effects.Memory);
+        _descriptorTable.Set(logicalDescriptor, binding, scope.Effects.Memory);
         if (replaced == null)
             return;
+        var resolvedDescriptor = binding.Handle;
         replaced.Remove(resolvedDescriptor);
         if (previousDescriptor != resolvedDescriptor
             && !previousDescriptor.IsClosed

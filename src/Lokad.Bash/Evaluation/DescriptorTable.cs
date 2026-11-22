@@ -45,26 +45,31 @@ internal sealed partial class DescriptorTable
     public FileDescriptor Resolve(LogicalDescriptor descriptor) =>
         _bindings.Resolve(descriptor);
 
-    public void Set(LogicalDescriptor descriptor, FileDescriptor handle)
+    internal DescriptorBinding ResolveBinding(LogicalDescriptor descriptor) => _bindings.ResolveBinding(descriptor);
+
+    public void Set(LogicalDescriptor descriptor, FileDescriptor handle) =>
+        Set(descriptor, new DescriptorBinding(handle));
+
+    internal void Set(LogicalDescriptor descriptor, DescriptorBinding binding)
     {
-        if (!_bindings.Set(descriptor, handle))
+        if (!_bindings.Set(descriptor, binding))
             return;
-        if (handle.IsClosed && descriptor.Number >= FirstAllocatedDescriptorNumber && descriptor.Number < _nextAllocationNumber)
+        if (binding.Handle.IsClosed && descriptor.Number >= FirstAllocatedDescriptorNumber && descriptor.Number < _nextAllocationNumber)
             _nextAllocationNumber = descriptor.Number;
         else if (descriptor.Number == _nextAllocationNumber)
             TryFindAvailableDescriptor(out _);
     }
 
     /// <summary>Prepares major backing storage before a mapping or persistent batch is published.</summary>
-    internal void PrepareSet(LogicalDescriptor descriptor, FileDescriptor handle, MemoryCapacity? memory)
+    internal void PrepareSet(LogicalDescriptor descriptor, DescriptorBinding binding, MemoryCapacity? memory)
     {
-        _bindings.PrepareSet(descriptor, handle, memory);
+        _bindings.PrepareSet(descriptor, binding, memory);
     }
 
-    internal void Set(LogicalDescriptor descriptor, FileDescriptor handle, EvaluationMemory memory)
+    internal void Set(LogicalDescriptor descriptor, DescriptorBinding binding, EvaluationMemory memory)
     {
-        PrepareSet(descriptor, handle, memory.Workspace);
-        Set(descriptor, handle);
+        PrepareSet(descriptor, binding, memory.Workspace);
+        Set(descriptor, binding);
     }
 
     /// <summary>Finds the first free script descriptor from 10; host handle numbers do not participate.</summary>

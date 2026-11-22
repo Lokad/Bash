@@ -116,7 +116,7 @@ public sealed class DescriptorReferenceTests
         var memory = new EvaluationMemory(owner);
         var table = new DescriptorTable();
         for (var index = 0; index < 128; index++)
-            table.Set(new LogicalDescriptor(10 + index), new FileDescriptor(1000 + index), memory);
+            table.Set(new LogicalDescriptor(10 + index), new DescriptorBinding(new FileDescriptor(1000 + index)), memory);
         if (captured) table = table.Capture().Fork();
         var absent = new FileDescriptor(9000);
         var last = new FileDescriptor(1127);

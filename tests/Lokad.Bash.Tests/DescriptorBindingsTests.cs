@@ -5,6 +5,28 @@ namespace Lokad.Bash.Tests;
 public sealed class DescriptorBindingsTests
 {
     [Fact]
+    public void StandardStreamReplacementDropsOnlyTheReplacedAccessInformation()
+    {
+        var writer = new DescriptorBinding(new FileDescriptor(40), IsWriteOnly: true);
+        var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+        var alias = new LogicalDescriptor(10);
+        bindings.Set(LogicalDescriptor.StdIn, writer);
+        bindings.Set(alias, writer);
+        Assert.False(bindings.Set(alias, writer.Handle));
+
+        var saved = bindings.Capture();
+        var child = saved.WithStandardStreams(saved.StdIn, new FileDescriptor(41), saved.StdErr).Fork();
+        Assert.Equal(writer, child.ResolveBinding(LogicalDescriptor.StdIn));
+        Assert.Equal(writer, child.ResolveBinding(alias));
+
+        var replacement = new FileDescriptor(42);
+        var replaced = saved.WithStandardStreams(replacement, saved.StdOut, saved.StdErr);
+        Assert.Equal(new DescriptorBinding(replacement), replaced.ResolveBinding(LogicalDescriptor.StdIn));
+        Assert.Equal(writer, replaced.ResolveBinding(alias));
+        Assert.Equal(writer, saved.ResolveBinding(LogicalDescriptor.StdIn));
+    }
+
+    [Fact]
     public void RemovingAdditionalBindingsPreservesSnapshotsAndOtherAliases()
     {
         var number = new LogicalDescriptor(10);

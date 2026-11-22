@@ -33,8 +33,8 @@ internal sealed class DescriptorMap
     internal int RequiredSlots(LogicalDescriptor descriptor) =>
         RequiredSlots(_positions, SlotCount, _firstFree, descriptor, captured: true);
 
-    internal bool TryGetValue(LogicalDescriptor descriptor, out FileDescriptor handle) =>
-        TryGetValue(_positions, _slots, descriptor, out handle);
+    internal bool TryGetValue(LogicalDescriptor descriptor, out DescriptorBinding binding) =>
+        TryGetValue(_positions, _slots, descriptor, out binding);
 
     internal bool ContainsKey(LogicalDescriptor descriptor) => _positions.ContainsKey(descriptor);
 
@@ -48,14 +48,14 @@ internal sealed class DescriptorMap
     }
 
     private static bool TryGetValue(IReadOnlyDictionary<LogicalDescriptor, int> positions,
-        IReadOnlyList<Binding> slots, LogicalDescriptor descriptor, out FileDescriptor handle)
+        IReadOnlyList<Binding> slots, LogicalDescriptor descriptor, out DescriptorBinding binding)
     {
         if (positions.TryGetValue(descriptor, out var position))
         {
-            handle = slots[position].Handle;
+            binding = slots[position].Value;
             return true;
         }
-        handle = FileDescriptor.Closed;
+        binding = DescriptorBinding.Closed;
         return false;
     }
 
@@ -92,8 +92,8 @@ internal sealed class DescriptorMap
         internal int RequiredSlots(LogicalDescriptor descriptor) =>
             DescriptorMap.RequiredSlots(_positions, SlotCount, _firstFree, descriptor, _captured);
 
-        internal bool TryGetValue(LogicalDescriptor descriptor, out FileDescriptor handle) =>
-            DescriptorMap.TryGetValue(_positions, _slots, descriptor, out handle);
+        internal bool TryGetValue(LogicalDescriptor descriptor, out DescriptorBinding binding) =>
+            DescriptorMap.TryGetValue(_positions, _slots, descriptor, out binding);
 
         internal bool ContainsKey(LogicalDescriptor descriptor) => _positions.ContainsKey(descriptor);
 
@@ -128,14 +128,19 @@ internal sealed class DescriptorMap
             _referenceChanges[last] = (_referenceChanges[last].Count, removed.Position);
         }
 
-        internal void Set(LogicalDescriptor descriptor, FileDescriptor handle)
+        internal void Set(LogicalDescriptor descriptor, DescriptorBinding value)
         {
             PrepareWrite();
-            var binding = new Binding(descriptor, handle, -1);
+            var handle = value.Handle;
+            var binding = new Binding(descriptor, value, -1);
             if (_positions.TryGetValue(descriptor, out var position))
             {
-                ChangeReferences(_slots[position].Handle, -1);
-                ChangeReferences(handle, 1);
+                var oldHandle = _slots[position].Handle;
+                if (oldHandle != handle)
+                {
+                    ChangeReferences(oldHandle, -1);
+                    ChangeReferences(handle, 1);
+                }
                 _slots[position] = binding;
                 return;
             }
@@ -165,7 +170,7 @@ internal sealed class DescriptorMap
             var position = _positions[descriptor];
             ChangeReferences(_slots[position].Handle, -1);
             _positions.Remove(descriptor);
-            _slots[position] = new Binding(default, FileDescriptor.Closed, _firstFree);
+            _slots[position] = new Binding(default, DescriptorBinding.Closed, _firstFree);
             _firstFree = position;
         }
 
@@ -222,8 +227,9 @@ internal sealed class DescriptorMap
         }
     }
 
-    private readonly record struct Binding(LogicalDescriptor Descriptor, FileDescriptor Handle, int NextFree)
+    private readonly record struct Binding(LogicalDescriptor Descriptor, DescriptorBinding Value, int NextFree)
     {
+        internal FileDescriptor Handle => Value.Handle;
         internal bool IsPresent => Descriptor.Number > 2;
     }
 }

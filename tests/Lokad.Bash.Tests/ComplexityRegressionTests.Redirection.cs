@@ -74,13 +74,13 @@ public sealed partial class ComplexityRegressionTests
         var closing = new OrderedDescriptorSet();
         // Warm generic index and transfer paths outside the measured owner.
         var warmup = new RedirectionState(new DescriptorTable());
-        warmup.SetPersistentDescriptor(LogicalDescriptor.StdOut, new FileDescriptor(9), memory, acquired: true);
+        warmup.SetPersistentDescriptor(LogicalDescriptor.StdOut, new DescriptorBinding(new FileDescriptor(9)), memory, acquired: true);
         Assert.Empty(warmup.TransferHandles(new[] { new FileDescriptor(9) }, memory, closing));
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var index = 0; index < Count; index++)
         {
             batch[0] = new FileDescriptor(1000 + index);
-            state.SetPersistentDescriptor(LogicalDescriptor.StdOut, batch[0], memory, acquired: true);
+            state.SetPersistentDescriptor(LogicalDescriptor.StdOut, new DescriptorBinding(batch[0]), memory, acquired: true);
             Assert.True(state.TransferHandles(batch, memory, closing).Count == 0);
         }
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -194,7 +194,7 @@ public sealed partial class ComplexityRegressionTests
         parent.PushRedirectionTable(rootTable, new DescriptorHandleOwner(owned), new HashSet<LogicalDescriptor>(), null);
         using var memory = new MemoryGovernor(1024).CreateScope();
         var child = parent.CloneForSubshell(new EvaluationMemory(memory));
-        child.SetPersistentDescriptor(new LogicalDescriptor(11), rootHandle, null, acquired: false);
+        child.SetPersistentDescriptor(new LogicalDescriptor(11), new DescriptorBinding(rootHandle), null, acquired: false);
         var middleTable = new DescriptorTable();
         middleTable.Set(new LogicalDescriptor(12), middleHandle);
         child.PushRedirectionTable(middleTable, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), null);

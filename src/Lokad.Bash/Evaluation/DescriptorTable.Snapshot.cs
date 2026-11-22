@@ -35,11 +35,16 @@ internal sealed partial class DescriptorTable
         public Snapshot WithStandardStreams(FileDescriptor stdIn, FileDescriptor stdOut, FileDescriptor stdErr) =>
             new(Bindings.WithStandardStreams(stdIn, stdOut, stdErr), _nextAllocationNumber);
 
+        internal Snapshot WithStandardStreams(DescriptorBinding stdIn, DescriptorBinding stdOut, DescriptorBinding stdErr) =>
+            new(Bindings.WithStandardStreams(stdIn, stdOut, stdErr), _nextAllocationNumber);
+
         /// <summary>Creates an independent mutable owner without copying the captured mappings.</summary>
         public DescriptorTable Fork() => new(Bindings.Fork(), _nextAllocationNumber);
 
         public FileDescriptor Resolve(LogicalDescriptor descriptor) =>
             Bindings.Resolve(descriptor);
+
+        internal DescriptorBinding ResolveBinding(LogicalDescriptor descriptor) => Bindings.ResolveBinding(descriptor);
 
         public bool HasMapping(LogicalDescriptor descriptor) => Bindings.HasMapping(descriptor);
 

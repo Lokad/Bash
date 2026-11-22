@@ -14,15 +14,18 @@ public sealed partial class Evaluation
     private const int ReadScratchRetentionBytes = 64 * 1024;
     private ReadWorkspace? _readWorkspace;
 
-    private (LogicalDescriptor? Number, FileDescriptor Handle) ResolveInputDescriptorOperand(ReadOnlySpan<byte> operand)
+    private (LogicalDescriptor? Number, DescriptorBinding Binding) ResolveInputDescriptorOperand(ReadOnlySpan<byte> operand)
     {
         if (!Integers.TryParseBuiltinNumber(operand, out var number) || number is < 0 or > int.MaxValue)
-            return (null, FileDescriptor.Closed);
+            return (null, DescriptorBinding.Closed);
 
-        // Input borrows the reached logical mapping and leaves handle ownership with it.
         var logical = new LogicalDescriptor((int)number);
-        return (logical, _state.CurrentRedirectionTable?.Resolve(logical) ?? CaptureDescriptorBindings().Resolve(logical));
+        return (logical, ResolveInputBinding(logical));
     }
+
+    // Input borrows the reached logical mapping and leaves handle ownership with it.
+    private DescriptorBinding ResolveInputBinding(LogicalDescriptor descriptor) =>
+        _state.CurrentRedirectionTable?.ResolveBinding(descriptor) ?? CaptureDescriptorBindings().ResolveBinding(descriptor);
 
     private Task ReportInvalidInputDescriptorAsync(ShellValue command, ShellValue operand, LogicalDescriptor? number) =>
         number is { } logical
@@ -59,7 +62,7 @@ public sealed partial class Evaluation
         var backslashMode = ReadBackslashMode.InterpretEscapes;
         var delimiter = (byte)'\n';
         var inputNumber = LogicalDescriptor.StdIn;
-        var inputDescriptor = GetStdInDescriptor();
+        var inputBinding = ResolveInputBinding(inputNumber);
         ShellValue? arrayName = null;
         int? count = null;
         var ignoreDelimiter = false;
@@ -104,15 +107,15 @@ public sealed partial class Evaluation
                 continue;
             }
 
-            var (number, descriptor) = ResolveInputDescriptorOperand(operand.Bytes.Span);
-            if (number is not { } logical || descriptor.IsClosed)
+            var (number, binding) = ResolveInputDescriptorOperand(operand.Bytes.Span);
+            if (number is not { } logical || binding.Handle.IsClosed)
             {
                 await ReportInvalidInputDescriptorAsync(ShellValue.FromText("read"), operand, number)
                     .ConfigureAwait(false);
                 return await FinishAsync(1).ConfigureAwait(false);
             }
             inputNumber = logical;
-            inputDescriptor = descriptor;
+            inputBinding = binding;
         }
         if (options.RequestedHelp)
             return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Read, "read", negated)
@@ -247,11 +250,11 @@ public sealed partial class Evaluation
             var content = memory.Content;
             if (count.HasValue || delimiter != (byte)'\n')
             {
-                // A zero count skips the borrow and checks only the access information carried by the handle.
+                // A zero count skips the borrow and uses the known access mode of the selected binding.
                 if (count == 0)
-                    return (inputDescriptor.IsClosed || inputDescriptor.IsWriteOnlyDevNull ? 1 : 0, default, false);
+                    return (inputBinding.CannotRead ? 1 : 0, default, false);
                 var completion = new TaskCompletionSource<(bool Complete, OperationError? Error)>(TaskCreationOptions.RunContinuationsAsynchronously);
-                PublishOperation(new ReadInputOperation(completion, inputDescriptor,
+                PublishOperation(new ReadInputOperation(completion, inputBinding.Handle,
                     ignoreDelimiter ? null : delimiter, count, backslashMode, content));
                 try
                 {
@@ -276,7 +279,7 @@ public sealed partial class Evaluation
                     ReadResult result;
                     try
                     {
-                        result = await ExecuteReadAsync(inputDescriptor, 1, destinationBudget: null, reusableLine: physicalLine,
+                        result = await ExecuteReadAsync(inputBinding.Handle, 1, destinationBudget: null, reusableLine: physicalLine,
                                 sourceDestination: null)
                             .ConfigureAwait(false);
                     }

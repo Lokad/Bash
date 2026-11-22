@@ -47,7 +47,7 @@ public sealed class RedirectionStateTests
         state.Push(root, new DescriptorHandleOwner(original), new HashSet<LogicalDescriptor>(), null);
         using var refused = new MemoryGovernor(0).CreateScope();
         Assert.Throws<MemoryBudgetExceededException>(() => state.SetPersistentDescriptor(
-            LogicalDescriptor.StdOut, FileDescriptor.Closed, new EvaluationMemory(refused), acquired: false));
+            LogicalDescriptor.StdOut, DescriptorBinding.Closed, new EvaluationMemory(refused), acquired: false));
         Assert.Equal(handle, root.StdOut);
         Assert.Same(original, state.OpenedDescriptors);
 
@@ -55,7 +55,7 @@ public sealed class RedirectionStateTests
         var counted = new CountingMemoryBudget(governor);
         using var owner = counted.CreateScope();
         var memory = new EvaluationMemory(owner);
-        state.SetPersistentDescriptor(LogicalDescriptor.StdOut, FileDescriptor.Closed, memory, acquired: false);
+        state.SetPersistentDescriptor(LogicalDescriptor.StdOut, DescriptorBinding.Closed, memory, acquired: false);
         var calls = counted.AdmissionCalls;
         using var blocking = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
 
@@ -114,7 +114,7 @@ public sealed class RedirectionStateTests
         Assert.Equal(FileDescriptor.StdOut, redirected.StdOut);
         Assert.Same(opened, child.OpenedDescriptors);
 
-        child.SetPersistentDescriptor(number, replacement, null, acquired: false);
+        child.SetPersistentDescriptor(number, new DescriptorBinding(replacement), null, acquired: false);
         Assert.Equal(replacement, childTable.Resolve(number));
         Assert.Equal(temporary, redirected.Resolve(number));
         Assert.Equal(inherited, root.Resolve(number));
