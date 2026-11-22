@@ -91,13 +91,13 @@ public sealed partial class Evaluation
         // Arithmetic consumes borrowed records after input settles. Ordinary records can
         // outlive their batch independently after publication.
         using var integerInputMemory = integer && callback == null ? Memory.Budget.CreateScope() : null;
-        var values = new List<ShellValue>();
+        var values = callback.HasValue ? null : new List<ShellValue>();
+        using var inputMemory = values != null ? Memory.Budget.Reserve(0) : null;
         long stagedBytes = 0;
-        using var inputMemory = Memory.Budget.Reserve(0);
         Variables.IndexedInputAssignment? callbackAssignment = null;
         var toCallback = quantum;
         uint written = 0;
-        var assigned = false;
+        bool assigned;
         try
         {
             // Bash treats an explicitly closed stdin as empty input; actual host read failures remain failures.
@@ -139,7 +139,7 @@ public sealed partial class Evaluation
                 if (await AcceptBatchAsync(content, recordStarts).ConfigureAwait(false) is { } stop)
                     return stop;
             }
-            if (callback.HasValue)
+            if (values == null)
             {
                 StartCallbackAssignment().Commit();
                 return await FinishAsync(0).ConfigureAwait(false);
@@ -158,10 +158,9 @@ public sealed partial class Evaluation
             _cancellationToken.ThrowIfCancellationRequested();
             // Publish only after the requested records have been read and admitted.
             target.PrepareForPublication(variables);
-            if (origin is { } first)
-                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values, Memory, _cancellationToken);
-            else
-                assigned = variables.TryAssignResolvedIndexedArray(resolved, IndexedArray.FromSequential(values));
+            assigned = origin is { } first
+                ? variables.TryUpdateResolvedIndexedArray(resolved, first, values, Memory, _cancellationToken)
+                : variables.TryAssignResolvedIndexedArray(resolved, IndexedArray.FromSequential(values));
         }
         catch (ShellDescriptorReadException)
         {
@@ -171,9 +170,12 @@ public sealed partial class Evaluation
         {
             callbackAssignment?.Dispose();
             callbackAssignment = null;
-            values.Clear();
-            values.Capacity = 0;
-            inputMemory.Dispose();
+            if (values != null)
+            {
+                values.Clear();
+                values.Capacity = 0;
+            }
+            inputMemory?.Dispose();
             integerInputMemory?.Dispose();
             Memory.Workspace.Resize(Memory.Workspace.Bytes - stagedBytes);
             Memory.ReleaseUnusedCapacity();
@@ -182,7 +184,7 @@ public sealed partial class Evaluation
         finally { callbackAssignment?.Dispose(); }
         return await FinishAsync(assigned ? 0 : 1).ConfigureAwait(false);
 
-        uint CollectedCount() => callback.HasValue ? written : (uint)values.Count;
+        uint CollectedCount() => values != null ? (uint)values.Count : written;
 
         Variables.IndexedInputAssignment StartCallbackAssignment() =>
             callbackAssignment ??= new Variables.IndexedInputAssignment(variables, resolved, origin.HasValue,
@@ -207,9 +209,9 @@ public sealed partial class Evaluation
                 if (trimDelimiter && record.Span[^1] == delimiter)
                     record = record[..^1];
                 var value = ShellValue.FromBytes(record).BeforeFirstNul();
-                if (callback is { } action)
+                if (values == null)
                 {
-                    if (await AssignCallbackRecordAsync(action, value).ConfigureAwait(false) is { } stop)
+                    if (await AssignCallbackRecordAsync(callback.GetValueOrDefault(), value).ConfigureAwait(false) is { } stop)
                         return stop;
                     continue;
                 }
@@ -218,7 +220,9 @@ public sealed partial class Evaluation
                 if (values.Count == values.Capacity)
                 {
                     var capacity = values.Capacity == 0 ? 4 : checked(2 * values.Capacity);
-                    inputMemory.Resize((long)RecordListEntryBytes * capacity);
+                    // The bulk list and its reservation are created together.
+                    (inputMemory ?? throw new InvalidOperationException("Bulk records require a reservation."))
+                        .Resize((long)RecordListEntryBytes * capacity);
                     values.Capacity = capacity;
                 }
                 if (value.IsEmpty)
@@ -269,7 +273,8 @@ public sealed partial class Evaluation
                 CheckCancellation();
             }
 
-            long prepaidBytes;
+            var index = IndexedArrayIndex.FromUnsigned(position);
+            bool stored;
             var writesInteger = (variables.GetAssignmentAttributes(resolved)
                 & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0;
             if (writesInteger)
@@ -284,22 +289,13 @@ public sealed partial class Evaluation
                     assignment.Commit();
                     return await FinishAsync(1).ConfigureAwait(false);
                 }
-                value = coerced.Value;
-                prepaidBytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value);
+                CheckCancellation();
+                var prepaidBytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(coerced.Value);
+                stored = variables.TrySetResolvedArrayElement(resolved, index, coerced.Value, Memory, prepaidBytes);
             }
             else
-            {
-                prepaidBytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value);
-                if (prepaidBytes != 0)
-                {
-                    Memory.PrepareRetainedStorage(assignment.SavedBytes + prepaidBytes);
-                    value = ShellValue.FromBytes(value.Bytes.ToArray());
-                }
-            }
-
-            CheckCancellation();
-            if (!variables.TrySetResolvedArrayElement(resolved, IndexedArrayIndex.FromUnsigned(position),
-                    value, Memory, prepaidBytes))
+                stored = assignment.TryStoreBorrowedRecord(index, value, Memory);
+            if (!stored)
                 return await FinishAsync(1).ConfigureAwait(false);
             written++;
             return null;

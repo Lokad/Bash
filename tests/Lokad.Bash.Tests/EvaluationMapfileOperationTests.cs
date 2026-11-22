@@ -82,6 +82,33 @@ public partial class EvaluationTests
         Assert.Equal(ShellValue.FromText("third"), state.IndexedArrays["arr"][2]);
     }
 
+    [Theory]
+    [InlineData("mixed", "MIXED")]
+    [InlineData("UPPER", "UPPER")]
+    [InlineData("", "")]
+    public async Task MapfileCallbackStoresOwnedRecordsUsingTheReachedAttributes(string record, string expected)
+    {
+        var state = new Eval(Parser.Parse("mapfile -tc2 -C 'declare -u arr; :' arr"));
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        var input = Utf8Bytes("first\n" + record + "\n").ToArray();
+        var read = await NextReadAsync(state);
+        using var borrowed = Assert.IsAssignableFrom<IMemoryBudget>(read.DestinationBudget).Reserve(input.Length);
+        read.SetResult(ReadResult.Success(input, [6], reachedEoF: true));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(0, borrowed.Bytes);
+        input.AsSpan().Fill((byte)'?');
+        var records = state.IndexedArrays["arr"];
+        Assert.Equal(new[] { ShellValue.FromText("first"), ShellValue.FromText(expected) }, records);
+        if (record.Length == 0)
+            Assert.True(records[1].Bytes.Equals(ShellValue.Empty.Bytes));
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task ReadarrayCallbackCanConsumeTheNextRecordFromTheSelectedDescriptor()
     {
@@ -156,6 +183,38 @@ public partial class EvaluationTests
         Assert.Equal($"{builtin}: shared memory budget exhausted\n", Text(diagnostic.Content));
         Assert.Equal(0, borrowed.Bytes);
         Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+        occupied.Dispose();
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(2, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task MapfileRestoresTheArrayWhenBorrowedRecordConversionIsRefused()
+    {
+        var state = new Eval(Parser.Parse("declare -au arr=(old); mapfile -tc3 -C : arr"));
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var first = await NextReadAsync(state);
+        first.SetResult(ReadResult.Success(Utf8Bytes("first\n"), [], reachedEoF: false));
+        var second = await NextReadAsync(state);
+        Assert.Equal(ShellValue.FromText("FIRST"), Assert.Single(state.IndexedArrays["arr"]));
+
+        var record = Utf8Bytes(new string('x', 4096) + "\n");
+        using var borrowed = Assert.IsAssignableFrom<IMemoryBudget>(second.DestinationBudget).Reserve(record.Length);
+        using var occupied = governor.Reserve(governor.LimitBytes - governor.ReservedBytes - 2048);
+        second.SetResult(ReadResult.Success(record, [], reachedEoF: true));
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
+        Assert.Equal(0, borrowed.Bytes);
+        Assert.Equal(ShellValue.FromText("OLD"), Assert.Single(state.IndexedArrays["arr"]));
         occupied.Dispose();
         diagnostic.SetResult(DescriptorWriteResult.Open);
 

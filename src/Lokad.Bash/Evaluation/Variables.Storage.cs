@@ -302,6 +302,10 @@ public sealed partial class Variables
 
         internal void Commit() => _committed = true;
 
+        /// <summary>Promotes a borrowed record without retaining the source batch.</summary>
+        internal bool TryStoreBorrowedRecord(IndexedArrayIndex index, ShellValue value, EvaluationMemory memory) =>
+            _owner.TrySetResolvedArrayElement(_name, index, value, memory, prepaidBytes: 0, savedInputBytes: SavedBytes);
+
         public void Dispose()
         {
             if (_committed)

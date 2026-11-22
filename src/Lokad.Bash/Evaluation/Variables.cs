@@ -1290,7 +1290,12 @@ public sealed partial class Variables
         => TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes: 0);
 
     internal bool TrySetResolvedArrayElement(
-        BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
+        BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes) =>
+        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes, savedInputBytes: null);
+
+    private bool TrySetResolvedArrayElement(
+        BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes,
+        long? savedInputBytes)
     {
         if (resolved.IsEmpty)
             return false;
@@ -1299,7 +1304,24 @@ public sealed partial class Variables
         if (slot is AssociativeSlot)
             return false;
         if (value is { } assigned)
-            value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, assigned, memory);
+        {
+            var converted = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, assigned, memory);
+            if (savedInputBytes is { } saved)
+            {
+                if (converted.IsEmpty)
+                    converted = ShellValue.Empty;
+                else
+                {
+                    prepaidBytes = EstimateValueBytes(converted);
+                    memory?.PrepareRetainedStorage(checked(saved + prepaidBytes));
+                    // A changed value already has its own backing from the converter.
+                    if (converted.Bytes.Equals(assigned.Bytes))
+                        converted = ShellValue.FromBytes(assigned.Bytes.ToArray());
+                }
+                memory?.CancellationToken.ThrowIfCancellationRequested();
+            }
+            value = converted;
+        }
         if (slot is IndexedSlot indexed)
         {
             using var change = TrackBindingMemory(resolved);
