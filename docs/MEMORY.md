@@ -146,6 +146,10 @@ same root; command inheritance does not copy or create a memory allowance.
 Conditional evaluation admits its traversal buffer before growing it, including
 overlap during replacement. Reached predicates reuse the buffer, which stays
 charged through pending operations and is refunded when traversal unwinds.
+`test` and `[` admit their parsed steps and file operands in the command workspace
+before growing their backing lists. They admit reduction scratch before running
+any predicates that require it. Ordered host request and response storage uses
+the file lookup's own allowance through completion.
 Case selection holds its expanded subject across reached alternatives and any
 body chain that resumes matching. Each alternative keeps its expanded word and
 prepared matcher through comparison, then reuses the same command workspace for

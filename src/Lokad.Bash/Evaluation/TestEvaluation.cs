@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using static Lokad.Bash.Evaluation.ShellPredicates;
 
@@ -41,12 +42,17 @@ public sealed class TestEvaluation
             else
                 Fail("too many arguments");
         }
+
+        // Admit the completion scratch before any file or variable predicate runs.
+        if (!HasParseError && !HasConstantResult)
+            _memory?.Charge(MemoryCapacity.ArrayBackingBytes<bool>(_maximumStackDepth));
     }
 
     /// <summary>Gets whether arguments contain a syntax, integer or text-boundary error.</summary>
     public bool HasParseError => ParseError.HasValue;
     internal (string Prefix, ShellValue Operand, string Suffix)? ParseError { get; private set; }
     internal bool HasVariablePredicates { get; private set; }
+    private bool HasConstantResult => _steps.Count == 1 && _steps[0].Kind == StepKind.Constant;
 
     /// <summary>Encodes text arguments and parses them through the byte-valued test grammar.</summary>
     public static TestEvaluation Parse(IReadOnlyList<string> arguments)
@@ -82,7 +88,7 @@ public sealed class TestEvaluation
         if (HasParseError)
             return false;
 
-        if (_steps.Count == 1 && _steps[0].Kind == StepKind.Constant)
+        if (HasConstantResult)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             return _steps[0].Value != 0;
@@ -375,6 +381,7 @@ public sealed class TestEvaluation
 
     private void AppendFileTest(UnresolvedFileTest test)
     {
+        _memory?.PrepareListCapacity(_files, 1);
         AppendPredicate(StepKind.File, _files.Count);
         _files.Add(test);
     }
@@ -399,7 +406,7 @@ public sealed class TestEvaluation
 
     private void AppendPredicate(StepKind kind, int operand)
     {
-        _steps.Add(new(kind, operand));
+        AppendStep(kind, operand);
         _maximumStackDepth = Math.Max(_maximumStackDepth, ++_stackDepth);
     }
 
@@ -407,25 +414,35 @@ public sealed class TestEvaluation
     // must still run in argument order, even when a constant determines the result.
     private void AppendNegation()
     {
-        if (!HasParseError && _steps[^1] is { Kind: StepKind.Constant } operand)
+        if (HasParseError)
+            return;
+        if (_steps[^1] is { Kind: StepKind.Constant } operand)
             _steps[^1] = new(StepKind.Constant, operand.Value == 0 ? 1 : 0);
         else
-            _steps.Add(new(StepKind.Not, 0));
+            AppendStep(StepKind.Not, 0);
     }
 
     private void AppendBinaryOperator(StepKind kind)
     {
-        if (!HasParseError && _steps[^1] is { Kind: StepKind.Constant } right
-            && _steps[^2] is { Kind: StepKind.Constant } left)
+        if (HasParseError)
+            return;
+        if (_steps[^1] is { Kind: StepKind.Constant } right && _steps[^2] is { Kind: StepKind.Constant } left)
         {
             var value = Combine(left.Value != 0, right.Value != 0, kind);
             _steps[^2] = new(StepKind.Constant, value ? 1 : 0);
             _steps.RemoveAt(_steps.Count - 1);
         }
         else
-            _steps.Add(new(kind, 0));
+            AppendStep(kind, 0);
         _stackDepth--;
     }
+
+    private void AppendStep(StepKind kind, int operand)
+    {
+        _memory?.PrepareListCapacity(_steps, 1);
+        _steps.Add(new(kind, operand));
+    }
+
     private void Fail(string message) => Fail(message, ShellValue.Empty, string.Empty);
 
     private void Fail(ShellValue operand, string suffix) => Fail(string.Empty, operand, suffix);

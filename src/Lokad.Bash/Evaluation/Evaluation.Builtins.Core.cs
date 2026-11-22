@@ -45,7 +45,6 @@ public sealed partial class Evaluation
             argumentLimit--;
         }
 
-        Memory.Charge(checked(128L * argumentLimit));
         var evaluation = TestEvaluation.ParseValues(words, firstArgument: 1, argumentLimit, _cancellationToken,
             _state.ErrexitEnabled, Memory);
         bool? mixed = null;

@@ -142,4 +142,50 @@ public sealed class TestEvaluationTests
                 CancellationToken.None, errexitEnabled: false, memory).CompleteFileTests([]);
         }
     }
+
+    [Fact]
+    public void TestEvaluation_AdmitsListsAndValidReductionDuringParsing()
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        Assert.False(Parse("-n yes", memory).HasParseError);
+        var singleStepBytes = memory.Workspace.Bytes;
+        Assert.True(singleStepBytes > 0);
+        memory.Workspace.Resize(0);
+
+        Assert.True(Parse("-t 0 -a -n yes extra", memory).HasParseError);
+        var listBytes = memory.Workspace.Bytes;
+        Assert.Equal(singleStepBytes + MemoryCapacity.ArrayBackingBytes<UnresolvedFileTest>(4), listBytes);
+        memory.Workspace.Resize(0);
+
+        Assert.False(Parse("-t 0 -a -n yes", memory).HasParseError);
+        Assert.Equal(listBytes + MemoryCapacity.ArrayBackingBytes<bool>(2), memory.Workspace.Bytes);
+
+        VerifyRefusal("-n yes", singleStepBytes - 1);
+        VerifyRefusal("-t 0 -a -n yes extra", listBytes - 1);
+        VerifyRefusal("-t 0 -a -n yes", listBytes);
+
+        static TestEvaluation Parse(string expression, EvaluationMemory memory)
+        {
+            var operands = expression.Split(' ').Select(ShellValue.FromText).ToArray();
+            return TestEvaluation.ParseValues(operands, 0, operands.Length,
+                CancellationToken.None, errexitEnabled: false, memory);
+        }
+
+        static void VerifyRefusal(string expression, long limit)
+        {
+            var budget = new MemoryGovernor(limit);
+            using (var scope = budget.CreateScope())
+            {
+                var memory = new EvaluationMemory(scope);
+                // Prepay the limit so the control measures logical usage at the refusal.
+                memory.Charge(limit);
+                memory.Workspace.Resize(0);
+                Assert.Throws<MemoryBudgetExceededException>(() => Parse(expression, memory));
+            }
+            Assert.Equal(0, budget.ReservedBytes);
+        }
+    }
 }

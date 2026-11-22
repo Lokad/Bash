@@ -206,6 +206,7 @@ public partial class EvaluationTests
     [Theory]
     [InlineData("test -t 0", true)]
     [InlineData("test ! -t -1 -a -e path", false)]
+    [InlineData("[ -e path -a -v 'a[0]' ]", false)]
     public async Task FileTests_RetainTheirAllowanceUntilTheHostSettles(string command, bool terminal)
     {
         var state = new Eval(Parser.Parse(command + "; after=1"));
@@ -230,6 +231,26 @@ public partial class EvaluationTests
         Assert.Equal(reserved, pending);
         Assert.True(budget.ReservedBytes < reserved);
         Assert.False(state.Variables.ContainsKey("after"));
+    }
+
+    [Fact]
+    public async Task ConstantTestChainUsesTheAdmittedCommandWorkspace()
+    {
+        var expression = string.Join(" -a ", Enumerable.Repeat("-n yes", 1_024));
+        var state = new Eval(Parser.Parse("test " + expression));
+        var budget = new MemoryGovernor(256 * 1024);
+        var host = new TestOperationVisitor([]) { MemoryBudget = budget };
+
+        using (var owner = budget.CreateScope())
+        {
+            await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+            Assert.True(budget.ReservedBytes < budget.PeakBytes);
+        }
+
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Empty(host.PathInfoBatches);
+        Assert.Empty(host.TerminalStatusBatches);
+        Assert.Equal(0, budget.ReservedBytes);
     }
 
     [Theory]
