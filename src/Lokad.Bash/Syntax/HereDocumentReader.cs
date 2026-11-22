@@ -107,18 +107,22 @@ internal sealed class HereDocumentReader
             var result = command switch
             {
                 SimpleCommand simple when ReplaceRedirections(simple.Redirections) is { } redirections => simple with { Redirections = redirections },
-                ListCommand list when Changed(list.Left) || Changed(list.Right) => list with { Left = Get(list.Left), Right = Get(list.Right) },
-                PipelineCommand pipe when Changed(pipe.Left) || Changed(pipe.Right) => pipe with { Left = Get(pipe.Left), Right = Get(pipe.Right) },
-                GroupCommand group when Changed(group.Body) => group with { Body = Get(group.Body) },
-                SubshellCommand subshell when Changed(subshell.Body) => subshell with { Body = Get(subshell.Body) },
+                ListCommand list when TryReplacePair(list.Left, list.Right, out var left, out var right) =>
+                    list with { Left = left, Right = right },
+                PipelineCommand pipe when TryReplacePair(pipe.Left, pipe.Right, out var left, out var right) =>
+                    pipe with { Left = left, Right = right },
+                GroupCommand group when replacements.TryGetValue(group.Body, out var body) => group with { Body = body },
+                SubshellCommand subshell when replacements.TryGetValue(subshell.Body, out var body) => subshell with { Body = body },
                 RedirectedCommand redirected => ReplaceRedirected(redirected),
-                NegatedCommand negated when Changed(negated.Inner) => negated with { Inner = Get(negated.Inner) },
-                TimedCommand timed when Changed(timed.Inner) => timed with { Inner = Get(timed.Inner) },
-                FunctionDefinition function when Changed(function.Body) => function with { Body = Get(function.Body) },
-                ForCommand loop when Changed(loop.Body) => loop with { Body = Get(loop.Body) },
-                ArithmeticForCommand loop when Changed(loop.Body) => loop with { Body = Get(loop.Body) },
-                WhileCommand loop when Changed(loop.Condition) || Changed(loop.Body) => loop with { Condition = Get(loop.Condition), Body = Get(loop.Body) },
-                UntilCommand loop when Changed(loop.Condition) || Changed(loop.Body) => loop with { Condition = Get(loop.Condition), Body = Get(loop.Body) },
+                NegatedCommand negated when replacements.TryGetValue(negated.Inner, out var inner) => negated with { Inner = inner },
+                TimedCommand timed when replacements.TryGetValue(timed.Inner, out var inner) => timed with { Inner = inner },
+                FunctionDefinition function when replacements.TryGetValue(function.Body, out var body) => function with { Body = body },
+                ForCommand loop when replacements.TryGetValue(loop.Body, out var body) => loop with { Body = body },
+                ArithmeticForCommand loop when replacements.TryGetValue(loop.Body, out var body) => loop with { Body = body },
+                WhileCommand loop when TryReplacePair(loop.Condition, loop.Body, out var condition, out var body) =>
+                    loop with { Condition = condition, Body = body },
+                UntilCommand loop when TryReplacePair(loop.Condition, loop.Body, out var condition, out var body) =>
+                    loop with { Condition = condition, Body = body },
                 IfCommand conditional => ReplaceIf(conditional),
                 CaseCommand selection when ReplaceItems(selection.Items, replacements, static (item, commands) =>
                     commands.TryGetValue(item.Body, out var body)
@@ -145,8 +149,14 @@ internal sealed class HereDocumentReader
             scratch?.PrepareListCapacity(work, 1);
             work.Add((command, visited));
         }
-        bool Changed(ICommand command) => replacements.ContainsKey(command);
         ICommand Get(ICommand command) => replacements.TryGetValue(command, out var replacement) ? replacement : command;
+
+        bool TryReplacePair(ICommand first, ICommand second, out ICommand newFirst, out ICommand newSecond)
+        {
+            newFirst = Get(first);
+            newSecond = Get(second);
+            return !ReferenceEquals(first, newFirst) || !ReferenceEquals(second, newSecond);
+        }
 
         IReadOnlyList<Redirection>? ReplaceRedirections(IReadOnlyList<Redirection> redirections) =>
             ReplaceItems(redirections, _completed, static (redirection, completed) =>
@@ -155,8 +165,9 @@ internal sealed class HereDocumentReader
         ICommand ReplaceRedirected(RedirectedCommand command)
         {
             var redirections = ReplaceRedirections(command.Redirections);
-            return redirections != null || Changed(command.Body)
-                ? command with { Body = Get(command.Body), Redirections = redirections ?? command.Redirections }
+            var body = Get(command.Body);
+            return redirections != null || !ReferenceEquals(command.Body, body)
+                ? command with { Body = body, Redirections = redirections ?? command.Redirections }
                 : command;
         }
 
@@ -170,10 +181,13 @@ internal sealed class HereDocumentReader
                     ? new ElifClause(condition ?? clause.Condition, body ?? clause.Body)
                     : clause;
             });
-            return clauses != null || Changed(command.Condition) || Changed(command.ThenBody)
-                || command.ElseBody is { } elseBody && Changed(elseBody)
-                ? command with { Condition = Get(command.Condition), ThenBody = Get(command.ThenBody),
-                    ElifClauses = clauses ?? command.ElifClauses, ElseBody = command.ElseBody is { } body ? Get(body) : null }
+            var condition = Get(command.Condition);
+            var thenBody = Get(command.ThenBody);
+            var elseBody = command.ElseBody is { } body ? Get(body) : null;
+            return clauses != null || !ReferenceEquals(command.Condition, condition)
+                || !ReferenceEquals(command.ThenBody, thenBody) || !ReferenceEquals(command.ElseBody, elseBody)
+                ? command with { Condition = condition, ThenBody = thenBody,
+                    ElifClauses = clauses ?? command.ElifClauses, ElseBody = elseBody }
                 : command;
         }
 

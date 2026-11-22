@@ -158,6 +158,31 @@ public sealed class ParserHereDocumentTests
         }
     }
 
+    [Fact]
+    public void CompletingUntilReplacesBothChildrenAndKeepsTheirLocations()
+    {
+        var tokenizer = new Tokenizer(ShellSource.FromText("until cat <<CHECK\ncondition\nCHECK\n"
+            + "do cat <<BODY\nbody\nBODY\ndone\n")) { TrackCommandLocations = true };
+        var original = Assert.IsType<UntilCommand>(Parser.ParsePipeline(tokenizer));
+        var reader = Assert.IsType<HereDocumentReader>(tokenizer.HereDocuments);
+        var locations = Assert.IsType<CommandLocations>(tokenizer.Locations);
+        Assert.True(locations.TryGet(original.Condition, out var conditionLocation));
+        Assert.True(locations.TryGet(original.Body, out var bodyLocation));
+
+        var completed = Assert.IsType<UntilCommand>(reader.Complete(original, locations, budget: null));
+
+        AssertBody(completed.Condition, conditionLocation, "condition\n");
+        AssertBody(completed.Body, bodyLocation, "body\n");
+
+        void AssertBody(ICommand command, CommandLocation expectedLocation, string expectedBody)
+        {
+            var redirection = Assert.Single(Assert.IsType<SimpleCommand>(command).Redirections);
+            Assert.Equal(expectedBody, Assert.Single(redirection.Target.Parts).GetUtf8Text());
+            Assert.True(locations.TryGet(command, out var location));
+            Assert.Equal(expectedLocation, location);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
