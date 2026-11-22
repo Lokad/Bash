@@ -514,10 +514,18 @@ whitespace and trailing space or tab. A count larger than the remaining
 positional window returns 1 silently. Negative or invalid counts return 1 with
 a diagnostic.
 
+Implicit `for name; do ...; done` iterates a snapshot of quoted positional
+parameters, preserving empty arguments and bytes. Explicit `in` lists retain
+their usual expansion rules.
+
 `break` and `continue` select loops in the active shell and function. A
 parenthesized subshell or compound pipeline stage starts with zero active
-loops. Outside a loop, either builtin diagnoses and returns 0. An out-of-range
-count diagnostic reports the first operand, including a leading `--`.
+loops. Outside a loop, either builtin diagnoses and returns 0. A level-one
+`break` or `continue` from a while or until condition is handled by that loop
+after its condition gate. Higher counts can select enclosing loops within
+the same function. A nonpositive count diagnoses, abandons all active loops
+and returns status 1. Its diagnostic reports the first operand, including
+a leading `--`.
 An invalid numeric count terminates the current shell. It sets the high
 bit of the status current after operand expansion and publishes that value
 to `PIPESTATUS` in the reached scope before unwinding. Function-local option
@@ -533,9 +541,10 @@ stage terminates on discard with the preceding nonzero status or 1. A direct
 builtin pipeline stage or command substitution reports 1. A discard inside
 an EXIT action ends the action and preserves the pending exit status.
 
+`exit` and `return` use the low byte of an explicit signed 64-bit decimal
+status. An invalid numeric operand diagnoses and selects status 2.
 Inside an EXIT action, bare `exit` uses the saved status that started the
-action. `exit --` uses the status current inside the action. An explicit
-numeric operand selects its low byte.
+action. `exit --` uses the status current inside the action.
 
 `echo` consumes leading arguments made of a dash followed by one or more `n`,
 `e` or `E` bytes. Any consumed `n` omits the final LF. Backslashes are literal
@@ -653,8 +662,10 @@ argument. The attached remainder or the next argument is assigned to `OPTARG`,
 including an empty argument. A leading colon selects silent errors. `OPTERR=0`
 suppresses diagnostics while retaining the normal error results.
 An explicit `OPTIND=1` restarts the scan. A visible `OPTIND` can stay unchanged
-between bytes of a bundle. The scanner stops at `--` or the first non-option and
-reports status 1. `OPTIND` starts with the integer attribute.
+between bytes of a bundle. A call reaching `--` returns status 1 and advances
+past it. A later call can scan an option at that new position. An ordinary
+non-option returns status 1 and keeps its position. `OPTIND` starts with the
+integer attribute.
 
 `declare -i` and `local -i` evaluate subsequent assigned values as arithmetic
 and store the decimal result. For integer bindings, `+=` adds the evaluated
@@ -965,17 +976,6 @@ select the configured timestamp. Each `%(...)T` conversion uses GNU's 128-byte
 buffer profile: a result requiring 128 or more bytes becomes an empty value with
 successful status. Outer field width and precision apply afterward. This conversion
 rule is distinct from shared-memory refusal, which remains a reported failure.
-
-Implicit `for name; do ...; done` iterates a snapshot of quoted positional
-parameters, preserving empty arguments and bytes. Explicit `in` lists retain their
-usual expansion rules. `exit` accepts signed 64-bit decimal statuses modulo 256;
-invalid numbers and surplus arguments diagnose and stop non-interactive execution.
-Outside a loop, `break`/`continue` warn and return 0. Level-one condition flow is
-consumed by the current while/until loop after its condition gate is applied.
-Higher counts still select outer loops; functions retain their own loop boundary.
-Within loops, nonpositive counts abandon all active loops and the builtin reports
-status 1; malformed counts and surplus operands have
-their distinct shell-exit statuses (128 and 1).
 
 Hosts provide external commands, including any `sh`/`bash` aliases and script-file
 launch policy. Command names and filesystem capabilities are never inferred from
