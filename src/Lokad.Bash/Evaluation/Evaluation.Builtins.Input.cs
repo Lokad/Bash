@@ -247,8 +247,9 @@ public sealed partial class Evaluation
             var content = memory.Content;
             if (count.HasValue || delimiter != (byte)'\n')
             {
+                // A zero count skips the borrow and checks only the access information carried by the handle.
                 if (count == 0)
-                    return (inputDescriptor.IsClosed ? 1 : 0, default, false);
+                    return (inputDescriptor.IsClosed || inputDescriptor.IsWriteOnlyDevNull ? 1 : 0, default, false);
                 var completion = new TaskCompletionSource<(bool Complete, OperationError? Error)>(TaskCreationOptions.RunContinuationsAsynchronously);
                 PublishOperation(new ReadInputOperation(completion, inputDescriptor,
                     ignoreDelimiter ? null : delimiter, count, backslashMode, content));

@@ -75,8 +75,10 @@ The last count applies, and any reached `-N` selects the exact-count mode.
 Counts use the C locale byte profile, including for UTF-8 input. Escape
 processing skips backslash-LF and counts the protected byte for other escapes.
 Unquoted NUL does not count toward either limit. Zero assigns an empty value
-without consuming bytes. EOF before the requested boundary publishes partial
-input and returns failure.
+without consuming bytes. A closed standard input or a write-only `/dev/null`
+handle returns failure after assigning empty input. An explicit `-u` for a
+closed descriptor fails before assignment. EOF before the requested boundary
+publishes partial input and returns failure.
 
 `read` accepts `-e`, `-i text`, `-p prompt` and `-s` in its non-interactive
 input profile. The option scanner consumes the text and prompt and resumes at

@@ -31,6 +31,42 @@ public sealed class ReadCountedTests
     }
 
     [Theory]
+    [InlineData("", "-n0 value 0>/dev/null", 1)]
+    [InlineData("", "-N0 value 0>>/dev/null", 1)]
+    [InlineData("exec 3>/dev/null; exec 8<&3; ", "-u8 -N0 value", 1)]
+    [InlineData("exec 3>/dev/null; exec 3</dev/null; ", "-u3 -n0 value", 0)]
+    [InlineData("", "-N0 value </dev/null", 0)]
+    [InlineData("", "-n0 value 0<>/dev/null", 0)]
+    public async Task ZeroCountUsesTheNullDescriptorModeWithoutReading(string setup, string operands, int status)
+    {
+        var script = setup + $"value=old; read {operands}; " + """printf '<%s><%s>' "$?" "$value" """;
+        var host = EndToEndHarness.BuildTree([]);
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}><>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.ReadCallCount);
+    }
+
+    [Fact]
+    public async Task FailedZeroCountReplacesTheArrayBeforeErrexit()
+    {
+        const string script = """
+            values=(old prior)
+            trap 'printf "<%s>" "${#values[@]}"' EXIT
+            set -e
+            read -a values -n0 0>/dev/null
+            echo reached
+            """;
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("<0>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("-n6", "<><a:b:c>", "<><a><b><c>")]
     [InlineData("-N6", "<:a:b:c><>", "<:a:b:c>")]
     public async Task ExactCountDisablesScalarAndArrayFieldSplitting(string option, string scalar, string array)
