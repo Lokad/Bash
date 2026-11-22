@@ -1189,7 +1189,8 @@ public sealed partial class Evaluation : IFileTester
                 preparation.RedirectionLifetime, inputSubstitution: false)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
-        List<FunctionBinding>? exportOwners = null;
+        FunctionBinding[]? exportOwners = null;
+        var retainedExportCount = 0;
         var preparedResult = EvaluationResult.FromExitCode(0);
         OperationError? commandCloseError = null;
         try
@@ -1216,9 +1217,9 @@ public sealed partial class Evaluation : IFileTester
             }
             finally
             {
-                if (exportOwners != null)
-                    foreach (var owner in exportOwners)
-                        owner.Release();
+                if (exportOwners is { } owners)
+                    for (var index = 0; index < retainedExportCount; index++)
+                        owners[index].Release();
             }
         }
         return await CompleteSimpleCommandAsync(preparedResult, commandCloseError, lastArgument).ConfigureAwait(false);
@@ -1584,29 +1585,19 @@ public sealed partial class Evaluation : IFileTester
             var selected = _state.GetExportedFunctions(Memory);
             if (selected.IsEmpty)
                 return true;
-            var result = new List<ExportedFunction>();
+            Memory.Charge(checked(MemoryCapacity.ArrayBackingBytes<ExportedFunction>(selected.Length)
+                + MemoryCapacity.ArrayBackingBytes<FunctionBinding>(selected.Length)));
+            var result = new ExportedFunction[selected.Length];
+            var owners = new FunctionBinding[selected.Length];
+            exportOwners = owners;
             var remaining = ExportedFunction.MaximumSourceBytes;
-            foreach (var function in selected)
+            for (var index = 0; index < selected.Length; index++)
             {
-                if (exportOwners == null)
-                {
-                    Memory.Charge(256); // The two command-local lists and their initial storage.
-                    exportOwners = [];
-                }
+                var function = selected[index];
                 function.Retain();
-                try
-                {
-                    Memory.Charge(64); // Both list capacities and replacement overlap.
-                    exportOwners.Add(function);
-                }
-                catch
-                {
-                    function.Release();
-                    throw;
-                }
-                if (!function.TryGetExport(remaining, out var export)) return false;
-                remaining -= export.Source.Length;
-                result.Add(export);
+                owners[retainedExportCount++] = function;
+                if (!function.TryGetExport(remaining, out result[index])) return false;
+                remaining -= result[index].Source.Length;
             }
             exports = result;
             return true;

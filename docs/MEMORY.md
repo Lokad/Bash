@@ -349,8 +349,10 @@ Function calls, queries and host command payloads retain their selected bindings
 through all consumers and descriptor cleanup; only the final owner refunds a cache.
 The function namespace admits its ordered export selection on first use. It
 borrows the selected bindings and refunds the selection when an exported binding
-changes or the namespace settles. Each host invocation retains its own selected
-bindings through dispatch and cleanup.
+changes or the namespace settles. The command admits exact backing for its host
+payload and retained bindings from the selection count before allocating either
+array. Each invocation retains the reached bindings through dispatch and cleanup,
+including the retained prefix when preparation fails.
 In-process `exec -c` clears owned variable exports through the fork's export
 index. An overlay admits a temporary snapshot of the visible export names before
 detaching any borrowed slots. Function export clearing admits the exported

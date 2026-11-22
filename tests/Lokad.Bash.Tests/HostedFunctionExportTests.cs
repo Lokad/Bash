@@ -50,6 +50,45 @@ public sealed class HostedFunctionExportTests
         Assert.Equal(0, state.LastExitCode);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(17)]
+    public async Task HostedExportPayloadUsesExactBackingOnRepeatedCalls(int count)
+    {
+        var names = Enumerable.Range(0, count).Select(index => $"f{index}").ToArray();
+        var definitions = string.Concat(names.Select(name => name + "(){ :; }\n"));
+        var export = count == 0 ? "" : "export -f " + string.Join(' ', names) + "\n";
+        var state = new Eval(Parser.Parse(definitions + "inspect\ninspect\n" + export + "inspect\ninspect"));
+        var admission = MemoryCapacity.ArrayBackingBytes<ExportedFunction>(count)
+            + MemoryCapacity.ArrayBackingBytes<FunctionBinding>(count);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var warmup = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        warmup.SetResult(new CommandExecutionResult.Completed(0));
+        var unexported = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        Assert.Empty(unexported.Command.Functions);
+        var workspaceWithoutExports = state.Memory.Workspace.Bytes;
+        unexported.SetResult(new CommandExecutionResult.Completed(0));
+
+        var first = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        var firstPayload = Assert.IsType<ExportedFunction[]>(first.Command.Functions);
+        Assert.Equal(count, firstPayload.Length);
+        first.SetResult(new CommandExecutionResult.Completed(0));
+
+        var second = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        var secondPayload = Assert.IsType<ExportedFunction[]>(second.Command.Functions);
+        Assert.Equal(count, secondPayload.Length);
+        Assert.Equal(firstPayload, secondPayload);
+        // Both measured calls follow the same last-argument publication.
+        Assert.Equal(admission, state.Memory.Workspace.Bytes - workspaceWithoutExports);
+        second.SetResult(new CommandExecutionResult.Completed(0));
+
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        Assert.Equal(0, state.LastExitCode);
+        state.ReleaseFunctions();
+    }
+
     [Fact]
     public void ExportSelectionReusesAdmissionAcrossUnexportedChanges()
     {
@@ -125,7 +164,7 @@ public sealed class HostedFunctionExportTests
     {
         var governor = new MemoryGovernor(1024 * 1024);
         using var owner = governor.CreateScope();
-        var budget = new RefusingExecBudget(owner);
+        var budget = new RefusingReservationBudget(owner);
         var state = new Eval(Parser.Parse("f(){ :; }; export -f f; inspect\n" + exec + "\ninspect \"$?\""));
         state.Memory.Budget = budget;
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -157,7 +196,7 @@ public sealed class HostedFunctionExportTests
     {
         var governor = new MemoryGovernor(1024 * 1024);
         using var owner = governor.CreateScope();
-        var budget = new RefusingExecBudget(owner);
+        var budget = new RefusingReservationBudget(owner);
         var state = new Eval(Parser.Parse("f(){ :; }; g(){ :; }; export -f f g;\n"
             + "exec -c eval 'unset -f g\nprintf ready\n:'\ninspect \"$?\""));
         state.Memory.Budget = budget;
@@ -183,7 +222,47 @@ public sealed class HostedFunctionExportTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    private sealed class RefusingExecBudget(IMemoryBudget budget) : IMemoryBudget
+    [Fact]
+    public async Task RefusedExportPreparationPreservesEarlierSerializationAndAllowsRetry()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        var budget = new RefusingReservationBudget(owner);
+        var state = new Eval(Parser.Parse("f(){ :; }; g(){ :; }; h(){ :; }; export -f f; inspect\n"
+            + "export -f g h; printf ready\ninspect\ninspect \"$?\""));
+        state.Memory.Budget = budget;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var initial = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        var cached = Assert.Single(initial.Command.Functions).Source;
+        initial.SetResult(new CommandExecutionResult.Completed(0));
+        var marker = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("ready", Utf8Text.Decode(marker.Content));
+        // The first binding is cached. Refuse the next binding's cold cache metadata.
+        budget.RefuseNext = (child, bytes) => child && bytes == 192;
+        marker.SetResult(DescriptorWriteResult.Open);
+
+        var error = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal(FileDescriptor.StdErr, error.FileDescriptor);
+        Assert.Equal("inspect: shared memory budget exhausted\n", Utf8Text.Decode(error.Content));
+        Assert.Equal(1, budget.Refusals);
+        error.SetResult(DescriptorWriteResult.Open);
+
+        var retry = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("inspect", retry.Command.CommandName);
+        Assert.Equal("1", Assert.Single(retry.Command.Arguments).ToUtf8String());
+        Assert.Equal(new[] { "f", "g", "h" }, retry.Command.Functions.Select(export => Assert.IsType<FunctionDefinition>(
+            Assert.Single(Parser.Parse(export.Source).Commands)).Name.Value.ToUtf8String()));
+        Assert.Equal(cached, retry.Command.Functions[0].Source);
+        retry.SetResult(new CommandExecutionResult.Completed(0));
+
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        state.ReleaseFunctions();
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class RefusingReservationBudget(IMemoryBudget budget) : IMemoryBudget
     {
         public Func<bool, long, bool>? RefuseNext { get; set; }
         public int Refusals { get; private set; }
@@ -206,7 +285,7 @@ public sealed class HostedFunctionExportTests
             return inner.TryReserve(bytes, out reservation);
         }
 
-        private sealed class Scope(IMemoryScope inner, RefusingExecBudget owner) : IMemoryScope
+        private sealed class Scope(IMemoryScope inner, RefusingReservationBudget owner) : IMemoryScope
         {
             public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation) =>
                 owner.TryReserve(inner, true, bytes, out reservation);
