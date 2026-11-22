@@ -1184,12 +1184,13 @@ public sealed partial class Variables
         if (!TryResolveWritableName(name, out var resolved))
             return false;
 
-        return TryAssignResolvedArray(resolved, values, kind);
+        return TryAssignResolvedArray(resolved, values, kind, initializeReadonly: false);
     }
 
     /// <summary>Replaces an already selected array binding without following its nameref again.</summary>
+    /// <remarks>The declaring initializer can populate a binding it just marked readonly.</remarks>
     internal bool TryAssignResolvedArray(BindingName resolved, IReadOnlyList<ShellValue> values, ArrayKind kind,
-        bool initializeReadonly = false)
+        bool initializeReadonly)
     {
         if (resolved.IsEmpty || !initializeReadonly && IsReadonly(resolved))
             return false;

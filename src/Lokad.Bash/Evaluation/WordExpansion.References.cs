@@ -173,7 +173,8 @@ internal static partial class WordExpansion
             return new(true, BindingName.Empty);
 
         if (reference.IsAggregate && variables.IndexedArrays.TryGetValue(resolvedName, out var aggregate))
-            return new(aggregate.Count == 0 || variables.TryAssignResolvedArray(resolvedName, [], ArrayKind.Indexed), BindingName.Empty);
+            return new(aggregate.Count == 0
+                || variables.TryAssignResolvedArray(resolvedName, [], ArrayKind.Indexed, initializeReadonly: false), BindingName.Empty);
         if (kind == UnsetReferenceKind.Direct && reference.IsAggregate && !variables.AssociativeArrays.ContainsKey(resolvedName))
             return await NotAnArrayAsync().ConfigureAwait(false);
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recognize compound array initializers in quoted and expanded declaration
+  operands. Expand the initializer after ordinary arguments and redirections.
+
 - Preserve the final unmatched `help` topic and invalid option bytes in
   diagnostics. Return status 2 from `help --help` with shell-closed stdout.
 

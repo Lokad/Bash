@@ -2811,7 +2811,7 @@ public sealed partial class Evaluation : IFileTester
                 name, items, kind, assignment.Operator, AssignmentContext.Direct, scope, itemMemory).ConfigureAwait(false);
             return expanded != null && await ApplyCompoundArrayItemsAsync(
                 name, assignment.Operator, kind, expanded, scope, scope.Variables, compoundTarget.Name,
-                ShellValue.Empty).ConfigureAwait(false);
+                ShellValue.Empty, initializeReadonly: false).ConfigureAwait(false);
         }
     }
 

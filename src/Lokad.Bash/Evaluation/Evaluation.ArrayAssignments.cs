@@ -182,7 +182,7 @@ public sealed partial class Evaluation
     private async Task<bool> ApplyCompoundArrayItemsAsync(
         BindingName name, AssignmentOperator operation, ArrayKind kind, IReadOnlyList<ExpandedArrayItem> expanded,
         ScopedEvaluation scope, Variables targetVariables, BindingName sourceName, ShellValue command,
-        bool initializeReadonly = false)
+        bool initializeReadonly)
     {
         var associative = kind == ArrayKind.Associative;
         // Word expansion sees the previous binding. Arithmetic selection and writes see
