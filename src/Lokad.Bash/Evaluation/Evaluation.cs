@@ -1836,6 +1836,8 @@ public sealed partial class Evaluation : IFileTester
                     && options.ListingAttributes == DeclarationListingAttributes.None && options.CaseChange.Set == BindingAttributes.None
                     ? VariableDisplayStyle.Assignment
                     : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationWithoutScalarValues : VariableDisplayStyle.Declaration;
+                var preserveStatusOnClosedOutput = listing && (options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
+                    && style != VariableDisplayStyle.Assignment;
                 var printStatus = 0;
                 var outputClosed = false;
                 await foreach (var name in GetNamesAsync(GetListedNames,
@@ -1867,7 +1869,7 @@ public sealed partial class Evaluation : IFileTester
                     var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
                     if (!result.CanAcceptMore)
                     {
-                        printStatus = result.IsError ? 1 : 0;
+                        printStatus = WriteFailureAffectsListingStatus(result, preserveStatusOnClosedOutput) ? 1 : 0;
                         outputClosed = true;
                         break;
                     }
@@ -1928,11 +1930,16 @@ public sealed partial class Evaluation : IFileTester
                 }
             }
 
+            // Buffered declaration listings report a shell-closed stdout without failing the listing.
+            bool WriteFailureAffectsListingStatus(DescriptorWriteResult result, bool preserveStatusOnClosedOutput) =>
+                result.IsError && (!preserveStatusOnClosedOutput || !GetStdOutDescriptor().IsClosed);
+
             async Task<int> EvaluateFunctionsAsync()
             {
                 const DeclarationListingAttributes ArrayFilters =
                     DeclarationListingAttributes.Indexed | DeclarationListingAttributes.Associative;
                 var noOperands = declaration.Operands.Count == 0;
+                var preserveStatusOnClosedOutput = noOperands && options.Builtin == BuiltinKind.Declare && options.Functions;
                 if (noOperands && (options.ListingAttributes & ArrayFilters) != DeclarationListingAttributes.None)
                     return 0;
                 if (!noOperands && !options.Print && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local
@@ -2020,7 +2027,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                     var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
                     if (!result.CanAcceptMore)
-                        return result.IsError ? 1 : functionStatus;
+                        return WriteFailureAffectsListingStatus(result, preserveStatusOnClosedOutput) ? 1 : functionStatus;
                 }
                 return functionStatus;
 

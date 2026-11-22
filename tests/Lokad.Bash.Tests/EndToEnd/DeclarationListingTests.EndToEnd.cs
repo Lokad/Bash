@@ -37,6 +37,34 @@ public sealed class DeclarationListingTestsEndToEnd
     public Task Evaluation_DeclarationListings_FilterRawAttributes(string command, string expectedOutput, int expectedStatus) =>
         AssertResultAsync(Bindings + command + Projection, expectedOutput, expectedStatus);
 
+    [Theory]
+    [InlineData("f(){ local a=value; local -F >&-; }; f", "local", 0)]
+    [InlineData("f(){ local a=value; local -p a >&-; }; f", "local", 1)]
+    [InlineData("declare -a a=([7]=tail); declare -a >&-", "declare", 0)]
+    [InlineData("probe_f(){ :; }; declare -F >&-", "declare", 0)]
+    [InlineData("probe_f(){ :; }; declare -F probe_f >&-", "declare", 1)]
+    [InlineData("a=value; declare >&-", "declare", 1)]
+    public async Task ClosedStdoutKeepsTheListingDiagnosticAndSelectsStatusByRole(
+        string script, string builtin, int status)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal(builtin + ": write error: Bad file descriptor\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task OperandFreeDeclarationWithClosedStdoutContinuesUnderErrexit()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "set -e; a=value; declare -p >&-; declare -p a");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -- a=\"value\"\n", result.StdOut);
+        Assert.Equal("declare: write error: Bad file descriptor\n", result.StdErr);
+    }
+
     [Fact]
     public Task Evaluation_AssignmentListing_RetainsDeterministicUtf8Rendering()
     {

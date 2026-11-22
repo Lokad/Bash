@@ -129,6 +129,28 @@ public sealed class ByteDeclarationInspectionTests
         Assert.True(state.Variables["saved"].Bytes.Span.SequenceEqual(input.AsSpan(0, InputBytes)));
     }
 
+    [Fact]
+    public async Task OperandFreeLocalListingWithClosedStdoutStillRefusesUnadmittedOutput()
+    {
+        const int inputBytes = 128 * 1024;
+        var input = new byte[inputBytes + 1];
+        input.AsSpan().Fill(1);
+        input[^1] = (byte)'\n';
+        var governor = new MemoryGovernor(1024 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/input", input);
+
+        var result = await host.RunAsync(
+            "f(){ local saved; read -r saved </input; local -p >&-; printf '%s:%s' \"$?\" \"${#saved}\"; }; f",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"1:{inputBytes}", host.StandardOutput.TextContent);
+        Assert.Equal("local: shared memory budget exhausted\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("-a", "i", "4095", "[0]", "[4095]")]
     [InlineData("-A", "key$i", "key4095", "[key0]", "[key4095]")]
@@ -174,6 +196,33 @@ public sealed class ByteDeclarationInspectionTests
                 Assert.Equal("declare: write error: Write failed\n"u8.ToArray(), diagnostic.Content);
             });
         Assert.Empty(host.ClosedDescriptors);
+    }
+
+    [Theory]
+    [InlineData("x=one; y=two; declare -p")]
+    [InlineData("x(){ :; }; y(){ :; }; declare -F")]
+    public async Task OperandFreeInspectionReportsBadDescriptorFromTheHostAsFailure(string script)
+    {
+        var state = new Eval(Parser.Parse(script));
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        var host = new TestOperationVisitor([]) { RecordAppends = true, MemoryBudget = owner };
+        host.EnqueueAppendResult(DescriptorWriteResult.WriteFailure);
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        await new Engine().RunAsync(state, host, CancellationToken.None);
+
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Collection(host.Appends,
+            attempted => Assert.Equal(FileDescriptor.StdOut, attempted.Descriptor),
+            diagnostic =>
+            {
+                Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
+                Assert.Equal("declare: write error: Bad file descriptor\n"u8.ToArray(), diagnostic.Content);
+            });
+        Assert.Empty(host.ClosedDescriptors);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]

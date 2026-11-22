@@ -210,8 +210,12 @@ current directory. A directory stored by `pushd -n dir` retains its supplied byt
 until a later navigation resolves the path through the host.
 Successful stack edits retain success if the
 listing write fails, and the write cause is reported through active stderr.
-`pwd`, `dirs`, and declaration and option listings report write failures
-and return failure. `caller` uses a compact display of active function and
+`pwd`, `dirs`, and declaration and option listings report write failures.
+With shell-closed stdout, operand-free `local` and operand-free `declare`
+attribute and function listings report the write diagnostic and keep their
+listing status. Assignment-style listings and named declaration queries
+return failure on a closed descriptor. Host write errors still fail a
+declaration listing. `caller` uses a compact display of active function and
 sourced invocations for unnamed script input. Both `source` and `.` appear
 as `source`. An omitted index selects the current invocation. Explicit
 indices select enclosing invocations starting at zero. A leading `--` ends
