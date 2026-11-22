@@ -33,7 +33,10 @@ jobs:
         run: dotnet pack src/Lokad.Bash/Lokad.Bash.csproj -c Release --no-build --no-restore
       - name: Verify installed package on both runtimes
         shell: pwsh
-        run: ./scripts/Test-NuGetPackage.ps1 -PackagePath (Get-ChildItem artifacts/nuget/Lokad.Bash.*.nupkg).FullName
+        run: |
+          $package = (Get-ChildItem artifacts/nuget/Lokad.Bash.*.nupkg).FullName
+          $output = Join-Path $PWD 'artifacts/package-validation'
+          ./scripts/Test-NuGetPackage.ps1 -PackagePath $package -OutputDirectory $output
       - name: Verify benchmark correctness without timings
         shell: pwsh
         run: |

@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot
 $package = (Resolve-Path -LiteralPath $PackagePath).Path
-$outputRoot = [System.IO.Path]::GetFullPath((Join-Path $repository $OutputDirectory))
+$outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory, $repository)
 $runDirectory = Join-Path $outputRoot ([Guid]::NewGuid().ToString('N'))
 $feed = Join-Path $runDirectory 'feed'
 $cache = Join-Path $runDirectory 'packages'

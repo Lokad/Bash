@@ -60,7 +60,9 @@ being claimed. `scripts/Test-NuGetPackage.ps1` restores the public consumer in
 `validation/PackageConsumer.cs` from the produced NuGet file, using an isolated
 local feed/cache without a project reference. It rejects runtime dependencies,
 checks loaded assembly hashes and exports runtime/package/source hashes and
-individual probe names. CI executes it on both operating systems and runtimes.
+individual probe names. Its `-OutputDirectory` accepts an absolute path or a
+path relative to the checkout, defaulting to `artifacts/package-validation`.
+CI executes it on both operating systems and runtimes.
 The probe checks public invocation, prepared reuse, byte arguments/output, lazy
 command units, errexit/EXIT, cancellation, memory refunds and matcher migration.
 The isolated consumer also checks that a long accepted pipeline reaches host pipe
