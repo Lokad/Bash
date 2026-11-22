@@ -1028,6 +1028,12 @@ public static class Parser
         if (!tokenizer.IsFollowedByFunctionParentheses(firstWord))
             return false;
 
+        // Assignment-shaped names are only valid with the function keyword.
+        // Leave the raw parentheses unread so an array assignment can own them.
+        if (!tokenizer.TryReadFunctionName(firstWord, out var name)
+            || name.Syntax.HasFlag(FunctionNameSyntax.KeywordOnly))
+            return false;
+
         var token1 = tokenizer.NextTokenCore();
         var token2 = tokenizer.NextTokenCore();
         if (token2.Kind != TokenKind.OpenParen)
@@ -1040,17 +1046,12 @@ public static class Parser
         var token3 = tokenizer.NextTokenCore();
         if (token3.Kind == TokenKind.CloseParen)
         {
-            if (!tokenizer.TryReadFunctionName(firstWord, out var name))
+            var body = ParseFunctionBody(tokenizer);
+            if (body == null)
                 return false;
-            if (!name.Syntax.HasFlag(FunctionNameSyntax.KeywordOnly))
-            {
-                var body = ParseFunctionBody(tokenizer);
-                if (body == null)
-                    return false;
 
-                functionDefinition = new FunctionDefinition(name, body);
-                return true;
-            }
+            functionDefinition = new FunctionDefinition(name, body);
+            return true;
         }
 
         tokenizer.PushBack(token3);

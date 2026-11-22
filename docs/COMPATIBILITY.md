@@ -140,6 +140,11 @@ and redirections in effect. A malformed list discards the current command unit.
 With errexit set it exits with status 2, except in a source or eval reader that
 was itself invoked as a tested command.
 
+In an assignment-only command, a compound list on an array element, including
+an empty list, reports an assignment error before expanding either the selector
+or the list. Without errexit, a later command unit can proceed. Immediate
+trailing text can form a scalar element value, as in `items[2]=()tail`.
+
 `declare`, `typeset`, `local`, `export`, and `readonly` report usage after an
 unrecognized leading option. A reached `--help` writes the command's synopsis
 and Lokad.Bash's builtin documentation to stdout with status 2. At script
