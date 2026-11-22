@@ -244,6 +244,35 @@ public partial class EvaluationTests
         Assert.Equal(0, state.LastExitCode);
     }
 
+    [Fact]
+    public async Task FileTests_SeparateRequestKindsWhenComparisonsShareMetadata()
+    {
+        var state = new Eval(Parser.Parse("test ! -t invalid -a -t 0 -a -s file -a file -ef alias"
+            + " -a -r file -a file -nt missing -a -e file -a ! -s empty"));
+        var kinds = await NextPathKindsAsync(state);
+        Assert.Equal("/file", Assert.Single(kinds.Paths).Path);
+        kinds.SetResult([PathKindResult(FilePathKind.File)]);
+
+        var metadata = await NextMetadataAsync(state);
+        Assert.Equal(new[] { "/file", "/alias", "/missing" }, metadata.Paths.Select(path => path.Path));
+        var identity = new FileIdentity(new object(), "shared");
+        var file = FilePathResolutionResult.Success(new FilePathInfo(FilePathKind.File,
+            new FileMetadata(null, DateTimeOffset.UnixEpoch, FileAccessRights.Read, null, null, null, null, identity)));
+        metadata.SetResult([file, file, default]);
+
+        var sizes = Assert.IsType<PathInfosOperation>(await NextStepAsync(state));
+        Assert.Equal(FilePathInfoRequest.MetadataWithExactSize, sizes.Request);
+        Assert.Equal(new[] { "/file", "/empty" }, sizes.Paths.Select(path => path.Path));
+        sizes.SetResult([SizeInfo(FilePathKind.File, 1), SizeInfo(FilePathKind.File, 0)]);
+
+        var terminals = await NextTerminalStatusesAsync(state);
+        Assert.Equal(FileDescriptor.StdIn, Assert.Single(terminals.Descriptors));
+        terminals.SetResult([true]);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData("test -e special -a -a special -a ! -f special -a ! -d special -a -p special")]
     public async Task FileTests_SpecialFilesExistWithoutBeingRegularFilesOrDirectories(string script)

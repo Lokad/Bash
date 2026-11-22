@@ -3581,15 +3581,15 @@ public sealed partial class Evaluation : IFileTester
         using var lookupMemory = new MemoryCapacity(Memory.Budget,
             MemoryCapacity.ArrayBackingBytes<int>(tests.Count) + MemoryCapacity.ArrayBackingBytes<bool>(tests.Count));
         var currentDirectory = _state.CurrentDirectory;
-        var terminalDescriptors = new List<FileDescriptor>();
-        var terminalResultIndices = new List<int>();
-        var kindPaths = new PathLookupBatch<FilePathLookup>();
-        var metadataPaths = new PathLookupBatch<FilePathLookup>();
-        var sizePaths = new PathLookupBatch<FilePathLookup>();
+        List<FileDescriptor>? terminalDescriptors = null;
+        List<int>? terminalResultIndices = null;
+        PathLookupBatch<FilePathLookup>? kindPaths = null;
+        PathLookupBatch<FilePathLookup>? metadataPaths = null;
+        PathLookupBatch<FilePathLookup>? sizePaths = null;
         var pathResultIndices = new int[tests.Count];
         Array.Fill(pathResultIndices, -1);
-        var comparisons = new List<(int TestIndex, FileTimeComparison Comparison, int Left, int Right)>();
-        var identityTests = new List<(int TestIndex, int Left, int Right)>();
+        List<(int TestIndex, FileTimeComparison Comparison, int Left, int Right)>? comparisons = null;
+        List<(int TestIndex, int Left, int Right)>? identityTests = null;
         var results = new bool[tests.Count];
         for (var index = 0; index < tests.Count; index++)
         {
@@ -3599,8 +3599,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (LogicalDescriptor.TryParse(test.Operand.AsSpan(), out var descriptor))
                 {
-                    lookupMemory.PrepareListCapacity(terminalDescriptors, 1);
-                    lookupMemory.PrepareListCapacity(terminalResultIndices, 1);
+                    lookupMemory.PrepareListCapacity(terminalDescriptors ??= [], 1);
+                    lookupMemory.PrepareListCapacity(terminalResultIndices ??= [], 1);
                     terminalDescriptors.Add(_state.CurrentRedirectionTable?.Resolve(descriptor) ?? FileDescriptor.Closed);
                     terminalResultIndices.Add(index);
                 }
@@ -3611,7 +3611,8 @@ public sealed partial class Evaluation : IFileTester
                     && TryReadFileOperand(test.Operand, currentDirectory, out var left) && left is not null
                     && TryReadFileOperand(secondary, currentDirectory, out var right) && right is not null)
                 {
-                    lookupMemory.PrepareListCapacity(identityTests, 1);
+                    lookupMemory.PrepareListCapacity(identityTests ??= [], 1);
+                    metadataPaths ??= new();
                     identityTests.Add((index, AddPath(metadataPaths, left, FileLinkFollowing.Follow),
                         AddPath(metadataPaths, right, FileLinkFollowing.Follow)));
                 }
@@ -3622,10 +3623,10 @@ public sealed partial class Evaluation : IFileTester
                     && TryReadFileOperand(test.Operand, currentDirectory, out var left)
                     && TryReadFileOperand(secondary, currentDirectory, out var right))
                 {
-                    lookupMemory.PrepareListCapacity(comparisons, 1);
+                    lookupMemory.PrepareListCapacity(comparisons ??= [], 1);
                     comparisons.Add((index, comparison,
-                        left is null ? -1 : AddPath(metadataPaths, left, FileLinkFollowing.Follow),
-                        right is null ? -1 : AddPath(metadataPaths, right, FileLinkFollowing.Follow)));
+                        left is null ? -1 : AddPath(metadataPaths ??= new(), left, FileLinkFollowing.Follow),
+                        right is null ? -1 : AddPath(metadataPaths ??= new(), right, FileLinkFollowing.Follow)));
                 }
             }
             else
@@ -3634,18 +3635,18 @@ public sealed partial class Evaluation : IFileTester
                     ? FileLinkFollowing.NoFollow : FileLinkFollowing.Follow;
                 if (!TryReadFileOperand(test.Operand, currentDirectory, out var path) || path is null)
                     continue;
-                var batch = test.Kind.MetadataPredicate is not null ? metadataPaths
-                    : test.Kind.IsNonEmpty ? sizePaths : kindPaths;
+                var batch = test.Kind.MetadataPredicate is not null ? (metadataPaths ??= new())
+                    : test.Kind.IsNonEmpty ? (sizePaths ??= new()) : (kindPaths ??= new());
                 pathResultIndices[index] = AddPath(batch, path, following);
             }
         }
 
         // The evaluator retains one ordered response slot per request through result mapping.
         // Referenced payloads and provider scratch remain under their original owners.
-        lookupMemory.Grow(MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(kindPaths.Paths.Count)
-            + MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(metadataPaths.Paths.Count)
-            + MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(sizePaths.Paths.Count)
-            + MemoryCapacity.ArrayBackingBytes<bool>(terminalDescriptors.Count));
+        lookupMemory.Grow(MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(kindPaths?.Paths.Count ?? 0)
+            + MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(metadataPaths?.Paths.Count ?? 0)
+            + MemoryCapacity.ArrayBackingBytes<FilePathResolutionResult>(sizePaths?.Paths.Count ?? 0)
+            + MemoryCapacity.ArrayBackingBytes<bool>(terminalDescriptors?.Count ?? 0));
 
         // Kind, metadata and exact-size failures remain independent. Hosts validate traversal
         // before fetching content; lexical normalization here would erase symbolic-link semantics.
@@ -3694,21 +3695,27 @@ public sealed partial class Evaluation : IFileTester
                 results[index] = test.Kind.RequiredKind is { } requiredKind
                     ? info.Kind == requiredKind : info.Kind != FilePathKind.Missing;
         }
-        foreach (var comparison in comparisons)
-            results[comparison.TestIndex] = CompareTimes(comparison.Comparison,
-                comparison.Left < 0 ? default : infos[comparison.Left],
-                comparison.Right < 0 ? default : infos[comparison.Right]);
-        foreach (var test in identityTests)
+        if (comparisons != null)
         {
-            var left = infos[test.Left];
-            var right = infos[test.Right];
-            if (left.Error is not null || right.Error is not null)
-                continue;
-            results[test.TestIndex] = left.Info.HasMetadata && right.Info.HasMetadata
-                && left.Info.Metadata.Identity is { } leftIdentity
-                && right.Info.Metadata.Identity is { } rightIdentity && leftIdentity == rightIdentity;
+            foreach (var comparison in comparisons)
+                results[comparison.TestIndex] = CompareTimes(comparison.Comparison,
+                    comparison.Left < 0 ? default : infos[comparison.Left],
+                    comparison.Right < 0 ? default : infos[comparison.Right]);
         }
-        if (terminalDescriptors.Count > 0)
+        if (identityTests != null)
+        {
+            foreach (var test in identityTests)
+            {
+                var left = infos[test.Left];
+                var right = infos[test.Right];
+                if (left.Error is not null || right.Error is not null)
+                    continue;
+                results[test.TestIndex] = left.Info.HasMetadata && right.Info.HasMetadata
+                    && left.Info.Metadata.Identity is { } leftIdentity
+                    && right.Info.Metadata.Identity is { } rightIdentity && leftIdentity == rightIdentity;
+            }
+        }
+        if (terminalDescriptors != null && terminalResultIndices != null)
         {
             CheckCancellation();
             var terminalStatuses = await TerminalStatusesOperation.AsTask(PublishOperation, terminalDescriptors)
@@ -3738,10 +3745,10 @@ public sealed partial class Evaluation : IFileTester
         }
 
         async Task<IReadOnlyList<FilePathResolutionResult>> ReadPathsAsync(
-            PathLookupBatch<FilePathLookup> paths, FilePathInfoRequest request)
+            PathLookupBatch<FilePathLookup>? paths, FilePathInfoRequest request)
         {
             CheckCancellation();
-            if (paths.Paths.Count == 0)
+            if (paths == null)
                 return Array.Empty<FilePathResolutionResult>();
             // A cancelled wait cannot release the borrowed paths before the host has settled.
             var infos = await PathInfosOperation.AsTask(PublishOperation, paths.Paths, request)
