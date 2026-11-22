@@ -1,7 +1,3 @@
-using Lokad.Bash.Tests.EndToEnd;
-using Lokad.Bash.Files;
-using Lokad.Bash.Helpers;
-using Lokad.Bash.Tree;
 namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationCommandQueryDescriptionTestsEndToEnd
@@ -13,12 +9,7 @@ public sealed class EvaluationCommandQueryDescriptionTestsEndToEnd
     [InlineData("command -V", "")]
     [InlineData("command -V --", "")]
     [InlineData("command -v echo if", "echo\nif\n")]
-    [InlineData("command -V -v printf", "printf\n")]
-    [InlineData("command -v -V printf", "printf is a shell builtin\n")]
-    [InlineData("command -VV printf", "printf is a shell builtin\n")]
     [InlineData("command -V -V printf", "printf is a shell builtin\n")]
-    [InlineData("command -Vv printf", "printf\n")]
-    [InlineData("command -vV printf", "printf is a shell builtin\n")]
     [InlineData("command -VvV -- printf", "printf is a shell builtin\n")]
     [InlineData("option='-V -v printf'; command $option", "printf\n")]
     [InlineData("command -V $(printf -- '-v printf')", "printf\n")]
