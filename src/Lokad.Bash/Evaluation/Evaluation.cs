@@ -3327,7 +3327,7 @@ public sealed partial class Evaluation : IFileTester
                     CheckCancellation();
                     // Removing a local export also hides its saved function-call prefix, but not outer exports.
                     if (callPrefixes?.Contains(binding.Name) != true
-                        || visibleOwners.GetValueOrDefault(binding.Name, variables).IsExported(binding.Name))
+                        || visibleOwners.GetValueOrDefault(binding.Name, variables).IsExported(binding.Name, detachBorrowed: false))
                         yield return binding;
                 }
                 // A scope often saves only a few names, independently of the call depth.

@@ -1810,7 +1810,7 @@ public sealed partial class Variables
             cancellationToken.ThrowIfCancellationRequested();
             var name = binding.Name;
             var scope = binding.Owner;
-            if (selected?.Contains(name) == true || !scope.TryGetBinding(name, out var slot)) continue;
+            if (selected?.Contains(name) == true || !scope.TryGetBinding(name, detachBorrowed: false, out var slot)) continue;
             ShellValue value;
             switch (slot)
             {
@@ -1881,7 +1881,10 @@ public sealed partial class Variables
     /// <summary>
     /// Returns true when a name is exported.
     /// </summary>
-    public bool IsExported(BindingName name) => !name.IsEmpty && HasAttribute(name, BindingAttributes.Exported);
+    public bool IsExported(BindingName name) => IsExported(name, detachBorrowed: true);
+
+    internal bool IsExported(BindingName name, bool detachBorrowed) =>
+        !name.IsEmpty && TryGetBinding(name, detachBorrowed, out var slot) && (slot.Attributes & BindingAttributes.Exported) != 0;
 
     /// <summary>
     /// Marks or unmarks a name as exported.

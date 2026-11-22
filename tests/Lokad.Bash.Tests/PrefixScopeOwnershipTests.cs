@@ -1,3 +1,4 @@
+using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
@@ -46,6 +47,62 @@ public sealed class PrefixScopeOwnershipTests
             Assert.Equal("zero", zero.ToUtf8String());
             Assert.True(caller.AssociativeArrays["map"].TryGet(key, out var mapValue));
             Assert.Equal("outer", mapValue.ToUtf8String());
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void ExportSnapshotReadsThroughMultipleOverlaysWithoutDetaching()
+    {
+        var caller = Variables.CreateEmpty();
+        var original = ShellValue.FromBytes(new byte[] { 0xff, 0x20 });
+        Assert.True(caller.TrySetScalar("value", original));
+        caller.SetExported("value", true);
+        Assert.True(caller.TryAssignArray("array", [original], ArrayKind.Indexed));
+        caller.SetExported("array", true);
+        Assert.True(caller.TrySetScalar("hidden", original));
+        caller.SetExported("hidden", true);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var middle = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
+            Assert.True(middle.TryUnset("hidden"));
+            var inner = Variables.CreateCommandScope(middle, memory, CancellationToken.None);
+            memory.ReleaseUnusedCapacity();
+            var workspace = memory.Workspace.Bytes;
+            using var hold = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
+
+            var snapshot = inner.BuildExportedEnvironment();
+            Assert.Equal(new EnvironmentVariable("value", original), Assert.Single(snapshot));
+            Assert.Equal(workspace, memory.Workspace.Bytes);
+
+            var replacement = ShellValue.FromText("later");
+            Assert.True(caller.TrySetScalar("value", replacement));
+            Assert.Equal(original, snapshot[0].Value);
+            Assert.Equal(replacement, Assert.Single(inner.BuildExportedEnvironment()).Value);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void BorrowedExportProjectionObservesCancellation()
+    {
+        var caller = Variables.CreateEmpty();
+        Assert.True(caller.TrySetScalar("value", ShellValue.FromText("caller")));
+        caller.SetExported("value", true);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var overlay = Variables.CreateCommandScope(caller, memory, cancellation.Token);
+            cancellation.Cancel();
+
+            var failure = Assert.Throws<OperationCanceledException>(() => overlay.BuildExportedEnvironment());
+            Assert.Equal(cancellation.Token, failure.CancellationToken);
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);

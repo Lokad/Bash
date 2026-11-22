@@ -39,17 +39,23 @@ public sealed partial class Variables
         };
     }
 
-    private bool TryGetBinding(BindingName name, [NotNullWhen(true)] out VariableSlot? slot)
+    private bool TryGetBinding(BindingName name, [NotNullWhen(true)] out VariableSlot? slot) =>
+        TryGetBinding(name, detachBorrowed: true, out slot);
+
+    // A read-only projection can follow the visible owner without taking a mutable copy.
+    private bool TryGetBinding(BindingName name, bool detachBorrowed, [NotNullWhen(true)] out VariableSlot? slot)
     {
         if (_bindings.TryGetValue(name, out slot))
             return slot is not MissingSlot;
-        if (_commandSource is not { } source || !source.Variables.TryGetBinding(name, out slot))
+        if (_commandSource is not { } source || !source.Variables.TryGetBinding(name, detachBorrowed, out slot))
         {
             slot = null;
             return false;
         }
         source.CancellationToken.ThrowIfCancellationRequested();
-        source.Memory.Charge(source.Variables.EstimateBindingBytes(name));
+        if (!detachBorrowed)
+            return true;
+        source.Memory.Charge(EstimateSlotBytes(name, slot));
         source.CancellationToken.ThrowIfCancellationRequested();
         slot = slot.Clone();
         source.CancellationToken.ThrowIfCancellationRequested();

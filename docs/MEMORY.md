@@ -381,9 +381,10 @@ bindings and completed edits retain their own state. The batch refunds after
 publication or restoration settles.
 Runtime environment snapshots admit result backing before growth. A merge
 across saved scopes also admits selected-name scratch. Direct snapshots use
-the unique names from the variable export index. Scratch retires before host
-dispatch, and the result stays admitted through completion while borrowing
-the original name and value bytes.
+the unique names from the variable export index. Projection reads the visible
+slot in its existing owner, including when an array masks an outer export.
+Scratch retires before host dispatch, and the result stays admitted through
+completion while borrowing the original name and value bytes.
 Preparing a hosted child with `CreateInherited` builds a caller-owned namespace
 and positional frame. The engine installs the evaluation budget when it runs.
 Retained root namespaces keep the caller-owned evaluation budget alive as before.

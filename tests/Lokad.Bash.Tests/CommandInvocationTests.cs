@@ -469,6 +469,65 @@ public sealed class CommandInvocationTests
     }
 
     [Theory]
+    [InlineData(false, ArrayKind.Indexed)]
+    [InlineData(true, ArrayKind.Indexed)]
+    [InlineData(false, ArrayKind.Associative)]
+    [InlineData(true, ArrayKind.Associative)]
+    public async Task PrefixCommandKeepsExportSnapshotAdmittedWithoutCopyingArray(bool query, ArrayKind kind)
+    {
+        var state = new ShellEvaluation(Parser.Parse(query ? "FLAG=temporary command -v inspect" : "FLAG=temporary inspect"));
+        var variables = Assert.IsType<Variables>(typeof(ShellEvaluation)
+            .GetField("_vars", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(state));
+        var value = ShellValue.FromBytes(new byte[] { 0xff, 0x20 });
+        const int elementCount = 1024;
+        var items = kind == ArrayKind.Indexed
+            ? Enumerable.Repeat(value, elementCount).ToArray()
+            : Enumerable.Range(0, elementCount).SelectMany(index => new[] { ShellValue.FromInteger(index), value }).ToArray();
+        Assert.True(variables.TryAssignArray("array", items, kind));
+        Assert.Equal(elementCount, kind == ArrayKind.Indexed
+            ? variables.IndexedArrays["array"].Count
+            : variables.AssociativeArrays["array"].Count);
+        variables.SetExported("array", true);
+        state.SetExportedVariable("value", value);
+        var namespaceBytes = variables.EstimatedMemoryBytes;
+        var governor = new MemoryGovernor(namespaceBytes + 96 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var step = await state.GetNextStep(deadline.Token);
+        try
+        {
+            var environment = query
+                ? Assert.IsType<ResolveCommandsOperation>(step).Environment
+                : Assert.IsType<RunCommand>(step).Command.Environment;
+            Assert.Equal(3, environment.Count);
+            Assert.DoesNotContain(environment, entry => entry.Name == "array");
+            Assert.Equal(value, Assert.Single(environment, entry => entry.Name == "value").Value);
+            Assert.Equal(ShellValue.FromText("temporary"), Assert.Single(environment, entry => entry.Name == "FLAG").Value);
+            var snapshot = Assert.IsType<List<EnvironmentVariable>>(environment);
+            Assert.True(state.Memory.Workspace.Bytes - namespaceBytes >= (long)snapshot.Capacity * Unsafe.SizeOf<EnvironmentVariable>());
+            Assert.False(state.Completion.IsCompleted);
+        }
+        finally
+        {
+            if (step is RunCommand command) command.SetResult(new CommandExecutionResult.Completed(0));
+            if (step is ResolveCommandsOperation lookup) lookup.SetResult([new CommandLookupResult.Found("/inspect")]);
+            if (step is WriteOperation diagnostic) diagnostic.SetResult(DescriptorWriteResult.Open);
+        }
+        if (query)
+        {
+            var output = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+            Assert.True(output.Content.Span.SequenceEqual("/inspect\n"u8));
+            output.SetResult(DescriptorWriteResult.Open);
+        }
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        Assert.Equal(0, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("type -p", 4096, 512, true)]
     [InlineData("command -v", 4096, 512, true)]
     [InlineData("type -p", 4096, 2048, false)]
