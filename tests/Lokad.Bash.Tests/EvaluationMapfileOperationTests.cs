@@ -11,7 +11,7 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
-    private const string MapfileUsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [--] [array]";
+    private const string MapfileUsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [-c quantum] [--] [array]";
 
     [Fact]
     public async Task Evaluation_MapfileBuiltin_ReadsAllLinesInBatches()
@@ -35,6 +35,21 @@ public partial class EvaluationTests
         Assert.Equal(
             new[] { ShellValue.FromText("a\n"), ShellValue.FromText("b\n"), ShellValue.FromText("c") },
             state.IndexedArrays["arr"]);
+    }
+
+    [Fact]
+    public async Task MapfileQuantumAloneKeepsTheRecordLimitAndOrigin()
+    {
+        var state = new Eval(Parser.Parse("arr=(old); mapfile -c1 -tn2 -O2 arr"));
+        var read = await NextReadAsync(state);
+
+        Assert.Equal(2, read.Limit);
+        read.SetResult(ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(new[] { ShellValue.FromText("old"), ShellValue.Empty,
+            ShellValue.FromText("first"), ShellValue.FromText("second") }, state.IndexedArrays["arr"]);
     }
 
     [Fact]
@@ -380,7 +395,6 @@ public partial class EvaluationTests
 
     [Theory]
     [InlineData("mapfile -C callback arr")]
-    [InlineData("mapfile -c 1 arr")]
     [InlineData("mapfile -x arr")]
     public async Task Evaluation_MapfileBuiltin_RejectsUnsupportedShapeBeforeReading(string command)
     {
@@ -458,6 +472,7 @@ public partial class EvaluationTests
     [InlineData("readarray -tO", "readarray", "-O")]
     [InlineData("mapfile -u", "mapfile", "-u")]
     [InlineData("mapfile -s", "mapfile", "-s")]
+    [InlineData("readarray -tc", "readarray", "-c")]
     public async Task Evaluation_MapfileBuiltin_RejectsMissingOptionOperandBeforeReading(string command, string builtin, string option)
     {
         var state = new Eval(Parser.Parse($"arr=(old); {command}"));
@@ -476,6 +491,9 @@ public partial class EvaluationTests
     [InlineData("mapfile -n -1", "mapfile: -1: invalid line count\n")]
     [InlineData("readarray -O4294967296", "readarray: 4294967296: invalid array origin\n")]
     [InlineData("readarray -s-1", "readarray: -1: invalid line count\n")]
+    [InlineData("mapfile -c0 -c2", "mapfile: 0: invalid callback quantum\n")]
+    [InlineData("readarray -c4294967296", "readarray: 4294967296: invalid callback quantum\n")]
+    [InlineData("mapfile -c --help", "mapfile: --help: invalid callback quantum\n")]
     public async Task Evaluation_MapfileBuiltin_RejectsInvalidNumbersBeforeReading(string command, string error)
     {
         var state = new Eval(Parser.Parse($"arr=(old); {command} arr"));

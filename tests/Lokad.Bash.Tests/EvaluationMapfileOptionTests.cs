@@ -9,7 +9,7 @@ namespace Lokad.Bash.Tests;
 
 public sealed class EvaluationMapfileOptionTests
 {
-    private const string UsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [--] [array]";
+    private const string UsageArguments = "[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [-c quantum] [--] [array]";
 
     // Usage intentionally advertises the supported subset; native comparisons retain the full Bash text.
     [Theory]
@@ -39,6 +39,7 @@ public sealed class EvaluationMapfileOptionTests
     [InlineData("arr=(old); mapfile arr extra </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,empty>", "")]
     [InlineData("mapfile -- -x; printf '<%s>' \"$?\"", 0, "<1>", "mapfile: `-x': not a valid identifier\n")]
     [InlineData("mapfile -tt -t -- arr <<< line; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<0,line>", "")]
+    [InlineData("readarray -c ' +2 ' -c4294967295 -tn2 arr <<< $'a\\nb\\nc'; printf '<%s><%s><%s>' \"$?\" \"${arr[0]}\" \"${arr[1]}\"", 0, "<0><a><b>", "")]
     [InlineData("arr=(old); mapfile arr -x </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,empty>", "")]
     [InlineData("mapfile -x \"${missing:?boom}\"; printf after", 1, "", "missing: boom\n")]
     public async Task OptionsPreserveDiagnosticAndEffectOrder(

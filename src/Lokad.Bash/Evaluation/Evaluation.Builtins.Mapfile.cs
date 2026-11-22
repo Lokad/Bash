@@ -34,7 +34,7 @@ public sealed partial class Evaluation
                 trimDelimiter = true;
                 continue;
             }
-            if (option is not ((byte)'d' or (byte)'n' or (byte)'O' or (byte)'s' or (byte)'u'))
+            if (option is not ((byte)'c' or (byte)'d' or (byte)'n' or (byte)'O' or (byte)'s' or (byte)'u'))
                 return await InvalidArgumentsAsync(flag, ": invalid option").ConfigureAwait(false);
             if (!options.TryReadOperand(out var operand))
                 return await InvalidArgumentsAsync(flag, ": option requires an argument").ConfigureAwait(false);
@@ -53,14 +53,16 @@ public sealed partial class Evaluation
             }
             else
             {
-                if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var number) || number is < 0 or > uint.MaxValue)
+                if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var number)
+                    || number < (option == (byte)'c' ? 1 : 0) || number > uint.MaxValue)
                     return await InvalidNumberAsync(operand.Bytes, option).ConfigureAwait(false);
                 if (option == (byte)'n')
                     count = (uint)number;
                 else if (option == (byte)'s')
                     skip = (uint)number;
-                else
+                else if (option == (byte)'O')
                     origin = (uint)number;
+                // The quantum affects callbacks only.
             }
         }
         if (options.RequestedHelp)
@@ -233,8 +235,14 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> InvalidNumberAsync(ReadOnlyMemory<byte> operand, byte option)
         {
+            var detail = option switch
+            {
+                (byte)'c' => ": invalid callback quantum",
+                (byte)'O' => ": invalid array origin",
+                _ => ": invalid line count"
+            };
             await ReportExpansionDiagnosticAsync([arguments[0]], [ShellValue.FromBytes(operand),
-                ShellValue.FromText(option == (byte)'O' ? ": invalid array origin" : ": invalid line count")]).ConfigureAwait(false);
+                ShellValue.FromText(detail)]).ConfigureAwait(false);
             return await FinishAsync(1).ConfigureAwait(false);
         }
     }
