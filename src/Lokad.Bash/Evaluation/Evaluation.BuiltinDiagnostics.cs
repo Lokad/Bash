@@ -21,7 +21,11 @@ public sealed partial class Evaluation
 
     private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
         ShellValue command, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
-        WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("-"), ShellValue.FromBytes(flag),
+        WriteInvalidShortOptionUnlessStderrClosedAsync(command, ShellValue.FromText("-"), flag, kind, name);
+
+    private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
+        ShellValue command, ShellValue sign, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
+        WriteDiagnosticUnlessStderrClosedAsync([command], [sign, ShellValue.FromBytes(flag),
             ShellValue.FromText(": invalid option\n" + name + ": usage: " + BuiltinDocumentation.For(kind).Synopsis(name))],
             scope: null);
 

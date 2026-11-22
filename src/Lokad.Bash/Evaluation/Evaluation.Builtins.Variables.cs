@@ -275,7 +275,7 @@ public sealed partial class Evaluation
             if (firstOtherFlag == 0)
                 continue;
             if (bytes[firstOtherFlag] != (byte)'o')
-                return await InvalidOptionAsync(field, ": unsupported option", 2).ConfigureAwait(false);
+                return await RejectFlagAsync(field, firstOtherFlag, 2).ConfigureAwait(false);
             if (firstOtherFlag == bytes.Length - 1 && candidate + 1 < words.Count
                 && !IsSetOption(words[candidate + 1].Bytes.Span))
                 candidate++;
@@ -318,7 +318,7 @@ public sealed partial class Evaluation
                     continue;
                 }
                 if (flag != (byte)'o')
-                    return await InvalidOptionAsync(option, ": unsupported option", 1).ConfigureAwait(false);
+                    return await RejectFlagAsync(option, flagIndex, 1).ConfigureAwait(false);
                 if (index + 1 < words.Count && words[index + 1].Bytes.Span is [not ((byte)'-' or (byte)'+'), ..])
                 {
                     var name = words[++index];
@@ -347,6 +347,18 @@ public sealed partial class Evaluation
 
         static bool IsSetOption(ReadOnlySpan<byte> bytes) =>
             bytes.Length > 1 && bytes[0] is (byte)'-' or (byte)'+';
+
+        async Task<EvaluationResult> RejectFlagAsync(ShellValue group, int flagIndex, int exitCode)
+        {
+            var flag = group.Bytes.Slice(flagIndex, 1);
+            // Recognized Bash flags outside the mutable option profile keep the unsupported-option diagnostic.
+            if ("abfhkmnprtuvxBCEHPT"u8.Contains(flag.Span[0]))
+                return await InvalidOptionAsync(group, ": unsupported option", exitCode).ConfigureAwait(false);
+
+            await WriteInvalidShortOptionUnlessStderrClosedAsync(words[0], ShellValue.FromBytes(group.Bytes[..1]),
+                flag, BuiltinKind.Set, "set").ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
+        }
 
         async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, string message, int exitCode)
         {

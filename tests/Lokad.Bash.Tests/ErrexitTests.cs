@@ -8,6 +8,7 @@ namespace Lokad.Bash.Tests;
 public sealed class ErrexitTests
 {
     private const string ReportOption = "flag(){ if [[ -o errexit ]]; then printf on; else printf off; fi; }; ";
+    private const string SetUsage = "set: usage: set [-e|+e] [-o errexit|+o errexit] [-|+|--] [arg ...]\n";
 
     [Theory]
     [InlineData("-e", "+e")]
@@ -57,7 +58,7 @@ public sealed class ErrexitTests
     }
 
     [Theory]
-    [InlineData("-e -z", "off", "set: -z: unsupported option\n")]
+    [InlineData("-e -z", "off", "set: -z: invalid option\n" + SetUsage)]
     [InlineData("-e -o invalid", "on", "set: invalid: invalid option name\n")]
     public async Task SetSeparatesShortFlagValidationFromApplyingNamedOptions(
         string options, string expectedMode, string expectedDiagnostic)
@@ -70,6 +71,55 @@ public sealed class ErrexitTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2>" + expectedMode, host.StandardOutput.TextContent);
         Assert.Equal(expectedDiagnostic, host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("-e + --help ignored", "--", "on")]
+    [InlineData("-e + +ezq ignored", "+z", "off")]
+    [InlineData("-oz errexit", "-z", "on")]
+    public async Task InvalidFlagReachedDuringSetApplicationKeepsEarlierChanges(
+        string options, string flagSpelling, string expectedMode)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(ReportOption
+            + $"set -- keep; if set {options}; then status=0; else status=$?; fi; "
+            + "printf '<%s><%s>' \"$status\" \"$1\"; flag", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1><keep>" + expectedMode, host.StandardOutput.TextContent);
+        Assert.Equal($"set: {flagSpelling}: invalid option\n" + SetUsage, host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("$'-e\\377z'", "<2>off", (byte)'-', (byte)0xff)]
+    [InlineData("-e + $'+e\\376z'", "<1>off", (byte)'+', (byte)0xfe)]
+    public async Task SetInvalidFlagReportsTheSignAndTheFirstInvalidByte(
+        string options, string expected, byte sign, byte flag)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(ReportOption
+            + $"if set {options}; then status=0; else status=$?; fi; "
+            + "printf '<%s>' \"$status\"; flag", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        byte[] diagnostic = [.. "set: "u8, sign, flag, .. ": invalid option\n"u8, .. System.Text.Encoding.ASCII.GetBytes(SetUsage)];
+        Assert.Equal(diagnostic, host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("2>&1", "set: --: invalid option\n" + SetUsage)]
+    [InlineData("2>&-", "")]
+    public async Task SetInvalidFlagUsesTheReachedDiagnosticDescriptor(string redirection, string diagnostic)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(ReportOption
+            + $"if set -e + --help {redirection}; then status=0; else status=$?; fi; "
+            + "printf '<%s>' \"$status\"; flag", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(diagnostic + "<1>on", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
     }
 
     [Fact]
