@@ -77,6 +77,27 @@ public sealed class ReadTargetBindingTests
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData("IFS=' ' read value", "head tail\\\\\\  ", "<unset><head tail\\><next>")]
+    [InlineData("IFS=' ' read value", "head tail\\\\\\\\  ", "<unset><head tail\\\\><next>")]
+    [InlineData("IFS=' ' read value", " one\\  ", "<unset><one ><next>")]
+    [InlineData("IFS=' :' read -r value", "head tail\\  ", "<unset><head tail\\><next>")]
+    [InlineData("IFS=$' \\t:' read left value", "first : next last\\\t \t", "<first><next last><next>")]
+    public async Task ReadScalarRemainderTrimsOnlyTrailingIfsWhitespace(string read, string record, string output)
+    {
+        var script = read + "\n" + """
+            IFS= read -r next
+            printf '<%s>' "${left-unset}" "$value" "$next"
+            """;
+        var host = EndToEndHarness.BuildTree([]);
+        var result = await EndToEndHarness.RunScriptAsync(script, host, System.Text.Encoding.UTF8.GetBytes(record + "\nnext\n"));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ReadArrayPreservesBytesAndLeavesTheNextDelimitedRecord()
     {

@@ -49,31 +49,17 @@ internal static class ReadFieldSplitter
                     : ShellValue.Empty);
             }
 
-            SkipIfsWhitespace(ref position);
-            var remainderStart = position;
-            var probePosition = position;
-            if (!TryReadField(ref probePosition, out var firstStart, out var firstEnd))
+            if (!TryReadField(ref position, out var firstStart, out var firstEnd))
             {
                 splitFields.Add(ShellValue.Empty);
             }
-            else if (!TryReadField(ref probePosition, out _, out _))
+            else if (!TryReadCharacter(position, out _, out _))
             {
                 splitFields.Add(BuildValue(firstStart, firstEnd));
             }
             else
             {
-                // Keep source offsets instead of a per-character table. Trim even escaped
-                // trailing IFS whitespace, preserving the final-remainder semantics of read.
-                var remainderEnd = remainderStart;
-                var index = remainderStart;
-                while (TryReadCharacter(index, out var character, out var next))
-                {
-                    if (!HasIfsWhitespaceValue(character))
-                        remainderEnd = next;
-                    index = next;
-                }
-
-                splitFields.Add(BuildValue(remainderStart, remainderEnd));
+                splitFields.Add(BuildValue(firstStart, TrimRemainderEnd(firstStart)));
             }
 
             return splitFields;
@@ -154,9 +140,34 @@ internal static class ReadFieldSplitter
             bool IsIfsWhitespace(ReadCharacter character) =>
                 IsIfsDelimiter(character) && character.Scalar is { } scalar && FieldSeparators.HasWhitespaceSemantics(scalar);
 
-            bool HasIfsWhitespaceValue(ReadCharacter character) =>
-                IsSeparator(character)
-                && character.Scalar is { } scalar && FieldSeparators.HasWhitespaceSemantics(scalar);
+            int TrimRemainderEnd(int start)
+            {
+                // IFS whitespace is ASCII. Trim from the end so the remainder need not be scanned again.
+                var bytes = content.Span;
+                var end = contentEnd;
+                while (end > start)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var scalar = new Rune(bytes[end - 1]);
+                    if (!FieldSeparators.HasWhitespaceSemantics(scalar)
+                        || !IsSeparator(new ReadCharacter(content.Slice(end - 1, 1), scalar, IsEscaped: false)))
+                        break;
+
+                    end--;
+                    if (options.BackslashMode == ReadBackslashMode.Preserve)
+                        continue;
+                    // Trim the escape of removed whitespace, retaining any preceding literal backslashes.
+                    var escapeStart = end;
+                    while (escapeStart > start && bytes[escapeStart - 1] == (byte)'\\')
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        escapeStart--;
+                    }
+                    if ((end - escapeStart) % 2 != 0)
+                        end--;
+                }
+                return end;
+            }
 
             bool IsIfsNonWhitespace(ReadCharacter character) =>
                 IsIfsDelimiter(character) && !(character.Scalar is { } scalar && FieldSeparators.HasWhitespaceSemantics(scalar));
