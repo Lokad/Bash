@@ -71,6 +71,11 @@ internal sealed class PipeInputWriter
             {
                 failure = new DescriptorCloseResult(false, null, ExceptionDispatchInfo.Capture(exception));
             }
+            finally
+            {
+                // The write ends the host's payload borrow. Writer close uses only the handle.
+                _content.Dispose();
+            }
             var close = await ShellDescriptorCleanup.TryCloseOwnedAsync(writerHost, _pipe.Write).ConfigureAwait(false);
             failure = DescriptorCloseResult.FirstFailure(failure, close);
             if (failure.Error != null || failure.Exception != null)
@@ -78,7 +83,6 @@ internal sealed class PipeInputWriter
                 // A writer-close failure must not strand a consumer still waiting for EOF.
                 failure = DescriptorCloseResult.FirstFailure(failure, await CloseReaderAsync(writerHost).ConfigureAwait(false));
             }
-            _content.Dispose();
             return failure;
         }
     }
@@ -105,7 +109,8 @@ internal sealed class PipeInputWriter
         finally
         {
             // An operation canceled before dispatch still owns the admitted payload.
-            _content.Dispose();
+            if (_completion == null)
+                _content.Dispose();
             _memory.Dispose();
             _lifetime?.Dispose();
         }
@@ -113,6 +118,8 @@ internal sealed class PipeInputWriter
 
     private Task<DescriptorCloseResult> CloseReaderAsync(IBashHost host)
     {
+        if (Volatile.Read(ref _readerClose) is { } previous)
+            return previous.Task;
         var candidate = new TaskCompletionSource<DescriptorCloseResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var existing = Interlocked.CompareExchange(ref _readerClose, candidate, null);
         if (existing != null) return existing.Task;

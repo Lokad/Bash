@@ -389,6 +389,78 @@ public sealed class HereInputLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HereInputReturnsPayloadAllowanceBeforeWriterCloseSettles(bool writeFails)
+    {
+        const int payloadLength = 32 * 1024;
+        var governor = new MemoryGovernor(1024 * 1024);
+        var pipe = new PipeDescriptors(10, 11);
+        var write = new TaskCompletionSource<DescriptorWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumer = new TaskCompletionSource<Commands.CommandExecutionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumerEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var close = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new IOException("Synthetic here-input write failure.");
+        var host = new TestOperationVisitor([])
+        {
+            MemoryBudget = governor,
+            BeforeAppend = (descriptor, content) =>
+            {
+                Assert.Equal(pipe.Write, descriptor);
+                Assert.Equal(payloadLength + 1, content.Length);
+                Assert.Equal((byte)'\n', content.Span[^1]);
+            },
+            RunCommandOverride = () =>
+            {
+                consumerEntered.TrySetResult();
+                return consumer.Task;
+            },
+            BeforeDescriptorClose = descriptor =>
+            {
+                if (descriptor == pipe.Write)
+                    closeEntered.TrySetResult();
+            }
+        };
+        host.EnqueuePipeDescriptors(pipe);
+        host.EnqueueAppendTask(write.Task);
+        host.EnqueueCloseDescriptorTask(close.Task);
+        host.EnqueueCloseDescriptor();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var running = BashScript.RunAsync(host, "consumer <<<'" + new string('x', payloadLength) + "'",
+            EvaluationOptions.Default, deadline.Token);
+        try
+        {
+            await consumerEntered.Task.WaitAsync(deadline.Token);
+            var whileBorrowed = governor.ReservedBytes;
+            if (writeFails)
+                write.SetException(failure);
+            else
+                write.SetResult(DescriptorWriteResult.Open);
+
+            await closeEntered.Task.WaitAsync(deadline.Token);
+            Assert.Equal(payloadLength + 1, whileBorrowed - governor.ReservedBytes);
+            Assert.False(running.IsCompleted);
+            Assert.Equal([pipe.Write], host.ClosedDescriptors);
+        }
+        finally
+        {
+            write.TrySetResult(DescriptorWriteResult.Open);
+            close.TrySetResult();
+            consumer.TrySetResult(new Commands.CommandExecutionResult.Completed(0));
+            try { await running.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (IOException) when (writeFails) { }
+        }
+
+        if (writeFails)
+            Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => running));
+        else
+            Assert.Equal(0, (await running).ExitCode);
+        Assert.Equal([pipe.Write, pipe.Read], host.ClosedDescriptors);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task ThrowingCancellationCallbackStillSettlesTheWriteAndBothEndpoints()
     {

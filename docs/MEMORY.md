@@ -445,6 +445,8 @@ writer startup. Assembly returns unused credit before pipe acquisition. The
 writer joins the expanded fields directly in its own admitted buffer. The
 assembly allowance is refunded before the reader is published. Expansion
 writes and descriptor bookkeeping keep their own owners.
+When the host write settles, the writer discards the payload and returns its
+allowance. Its completion channels stay admitted through endpoint settlement.
 Here-input registration dictionaries prepare capacity before pipe acquisition,
 including replacement overlap. Their actual high-water capacity belongs to the
 execution cleanup owner, separately from producer payload/channel estimates.
