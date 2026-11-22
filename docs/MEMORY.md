@@ -247,6 +247,8 @@ expanded segment and no prepared selectors reuses the segment's admitted bytes.
 Other dynamic operands write joined fields directly into admitted backing.
 Growth accounts for replacement overlap and the operand keeps its charge through
 numeric evaluation.
+An implicit `for` list shares fixed quoted positional syntax across parse owners.
+The expanded argument snapshot belongs to each loop invocation.
 Scalar assignment and byte-only selectors use the same field join to copy
 expanded bytes and separators into their admitted result. Shell-pattern
 consumers project bytes and quote masks directly from the fields. Regex pattern

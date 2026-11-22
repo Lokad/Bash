@@ -911,10 +911,8 @@ public class ParserTests
 
         var firstLoop = Assert.IsType<ForCommand>(ParseOne("for x in; do :; done"));
         var secondLoop = Assert.IsType<ForCommand>(ParseOne("for y in\ndo :; done"));
-        var implicitLoop = Assert.IsType<ForCommand>(ParseOne("for x; do :; done"));
         Assert.Empty(firstLoop.Items);
         Assert.Same(firstLoop.Items, secondLoop.Items);
-        Assert.Equal("$@", WordText(Assert.Single(implicitLoop.Items)));
 
         var firstCase = Assert.IsType<CaseCommand>(ParseOne("case x in esac"));
         var secondCase = Assert.IsType<CaseCommand>(ParseOne("case y in\nesac"));
@@ -925,6 +923,27 @@ public class ParserTests
             ? Assert.IsType<CommandUnitParseResult.Parsed>(
                 Assert.Single(Parser.TryParseCommandUnits(Encoding.UTF8.GetBytes(source)))).Command
             : Assert.Single(Parser.Parse(source).Commands);
+    }
+
+    [Fact]
+    public void Parse_ImplicitForListsShareReadOnlyQuotedPositionalSyntax()
+    {
+        var prepared = Assert.IsType<ForCommand>(Assert.Single(Parser.Parse("for x; do :; done").Commands));
+        var unit = Assert.IsType<CommandUnitParseResult.Parsed>(
+            Assert.Single(Parser.TryParseCommandUnits("for y do :; done"u8.ToArray())));
+        var streamed = Assert.IsType<ForCommand>(unit.Command);
+        var braceBody = Assert.IsType<ForCommand>(Assert.Single(Parser.Parse("for z\n{ :; }").Commands));
+
+        Assert.Same(prepared.Items, streamed.Items);
+        Assert.Same(prepared.Items, braceBody.Items);
+        var word = Assert.Single(prepared.Items);
+        var part = Assert.Single(word.Parts);
+        Assert.Equal(WordPartKind.DoubleQuoted, part.Kind);
+        Assert.Equal("$@", WordText(word));
+        var items = Assert.IsAssignableFrom<IList<Word>>(prepared.Items);
+        var parts = Assert.IsAssignableFrom<IList<WordPart>>(word.Parts);
+        Assert.Throws<NotSupportedException>(() => items[0] = new Word([]));
+        Assert.Throws<NotSupportedException>(() => parts[0] = WordPart.FromText(WordPartKind.SingleQuoted, "replacement"));
     }
 
     [Fact]

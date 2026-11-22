@@ -53,6 +53,19 @@ public static class Parser
         KeywordIn, KeywordFunction, KeywordCase, KeywordEsac, "time", "!", "{", "}", "[[", "]]"
     ];
 
+    private static class ImplicitForList
+    {
+        internal static readonly IReadOnlyList<Word> Items = Create();
+
+        private static IReadOnlyList<Word> Create()
+        {
+            var positional = Tokenizer.ReadExpansionWord(ShellSource.FromText("\"$@\""),
+                ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
+            // Freeze the parts before sharing the word between parsed scripts.
+            return [new Word(Array.AsReadOnly(positional.Parts.ToArray()))];
+        }
+    }
+
     /// <summary>Returns true when a word is a reserved keyword supported by this parser.</summary>
     internal static bool IsSupportedKeyword(ReadOnlySpan<char> word)
     {
@@ -853,9 +866,7 @@ public static class Parser
         {
             // Bash's implicit list is exactly the quoted positional expansion. Lower it
             // to the existing word path, including the snapshot taken before the body.
-            var positionalItems = Tokenizer.ReadExpansionWord(ShellSource.FromText("\"$@\""),
-                ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
-            items = [positionalItems];
+            items = ImplicitForList.Items;
             if (!canUseBraceBody && tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
             {
                 tokenizer.NextTokenCore();
