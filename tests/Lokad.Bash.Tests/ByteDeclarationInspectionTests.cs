@@ -225,6 +225,30 @@ public sealed class ByteDeclarationInspectionTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task DownstreamClosureKeepsTheStatusOfEarlierInspectionOperands(bool functions, bool missing)
+    {
+        var setup = functions ? "present(){ :; }; later(){ :; }; declare -Fp " : "present=value; later=value; declare -p ";
+        var state = new Eval(Parser.Parse(setup + (missing ? "absent present later" : "present later")));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        if (missing)
+            host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueueAppendResult(DescriptorWriteResult.Closed);
+
+        var result = await new Engine().RunAsync(state, host, CancellationToken.None);
+
+        Assert.Equal(missing ? 1 : 0, result.ExitCode);
+        FileDescriptor[] descriptors = missing ? [FileDescriptor.StdErr, FileDescriptor.StdOut] : [FileDescriptor.StdOut];
+        Assert.Equal(descriptors, host.Appends.Select(static append => append.Descriptor));
+        if (missing)
+            Assert.Equal("declare: absent: not found\n"u8.ToArray(), host.Appends[0].Content);
+        var lastRow = functions ? "declare -f present\n" : "declare -- present=\"value\"\n";
+        Assert.Equal(Utf8Text.Encode(lastRow).ToArray(), host.Appends[^1].Content);
+    }
+
     [Fact]
     public async Task OperandFreeInspectionKeepsOneSpellingPerSortedName()
     {

@@ -1869,7 +1869,7 @@ public sealed partial class Evaluation : IFileTester
                     var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
                     if (!result.CanAcceptMore)
                     {
-                        printStatus = WriteFailureAffectsListingStatus(result, preserveStatusOnClosedOutput) ? 1 : 0;
+                        printStatus = GetListingWriteStatus(result, printStatus, preserveStatusOnClosedOutput);
                         outputClosed = true;
                         break;
                     }
@@ -1930,9 +1930,10 @@ public sealed partial class Evaluation : IFileTester
                 }
             }
 
-            // Buffered declaration listings report a shell-closed stdout without failing the listing.
-            bool WriteFailureAffectsListingStatus(DescriptorWriteResult result, bool preserveStatusOnClosedOutput) =>
-                result.IsError && (!preserveStatusOnClosedOutput || !GetStdOutDescriptor().IsClosed);
+            // Downstream closure ends the write without replacing an earlier operand failure.
+            // Buffered declaration listings also keep their status on shell-closed stdout.
+            int GetListingWriteStatus(DescriptorWriteResult result, int status, bool preserveStatusOnClosedOutput) =>
+                result.IsError && (!preserveStatusOnClosedOutput || !GetStdOutDescriptor().IsClosed) ? 1 : status;
 
             async Task<int> EvaluateFunctionsAsync()
             {
@@ -2027,7 +2028,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                     var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
                     if (!result.CanAcceptMore)
-                        return WriteFailureAffectsListingStatus(result, preserveStatusOnClosedOutput) ? 1 : functionStatus;
+                        return GetListingWriteStatus(result, functionStatus, preserveStatusOnClosedOutput);
                 }
                 return functionStatus;
 
