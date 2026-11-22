@@ -305,6 +305,21 @@ public sealed class ByteStoredValueTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "2009C3A9FF09612020620D20090A", "3CC3A9FF3E3C612020620D3E")]
+    [InlineData("read -ra values; printf '<%s>' \"${values[@]}\"", "09C3A9FF2061625C63200A", "3CC3A9FF3E3C61625C633E")]
+    [InlineData("read -ra values; printf '<%s>' \"${#values[@]}\"", "2009200A", "3C303E")]
+    public async Task ReadWithDefaultIfsSplitsRawBytesOnAsciiWhitespace(string command, string inputHex, string outputHex)
+    {
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync("unset IFS; " + command, host, Convert.FromHexString(inputHex));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(outputHex), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public void AssociativeAssignment_RejectsEmptyKeysWithoutReplacingExistingValues()
     {

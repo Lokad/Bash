@@ -15,6 +15,8 @@ internal static class ReadFieldSplitter
         MemoryCapacity scratch, Variables variables, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         var fieldSeparators = options.FieldSeparators;
+        var defaultRaw = options.BackslashMode == ReadBackslashMode.Preserve
+            && ReferenceEquals(fieldSeparators, FieldSeparators.Default);
         const int FieldListOverheadBytes = 32;
         var capacity = options.FieldMode switch
         {
@@ -71,6 +73,20 @@ internal static class ReadFieldSplitter
                     cancellationToken.ThrowIfCancellationRequested();
                     start = index;
                     end = index = contentEnd;
+                    return start < end;
+                }
+                if (defaultRaw)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // The default separators are ASCII, which cannot occur inside a UTF-8 scalar.
+                    var bytes = content.Span[..contentEnd];
+                    var separators = fieldSeparators.Bytes.Span;
+                    var first = bytes[index..].IndexOfAnyExcept(separators);
+                    start = first < 0 ? contentEnd : index + first;
+                    var boundary = bytes[start..].IndexOfAny(separators);
+                    end = boundary < 0 ? contentEnd : start + boundary;
+                    var following = bytes[end..].IndexOfAnyExcept(separators);
+                    index = following < 0 ? contentEnd : end + following;
                     return start < end;
                 }
 
@@ -152,6 +168,11 @@ internal static class ReadFieldSplitter
             {
                 // IFS whitespace is ASCII. Trim from the end so the remainder need not be scanned again.
                 var bytes = content.Span;
+                if (defaultRaw)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return start + bytes[start..contentEnd].LastIndexOfAnyExcept(fieldSeparators.Bytes.Span) + 1;
+                }
                 var end = contentEnd;
                 while (end > start)
                 {
