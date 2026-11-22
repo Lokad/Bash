@@ -2106,7 +2106,7 @@ public sealed partial class Evaluation : IFileTester
                 // Bash 5.2 resolves global names but keeps element writes in the active scope.
                 var sourceName = reference.Name;
                 var global = options.Global && reference.Kind == VariableReferenceKind.Name;
-                var local = options.IsLocal(declarationScope);
+                var local = options.IsLocal(declarationScope, options.Global);
                 if (!global && !local && !operand.CompoundApplied && operand.Value == null)
                 {
                     var visibleName = options.Nameref ? sourceName : StripArraySubscript(commandVars.ResolveNamerefName(sourceName));

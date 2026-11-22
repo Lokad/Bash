@@ -7,6 +7,43 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationOperandTestsEndToEnd
 {
     [Theory]
+    [InlineData("local", "-ga", "declare -- x=\"local\"\ndeclare -a x=([0]=\"one\" [1]=\"two\")\n")]
+    [InlineData("local", "\"-ga\"", "declare -a x=([0]=\"one\" [1]=\"two\")\ndeclare -a x=([0]=\"old\")\n")]
+    [InlineData("local", "\"$flags\"", "declare -a x=([0]=\"one\" [1]=\"two\")\ndeclare -a x=([0]=\"old\")\n")]
+    [InlineData("declare", "\"$flags\"", "declare -a x=([0]=\"one\" [1]=\"two\")\ndeclare -a x=([0]=\"old\")\n")]
+    [InlineData("local", "-g\"$tail\"", "declare -- x=\"local\"\ndeclare -ail x=([0]=\"0\" [1]=\"0\")\n")]
+    [InlineData("local", "\"$assoc\"", "declare -a x=([0]=\"one\" [1]=\"two\")\ndeclare -A x=([0]=\"old\" )\n")]
+    public async Task ParsedCompoundInitializerUsesSourceOptionsBeforeDispatch(
+        string builtin, string options, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync("x=old; f(){ local x=local flags=-ga tail=a assoc=-gA; "
+            + builtin + " " + options + " x=(one two); declare -p x; }; f; declare -p x");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task ExpandedGlobalFlagDoesNotRepeatTheParsedInitializer()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=old
+            f() {
+              local x=local flags=-ga
+              local "$flags" x=("$(printf hit >> count; printf element)" tail)
+              printf '<%s><%s><%s>' "$?" "${x[*]}" "$(<count)"
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><element tail><hit>declare -a x=([0]=\"old\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("""declare -a 'items=([2]=one [5]="two words")'; printf '<%s>' "${items[2]}" "${items[5]}" """, "<one><two words>")]
     [InlineData("""arg='items=(one "two words")'; command declare -a "$arg"; printf '<%s>' "${items[@]}" """, "<one><two words>")]
     [InlineData("""items=(old); declare 'items+=(one "two words")'; printf '<%s>' "${items[@]}" """, "<old><one><two words>")]

@@ -427,6 +427,11 @@ diagnostics and local bindings.
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the
 pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.
+Inside a function, `local -g` applies a declaration to the global binding.
+Named `local -p` still inspects the current function's local binding.
+A parser-recognized compound initializer takes its scope, array kind and
+value transforms from source options. The builtin then handles the expanded
+options and the resulting name, without repeating initializer effects.
 
 `type -p` prints the host's reported path when the selected name resolves to an
 external command. Builtins, keywords and functions resolve successfully in this

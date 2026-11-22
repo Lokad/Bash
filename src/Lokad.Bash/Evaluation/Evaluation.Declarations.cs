@@ -29,13 +29,18 @@ public sealed partial class Evaluation
         var fields = new List<ShellValue>();
         ShellValue? lastArgument = null;
         PreparedDeclarationOperand? lastAssignment = null;
-        var readCompoundOptions = command.DeclarationAssignments.Count != 0;
+        var hasDeclarationAssignments = command.DeclarationAssignments.Count != 0;
+        var readCompoundTransforms = true;
+        var compoundGlobal = false;
+        var compoundArrayKind = ArrayAssignmentKind.Auto;
+        var compoundInteger = false;
+        var compoundInherit = false;
         var compoundCase = BindingAttributes.None;
         byte compoundAttributeSign = 0;
         for (var index = 1; index < sourceWords.Count; index++)
         {
             var word = sourceWords[index];
-            if (readCompoundOptions)
+            if (hasDeclarationAssignments)
                 ReadCompoundOptions(word);
             if (command.DeclarationAssignments.TryGetValue(word, out var assignment))
             {
@@ -48,7 +53,10 @@ public sealed partial class Evaluation
                         throw new InvalidOperationException("A compound declaration requires a variable name.");
                     var declaredName = declaredReference.Name;
                     var declaredValue = declaredSource.ToValue();
-                    var local = options.IsLocal(scope);
+                    var local = options.IsLocal(scope, compoundGlobal);
+                    var setCompoundTransforms = compoundAttributeSign != (byte)'+'
+                        || compoundGlobal || compoundArrayKind != ArrayAssignmentKind.Auto;
+                    var inherit = compoundInherit && setCompoundTransforms;
                     var existingLocal = scope.Context.FunctionContext?.Locals.Declares(declaredName) == true;
                     var resolved = SelectTarget(out var name, out var targetVariables, out var targetLocal);
                     var kind = SelectKind();
@@ -56,7 +64,7 @@ public sealed partial class Evaluation
                     IReadOnlyList<ExpandedArrayItem> expanded = [];
                     if (itemMemory != null)
                     {
-                        var context = options.Global && kind == ArrayKind.Indexed && targetVariables.AssociativeArrays.ContainsKey(name)
+                        var context = compoundGlobal && kind == ArrayKind.Indexed && targetVariables.AssociativeArrays.ContainsKey(name)
                             ? AssignmentContext.QuotedIndexedDeclaration : AssignmentContext.Declaration;
                         var expandedItems = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(
                             name, items, kind, assignment.Operator, context, scope, itemMemory))
@@ -79,7 +87,7 @@ public sealed partial class Evaluation
                         await ReportCircularNameReferenceAsync(declaredName).ConfigureAwait(false);
                         if (local)
                             await ReportCircularNameReferenceAsync(declaredName).ConfigureAwait(false); // Local binding creation.
-                        else if (options.ArrayKind == ArrayAssignmentKind.Auto)
+                        else if (compoundArrayKind == ArrayAssignmentKind.Auto)
                         {
                             // Implicit array kind first attempts ordinary binding, then array lookup.
                             await ReportCircularNameReferenceAsync(declaredName).ConfigureAwait(false);
@@ -93,7 +101,7 @@ public sealed partial class Evaluation
                     var memberAssignment = bracket >= 0 || !name.IsIdentifier
                         || targetVariables.TryResolveBinding(declaredName, selectOwner: null, out var selected)
                             && selected.Reference.Kind != VariableReferenceKind.Name;
-                    if (!memberAssignment && !local && options.ArrayKind != ArrayAssignmentKind.Auto
+                    if (!memberAssignment && !local && compoundArrayKind != ArrayAssignmentKind.Auto
                         && targetVariables.TryGetNameref(name, out _))
                         targetVariables.RecreateDeclarationArray(name, kind);
                     if (memberAssignment || (!local || targetLocal) && targetVariables.IsReadonly(name))
@@ -102,19 +110,19 @@ public sealed partial class Evaluation
                             .ConfigureAwait(false);
                         break;
                     }
-                    var declarationBinding = options.Global
+                    var declarationBinding = compoundGlobal
                         && scope.Context.TryResolveGlobalBinding(declaredName, scope.Variables, out var globalBinding)
                         ? globalBinding : new VariableBinding(VariableReference.ForName(name), targetVariables);
-                    if (!local && (!options.Global || options.ArrayKind != ArrayAssignmentKind.Auto)
+                    if (!local && (!compoundGlobal || compoundArrayKind != ArrayAssignmentKind.Auto)
                         && HasConflictingArrayKind(declarationBinding.Owner, declarationBinding.Name, kind))
                     {
-                        if (options.Global && scope.Context.FunctionContext != null)
+                        if (compoundGlobal && scope.Context.FunctionContext != null)
                         {
                             await ReportExpansionDiagnosticAsync(declaredName.ToValue(), ShellValue.FromText(ArrayConversionMessage(kind))).ConfigureAwait(false);
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;
                         }
-                        await ReportFatalExpansionAsync((options.Global ? declaredName : name).ToValue(), ShellValue.FromText(ArrayConversionMessage(kind)), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
+                        await ReportFatalExpansionAsync((compoundGlobal ? declaredName : name).ToValue(), ShellValue.FromText(ArrayConversionMessage(kind)), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
                         break;
                     }
                     var unsetReference = targetVariables.TryGetNameref(name, out var referenceTarget) && referenceTarget.IsEmpty;
@@ -124,10 +132,10 @@ public sealed partial class Evaluation
                         // An unset reference instead becomes the array, including implicit compound declarations.
                         var declarationKind = existingLocal && unsetReference
                             ? kind == ArrayKind.Associative ? ArrayAssignmentKind.Associative : ArrayAssignmentKind.Indexed
-                            : options.ArrayKind;
+                            : compoundArrayKind;
                         if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
                                 new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
-                                declarationKind, isNameref: false, options.Inherit, caseChange: default, Memory))
+                                declarationKind, isNameref: false, inherit, caseChange: default, Memory))
                         {
                             var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
                             await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(message)).ConfigureAwait(false);
@@ -138,13 +146,13 @@ public sealed partial class Evaluation
                     }
                     else if (unsetReference)
                     {
-                        if (options.ArrayKind == ArrayAssignmentKind.Auto)
+                        if (compoundArrayKind == ArrayAssignmentKind.Auto)
                             await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
                         targetVariables.TryRemoveNamerefAttribute(name);
                     }
-                    if (options.IntegerChange != DeclarationAttributeChange.Unchanged)
-                        targetVariables.SetIntegerBinding(name, options.IntegerChange == DeclarationAttributeChange.Set);
-                    targetVariables.SetCaseAttributes(name, GetCompoundCaseChange());
+                    if (compoundInteger)
+                        targetVariables.SetIntegerBinding(name, setCompoundTransforms);
+                    targetVariables.SetCaseAttributes(name, GetCompoundCaseChange(setCompoundTransforms));
                     if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, targetVariables, declaredName,
                             ShellValue.FromText(commandName), initializeReadonly: false)).ConfigureAwait(false))
@@ -154,34 +162,37 @@ public sealed partial class Evaluation
                         break;
                     }
 
-                    AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: true));
+                    // Dispatch still sees a name. When expanded options select another scope or type,
+                    // apply the ordinary named declaration there without repeating the initializer.
+                    var applied = compoundGlobal == options.Global && compoundArrayKind == options.ArrayKind;
+                    AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: applied));
 
                     bool SelectTarget(out BindingName targetName, out Variables variables, out bool isLocal)
                     {
                         // -g selects the declaration's initial binding globally. Compound writes
                         // through a nameref then follow its referent in the active scope.
-                        var found = options.Global
+                        var found = compoundGlobal
                             ? scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables)
                                 .TryResolveBinding(declaredName, _ => scope.Variables, out var binding)
                             : scope.Variables.TryResolveBinding(declaredName, selectOwner: null, out binding);
-                        if (found && !local && options.ArrayKind != ArrayAssignmentKind.Auto)
-                            binding = (options.Global ? scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables) : scope.Variables)
+                        if (found && !local && compoundArrayKind != ArrayAssignmentKind.Auto)
+                            binding = (compoundGlobal ? scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables) : scope.Variables)
                                 .SelectArrayDeclarationBinding(declaredName, binding);
                         targetName = !found || local && !existingLocal ? declaredName : binding.Name;
-                        variables = !options.Global ? scope.Variables : found ? binding.Owner
+                        variables = !compoundGlobal ? scope.Variables : found ? binding.Owner
                             : scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables);
                         isLocal = local && scope.Context.FunctionContext?.Locals.Declares(targetName) == true;
                         return found;
                     }
 
-                    ArrayKind SelectKind() => options.ArrayKind switch
+                    ArrayKind SelectKind() => compoundArrayKind switch
                     {
                         ArrayAssignmentKind.Associative => ArrayKind.Associative,
                         ArrayAssignmentKind.Indexed => ArrayKind.Indexed,
                         // In a function, -g checks the declared name's own array attribute before following a nameref.
-                        _ when options.Global && scope.Context.FunctionContext != null => scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables)
+                        _ when compoundGlobal && scope.Context.FunctionContext != null => scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables)
                             .AssociativeArrays.ContainsKey(declaredName) ? ArrayKind.Associative : ArrayKind.Indexed,
-                        _ => (!local || targetLocal || options.Inherit) && targetVariables.AssociativeArrays.ContainsKey(name)
+                        _ => (!local || targetLocal || inherit) && targetVariables.AssociativeArrays.ContainsKey(name)
                             ? ArrayKind.Associative : ArrayKind.Indexed,
                     };
 
@@ -311,31 +322,54 @@ public sealed partial class Evaluation
 
         void ReadCompoundOptions(Word word)
         {
-            // Compound declaration operands take transformation attributes from
-            // the leading option spellings, before ordinary option dispatch.
-            var bytes = word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted } source]
-                ? source.Source.AsSpan() : ReadOnlySpan<byte>.Empty;
-            if (bytes is not [(byte)'-' or (byte)'+', ..] || bytes.SequenceEqual("--"u8))
+            // A parsed initializer takes scope and array kind from source options.
+            // Once a source operand is reached, later options can still select
+            // its scope and kind but cannot select value transforms.
+            if (word.Parts is not [SourceWordPart { Kind: WordPartKind.Unquoted } source, ..]
+                || source.Source.AsSpan() is not [(byte)'-' or (byte)'+', ..])
             {
-                readCompoundOptions = false;
+                readCompoundTransforms = false;
                 return;
             }
-            foreach (var flag in bytes[1..])
+            if (word.Parts.Count == 1 && source.Source.AsSpan().SequenceEqual("--"u8))
             {
-                var attribute = ReadCaseAttribute(flag);
-                if (attribute == BindingAttributes.None && flag is not ((byte)'i' or (byte)'I'))
-                    continue;
-                if (compoundAttributeSign == 0)
-                    compoundAttributeSign = bytes[0];
-                compoundCase |= attribute;
+                readCompoundTransforms = false;
+                return;
+            }
+            var sign = source.Source.AsSpan()[0];
+            for (var index = 0; index < word.Parts.Count; index++)
+            {
+                var bytes = word.Parts[index].GetUnexpandedValue().Bytes.Span;
+                foreach (var flag in index == 0 ? bytes[1..] : bytes)
+                {
+                    if (sign == (byte)'-')
+                    {
+                        if (flag == (byte)'g' && builtin is BuiltinKind.Declare or BuiltinKind.Local)
+                            compoundGlobal = true;
+                        if (flag == (byte)'A')
+                            compoundArrayKind = ArrayAssignmentKind.Associative;
+                        else if (flag == (byte)'a' && compoundArrayKind == ArrayAssignmentKind.Auto)
+                            compoundArrayKind = ArrayAssignmentKind.Indexed;
+                    }
+                    if (!readCompoundTransforms)
+                        continue;
+                    var attribute = ReadCaseAttribute(flag);
+                    if (attribute == BindingAttributes.None && flag is not ((byte)'i' or (byte)'I'))
+                        continue;
+                    if (compoundAttributeSign == 0)
+                        compoundAttributeSign = sign;
+                    compoundInteger |= flag == (byte)'i';
+                    compoundInherit |= flag == (byte)'I';
+                    compoundCase |= attribute;
+                }
             }
         }
 
-        CaseAttributeChange GetCompoundCaseChange()
+        CaseAttributeChange GetCompoundCaseChange(bool set)
         {
             if (compoundCase == BindingAttributes.None)
                 return default;
-            if (compoundAttributeSign == (byte)'+' && !options.Global && options.ArrayKind == ArrayAssignmentKind.Auto)
+            if (!set)
                 return new(BindingAttributes.None, compoundCase);
             return compoundCase is BindingAttributes.Capitalize or BindingAttributes.Lowercase or BindingAttributes.Uppercase
                 ? default(CaseAttributeChange).Include(compoundCase, remove: false)
@@ -429,8 +463,8 @@ public sealed partial class Evaluation
         public ShellValue InvalidOption { get; private set; } = ShellValue.Empty;
         public DeclarationHelp Help { get; private set; }
 
-        public bool IsLocal(ScopedEvaluation scope) => scope.Context.FunctionContext != null
-            && (Builtin == BuiltinKind.Local || Builtin == BuiltinKind.Declare && !Global);
+        public bool IsLocal(ScopedEvaluation scope, bool global) => !global
+            && (Builtin is BuiltinKind.Local or BuiltinKind.Declare) && scope.Context.FunctionContext != null;
 
         public void EndOptions() => _readingOptions = false;
 
@@ -488,7 +522,7 @@ public sealed partial class Evaluation
                         CaseChange = CaseChange.Include(ReadCaseAttribute(flag), remove);
                         break;
                     case (byte)'I' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: Inherit = !remove; break;
-                    case (byte)'g' when Builtin == BuiltinKind.Declare: Global |= !remove; break;
+                    case (byte)'g' when Builtin is BuiltinKind.Declare or BuiltinKind.Local: Global |= !remove; break;
                     case (byte)'p': Print = true; break;
                     case (byte)'f':
                     case (byte)'F' when Builtin is BuiltinKind.Declare or BuiltinKind.Local:

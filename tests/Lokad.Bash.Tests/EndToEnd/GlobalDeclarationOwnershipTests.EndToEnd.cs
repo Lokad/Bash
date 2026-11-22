@@ -7,6 +7,41 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class GlobalDeclarationOwnershipTestsEndToEnd
 {
     [Theory]
+    [InlineData("x=original; f(){ local x=hidden; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"; }; f; declare -p x",
+        "<0><hidden>declare -- x=\"edited\"\n", "")]
+    [InlineData("f(){ local -g missing=created; }; f; declare -p missing",
+        "declare -- missing=\"created\"\n", "")]
+    [InlineData("x=original; f(){ local x=hidden; local -gp x; }; f; declare -p x",
+        "declare -- x=\"hidden\"\ndeclare -- x=\"original\"\n", "")]
+    [InlineData("x=original; f(){ local -gp x; printf '<%s>' \"$?\"; }; f",
+        "<1>", "local: x: not found\n")]
+    [InlineData("x=original; f(){ local x=hidden; local -g; }; f",
+        "declare -- x=\"hidden\"\n", "")]
+    [InlineData("x=original; f(){ local +g x=edited; printf '<%s>' \"$x\"; }; f; declare -p x",
+        "<edited>declare -- x=\"original\"\n", "")]
+    [InlineData("x=original; f(){ local -g +g x=edited; }; f; declare -p x",
+        "declare -- x=\"edited\"\n", "")]
+    [InlineData("x=original; f(){ local x=hidden; x=prefix local -g x=edited; printf '<%s>' \"$x\"; }; f; declare -p x",
+        "<hidden>declare -- x=\"edited\"\n", "")]
+    [InlineData("x=original; f(){ local x=hidden; builtin local -gi x='40+2'; printf '<%s>' \"$x\"; }; f; declare -p x",
+        "<hidden>declare -i x=\"42\"\n", "")]
+    [InlineData("x=original; f(){ local x=hidden; command local -g x=edited; }; f; declare -p x",
+        "declare -- x=\"edited\"\n", "")]
+    [InlineData("x=original; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"",
+        "<1><original>", "local: can only be used in a function\n")]
+    [InlineData("readonly x=original; f(){ local x=hidden; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"; }; f; declare -p x",
+        "<1><original>declare -r x=\"original\"\n", "local: x: readonly variable\nlocal: x: readonly variable\n")]
+    public async Task LocalGlobalUsesGlobalWritesAndKeepsLocalInspection(
+        string script, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("a=prefix ", "-g", "=", false, "old")]
     [InlineData("link=prefix ", "-g", "=", false, "old")]
     [InlineData("b=prefix ", "-g", "=", false, "old")]
