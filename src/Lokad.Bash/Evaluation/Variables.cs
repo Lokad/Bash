@@ -24,7 +24,7 @@ internal readonly record struct VariableBinding(VariableReference Reference, Var
 internal readonly record struct VariableUnsetTarget(BindingName Name, bool RequiresSelector, BindingName ReadonlyName);
 
 /// <summary>Declarations include attributes/unset names; assignment listings include assigned values only.</summary>
-internal enum VariableDisplayStyle { Declaration, DeclarationName, Assignment }
+internal enum VariableDisplayStyle { Declaration, DeclarationWithoutScalarValues, Assignment }
 
 /// <summary>
 /// Encapsulates shell variable state (scalars, arrays, namerefs, export/readonly flags, and positional parameters).
@@ -1456,19 +1456,15 @@ public sealed partial class Variables
             || !output.TryAppend(name.ToValue().Bytes.Span))
             return false;
 
-        var valueStyle = style == VariableDisplayStyle.Declaration ? ShellQuoteStyle.DoubleQuoted : ShellQuoteStyle.AssignmentValue;
-        if (style != VariableDisplayStyle.DeclarationName)
+        var appendScalarValue = style != VariableDisplayStyle.DeclarationWithoutScalarValues;
+        var valueStyle = style == VariableDisplayStyle.Assignment ? ShellQuoteStyle.AssignmentValue : ShellQuoteStyle.DoubleQuoted;
+        var appended = slot switch
         {
-            var appended = slot switch
-            {
-                ScalarSlot scalar => AppendValue(scalar.Value, valueStyle),
-                NamerefSlot reference when !reference.Value.IsEmpty => AppendValue(reference.Value.Value, valueStyle),
-                _ => TryAppendArrayAssignment(slot, output, CancellationToken.None)
-            };
-            if (!appended)
-                return false;
-        }
-        return output.TryAppend((byte)'\n');
+            ScalarSlot scalar => !appendScalarValue || AppendValue(scalar.Value, valueStyle),
+            NamerefSlot reference when !reference.Value.IsEmpty => !appendScalarValue || AppendValue(reference.Value.Value, valueStyle),
+            _ => TryAppendArrayAssignment(slot, output, CancellationToken.None)
+        };
+        return appended && output.TryAppend((byte)'\n');
 
         bool AppendValue(ShellValue value, ShellQuoteStyle quoteStyle) => output.TryAppend((byte)'=')
             && ShellArgumentEscaping.TryAppendQuoted(output, value.Bytes.Span, quoteStyle);

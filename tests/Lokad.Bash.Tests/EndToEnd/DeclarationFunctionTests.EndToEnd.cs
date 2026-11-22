@@ -6,6 +6,23 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class DeclarationFunctionTestsEndToEnd
 {
+    [Theory]
+    [InlineData("-F")]
+    [InlineData("+F")]
+    [InlineData("-Fp")]
+    public async Task OperandFreeLocalWithFListsArrayValuesAndOmitsScalarInitializers(string flags)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "outside=outer; f(){ local plain=scalar; local -n ref=plain; local -a empty=(); local -a pending; "
+            + "local -a vector=([10]='ten words' [2]=''); local -A map=(['one key']=value); FLAG=temporary local "
+            + flags + "; }; f");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("declare -a empty=()\ndeclare -A map=([\"one key\"]=\"value\" )\ndeclare -a pending\n"
+            + "declare -- plain\ndeclare -n ref\ndeclare -a vector=([2]=\"\" [10]=\"ten words\")\n", result.StdOut);
+    }
+
     // Git Bash 5.2.37 in an empty environment; omit only native script-path/line diagnostic prefixes.
     [Theory]
     [InlineData("count=0; f(){ printf executed; ((count+=1)); }; declare -f f; type f; printf 'count=%s\\n' \"$count\"", "f () \n{ \n    printf executed;\n    ((count+=1))\n}\nf is a function\nf () \n{ \n    printf executed;\n    ((count+=1))\n}\ncount=0\n", "", 0)]

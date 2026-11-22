@@ -159,6 +159,11 @@ In function listings without named operands, a positive `-a` or `-A`
 array filter selects no rows and returns success. This applies alongside
 function attribute filters and `-p`.
 
+With no operands, `local -F` and `local +F` list the current frame's
+variables. Scalar values and nameref targets are omitted. Initialized
+arrays include their compound values, including `()` for assigned empty
+arrays. A named `local -F` operand still selects a function.
+
 `declare`, `typeset` and `local` support `-l`, `-u` and `-c` case
 attributes. They affect later assignments, including compound arrays,
 appends, case-aware parameter-default results, and values read by `read`

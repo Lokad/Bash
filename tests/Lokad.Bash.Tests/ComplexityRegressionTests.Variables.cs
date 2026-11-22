@@ -226,33 +226,24 @@ public sealed partial class ComplexityRegressionTests
     }
 
     [Fact]
-    public void VariableNameInspectionDoesNotCopyArrayElements()
+    public void LocalInspectionRendersArrayWithoutDetachingItsStorage()
     {
+        const int outputBytes = 128 * 1024;
         var variables = Variables.CreateEmpty();
-        var value = ShellValue.FromText("value");
-        for (var index = 0; index < 100_000; index++)
+        var values = Enumerable.Repeat(ShellValue.FromText("value"), 4096).ToArray();
+        Assert.True(variables.TryAssignArray("large", values, ArrayKind.Indexed));
+        var governor = new MemoryGovernor(outputBytes + 64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
         {
-            Assert.True(IndexedArrayIndex.TryCreate(index, out var position));
-            Assert.True(variables.TrySetArrayElement("large", position, value));
+            var command = Variables.CreateCommandScope(variables, memory, CancellationToken.None);
+            using var output = new ByteMemoryBuilder(outputBytes, governor);
+            Assert.True(command.TryAppendVariable("large", output, VariableDisplayStyle.DeclarationWithoutScalarValues));
+            Assert.True(output.ToMemory().Span.StartsWith("declare -a large=([0]=\"value\" "u8));
+            Assert.True(output.ToMemory().Span.EndsWith(" [4095]=\"value\")\n"u8));
+            Assert.Equal(outputBytes, output.Capacity);
         }
-
-        _ = InspectNames();
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var output = InspectNames();
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal("declare -a large\n", Utf8Text.Decode(output));
-        Assert.True(
-            allocated < 256 * 1024,
-            $"Summarizing one large array allocated {allocated:N0} bytes; array elements must not be copied.");
-
-        ReadOnlyMemory<byte> InspectNames()
-        {
-            const long MemoryBudgetBytes = 4096;
-            using var output = new ByteMemoryBuilder(128, new MemoryGovernor(MemoryBudgetBytes));
-            foreach (var name in variables.BindingNames.Distinct())
-                Assert.True(variables.TryAppendVariable(name, output, VariableDisplayStyle.DeclarationName));
-            return output.DetachSnapshot();
-        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
     }
 }

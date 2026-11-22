@@ -1834,7 +1834,8 @@ public sealed partial class Evaluation : IFileTester
                 var listOptionSnapshot = listing && localBuiltinFrame?.HasOwnOptionSnapshot == true;
                 var style = listing && options.Builtin == BuiltinKind.Declare && !options.Print
                     && options.ListingAttributes == DeclarationListingAttributes.None && options.CaseChange.Set == BindingAttributes.None
-                    ? VariableDisplayStyle.Assignment : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationName : VariableDisplayStyle.Declaration;
+                    ? VariableDisplayStyle.Assignment
+                    : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationWithoutScalarValues : VariableDisplayStyle.Declaration;
                 var printStatus = 0;
                 var outputClosed = false;
                 await foreach (var name in GetNamesAsync(GetListedNames,
