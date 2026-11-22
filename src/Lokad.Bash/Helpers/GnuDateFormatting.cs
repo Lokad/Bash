@@ -401,19 +401,24 @@ public static class GnuDateFormatting
                 ? '0'
                 : ' ';
 
-            static bool IsStrftimeSpecifier(char value, char? alternativeModifier) => alternativeModifier switch
+            static bool IsStrftimeSpecifier(char value, char? alternativeModifier)
             {
-                'E' => value is 'c' or 'C' or 'x' or 'X' or 'y' or 'Y',
-                'O' => value is 'd' or 'e' or 'H' or 'I' or 'm' or 'M' or 'S'
-                    or 'u' or 'U' or 'V' or 'w' or 'W' or 'y',
-                null => value is
-                    '%' or 'n' or 't'
-                    or 'H' or 'I' or 'k' or 'l' or 'M' or 'p' or 'P' or 'r' or 'R' or 's' or 'S' or 'T' or 'X'
-                    or 'z' or 'Z'
-                    or 'a' or 'A' or 'b' or 'B' or 'c' or 'C' or 'd' or 'D' or 'e' or 'F'
-                    or 'g' or 'G' or 'h' or 'j' or 'm' or 'u' or 'U' or 'V' or 'w' or 'W' or 'x' or 'y' or 'Y',
-                _ => false
-            };
+                // The Linux C locale accepts either modifier on these directives.
+                if (value is '%' or 'n' or 't' or 'p' or 'P' or 'r' or 'R' or 's' or 'T' or 'z' or 'Z')
+                    return true;
+
+                return alternativeModifier switch
+                {
+                    'E' => value is 'c' or 'C' or 'u' or 'x' or 'X' or 'y' or 'Y',
+                    'O' => value is 'H' or 'I' or 'k' or 'l' or 'M' or 'S'
+                        or 'b' or 'B' or 'C' or 'd' or 'e' or 'g' or 'G' or 'h' or 'j' or 'm'
+                        or 'u' or 'U' or 'V' or 'w' or 'W' or 'y',
+                    null => value is 'H' or 'I' or 'k' or 'l' or 'M' or 'S' or 'X'
+                        or 'a' or 'A' or 'b' or 'B' or 'c' or 'C' or 'd' or 'D' or 'e' or 'F'
+                        or 'g' or 'G' or 'h' or 'j' or 'm' or 'u' or 'U' or 'V' or 'w' or 'W' or 'x' or 'y' or 'Y',
+                    _ => false
+                };
+            }
         }
 
         static string FormatNanoseconds(DateTimeOffset directiveValue)

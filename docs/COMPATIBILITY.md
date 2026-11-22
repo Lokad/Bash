@@ -880,8 +880,9 @@ Padding for nonempty values is subject to the ordinary output representation
 and budget limits.
 
 Printf time-format literals preserve bytes, including malformed UTF-8. Directives
-and widths use ASCII grammar with invariant date text; unknown directives follow
-the pinned Linux strftime spelling. Explicit seconds use the configured fixed
+and widths use ASCII grammar with invariant date text. The pinned Linux C
+locale governs which directives accept the `E` and `O` modifiers and the
+spelling of unknown directives. Explicit seconds use the configured fixed
 offset with a Gregorian calendar. The calendar admits local years whose difference
 from 1900 fits in a signed 32-bit field. Within that range `%s` retains the supplied
 seconds. Numeric year rendering and padding follow the pinned Linux profile,
