@@ -1,7 +1,9 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
@@ -9,6 +11,7 @@ public sealed class ErrexitTests
 {
     private const string ReportOption = "flag(){ if [[ -o errexit ]]; then printf on; else printf off; fi; }; ";
     private const string SetUsage = "set: usage: set [-e|+e] [-o errexit|+o errexit] [-|+|--] [arg ...]\n";
+    private const string SetClosedOutput = "set: write error: Bad file descriptor\n";
 
     [Theory]
     [InlineData("-e", "+e")]
@@ -36,6 +39,99 @@ public sealed class ErrexitTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("errexit\toff\nset -o errexit\nerrexit\toff\nkeep", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("-o -o -e -o")]
+    [InlineData("-ooe +o")]
+    public async Task SetContinuesApplyingOptionsAndPositionalsAfterInspectionCloses(string options)
+    {
+        var evaluation = new Eval(Parser.Parse($"set {options} -- tail; status=$?; flags=$-"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Closed);
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText("0"), evaluation.Variables["status"]);
+        Assert.Equal(ShellValue.FromText("e"), evaluation.Variables["flags"]);
+        Assert.Equal(ShellValue.FromText("tail"), Assert.Single(evaluation.PositionalParameters));
+        var inspection = Assert.Single(host.Appends);
+        Assert.Equal(FileDescriptor.StdOut, inspection.Descriptor);
+        Assert.Equal("errexit\toff\n"u8.ToArray(), inspection.Content);
+    }
+
+    [Theory]
+    [InlineData("-o invalid", 2, false, "set: invalid: invalid option name\n")]
+    [InlineData("-o invalid", 2, true, "")]
+    [InlineData("-oz", 1, true, "")]
+    public async Task SetValidatesLaterOptionsAfterInspectionCloses(
+        string invalid, int status, bool merged, string diagnostic)
+    {
+        var evaluation = new Eval(Parser.Parse("set -- keep; "
+            + $"if set -o -e -o {invalid} -- tail {(merged ? "2>&1" : "")}; then status=0; else status=$?; fi; flags=$-"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Closed);
+        if (!merged)
+            host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText(status.ToString()), evaluation.Variables["status"]);
+        Assert.Equal(ShellValue.FromText("e"), evaluation.Variables["flags"]);
+        Assert.Equal(ShellValue.FromText("keep"), Assert.Single(evaluation.PositionalParameters));
+        FileDescriptor[] expected = merged ? [FileDescriptor.StdOut] : [FileDescriptor.StdOut, FileDescriptor.StdErr];
+        Assert.Equal(expected, host.Appends.Select(static write => write.Descriptor));
+        Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[0].Content);
+        if (!merged)
+            Assert.Equal(ShellValue.FromText(diagnostic).Bytes.ToArray(), host.Appends[1].Content);
+    }
+
+    [Fact]
+    public async Task SetKeepsAnEarlierInspectionFailureAfterDownstreamClosure()
+    {
+        var evaluation = new Eval(Parser.Parse(
+            "if set -o -o -e -o -- tail; then status=0; else status=$?; fi; flags=$-"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("Synthetic write failure\n")));
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueueAppendResult(DescriptorWriteResult.Closed);
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText("1"), evaluation.Variables["status"]);
+        Assert.Equal(ShellValue.FromText("e"), evaluation.Variables["flags"]);
+        Assert.Equal(ShellValue.FromText("tail"), Assert.Single(evaluation.PositionalParameters));
+        Assert.Equal(new[] { FileDescriptor.StdOut, FileDescriptor.StdErr, FileDescriptor.StdOut },
+            host.Appends.Select(static write => write.Descriptor));
+        Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[0].Content);
+        Assert.Equal("set: write error: Synthetic write failure\n"u8.ToArray(), host.Appends[1].Content);
+        Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[2].Content);
+    }
+
+    [Theory]
+    [InlineData("-o", "<1><1><keep>off", SetClosedOutput)]
+    [InlineData("-o -o", "<1><1><keep>off", SetClosedOutput)]
+    [InlineData("-o +oo", "<1><1><keep>off", SetClosedOutput + SetClosedOutput)]
+    [InlineData("-o -o --", "<0><0><>off", "")]
+    [InlineData("-o -e -- tail", "<0><1><tail>on", "")]
+    [InlineData("-o -o invalid -- tail", "<2><1><keep>off", "set: invalid: invalid option name\n")]
+    [InlineData("-o ''", "<0><1><>off", "")]
+    public async Task SetChecksShellClosedOutputForInspectionsWithoutAFollowingArgument(
+        string options, string output, string diagnostic)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(ReportOption
+            + $"set -- keep; if set {options} 1>&- 2>diagnostic; then status=0; else status=$?; fi; "
+            + "printf '<%s><%s><%s>' \"$status\" \"$#\" \"$1\"; flag", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(diagnostic, host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]

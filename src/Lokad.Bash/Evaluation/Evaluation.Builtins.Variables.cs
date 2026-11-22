@@ -258,6 +258,7 @@ public sealed partial class Evaluation
         Variables commandVars,
         bool negated)
     {
+        var inspectionClosed = false;
         // Validate the leading groups before publishing option changes. A bare
         // plus ends validation but is skipped when applying the options.
         for (var candidate = 1; candidate < words.Count; candidate++)
@@ -328,12 +329,17 @@ public sealed partial class Evaluation
                     continue;
                 }
 
+                // With shell-closed stdout, Bash reports listing write failures only when no argument follows.
+                if (inspectionClosed || (index + 1 < words.Count && GetStdOutDescriptor().IsClosed))
+                    continue;
                 var inspection = enabled
                     ? (_state.ErrexitEnabled ? "errexit\ton\n" : "errexit\toff\n")
                     : (_state.ErrexitEnabled ? "set -o errexit\n" : "set +o errexit\n");
                 var written = await WriteBuiltinOutputAsync(words[0], Utf8Text.Encode(inspection)).ConfigureAwait(false);
                 if (written.IsError)
                     status = 1;
+                else
+                    inspectionClosed = !written.CanAcceptMore;
             }
             index++;
         }
@@ -348,6 +354,8 @@ public sealed partial class Evaluation
         static bool IsSetOption(ReadOnlySpan<byte> bytes) =>
             bytes.Length > 1 && bytes[0] is (byte)'-' or (byte)'+';
 
+        bool CanWriteOptionDiagnostic() => !inspectionClosed || GetStdErrDescriptor() != GetStdOutDescriptor();
+
         async Task<EvaluationResult> RejectFlagAsync(ShellValue group, int flagIndex, int exitCode)
         {
             var flag = group.Bytes.Slice(flagIndex, 1);
@@ -355,14 +363,16 @@ public sealed partial class Evaluation
             if ("abfhkmnprtuvxBCEHPT"u8.Contains(flag.Span[0]))
                 return await InvalidOptionAsync(group, ": unsupported option", exitCode).ConfigureAwait(false);
 
-            await WriteInvalidShortOptionUnlessStderrClosedAsync(words[0], ShellValue.FromBytes(group.Bytes[..1]),
-                flag, BuiltinKind.Set, "set").ConfigureAwait(false);
+            if (CanWriteOptionDiagnostic())
+                await WriteInvalidShortOptionUnlessStderrClosedAsync(words[0], ShellValue.FromBytes(group.Bytes[..1]),
+                    flag, BuiltinKind.Set, "set").ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
         }
 
         async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, string message, int exitCode)
         {
-            await ReportExpansionDiagnosticAsync([words[0]], [option, ShellValue.FromText(message)]).ConfigureAwait(false);
+            if (CanWriteOptionDiagnostic())
+                await ReportExpansionDiagnosticAsync([words[0]], [option, ShellValue.FromText(message)]).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
         }
     }

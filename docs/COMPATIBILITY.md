@@ -455,6 +455,10 @@ positions and negation suppress it through nested functions/groups and source/ev
 Command substitution clears errexit by default; parenthesized subshells inherit it.
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
+Downstream closure stops inspection output and diagnostics routed to the
+same handle. Option and positional processing continues.
+With shell-closed stdout, an inspection reports a write failure only when
+it has no following argument.
 Leading short flags are validated before they can change shell state.
 During validation, `--help` describes the supported options and returns
 status 2, including with shell-closed stdout. It leaves shell options and
