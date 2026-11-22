@@ -111,6 +111,10 @@ local declaration, including through unprefixed helper calls. Unsetting that
 temporary binding reveals the saved caller; subsequent assignments can survive
 the call. Unsetting a local declaration instead keeps its unassigned local
 namespace. A prefix on `local`/`declare` itself has a separate lifetime.
+At script scope, a prefix on `declare -g` or `typeset -g` leaves the saved
+value and export attribute available to the declaration. Appends use that
+value, and explicit `-x` or `+x` changes its export attribute. Named `-p`
+inspection still sees the active prefix.
 If a temporary scalar is converted to an array, a helper's new local inherits the
 structured array value. This deliberately preserves its data and kind where both
 pinned GNU 5.2 references emit a scalar containing byte 01 in that nested case.

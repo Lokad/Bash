@@ -7,6 +7,60 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class GlobalDeclarationOwnershipTestsEndToEnd
 {
     [Theory]
+    [InlineData("x=old", "x=prefix declare -g x", "declare -- x=\"old\"")]
+    [InlineData("declare x", "x=prefix declare -gr x", "declare -r x")]
+    [InlineData(":", "x=prefix declare -g x+=edit", "declare -- x=\"edit\"")]
+    [InlineData("x=old", "x=prefix command declare -g x+=edit", "declare -- x=\"oldedit\"")]
+    [InlineData("export x=old", "x=prefix declare -g x+=edit", "declare -x x=\"oldedit\"")]
+    [InlineData("x=old", "x=prefix declare -gx x", "declare -x x=\"old\"")]
+    [InlineData("export x=old", "x=prefix declare -g +x x", "declare -- x=\"old\"")]
+    [InlineData("declare -i x=9", "x=prefix declare -g x+=6", "declare -i x=\"15\"")]
+    [InlineData("x=old; declare -n ref=x", "x=prefix builtin declare -gr ref=edit", "declare -r x=\"edit\"")]
+    [InlineData("x=old; declare -n ref=x", "x=prefix declare -gn ref=x", "declare -- x=\"old\"")]
+    [InlineData("x=([0]=old [8]=tail)", "x=prefix declare -ga x+=edit", "declare -a x=([0]=\"oldedit\" [8]=\"tail\")")]
+    [InlineData("x=([0]=old [8]=tail); declare -n ref=x", "x=prefix declare -ga ref+=edit x+=last",
+        "declare -a x=([0]=\"oldlast\" [8]=\"tail\")")]
+    [InlineData("x=old", "x=prefix declare -ga x=(edit spare)", "declare -a x=([0]=\"edit\" [1]=\"spare\")")]
+    [InlineData("x=old", "x=prefix declare -ga 'x=(\"$x\" spare)'", "declare -a x=([0]=\"prefix\" [1]=\"spare\")")]
+    public async Task GlobalDeclarationUsesSavedBindingBehindItsCommandPrefix(string setup, string declaration, string listing)
+    {
+        var result = await EvaluationTestHelper.RunAsync(setup + "; " + declaration + "; printf '<%s>' \"$?\"; declare -p x");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0>" + listing + "\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("-g", "declare -x x=\"outer\"\ndeclare -- x=\"next\"\n")]
+    [InlineData("-ga", "declare -ax x=([0]=\"next\")\ndeclare -a x=([0]=\"old\")\n")]
+    public async Task GlobalDeclarationsRespectBothScriptAndCommandPrefixOwners(string options, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "x=old; x=outer eval 'x=inner declare " + options + " x=next; declare -p x'; declare -p x");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("x=old", "-g", "unset")]
+    [InlineData("x=old", "-gx", "edited")]
+    [InlineData("export x=old", "-g", "edited")]
+    [InlineData("export x=old", "-g +x", "unset")]
+    public async Task GlobalDeclarationExportsOnlyTheSavedOrExplicitAttribute(string setup, string options, string childValue)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(
+            setup + "; x=prefix declare " + options + " x=edited; printf '<%s>/' \"$x\"; sh -c 'printf \"<%s>\" \"${x-unset}\"'",
+            EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<edited>/<" + childValue + ">", result.Host.StandardOutput.TextContent);
+        Assert.Empty(result.Host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData("x=original; f(){ local x=hidden; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"; }; f; declare -p x",
         "<0><hidden>declare -- x=\"edited\"\n", "")]
     [InlineData("f(){ local -g missing=created; }; f; declare -p missing",

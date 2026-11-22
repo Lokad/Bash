@@ -2078,6 +2078,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var setsNamedAttribute = options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly;
+            var globalBindings = options.Global ? bindings : null;
             var exitCode = 0;
             List<Variables.CommandBindings>? exposedPrefixes = null;
             foreach (var operand in declaration.Operands)
@@ -2146,19 +2147,20 @@ public sealed partial class Evaluation : IFileTester
                 if (global)
                 {
                     if (options.NamerefChange == DeclarationAttributeChange.Set)
-                        targetVars = declarationScope.Context.GetGlobalBindingOwner(reference.Name, declarationScope.Variables);
+                        targetVars = SelectGlobalOwner(reference.Name);
                     else
                     {
-                        if (!declarationScope.Context.TryResolveGlobalBinding(reference.Name, declarationScope.Variables, commandVars, prefixNames, resolution, out var binding))
+                        if (!declarationScope.Context.TryResolveGlobalBinding(reference.Name, declarationScope.Variables,
+                                commandVars, prefixNames, globalBindings, resolution, out var binding))
                         {
                             circular = true;
-                            binding = new VariableBinding(VariableReference.ForName(reference.Name), declarationScope.Context.GetGlobalBindingOwner(reference.Name, declarationScope.Variables));
+                            binding = new VariableBinding(VariableReference.ForName(reference.Name), SelectGlobalOwner(reference.Name));
                         }
                         if (!circular && arrayKind != ArrayAssignmentKind.Auto
                             && (resolution == BindingResolution.Referent
                                 || binding.Owner.TryGetNameref(binding.Name, out var lastTarget) && lastTarget.IsEmpty))
                         {
-                            var declaredOwner = declarationScope.Context.GetGlobalBindingOwner(reference.Name, declarationScope.Variables);
+                            var declaredOwner = SelectGlobalOwner(reference.Name);
                             binding = declaredOwner.SelectArrayDeclarationBinding(reference.Name, binding);
                             recreateArrayReference = binding.Owner.TryGetNameref(binding.Name, out _);
                         }
@@ -2413,7 +2415,7 @@ public sealed partial class Evaluation : IFileTester
                     && referentAttributes != null ? reference : null;
                 if (!local && options.NamerefChange == DeclarationAttributeChange.Clear
                     && targetVars.TryGetNameref(name, out var finalTarget) && !finalTarget.IsEmpty && (global
-                        ? declarationScope.Context.TryResolveGlobalBinding(name, declarationScope.Variables, out var referent)
+                        ? TryResolveGlobalReferent(name, out var referent)
                         : targetVars.TryResolveBinding(name, selectOwner: null, out referent)))
                 {
                     referentAttributes = referent with { Reference = VariableReference.ForName(referent.Name) };
@@ -2505,7 +2507,7 @@ public sealed partial class Evaluation : IFileTester
                         var declarationWrite = WordExpansion.DeclarationWrite.Ordinary;
                         if (global && arrayKind == ArrayAssignmentKind.Indexed)
                         {
-                            // Bash writes element zero through the active binding here, even if that binding is readonly.
+                            // Bash writes element zero through the active caller binding, even if it is readonly.
                             var activeName = declarationScope.Variables.ResolveNamerefName(sourceName);
                             if (activeName.IsEmpty)
                             {
@@ -2517,7 +2519,9 @@ public sealed partial class Evaluation : IFileTester
                             }
                             writeReference = VariableReference.ForElement(sourceName, ShellSource.FromText("0"));
                             writeVariables = declarationScope.Variables;
-                            if (prefixNames != null)
+                            if (name == sourceName && globalBindings?.Contains(sourceName) == true)
+                                writeVariables = globalBindings.SavedVariables;
+                            else if (prefixNames != null)
                             {
                                 var initializerScope = executionScope with
                                 {
@@ -2540,7 +2544,7 @@ public sealed partial class Evaluation : IFileTester
                             && targetVars.TryGetNameref(name, out _))
                         {
                             var resolved = global
-                                ? declarationScope.Context.TryResolveGlobalBinding(name, declarationScope.Variables, out var binding)
+                                ? TryResolveGlobalReferent(name, out var binding)
                                 : targetVars.TryResolveBinding(name, selectOwner: null, out binding);
                             if (!resolved)
                             {
@@ -2655,6 +2659,13 @@ public sealed partial class Evaluation : IFileTester
             }
 
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
+
+            Variables SelectGlobalOwner(BindingName name) =>
+                declarationScope.Context.GetGlobalBindingOwner(name, declarationScope.Variables, globalBindings);
+
+            bool TryResolveGlobalReferent(BindingName name, out VariableBinding binding) =>
+                declarationScope.Context.TryResolveGlobalBinding(name, declarationScope.Variables,
+                    declarationScope.Variables, prefixes: null, globalBindings, BindingResolution.Referent, out binding);
 
             bool TrySelectExpandedInitializer(BindingName name, VariableReference reference, Variables variables, ArrayAssignmentKind arrayKind,
                 out VariableBinding binding, out ArrayKind kind)
@@ -2799,7 +2810,9 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (global && ReferenceEquals(variables, commandVars))
                 {
-                    bindings?.Retain(name, Memory, _cancellationToken);
+                    // Explicit global declarations already write to their selected caller binding.
+                    if (!options.Global)
+                        bindings?.Retain(name, Memory, _cancellationToken);
                     // Active fallback attributes can promote this declaration's prefix, not the enclosing call's.
                     if (bindings == null && prefixNames?.Contains(name) == true
                         && (exportChange == DeclarationAttributeChange.Set || options.Readonly))
@@ -4638,23 +4651,29 @@ public sealed partial class Evaluation : IFileTester
         }
 
         public Variables GetGlobalBindingOwner(BindingName name, Variables active)
-            => GetGlobalBindingOwner(name, active, outerBoundary: null);
+            => GetGlobalBindingOwner(name, active, commandBindings: null, outerBoundary: null);
 
-        private Variables GetGlobalBindingOwner(BindingName name, Variables active, FunctionContext? outerBoundary)
+        public Variables GetGlobalBindingOwner(BindingName name, Variables active, Variables.CommandBindings? commandBindings)
+            => GetGlobalBindingOwner(name, active, commandBindings, outerBoundary: null);
+
+        private Variables GetGlobalBindingOwner(BindingName name, Variables active,
+            Variables.CommandBindings? commandBindings, FunctionContext? outerBoundary)
         {
             List<Variables.CommandBindings>? exposedPrefixes = null;
-            return GetBindingOwner(name, active, DeclarationBindingScope.Global, prefixMemory: null, ref exposedPrefixes, outerBoundary);
+            return GetBindingOwner(name, active, DeclarationBindingScope.Global, prefixMemory: null, ref exposedPrefixes, outerBoundary, commandBindings);
         }
 
         public Variables GetVisibleBindingOwner(BindingName name, Variables active, EvaluationMemory memory,
             ref List<Variables.CommandBindings>? exposedPrefixes) =>
-            GetBindingOwner(name, active, DeclarationBindingScope.Visible, memory, ref exposedPrefixes, outerBoundary: null);
+            GetBindingOwner(name, active, DeclarationBindingScope.Visible, memory, ref exposedPrefixes, outerBoundary: null, commandBindings: null);
 
         private Variables GetBindingOwner(BindingName name, Variables active, DeclarationBindingScope lookup,
-            EvaluationMemory? prefixMemory, ref List<Variables.CommandBindings>? exposedPrefixes, FunctionContext? outerBoundary)
+            EvaluationMemory? prefixMemory, ref List<Variables.CommandBindings>? exposedPrefixes,
+            FunctionContext? outerBoundary, Variables.CommandBindings? commandBindings)
         {
             var bindingName = StripArraySubscript(name);
-            var owner = active;
+            // The reached command's prefixes are the innermost restoration scope.
+            var owner = commandBindings?.Contains(bindingName) == true ? commandBindings.SavedVariables : active;
             var prefix = GlobalPrefixes;
             // Interleave script prefixes with function frames in nesting order:
             // eval may be inside a function or may itself invoke a function.
@@ -4720,7 +4739,7 @@ public sealed partial class Evaluation : IFileTester
         }
 
         public bool TryResolveGlobalBinding(BindingName name, Variables active, out VariableBinding binding)
-            => TryResolveGlobalBinding(name, active, active, prefixes: null, BindingResolution.Referent, out binding);
+            => TryResolveGlobalBinding(name, active, active, prefixes: null, commandBindings: null, BindingResolution.Referent, out binding);
 
         /// <summary>A circular local lookup retries the original name in the global namespace.</summary>
         public bool TryResolveCircularBinding(BindingName name, Variables active, out VariableBinding binding)
@@ -4761,7 +4780,7 @@ public sealed partial class Evaluation : IFileTester
                     return true;
                 }
 
-                Variables CallerOwner(BindingName variable) => context.GetGlobalBindingOwner(variable, active, outerBoundary);
+                Variables CallerOwner(BindingName variable) => context.GetGlobalBindingOwner(variable, active, commandBindings: null, outerBoundary);
             }
 
             // Inner locals can hide the scalar created in the source frame. A target owned by
@@ -4775,16 +4794,18 @@ public sealed partial class Evaluation : IFileTester
         }
 
         public bool TryResolveGlobalBinding(BindingName name, Variables persistent, Variables active,
-            IReadOnlySet<BindingName>? prefixes, BindingResolution resolution, out VariableBinding binding)
+            IReadOnlySet<BindingName>? prefixes, Variables.CommandBindings? commandBindings, BindingResolution resolution, out VariableBinding binding)
         {
             var context = this;
-            var owner = GetGlobalBindingOwner(name, persistent);
-            if (!owner.TryResolveBinding(name, current => context.GetGlobalBindingOwner(current, persistent), resolution, out binding))
+            var owner = SelectGlobalOwner(name);
+            if (!owner.TryResolveBinding(name, SelectGlobalOwner, resolution, out binding))
                 return owner.TryResolveBinding(name, SelectActiveOwner, resolution, out binding);
 
             // An unset global chain can still name an active referent; +n must not detach that chain.
             return !binding.Owner.TryGetNameref(binding.Name, out var target) || !target.IsEmpty
                 || owner.TryResolveBinding(name, SelectActiveOwner, out binding);
+
+            Variables SelectGlobalOwner(BindingName current) => context.GetGlobalBindingOwner(current, persistent, commandBindings);
 
             Variables SelectActiveOwner(BindingName current) => prefixes?.Contains(StripArraySubscript(current)) == true
                 ? active : persistent;
