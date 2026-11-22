@@ -615,6 +615,15 @@ integer attribute when computing the append. `local -I` and function-local
 declaration attributes. A nameref contributes its target spelling as scalar
 data unless the new declaration gives the local its own nameref attribute.
 
+`export -a/-A` and `readonly -a/-A` filter listings when there are no
+operands. A bare name receives the requested attribute and keeps its binding
+kind. An assignment operand uses the global array declaration path, then
+applies the named attribute to the visible binding. With both array flags,
+this assignment path selects indexed storage. Parsed compound initializers
+still use the existing source preparation phase. When a global indexed write
+converts a shadowing associative binding, it keeps the binding's attributes.
+Append uses the old value at key `0` as the previous element.
+
 The public script runner, `source`, `eval` and reached EXIT actions execute complete command units as
 they are parsed. Earlier units retain their effects before later syntax failure.
 A malformed arithmetic `for` header in a direct double-quoted command substitution

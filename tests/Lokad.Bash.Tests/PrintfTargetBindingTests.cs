@@ -201,7 +201,7 @@ public sealed class PrintfTargetBindingTests
     [InlineData("declare -A a; printf -v 'a[@]' value; printf '<%s><%s>' \"$?\" \"${a[@]}\"", "3C303E3C76616C75653E", "", 0)]
     [InlineData("printf -v 'a[2147483648]' value; printf '<%s><%s>' \"${!a[@]}\" \"${a[@]}\"", "3C323134373438333634383E3C76616C75653E", "", 0)]
     [InlineData("i=0; printf -v 'a[(i++,-1)]' value; printf '<%s><%s>' \"$?\" \"$i\"", "3C313E3C313E", "615B28692B2B2C2D31295D3A20626164206172726179207375627363726970740A", 0)]
-    [InlineData("readonly -A a; printf -v 'a[$(printf selector >&2; printf key)]' value; printf '<%s>' \"$?\"", "3C313E", "73656C6563746F72613A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("readonly -A a=(); printf -v 'a[$(printf selector >&2; printf key)]' value; printf '<%s>' \"$?\"", "3C313E", "73656C6563746F72613A20726561646F6E6C79207661726961626C650A", 0)]
     public async Task AssignsSelectedLocationAfterFormatting(
         string script, string outputHex, string errorHex, int exitCode)
     {

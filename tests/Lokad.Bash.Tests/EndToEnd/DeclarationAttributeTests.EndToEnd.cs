@@ -10,6 +10,50 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationAttributeTestsEndToEnd
 {
     [Theory]
+    [InlineData("export -a x; declare -p x", "declare -x x\n", "")]
+    [InlineData("x=old; readonly -A x; declare -p x", "declare -r x=\"old\"\n", "")]
+    [InlineData("x=(one two); export -A x; declare -p x", "declare -ax x=([0]=\"one\" [1]=\"two\")\n", "")]
+    [InlineData("declare -n x=target; target=old; readonly -a x; declare -p x target",
+        "declare -n x=\"target\"\ndeclare -r target=\"old\"\n", "")]
+    [InlineData("declare -n x; export -A x; printf '<%s>' \"$?\"; declare -p x",
+        "<0>declare -n x\n", "export: `': not a valid identifier\n")]
+    [InlineData("export -aA x=edited; declare -p x", "declare -ax x=([0]=\"edited\")\n", "")]
+    [InlineData("x=(old spare); export -A x=edited later=next; printf '<%s>' \"$?\"; declare -p x later",
+        "<1>declare -ax x=([0]=\"old\" [1]=\"spare\")\ndeclare -Ax later=([0]=\"next\" )\n",
+        "export: x: cannot convert indexed to associative array\n")]
+    [InlineData("readonly x=old; export -a x=edited; printf '<%s>' \"$?\"; declare -p x",
+        "<1>declare -rx x=\"old\"\n", "export: x: readonly variable\n")]
+    [InlineData("x=outer; f(){ local x=inner; export -a x+=tail; declare -p x; }; f; declare -p x",
+        "declare -ax x=([0]=\"innertail\")\ndeclare -ax x=([0]=\"outer\")\n", "")]
+    [InlineData("x=outer; f(){ local x=inner; export -n -A x=edited; declare -p x; }; f; declare -p x",
+        "declare -- x=\"inner\"\ndeclare -Ax x=([0]=\"edited\" )\n", "")]
+    [InlineData("x=outer; f(){ local x=inner; readonly -A x=([key]=item); declare -p x; }; f; declare -p x",
+        "declare -Ar x=([key]=\"item\" )\ndeclare -- x=\"outer\"\n", "")]
+    [InlineData("x=outer; f(){ local x=inner; readonly -A 'x=([key]=item)'; declare -p x; }; f; declare -p x",
+        "declare -r x=\"inner\"\ndeclare -Ar x=([key]=\"item\" )\n", "")]
+    [InlineData("x=old; x=prefix export -a x=edited; declare -p x",
+        "declare -ax x=([0]=\"prefix\")\n", "")]
+    [InlineData("x=old; x=prefix readonly -A x=edited; declare -p x",
+        "declare -Arx x=([0]=\"edited\" )\n", "x: readonly variable\n")]
+    [InlineData("x=old; x=prefix readonly -n -a x=edited; declare -p x",
+        "declare -a x=([0]=\"edited\")\n", "")]
+    [InlineData("x=outer; f(){ local -A x=([0]=old [key]=other); export -a x=edited; declare -p x; }; f; declare -p x",
+        "declare -ax x=([0]=\"edited\")\ndeclare -ax x=([0]=\"outer\")\n", "")]
+    [InlineData("x=outer; f(){ local -A x=([0]=old [key]=other); export -a x+=tail; declare -p x; }; f; declare -p x",
+        "declare -ax x=([0]=\"oldtail\")\ndeclare -ax x=([0]=\"outer\")\n", "")]
+    [InlineData("declare -ax ix=(one); declare -Ax ax=([key]=two); export -a; export -A; export -aA",
+        "declare -ax ix=([0]=\"one\")\ndeclare -Ax ax=([key]=\"two\" )\n", "")]
+    public async Task ArrayOptionsSelectAssignmentKindsAndKeepNamedAttributes(
+        string script, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("v=MiXeD; declare -l v; printf '<%s>' \"$v\"; v+=TaIL; declare -p v", "<MiXeD>declare -l v=\"mixedtail\"\n")]
     [InlineData("declare -c a='...mIXeD tEXT' b='tWO wORDS'; declare -p a b", "declare -c a=\"...mixed text\"\ndeclare -c b=\"Two words\"\n")]
     [InlineData("declare -lu v=MiXeD; declare -p v", "declare -- v=\"MiXeD\"\n")]
