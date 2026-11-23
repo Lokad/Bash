@@ -107,6 +107,8 @@ public sealed partial class Variables
                 _head = 0;
             }
         }
+
+        public PositionalParametersFrame CopyActiveValues() => new(_values, _head);
     }
 
     /// <summary>A live view follows frame switches without exposing owned arrays to callers.</summary>
@@ -149,6 +151,13 @@ public sealed partial class Variables
             _saved = variables._positional;
             _restorePolicy = restorePolicy;
             variables.SetPositionalFrame(new PositionalParametersFrame(values, start), replacedBySet: false);
+        }
+
+        /// <summary>Copies the inactive caller frame for EXIT in a terminating child.</summary>
+        internal void CopySavedParametersTo(Variables child, EvaluationMemory memory)
+        {
+            memory.Charge(checked((long)PositionalEntryBytes * _saved.Count));
+            child.SetPositionalFrame(_saved.CopyActiveValues(), replacedBySet: false);
         }
 
         public void Dispose()

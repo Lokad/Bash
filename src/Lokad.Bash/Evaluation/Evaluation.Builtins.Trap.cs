@@ -164,38 +164,58 @@ public sealed partial class Evaluation
 
     private enum ExitTrapKind { Completion, Errexit, Expansion }
 
+    private static int ExitActionStatus(ExpansionFailure failure) =>
+        failure is { Kind: ExpansionFailureKind.ReaderSyntax, ExitCode: 1 } ? BuiltinSyntaxErrorStatus : failure.ExitCode;
+
     private ValueTask<EvaluationResult> RunExitTrapAsync(ScopedEvaluation scope, EvaluationResult result) =>
         RunExitTrapAsync(scope, result, ExitTrapKind.Completion);
 
     /// <summary>Runs EXIT once with the bindings and descriptors selected by the reason for termination.</summary>
     private async ValueTask<EvaluationResult> RunExitTrapAsync(ScopedEvaluation scope, EvaluationResult result, ExitTrapKind kind)
     {
-        if (_state.Traps is not { } traps || _state.ExitedThroughExec || !traps.TryBeginExit(result.ExitCode, out var action))
+        var failure = _state.FatalExpansion;
+        var useInheritedPipelineAction = kind == ExitTrapKind.Completion && failure is { UseInheritedPipelineExitAction: true };
+        var status = kind == ExitTrapKind.Completion && result.Flow == FlowControlKind.Exit
+            && failure is { Kind: ExpansionFailureKind.ReaderSyntax } readerFailure
+                ? ExitActionStatus(readerFailure) : result.ExitCode;
+        if (_state.Traps is not { } traps || _state.ExitedThroughExec
+            || !traps.TryBeginExit(status, useInheritedPipelineAction, out var action))
             return result;
 
-        var failure = _state.FatalExpansion;
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
-        _state.LastExitCode = result.ExitCode;
+        _state.LastExitCode = status;
         try
         {
             if (kind != ExitTrapKind.Completion)
                 for (var timing = scope.Timing; timing != null; timing = timing.Enclosing)
                     await ReportTimingAsync(timing).ConfigureAwait(false);
 
-            var restoreLocals = kind == ExitTrapKind.Errexit && (!_state.KeepsLocalsOnErrexit || scope.InNestedCommandUnits);
-            if (restoreLocals)
-                RestoreErrexitBindings(scope);
+            var function = scope.Context.FunctionContext;
+            var prefixes = scope.Context.GlobalPrefixes;
+            var callerSource = scope.Context.CallerSource;
+            var returnTarget = scope.Context.ReturnTarget;
+            if (useInheritedPipelineAction)
+            {
+                (function, prefixes) = RestoreBindings(scope, scope.LoadedSyntaxFunctionDepth, restorePositionals: true);
+                var functionDepth = function?.Depth ?? 0;
+                returnTarget = callerSource?.FunctionDepth == functionDepth ? ReturnTargetKind.Source
+                    : function != null ? ReturnTargetKind.Function : ReturnTargetKind.None;
+            }
+            else if (kind == ExitTrapKind.Errexit && (!_state.KeepsLocalsOnErrexit || scope.InNestedCommandUnits))
+            {
+                (function, prefixes) = RestoreBindings(scope, retainDepth: null, restorePositionals: false);
+                callerSource = null;
+            }
 
             // EXIT runs independently of its caller's tested-status suppression. Keep
             // positional and flow targets, while copied action bytes own their syntax.
             var trapScope = scope with
             {
-                Context = new EvaluationContext(scope.Context.LoopDepth,
-                    restoreLocals ? null : scope.Context.FunctionContext, scope.Context.ReturnTarget)
+                Context = new EvaluationContext(scope.Context.LoopDepth, function, returnTarget)
                 {
-                    GlobalPrefixes = restoreLocals ? null : scope.Context.GlobalPrefixes,
-                    CallerSource = restoreLocals ? null : scope.Context.CallerSource
+                    GlobalPrefixes = prefixes,
+                    CallerSource = callerSource
                 },
                 Timing = null,
                 ErrexitRedirections = null
@@ -225,28 +245,35 @@ public sealed partial class Evaluation
             _state.LastExitCode = result.ExitCode;
         }
 
-        void RestoreErrexitBindings(ScopedEvaluation active)
+        (FunctionContext? Function, GlobalPrefixBindings? Prefixes) RestoreBindings(
+            ScopedEvaluation active, int? retainDepth, bool restorePositionals)
         {
             var prefix = active.Context.GlobalPrefixes;
-            for (var function = active.Context.FunctionContext; function != null; function = function.Enclosing)
+            var frame = active.Context.FunctionContext;
+            Variables.PositionalParametersScope? positionals = null;
+            for (; frame != null && frame.Depth > retainDepth.GetValueOrDefault(); frame = frame.Enclosing)
             {
-                var temporaryScriptBindings = function.Locals.IsTemporaryPrefixScope;
-                var bindings = temporaryScriptBindings && prefix?.FunctionDepth == function.Depth
-                    ? prefix.Bindings : function.PrefixBindings;
-                CompletePromotions(function, function.Enclosing, active.Variables, bindings);
+                positionals = frame.CallerPositionals ?? positionals;
+                var temporaryScriptBindings = frame.Locals.IsTemporaryPrefixScope;
+                var bindings = temporaryScriptBindings && prefix?.FunctionDepth == frame.Depth
+                    ? prefix.Bindings : frame.PrefixBindings;
+                CompletePromotions(frame, frame.Enclosing, active.Variables, bindings);
                 if (!temporaryScriptBindings)
-                    function.Locals.Restore();
-                function.BindingsRestoredForExit = true;
-                function.PrefixBindings?.Dispose();
+                    frame.Locals.Restore();
+                frame.BindingsRestoredForExit = true;
+                frame.PrefixBindings?.Dispose();
 
-                while (prefix?.FunctionDepth == function.Depth)
+                while (prefix?.FunctionDepth == frame.Depth)
                 {
                     prefix.Bindings.Dispose();
                     prefix = prefix.Enclosing;
                 }
             }
-            for (; prefix != null; prefix = prefix.Enclosing)
+            for (; prefix != null && (retainDepth == null || prefix.FunctionDepth > retainDepth.Value); prefix = prefix.Enclosing)
                 prefix.Bindings.Dispose();
+            if (restorePositionals)
+                positionals?.CopySavedParametersTo(active.Variables, Memory);
+            return (frame, prefix);
         }
     }
 }

@@ -7,7 +7,7 @@ namespace Lokad.Bash.Evaluation;
 
 internal enum TrapCondition { Exit = 0, Hangup = 1, Interrupt = 2, Terminate = 15 }
 
-/// <summary>Per-shell registrations; caught handlers are inactive in children until explicitly installed there.</summary>
+/// <summary>Per-shell registrations, inherited listings and EXIT during direct pipeline expansion.</summary>
 internal sealed class ShellTraps
 {
     public static IReadOnlyList<TrapCondition> Conditions { get; } =
@@ -15,6 +15,7 @@ internal sealed class ShellTraps
 
     private readonly Dictionary<TrapCondition, ShellValue> _handlers = [];
     private IReadOnlyDictionary<TrapCondition, ShellValue>? _inheritedForListing;
+    private ShellValue _inheritedPipelineExitAction;
     private ShellValue _runningAction;
     private bool _exitHandled;
     private const int EntryMemoryBytes = 128;
@@ -23,6 +24,8 @@ internal sealed class ShellTraps
 
     internal bool HasPendingExitAction =>
         !_exitHandled && _handlers.TryGetValue(TrapCondition.Exit, out var action) && !action.IsEmpty;
+
+    internal bool HasInheritedPipelineExitAction => !_exitHandled && !_inheritedPipelineExitAction.IsEmpty;
 
     // Retain the EXIT latch and saved status even if the action clears all registrations.
     internal bool CanRetire => !_exitHandled && _handlers.Count == 0 && ListedHandlers.Count == 0;
@@ -42,7 +45,11 @@ internal sealed class ShellTraps
     }
 
     /// <summary>A registration/reset attempt discards inherited listings, even if all its conditions are invalid.</summary>
-    public void DiscardInheritedListing() => _inheritedForListing = null;
+    public void DiscardInheritedListing()
+    {
+        _inheritedForListing = null;
+        _inheritedPipelineExitAction = ShellValue.Empty;
+    }
 
     public void Set(TrapCondition condition, ShellValue action, EvaluationMemory memory)
     {
@@ -74,16 +81,22 @@ internal sealed class ShellTraps
         foreach (var (condition, action) in _handlers)
             if (action.Bytes.IsEmpty)
                 child._handlers.Add(condition, action);
+            else if (kind == ShellForkKind.PipelineSimpleCommand && condition == TrapCondition.Exit)
+                child._inheritedPipelineExitAction = action;
         return child;
     }
 
-    public bool TryBeginExit(int status, out ShellValue action)
+    public bool TryBeginExit(int status, bool useInheritedPipelineAction, out ShellValue action)
     {
         action = ShellValue.Empty;
         if (_exitHandled)
             return false;
         _exitHandled = true;
-        if (!_handlers.TryGetValue(TrapCondition.Exit, out action) || action.Bytes.IsEmpty)
+        if (useInheritedPipelineAction)
+            action = _inheritedPipelineExitAction;
+        else
+            _handlers.TryGetValue(TrapCondition.Exit, out action);
+        if (action.IsEmpty)
             return false;
         // A handler may reset or replace itself before its parsed commands finish.
         _runningAction = action;

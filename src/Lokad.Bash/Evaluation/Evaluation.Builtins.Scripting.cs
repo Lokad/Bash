@@ -310,6 +310,7 @@ public sealed partial class Evaluation
             scope = scope with
             {
                 InNestedCommandUnits = true,
+                LoadedSyntaxFunctionDepth = scope.Context.FunctionContext?.Depth ?? 0,
                 LoadedReaderIgnoresErrexit = scope.Context.ErrexitIgnored
             };
         var lineOffset = kind switch
@@ -379,7 +380,7 @@ public sealed partial class Evaluation
                         {
                             var status = failedUnit.Failure.Kind == ParserFailureKind.SubstitutionGrammar
                                 ? BuiltinSyntaxErrorStatus : 2;
-                            return await ExitLoadedSyntaxFailureAsync(scope, status).ConfigureAwait(false);
+                            return await ExitLoadedSyntaxFailureAsync(scope, status, unwindChildFirst: true).ConfigureAwait(false);
                         }
                         if (failedUnit.Failure.Kind is ParserFailureKind.ArrayQuotedSubstitutionForHeader
                             or ParserFailureKind.ArraySubstitutionDelimiter)
@@ -412,11 +413,12 @@ public sealed partial class Evaluation
                 else if (result.Flow == FlowControlKind.Exit)
                 {
                     if (IsNestedLoadedReader(kind)
-                        && _state.FatalExpansion is { Kind: ExpansionFailureKind.CompoundInitializerSyntax })
+                        && _state.FatalExpansion is { Kind: ExpansionFailureKind.ReaderSyntax } failure)
                     {
                         _state.FatalExpansion = null;
                         _state.TryConsumeExpansionError(out _);
-                        return await ExitLoadedSyntaxFailureAsync(scope, BuiltinSyntaxErrorStatus).ConfigureAwait(false);
+                        return await ExitLoadedSyntaxFailureAsync(scope, ExitActionStatus(failure), unwindChildFirst: false)
+                            .ConfigureAwait(false);
                     }
                     // Recover only the expansion failures that end the current command unit.
                     // Explicit exit, errexit and unrecoverable expansion failures still terminate.
@@ -437,11 +439,12 @@ public sealed partial class Evaluation
         return await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
     }
 
-    private async ValueTask<EvaluationResult> ExitLoadedSyntaxFailureAsync(ScopedEvaluation scope, int status)
+    private async ValueTask<EvaluationResult> ExitLoadedSyntaxFailureAsync(ScopedEvaluation scope, int status, bool unwindChildFirst)
     {
-        // These child boundaries unwind the builtin before running their EXIT action.
-        if (_state.ForkKind is ShellForkKind.CommandSubstitution or ShellForkKind.PipelineSimpleCommand)
-            return EvaluationResult.Exit(1);
+        // A capturing child unwinds the builtin before running its own EXIT action.
+        if (_state.ForkKind == ShellForkKind.CommandSubstitution
+            || unwindChildFirst && _state.ForkKind == ShellForkKind.PipelineSimpleCommand)
+            return EvaluationResult.Exit(unwindChildFirst ? 1 : status & byte.MaxValue);
 
         // In the invoking shell, EXIT sees the full parser status and the active
         // builtin scope. The result crossing the shell boundary uses its low byte.
@@ -502,7 +505,8 @@ public sealed partial class Evaluation
         kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.ArrayReaderCallback;
 
     private bool CanRecoverCommandSubstitutionSyntax =>
-        _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1 };
+        _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1,
+            UseInheritedPipelineExitAction: false };
 
     private int? RecoverableRootExpansionStatus => _state.ForkKind != null ? null : _state.FatalExpansion switch
     {

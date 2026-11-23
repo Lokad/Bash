@@ -74,6 +74,7 @@ public sealed partial class Evaluation : IFileTester
     private bool _retainCompletedMemory;
     // Simple stages can inherit the status rules of the reader that started the pipeline.
     private bool _pipelineUsesLoadedUnitStatus;
+    private int? _loadedSyntaxFunctionDepth;
     /// <summary>
     /// Tracks descriptors inherited by a nested evaluator and therefore not owned by it.
     /// </summary>
@@ -450,10 +451,14 @@ public sealed partial class Evaluation : IFileTester
             OperationError? closeError = null;
             try
             {
-                result = await EvaluateScriptAsync(new ScopedEvaluation(this, _vars, _initialContext), _rootFlowHandling).ConfigureAwait(false);
+                var scope = new ScopedEvaluation(this, _vars, _initialContext)
+                {
+                    LoadedSyntaxFunctionDepth = _loadedSyntaxFunctionDepth
+                };
+                result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
                 if (_state.ForkKind == ShellForkKind.Subshell)
                     result = CompleteDiscardInChild(result);
-                result = await RunExitTrapAsync(new ScopedEvaluation(this, _vars, _initialContext), result).ConfigureAwait(false);
+                result = await RunExitTrapAsync(scope, result).ConfigureAwait(false);
             }
             catch (ByteMemoryBuilder.LimitExceededException)
             {
@@ -711,7 +716,6 @@ public sealed partial class Evaluation : IFileTester
                 ErrexitRedirections = null,
                 Timing = null,
                 InNestedCommandUnits = false,
-                InheritsLoadedSyntaxStatus = scope.InNestedCommandUnits || scope.InheritsLoadedSyntaxStatus,
                 LoadedReaderIgnoresErrexit = false
             };
             if (redirections != null)
@@ -877,6 +881,7 @@ public sealed partial class Evaluation : IFileTester
                 };
 
                 stage._retainCompletedMemory = true;
+                stage._loadedSyntaxFunctionDepth = scope.LoadedSyntaxFunctionDepth;
                 stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
                     && (scope.InNestedCommandUnits || _state.ForkKind == ShellForkKind.CommandSubstitution
                         || PipelineInheritsLoadedUnitStatus);
@@ -3598,17 +3603,32 @@ public sealed partial class Evaluation : IFileTester
     private bool PipelineInheritsLoadedUnitStatus => _state.ForkKind == ShellForkKind.PipelineSimpleCommand
         && _pipelineUsesLoadedUnitStatus;
 
+    private int ReaderSyntaxExitCode(ScopedEvaluation scope) =>
+        !_state.ErrexitEnabled && scope.LoadedSyntaxFunctionDepth.HasValue ? 1 : 2;
+
+    private bool IsDirectPipelineStageScope(ScopedEvaluation scope) =>
+        _state.ForkKind == ShellForkKind.PipelineSimpleCommand && !scope.InNestedCommandUnits
+        && ReferenceEquals(scope.Context.FunctionContext, _initialContext.FunctionContext);
+
+    private bool UsesInheritedPipelineExitAction(ScopedEvaluation scope) =>
+        IsDirectPipelineStageScope(scope) && _state.Traps?.HasInheritedPipelineExitAction == true;
+
     internal async Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure,
         CommandSubstitutionSyntax.Parsed? capture, ScopedEvaluation scope, bool quoted, RejectedSelectorCapture rejectedSelector)
     {
         if (_state.FatalExpansion.HasValue)
             return;
 
-        var exitCode = _state.ErrexitEnabled || failure is SubstitutionSyntaxFailure.NestedSyntax
-            or SubstitutionSyntaxFailure.NestedHereDocumentSeparator ? 2 : 1;
-        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode));
+        var terminatesReader = failure == SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
+        var separatorFailure = terminatesReader || failure == SubstitutionSyntaxFailure.HereDocumentSeparator;
+        var exitCode = terminatesReader ? ReaderSyntaxExitCode(scope)
+            : _state.ErrexitEnabled || failure == SubstitutionSyntaxFailure.NestedSyntax ? 2 : 1;
+        var kind = terminatesReader ? ExpansionFailureKind.ReaderSyntax : ExpansionFailureKind.CommandSubstitutionSyntax;
+        SetFatalExpansionError(new ExpansionFailure(kind, exitCode)
+        {
+            UseInheritedPipelineExitAction = separatorFailure && UsesInheritedPipelineExitAction(scope)
+        });
         _state.LastExitCode = exitCode;
-        var separatorFailure = failure is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
         if (separatorFailure && (capture != null || scope.ExpansionWord != null || !rejectedSelector.Operand.IsEmpty)
             && !GetStdErrDescriptor().IsClosed)
         {
@@ -4857,6 +4877,8 @@ public sealed partial class Evaluation : IFileTester
         public int Depth { get; }
 
         public Variables.LocalBindings Locals { get; }
+        /// <summary>Borrows the inactive argument frame while the invocation and its children run.</summary>
+        internal Variables.PositionalParametersScope? CallerPositionals { get; set; }
         public Variables.CommandBindings? PrefixBindings { get; init; }
         internal bool BindingsRestoredForExit { get; set; }
         public IReadOnlySet<BindingName> PrefixNames => PrefixBindings?.PrefixNames ?? NoPrefixNames;
@@ -4903,6 +4925,7 @@ public sealed partial class Evaluation : IFileTester
             return new FunctionContext(FunctionName, Locals.Fork(variables, enclosing?.Locals, scriptPrefixes ?? callPrefixes), enclosing)
             {
                 PrefixBindings = callPrefixes,
+                CallerPositionals = CallerPositionals,
                 SavedErrexit = SavedErrexit
             };
         }
@@ -4935,7 +4958,7 @@ public sealed partial class Evaluation : IFileTester
         public int LoopDepth { get; init; } = loopDepth;
 
         public FunctionContext? FunctionContext { get; } = functionContext;
-        public ReturnTargetKind ReturnTarget { get; } = returnTarget;
+        public ReturnTargetKind ReturnTarget { get; init; } = returnTarget;
         public GlobalPrefixBindings? GlobalPrefixes { get; init; }
         public SourceCallerFrame? CallerSource { get; init; }
         public bool ErrexitIgnored { get; init; }

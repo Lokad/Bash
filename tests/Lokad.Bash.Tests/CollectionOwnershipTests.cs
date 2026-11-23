@@ -282,7 +282,7 @@ public sealed class CollectionOwnershipTests
             var child = Fork(memory);
             var traps = Assert.IsType<ShellTraps>(child.Traps);
             Assert.True(traps.ListedHandlers[TrapCondition.Exit].Bytes.Equals(action.Bytes));
-            Assert.False(traps.TryBeginExit(0, out _));
+            Assert.False(traps.TryBeginExit(0, useInheritedPipelineAction: false, out _));
             traps.DiscardInheritedListing();
             Assert.True(traps.ListedHandlers[TrapCondition.Interrupt].IsEmpty);
             Assert.True(Assert.IsType<ShellTraps>(parent.Traps).ListedHandlers.ContainsKey(TrapCondition.Exit));

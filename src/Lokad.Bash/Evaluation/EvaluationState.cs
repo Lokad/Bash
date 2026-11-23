@@ -19,8 +19,8 @@ internal enum ExpansionFailureKind
     WordSyntax,
     /// <summary>A reached parenthesized substitution has invalid rendered syntax.</summary>
     CommandSubstitutionSyntax,
-    /// <summary>A reached initializer fails when its rendered elements are read as an array list.</summary>
-    CompoundInitializerSyntax,
+    /// <summary>Rereading rendered capture or array syntax terminates the current reader.</summary>
+    ReaderSyntax,
     Parameter,
     /// <summary>A failed indirect name read or write discards the current command unit.</summary>
     IndirectParameter,
@@ -45,6 +45,9 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
 {
     // A local option scope may be restored before the loaded script reader handles the failure.
     internal bool CanResumeUntestedUnit { get; init; }
+
+    // Argument expansion in a direct pipeline stage precedes the child boundary that resets EXIT.
+    internal bool UseInheritedPipelineExitAction { get; init; }
 }
 
 [Flags]

@@ -65,8 +65,8 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Eval and source use a command-unit boundary even in a child shell.</summary>
     internal bool InNestedCommandUnits { get; init; }
 
-    /// <summary>An inline subshell inherits the loaded reader's syntax failure status.</summary>
-    internal bool InheritsLoadedSyntaxStatus { get; init; }
+    /// <summary>Inherited syntax status and the function scope active when the reader entered.</summary>
+    internal int? LoadedSyntaxFunctionDepth { get; init; }
 
     /// <summary>Records whether a loaded reader was invoked as a tested command.</summary>
     internal bool LoadedReaderIgnoresErrexit { get; init; }

@@ -32,23 +32,36 @@ public sealed partial class Evaluation
         using var positionalParametersScope = scope.Variables.EnterPositionalParametersScope(
             arguments,
             PositionalParametersRestorePolicy.Always);
+        functionContext.CallerPositionals = positionalParametersScope;
+        var functionScope = scope with
+        {
+            // A function can only break/continue its own loops, not the caller's loops.
+            Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function)
+            {
+                GlobalPrefixes = scope.Context.GlobalPrefixes,
+                CallerSource = scope.Context.CallerSource,
+                ErrexitIgnored = scope.Context.ErrexitIgnored,
+                SourceMemory = function.SourceMemory,
+                Coordinates = function.Coordinates
+            }
+        };
         EvaluationResult functionResult;
         var preserveExitOptions = false;
         try
         {
-            functionResult = await EvaluateCommandAsync(
-                    functionDefinition.Body,
-                    // A function can only break/continue its own loops, not the caller's loops.
-                    scope with { Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function)
-                    {
-                        GlobalPrefixes = scope.Context.GlobalPrefixes,
-                        CallerSource = scope.Context.CallerSource,
-                        ErrexitIgnored = scope.Context.ErrexitIgnored,
-                        SourceMemory = function.SourceMemory,
-                        Coordinates = function.Coordinates
-                    } },
-                    negated: false)
+            functionResult = await EvaluateCommandAsync(functionDefinition.Body, functionScope, negated: false)
                 .ConfigureAwait(false);
+
+            if (functionResult.Flow == FlowControlKind.Exit && IsDirectPipelineStageScope(scope)
+                && _state.Traps?.HasPendingExitAction == true
+                && _state.FatalExpansion is { Kind: ExpansionFailureKind.ReaderSyntax })
+            {
+                // A child action installed by the function sees its arguments after the return target unwinds.
+                var exitScope = functionScope with { Context = functionScope.Context with { ReturnTarget = scope.Context.ReturnTarget } };
+                functionResult = await RunExitTrapAsync(exitScope, functionResult).ConfigureAwait(false);
+                _state.FatalExpansion = null;
+                _state.TryConsumeExpansionError(out _);
+            }
 
             // A terminating exit or errexit leaves the active options visible to EXIT.
             // Control-operand and expansion errors restore local options as they unwind.

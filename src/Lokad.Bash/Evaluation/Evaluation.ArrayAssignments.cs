@@ -204,9 +204,11 @@ public sealed partial class Evaluation
         if (Parser.ReadCompoundInitializerFailure(source, workspace, out var line) is not { } failure)
             return true;
 
-        var loadedStatus = scope.InNestedCommandUnits || scope.InheritsLoadedSyntaxStatus || PipelineInheritsLoadedUnitStatus;
-        var status = loadedStatus ? 1 : 2;
-        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CompoundInitializerSyntax, status));
+        var status = ReaderSyntaxExitCode(scope);
+        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.ReaderSyntax, status)
+        {
+            UseInheritedPipelineExitAction = UsesInheritedPipelineExitAction(scope)
+        });
         _state.LastExitCode = status;
         if (failure.UnexpectedToken is { } token)
             await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ArrayAssignment,

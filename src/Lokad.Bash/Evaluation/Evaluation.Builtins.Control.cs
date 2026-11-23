@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
@@ -47,8 +48,16 @@ public sealed partial class Evaluation
 
         if (scope.Context.ReturnTarget == ReturnTargetKind.None)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("return"),
-                ShellValue.FromText("can only `return' from a function or sourced script")).ConfigureAwait(false);
+            var name = ShellValue.FromText("return");
+            var message = ShellValue.FromText("can only `return' from a function or sourced script");
+            if (_state.Traps?.ExitTrapStatus.HasValue != true)
+                await ReportExpansionDiagnosticAsync(name, message).ConfigureAwait(false);
+            else if (_builtinDiagnostics is not { Result.CanAcceptMore: false })
+            {
+                var prefix = new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine,
+                    Math.Max(1, scope.Context.Coordinates.Line));
+                await WriteDiagnosticAsync(GetStdErrDescriptor(), [name], [message], _builtinDiagnostics, prefix).ConfigureAwait(false);
+            }
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
 

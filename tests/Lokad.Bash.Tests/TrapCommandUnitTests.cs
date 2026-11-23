@@ -10,6 +10,85 @@ namespace Lokad.Bash.Tests;
 
 public sealed class TrapCommandUnitTests
 {
+    private const string RejectedNestedCapture =
+        "value=\"$(printf latent; printf \"%s\" \"$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\")\"";
+    private const string PrintExitFrame = "printf \"trap:%s:<%s>:<%s>\\n\" \"$?\" \"$1\" \"${x-}\"";
+    private const string PrintStages = "\nprintf \"stages:%s\\n\" \"${PIPESTATUS[*]}\"\n";
+
+    [Theory]
+    [InlineData(false, false, 1, "trap:257:<inner>:<>\n")]
+    [InlineData(true, false, 1, "trap:257:<outer>:<>\n")]
+    [InlineData(false, true, 2, "trap:2:<inner>:<>\n")]
+    [InlineData(true, true, 2, "trap:2:<outer>:<>\n")]
+    public async Task LoadedNestedCaptureSyntaxPassesTheReaderStatusToExit(
+        bool eval, bool errexit, int expectedStatus, string expectedOutput)
+    {
+        var body = (errexit ? "set -e\n" : "") + "if " + RejectedNestedCapture + "; then printf unreached; fi\n";
+        var reader = eval ? "eval '" + body + "'\n" : "source ./fixture inner\n";
+        var script = "trap '" + PrintExitFrame + "' EXIT\nset -- outer\n" + reader + "printf unreached\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (!eval)
+                host.AddFile("/fixture", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(expectedStatus, status);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Contains("syntax error near unexpected token `printf'", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("{assignment} | cat", "", 0, "trap:2:<outer>:<global>\nstages:2 0\ntrap:0:<outer>:<global>\n")]
+    [InlineData("{assignment} | cat", "; exit 7", 7, "trap:2:<outer>:<global>\nstages:7 0\ntrap:0:<outer>:<global>\n")]
+    [InlineData("{ {assignment}; } | cat", "", 0, "stages:2 0\ntrap:0:<outer>:<global>\n")]
+    public async Task RejectedCaptureRunsInheritedExitOnlyDuringSimpleStageExpansion(
+        string form, string actionSuffix, int status, string output)
+    {
+        var script = "trap '" + PrintExitFrame + actionSuffix + "' EXIT\nset -- outer\nx=global\n"
+            + form.Replace("{assignment}", RejectedNestedCapture) + PrintStages;
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Contains("syntax error near unexpected token `printf'", result.StdErr);
+    }
+
+    [Fact]
+    public async Task InheritedStageExitRestoresTheLoadedReadersFunctionFrame()
+    {
+        var script = "trap '" + PrintExitFrame + "' EXIT\nset -- outer\nx=global\n"
+            + "f() { local x=local; source ./fixture sourced; }\nf fun\n";
+        var body = "g() { local x=local-inner; " + RejectedNestedCapture + " | cat" + PrintStages + "}\ng inner-fun\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("trap:257:<sourced>:<local>\nstages:1 0\ntrap:0:<outer>:<global>\n", host.StandardOutput.TextContent);
+            Assert.Contains("./fixture: command substitution: line", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task StageFunctionExitKeepsArgumentsAfterLosingItsReturnTarget()
+    {
+        var script = "trap '" + PrintExitFrame + "' EXIT\nset -- outer\nx=global\n"
+            + "f() { trap '" + PrintExitFrame + "; return 7' EXIT; " + RejectedNestedCapture + "; }\nf fun | cat" + PrintStages;
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("trap:2:<fun>:<global>\nstages:2 0\ntrap:0:<outer>:<global>\n", result.StdOut);
+        Assert.EndsWith("line 1: return: can only `return' from a function or sourced script\n", result.StdErr);
+    }
+
     [Theory]
     [InlineData("trap", 0, "")]
     [InlineData("trap -p EXIT", 0, "")]
