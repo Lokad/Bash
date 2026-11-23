@@ -167,7 +167,48 @@ public sealed class PrefixScopeOwnershipTests
         AssertBorrowedAggregateExpansionAsync(kind, "${array[@]:" + bounds + "}",
             ShellValue.FromBytes(new byte[] { 0xff }));
 
-    private static async Task AssertBorrowedAggregateExpansionAsync(ArrayKind kind, string expression, ShellValue expected)
+    [Theory]
+    [InlineData(ArrayKind.Indexed, " -((2-1)):8>>3")]
+    [InlineData(ArrayKind.Associative, "0+0:1?2#1:2")]
+    public Task ComputedArraySliceBorrowsAcrossReferenceFreeBounds(ArrayKind kind, string bounds) =>
+        AssertBorrowedAggregateExpansionAsync(kind, "${array[@]:" + bounds + "}",
+            ShellValue.FromBytes(new byte[] { 0xff }));
+
+    [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
+    public Task OutOfRangeArraySliceSkipsLengthAndItsDetachment(ArrayKind kind) =>
+        AssertBorrowedAggregateExpansionAsync(kind, "${array[@]:2048+1:$((side=1))}", expected: null);
+
+    [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
+    public async Task ComputedSliceLengthWritesToItsSelectedCommandArray(ArrayKind kind)
+    {
+        var caller = Variables.CreateEmpty();
+        var initial = ShellValue.FromText("1");
+        ShellValue[] entries = kind == ArrayKind.Indexed ? [initial] : [ShellValue.FromText("0"), initial];
+        Assert.True(caller.TryAssignArray("array", entries, kind));
+        var governor = new MemoryGovernor(64 * 1024);
+        var evaluation = new Eval(Parser.Parse(""), EvaluationDescriptorSetup.Standard,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        try
+        {
+            var command = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);
+            var scope = new ScopedEvaluation(evaluation, command, default);
+            var word = new Word([WordPart.FromText(WordPartKind.DoubleQuoted, "${array[@]:0+0:$((array[0]=23,1))}")]);
+
+            var fields = await WordExpansion.ExpandToWordsAsync(word, scope);
+
+            Assert.Equal(ShellValue.FromText("23"), Assert.Single(fields).ToValue(evaluation.Memory));
+            Assert.True(caller.TryGetExpansionValue("array", out var retained));
+            Assert.Equal(initial, retained);
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private static async Task AssertBorrowedAggregateExpansionAsync(ArrayKind kind, string expression, ShellValue? expected)
     {
         const int Count = 1024;
         var caller = Variables.CreateEmpty();
@@ -187,7 +228,11 @@ public sealed class PrefixScopeOwnershipTests
 
             var fields = await WordExpansion.ExpandToWordsAsync(word, scope);
 
-            Assert.Equal(expected, Assert.Single(fields).ToValue(evaluation.Memory));
+            if (expected is { } valueExpected)
+                Assert.Equal(valueExpected, Assert.Single(fields).ToValue(evaluation.Memory));
+            else
+                Assert.Empty(fields);
+            Assert.False(variables.HasBinding("side"));
             Assert.Equal(Count, caller.GetArrayMetadata("array")?.Count);
         }
         finally { evaluation.Memory.Finish(retainVariables: false); }

@@ -71,6 +71,25 @@ public static partial class ArithmeticEvaluation
 
     private static bool IsArithmeticBlank(byte value) => value is (byte)' ' or (byte)'\t' or (byte)'\n';
 
+    /// <summary>Checks that an operand has only numeric and operator tokens, with no shell expansions or bindings.</summary>
+    internal static bool IsReferenceFree(ReadOnlySpan<byte> expression, CancellationToken cancellationToken)
+    {
+        while (!expression.IsEmpty)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsArithmeticBlank(expression[0]))
+            {
+                expression = expression[1..];
+                continue;
+            }
+            var token = ReadTokenShape(expression, cancellationToken);
+            if (token.Kind is not (ArithmeticTokenKind.Number or ArithmeticTokenKind.Operator))
+                return false;
+            expression = expression[token.Length..];
+        }
+        return true;
+    }
+
     private static BinaryToken GetBinaryToken(ReadOnlySpan<byte> token, ArithmeticTokenKind kind) =>
         kind == ArithmeticTokenKind.Operator ? token switch
         {

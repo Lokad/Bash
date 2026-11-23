@@ -174,9 +174,12 @@ return immutable bytes or metadata, and writes take independent mutable backing
 before publication. Aggregate values and keys can use the borrowed array when
 the expansion consumes it before running another operand. An operator that
 reads it after operand effects keeps the command-owned source. Array slices
-with validated integer-literal bounds read from the borrowed source. In-process
-installation admits the saved caller set before publishing any prefix. It
-moves original slots to the saved store and consumes the prepared prefix slots.
+with validated integer-literal bounds read from the borrowed source. A direct
+computed slice borrows through numeric expressions that need no expansion or
+binding. It detaches before the first reached bound that may consult bindings or
+expand shell syntax. In-process installation admits the saved caller set before
+publishing any prefix. It moves original slots to the saved store and consumes
+the prepared prefix slots.
 Retained outputs admit independent copies before staging, reusing
 the surrounding command's capacity for later replacements. Valueless declaration
 lookup admits its prefix selection buffer in command workspace as it grows.

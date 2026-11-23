@@ -42,6 +42,9 @@ public sealed partial class Variables
     private bool TryGetBinding(BindingName name, [NotNullWhen(true)] out VariableSlot? slot) =>
         TryGetBinding(name, detachBorrowed: true, out slot);
 
+    /// <summary>Checks whether an existing visible binding is supplied by the caller's store.</summary>
+    internal bool IsBorrowedBinding(BindingName name) => _commandSource != null && !_bindings.ContainsKey(name);
+
     // A read-only projection can follow the visible owner without taking a mutable copy.
     private bool TryGetBinding(BindingName name, bool detachBorrowed, [NotNullWhen(true)] out VariableSlot? slot)
     {

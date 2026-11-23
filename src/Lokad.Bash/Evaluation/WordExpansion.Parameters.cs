@@ -20,6 +20,8 @@ internal static partial class WordExpansion
         internal sealed record Indexed(IndexedArray Array) : ParameterSource;
         internal sealed record Associative(AssociativeArray Array) : ParameterSource;
         internal sealed record LiteralSlice(ParameterSource Source, long Offset, long? Length) : ParameterSource;
+        // A direct computed slice resolves this binding at its reached bounds.
+        internal sealed record DeferredSlice(VariableBinding Binding) : ParameterSource;
         internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource
         {
             internal IEnumerable<ShellValue> ValuesFrom(long first, int count)
@@ -721,6 +723,7 @@ internal static partial class WordExpansion
                         or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset
                         or BracedParameterOperatorKind.Transform or BracedParameterOperatorKind.Substring);
                     var (array, map) = variables.SelectExpansionArray(resolved, detachBorrowed);
+                    ParameterSource.DeferredSlice? deferredSlice = null;
                     (long Offset, long? Length)? literalSliceBounds = null;
                     if (parsed.Kind == BracedParameterOperatorKind.Substring && (array?.Count ?? map?.Count) is > 0)
                     {
@@ -728,14 +731,21 @@ internal static partial class WordExpansion
                         // borrowed when both reached bounds are already integer literals.
                         literalSliceBounds = ReadLiteralSliceBounds(parsed.Word, scope.Effects.CancellationToken);
                         if (literalSliceBounds == null)
-                            (array, map) = variables.SelectExpansionArray(resolved, detachBorrowed: true);
+                        {
+                            // Indirection can evaluate more selectors before returning the final operand.
+                            if (parsed.Modifier == ParameterModifier.Indirect)
+                                (array, map) = variables.SelectExpansionArray(resolved, detachBorrowed: true);
+                            else if (selected is { } sliceBinding && variables.IsBorrowedBinding(resolved))
+                                deferredSlice = new ParameterSource.DeferredSlice(sliceBinding);
+                        }
                     }
                     var scalar = ShellValue.Empty;
                     var count = array?.Count ?? map?.Count ?? (variables.TryGetScalar(resolved, out scalar) ? 1 : 0);
 
                     if (modifier == ParameterModifier.None)
                     {
-                        ParameterSource? source = array != null ? new ParameterSource.Indexed(array)
+                        ParameterSource? source = deferredSlice != null ? deferredSlice
+                            : array != null ? new ParameterSource.Indexed(array)
                             : map != null ? new ParameterSource.Associative(map) : null;
                         if (source != null && literalSliceBounds is { } bounds)
                             source = new ParameterSource.LiteralSlice(source, bounds.Offset, bounds.Length);
@@ -1130,6 +1140,13 @@ internal static partial class WordExpansion
             }
 
             var source = parameter.RangeSource;
+            VariableBinding? borrowedBinding = null;
+            if (source is ParameterSource.DeferredSlice deferred)
+            {
+                borrowedBinding = deferred.Binding;
+                source = null;
+            }
+            var cancellationToken = scope.Effects.CancellationToken;
             var separator = -1;
             long start;
             long? length = null;
@@ -1157,13 +1174,16 @@ internal static partial class WordExpansion
                     return;
                 }
 
-                var offset = await ExpandArithmeticOperandAsync(
-                    separator < 0 ? expression : expression[..separator], scope, arithmeticPurpose, name).ConfigureAwait(false);
+                var offsetSource = separator < 0 ? expression : expression[..separator];
+                DetachForBound(offsetSource, cancellationToken, ref borrowedBinding, ref source);
+                var offset = await ExpandArithmeticOperandAsync(offsetSource, scope, arithmeticPurpose, name).ConfigureAwait(false);
                 if (offset is not { } selectedOffset)
                     return;
                 start = selectedOffset;
             }
 
+            if (source == null && borrowedBinding is { } selectedBinding)
+                source = ReadSliceSource(selectedBinding, detachBorrowed: false);
             var value = source == null ? parameter.Value.Bytes : default;
             var scalarStart = 0;
             if (source == null)
@@ -1201,7 +1221,9 @@ internal static partial class WordExpansion
 
             if (separator >= 0)
             {
-                length = await ExpandArithmeticOperandAsync(expression[(separator + 1)..], scope, arithmeticPurpose, name)
+                var lengthSource = expression[(separator + 1)..];
+                DetachForBound(lengthSource, cancellationToken, ref borrowedBinding, ref source);
+                length = await ExpandArithmeticOperandAsync(lengthSource, scope, arithmeticPurpose, name)
                     .ConfigureAwait(false);
                 if (length == null)
                     return;
@@ -1252,6 +1274,23 @@ internal static partial class WordExpansion
             }
             Emit([ShellValue.FromBytes(selected)]);
 
+            static void DetachForBound(ShellSource operand, CancellationToken cancellationToken,
+                ref VariableBinding? borrowed, ref ParameterSource? source)
+            {
+                if (borrowed is not { } binding || ArithmeticEvaluation.IsReferenceFree(operand.AsSpan(), cancellationToken))
+                    return;
+                source = ReadSliceSource(binding, detachBorrowed: true);
+                borrowed = null;
+            }
+
+            static ParameterSource ReadSliceSource(VariableBinding binding, bool detachBorrowed)
+            {
+                var (indexed, associative) = binding.Owner.SelectExpansionArray(binding.Name, detachBorrowed);
+                return indexed != null ? new ParameterSource.Indexed(indexed) : associative != null
+                    ? new ParameterSource.Associative(associative)
+                    : throw new InvalidOperationException("The borrowed slice no longer has array backing.");
+            }
+
             int? FindScalarBoundary(ReadOnlySpan<byte> bytes, long offset)
             {
                 if (offset < -bytes.Length || offset > bytes.Length)
@@ -1262,7 +1301,6 @@ internal static partial class WordExpansion
                     return reached == offset ? size : null;
                 }
 
-                var cancellationToken = scope.Effects.CancellationToken;
                 var position = bytes.Length;
                 for (var remaining = -(int)offset; remaining > 0; remaining--)
                 {
