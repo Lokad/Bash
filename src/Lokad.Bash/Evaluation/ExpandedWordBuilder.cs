@@ -46,6 +46,7 @@ internal enum ExpansionPurpose
     CasePattern,
     ParameterReplacement,
     Assignment,
+    AssociativeCompound,
     IndexedCompound,
     IndexedCompoundOperand,
     CompoundPrefix,

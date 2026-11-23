@@ -47,7 +47,7 @@ internal static partial class WordExpansion
         byte transform, ParameterValue parameter, ScopedEvaluation scope, ExpandedWordBuilder output,
         bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit)
     {
-        var assignmentContext = output.Purpose is ExpansionPurpose.Assignment
+        var assignmentContext = output.Purpose is ExpansionPurpose.Assignment or ExpansionPurpose.AssociativeCompound
             or ExpansionPurpose.IndexedCompound or ExpansionPurpose.IndexedCompoundOperand;
         var scalarContext = output.Purpose == ExpansionPurpose.Scalar || assignmentContext;
         var hereDocument = quoteContext == ExpansionQuoteContext.HereDocument;
@@ -135,7 +135,11 @@ internal static partial class WordExpansion
 
         void EmitValues(IEnumerable<ShellValue> fields)
         {
-            if (output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
+            var fieldJoin = parameter.FieldJoin;
+            if (fieldJoin == ParameterFieldJoin.Default && !hereDocument && output.Purpose == ExpansionPurpose.Assignment
+                && kind == VariableReferenceKind.At)
+                fieldJoin = ParameterFieldJoin.IfsOrSpace;
+            if (output.TryAppendSelectedFields(fieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
                 return;
             if (hereDocument && kind is VariableReferenceKind.At or VariableReferenceKind.Star)
                 output.AppendSeparatedFields(fields, SpaceSeparator, allowWordSplitting, globQuoted);

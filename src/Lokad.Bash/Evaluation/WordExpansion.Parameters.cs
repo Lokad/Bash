@@ -202,9 +202,14 @@ internal static partial class WordExpansion
                             .ConfigureAwait(false);
                         return;
                     }
+                    var assignmentPurpose = output.Purpose switch
+                    {
+                        ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource => output.Purpose,
+                        _ when quoteContext == ExpansionQuoteContext.HereDocument => ExpansionPurpose.Scalar,
+                        _ => ExpansionPurpose.Assignment,
+                    };
                     var operand = await ExpandOperatorWordAsync(
-                            parsed.Word, scanContext, scope, quoteContext,
-                            output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource ? output.Purpose : ExpansionPurpose.Scalar,
+                            parsed.Word, scanContext, scope, quoteContext, assignmentPurpose,
                             ImplicitEmptyPolicy.Preserve, TildeExpansion.AssignDefault,
                             quoteContext == ExpansionQuoteContext.HereDocument ? output : null)
                         .ConfigureAwait(false);
@@ -388,7 +393,7 @@ internal static partial class WordExpansion
             var emptyPolicy = purpose switch
             {
                 ExpansionPurpose.Scalar when output.EmptyPolicy == ImplicitEmptyPolicy.PreserveAggregate => output.EmptyPolicy,
-                ExpansionPurpose.Scalar or ExpansionPurpose.CasePattern or ExpansionPurpose.Assignment
+                ExpansionPurpose.Scalar or ExpansionPurpose.CasePattern or ExpansionPurpose.Assignment or ExpansionPurpose.AssociativeCompound
                     or ExpansionPurpose.IndexedCompoundOperand or ExpansionPurpose.Arithmetic
                     or ExpansionPurpose.ArithmeticSource => ImplicitEmptyPolicy.Preserve,
                 _ => ImplicitEmptyPolicy.Remove,
@@ -856,7 +861,13 @@ internal static partial class WordExpansion
                 output.AppendIntegerExpansion(parameter.Value, allowWordSplitting, globQuoted);
                 return;
             }
-            if (output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
+            var fieldJoin = parameter.FieldJoin;
+            if (fieldJoin == ParameterFieldJoin.Default && output.Purpose == ExpansionPurpose.Assignment
+                && quoteContext != ExpansionQuoteContext.HereDocument
+                && parameter.Kind == VariableReferenceKind.At
+                && (projected || parameter.RangeSource is ParameterSource.Keys && quoteContext == ExpansionQuoteContext.DoubleQuoted))
+                fieldJoin = ParameterFieldJoin.IfsOrSpace;
+            if (output.TryAppendSelectedFields(fieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
                 return;
             if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
             {

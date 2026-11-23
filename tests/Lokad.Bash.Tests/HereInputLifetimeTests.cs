@@ -52,6 +52,53 @@ public sealed class HereInputLifetimeTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("IFS=:", "\"${!a[@]}\"", "2:10:50")]
+    [InlineData("IFS=:", "${!a[@]}", "2 10 50")]
+    [InlineData("IFS=:", "\"${a[@]}\"", "wide text  last:value")]
+    [InlineData("IFS=:", "\"${a[@]@U}\"", "WIDE TEXT::LAST:VALUE")]
+    [InlineData("IFS=:", "${a[@]@U}", "WIDE TEXT::LAST:VALUE")]
+    [InlineData("IFS=:", "\"${a[@]//text/line}\"", "wide line::last:value")]
+    [InlineData("IFS=:", "\"${a[@]#wide }\"", "text::last:value")]
+    [InlineData("IFS=", "\"${a[@]@k}\"", "2 wide text 10  50 last:value")]
+    [InlineData("IFS=", "\"${a[@]@a}\"", "a a a")]
+    [InlineData("IFS=", "\"${a[*]@k}\"", "2wide text1050last:value")]
+    [InlineData("IFS=", "\"${a[@]@U}${IFS:=:}x\"", "WIDE TEXT  LAST:VALUE:x")]
+    public async Task HereStringsAndAssignmentsJoinSelectedAggregatesAtExpansionTime(string ifs, string value, string expected)
+    {
+        var source = $$"""
+            a=([2]='wide text' [10]='' [50]='last:value')
+            {{ifs}}
+            assigned={{value}}
+            printf '%s\n' "$assigned"
+            {{ifs}}
+            cat <<< {{value}}
+            """;
+        await using var host = new TestHost();
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected + "\n" + expected + "\n", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("""printf '<%s>' "${dst:="${a[@]@U}"}" "$dst" """, "<WIDE TEXT::LAST:VALUE><WIDE TEXT::LAST:VALUE>")]
+    [InlineData("""declare -A b=([key]="${a[@]@U}"); printf '<%s>' "${b[key]}" """, "<WIDE TEXT  LAST:VALUE>")]
+    [InlineData("cat <<EOF\n${a[@]@U}\nEOF", "WIDE TEXT  LAST:VALUE\n")]
+    public async Task TransformedAggregatesUseTheSelectedOperandContext(string command, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("a=([2]='wide text' [10]='' [50]='last:value'); IFS=:\n" + command,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     public static IEnumerable<object[]> BufferedInputs()
     {
         foreach (var count in new[] { 1000, 70000 })

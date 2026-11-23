@@ -25,7 +25,7 @@ internal static partial class WordExpansion
 
     internal static Task<ShellValue> ExpandCompoundValueAsync(Word word, ScopedEvaluation scope, ArrayKind kind) =>
         ExpandUnsplitValueAsync(word, scope,
-            kind == ArrayKind.Indexed ? ExpansionPurpose.IndexedCompound : ExpansionPurpose.Assignment,
+            kind == ArrayKind.Indexed ? ExpansionPurpose.IndexedCompound : ExpansionPurpose.AssociativeCompound,
             kind == ArrayKind.Indexed ? TildeExpansion.Assignment : TildeExpansion.None);
 
     internal static Task<ShellValue> ExpandSubscriptAsync(
@@ -86,7 +86,7 @@ internal static partial class WordExpansion
         var braceExpanded = ExpandBraceWords(word, scope);
         var results = new List<ExpandedWord>();
         // Scalar consumers join fields per alternative before selecting their value.
-        var joinFields = purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment;
+        var joinFields = purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment or ExpansionPurpose.AssociativeCompound;
 
         foreach (var expansion in braceExpanded)
         {

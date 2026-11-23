@@ -362,7 +362,13 @@ when the bracketed expansion is reached. Both forms preserve a quoted bracket in
 an associative array key, including `a["]"]` in an unquoted arithmetic expansion.
 Both pinned GNU builds report an arithmetic error for that unquoted key.
 Here-strings expand one scalar operand without brace generation, field splitting
-or pathname expansion, then append LF. In unquoted here-documents, backslash escapes
+or pathname expansion, then append LF. In scalar assignments, assignment defaults
+and here-strings, quoted array key expansions such as `"${!a[@]}"` and per-field
+transformations of array or positional `@` fields join on the first IFS character.
+Unset or empty IFS selects spaces. Inspection fields such as `[@]@k` and `[@]@a`
+use the same separator in those contexts. Associative compound initializers use
+spaces for the per-field transformations, matching the pinned Linux build.
+In unquoted here-documents, backslash escapes
 dollar, backtick, backslash and LF; double quotes remain ordinary data. Quoting the
 delimiter disables body expansion.
 Direct positional star expansions, indirect array key stars and aggregate slices
