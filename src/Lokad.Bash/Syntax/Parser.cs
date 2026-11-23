@@ -461,8 +461,17 @@ public static class Parser
                 return ShellScanStatus.Incomplete;
             }
 
+            if (closing.Kind == TokenKind.EndOfInput)
+                return ShellScanStatus.Incomplete;
             if (closing.Kind != TokenKind.CloseParen)
-                return closing.Kind == TokenKind.EndOfInput ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid;
+            {
+                error = new ParserFailure(new SyntaxError("Unexpected token after command substitution body.",
+                    closing.Source.Start.Value), ParserFailureKind.SubstitutionGrammar)
+                {
+                    UnexpectedToken = tokenizer.GetUnexpectedSyntax(closing)
+                };
+                return ShellScanStatus.Invalid;
+            }
             tokenizer.NextTokenCore();
             end = closing.Source.Start.Value;
             return ShellScanStatus.Complete;

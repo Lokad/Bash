@@ -148,11 +148,16 @@ internal sealed class Tokenizer
             RecordError(error);
             return;
         }
-        var (start, end) = (token.Source.Start.Value, token.Source.End.Value);
         RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar)
         {
-            UnexpectedToken = new UnexpectedSyntax(_input.Slice(start, end - start), _input.GetPhysicalLine(end, out _), end)
+            UnexpectedToken = GetUnexpectedSyntax(token)
         });
+    }
+
+    internal UnexpectedSyntax GetUnexpectedSyntax(Token token)
+    {
+        var (start, end) = (token.Source.Start.Value, token.Source.End.Value);
+        return new UnexpectedSyntax(_input.Slice(start, end - start), _input.GetPhysicalLine(end, out _), end);
     }
 
     internal void RecordFailure(ParserFailure failure)

@@ -343,8 +343,9 @@ in complete units when reached. A failing child unit reports its diagnostic and
 leaves any earlier complete units' output and effects available. A skipped
 capture stays inert.
 A diagnosed command substitution grammar error in `source` or `eval` can
-terminate the invoking shell even in a tested command. A malformed arithmetic
-`for` header in an unquoted substitution terminates with status 2. With an
+terminate the invoking shell even in a tested command. A token following the
+body where the closer is required is reported with its reader line. A malformed
+arithmetic `for` header in an unquoted substitution terminates with status 2. With an
 enclosing double quote, the builtin returns the status of any complete command
 prefix in that unit, or 2 if the unit has no complete prefix. A compound array
 assignment with that quoted error returns 1. For errors such as a pipeline

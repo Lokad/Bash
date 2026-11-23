@@ -200,6 +200,37 @@ public sealed class SourceCommandUnitTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false, "./fixture: line 4: ")]
+    [InlineData(true, "eval: line 11: ")]
+    public async Task LoadedCaptureReportsTheTokenAfterACompoundBody(bool eval, string prefix)
+    {
+        const string Definition = "f(){ value=\"$({ cat <<END\nbody\nEND\n } printf 'wrong')\"; printf 'inside'; }\n";
+        var script = (eval ? "payload=$(cat <<'PAYLOAD'\n" + Definition + "PAYLOAD\n)\neval \"$payload\""
+            : "source ./fixture") + "\nprintf 'after'\n";
+
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            if (!eval)
+                host.AddFile("/fixture", Definition);
+            var result = prepared ? await new Engine().RunAsync(new Eval(Parser.Parse(script)),
+                host, owner, CancellationToken.None) : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Empty(host.StandardOutput.TextContent);
+            Assert.Equal(prefix + "syntax error near unexpected token `printf'\n"
+                + prefix + "` } printf 'wrong')\"; printf 'inside'; }'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            if (!prepared)
+                Assert.Equal(0, governor.ReservedBytes);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
     [Fact]
     public async Task EvalInASourceFileReportsItsOriginAndStillReturnsToBothCallers()
     {
