@@ -342,7 +342,8 @@ public sealed partial class Evaluation
                 {
                     var warningPrefix = failedUnit?.Failure is { Kind: ParserFailureKind.RedirectionOperand, UnexpectedToken: not null }
                         ? new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, diagnosticLine) : default;
-                    await ReportHereDocumentWarningsAsync(warnings, lineOffset, warningPrefix).ConfigureAwait(false);
+                    var adjacentCapture = kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution;
+                    await ReportHereDocumentWarningsAsync(warnings, lineOffset, warningPrefix, adjacentCapture, path).ConfigureAwait(false);
                 }
                 if (readDiagnostics.CompoundItems is { } items
                     && await ReportCompoundItemReadDiagnosticsAsync(items, scope, lineOffset).ConfigureAwait(false) is { } readFailure)

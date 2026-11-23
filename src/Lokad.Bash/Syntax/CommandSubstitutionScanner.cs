@@ -152,9 +152,14 @@ internal static class CommandSubstitutionScanner
             if (status == ShellScanStatus.Complete)
             {
                 var payload = text.Slice(payloadStart, endIndex - payloadStart);
-                substitution = parsed == null ? new CommandSubstitutionSyntax.Deferred(payload)
-                    : new CommandSubstitutionSyntax.Parsed(payload, parsed, failure, preserveAdjacentOpening)
-                        { AdjacentSpelling = adjacentSpelling };
+                substitution = parsed switch
+                {
+                    null when preserveAdjacentOpening =>
+                        new CommandSubstitutionSyntax.AdjacentSubshell(ShellSourceCursor.RemoveLineContinuations(context, payload)),
+                    null => new CommandSubstitutionSyntax.Deferred(payload),
+                    _ => new CommandSubstitutionSyntax.Parsed(payload, parsed, failure, preserveAdjacentOpening)
+                        { AdjacentSpelling = adjacentSpelling }
+                };
             }
             else if (status == ShellScanStatus.Incomplete && error is { CaptureEndOfInput: not null })
                 error = error with { Error = error.Error with { Offset = startIndex } };

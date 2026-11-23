@@ -4094,14 +4094,14 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private Task ReportHereDocumentWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, int offset) =>
-        ReportHereDocumentWarningsAsync(warnings, offset, default);
+        ReportHereDocumentWarningsAsync(warnings, offset, default, positionWarnings: false, path: null);
 
     private Task ReportCaptureHereDocumentWarningsAsync(CaptureHereDocumentWarnings captured, string? path, int offset, int line) =>
         ReportHereDocumentWarningsAsync(captured.Warnings, offset + captured.LineOffset,
-            new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, Math.Max(1, line)));
+            new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, Math.Max(1, line)), positionWarnings: false, path: null);
 
     private async Task ReportHereDocumentWarningsAsync(
-        IReadOnlyList<HereDocumentWarning> warnings, int offset, SyntaxDiagnosticPrefix prefix)
+        IReadOnlyList<HereDocumentWarning> warnings, int offset, SyntaxDiagnosticPrefix prefix, bool positionWarnings, string? path)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
@@ -4110,17 +4110,21 @@ public sealed partial class Evaluation : IFileTester
         foreach (var warning in warnings)
         {
             CheckCancellation();
+            var warningLine = warning.Line + offset;
+            var reachedPrefix = positionWarnings
+                ? new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, warningLine)
+                : prefix;
             if (warning.PendingCaptureDocuments != 0)
             {
                 await WriteDiagnosticAsync(descriptor, [HereDocumentWarningName],
                     [PendingCaptureWarningPrefix, ShellValue.FromInteger(warning.PendingCaptureDocuments),
                         warning.PendingCaptureDocuments == 1 ? PendingCaptureWarningSingular : PendingCaptureWarningPlural],
-                    scope: null, prefix).ConfigureAwait(false);
+                    scope: null, reachedPrefix).ConfigureAwait(false);
                 continue;
             }
             await WriteDiagnosticAsync(descriptor, [HereDocumentWarningName],
-                [HereDocumentWarningPrefix, ShellValue.FromInteger(warning.Line + offset), HereDocumentWarningDelimiter,
-                    warning.Delimiter.ToValue(), HereDocumentWarningClose], scope: null, prefix).ConfigureAwait(false);
+                [HereDocumentWarningPrefix, ShellValue.FromInteger(warningLine), HereDocumentWarningDelimiter,
+                    warning.Delimiter.ToValue(), HereDocumentWarningClose], scope: null, reachedPrefix).ConfigureAwait(false);
         }
     }
 

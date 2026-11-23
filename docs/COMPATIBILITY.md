@@ -413,8 +413,12 @@ If a pipeline operator or prefix still needs a command at a closing token,
 the streamed reader shows that token and its physical source line.
 A reached adjacent or backtick capture attributes token and grammar EOF
 diagnostics to the command substitution reader.
-When `)` closes a capture with documents still pending, the script reader
-warns and collects their bodies from the next unread line. The remainder of
+An adjacent `(` at the start of a capture preserves the payload through its
+closing parenthesis. Pending here-documents end at that boundary. Later lines
+stay with the surrounding reader. Reaching the capture reports EOF for each
+pending delimiter at the capture reader's source line.
+For a capture without that adjacent opener, `)` with documents still pending
+prompts the script reader to warn and collect their bodies from the next unread line. The remainder of
 the header still parses, and body expansion waits for the capture to execute.
 The warning belongs to the enclosing command unit, including short-circuited
 commands. Reading a function definition collects the bodies once for later calls.

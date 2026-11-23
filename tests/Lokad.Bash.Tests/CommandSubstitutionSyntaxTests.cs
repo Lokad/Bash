@@ -157,6 +157,55 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Theory]
+    [InlineData("", "<inside><body><stop>", "line 2: warning: here-document at line 2 delimited by end-of-file (wanted `STOP')\n")]
+    [InlineData("false && ", "<body><stop>", "")]
+    public async Task AdjacentCaptureLeavesPendingDocumentLinesToTheOuterReader(
+        string condition, string expectedOutput, string expectedError)
+    {
+        var source = "body(){ printf '<body>'; }; STOP(){ printf '<stop>'; }\n"
+            + condition + "printf '<%s>' \"$((printf inside); cat <<STOP)\"\nbody\nSTOP\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunAsync(source, host, prepared));
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Equal(expectedError, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task AdjacentCaptureLeavesTheRestOfItsEnclosingHereDocumentToExpansion()
+    {
+        const string source = ":\ncat <<OUTER\n$((printf inside); cat <<STOP)\nbody\nSTOP\nOUTER\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunAsync(source, host, prepared));
+            Assert.Equal("inside\nbody\nSTOP\n", host.StandardOutput.TextContent);
+            Assert.Equal("line 2: warning: here-document at line 2 delimited by end-of-file (wanted `STOP')\n",
+                host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task AdjacentCaptureWarningUsesTheSourcedLineAndReachedDescriptor()
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", ":\nprintf '<%s>' \"$(\\\n(printf inside); cat <<STOP)\"\n");
+            Assert.Equal(0, await RunAsync("source ./fixture 2>log\n", host, prepared));
+            Assert.Equal("<inside>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal("./fixture: line 2: warning: here-document at line 2 delimited by end-of-file (wanted `STOP')\n",
+                host.ReadFile("/log"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RenderedHereDocumentCanJoinPipelineArgumentsAndKeepTheirLine(bool prepared)

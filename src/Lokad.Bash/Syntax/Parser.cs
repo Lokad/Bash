@@ -320,6 +320,13 @@ public static class Parser
             var collectedAhead = false;
             if (tokenizer.HereDocuments is { HasPending: true } pending)
             {
+                if (adjacentParenthesis)
+                {
+                    // The matched pair defers its pending documents to the capture reader.
+                    // Later lines still belong to the surrounding input.
+                    preserveAdjacentOpening = true;
+                    return ShellScanStatus.Complete;
+                }
                 if (context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
                 {
                     tokenizer.ReadHereDocumentExpansionCaptureBodies(pending);
