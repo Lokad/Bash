@@ -30,4 +30,6 @@ public sealed class ParsedScript
     internal int? RenderedLineBreaks { get; set; }
     internal bool HasReadAheadHereDocuments { get; set; }
     internal bool HasNormalizedSpelling { get; init; }
+    internal bool HasConditionalSyntax { get; init; }
+    internal bool RequiresCanonicalSpelling => HasNormalizedSpelling || HasConditionalSyntax;
 }

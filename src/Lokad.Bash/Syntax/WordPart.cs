@@ -63,7 +63,6 @@ public abstract class WordPart
 public sealed class SourceWordPart : WordPart
 {
     private readonly IReadOnlyDictionary<int, ArithmeticExpansion> _arithmetic;
-    private readonly int _arithmeticOffset;
     private static readonly IReadOnlyDictionary<int, ArithmeticExpansion> NoArithmetic = new Dictionary<int, ArithmeticExpansion>();
 
     /// <summary>Brace sequences can synthesize escapes after the original word was tokenized.</summary>
@@ -71,6 +70,9 @@ public sealed class SourceWordPart : WordPart
     // The bytes still carry nested expansion operands in source form.
     internal int RenderedLineAdjustment { get; init; }
     internal ParameterSubscriptFailure ParameterSubscriptFailure { get; init; }
+    internal bool HasExpandedParameterQuoteSyntax { get; init; }
+    internal IReadOnlyList<SpellingCapture>? SpellingCaptures { get; init; }
+    internal int SourceOffset { get; }
 
     /// <summary>The selected lexical span and its operand. A missing operand fails if reached.</summary>
     internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand);
@@ -85,7 +87,7 @@ public sealed class SourceWordPart : WordPart
     {
         Source = source;
         _arithmetic = arithmetic;
-        _arithmeticOffset = offset;
+        SourceOffset = offset;
     }
 
     /// <summary>Assignment and descriptor punctuation borrow the same immutable lexical metadata.</summary>
@@ -97,21 +99,23 @@ public sealed class SourceWordPart : WordPart
             memory?.Grow(checked(32L + length));
             source = ShellSource.FromBytes(source.Bytes.ToArray());
         }
-        return new(Kind, source, _arithmetic, checked(_arithmeticOffset + start))
+        return new(Kind, source, _arithmetic, checked(SourceOffset + start))
         {
             DoubleQuote = DoubleQuote,
             IsBraceExpanded = IsBraceExpanded,
             RenderedLineAdjustment = RenderedLineAdjustment,
-            ParameterSubscriptFailure = ParameterSubscriptFailure
+            ParameterSubscriptFailure = ParameterSubscriptFailure,
+            HasExpandedParameterQuoteSyntax = HasExpandedParameterQuoteSyntax,
+            SpellingCaptures = SpellingCaptures
         };
     }
 
     internal bool TryGetArithmetic(int start, out ArithmeticExpansion expansion)
     {
-        if (_arithmetic.TryGetValue(checked(start + _arithmeticOffset), out var cached)
-            && cached.End < (long)_arithmeticOffset + Source.Length)
+        if (_arithmetic.TryGetValue(checked(start + SourceOffset), out var cached)
+            && cached.End < (long)SourceOffset + Source.Length)
         {
-            expansion = new ArithmeticExpansion(cached.End - _arithmeticOffset, cached.Operand);
+            expansion = new ArithmeticExpansion(cached.End - SourceOffset, cached.Operand);
             return true;
         }
         expansion = default;

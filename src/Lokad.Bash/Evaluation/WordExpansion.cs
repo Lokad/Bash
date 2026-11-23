@@ -238,7 +238,7 @@ internal static partial class WordExpansion
                 builder.BeginDoubleQuote();
                 do
                 {
-                    await ExpandPartAsync(word.Parts[position.Part], scope, builder, allowWordSplitting)
+                    await ExpandPartAsync(word.Parts[position.Part], word, scope, builder, allowWordSplitting)
                         .ConfigureAwait(false);
                     position = new WordPosition(position.Part + 1, 0);
                 } while (scope.CanExpand && position.Part < endPart
@@ -248,7 +248,7 @@ internal static partial class WordExpansion
                 continue;
             }
             else
-                await ExpandPartAsync(part, scope, builder, allowWordSplitting).ConfigureAwait(false);
+                await ExpandPartAsync(part, word, scope, builder, allowWordSplitting).ConfigureAwait(false);
             position = new WordPosition(position.Part + 1, 0);
         }
     }
@@ -279,16 +279,22 @@ internal static partial class WordExpansion
         return ParameterSubscriptFailure.None;
     }
 
+    private static Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,
+        ScopedEvaluation scope, ShellScanContext? captures = null) =>
+        ReportParameterWordSyntaxAsync(word, segment, missingBrace, scope, captures, quoteSegment: false);
+
     private static async Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,
-        ScopedEvaluation scope, ShellScanContext? captures = null)
+        ScopedEvaluation scope, ShellScanContext? captures, bool quoteSegment)
     {
-        if (word == null || captures == null && word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted }])
+        if (word == null && !quoteSegment || captures == null && word?.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted }])
         {
             await ReportAsync(segment.ToValue()).ConfigureAwait(false);
             return;
         }
         using var source = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-        if (!FunctionDefinitionFormatter.TryAppendWordSource(word, source, scope.Effects.Memory.Budget,
+        if (word == null)
+            source.Append((byte)'"').Append(segment.AsSpan()).Append((byte)'"');
+        else if (!FunctionDefinitionFormatter.TryAppendWordSource(word, source, scope.Effects.Memory.Budget,
                 scope.Effects.CancellationToken, captures))
             throw new ByteMemoryBuilder.LimitExceededException();
         await ReportAsync(ShellValue.FromBytes(source.ToMemory())).ConfigureAwait(false);
@@ -330,6 +336,7 @@ internal static partial class WordExpansion
 
     private static async Task ExpandPartAsync(
         WordPart part,
+        Word word,
         ScopedEvaluation scope,
         ExpandedWordBuilder builder,
         bool allowWordSplitting)
@@ -343,19 +350,23 @@ internal static partial class WordExpansion
         switch (part.Kind)
         {
             case WordPartKind.DoubleQuoted:
-                if (((SourceWordPart)part).Source.Length == 0)
+                var quoted = (SourceWordPart)part;
+                if (quoted.Source.IsEmpty)
                 {
                     builder.MarkCurrentWordForEmission();
                     break;
                 }
 
                 await ExpandSegmentAsync(
-                        (SourceWordPart)part,
+                        quoted.Source,
+                        quoted,
                         scope,
                         builder,
                         allowWordSplitting: false,
                         globQuoted: true,
-                        quoteContext: ExpansionQuoteContext.DoubleQuoted)
+                        ExpansionQuoteContext.DoubleQuoted, new WordPosition(0, 0), assignment: null,
+                        originalWord: quoted.HasExpandedParameterQuoteSyntax ? word : null,
+                        inHereDocumentOperand: false, inheritAssignmentTildes: false)
                     .ConfigureAwait(false);
                 break;
             case WordPartKind.CommandSubstitution:
@@ -924,6 +935,12 @@ internal static partial class WordExpansion
                 }
                 else if (parameterStatus != BracedParameterScanStatus.Found)
                 {
+                    if (syntax?.HasExpandedParameterQuoteSyntax == true)
+                    {
+                        await ReportParameterWordSyntaxAsync(originalWord, content, missingBrace: true, scope, captures: null,
+                            quoteSegment: quoteContext == ExpansionQuoteContext.DoubleQuoted).ConfigureAwait(false);
+                        return null;
+                    }
                     if (quoteContext == ExpansionQuoteContext.HereDocument)
                     {
                         await RejectHereDocumentAsync(scope, parameterStatus is BracedParameterScanStatus.Unterminated

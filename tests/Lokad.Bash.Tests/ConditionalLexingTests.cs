@@ -24,6 +24,10 @@ public sealed partial class ConditionalLexingTests
     [InlineData("! ! ! \"\"", "! -n \"\"")]
     [InlineData("\"$([[ x ]]; printf a)$([[ $\"y\" == y ]] && printf b)\" == ab",
         "\"$([[ -n x ]]; printf a)$([[ \"y\" == y ]] && printf b)\" == ab")]
+    [InlineData("${missing:-$'a\\nb'} == $'a\\nb'", "${missing:-'a\nb'} == 'a\nb'")]
+    [InlineData("\"${missing:-$'a\\nb'}\" == $'a\\nb'", "\"${missing:-a\nb}\" == 'a\nb'")]
+    [InlineData("\"${missing:-$'$(printf value)'}\" == value", "\"${missing:-$(printf value)}\" == value")]
+    [InlineData("\"${missing:-$([[ value ]]; printf value)}\"", "-n \"${missing:-$([[ -n value ]]; printf value)}\"")]
     public async Task ConditionalDisplayRendersDecodedOperandsAndKeepsTheirMeaning(string condition, string spelling)
     {
         var script = "f(){ [[ " + condition + " ]] && printf hit; }; declare -f f; d=$(declare -f f); unset -f f; eval \"$d\"; f";

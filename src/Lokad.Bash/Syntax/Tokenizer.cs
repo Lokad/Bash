@@ -31,6 +31,7 @@ internal sealed class Tokenizer
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
     internal bool HasNormalizedSpelling { get; private set; }
+    internal bool HasConditionalSyntax { get; private set; }
 
     internal ShellScanContext ScanContext => _scanContext;
 
@@ -984,6 +985,7 @@ internal sealed class Tokenizer
             return false;
         }
         Position = end;
+        HasConditionalSyntax = true;
         HasNormalizedSpelling |= command.HasNormalizedSpelling;
         if (TrackCommandLocations)
             ConsumedPosition = end;
@@ -1100,6 +1102,7 @@ internal sealed class Tokenizer
         var continuesQuote = false;
         var renderedLineAdjustment = 0;
         var subscriptFailure = ParameterSubscriptFailure.None;
+        var expandedParameterQuoteSyntax = false;
 
         void AddPart(WordPart part)
         {
@@ -1120,16 +1123,20 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
+            var part = unquoted.TakeSource();
             AddPart(new SourceWordPart(
-                quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, unquoted.TakeSource(),
+                quotedOperand ? WordPartKind.DoubleQuoted : WordPartKind.Unquoted, part.Source,
                 _scanContext.SyntaxMemory)
             {
                 IsBraceExpanded = braceExpanded,
                 RenderedLineAdjustment = renderedLineAdjustment,
-                ParameterSubscriptFailure = subscriptFailure
+                ParameterSubscriptFailure = subscriptFailure,
+                HasExpandedParameterQuoteSyntax = expandedParameterQuoteSyntax,
+                SpellingCaptures = part.Captures
             });
             renderedLineAdjustment = 0;
             subscriptFailure = ParameterSubscriptFailure.None;
+            expandedParameterQuoteSyntax = false;
         }
 
         while (Position < span.Length && Error == null)
@@ -1143,7 +1150,8 @@ internal sealed class Tokenizer
                 AddPart(subscript);
                 continue;
             }
-            if (TryReadBracedParameterExpansion(ref unquoted, quotedOperand, ref renderedLineAdjustment, ref subscriptFailure))
+            if (TryReadBracedParameterExpansion(ref unquoted, quotedOperand, syntax, spelling, ref renderedLineAdjustment,
+                    ref subscriptFailure, ref expandedParameterQuoteSyntax))
             {
                 continue;
             }
@@ -1371,9 +1379,10 @@ internal sealed class Tokenizer
 
         Position = endIndex + 1;
         var parsed = payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax.");
-        if (parsed is CommandSubstitutionSyntax.Parsed { Script.HasNormalizedSpelling: true })
+        if (parsed is CommandSubstitutionSyntax.Parsed { Script.RequiresCanonicalSpelling: true } capture)
         {
-            HasNormalizedSpelling = true;
+            HasNormalizedSpelling |= capture.Script.HasNormalizedSpelling;
+            HasConditionalSyntax |= capture.Script.HasConditionalSyntax;
             spelling.RecordCapture(start, Position, parsed);
         }
         return new CommandSubstitutionWordPart(kind, parsed);
@@ -1382,8 +1391,9 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a braced parameter expansion as unexpanded segment bytes.
     /// </summary>
-    private bool TryReadBracedParameterExpansion(ref WordPartBuffer content, bool quoted, ref int renderedLineAdjustment,
-        ref ParameterSubscriptFailure subscriptFailure)
+    private bool TryReadBracedParameterExpansion(ref WordPartBuffer content, bool quoted, ExpansionWordSyntax syntax,
+        ConditionalParser.OperandSpelling spelling, ref int renderedLineAdjustment, ref ParameterSubscriptFailure subscriptFailure,
+        ref bool expandedParameterQuoteSyntax)
     {
         if (!BracedParameterScanner.HasPrefix(_input, Position))
         {
@@ -1391,6 +1401,10 @@ internal sealed class Tokenizer
         }
 
         var start = Position;
+        // Conditional spelling sees the authored word. Runtime operand readers see bytes from a later phase.
+        var quotes = syntax == ExpansionWordSyntax.Parameter && (!_isExpansionOperand || spelling.IsActive)
+            ? quoted ? BracedParameterScanner.LexicalQuotes.DoubleQuoted : BracedParameterScanner.LexicalQuotes.Unquoted
+            : BracedParameterScanner.LexicalQuotes.Preserve;
         var status = BracedParameterScanner.ScanWithPayload(
             _scanContext,
             _input,
@@ -1401,10 +1415,21 @@ internal sealed class Tokenizer
             out var adjustment,
             out var error,
             out var incompleteSubscript,
-            trackRenderedLines: true);
+            trackRenderedLines: true, quotes,
+            out var hasSpellingEdits,
+            out var expandedQuotes);
         if (status == BracedParameterScanStatus.Found)
         {
-            content.AppendExpansion(start, endIndex + 1, "${"u8, payload, "}"u8);
+            content.AppendParameter(start, endIndex + 1, payload);
+            if (hasSpellingEdits)
+            {
+                HasNormalizedSpelling = true;
+                spelling.RecordParameter(start, endIndex + 1, payload);
+                expandedParameterQuoteSyntax |= expandedQuotes;
+                if (payload.Captures is { } captures)
+                    foreach (var capture in captures)
+                        HasConditionalSyntax |= capture.Syntax is CommandSubstitutionSyntax.Parsed { Script.HasConditionalSyntax: true };
+            }
             renderedLineAdjustment += adjustment;
             if (quoted && subscriptFailure == ParameterSubscriptFailure.None
                 && incompleteSubscript is ParameterSubscriptFailure.Direct or ParameterSubscriptFailure.Nested)
@@ -1437,6 +1462,7 @@ internal sealed class Tokenizer
         var parts = new List<WordPart>();
         var renderedLineAdjustment = 0;
         var subscriptFailure = ParameterSubscriptFailure.None;
+        var expandedParameterQuoteSyntax = false;
         var content = new WordPartBuffer(_input, _scanContext);
 
         void AddPart(WordPart part)
@@ -1461,13 +1487,17 @@ internal sealed class Tokenizer
 
             if (!TryReserveSyntax())
                 return;
-            AddPart(new SourceWordPart(WordPartKind.DoubleQuoted, content.TakeSource(), _scanContext.SyntaxMemory)
+            var part = content.TakeSource();
+            AddPart(new SourceWordPart(WordPartKind.DoubleQuoted, part.Source, _scanContext.SyntaxMemory)
             {
                 RenderedLineAdjustment = renderedLineAdjustment,
-                ParameterSubscriptFailure = subscriptFailure
+                ParameterSubscriptFailure = subscriptFailure,
+                HasExpandedParameterQuoteSyntax = expandedParameterQuoteSyntax,
+                SpellingCaptures = part.Captures
             });
             renderedLineAdjustment = 0;
             subscriptFailure = ParameterSubscriptFailure.None;
+            expandedParameterQuoteSyntax = false;
         }
 
         while (Position < span.Length && Error == null)
@@ -1524,7 +1554,8 @@ internal sealed class Tokenizer
                 continue;
             }
 
-            if (TryReadBracedParameterExpansion(ref content, quoted: true, ref renderedLineAdjustment, ref subscriptFailure))
+            if (TryReadBracedParameterExpansion(ref content, quoted: true, syntax, spelling, ref renderedLineAdjustment,
+                    ref subscriptFailure, ref expandedParameterQuoteSyntax))
             {
                 continue;
             }
@@ -1566,6 +1597,7 @@ internal sealed class Tokenizer
         private ByteMemoryBuilder? _edited;
         private int _start;
         private int _length;
+        private List<SpellingCapture>? _captures;
 
         public readonly int Length => _edited?.Length ?? _length;
 
@@ -1597,7 +1629,13 @@ internal sealed class Tokenizer
             GetEdited().Append(opening).Append(payload.Bytes).Append(closing);
         }
 
-        public ShellSource TakeSource()
+        public void AppendParameter(int start, int end, SourceSpelling payload)
+        {
+            payload.CopyCaptures(Length + 2, ref _captures, context.SyntaxMemory);
+            AppendExpansion(start, end, "${"u8, payload.Source, "}"u8);
+        }
+
+        public SourceSpelling TakeSource()
         {
             var memory = context.SyntaxMemory;
             ReadOnlyMemory<byte> bytes;
@@ -1611,7 +1649,9 @@ internal sealed class Tokenizer
             }
             _edited = null;
             _length = 0;
-            return ShellSource.FromBytes(bytes);
+            var part = new SourceSpelling(ShellSource.FromBytes(bytes), _captures);
+            _captures = null;
+            return part;
         }
 
         private ByteMemoryBuilder GetEdited()

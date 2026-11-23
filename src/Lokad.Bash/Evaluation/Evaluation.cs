@@ -3818,6 +3818,28 @@ public sealed partial class Evaluation : IFileTester
     private static readonly ShellValue PendingCaptureWarningPlural = ShellValue.FromText(" unterminated here-documents");
     private static readonly byte[] UnreadConditionalToken =
         [.. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
+    private static readonly byte[] MissingConditionalDoubleQuote = "unexpected EOF while looking for matching `\"'\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalSingleQuote = "unexpected EOF while looking for matching `''\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalUnaryArgument = "unexpected argument to conditional unary operator\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalBinaryArgument = "unexpected argument to conditional binary operator\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalGroup = "expected `)'\n"u8.ToArray();
+
+    private async Task ReportUnclosedConditionalQuoteAsync(ConditionalQuoteEnd failure)
+    {
+        var descriptor = GetStdErrDescriptor();
+        if (descriptor.IsClosed)
+            return;
+        await ExecuteWriteAsync(descriptor, failure.DoubleQuoted ? MissingConditionalDoubleQuote : MissingConditionalSingleQuote)
+            .ConfigureAwait(false);
+        await ExecuteWriteAsync(descriptor, failure.Role switch
+        {
+            ConditionalArgumentError.UnaryOperand => MissingConditionalUnaryArgument,
+            ConditionalArgumentError.BinaryOperand => MissingConditionalBinaryArgument,
+            _ => UnreadConditionalToken
+        }).ConfigureAwait(false);
+        for (var group = 0; group < failure.UnclosedGroups; group++)
+            await ExecuteWriteAsync(descriptor, MissingConditionalGroup).ConfigureAwait(false);
+    }
 
     internal async Task ReportCapturedHereDocumentEndOfInputAsync(SyntaxError error,
         CapturedHereDocumentEndOfInput endOfInput, int offset)

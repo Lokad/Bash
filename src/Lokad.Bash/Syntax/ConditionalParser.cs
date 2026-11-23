@@ -31,7 +31,7 @@ internal sealed class ConditionalParser : IDisposable
 
     internal static bool TryParse(ShellSource source,
         [NotNullWhen(true)] out ConditionalExpression? expression,
-        out ConditionalSpelling spelling,
+        out SourceSpelling spelling,
         [NotNullWhen(false)] out SyntaxError? error)
     {
         using var parser = new ConditionalParser(source, 0, new ShellScanContext(), command: false, trackUnexpectedTokens: false);
@@ -59,7 +59,7 @@ internal sealed class ConditionalParser : IDisposable
         var closing = parser.Peek();
         var original = parser.GetSpelling(start, closing.Offset, display: false).Source.TrimBlanks();
         var spelling = parser._spellingEdits == null && parser._spacingEdits == null
-            ? new ConditionalSpelling(original, Captures: null)
+            ? new SourceSpelling(original, Captures: null)
             : parser.GetSpelling(parser._firstTokenStart, parser._previousTokenEnd, display: true);
         command = new ConditionalCommand(original, expression, spelling,
             parser._ignoredRanges != null || parser._spacingEdits != null || parser._spellingEdits != null);
@@ -150,6 +150,7 @@ internal sealed class ConditionalParser : IDisposable
             var token = Take();
             if (token.Kind != TokenKind.Word)
             {
+                SetQuoteEndRole(ConditionalArgumentError.None, depth);
                 Fail("Conditional operand expected.", token.Offset);
                 return null;
             }
@@ -218,6 +219,7 @@ internal sealed class ConditionalParser : IDisposable
         var token = _lookahead == null ? Read(regex) : Take();
         if (token.Kind != TokenKind.Word)
         {
+            SetQuoteEndRole(error, depth);
             FailArgument("Conditional operand expected.", token, error, depth);
             return null;
         }
@@ -297,14 +299,20 @@ internal sealed class ConditionalParser : IDisposable
 
     internal readonly struct OperandSpelling(ConditionalParser? parser, int offset)
     {
+        internal bool IsActive => parser != null;
+
         internal void RecordAnsiCLiteral(int start, int end, ShellValue value) =>
-            Record(new SpellingEdit(offset + start, offset + end, value, null, Quote: true));
+            Record(new SpellingEdit(offset + start, offset + end, new SourceSpelling(ShellSource.FromBytes(value.Bytes), null),
+                null, SpellingEditKind.Literal));
 
         internal void RecordCapture(int start, int end, CommandSubstitutionSyntax capture) =>
-            Record(new SpellingEdit(offset + start, offset + end, default, capture, Quote: false));
+            Record(new SpellingEdit(offset + start, offset + end, default, capture, SpellingEditKind.Capture));
 
         internal void RecordLocalePrefix(int start, int end) =>
-            Record(new SpellingEdit(offset + start, offset + end, default, null, Quote: false));
+            Record(new SpellingEdit(offset + start, offset + end, default, null, SpellingEditKind.Omit));
+
+        internal void RecordParameter(int start, int end, SourceSpelling payload) =>
+            Record(new SpellingEdit(offset + start, offset + end, payload, null, SpellingEditKind.Parameter));
 
         private void Record(SpellingEdit edit)
         {
@@ -450,6 +458,8 @@ internal sealed class ConditionalParser : IDisposable
         if (cursor.IsQuoted || parentheses != 0 || (!regex && _position == start))
         {
             Fail("Invalid or unterminated conditional operand.", _position);
+            if (_trackUnexpectedTokens && cursor.IsQuoted && cursor.IsAtEnd && _failure is { } failure)
+                _failure = failure with { ConditionalQuoteEnd = new ConditionalQuoteEnd(cursor.IsDoubleQuoted) };
             return new(TokenKind.Invalid, default, _position);
         }
 
@@ -484,6 +494,12 @@ internal sealed class ConditionalParser : IDisposable
     private void Fail(string message) => Fail(message, _position);
     private void Fail(string message, int offset) =>
         _failure ??= new ParserFailure(new SyntaxError(message, offset), ParserFailureKind.Grammar);
+
+    private void SetQuoteEndRole(ConditionalArgumentError role, int depth)
+    {
+        if (_failure is { ConditionalQuoteEnd: { } quote })
+            _failure = _failure with { ConditionalQuoteEnd = quote with { Role = role, UnclosedGroups = depth } };
+    }
 
     private void FailArgument(string message, Token token, ConditionalArgumentError error, int depth)
     {
@@ -579,12 +595,12 @@ internal sealed class ConditionalParser : IDisposable
     }
 
     /// <summary>Normalizes this lexical layer while preserving the original operand bytes on the AST.</summary>
-    private ConditionalSpelling GetSpelling(int start, int end, bool display)
+    private SourceSpelling GetSpelling(int start, int end, bool display)
     {
         var edits = display ? _spellingEdits : null;
         var spacing = display ? _spacingEdits : null;
         if (_ignoredRanges == null && edits == null && spacing == null)
-            return new ConditionalSpelling(FunctionDefinitionFormatter.RenderReadAheadCaptures(_source.Slice(start, end - start), _context),
+            return new SourceSpelling(FunctionDefinitionFormatter.RenderReadAheadCaptures(_source.Slice(start, end - start), _context),
                 Captures: null);
         var capacity = end - start;
         if (!display && _ignoredRanges != null)
@@ -597,7 +613,7 @@ internal sealed class ConditionalParser : IDisposable
         var ignoreCount = _ignoredRanges?.Count ?? 0;
         var editCount = edits?.Count ?? 0;
         var spacingCount = spacing?.Count ?? 0;
-        List<ConditionalSpellingCapture>? captures = null;
+        List<SpellingCapture>? captures = null;
         while (ignored < ignoreCount || edited < editCount || spaced < spacingCount)
         {
             var nextIgnore = _ignoredRanges != null && ignored < ignoreCount ? _ignoredRanges[ignored] : (Start: int.MaxValue, End: int.MaxValue);
@@ -628,7 +644,7 @@ internal sealed class ConditionalParser : IDisposable
             start = nextIgnore.End;
         }
         AppendRange(start, end);
-        return new ConditionalSpelling(
+        return new SourceSpelling(
             ShellSource.FromBytes(display ? output.ToCompactMemory(_context.SyntaxMemory) : output.ToMemory()), captures);
 
         void AppendRange(int beginning, int finish)
@@ -648,12 +664,19 @@ internal sealed class ConditionalParser : IDisposable
                     captures = [];
                 }
                 _context.SyntaxMemory?.PrepareListCapacity(captures, 1);
-                captures.Add(new ConditionalSpellingCapture(output.Length, capture));
+                captures.Add(new SpellingCapture(output.Length, 0, capture));
                 return true;
             }
-            var bytes = edit.Value.Bytes.Span;
-            if (!edit.Quote)
-                return output.TryAppend(bytes);
+            var bytes = edit.Spelling.Source.AsSpan();
+            if (edit.Kind == SpellingEditKind.Parameter)
+            {
+                if (!output.TryAppend("${"u8))
+                    return false;
+                edit.Spelling.CopyCaptures(output.Length, ref captures, _context.SyntaxMemory);
+                return output.TryAppend(bytes) && output.TryAppend((byte)'}');
+            }
+            if (edit.Kind == SpellingEditKind.Omit)
+                return true;
             return bytes.SequenceEqual("'"u8) ? output.TryAppend("\\'"u8)
                 : ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, bytes);
         }
@@ -666,7 +689,10 @@ internal sealed class ConditionalParser : IDisposable
 
     private readonly record struct SpacingEdit(int Start, int End, TokenPrefix Prefix);
 
-    private readonly record struct SpellingEdit(int Start, int End, ShellValue Value, CommandSubstitutionSyntax? Capture, bool Quote);
+    private enum SpellingEditKind { Literal, Capture, Omit, Parameter }
+
+    private readonly record struct SpellingEdit(int Start, int End, SourceSpelling Spelling, CommandSubstitutionSyntax? Capture,
+        SpellingEditKind Kind);
 
     private enum TokenKind { End, Word, And, Or, Open, Close, Order, DescriptorNumber, EndCommand, Newline, Invalid }
     private sealed record Token(TokenKind Kind, ShellSource Source, int Offset);

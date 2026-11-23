@@ -18,6 +18,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
     internal CapturedHereDocumentEndOfInput? HereDocumentEndOfInput { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
+    internal ConditionalQuoteEnd? ConditionalQuoteEnd { get; init; }
     internal bool IsNestedSubstitution { get; init; }
 
     internal bool ExitsSubstitution => Kind is ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader;
@@ -46,6 +47,12 @@ internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int
 }
 
 internal enum ConditionalArgumentError { None, UnaryOperand, BinaryOperand, BinaryOperator }
+
+internal readonly record struct ConditionalQuoteEnd(bool DoubleQuoted)
+{
+    internal ConditionalArgumentError Role { get; init; }
+    internal int UnclosedGroups { get; init; }
+}
 
 /// <summary>Diagnostics from reading a capture that could not reach its closing parenthesis.</summary>
 internal sealed record CapturedHereDocumentEndOfInput(IReadOnlyList<HereDocumentWarning>? Warnings, int LineOffset)

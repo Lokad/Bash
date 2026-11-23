@@ -255,6 +255,8 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ case esac\nin (esac) printf match;; esac; }", "f () \n{ \n    case esac in \n        (esac)\n            printf match\n        ;;\n    esac\n}\n")]
     [InlineData("f(){ for x in a 'b c' \"$@\"; { printf '%s\\n' \"$x\"; }; }", "f () \n{ \n    for x in a 'b c' \"$@\";\n    do\n        printf '%s\\n' \"$x\";\n    done\n}\n")]
     [InlineData("f(){ [[ $x == a* && -n \"$y\" ]];\n}", "f () \n{ \n    [[ $x == a* && -n \"$y\" ]]\n}\n")]
+    [InlineData("f(){ printf '%s' \"$([[ yes ]]; printf yes)\"; }",
+        "f () \n{ \n    printf '%s' \"$([[ -n yes ]]; printf yes)\"\n}\n")]
     [InlineData("f(){ ((x+=1));\n}", "f () \n{ \n    ((x+=1))\n}\n")]
     [InlineData("f(){ g(){ printf '%s\\n' \"$1\"; }; g x;\n}", "f () \n{ \n    function g () \n    { \n        printf '%s\\n' \"$1\"\n    };\n    g x\n}\n")]
     [InlineData("f(){ echo x 2>err >out; cat <in; echo y >&2; true 3>&-;\n}", "f () \n{ \n    echo x 2> err > out;\n    cat < in;\n    echo y 1>&2;\n    true 3>&-\n}\n")]

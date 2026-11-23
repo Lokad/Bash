@@ -37,6 +37,55 @@ public sealed class QuotedEscapeTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("\"${missing:-CAPTURE}\"", "<reached>", true)]
+    [InlineData("\"${present:-CAPTURE}\"", "<given>", false)]
+    [InlineData("\"${present:+CAPTURE}\"", "<reached>", true)]
+    [InlineData("\"${missing:+CAPTURE}\"", "<>", false)]
+    [InlineData("${missing:-CAPTURE}", "<$(printf x >>effect; printf reached)>", false)]
+    [InlineData("\"${present/given/CAPTURE}\"", "<$(printf x >>effect; printf reached)>", false)]
+    public async Task BracedOperatorQuoteContextControlsWhetherDecodedCaptureIsReached(string form, string expected, bool executes)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("present=given; printf '<%s>' "
+            + form.Replace("CAPTURE", "$'$(printf x >>effect; printf reached)'", StringComparison.Ordinal), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        if (executes)
+            Assert.Equal("x", host.ReadFile("/effect"));
+        else
+            Assert.False(host.FileExists("/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("\\x27", "'")]
+    [InlineData("\\x22", "\"")]
+    public async Task DecodedQuoteCanInvalidateAProtectedDefaultBeforeOperandSelection(string escape, string quote)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("value=given\nprintf '%s' \"${value:-$'a" + escape
+            + "b'}\"; printf discarded\nprintf tail", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Equal("bad substitution: no closing `}' in \"${value:-a" + quote + "b}\"\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task ProjectedQuoteDiagnosticUsesTheFirstReachedBraceExpandedWord()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("printf '<%s>' p{a,b}\"${missing:-$'a\\x27b'}\"; printf discarded\nprintf tail",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("tail", host.StandardOutput.TextContent);
+        Assert.Equal("bad substitution: no closing `}' in pa\"${missing:-a'b}\"\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData("value=outer; printf '<%s>\\n' \"\\$value\"", "<$value>\n", "", 0)]
     [InlineData("value=outer; printf '<%s>\\n' \"\\${value}\"", "<${value}>\n", "", 0)]
     [InlineData("printf '<%s>\\n' \"\\$(printf effect >&2)\"", "<$(printf effect >&2)>\n", "", 0)]

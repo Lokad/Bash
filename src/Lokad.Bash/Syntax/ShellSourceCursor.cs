@@ -361,6 +361,14 @@ internal sealed class ShellSourceCursor
     internal ShellNestedExpansionScan SkipNestedExpansion(BracedParameterRecognition parameters, bool trackRenderedLines,
         bool resolveLateSubscripts)
     {
+        var edits = new BracedParameterScanner.ParameterSpellingEdits();
+        return SkipNestedExpansion(parameters, trackRenderedLines, resolveLateSubscripts,
+            BracedParameterScanner.LexicalQuotes.Preserve, ref edits);
+    }
+
+    internal ShellNestedExpansionScan SkipNestedExpansion(BracedParameterRecognition parameters, bool trackRenderedLines,
+        bool resolveLateSubscripts, BracedParameterScanner.LexicalQuotes quotes, ref BracedParameterScanner.ParameterSpellingEdits edits)
+    {
         if (_quote is ShellQuoteKind.Single or ShellQuoteKind.AnsiC)
             return ShellNestedExpansionScan.NotFound.Instance;
 
@@ -391,6 +399,8 @@ internal sealed class ShellSourceCursor
         if ((parameters == BracedParameterRecognition.All || IsDoubleQuoted)
             && BracedParameterScanner.HasPrefix(_text, start))
         {
+            var nestedQuotes = quotes == BracedParameterScanner.LexicalQuotes.Unquoted && IsDoubleQuoted
+                ? BracedParameterScanner.LexicalQuotes.DoubleQuoted : quotes;
             var status = BracedParameterScanner.ScanShape(
                 _context,
                 _text,
@@ -402,7 +412,7 @@ internal sealed class ShellSourceCursor
                 out var error,
                 out var subscriptFailure,
                 out var hasLateSubscript,
-                trackRenderedLines, resolveLateSubscripts);
+                trackRenderedLines, resolveLateSubscripts, nestedQuotes, ref edits);
             if (status != BracedParameterScanStatus.Found)
             {
                 return status is BracedParameterScanStatus.Unterminated

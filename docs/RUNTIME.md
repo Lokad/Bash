@@ -512,6 +512,11 @@ through stderr write completion.
 Conditional display retains the local spelling and borrows nested capture
 syntax for rendering on demand. Spacing edits use parser scratch that refunds
 when the conditional is prepared.
+Authored braced-parameter spelling uses ordered edits from the shared delimiter
+scan. Quote edits produce the bytes consumed by reached expansion. Display-only
+edits borrow parsed captures and keep their offsets into those bytes, leaving
+physical command coordinates available to execution. Scratch is released after
+payload assembly, and retained syntax borrows the source owner.
 `source` and `eval` select operands from completed byte fields after command
 resolution. They validate leading options before performing a file lookup or
 allocating copied script source. `source` decodes its selected filename and

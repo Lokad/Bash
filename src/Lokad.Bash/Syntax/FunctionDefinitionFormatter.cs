@@ -427,7 +427,7 @@ internal static class FunctionDefinitionFormatter
                             break;
                         case ConditionalCommand conditional:
                             if (capture) PushStep(new Step.Condition(conditional.Condition));
-                            else if (!Append("[[ ") || !AppendConditionalSpelling(conditional.Spelling) || !Append(" ]]"))
+                            else if (!Append("[[ ") || !AppendSpelling(conditional.Spelling, 0) || !Append(" ]]"))
                                 return false;
                             break;
                         case CaseCommand selection:
@@ -467,17 +467,20 @@ internal static class FunctionDefinitionFormatter
         if (capture) return FlushCaptureDocuments();
         return !braceSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
 
-        bool AppendConditionalSpelling(ConditionalSpelling spelling)
+        bool AppendSpelling(SourceSpelling spelling, int sourceOffset)
         {
             var source = spelling.Source.AsSpan();
             var written = 0;
             if (spelling.Captures is { } nested)
                 foreach (var substitution in nested)
                 {
-                    if (!output.TryAppend(source[written..substitution.Offset])
+                    var offset = substitution.Offset - sourceOffset;
+                    if (offset < 0 || offset + substitution.Length > source.Length)
+                        continue;
+                    if (!output.TryAppend(source[written..offset])
                         || !TryAppendSubstitutionSource(substitution.Syntax, output, budget, cancellationToken))
                         return false;
-                    written = substitution.Offset;
+                    written = offset + substitution.Length;
                 }
             return output.TryAppend(source[written..]);
         }
@@ -497,6 +500,9 @@ internal static class FunctionDefinitionFormatter
                 doubleQuoted = quotedPart;
                 var success = part.Kind switch
                 {
+                    WordPartKind.Unquoted or WordPartKind.DoubleQuoted when !capture && part is SourceWordPart
+                        { SpellingCaptures: { } nested } projected =>
+                        AppendSpelling(new SourceSpelling(projected.Source, nested), projected.SourceOffset),
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when captures != null && part is SourceWordPart source =>
                         TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
                     WordPartKind.Unquoted => output.TryAppend(content),
@@ -513,6 +519,7 @@ internal static class FunctionDefinitionFormatter
                             && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy
                                 or CommandSubstitutionSyntax.AdjacentSubshell
                                 or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }
+                                or CommandSubstitutionSyntax.Parsed { Script.HasConditionalSyntax: true }
                                 or CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }) =>
                         TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),
                     WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>

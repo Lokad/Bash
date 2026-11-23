@@ -268,6 +268,22 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
+    [InlineData("[[ \"unfinished", "\"", "unexpected token `", "' in conditional command\n")]
+    [InlineData("[[ $'unfinished", "'", "unexpected token `", "' in conditional command\n")]
+    [InlineData("[[ ( x =~ \"unfinished", "\"", "unexpected argument to conditional binary operator\nexpected `)'\n", "")]
+    public async Task ConditionalQuoteEndOfInputReportsTheUnfinishedRole(string script, string quote, string reason, string suffix)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        var prefix = System.Text.Encoding.UTF8.GetBytes($"unexpected EOF while looking for matching `{quote}'\n" + reason);
+        byte[] expected = suffix.Length == 0 ? prefix : [.. prefix, 0xff, .. System.Text.Encoding.UTF8.GetBytes(suffix)];
+        Assert.Equal(expected, host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
     [InlineData("x ==", "", "")]
     [InlineData("$(cat <<ONE) ==", "first\nONE\n", "warning: command substitution: 1 unterminated here-document\n")]
     public async Task ConditionalFailureLeavesLaterCaptureUnread(string before, string body, string warnings)

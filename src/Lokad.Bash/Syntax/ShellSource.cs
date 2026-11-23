@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -60,3 +62,23 @@ public readonly struct ShellSource
     /// <summary>Decodes source at a text boundary; malformed UTF-8 is rejected.</summary>
     public string ToUtf8String() => Utf8Text.Decode(Bytes);
 }
+
+/// <summary>Source spelling with selected nested captures rendered on demand.</summary>
+internal readonly record struct SourceSpelling(ShellSource Source, IReadOnlyList<SpellingCapture>? Captures)
+{
+    internal void CopyCaptures(int offset, ref List<SpellingCapture>? destination, MemoryCapacity? memory)
+    {
+        if (Captures == null)
+            return;
+        if (destination == null)
+        {
+            memory?.Grow(32);
+            destination = [];
+        }
+        memory?.PrepareListCapacity(destination, Captures.Count);
+        foreach (var capture in Captures)
+            destination.Add(capture with { Offset = offset + capture.Offset });
+    }
+}
+
+internal readonly record struct SpellingCapture(int Offset, int Length, CommandSubstitutionSyntax Syntax);

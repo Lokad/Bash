@@ -343,6 +343,8 @@ public sealed partial class Evaluation
                     else if (failedUnit.Failure.UnexpectedToken is { } token)
                         await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path,
                             kind == ScriptExecutionKind.Eval, lineOffset + failedUnit.DiagnosticLine).ConfigureAwait(false);
+                    else if (failedUnit.Failure.ConditionalQuoteEnd is { } quoteEnd)
+                        await ReportUnclosedConditionalQuoteAsync(quoteEnd).ConfigureAwait(false);
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)

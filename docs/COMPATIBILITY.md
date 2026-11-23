@@ -647,6 +647,13 @@ Definition display and export render implicit nonempty predicates with `-n`,
 use spaces around groups and connectors, and render locale quotes as double
 quotes in the invariant locale. Nested captures use the same conditional
 spelling when their enclosing condition is rendered.
+Braced parameter operands decode authored ANSI-C literals during tokenization.
+Unquoted operands and pattern operators preserve the decoded literal's quoting.
+Double-quoted defaults, alternates, assigning defaults and error operands use
+the decoded bytes as parameter syntax. A decoded delimiter can change the
+reached operand or yield a substitution diagnostic. Only selected operands
+evaluate their expansions. Definition display uses the prepared spelling,
+including conditional captures nested in ordinary words and other parameters.
 With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
 and the pinned Linux Bash build. The pinned MSYS build returns status 2.
 LF is accepted before a term or after a complete predicate. It cannot split
