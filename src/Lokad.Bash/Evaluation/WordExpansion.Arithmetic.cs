@@ -11,14 +11,15 @@ internal static partial class WordExpansion
     /// <summary>Expands direct selectors before numeric writes, retaining their source and literal result.</summary>
     internal static Task<ArithmeticOperand?> PrepareArithmeticAsync(
         ShellSource source, ScopedEvaluation scope, ExpansionPurpose purpose) =>
-        PrepareArithmeticAsync(source, null, scope, purpose);
+        PrepareArithmeticAsync(source, null, scope, purpose, null);
 
     internal static Task<ArithmeticOperand?> PrepareArithmeticAsync(
         ArithmeticSource syntax, ScopedEvaluation scope, ExpansionPurpose purpose) =>
-        PrepareArithmeticAsync(syntax.Source, syntax, scope, purpose);
+        PrepareArithmeticAsync(syntax.Source, syntax, scope, purpose, null);
 
     private static async Task<ArithmeticOperand?> PrepareArithmeticAsync(
-        ShellSource source, ArithmeticSource? syntax, ScopedEvaluation scope, ExpansionPurpose purpose)
+        ShellSource source, ArithmeticSource? syntax, ScopedEvaluation scope, ExpansionPurpose purpose,
+        ShellScanContext? scanContext)
     {
         scope.Effects.CancellationToken.ThrowIfCancellationRequested();
         if (!scope.CanExpand)
@@ -30,7 +31,7 @@ internal static partial class WordExpansion
         var budget = scope.Effects.Memory;
         // Bash expands the whole arithmetic word if any of these bytes require expansion.
         var expandSubscripts = source.AsSpan().IndexOfAny("$`~\u0001"u8) >= 0;
-        var scanContext = CreateExpansionScanContext(scope);
+        scanContext ??= CreateExpansionScanContext(scope);
         var word = Tokenizer.ReadArithmeticWord(source, GetOperandSyntax(purpose), scanContext);
         using var bytes = new ByteMemoryBuilder(0, budget.Workspace);
         Dictionary<int, ArithmeticOperand.Subscript>? subscripts = null;

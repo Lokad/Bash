@@ -790,7 +790,8 @@ internal static partial class WordExpansion
                     result = await ExpandArithmeticOperandAsync(arithmetic, operandScope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
                 else
                 {
-                    result = await ExpandArithmeticOperandAsync(expression, operandScope, ExpansionPurpose.ArithmeticSource, ShellValue.Empty)
+                    result = await ExpandArithmeticOperandAsync(expression, operandScope, ExpansionPurpose.ArithmeticSource,
+                            ShellValue.Empty, null)
                         .ConfigureAwait(false);
                 }
                 if (result is { } number)
@@ -1002,9 +1003,10 @@ internal static partial class WordExpansion
 
     /// <summary>Expands an arithmetic operand once, preserving its writes and first failure.</summary>
     private static async Task<long?> ExpandArithmeticOperandAsync(
-        ShellSource expression, ScopedEvaluation scope, ExpansionPurpose purpose, ShellValue command)
+        ShellSource expression, ScopedEvaluation scope, ExpansionPurpose purpose, ShellValue command,
+        ShellScanContext? scanContext)
     {
-        var operand = await PrepareArithmeticAsync(expression, scope, purpose).ConfigureAwait(false);
+        var operand = await PrepareArithmeticAsync(expression, null, scope, purpose, scanContext).ConfigureAwait(false);
         return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Expansion, command)
             .ConfigureAwait(false);
     }

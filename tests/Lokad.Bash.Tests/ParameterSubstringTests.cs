@@ -199,6 +199,44 @@ public sealed class ParameterSubstringTests
     }
 
     [Theory]
+    [InlineData("a=(one); printf '%s' \"${a[@]:0: \t-2#1 \t}\"; printf after", " \t-2#1 \t", "", 1)]
+    [InlineData("a=(one); n=-1; printf '%s' \"${a[@]:1?0:9:$n}\"; printf after", "$n", "", 1)]
+    [InlineData("set -- one; printf '%s' \"${@:1:\"-1\"}\"; printf after", "\"-1\"", "", 1)]
+    [InlineData("x=abc; printf '%s' \"${x:2:0-2}\"; printf after", "0-2", "", 1)]
+    [InlineData("a=(one); n=a-1; printf '%s' \"${a[@]:0:${n:1}}\"; printf after", "${n:1}", "", 1)]
+    [InlineData("a=(one); printf '%s' \"${a[@]:0:0\\\n-1}\"; printf after", "0-1", "", 1)]
+    [InlineData("a=(one); i=-1; eval 'printf \"%s\" \"${a[@]:0:i++}\"'; printf '%s:%s' \"$?\" \"$i\"",
+        "i++", "1:0", 0)]
+    public async Task RejectedLengthReportsItsSource(string script, string subject, string output, int status)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(subject + ": substring expression < 0\n", result.StdErr);
+        Assert.Equal(status, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("2>diagnostic", true)]
+    [InlineData("2>&-", false)]
+    public async Task RejectedLengthRendersTheReachedCaptureThroughActiveStderr(string redirection, bool writesDiagnostic)
+    {
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(
+            "a=(one)\n{ printf before; printf '%s' \"${a[@]:0:0\\\n+$(printf reached >>seen; printf -- -1)}\";"
+            + $" printf inside; }} {redirection}\nprintf 'after:%s' \"$?\"\n", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("beforeafter:1", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("reached", await EndToEndHarness.ReadFileAsync(host, "/seen"));
+        Assert.Equal(writesDiagnostic, await EndToEndHarness.FileExistsAsync(host, "/diagnostic"));
+        if (writesDiagnostic)
+            Assert.Equal("0+$(printf reached >> seen; printf -- -1): substring expression < 0\n",
+                await EndToEndHarness.ReadFileAsync(host, "/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("x=$'\\377\\u03bb\\U0001f642z'; printf '%s|%s|%s' \"${x:0:1}\" \"${x:1:2}\" \"${x: -1}\"\n", "FF7CCEBBF09F99827C7A", "", 0)]
     [InlineData("x=$'\\360\\237\\377z'; printf '%s|%s' \"${x:1:2}\" \"${x: -3:2}\"\n", "9FFF7C9FFF", "", 0)]
     [InlineData("a=([2]=x [9]=last); a[2]=$'\\377'; printf '<%s>' \"${a[@]:0:2}\"\n", "3CFF3E3C6C6173743E", "", 0)]

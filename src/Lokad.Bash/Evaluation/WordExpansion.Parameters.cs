@@ -1148,6 +1148,7 @@ internal static partial class WordExpansion
             }
             var cancellationToken = scope.Effects.CancellationToken;
             var separator = -1;
+            ShellScanContext? lengthScan = null;
             long start;
             long? length = null;
             if (source is ParameterSource.LiteralSlice bounds)
@@ -1176,7 +1177,8 @@ internal static partial class WordExpansion
 
                 var offsetSource = separator < 0 ? expression : expression[..separator];
                 DetachForBound(offsetSource, cancellationToken, ref borrowedBinding, ref source);
-                var offset = await ExpandArithmeticOperandAsync(offsetSource, scope, arithmeticPurpose, name).ConfigureAwait(false);
+                var offset = await ExpandArithmeticOperandAsync(offsetSource, scope, arithmeticPurpose, name, null)
+                    .ConfigureAwait(false);
                 if (offset is not { } selectedOffset)
                     return;
                 start = selectedOffset;
@@ -1223,7 +1225,10 @@ internal static partial class WordExpansion
             {
                 var lengthSource = expression[(separator + 1)..];
                 DetachForBound(lengthSource, cancellationToken, ref borrowedBinding, ref source);
-                length = await ExpandArithmeticOperandAsync(lengthSource, scope, arithmeticPurpose, name)
+                lengthScan = CreateExpansionScanContext(scope);
+                // A rejected bound renders the same parsed captures used during expansion.
+                lengthScan.PreserveDelimiterLookahead = true;
+                length = await ExpandArithmeticOperandAsync(lengthSource, scope, arithmeticPurpose, name, lengthScan)
                     .ConfigureAwait(false);
                 if (length == null)
                     return;
@@ -1324,9 +1329,31 @@ internal static partial class WordExpansion
                         starSplit, AtFieldSource.Projected);
             }
 
-            Task ReportInvalidLengthAsync() => scope.Effects.ReportFatalExpansionAsync(
-                ShellValue.FromInteger(length.GetValueOrDefault()), ShellValue.FromText("substring expression < 0"),
-                ExpansionFailureKind.Arithmetic);
+            async Task ReportInvalidLengthAsync()
+            {
+                var detail = ShellValue.FromText("substring expression < 0");
+                if (scope.Effects.GetStdErrDescriptor().IsClosed)
+                {
+                    await scope.Effects.ReportFatalExpansionAsync(ShellValue.Empty, detail, ExpansionFailureKind.Arithmetic)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                // The literal fast path accepted only numeric bounds, so its first colon is the delimiter.
+                var delimiter = separator >= 0 ? separator : expression.AsSpan().IndexOf((byte)':');
+                var spelling = expression[(delimiter + 1)..];
+                if (lengthScan is { HasCommandSubstitutionLookahead: true })
+                {
+                    using var rendered = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+                    if (!FunctionDefinitionFormatter.TryAppendSourceWithCaptures(spelling, lengthScan, rendered,
+                            scope.Effects.Memory.Budget, cancellationToken))
+                        throw new ByteMemoryBuilder.LimitExceededException();
+                    await scope.Effects.ReportFatalExpansionAsync(ShellValue.FromBytes(rendered.ToMemory()), detail,
+                            ExpansionFailureKind.Arithmetic).ConfigureAwait(false);
+                    return;
+                }
+                await scope.Effects.ReportFatalExpansionAsync(spelling.ToValue(), detail, ExpansionFailureKind.Arithmetic)
+                    .ConfigureAwait(false);
+            }
 
             Task ReportUnclosedOffsetAsync(ShellValue spelling) => scope.Effects.ReportUnitExpansionFailureAsync(
                 [ShellValue.FromText("bad substitution")], [ShellValue.FromText("no closing `)' in "), spelling],

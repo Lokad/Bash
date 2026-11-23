@@ -856,6 +856,9 @@ parentheses. A stray closing parenthesis leaves the scan at the current level.
 An unmatched opening parenthesis reports a bad substitution before either
 bound runs. Its diagnostic keeps the operand bytes and renders parsed
 command substitutions.
+A reached negative length rejected by a substring range reports the spelling
+of the length, including whitespace and quotes. It removes line continuations
+and renders parsed command substitutions without running them again.
 
 `let` consumes one leading `--` after operand expansion. A leading `--help`
 requests help on stdout and returns status 2 even with closed stdout. Later
