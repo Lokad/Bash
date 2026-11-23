@@ -18,14 +18,11 @@ public sealed class EvaluationExpansionTests
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         Assert.Same(word, ExpandedWord.JoinWithSpaces([word], budget));
-        Assert.Same(word, ExpandedWord.JoinCasePatternOperandWithSpaces([word], budget));
         Assert.Equal(0, budget.Workspace.Bytes);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void JoinedWordAdmitsItsSegmentArrayAndBorrowsTheOperandBytes(bool casePattern)
+    [Fact]
+    public void JoinedWordAdmitsItsSegmentArrayAndBorrowsTheOperandBytes()
     {
         var left = new ExpandedSegment(ShellValue.FromBytes(new byte[] { 0xff, (byte)'*' }), isGlobQuoted: true);
         var right = new ExpandedSegment(ShellValue.FromText("tail"), isGlobQuoted: false)
@@ -38,16 +35,16 @@ public sealed class EvaluationExpansionTests
         using (var owner = governor.CreateScope())
         {
             var memory = new EvaluationMemory(owner);
-            var segments = Join(memory).Segments;
+            var segments = ExpandedWord.JoinWithSpaces(fields, memory).Segments;
             Assert.Equal(4, segments.Count);
             Assert.Equal(left.Content.Bytes, segments[0].Content.Bytes);
             Assert.True(segments[0].IsGlobQuoted);
-            Assert.Equal(casePattern, segments[0].IsCasePatternIfsProtected);
+            Assert.False(segments[0].IsCasePatternIfsProtected);
             foreach (var separator in segments.Skip(1).Take(2))
             {
                 Assert.Equal(" ", separator.Content.ToUtf8String());
                 Assert.False(separator.IsGlobQuoted);
-                Assert.Equal(casePattern, separator.IsCasePatternIfsProtected);
+                Assert.False(separator.IsCasePatternIfsProtected);
             }
             Assert.Equal(right.Content.Bytes, segments[3].Content.Bytes);
             Assert.False(segments[3].IsGlobQuoted);
@@ -58,12 +55,8 @@ public sealed class EvaluationExpansionTests
 
         var constrained = new MemoryGovernor(required - 1);
         using var refusedOwner = constrained.CreateScope();
-        Assert.Throws<MemoryBudgetExceededException>(() => Join(new EvaluationMemory(refusedOwner)));
+        Assert.Throws<MemoryBudgetExceededException>(() => ExpandedWord.JoinWithSpaces(fields, new EvaluationMemory(refusedOwner)));
         Assert.Equal(0, constrained.ReservedBytes);
-
-        ExpandedWord Join(EvaluationMemory memory) => casePattern
-            ? ExpandedWord.JoinCasePatternOperandWithSpaces(fields, memory)
-            : ExpandedWord.JoinWithSpaces(fields, memory);
     }
 
     [Fact]

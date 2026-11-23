@@ -633,17 +633,17 @@ character. A direct unquoted named array keeps these bytes and joins with
 spaces. A slice in this case keeps its join bytes and leaves unquoted
 wildcards active. A literal DEL remains data.
 
-With stable IFS, unquoted `$@` joins with spaces. If IFS is nonempty and
-its first character differs from a space, unquoted `$@` and `${array[@]}`
-protect their values from glob matching. This protection also applies when
-a parameter default or alternate supplies those fields. Wildcards in the
-rest of the pattern still participate in matching. In this IFS profile,
-a multi-element direct positional `$@` or `${@}` contributes a DEL byte
-(`0x7F`) for each supplied empty field that remains empty after adjacent
-text is joined. A single empty positional argument contributes zero bytes.
-Named arrays and values supplied by a nested default or alternate contribute
-the ordinary empty payload. Quoted `$*` uses the first IFS character as its
-separator.
+With a nonempty IFS that starts with a character other than space, a case
+pattern containing unquoted `@` splits at exposed IFS characters and rejoins
+the fields with spaces. This includes adjacent unquoted text and `@`
+expansions that supply zero fields. Direct `$@`, `${@}` and `${array[@]}`
+protect their values from splitting and glob matching. Unquoted slices and
+projected values expose their bytes to both operations. An empty field
+created by a non-whitespace delimiter or retained from a quoted aggregate
+can contribute DEL (`0x7F`). A terminal delimiter supplies no additional
+field, and a lone synthesized DEL is removed. A selected parameter default
+or alternate can join fields before the enclosing pattern splits them.
+Quoted `$*` uses the first IFS character as its separator.
 
 In parameter replacement text, later empty fields from quoted `$@` or
 `${array[@]}` emit a DEL byte (`0x7F`) in the recorded Bash profile. A leading

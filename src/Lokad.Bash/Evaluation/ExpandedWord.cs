@@ -24,15 +24,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
     internal bool IsEmptyAggregateField { get; } = isEmptyAggregateField;
 
     /// <summary>Joins scalar or pattern operand fields without losing quote metadata.</summary>
-    public static ExpandedWord JoinWithSpaces(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory) =>
-        JoinWithSpaces(words, memory, protectCasePatternFields: false);
-
-    internal static ExpandedWord JoinCasePatternOperandWithSpaces(
-        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory) =>
-        JoinWithSpaces(words, memory, protectCasePatternFields: true);
-
-    private static ExpandedWord JoinWithSpaces(
-        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, bool protectCasePatternFields)
+    public static ExpandedWord JoinWithSpaces(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory)
     {
         if (words.Count == 0)
             return new ExpandedWord([]);
@@ -47,10 +39,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         var count = (int)segmentCount;
         memory.Charge(MemoryCapacity.ArrayBackingBytes<ExpandedSegment>(count));
         var segments = new ExpandedSegment[count];
-        var separator = new ExpandedSegment(Space, isGlobQuoted: false)
-        {
-            IsCasePatternIfsProtected = protectCasePatternFields,
-        };
+        var separator = new ExpandedSegment(Space, isGlobQuoted: false);
         var destination = 0;
         for (var index = 0; index < words.Count; index++)
         {
@@ -61,8 +50,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
             for (var part = 0; part < field.Count; part++)
             {
                 var segment = field[part];
-                segments[destination++] = protectCasePatternFields
-                    ? segment with { IsCasePatternIfsProtected = true } : segment;
+                segments[destination++] = segment;
             }
         }
 

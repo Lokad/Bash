@@ -126,6 +126,25 @@ public sealed class ByteFieldBoundaryTests
         Assert.Equal(new[] { "pre", "post" }, builder.Build().Select(word => word.ToValue(budget).ToUtf8String()));
     }
 
+    [Fact]
+    public void CaseFieldSelectionKeepsAValidCharacterContainingTheDelimiterByte()
+    {
+        var variables = Variables.CreateInitial(
+            new Dictionary<BindingName, ShellValue> { ["IFS"] = ShellValue.FromBytes(new byte[] { 0xa9 }) }, []);
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using (var owner = governor.CreateScope())
+        {
+            var memory = new EvaluationMemory(owner);
+            var builder = new ExpandedWordBuilder(variables, memory, ExpansionPurpose.CasePattern, ImplicitEmptyPolicy.Preserve);
+            builder.AppendFields([ShellValue.FromBytes(new byte[] { 0xc3, 0xa9, 0xa9, (byte)'x' })],
+                allowWordSplitting: false, globQuoted: false, ExpansionQuoteContext.Unquoted, AtFieldSource.Projected);
+
+            Assert.Equal(new[] { "C3A9", "78" }, builder.BuildCasePattern()
+                .Select(word => Convert.ToHexString(word.ToValue(memory).Bytes.Span)));
+        }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("preé", "C3A9", "post", new[] { "707265C3", "", "706F7374" })]
     [InlineData("pre", "C3", "épost", new[] { "707265", "C3", "706F7374" })]
