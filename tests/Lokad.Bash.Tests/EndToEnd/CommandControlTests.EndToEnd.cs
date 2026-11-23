@@ -17,7 +17,7 @@ public sealed class CommandControlTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("</target:/temporary></target:/temporary:/>", result.StdOut);
-        Assert.Equal("OLDPWD: readonly variable\nPWD: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: OLDPWD: readonly variable\nline 1: PWD: readonly variable\n", result.StdErr);
     }
 
     [Theory]

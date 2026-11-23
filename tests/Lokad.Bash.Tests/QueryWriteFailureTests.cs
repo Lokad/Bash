@@ -27,22 +27,22 @@ public sealed class QueryWriteFailureTests
     }
 
     [Theory]
-    [InlineData("pwd", "pwd")]
-    [InlineData("dirs", "dirs")]
+    [InlineData("pwd", "line 1: pwd")]
+    [InlineData("dirs", "line 1: dirs")]
     [InlineData("label=sample; declare -p label", "declare")]
     [InlineData("f(){ :; }; declare -f f", "declare")]
     [InlineData("export label=sample; export -p", "export")]
     [InlineData("readonly label=sample; readonly -p", "readonly")]
     [InlineData("set -o", "set")]
     [InlineData("set +o", "set")]
-    public async Task ListingsReportClosedOutputThroughTheReachedErrorDescriptor(string script, string name)
+    public async Task ListingsReportClosedOutputThroughTheReachedErrorDescriptor(string script, string diagnosticName)
     {
         await using var host = new TestHost();
         var result = await host.RunAsync(script + " 1>&- 2>errors", CancellationToken.None);
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal(name + ": write error: Bad file descriptor\n", host.ReadFile("/errors"));
+        Assert.Equal(diagnosticName + ": write error: Bad file descriptor\n", host.ReadFile("/errors"));
         Assert.Equal(0, host.OpenFileCount);
     }
 

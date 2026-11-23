@@ -41,11 +41,12 @@ public sealed partial class Evaluation
     /// Handles the <c>pwd</c> builtin, emitting the current directory to stdout.
     /// </summary>
     /// <returns>The finalized evaluation result.</returns>
-    private async Task<EvaluationResult> EvaluateBuiltinPwdAsync(ShellValue name, PwdOptions options, bool negated)
+    private async Task<EvaluationResult> EvaluateBuiltinPwdAsync(ShellValue name, PwdOptions options, EvaluationContext context, bool negated)
     {
         if (!options.InvalidFlag.IsEmpty)
         {
-            await WriteInvalidShortOptionUnlessStderrClosedAsync(name, options.InvalidFlag, BuiltinKind.Pwd, "pwd")
+            await WriteInvalidShortOptionUnlessStderrClosedAsync(name, ShellValue.FromText("-"), options.InvalidFlag,
+                    BuiltinKind.Pwd, "pwd", GetBuiltinDiagnosticPrefix(context))
                 .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
@@ -53,7 +54,7 @@ public sealed partial class Evaluation
             return await WriteBuiltinHelpUnlessStdoutClosedAsync(name, BuiltinKind.Pwd, "pwd", negated)
                 .ConfigureAwait(false);
 
-        var output = await WriteDirectoryStackAsync("pwd", 0, DirectoryStackLayout.Compact, ShellValue.Empty)
+        var output = await WriteDirectoryStackAsync("pwd", 0, DirectoryStackLayout.Compact, ShellValue.Empty, context)
             .ConfigureAwait(false);
         var exitCode = output.IsError ? 1 : 0;
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);
@@ -83,7 +84,7 @@ public sealed partial class Evaluation
                     return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Cd, "cd", negated)
                         .ConfigureAwait(false);
                 case ShortOptionField.Flags:
-                    await ReportExpansionDiagnosticAsync([words[0]], [operand, ShellValue.FromText(": invalid option")])
+                    await ReportBuiltinDiagnosticAsync([words[0]], [operand, ShellValue.FromText(": invalid option")], context)
                         .ConfigureAwait(false);
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
             }
@@ -101,7 +102,7 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> FailAsync(string message)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("cd"), ShellValue.FromText(message)).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync(ShellValue.FromText("cd"), message, context).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
     }
@@ -113,6 +114,7 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateBuiltinDirsAsync(
         IReadOnlyList<ShellValue> words,
         Variables variables,
+        EvaluationContext context,
         bool negated)
     {
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
@@ -145,10 +147,10 @@ public sealed partial class Evaluation
             else
             {
                 if (option is not [(byte)'+' or (byte)'-', ..])
-                    return await ReportDirectoryStackUsageAsync("dirs", documentation, operand, ": invalid option", negated)
+                    return await ReportDirectoryStackUsageAsync("dirs", documentation, operand, ": invalid option", context, negated)
                         .ConfigureAwait(false);
                 if (!TryReadDirectoryStackIndex(option, _state.DirectoryStackCount, out var logicalIndex))
-                    return await ReportDirectoryStackUsageAsync("dirs", documentation, operand, ": invalid number", negated)
+                    return await ReportDirectoryStackUsageAsync("dirs", documentation, operand, ": invalid number", context, negated)
                         .ConfigureAwait(false);
                 index = logicalIndex;
                 selected = operand;
@@ -161,10 +163,10 @@ public sealed partial class Evaluation
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
         }
         if (index is < 0)
-            return await ReportDirectoryStackIndexAsync("dirs", ShellValue.FromBytes(selected.Bytes[1..]), negated)
+            return await ReportDirectoryStackIndexAsync("dirs", ShellValue.FromBytes(selected.Bytes[1..]), context, negated)
                 .ConfigureAwait(false);
         var home = !fullPaths && variables.TryGetExpansionValue("HOME", out var value) ? value : ShellValue.Empty;
-        var output = await WriteDirectoryStackAsync("dirs", index, layout, home).ConfigureAwait(false);
+        var output = await WriteDirectoryStackAsync("dirs", index, layout, home, context).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(output.IsError ? 1 : 0), negated)
             .ConfigureAwait(false);
     }
@@ -182,11 +184,11 @@ public sealed partial class Evaluation
     {
         var operands = ReadDirectoryStackOperands(words, BuiltinKind.Pushd);
         if (operands.Outcome != DirectoryStackOperandOutcome.Run)
-            return await FinishDirectoryStackOperandsAsync(BuiltinKind.Pushd, operands, words, negated).ConfigureAwait(false);
+            return await FinishDirectoryStackOperandsAsync(BuiltinKind.Pushd, operands, words, context, negated).ConfigureAwait(false);
         if (operands.Index is { } index)
         {
             if (index < 0)
-                return await ReportDirectoryStackIndexAsync("pushd", operands.IndexOperand, negated).ConfigureAwait(false);
+                return await ReportDirectoryStackIndexAsync("pushd", operands.IndexOperand, context, negated).ConfigureAwait(false);
             CheckCancellation();
             var target = _state.RotateSavedDirectories(index, Memory);
             if (operands.KeepDirectory)
@@ -203,7 +205,7 @@ public sealed partial class Evaluation
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
             if (_state.DirectoryStackCount < 2)
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText("pushd"), ShellValue.FromText("no other directory")).ConfigureAwait(false);
+                await ReportBuiltinDiagnosticAsync(ShellValue.FromText("pushd"), "no other directory", context).ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
             }
 
@@ -217,7 +219,7 @@ public sealed partial class Evaluation
         {
             CheckCancellation();
             _state.PushDeferredDirectory(operand, Memory);
-            return await FinishStackEditAsync("pushd", variables, negated).ConfigureAwait(false);
+            return await FinishStackEditAsync("pushd", variables, context, negated).ConfigureAwait(false);
         }
 
         var pushResult = await ChangeToDirectoryOperandAsync(DirectoryChangeKind.PushDirectory, operand,
@@ -235,21 +237,21 @@ public sealed partial class Evaluation
     {
         var operands = ReadDirectoryStackOperands(words, BuiltinKind.Popd);
         if (operands.Outcome != DirectoryStackOperandOutcome.Run)
-            return await FinishDirectoryStackOperandsAsync(BuiltinKind.Popd, operands, words, negated).ConfigureAwait(false);
+            return await FinishDirectoryStackOperandsAsync(BuiltinKind.Popd, operands, words, context, negated).ConfigureAwait(false);
         if (_state.DirectoryStackCount < 2)
         {
-            await ReportExpansionDiagnosticAsync(ShellValue.FromText("popd"), ShellValue.FromText("directory stack empty")).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync(ShellValue.FromText("popd"), "directory stack empty", context).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
         }
 
         var index = operands.Index ?? 0;
         if (index < 0)
-            return await ReportDirectoryStackIndexAsync("popd", operands.IndexOperand, negated).ConfigureAwait(false);
+            return await ReportDirectoryStackIndexAsync("popd", operands.IndexOperand, context, negated).ConfigureAwait(false);
         if (index > 0 || operands.KeepDirectory)
         {
             CheckCancellation();
             _state.RemoveSavedDirectory(Math.Max(1, index));
-            return await FinishStackEditAsync("popd", variables, negated).ConfigureAwait(false);
+            return await FinishStackEditAsync("popd", variables, context, negated).ConfigureAwait(false);
         }
 
         var result = await ChangeToSavedDirectoryAsync(DirectoryChangeKind.PopDirectory,
@@ -329,7 +331,7 @@ public sealed partial class Evaluation
     }
 
     private async Task<EvaluationResult> FinishDirectoryStackOperandsAsync(
-        BuiltinKind kind, DirectoryStackOperands operands, IReadOnlyList<ShellValue> words, bool negated)
+        BuiltinKind kind, DirectoryStackOperands operands, IReadOnlyList<ShellValue> words, EvaluationContext context, bool negated)
     {
         var name = kind == BuiltinKind.Pushd ? "pushd" : "popd";
         if (operands.Outcome == DirectoryStackOperandOutcome.Help)
@@ -337,20 +339,21 @@ public sealed partial class Evaluation
                 .ConfigureAwait(false);
         if (operands.Outcome == DirectoryStackOperandOutcome.TooManyArguments)
         {
-            await ReportExpansionDiagnosticAsync(words[0], ShellValue.FromText("too many arguments")).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync(words[0], "too many arguments", context).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
 
         var reason = operands.Outcome == DirectoryStackOperandOutcome.InvalidNumber ? ": invalid number" : ": invalid argument";
         return await ReportDirectoryStackUsageAsync(name, BuiltinDocumentation.For(kind),
-            words[operands.NextOperand], reason, negated).ConfigureAwait(false);
+            words[operands.NextOperand], reason, context, negated).ConfigureAwait(false);
     }
 
     private async Task<EvaluationResult> ReportDirectoryStackUsageAsync(string name, BuiltinDocumentation documentation,
-        ShellValue operand, string reason, bool negated)
+        ShellValue operand, string reason, EvaluationContext context, bool negated)
     {
         var command = ShellValue.FromText(name);
-        await WriteDiagnosticUnlessStderrClosedAsync([command], [operand, ShellValue.FromText(reason)], _builtinDiagnostics)
+        await WriteDiagnosticAsync([command], [operand, ShellValue.FromText(reason)], _builtinDiagnostics,
+                ClosedStderrHandling.Discard, GetBuiltinDiagnosticPrefix(context))
             .ConfigureAwait(false);
         await WriteDiagnosticUnlessStderrClosedAsync([command],
                 [ShellValue.FromText("usage: "), ShellValue.FromText(documentation.Synopsis(name))], _builtinDiagnostics)
@@ -358,20 +361,21 @@ public sealed partial class Evaluation
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
     }
 
-    private async Task<EvaluationResult> ReportDirectoryStackIndexAsync(string name, ShellValue operand, bool negated)
+    private async Task<EvaluationResult> ReportDirectoryStackIndexAsync(string name, ShellValue operand,
+        EvaluationContext context, bool negated)
     {
         var command = ShellValue.FromText(name);
         if (_state.DirectoryStackCount == 1)
-            await ReportExpansionDiagnosticAsync(command, ShellValue.FromText("directory stack empty")).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync(command, "directory stack empty", context).ConfigureAwait(false);
         else
-            await ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(": directory stack index out of range")])
+            await ReportBuiltinDiagnosticAsync([command], [operand, ShellValue.FromText(": directory stack index out of range")], context)
                 .ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
     }
 
-    private async Task<EvaluationResult> FinishStackEditAsync(string name, Variables variables, bool negated)
+    private async Task<EvaluationResult> FinishStackEditAsync(string name, Variables variables, EvaluationContext context, bool negated)
     {
-        await WriteDirectoryStackAsync(name, variables).ConfigureAwait(false);
+        await WriteDirectoryStackAsync(name, variables, context).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
     }
 
@@ -389,8 +393,8 @@ public sealed partial class Evaluation
             var variable = selection == DirectoryOperandKind.Home ? "HOME" : "OLDPWD";
             if (!variables.TryGetExpansionValue(variable, out destination))
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)),
-                    ShellValue.FromText(variable + " not set")).ConfigureAwait(false);
+                await ReportBuiltinDiagnosticAsync(ShellValue.FromText(DirectoryCommandName(kind)),
+                    variable + " not set", context).ConfigureAwait(false);
                 return EvaluationResult.FromExitCode(1);
             }
         }
@@ -438,7 +442,7 @@ public sealed partial class Evaluation
                 variables, bindings, context, announcement)
                 .ConfigureAwait(false);
         await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
-            target, new OperationError("invalid path\n")).ConfigureAwait(false);
+            target, new OperationError("invalid path\n"), GetBuiltinDiagnosticPrefix(context)).ConfigureAwait(false);
         return EvaluationResult.FromExitCode(1);
 
         async Task<EvaluationResult?> TryChangeThroughCdPathAsync(ReadOnlyMemory<byte> remaining)
@@ -572,7 +576,7 @@ public sealed partial class Evaluation
             var error = selected.Error ?? new OperationError(
                 selected.Info.Kind == FilePathKind.Missing ? "No such file or directory\n" : "Not a directory\n");
             await ReportBuiltinOperationErrorAsync(ShellValue.FromText(DirectoryCommandName(kind)), string.Empty,
-                diagnosticPath, error).ConfigureAwait(false);
+                diagnosticPath, error, GetBuiltinDiagnosticPrefix(context)).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(1);
         }
 
@@ -593,14 +597,14 @@ public sealed partial class Evaluation
         if (ExitsOnReadonly(pwdResult))
             return await RunExitTrapAsync(scope, EvaluationResult.Exit(1)).ConfigureAwait(false);
         if (announced.IsError)
-            await ReportBuiltinWriteFailureAsync(ShellValue.FromText(DirectoryCommandName(kind)), announced).ConfigureAwait(false);
+            await ReportBuiltinWriteFailureAsync(ShellValue.FromText(DirectoryCommandName(kind)), announced, context).ConfigureAwait(false);
         if (oldResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly
             || pwdResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly
             || kind == DirectoryChangeKind.PushDirectory && announced.IsError)
             return EvaluationResult.FromExitCode(1);
         _state.CompleteDirectoryChange(kind, previous, Memory);
         if (kind != DirectoryChangeKind.ChangeDirectory)
-            await WriteDirectoryStackAsync(DirectoryCommandName(kind), variables).ConfigureAwait(false);
+            await WriteDirectoryStackAsync(DirectoryCommandName(kind), variables, context).ConfigureAwait(false);
         var exitCode = announced.IsError ? 1 : 0;
         return EvaluationResult.FromExitCode(exitCode);
 
@@ -610,17 +614,17 @@ public sealed partial class Evaluation
             assigned == BuiltinAssignmentResult.Readonly && _state.ErrexitEnabled;
     }
 
-    private Task<DescriptorWriteResult> WriteDirectoryStackAsync(string commandName, Variables variables)
+    private Task<DescriptorWriteResult> WriteDirectoryStackAsync(string commandName, Variables variables, EvaluationContext context)
     {
         variables.TryGetExpansionValue("HOME", out var home);
-        return WriteDirectoryStackAsync(commandName, null, DirectoryStackLayout.Compact, home);
+        return WriteDirectoryStackAsync(commandName, null, DirectoryStackLayout.Compact, home, context);
     }
 
     private Task<DescriptorWriteResult> WriteDirectoryStackAsync(
-        string commandName, int? index, DirectoryStackLayout layout, ShellValue home)
+        string commandName, int? index, DirectoryStackLayout layout, ShellValue home, EvaluationContext context)
     {
         var content = _state.FormatDirectoryStack(index, layout, home, Memory, _cancellationToken);
-        return WriteBuiltinOutputAsync(ShellValue.FromText(commandName), content);
+        return WriteBuiltinOutputAsync(ShellValue.FromText(commandName), content, context);
     }
 
     private static string DirectoryCommandName(DirectoryChangeKind kind) => kind switch

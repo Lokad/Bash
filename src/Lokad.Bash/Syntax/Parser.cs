@@ -1392,6 +1392,7 @@ public static class Parser
         var firstElementEndLine = 0;
         var trackWrapperOperand = false;
         var wrapperOperandEndLine = 0;
+        var redirectionOperandEndLine = 0;
 
         while (true)
         {
@@ -1444,22 +1445,22 @@ public static class Parser
             }
 
             var token = tokenizer.NextTokenCore();
-            if (trackWrapperOperand)
-            {
-                var operandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
-                if (operandLine != firstElementEndLine)
-                    wrapperOperandEndLine = operandLine;
-                trackWrapperOperand = false;
-            }
             switch (token.Kind)
             {
                 case TokenKind.Redirection:
                     sawAny = true;
+                    var trackRedirectionOperand = trackWrapperOperand;
+                    if (trackRedirectionOperand)
+                        RecordWrapperOperand();
                     ReadRedirection(tokenizer, token, null, string.Empty, ref redirections);
+                    if (trackRedirectionOperand)
+                        redirectionOperandEndLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
                     continue;
                 case TokenKind.Word:
                 case TokenKind.OpenBrace:
                 case TokenKind.CloseBrace:
+                    if (trackWrapperOperand)
+                        RecordWrapperOperand();
                     sawAny = true;
                     if (!tokenizer.TryGetOperandWord(token, out var wordToken))
                     {
@@ -1548,6 +1549,14 @@ public static class Parser
             }
         }
 
+        void RecordWrapperOperand()
+        {
+            var operandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
+            if (operandLine != firstElementEndLine)
+                wrapperOperandEndLine = operandLine;
+            trackWrapperOperand = false;
+        }
+
         SimpleCommand CreateCommand()
         {
             var command = new SimpleCommand(
@@ -1555,7 +1564,7 @@ public static class Parser
                 words is null ? Array.Empty<Word>() : words,
                 redirections is null ? Array.Empty<Redirection>() : redirections,
                 declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
-            tokenizer.RecordLocation(command, startLine, firstElementEndLine, wrapperOperandEndLine);
+            tokenizer.RecordLocation(command, startLine, firstElementEndLine, wrapperOperandEndLine, redirectionOperandEndLine);
             return command;
         }
 

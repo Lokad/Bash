@@ -16,7 +16,7 @@ public sealed class OperationDiagnosticTests
     [InlineData("read -d : value", "read", "read: read error: 0: ", true)]
     [InlineData("echo ok", "echo", "echo: write error: ", false)]
     [InlineData("echo ok", "echo", "echo: write error: ", true)]
-    [InlineData("cd /unavailable", "cd", "cd: /unavailable: ", false)]
+    [InlineData("cd /unavailable", "cd", "line 1: cd: /unavailable: ", false)]
     [InlineData("cd /unavailable", "cd", "cd: /unavailable: ", true)]
     public async Task BuiltinHostErrorsPreserveFramingAndRefusal(string script, string name, string prefix, bool exhaustBudget)
     {

@@ -1266,7 +1266,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("pwd: write error: Write failed\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: pwd: write error: Write failed\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -1333,7 +1333,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("cd: ./target: No such file or directory\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: cd: ./target: No such file or directory\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -1348,7 +1348,7 @@ public partial class EvaluationTests
         var state = new Eval(script);
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("cd: HOME not set\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: cd: HOME not set\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -1372,7 +1372,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("OLDPWD: readonly variable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: OLDPWD: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
@@ -3923,7 +3923,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("popd: directory stack empty\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: popd: directory stack empty\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

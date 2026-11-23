@@ -8,6 +8,9 @@ internal readonly record struct CommandLocation(int StartLine, int FirstElementE
 {
     /// <summary>End of the next token after an initial word, when it changes the callback anchor.</summary>
     internal int WrapperOperandEndLine { get; init; }
+
+    /// <summary>End of the operand when the next token is a redirection operator without a descriptor.</summary>
+    internal int RedirectionOperandEndLine { get; init; }
 }
 
 /// <summary>Cumulative line change after a spelling edit at a physical source position.</summary>

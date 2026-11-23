@@ -68,16 +68,18 @@ internal sealed class Tokenizer
     }
 
     internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine) =>
-        RecordLocation(command, startLine, firstElementEndLine, 0);
+        RecordLocation(command, startLine, firstElementEndLine, 0, 0);
 
-    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine, int wrapperOperandEndLine)
+    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine, int wrapperOperandEndLine,
+        int redirectionOperandEndLine)
     {
         if (!TrackCommandLocations)
             return;
         (Locations ??= new CommandLocations()).Add(command,
             new CommandLocation(startLine, firstElementEndLine, GetLine(ConsumedPosition))
             {
-                WrapperOperandEndLine = wrapperOperandEndLine
+                WrapperOperandEndLine = wrapperOperandEndLine,
+                RedirectionOperandEndLine = redirectionOperandEndLine
             }, _scanContext.SyntaxMemory);
     }
 

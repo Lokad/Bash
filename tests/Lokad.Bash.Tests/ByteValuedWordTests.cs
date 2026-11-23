@@ -212,7 +212,7 @@ public sealed class ByteValuedWordTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("1:/", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal($"reached\n{command}: too many arguments\n", host.ReadFile("/errors"));
+        Assert.Equal($"reached\nline 1: {command}: too many arguments\n", host.ReadFile("/errors"));
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -224,7 +224,7 @@ public sealed class ByteValuedWordTests
             EndToEndHarness.BuildTree(["/tmp"], []));
         byte[] expected =
         [
-            .. "popd: "u8, 0xff,
+            .. "line 1: popd: "u8, 0xff,
             .. ": invalid argument\npopd: usage: popd [-n] [+N | -N]\n"u8
         ];
 
@@ -256,7 +256,7 @@ public sealed class ByteValuedWordTests
             """, new TestHost());
 
         byte[] expectedOutput = [.. "/\n~/leaf"u8, 0xfe, .. "\n2\nhome"u8, 0xff, .. "/leaf"u8, 0xfe, (byte)'\n'];
-        byte[] expectedError = [.. "dirs: "u8, 0xff, .. ": invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\n"u8];
+        byte[] expectedError = [.. "line 3: dirs: "u8, 0xff, .. ": invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\n"u8];
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expectedOutput, result.Host.StandardOutput.Content.ToArray());
         Assert.Equal(expectedError, result.Host.StandardError.Content.ToArray());

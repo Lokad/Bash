@@ -34,7 +34,7 @@ public sealed class DirectoryNavigationHostTests
         Assert.Equal(expectedPaths, host.PathInfoRequests.Select(path => path.Path));
         var append = Assert.Single(host.Appends);
         Assert.Equal(fallback ? FileDescriptor.StdErr : FileDescriptor.StdOut, append.Descriptor);
-        Assert.Equal(fallback ? "cd: target: fallback denied\n" : "/third/target\n", Encoding.UTF8.GetString(append.Content));
+        Assert.Equal(fallback ? "line 1: cd: target: fallback denied\n" : "/third/target\n", Encoding.UTF8.GetString(append.Content));
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public sealed class DirectoryNavigationHostTests
     [InlineData(true, "OLDPWD")]
     public Task ReadonlyDiagnosticRetainsPublishedCwdAndOwnersThroughCancellation(bool prepared, string variable) =>
         VerifyPendingDirectoryWriteAsync(prepared, "readonly " + variable + "; set -e; cd /a 2>/out",
-            variable + ": readonly variable\n");
+            $"line 1: {variable}: readonly variable\n");
 
     [Theory]
     [InlineData(false)]
@@ -278,7 +278,7 @@ public sealed class DirectoryNavigationHostTests
         Assert.Equal(["/a", "/b", "/a"], host.PathInfoRequests.Select(p => p.Path));
         var prefix = command.StartsWith("cd", StringComparison.Ordinal) ? "cd" : command;
         var shownPath = prefix == "cd" ? "../a" : "/a";
-        Assert.Equal($"{prefix}: {shownPath}: synthetic denial\n", Encoding.UTF8.GetString(
+        Assert.Equal($"line 1: {prefix}: {shownPath}: synthetic denial\n", Encoding.UTF8.GetString(
             host.Appends.Where(a => a.Descriptor == FileDescriptor.StdErr).SelectMany(a => a.Content).ToArray()));
         Assert.Equal(command == "pushd" ? "/b /b\n" : "/b /a\n", Encoding.UTF8.GetString(
             host.Appends.Where(a => a.Descriptor == FileDescriptor.StdOut).SelectMany(a => a.Content).ToArray()));
@@ -410,14 +410,14 @@ public sealed class DirectoryNavigationHostTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
-        Assert.Equal(diagnosticName + ": write error: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal($"line 1: {diagnosticName}: write error: Bad file descriptor\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
-    [InlineData("pushd +1 1>&-", "0:/b\n/b /a /c\n", "pushd: write error: Bad file descriptor\n")]
+    [InlineData("pushd +1 1>&-", "0:/b\n/b /a /c\n", "line 1: pushd: write error: Bad file descriptor\n")]
     [InlineData("pushd -n +1 1>&-", "0:/c\n/c /a /c\n", "")]
-    [InlineData("popd -0 1>&-", "0:/c\n/c /b\n", "popd: write error: Bad file descriptor\n")]
+    [InlineData("popd -0 1>&-", "0:/c\n/c /b\n", "line 1: popd: write error: Bad file descriptor\n")]
     public async Task DirectoryStackIndicesSelectFromEitherEnd(string command, string output, string error)
     {
         await using var host = new TestHost();
@@ -440,7 +440,7 @@ public sealed class DirectoryNavigationHostTests
         var result = await host.RunAsync("pushd +1 1>&-", CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal("pushd: directory stack empty\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: pushd: directory stack empty\n", host.StandardError.TextContent);
     }
 
     [Fact]

@@ -7,13 +7,13 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationDirectoryStackTestsEndToEnd
 {
     [Theory]
-    [InlineData("pushd /alpha /beta", 1, "pushd: too many arguments\n")]
-    [InlineData("pushd -n -x", 2, "pushd: -x: invalid number\npushd: usage: pushd [-n] [+N | -N | dir]\n")]
-    [InlineData("pushd +7 +1", 1, "pushd: +7: directory stack index out of range\n")]
-    [InlineData("pushd +07 -q", 1, "pushd: +07: directory stack index out of range\n")]
-    [InlineData("pushd -7 -n +1", 1, "pushd: -7: directory stack index out of range\n")]
-    [InlineData("popd +1 stray", 2, "popd: stray: invalid argument\npopd: usage: popd [-n] [+N | -N]\n")]
-    [InlineData("popd -n --help", 2, "popd: --help: invalid number\npopd: usage: popd [-n] [+N | -N]\n")]
+    [InlineData("pushd /alpha /beta", 1, "line 3: pushd: too many arguments\n")]
+    [InlineData("pushd -n -x", 2, "line 3: pushd: -x: invalid number\npushd: usage: pushd [-n] [+N | -N | dir]\n")]
+    [InlineData("pushd +7 +1", 1, "line 3: pushd: +7: directory stack index out of range\n")]
+    [InlineData("pushd +07 -q", 1, "line 3: pushd: +07: directory stack index out of range\n")]
+    [InlineData("pushd -7 -n +1", 1, "line 3: pushd: -7: directory stack index out of range\n")]
+    [InlineData("popd +1 stray", 2, "line 3: popd: stray: invalid argument\npopd: usage: popd [-n] [+N | -N]\n")]
+    [InlineData("popd -n --help", 2, "line 3: popd: --help: invalid number\npopd: usage: popd [-n] [+N | -N]\n")]
     public async Task InvalidStackOperandsLeavePathsAndBindingsUntouched(string command, int status, string error)
     {
         await using var host = EndToEndHarness.BuildTree(["/alpha", "/beta"], []);
@@ -38,7 +38,7 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
 
     [Theory]
     [InlineData("pushd -", "/alpha\n/alpha /beta /alpha /\n0|/alpha|/beta\n/alpha /beta /alpha /\n", "")]
-    [InlineData("pushd -- - 1>&-", "1|/alpha|/beta\n/alpha /alpha /\n", "pushd: write error: Bad file descriptor\n")]
+    [InlineData("pushd -- - 1>&-", "1|/alpha|/beta\n/alpha /alpha /\n", "line 3: pushd: write error: Bad file descriptor\n")]
     [InlineData("pushd ''", "/beta /beta /alpha /\n0|/beta|/beta\n/beta /beta /alpha /\n", "")]
     public async Task PushdAppliesNavigationBeforeCompletingTheStackEdit(string command, string expected, string error)
     {
@@ -87,9 +87,9 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("cd -", "/base/missing", "cd: ../missing: No such file or directory\n", "/base/alpha")]
-    [InlineData("pushd -- +1", "/base/alpha/+1", "pushd: +1: No such file or directory\n", "/base/alpha")]
-    [InlineData("pushd -n ../record >/dev/null; popd", "/base/record", "popd: ../record: Not a directory\n", "/base/alpha ../record")]
+    [InlineData("cd -", "/base/missing", "line 3: cd: ../missing: No such file or directory\n", "/base/alpha")]
+    [InlineData("pushd -- +1", "/base/alpha/+1", "line 3: pushd: +1: No such file or directory\n", "/base/alpha")]
+    [InlineData("pushd -n ../record >/dev/null; popd", "/base/record", "line 3: popd: ../record: Not a directory\n", "/base/alpha ../record")]
     public async Task DirectoryLookupReportsTheSelectedSpelling(string command, string lookup, string diagnostic, string stack)
     {
         await using var host = EndToEndHarness.BuildTree(["/base/alpha"], [("/base/record", "record")]);
@@ -231,7 +231,7 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
         Assert.Equal($"status:{status}:-c\n{stack}\n", host.StandardOutput.TextContent);
         if (status == 2)
-            Assert.Equal("dirs: : invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\n", host.StandardError.TextContent);
+            Assert.Equal("line 3: dirs: : invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\n", host.StandardError.TextContent);
         else
             Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal("reached", host.ReadFile("/target/effect"));
@@ -278,7 +278,7 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("rejected:2\n/target /\ncleared:0\n/target\n", result.StdOut);
-        Assert.Equal("dirs: -z: invalid number\ndirs: usage: dirs [-clpv] [+N] [-N]\n", result.StdErr);
+        Assert.Equal("line 2: dirs: -z: invalid number\ndirs: usage: dirs [-clpv] [+N] [-N]\n", result.StdErr);
     }
 
     [Fact]
@@ -317,7 +317,7 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("popd: directory stack empty\n", result.StdErr);
+        Assert.Equal("line 1: popd: directory stack empty\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 }

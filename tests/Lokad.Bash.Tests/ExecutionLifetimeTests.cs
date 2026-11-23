@@ -168,7 +168,7 @@ public sealed class ExecutionLifetimeTests
     }
 
     [Theory]
-    [InlineData("cd \"-$1\"", "cd: -", ": invalid option\n", 2, 56 * 1024)]
+    [InlineData("cd \"-$1\"", "line 1: cd: -", ": invalid option\n", 2, 56 * 1024)]
     [InlineData("trap -p \"$1\"", "trap: ", ": invalid signal specification\n", 1, 32 * 1024)]
     public async Task RejectedOperandFitsWithOneDiagnosticBuffer(
         string command, string prefix, string suffix, int status, int allowance)

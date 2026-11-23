@@ -8,6 +8,36 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationDirectoryTestsEndToEnd
 {
     [Theory]
+    [InlineData("cd \\\n./missing", 3)]
+    [InlineData("tag=value \\\ncd \\\n./missing", 2)]
+    [InlineData("cd >\\\nreport \\\n./missing", 3)]
+    [InlineData("cd 1>\\\nreport \\\n./missing", 2)]
+    public async Task DirectoryLookupDiagnosticUsesTheReachedTokenLine(string command, int line)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(":\n" + command, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("/", result.CurrentDirectory.Path);
+        Assert.Equal($"line {line}: cd: ./missing: No such file or directory\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("source /body", "/body: line 3")]
+    [InlineData("eval ':\ncd ./missing'", "line 4")]
+    public async Task DirectoryLookupDiagnosticKeepsTheLoadedSourceLocation(string command, string location)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", ":\ncd \\\n./missing\n");
+        var result = await host.RunAsync(":\n" + command, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal($"{location}: cd: ./missing: No such file or directory\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("CDPATH=missing:search cd target", "/search/target", "/search/target\n")]
     [InlineData("CDPATH=:search cd target", "/target", "")]
     [InlineData("CDPATH=.:search cd target", "/target", "/target\n")]
@@ -50,7 +80,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         Assert.Equal("/start", result.CurrentDirectory.Path);
         Assert.Equal("</start></>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal($"cd: {component}/../finish: {cause}\n", host.ReadFile("/reason"));
+        Assert.Equal($"line 3: cd: {component}/../finish: {cause}\n", host.ReadFile("/reason"));
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -92,7 +122,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
         Assert.Equal("/", result.CurrentDirectory.Path);
         Assert.Equal("/ absent/../finish\n", host.StandardOutput.TextContent);
-        Assert.Equal("popd: absent/../finish: No such file or directory\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: popd: absent/../finish: No such file or directory\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -105,7 +135,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal("/search/target\n", host.StandardOutput.TextContent);
-        Assert.Equal("cd: write error: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: cd: write error: Bad file descriptor\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -161,7 +191,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
 
         Assert.Equal(2, result.ExitCode);
         Assert.True(host.StandardOutput.Content.IsEmpty);
-        byte[] expected = [.. "pwd: -"u8, 0xff, .. ": invalid option\npwd: usage: pwd [-LP]\n"u8];
+        byte[] expected = [.. "line 1: pwd: -"u8, 0xff, .. ": invalid option\npwd: usage: pwd [-LP]\n"u8];
         Assert.Equal(expected, host.StandardError.Content.ToArray());
     }
 
@@ -209,7 +239,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("pwd: write error: Bad file descriptor\n", result.StdErr);
+        Assert.Equal("line 1: pwd: write error: Bad file descriptor\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -219,7 +249,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("pwd >&-; echo after");
 
         Assert.Equal("after\n", result.StdOut);
-        Assert.Equal("pwd: write error: Bad file descriptor\n", result.StdErr);
+        Assert.Equal("line 1: pwd: write error: Bad file descriptor\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -276,7 +306,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("/\n", result.StdOut);
-        Assert.Equal("cd: /missing: No such file or directory\n", result.StdErr);
+        Assert.Equal("line 1: cd: /missing: No such file or directory\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -287,7 +317,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("cd: HOME not set\n", result.StdErr);
+        Assert.Equal("line 1: cd: HOME not set\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -303,12 +333,12 @@ public sealed class EvaluationDirectoryTestsEndToEnd
     [InlineData("cd -- -x", "/-x", "", "", 0)]
     [InlineData("x='one space'; cd \"$x\"", "/one space", "", "", 0)]
     [InlineData("cd first-*", "/first-hit", "", "", 0)]
-    [InlineData("x='one space'; cd $x", "/", "", "cd: too many arguments\n", 1)]
-    [InlineData("IFS=:; x=multi-a:multi-b; cd $x", "/", "", "cd: too many arguments\n", 1)]
-    [InlineData("cd multi-*", "/", "", "cd: too many arguments\n", 1)]
-    [InlineData("cd -x", "/", "", "cd: -x: invalid option\n", 2)]
-    [InlineData("unset OLDPWD; cd -", "/", "", "cd: OLDPWD not set\n", 1)]
-    [InlineData("OLDPWD=target; cd - 1>&-", "/target", "", "cd: write error: Bad file descriptor\n", 1)]
+    [InlineData("x='one space'; cd $x", "/", "", "line 1: cd: too many arguments\n", 1)]
+    [InlineData("IFS=:; x=multi-a:multi-b; cd $x", "/", "", "line 1: cd: too many arguments\n", 1)]
+    [InlineData("cd multi-*", "/", "", "line 1: cd: too many arguments\n", 1)]
+    [InlineData("cd -x", "/", "", "line 1: cd: -x: invalid option\n", 2)]
+    [InlineData("unset OLDPWD; cd -", "/", "", "line 1: cd: OLDPWD not set\n", 1)]
+    [InlineData("OLDPWD=target; cd - 1>&-", "/target", "", "line 1: cd: write error: Bad file descriptor\n", 1)]
     public async Task CdUsesExpandedOperandsAndReportsItsSelectedDestination(
         string command, string directory, string output, string error, int status)
     {

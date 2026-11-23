@@ -278,6 +278,11 @@ Failed `cd`, `pushd` and `popd` lookups report the selected destination's
 spelling, including relative operands, values from OLDPWD and deferred
 stack entries. A saved resolved entry uses its stored path.
 
+Directory builtin errors and readonly bookkeeping errors report the reached
+source line and the active `source` filename, if any. The first command
+element supplies the line unless an initial command word is followed by a
+token on a later line. Usage lines keep their builtin name prefix.
+
 A leading `cd --help` prints help and returns 2 before any navigation.
 `pwd` accepts leading `-L` and `-P` options, including bundles. Both use the
 single current directory tracked by the host model. Invalid leading flags

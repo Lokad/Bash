@@ -19,15 +19,27 @@ public sealed partial class Evaluation
         BuiltinDiagnosticScope? scope) =>
         WriteDiagnosticAsync(name, message, scope, ClosedStderrHandling.Discard);
 
+    private Task ReportBuiltinDiagnosticAsync(ShellValue name, string message, EvaluationContext context) =>
+        ReportBuiltinDiagnosticAsync([name], [ShellValue.FromText(message)], context);
+
+    private Task ReportBuiltinDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        EvaluationContext context) => WriteDiagnosticAsync(name, message, _builtinDiagnostics,
+            ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(context));
+
     private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
         ShellValue command, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
         WriteInvalidShortOptionUnlessStderrClosedAsync(command, ShellValue.FromText("-"), flag, kind, name);
 
     private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
         ShellValue command, ShellValue sign, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
-        WriteDiagnosticUnlessStderrClosedAsync([command], [sign, ShellValue.FromBytes(flag),
+        WriteInvalidShortOptionUnlessStderrClosedAsync(command, sign, flag, kind, name, default);
+
+    private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
+        ShellValue command, ShellValue sign, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name,
+        SyntaxDiagnosticPrefix sourcePrefix) =>
+        WriteDiagnosticAsync([command], [sign, ShellValue.FromBytes(flag),
             ShellValue.FromText(": invalid option\n" + name + ": usage: " + BuiltinDocumentation.For(kind).Synopsis(name))],
-            scope: null);
+            scope: null, ClosedStderrHandling.Discard, sourcePrefix);
 
     private Task<DescriptorWriteResult> WriteInvalidIdentifierDiagnosticAsync(ShellValue command, ShellValue operand,
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
@@ -38,10 +50,14 @@ public sealed partial class Evaluation
         WriteDiagnosticAsync([command], [ShellValue.FromText("`"), operand, ShellValue.FromText("': " + message)],
             scope, closedStderr);
 
-    private async Task<DescriptorWriteResult> WriteBuiltinOutputAsync(ShellValue name, ReadOnlyMemory<byte> content)
+    private Task<DescriptorWriteResult> WriteBuiltinOutputAsync(ShellValue name, ReadOnlyMemory<byte> content) =>
+        WriteBuiltinOutputAsync(name, content, default);
+
+    private async Task<DescriptorWriteResult> WriteBuiltinOutputAsync(ShellValue name, ReadOnlyMemory<byte> content,
+        EvaluationContext diagnosticContext)
     {
         var result = await ExecuteWriteAsync(GetStdOutDescriptor(), content).ConfigureAwait(false);
-        await ReportBuiltinWriteFailureAsync(name, result).ConfigureAwait(false);
+        await ReportBuiltinWriteFailureAsync(name, result, diagnosticContext).ConfigureAwait(false);
         return result;
     }
 
@@ -91,18 +107,28 @@ public sealed partial class Evaluation
 
     /// <summary>Reports a known output failure through the builtin's current stderr mapping.</summary>
     private Task ReportBuiltinWriteFailureAsync(ShellValue name, DescriptorWriteResult result) =>
+        ReportBuiltinWriteFailureAsync(name, result, default);
+
+    private Task ReportBuiltinWriteFailureAsync(ShellValue name, DescriptorWriteResult result,
+        EvaluationContext diagnosticContext) =>
         result.Error is { } cause && !GetStdErrDescriptor().IsClosed
             && GetStdErrDescriptor() != GetStdOutDescriptor()
-            ? ReportBuiltinOperationErrorAsync(name, "write error: ", path: null, cause)
+            ? ReportBuiltinOperationErrorAsync(name, "write error: ", path: null, cause,
+                GetBuiltinDiagnosticPrefix(diagnosticContext))
             : Task.CompletedTask;
 
-    private async Task ReportBuiltinOperationErrorAsync(ShellValue name, string prefix, string? path, OperationError error)
+    private Task ReportBuiltinOperationErrorAsync(ShellValue name, string prefix, string? path, OperationError error) =>
+        ReportBuiltinOperationErrorAsync(name, prefix, path, error, default);
+
+    private async Task ReportBuiltinOperationErrorAsync(ShellValue name, string prefix, string? path, OperationError error,
+        SyntaxDiagnosticPrefix sourcePrefix)
     {
         var scope = _builtinDiagnostics;
         if (scope is { Result.CanAcceptMore: false })
             return;
 
-        var result = await TryWriteOperationDiagnosticAsync(GetStdErrDescriptor(), name, prefix, path, error).ConfigureAwait(false)
+        var result = await TryWriteOperationDiagnosticAsync(GetStdErrDescriptor(), name, prefix, path, error, sourcePrefix)
+                .ConfigureAwait(false)
             ?? throw new MemoryBudgetExceededException();
         if (scope != null)
             scope.Result = result;

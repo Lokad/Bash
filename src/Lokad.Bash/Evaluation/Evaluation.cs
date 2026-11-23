@@ -1483,8 +1483,10 @@ public sealed partial class Evaluation : IFileTester
                         byteOperands, builtinScope with { Variables = commandVars }, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Cd => await EvaluateBuiltinCdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
-                    BuiltinKind.Pwd => await EvaluateBuiltinPwdAsync(executable.CommandValue, pwdOptions, false).ConfigureAwait(false),
-                    BuiltinKind.Dirs => await EvaluateBuiltinDirsAsync(byteOperands, commandVars, false).ConfigureAwait(false),
+                    BuiltinKind.Pwd => await EvaluateBuiltinPwdAsync(executable.CommandValue, pwdOptions, builtinScope.Context, false)
+                        .ConfigureAwait(false),
+                    BuiltinKind.Dirs => await EvaluateBuiltinDirsAsync(byteOperands, commandVars, builtinScope.Context, false)
+                        .ConfigureAwait(false),
                     BuiltinKind.Pushd => await EvaluateBuiltinPushdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
                     BuiltinKind.Popd => await EvaluateBuiltinPopdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
@@ -3123,7 +3125,7 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Writes LF-framed host detail through the supplied descriptor, with an optional path.</summary>
     internal async Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, string prefix, string? path, OperationError error)
     {
-        if (await TryWriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, prefix, path, error).ConfigureAwait(false) == null)
+        if (await TryWriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, prefix, path, error, default).ConfigureAwait(false) == null)
         {
             // The operation already failed. Keep the bounded message on its status and cleanup path.
             await ExecuteWriteAsync(descriptor, ShellMemoryRefusalDiagnostic).ConfigureAwait(false);
@@ -3132,19 +3134,21 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Formats directly into the admitted output buffer. A null result means admission refused.</summary>
     private async Task<DescriptorWriteResult?> TryWriteOperationDiagnosticAsync(
-        FileDescriptor descriptor, ShellValue name, string prefix, string? path, OperationError error)
+        FileDescriptor descriptor, ShellValue name, string prefix, string? path, OperationError error,
+        SyntaxDiagnosticPrefix sourcePrefix)
     {
         var encoding = Utf8Text.StrictUtf8;
         var prefixLength = encoding.GetByteCount(prefix);
         var pathLength = path is null ? 0 : encoding.GetByteCount(path);
         var detailLength = encoding.GetByteCount(error.Message.AsSpan());
         var nameLength = name.IsEmpty ? 0 : (long)name.Bytes.Length + 2;
-        var length = nameLength + prefixLength + pathLength + (path is null ? 0 : 2) + detailLength;
+        var length = nameLength + prefixLength + pathLength + (path is null ? 0 : 2) + detailLength + sourcePrefix.Length;
         if (!TryReserveDiagnostic(length, out var reservation))
             return null;
 
         using var memory = reservation;
         using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
+        sourcePrefix.AppendTo(diagnostic);
         if (!name.IsEmpty)
             diagnostic.Append(name.Bytes).Append(": "u8);
         encoding.GetBytes(prefix.AsSpan(), diagnostic.AppendSpan(prefixLength));
@@ -3753,12 +3757,21 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope) => WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
             GetCommandDiagnosticPrefix(scope));
 
-    private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(ScopedEvaluation scope)
+    private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(ScopedEvaluation scope) =>
+        GetCommandDiagnosticPrefix(scope.Context, scope.Context.Coordinates.Line);
+
+    private static SyntaxDiagnosticPrefix GetBuiltinDiagnosticPrefix(EvaluationContext context)
     {
-        var coordinates = scope.Context.Coordinates;
-        return coordinates.Locations == null ? default
-            : new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine, coordinates.Line);
+        var coordinates = context.Coordinates;
+        // With an initial command word, the next token can move the builtin's diagnostic line.
+        var line = coordinates.RedirectionOperandLine is not 0 ? coordinates.RedirectionOperandLine
+            : coordinates.WrapperOperandLine is not 0 ? coordinates.WrapperOperandLine : coordinates.Line;
+        return GetCommandDiagnosticPrefix(context, line);
     }
+
+    private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(EvaluationContext context, int line) =>
+        context.Coordinates.Locations == null ? default
+            : new SyntaxDiagnosticPrefix(context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine, line);
 
     private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
