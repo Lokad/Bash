@@ -42,9 +42,9 @@ public sealed partial class Evaluation
                     "printf", negated).ConfigureAwait(false);
 
             if (optionBytes.Span[1] != (byte)'v')
-                return await FinishInvalidInvocationAsync(WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("printf")],
-                    [ShellValue.FromText("-"), ShellValue.FromBytes(optionBytes.Slice(1, 1)),
-                        ShellValue.FromText(": invalid option\nprintf: " + Usage())], scope: null)).ConfigureAwait(false);
+                return await FinishInvalidInvocationAsync(WriteInvalidShortOptionUnlessStderrClosedAsync(
+                    ShellValue.FromText("printf"), optionBytes.Slice(1, 1), BuiltinKind.Printf, "printf"))
+                    .ConfigureAwait(false);
 
             ShellValue outputVariable;
             if (optionBytes.Length > 2)
@@ -53,7 +53,7 @@ public sealed partial class Evaluation
             {
                 operandIndex++;
                 if (operandIndex >= operands.Count)
-                    return await ReportUsageAsync().ConfigureAwait(false);
+                    return await ReportUsageAsync(missingDestination: true).ConfigureAwait(false);
                 outputVariable = operands[operandIndex];
             }
 
@@ -68,7 +68,7 @@ public sealed partial class Evaluation
         }
 
         if (operandIndex >= operands.Count)
-            return await ReportUsageAsync().ConfigureAwait(false);
+            return await ReportUsageAsync(missingDestination: false).ConfigureAwait(false);
 
         var format = operands[operandIndex++];
         var scope = new ScopedEvaluation(this, targetVars, context) { SelectorBindings = bindings };
@@ -134,8 +134,10 @@ public sealed partial class Evaluation
             return diagnostics.Result.CanAcceptMore;
         }
 
-        Task<EvaluationResult> ReportUsageAsync() => FinishInvalidInvocationAsync(
-            WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("printf")], [ShellValue.FromText(Usage())], scope: null));
+        Task<EvaluationResult> ReportUsageAsync(bool missingDestination) => FinishInvalidInvocationAsync(
+            WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("printf")],
+                [ShellValue.FromText(missingDestination ? "-v: option requires an argument\nprintf: " + Usage() : Usage())],
+                scope: null));
 
         async Task<EvaluationResult> FinishInvalidInvocationAsync(Task<DescriptorWriteResult> diagnostic)
         {

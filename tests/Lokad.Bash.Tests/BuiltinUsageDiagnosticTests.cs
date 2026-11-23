@@ -12,6 +12,7 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("printf -v bad-name '%s' sample")]
     [InlineData("printf -z sample")]
     [InlineData("printf -v")]
+    [InlineData("printf -v out -v")]
     [InlineData("mapfile -z")]
     [InlineData("readarray -z")]
     [InlineData("read -z")]
@@ -29,6 +30,7 @@ public sealed class BuiltinUsageDiagnosticTests
     }
 
     [Theory]
+    [InlineData("printf -v")]
     [InlineData("mapfile -z")]
     [InlineData("read -z")]
     [InlineData("getopts -z option")]
@@ -43,6 +45,38 @@ public sealed class BuiltinUsageDiagnosticTests
 
         Assert.Equal(1, state.LastExitCode);
         Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
+    }
+
+    [Theory]
+    [InlineData("printf -v")]
+    [InlineData("printf -v 'a[i++]' -v")]
+    [InlineData("printf -v $missing")]
+    public async Task PrintfMissingDestinationReportsTheOptionThroughReachedStderr(string command)
+    {
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync("a=(old); i=0; unset missing; " + command
+            + " 2>diagnostic; printf '<%s><%s><%s>' \"$?\" \"$i\" \"${a[0]}\"", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2><0><old>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("printf: -v: option requires an argument\nprintf: usage: printf [-v var] format [arguments]\n",
+            await EndToEndHarness.ReadFileAsync(host, "/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("printf -v out")]
+    [InlineData("printf -vout")]
+    public async Task PrintfMissingFormatReportsUsageAfterSelectingTheDestination(string command)
+    {
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync("out=old; " + command
+            + "; printf '<%s><%s>' \"$?\" \"$out\"", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2><old>", result.StdOut);
+        Assert.Equal("printf: usage: printf [-v var] format [arguments]\n", result.StdErr);
     }
 
     [Theory]

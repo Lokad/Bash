@@ -938,6 +938,9 @@ Write failures reported by the host still follow the builtin's status policy.
 options. Help describes the supported options and returns status 2, including
 when the shell has closed stdout. An option that expects an argument consumes
 its next field before the scan can reach help.
+When a reached `printf -v` has no destination field, it reports that the
+option requires an argument and follows with usage. A supplied destination
+with no format reports usage alone.
 
 `unset` follows the same help status and output rules. Leading option groups
 are scanned in order. An earlier invalid option reports usage, and `--`
