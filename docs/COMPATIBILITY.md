@@ -189,6 +189,13 @@ that produces no fields selects every character the operator considers.
 An explicitly quoted empty pattern or an empty aggregate field supplied
 as the pattern matches no characters.
 
+A double-quoted word keeps an empty field from case conversion, replacement,
+pattern removal, escape transformation, or an in-range slice of an assigned scalar, even
+beside a fieldless `@` expansion. A plain unset parameter or an out-of-range
+slice contributes implicit empty text. Direct quoted `*` joins preserve a
+field when they join one or more supplied empty fields to an empty result.
+Transforms and slices of actual `*` aggregates keep their own join rules.
+
 Function display/export preserves legacy backticks and their original escapes.
 Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches

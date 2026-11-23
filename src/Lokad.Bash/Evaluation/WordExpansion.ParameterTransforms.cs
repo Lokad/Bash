@@ -130,7 +130,8 @@ internal static partial class WordExpansion
         void Emit(IEnumerable<ShellValue> fields)
         {
             if (!output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
-                AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
+                AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext,
+                    starSplit, AtFieldSource.Other, preserveQuotedEmpty: false);
         }
 
         void EmitValues(IEnumerable<ShellValue> fields)
@@ -257,7 +258,8 @@ internal static partial class WordExpansion
                 output.AppendFields(quoted, allowWordSplitting, globQuoted, quoteContext);
             }
             else if (separators.IsEmpty && output.Purpose == ExpansionPurpose.Normal && starSplit != PositionalStarSplit.Default)
-                output.AppendJoinedFields(PrefixedFields(quoted), allowWordSplitting, globQuoted, starSplit);
+                output.AppendJoinedFields(PrefixedFields(quoted), allowWordSplitting, globQuoted, starSplit,
+                    preserveQuotedEmpty: false);
             else
                 output.AppendFields(PrefixedFields(quoted), allowWordSplitting, globQuoted, quoteContext);
 

@@ -916,7 +916,11 @@ internal static partial class WordExpansion
                     or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset) => AtFieldSource.Positional,
                 _ => AtFieldSource.Other,
             };
-            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit, source);
+            var preserveQuotedEmpty = parameter.Kind == VariableReferenceKind.Star
+                ? !projected || parameter.RangeSource == null
+                : projected && parameter.IsSet;
+            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit,
+                source, preserveQuotedEmpty);
         }
 
         // Operand expansion may have changed which values the selected array holds.
@@ -1125,6 +1129,12 @@ internal static partial class WordExpansion
                     .ConfigureAwait(false);
             if (!scope.CanExpand)
                 return;
+            if (parameter.RangeSource == null && parameter.Fields is [var field] && field.IsEmpty)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                EmitFields(parameter.Fields, projected: true);
+                return;
+            }
             // A missing field selects all characters. A present empty field matches none.
             var caseFields = caseOperand?.Build() ?? [];
             var casePattern = caseFields.Count == 0 ? null : JoinOperandFields(caseFields);
@@ -1192,7 +1202,8 @@ internal static partial class WordExpansion
         {
             if (!parameter.IsSet && parameter.RangeSource is not ParameterSource.Positional)
             {
-                Emit(parameter.Kind is VariableReferenceKind.At or VariableReferenceKind.Star ? parameter.Fields : [parameter.Value]);
+                Emit(parameter.Kind is VariableReferenceKind.At or VariableReferenceKind.Star ? parameter.Fields : [parameter.Value],
+                    preserveQuotedEmpty: false);
                 return;
             }
 
@@ -1249,7 +1260,8 @@ internal static partial class WordExpansion
             {
                 if (FindScalarBoundary(value.Span, start) is not { } position)
                 {
-                    Emit([ShellValue.Empty]);
+                    Emit(parameter.Kind is VariableReferenceKind.At or VariableReferenceKind.Star ? [] : [ShellValue.Empty],
+                        preserveQuotedEmpty: false);
                     return;
                 }
                 scalarStart = position;
@@ -1273,7 +1285,7 @@ internal static partial class WordExpansion
                     };
                 if (start < 0 || start > maximum)
                 {
-                    Emit([]);
+                    Emit([], preserveQuotedEmpty: false);
                     return;
                 }
             }
@@ -1303,15 +1315,15 @@ internal static partial class WordExpansion
                 {
                     case ParameterSource.Indexed indexed:
                         if (IndexedArrayIndex.TryCreate(start, out var first))
-                            Emit(indexed.Array.ValuesFrom(first, count));
+                            Emit(indexed.Array.ValuesFrom(first, count), preserveQuotedEmpty: false);
                         return;
                     case ParameterSource.Associative associative:
                         // Keep the platform's unsigned byte order rather than native Bash hash traversal.
                         // Bash includes the selected entry even when the requested length is zero.
-                        Emit(associative.Array.ValuesFrom((int)Math.Max(0, start - 1), Math.Max(1, count)));
+                        Emit(associative.Array.ValuesFrom((int)Math.Max(0, start - 1), Math.Max(1, count)), preserveQuotedEmpty: false);
                         return;
                     case ParameterSource.Positional positional:
-                        Emit(positional.ValuesFrom(start, count));
+                        Emit(positional.ValuesFrom(start, count), preserveQuotedEmpty: false);
                         return;
                 }
             }
@@ -1334,7 +1346,7 @@ internal static partial class WordExpansion
                         scope, out _);
                 selected = selected[..selectedBytes];
             }
-            Emit([ShellValue.FromBytes(selected)]);
+            Emit([ShellValue.FromBytes(selected)], preserveQuotedEmpty: true);
 
             static void DetachForBound(ShellSource operand, CancellationToken cancellationToken,
                 ref VariableBinding? borrowed, ref ParameterSource? source)
@@ -1375,7 +1387,7 @@ internal static partial class WordExpansion
             }
 
             // Enumerate into the budgeted builder; never copy the full array or allocate its holes.
-            void Emit(IEnumerable<ShellValue> fields)
+            void Emit(IEnumerable<ShellValue> fields, bool preserveQuotedEmpty)
             {
                 if (output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
                     return;
@@ -1383,7 +1395,7 @@ internal static partial class WordExpansion
                     output.AppendHereDocumentFields(fields, HereDocumentJoin.SpaceBetweenProtectedValues);
                 else
                     AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext,
-                        starSplit, AtFieldSource.Projected);
+                        starSplit, AtFieldSource.Projected, preserveQuotedEmpty);
             }
 
             async Task ReportInvalidLengthAsync()
@@ -1604,14 +1616,18 @@ internal static partial class WordExpansion
     private static void AppendParameterFields(
         VariableReferenceKind kind, IEnumerable<ShellValue> fields, ExpandedWordBuilder output,
         bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit,
-        AtFieldSource source = AtFieldSource.Other)
+        AtFieldSource source, bool preserveQuotedEmpty)
     {
+        preserveQuotedEmpty &= quoteContext == ExpansionQuoteContext.DoubleQuoted;
         if (kind == VariableReferenceKind.At)
             output.AppendFields(fields, allowWordSplitting, globQuoted, quoteContext, source);
         else if (kind == VariableReferenceKind.Star)
-            output.AppendJoinedFields(fields, allowWordSplitting, globQuoted, starSplit);
+            output.AppendJoinedFields(fields, allowWordSplitting, globQuoted, starSplit, preserveQuotedEmpty);
         else
             foreach (var field in fields)
-                output.AppendExpansion(field, allowWordSplitting, globQuoted);
+                if (preserveQuotedEmpty && field.IsEmpty)
+                    output.MarkCurrentWordForEmission();
+                else
+                    output.AppendExpansion(field, allowWordSplitting, globQuoted);
     }
 }

@@ -875,7 +875,8 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument)
                     output.AppendHereDocumentFields(arguments, HereDocumentJoin.PositionalStar);
                 else
-                    output.AppendJoinedFields(arguments, allowWordSplitting, globQuoted, PositionalStarSplit.EvenWhenEmpty);
+                    output.AppendJoinedFields(arguments, allowWordSplitting, globQuoted, PositionalStarSplit.EvenWhenEmpty,
+                        preserveQuotedEmpty: true);
                 index++;
                 continue;
             }

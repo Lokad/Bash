@@ -621,13 +621,14 @@ internal sealed class ExpandedWordBuilder
         IEnumerable<ShellValue> fields,
         bool allowWordSplitting,
         bool globQuoted) =>
-        AppendJoinedFields(fields, allowWordSplitting, globQuoted, PositionalStarSplit.Default);
+        AppendJoinedFields(fields, allowWordSplitting, globQuoted, PositionalStarSplit.Default, preserveQuotedEmpty: false);
 
     internal void AppendJoinedFields(
         IEnumerable<ShellValue> fields,
         bool allowWordSplitting,
         bool globQuoted,
-        PositionalStarSplit positionalStar)
+        PositionalStarSplit positionalStar,
+        bool preserveQuotedEmpty)
     {
         var fieldSeparators = FieldSeparators.FromVariables(_variables);
         if (!globQuoted && fieldSeparators.IsEmpty && OperandFields == ParameterOperandFields.UnquotedWithEmptyIfs)
@@ -654,7 +655,8 @@ internal sealed class ExpandedWordBuilder
 
         _hasUnquotedAggregate |= Purpose == ExpansionPurpose.Normal && allowWordSplitting;
         var separator = fieldSeparators.IsEmpty ? ShellValue.Empty : fieldSeparators.First;
-        AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted);
+        AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted,
+            preserveQuotedEmpty && globQuoted && _doubleQuote != DoubleQuoteState.Outside);
     }
 
     private bool AppendOperandFields(
@@ -696,7 +698,15 @@ internal sealed class ExpandedWordBuilder
         IEnumerable<ShellValue> fields,
         ShellValue separator,
         bool allowWordSplitting,
-        bool globQuoted)
+        bool globQuoted) =>
+        AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted, preserveQuotedEmpty: false);
+
+    private bool AppendSeparatedFields(
+        IEnumerable<ShellValue> fields,
+        ShellValue separator,
+        bool allowWordSplitting,
+        bool globQuoted,
+        bool preserveQuotedEmpty)
     {
         var first = true;
         foreach (var value in fields)
@@ -705,7 +715,10 @@ internal sealed class ExpandedWordBuilder
             if (!first)
                 AppendExpansion(separator, allowWordSplitting, globQuoted);
             first = false;
-            AppendAggregateValue(value, allowWordSplitting, globQuoted);
+            if (preserveQuotedEmpty && value.IsEmpty && EmptyPolicy != ImplicitEmptyPolicy.PreserveAggregate)
+                MarkCurrentWordForEmission();
+            else
+                AppendAggregateValue(value, allowWordSplitting, globQuoted);
         }
         if (first && !allowWordSplitting && (globQuoted || EmptyPolicy != ImplicitEmptyPolicy.PreserveAggregate))
             AppendEmptyExpansion(globQuoted: true);

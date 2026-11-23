@@ -261,6 +261,36 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
+    [InlineData("set --; v=; show \"$@${v^^$(printf p >&2; printf a)}\"; show \"${v^^}$@\"",
+        "[1]<>[1]<>", "p", 0)]
+    [InlineData("set --; v=; unset u; show \"$@${v}\"; show \"${u^^$(printf p >&2; printf a)}$@\"",
+        "[0][0]", "", 0)]
+    [InlineData("set --; v=a; show \"$@${v/a/}\"; show \"${v#a}$@\"; v=; show \"$@${v@E}\"",
+        "[1]<>[1]<>[1]<>", "", 0)]
+    [InlineData("set --; a=([2]=); unset pattern; show \"$@${a[2],,${pattern:=A}}\" \"$pattern\"",
+        "[2]<><A>", "", 0)]
+    [InlineData("set --; v=a; show \"$@${v:1}\"; show \"${v:2}$@\"; show \"$@${v[@]:2}\"",
+        "[1]<>[0][0]", "", 0)]
+    [InlineData("set --; IFS=:; a=(''); show \"$@${a[*]}\"; show \"$@${a[*]^^x}\"; a=(); show \"${a[*]}$@\"",
+        "[1]<>[0][0]", "", 0)]
+    [InlineData("empty=(); IFS=; set -- '' ''; show \"${empty[@]}$*\"; set --; show \"$*${empty[@]}\"",
+        "[1]<>[0]", "", 0)]
+    [InlineData("set --; v=; show \"$@${v[*]^^x}\"; show \"${v[*]:0}$@\"",
+        "[1]<>[1]<>", "", 0)]
+    [InlineData("v=; unset missing; show \"${v^^${missing:?required}}\"\nprintf skipped",
+        "", "missing: required\n", 1)]
+    public async Task QuotedParameterExpansionPreservesAnExplicitEmptyResult(string body, string expectedOutput,
+        string expectedError, int expectedStatus)
+    {
+        const string show = "show(){ printf '[%s]' \"$#\"; for field; do printf '<%s>' \"$field\"; done; }\n";
+        var result = await EndToEndHarness.RunScriptAsync(show + body, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(expectedStatus, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("""
         p=('a[q++]' 'b[r++]'); a=(alpha amber); b=(beta brown); i=0; q=0; r=0
         printf '<%s>|%s:%s:%s' "${!p[i++]#$(printf pattern >&2; printf a)}" "$i" "$q" "$r"
