@@ -607,6 +607,8 @@ LF and `#`. Shell quoting and escapes govern parenthesis balancing even within
 a regex bracket expression. At the top level of a regex word, unquoted `|` is
 alternation data and `&&` ends the word and resumes conditional parsing. An
 empty regex word before `&&` or a conditional `)` uses the .NET regex profile.
+With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
+and the pinned Linux Bash build. The pinned MSYS build returns status 2.
 LF is accepted before a term or after a complete predicate. It cannot split
 an operator from its required operand or
 follow the left word before predicate selection. Backslash/LF continuation retains

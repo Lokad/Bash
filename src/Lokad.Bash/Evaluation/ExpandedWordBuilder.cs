@@ -156,8 +156,6 @@ internal sealed class ExpandedWordBuilder
     private bool LeavesCasePatternUnsplit => _casePatternStartsWithEmptyIfs && CaseOperand == CasePatternOperand.None;
     internal bool PreservesCasePatternQuotedNulls => LeavesCasePatternUnsplit || CaseOperand == CasePatternOperand.PreserveQuotedNulls;
 
-    /// <summary>Whether substitutions contributed data, even if their output was empty.</summary>
-
     internal void BeginDoubleQuote()
     {
         _doubleQuote = DoubleQuoteState.Open;
@@ -183,8 +181,11 @@ internal sealed class ExpandedWordBuilder
 
         // A quoted group selects its fields before rejoining them for the enclosing word.
         var separators = FieldSeparators.FromVariables(_variables);
+        if (casePattern && !UsesCaseQuoteBytes(separators))
+            return;
+
         var join = AggregateSeparator(separators);
-        if (casePattern ? UsesCaseQuoteBytes(separators) : _doubleQuoteHasNumber && HasNumericSeparator(ref separators))
+        if (casePattern || _doubleQuoteHasNumber && HasNumericSeparator(ref separators))
         {
             using var groupStorage = new MemoryCapacity(_memory.Budget, 0);
             var fields = new List<ExpandedWord>();
@@ -212,9 +213,6 @@ internal sealed class ExpandedWordBuilder
             }
             return;
         }
-        if (casePattern)
-            return;
-
         for (var index = _doubleQuoteFirstWord + 1; index < _words.Count; index++)
         {
             _cancellationToken.ThrowIfCancellationRequested();
