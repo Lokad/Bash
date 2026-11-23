@@ -137,6 +137,83 @@ public static partial class PrintfFormatting
         }
     }
 
+    private enum OutputRetention { All, BeforeNul, None }
+
+    /// <summary>Bounds the logical output and retains the bytes selected for publication.</summary>
+    private sealed class OutputBuffer(int capacity, int maximumLength, OutputRetention retention, IMemoryBudget budget)
+        : IByteMemoryWriter, IDisposable
+    {
+        private readonly ByteMemoryBuilder _bytes = new(Math.Min(capacity, maximumLength), budget);
+        private int _maximumLength = maximumLength;
+        private OutputRetention _retention = retention;
+        private int _discarded;
+
+        public int Length => _bytes.Length + _discarded;
+        public int RemainingLength => _maximumLength - Length;
+        public bool HasDiscardedBytes => _discarded != 0;
+        public bool IsDiscarding => _retention == OutputRetention.None || HasDiscardedBytes;
+        public ReadOnlyMemory<byte> RetainedBytes => _bytes.ToMemory();
+
+        public bool TryAppend(byte value)
+        {
+            if (RemainingLength == 0)
+                return false;
+            if (!IsDiscarding && (_retention != OutputRetention.BeforeNul || value != 0))
+                return _bytes.TryAppend(value);
+            _discarded++;
+            return true;
+        }
+
+        public bool TryAppend(int count, byte value)
+        {
+            if (count < 0 || count > RemainingLength)
+                return false;
+            if (!IsDiscarding && (_retention != OutputRetention.BeforeNul || value != 0))
+                return _bytes.TryAppend(count, value);
+            _discarded += count;
+            return true;
+        }
+
+        public bool TryAppend(ReadOnlySpan<byte> bytes) => TryAppendConversion(bytes, bytes.Length);
+
+        // A conversion can provide its retained prefix and the length including its discarded suffix.
+        public bool TryAppendConversion(ReadOnlySpan<byte> prefix, int length)
+        {
+            if (length > RemainingLength)
+                return false;
+            if (!IsDiscarding)
+            {
+                var nul = _retention == OutputRetention.BeforeNul ? prefix.IndexOf((byte)0) : -1;
+                if (nul >= 0)
+                    prefix = prefix[..nul];
+                if (!_bytes.TryAppend(prefix))
+                    return false;
+                length -= prefix.Length;
+            }
+            _discarded += length;
+            return true;
+        }
+
+        public void RewindByte()
+        {
+            if (HasDiscardedBytes)
+                _discarded--;
+            else
+                _bytes.Truncate(_bytes.Length - 1);
+        }
+
+        public void Reset(int lengthLimit, OutputRetention mode)
+        {
+            _bytes.Truncate(0);
+            _maximumLength = lengthLimit;
+            _retention = mode;
+            _discarded = 0;
+        }
+
+        public ReadOnlyMemory<byte> DetachSnapshot() => _bytes.DetachSnapshot();
+        public void Dispose() => _bytes.Dispose();
+    }
+
     private sealed partial class Formatter(
         ShellValue formatValue,
         IReadOnlyList<ShellValue> arguments,
@@ -149,15 +226,11 @@ public static partial class PrintfFormatting
 
         private const int MaximumOutputBytes = ByteMemoryBuilder.MaxMemoryBuilderBytes - 1;
 
-        private readonly BoundedByteMemoryBuilder _output = new(
-            0, MaximumOutputBytes, memoryBudget);
-        // Assignment output retains the prefix and counts the first NUL and all later bytes.
-        private int _discardedOutputBytes;
-        private int OutputLength => _output.Length + _discardedOutputBytes;
-        private int OutputRemainingLength => MaximumOutputBytes - OutputLength;
+        private readonly OutputBuffer _output = new(
+            0, MaximumOutputBytes, assignOutput ? OutputRetention.BeforeNul : OutputRetention.All, memoryBudget);
         private List<Diagnostic>? _pendingDiagnostics;
         private MemoryCapacity? _diagnosticMemory;
-        private BoundedByteMemoryBuilder? _temporaryOutput;
+        private OutputBuffer? _temporaryOutput;
         private int _argumentIndex = firstArgument;
         private int _cycleOutputStart;
         private int _cycleCountAdjustment;
@@ -196,8 +269,6 @@ public static partial class PrintfFormatting
             pending.Add(diagnostic);
         }
 
-        private void AppendText(string text) => TryAppendUtf8Prefix(_output, text.AsSpan(), int.MaxValue);
-
         private void AppendByte(byte value) => TryAppendByte(_output, value);
 
         private void AppendPadding(int count, byte value)
@@ -205,21 +276,16 @@ public static partial class PrintfFormatting
             if (_failed)
                 return;
 
-            if (count > OutputRemainingLength)
+            if (count > _output.RemainingLength)
             {
                 FailOutputLimit();
                 return;
             }
-            if (count > 0 && _discardedOutputBytes != 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                _discardedOutputBytes += count;
-                return;
-            }
+            var quantum = _output.IsDiscarding ? count : 64 * 1024;
             while (count > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var length = Math.Min(count, 64 * 1024);
+                var length = Math.Min(count, quantum);
                 if (!_output.TryAppend(length, value))
                 {
                     FailOutputLimit();
@@ -229,13 +295,10 @@ public static partial class PrintfFormatting
             }
         }
 
-        private bool TryAppendByte(BoundedByteMemoryBuilder output, byte value)
+        private bool TryAppendByte(OutputBuffer output, byte value)
         {
             if (_failed)
                 return false;
-
-            if (assignOutput && ReferenceEquals(output, _output) && (_discardedOutputBytes != 0 || value == 0))
-                return TryAppendBytes(output, new ReadOnlySpan<byte>(in value));
 
             if (output.TryAppend(value))
                 return true;
@@ -244,25 +307,10 @@ public static partial class PrintfFormatting
             return false;
         }
 
-        private bool TryAppendBytes(BoundedByteMemoryBuilder output, ReadOnlySpan<byte> values)
+        private bool TryAppendBytes(OutputBuffer output, ReadOnlySpan<byte> values)
         {
             if (_failed)
                 return false;
-
-            if (assignOutput && ReferenceEquals(output, _output))
-            {
-                var prefixLength = _discardedOutputBytes != 0 ? 0 : values.IndexOf((byte)0);
-                if (prefixLength >= 0)
-                {
-                    if (values.Length <= OutputRemainingLength && output.TryAppend(values[..prefixLength]))
-                    {
-                        _discardedOutputBytes += values.Length - prefixLength;
-                        return true;
-                    }
-                    FailOutputLimit();
-                    return false;
-                }
-            }
 
             if (output.TryAppend(values))
                 return true;
@@ -271,15 +319,11 @@ public static partial class PrintfFormatting
             return false;
         }
 
-        private bool TryAppendUtf8Prefix(
-            BoundedByteMemoryBuilder output,
-            ReadOnlySpan<char> text,
-            int maximumBytes)
+        private void AppendText(string text)
         {
             const int CharacterChunkLength = 256;
             Span<byte> encoded = stackalloc byte[1024];
-            var remainingBytes = maximumBytes;
-            for (var index = 0; index < text.Length && remainingBytes > 0;)
+            for (var index = 0; index < text.Length;)
             {
                 var characterLength = Math.Min(CharacterChunkLength, text.Length - index);
                 if (index + characterLength < text.Length
@@ -289,27 +333,23 @@ public static partial class PrintfFormatting
                     characterLength--;
                 }
 
-                var encodedLength = Utf8.GetBytes(text.Slice(index, characterLength), encoded);
-                var appendedLength = Math.Min(encodedLength, remainingBytes);
-                if (!TryAppendBytes(output, encoded[..appendedLength]))
-                    return false;
-
-                remainingBytes -= appendedLength;
+                var encodedLength = Utf8.GetBytes(text.AsSpan(index, characterLength), encoded);
+                if (!TryAppendBytes(_output, encoded[..encodedLength]))
+                    return;
                 index += characterLength;
-                if (appendedLength < encodedLength)
-                    break;
             }
-
-            return true;
         }
 
-        private BoundedByteMemoryBuilder GetTemporaryOutput(int requestedCapacity, int maximumLength)
+        private OutputBuffer GetTemporaryOutput(int requestedCapacity, int maximumLength)
         {
+            var retention = _output.IsDiscarding ? OutputRetention.None
+                : assignOutput ? OutputRetention.BeforeNul : OutputRetention.All;
             if (_temporaryOutput == null)
-                _temporaryOutput = new BoundedByteMemoryBuilder(
-                    Math.Min(Math.Max(requestedCapacity, 16), 4096), maximumLength, memoryBudget);
+                _temporaryOutput = new OutputBuffer(
+                    retention == OutputRetention.None ? 0 : Math.Min(Math.Max(requestedCapacity, 16), 4096),
+                    maximumLength, retention, memoryBudget);
             else
-                _temporaryOutput.Reset(maximumLength);
+                _temporaryOutput.Reset(maximumLength, retention);
             return _temporaryOutput;
         }
 

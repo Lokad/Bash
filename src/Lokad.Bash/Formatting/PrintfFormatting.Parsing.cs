@@ -25,7 +25,7 @@ public static partial class PrintfFormatting
                 do
                 {
                     var argumentIndexAtCycleStart = _argumentIndex;
-                    _cycleOutputStart = OutputLength;
+                    _cycleOutputStart = _output.Length;
                     _cycleCountAdjustment = 0;
                     await FormatCycleAsync().ConfigureAwait(false);
 
@@ -318,7 +318,7 @@ public static partial class PrintfFormatting
 
                             await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
                             if (!_stop && !await assignCount(new PrintfVariableAssignment(
-                                    variable.ToUtf8String(), OutputLength - _cycleOutputStart + _cycleCountAdjustment)).ConfigureAwait(false))
+                                    variable.ToUtf8String(), _output.Length - _cycleOutputStart + _cycleCountAdjustment)).ConfigureAwait(false))
                                 _stop = true;
                             return;
                         }
@@ -502,7 +502,7 @@ public static partial class PrintfFormatting
                 void AppendEscapedString(FormatSpecification escapedSpecification)
                 {
                     var argument = GetValueArgument().Bytes;
-                    var bytes = GetTemporaryOutput(argument.Length, OutputRemainingLength);
+                    var bytes = GetTemporaryOutput(argument.Length, _output.RemainingLength);
                     for (var index = 0; index < argument.Length;)
                     {
                         if (argument.Span[index] != (byte)'\\')
@@ -535,13 +535,13 @@ public static partial class PrintfFormatting
 
                         if (stop)
                         {
-                            ApplyText(escapedSpecification, bytes.ToMemory(), ignorePrecision: false);
+                            ApplyTextWithLength(escapedSpecification, bytes.RetainedBytes, bytes.Length, ignorePrecision: false);
                             _stop = true;
                             return;
                         }
                     }
 
-                    ApplyText(escapedSpecification, bytes.ToMemory(), ignorePrecision: false);
+                    ApplyTextWithLength(escapedSpecification, bytes.RetainedBytes, bytes.Length, ignorePrecision: false);
                 }
 
                 void AppendQuotedString(FormatSpecification quotedSpecification)
@@ -560,7 +560,7 @@ public static partial class PrintfFormatting
                     var bytes = argument[..Math.Min(argument.Length, rawByteLimit)];
                     // Empty %q syntax can be truncated by precision before consuming the final output budget.
                     var quoted = bytes.IsEmpty
-                        ? GetTemporaryOutput(2, 2) : GetTemporaryOutput(bytes.Length, OutputRemainingLength);
+                        ? GetTemporaryOutput(2, 2) : GetTemporaryOutput(bytes.Length, _output.RemainingLength);
                     if (!ShellArgumentEscaping.TryAppendQuoted(quoted, bytes.Span,
                             quotedSpecification.Flags.HasFlag(FormatFlags.Alternate)
                                 ? ShellQuoteStyle.SingleQuoted : ShellQuoteStyle.Backslash))
@@ -571,7 +571,7 @@ public static partial class PrintfFormatting
                     var adjusted = quotedSpecification.Conversion == 'Q'
                         ? quotedSpecification with { Precision = null }
                         : quotedSpecification;
-                    ApplyText(adjusted, quoted.ToMemory(), ignorePrecision: false);
+                    ApplyTextWithLength(adjusted, quoted.RetainedBytes, quoted.Length, ignorePrecision: false);
                 }
 
                 ShellValue GetValueArgument() =>
@@ -585,9 +585,13 @@ public static partial class PrintfFormatting
                         precision is { } minimum ? Math.Max(0, minimum - digits.Length) : 0, digits);
                 }
 
-                void ApplyText(
+                void ApplyText(FormatSpecification textSpecification, ReadOnlyMemory<byte> bytes, bool ignorePrecision) =>
+                    ApplyTextWithLength(textSpecification, bytes, bytes.Length, ignorePrecision);
+
+                void ApplyTextWithLength(
                     FormatSpecification textSpecification,
-                    ReadOnlyMemory<byte> bytes,
+                    ReadOnlyMemory<byte> prefix,
+                    int length,
                     bool ignorePrecision)
                 {
                     if (ApplyFieldOverride(textSpecification))
@@ -595,22 +599,23 @@ public static partial class PrintfFormatting
 
                     if (!ignorePrecision
                         && textSpecification.Precision is { } precision
-                        && precision < bytes.Length)
+                        && precision < length)
                     {
-                        bytes = bytes[..precision];
+                        length = precision;
                     }
 
-                    var paddedLength = Math.Max(bytes.Length, GetFieldWidth(textSpecification.Width, bytes.Length));
-                    if (paddedLength > OutputRemainingLength)
+                    var paddedLength = Math.Max(length, GetFieldWidth(textSpecification.Width, length));
+                    if (paddedLength > _output.RemainingLength)
                     {
                         FailOutputLimit();
                         return;
                     }
-                    var padding = (int)(paddedLength - bytes.Length);
+                    var padding = (int)(paddedLength - length);
                     var left = textSpecification.Flags.HasFlag(FormatFlags.LeftJustify);
                     if (!left)
                         AppendPadding(padding, (byte)' ');
-                    TryAppendBytes(_output, bytes.Span);
+                    if (!_failed && !_output.TryAppendConversion(prefix.Span[..Math.Min(prefix.Length, length)], length))
+                        FailOutputLimit();
                     if (left)
                         AppendPadding(padding, (byte)' ');
                 }
@@ -633,7 +638,7 @@ public static partial class PrintfFormatting
                     };
                     var length = sign.Length + number.Prefix.Length + number.Text.Length;
                     var paddingLength = Math.Max(0L, GetFieldWidth(numberSpecification.Width, length) - length);
-                    if (length + paddingLength > OutputRemainingLength)
+                    if (length + paddingLength > _output.RemainingLength)
                     {
                         FailOutputLimit();
                         return;
@@ -672,13 +677,8 @@ public static partial class PrintfFormatting
                     if (field.SuppressOutput)
                     {
                         // The Linux conversion contributes -1 to %n and can rewind the assignment buffer.
-                        if (assignOutput && OutputLength > 0)
-                        {
-                            if (_discardedOutputBytes != 0)
-                                _discardedOutputBytes--;
-                            else
-                                _output.Truncate(_output.Length - 1);
-                        }
+                        if (assignOutput && _output.Length > 0)
+                            _output.RewindByte();
                         else
                             _cycleCountAdjustment--;
                         return true;
@@ -733,7 +733,7 @@ public static partial class PrintfFormatting
             }
 
             (ReadOnlyMemory<byte> Output, int ExitCode, bool DiscardedSuffix) BuildResult() =>
-                (_output.DetachSnapshot(), _failed || _conversionError ? 1 : 0, _discardedOutputBytes != 0);
+                (_output.DetachSnapshot(), _failed || _conversionError ? 1 : 0, _output.HasDiscardedBytes);
         }
     }
 

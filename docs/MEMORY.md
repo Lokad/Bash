@@ -105,9 +105,11 @@ stderr write. Standalone formatting that returns diagnostics owns their
 materialized bytes under the caller's scope. Output-only formatting and
 shell-closed stderr skip diagnostic storage.
 `printf -v` admits the retained prefix of its formatted output. It counts
-the first NUL and later bytes without storing them, while lexing and
-conversion scratch keep their existing ownership. Assignment compacts a
-truncated value before the formatting buffer is released.
+the first NUL and later bytes without storing them. Escaped and quoted
+conversions carry their logical lengths into field padding and precision.
+Their output scratch retains a prefix while those bytes can reach the
+assignment. Assignment compacts a truncated value before the formatting
+buffer is released.
 Prepared terminal diagnostics admit their final buffer in the command workspace,
 which holds it through later expansion, redirection setup and host writes.
 Prepared help retains the reached builtin and admits its output after

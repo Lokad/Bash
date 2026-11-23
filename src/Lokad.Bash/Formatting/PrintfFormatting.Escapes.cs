@@ -8,7 +8,7 @@ public static partial class PrintfFormatting
     private sealed partial class Formatter
     {
         private int AppendEscape(
-            BoundedByteMemoryBuilder output,
+            OutputBuffer output,
             ReadOnlyMemory<byte> source,
             int index,
             bool percentB,

@@ -442,6 +442,74 @@ public sealed class PrintfFieldSizeTests
     }
 
     [Theory]
+    [InlineData('b')]
+    [InlineData('q')]
+    [InlineData('Q')]
+    public async Task AssignmentCountsConversionsAfterNulWithoutBufferingThem(char conversion)
+    {
+        const int Width = 524_288;
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText($"A\\0%{conversion}%n"),
+            [ShellValue.FromText(new string('a', Width)), ShellValue.FromText("count")], DateTimeOffset.UnixEpoch,
+            assignOutput: true, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            reportDiagnostic: null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText("A"), ShellValue.FromBytes(result.Output));
+        Assert.True(result.DiscardedSuffix);
+        Assert.Equal(new PrintfVariableAssignment("count", Width + 2), Assert.Single(counts));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(1, "ABZ", 3, false)]
+    [InlineData(2, "AB", 4, true)]
+    public async Task EscapedAssignmentAppliesPrecisionToTheFullConversionLength(
+        int precision, string expected, int count, bool discardedSuffix)
+    {
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText($"A%.{precision}bZ%n"),
+            [ShellValue.FromText("B\\000" + new string('x', 524_288)), ShellValue.FromText("count")], DateTimeOffset.UnixEpoch,
+            assignOutput: true, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            reportDiagnostic: null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText(expected), ShellValue.FromBytes(result.Output));
+        Assert.Equal(discardedSuffix, result.DiscardedSuffix);
+        Assert.Equal(new PrintfVariableAssignment("count", count), Assert.Single(counts));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task QuotedAssignmentCanRetainBytesAfterTheNulIsRewound()
+    {
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText("A\\0%b%.2147483648s%q%n"),
+            [ShellValue.Empty, ShellValue.FromText("text"), ShellValue.FromText("a b"), ShellValue.FromText("count")],
+            DateTimeOffset.UnixEpoch, assignOutput: true, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            reportDiagnostic: null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText("Aa\\ b"), ShellValue.FromBytes(result.Output));
+        Assert.False(result.DiscardedSuffix);
+        Assert.Equal(new PrintfVariableAssignment("count", 5), Assert.Single(counts));
+    }
+
+    [Theory]
     [InlineData("A\\0", "AZ", 1)]
     [InlineData("A\\0Y", "A", 2)]
     public async Task SuppressedAssignmentConversionRewindsLogicalOutput(string prefix, string expected, int count)

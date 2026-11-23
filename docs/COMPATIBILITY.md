@@ -944,6 +944,8 @@ with no format reports usage alone.
 `printf -v` assigns the bytes before the first NUL. Later formatted bytes
 still contribute to `%n` and the output length limit. Later conversions
 retain their normal diagnostic and count-assignment effects.
+`%q` and `%Q` use ANSI-C spelling for nonprinting or malformed bytes.
+Their `#` flag selects single-quoted spelling for printable bytes.
 
 `unset` follows the same help status and output rules. Leading option groups
 are scanned in order. An earlier invalid option reports usage, and `--`
