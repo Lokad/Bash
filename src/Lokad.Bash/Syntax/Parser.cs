@@ -242,7 +242,7 @@ public static class Parser
                         { CaptureEndOfInput: { } captureEnd } =>
                             tokenizer.GetLine(captureEnd.ReadPosition) + captureEnd.LineAdvance,
                         { UnexpectedToken: { } diagnostic } => tokenizer.GetLine(diagnostic.ReadPosition),
-                        { Kind: ParserFailureKind.Grammar } when trailing.Kind == TokenKind.EndOfInput
+                        { Kind: ParserFailureKind.Grammar or ParserFailureKind.RedirectionOperand } when trailing.Kind == TokenKind.EndOfInput
                             && failure.Error.Offset == input.Length && tokenizer.Position == input.Length =>
                             tokenizer.GetLine(input.Length) + tokenizer.EndOfInputLineAdvance,
                         _ => 0
@@ -322,7 +322,7 @@ public static class Parser
                 if (context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
                 {
                     tokenizer.ReadHereDocumentExpansionCaptureBodies(pending);
-                    syntaxError = MissingCloser(pending.Warnings, GetWarningOffset(pending.Warnings, input, payloadStart),
+                    syntaxError = MissingCloser(GetCaptureWarnings(pending.Warnings, input, payloadStart),
                         input.Length, tokenizer.EndOfInputLineAdvance);
                     return ShellScanStatus.Invalid;
                 }
@@ -461,22 +461,24 @@ public static class Parser
             SkipNewlines(tokenizer);
             var closing = tokenizer.PeekTokenCore();
             var bodyFailure = tokenizer.Failure;
+            var missingOperand = bodyFailure is { Kind: ParserFailureKind.RedirectionOperand, UnexpectedToken: not null };
             var reachedEnd = tokenizer.Position == source.Length && closing.Kind == TokenKind.EndOfInput
                 && !tokenizer.HasPendingClosingParenthesis && !context.ParsingLimitExceeded;
-            if (reachedEnd && tokenizer is { AllowEofHereDocuments: true, HereDocuments: { } documents }
+            if (!missingOperand && reachedEnd && tokenizer is { AllowEofHereDocuments: true, HereDocuments: { } documents }
                 && (bodyFailure == null || documents.Warnings != null))
             {
-                var warnings = documents.Warnings;
-                error = MissingCloser(warnings, GetWarningOffset(warnings, source, start), source.Length,
+                error = MissingCloser(GetCaptureWarnings(documents.Warnings, source, start), source.Length,
                     tokenizer.EndOfInputLineAdvance);
                 return ShellScanStatus.Invalid;
             }
-            if (bodyFailure != null && (context.ParsingLimitExceeded || bodyFailure.CaptureEndOfInput != null
+            if (bodyFailure != null && (missingOperand || context.ParsingLimitExceeded || bodyFailure.CaptureEndOfInput != null
                 || bodyFailure.Error.Offset < source.Length || tokenizer.HasPendingClosingParenthesis))
             {
                 error = bodyFailure.InSubstitution();
                 if (error.UnexpectedToken is { } unexpected)
                     error = error with { UnexpectedToken = unexpected with { CapturePayloadStart = start } };
+                if (missingOperand)
+                    error = error with { CaptureWarnings = GetCaptureWarnings(tokenizer.HereDocuments?.Warnings, source, start) };
                 return ShellScanStatus.Invalid;
             }
 
@@ -504,15 +506,16 @@ public static class Parser
             return ShellScanStatus.Complete;
         }
 
-        static ParserFailure MissingCloser(IReadOnlyList<HereDocumentWarning>? warnings, int lineOffset, int eofOffset, int lineAdvance) =>
+        static ParserFailure MissingCloser(CaptureHereDocumentWarnings? warnings, int eofOffset, int lineAdvance) =>
             new(new SyntaxError("unexpected EOF while looking for matching `)'", eofOffset), ParserFailureKind.Delimiter)
             {
-                CaptureEndOfInput = new CaptureEndOfInput(')', eofOffset)
-                    { Warnings = warnings, WarningOffset = lineOffset, LineAdvance = lineAdvance }
+                CaptureEndOfInput = new CaptureEndOfInput(')', eofOffset) { LineAdvance = lineAdvance },
+                CaptureWarnings = warnings
             };
 
-        static int GetWarningOffset(IReadOnlyList<HereDocumentWarning>? warnings, ShellSource source, int start) =>
-            warnings == null ? 0 : source.AsSpan(0, start).Count((byte)'\n');
+        static CaptureHereDocumentWarnings? GetCaptureWarnings(
+            IReadOnlyList<HereDocumentWarning>? warnings, ShellSource source, int start) =>
+            warnings == null ? null : new CaptureHereDocumentWarnings(warnings, source.AsSpan(0, start).Count((byte)'\n'));
 
         static SubstitutionSyntaxFailure ClassifyNestedFailure(SubstitutionSyntaxFailure nested, bool adjacent) =>
             IsHereDocumentSeparatorFailure(nested)
@@ -1643,7 +1646,7 @@ public static class Parser
         var hereDocument = kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs;
         if (!tokenizer.TryReadRedirectionWord(hereDocument, out var target, out var targetWord, out var delimiter))
         {
-            tokenizer.RecordError("Expected a word after redirection operator.", tokenizer.Position);
+            tokenizer.RecordMissingRedirectionOperand(target);
             return;
         }
         redirections ??= [];

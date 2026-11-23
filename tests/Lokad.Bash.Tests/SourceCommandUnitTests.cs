@@ -254,6 +254,7 @@ public sealed class SourceCommandUnitTests
     [Theory]
     [InlineData("printf prior\nvalue=$(printf before\n", "prior", 3, ')')]
     [InlineData("value=$(printf before\\\n", "", 3, ')')]
+    [InlineData("value=$(cat <<\\\n", "", 2, ')')]
     [InlineData("value=$(printf \"first\nsecond\n", "", 1, '"')]
     public async Task IncompleteCaptureUsesTheSourceReaderCoordinate(string body, string stdout, int line, char delimiter)
     {
@@ -320,6 +321,52 @@ public sealed class SourceCommandUnitTests
             Assert.Equal(diagnostics, host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingCaptureRedirectionOperandUnwindsTheLoadedReader(bool eval)
+    {
+        const string body = "printf '<before>\\n'\nvalue=$(cat <<";
+        const string trap = "trap 'printf \"trap:%s:<%s>\" \"$?\" \"$1\"' EXIT\nset -- outer\n";
+        var reader = eval ? "eval \"" + body.Replace("$", "\\$") + "\"" : "source ./fixture inner";
+        var script = trap + reader + "\nprintf unreached\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (!eval)
+                host.AddFile("/fixture", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(1, status);
+            Assert.Equal(eval ? "<before>\ntrap:257:<outer>" : "<before>\ntrap:257:<inner>", host.StandardOutput.TextContent);
+            var prefix = eval ? "eval: line 5: " : "./fixture: line 2: ";
+            Assert.Equal(prefix + "syntax error near unexpected token `newline'\n"
+                + prefix + "`value=$(cat <<'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("cat <<FIRST >>\nbody\nFIRST\n", "cat <<FIRST >>", 3, false, false)]
+    [InlineData("cat <<FIRST >>\nbody\n", "cat <<FIRST >>", 2, true, false)]
+    [InlineData("value=$(cat <<FIRST >>\nbody\n", "value=$(cat <<FIRST >>", 2, true, true)]
+    public async Task MissingRedirectionOperandUsesTheHeaderAndTheReachedReaderLine(
+        string body, string header, int line, bool warns, bool aborts)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/fixture", body);
+        var result = await host.RunAsync("source ./fixture\nprintf 'after:%s' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(aborts ? 1 : 0, result.ExitCode);
+        Assert.Equal(aborts ? "" : "after:2", host.StandardOutput.TextContent);
+        var prefix = $"./fixture: line {line}: ";
+        var warning = warns ? prefix + "warning: here-document at line 1 delimited by end-of-file (wanted `FIRST')\n" : "";
+        Assert.Equal(warning + prefix + "syntax error near unexpected token `newline'\n"
+            + prefix + "`" + header + "'\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Fact]

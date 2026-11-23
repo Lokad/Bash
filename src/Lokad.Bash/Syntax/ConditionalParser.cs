@@ -11,7 +11,6 @@ namespace Lokad.Bash.Syntax;
 internal sealed class ConditionalParser : IDisposable
 {
     private static readonly Word EmptyRegexOperand = new([]);
-    private static readonly ShellSource NewlineArgument = ShellSource.FromText("newline");
     private readonly ShellSource _source;
     private readonly ShellScanContext _context;
     private readonly bool _command;
@@ -517,7 +516,7 @@ internal sealed class ConditionalParser : IDisposable
         {
             UnexpectedToken = new UnexpectedSyntax(FindNearToken(), line, readPosition)
             {
-                Argument = atLineEnd ? NewlineArgument : token.Source,
+                Argument = atLineEnd ? UnexpectedSyntax.NewlineToken : token.Source,
                 ConditionalError = error,
                 UnclosedGroups = depth
             }

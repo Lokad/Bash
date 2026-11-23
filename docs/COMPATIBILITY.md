@@ -353,6 +353,11 @@ with a missing command, EXIT sees parser status 257 and shell completion
 returns its low byte, 1. In a command capture or a simple pipeline stage,
 the child unwinds the builtin and completes with status 1. Ordinary syntax
 errors and incomplete substitutions continue to use the builtin's return path.
+An absent redirection operand reports the rejected token. An implicit final
+newline counts as that token if the input reaches it before the operand. At
+the end of a continuation in token spacing, an open capture instead reports
+its missing closer. An earlier here-document can advance the reported reader
+line while the displayed text still comes from the redirection header.
 A final bare `time` in an affected parenthesized substitution reports a syntax
 error when the substitution is reached, before executing any of its commands.
 The enclosing command unit ends with status 1 and earlier bindings retain their

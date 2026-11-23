@@ -23,6 +23,8 @@ internal sealed class Tokenizer
     private int _nextOmittedSeparator;
     private HereDocumentReadAhead? _readingAhead;
     private bool _continuedAtEndOfInput;
+    private bool _spacingContinuedAtEndOfInput;
+    private int _lastPhysicalNewline;
 
     internal bool TrackCommandLocations { get; init; }
     internal bool TrackUnexpectedTokens { get; init; }
@@ -169,6 +171,28 @@ internal sealed class Tokenizer
     {
         var (start, end) = (token.Source.Start.Value, token.Source.End.Value);
         return new UnexpectedSyntax(_input.Slice(start, end - start), _input.GetPhysicalLine(end, out _), end);
+    }
+
+    internal void RecordMissingRedirectionOperand(Token token)
+    {
+        if (Error != null)
+            return;
+        UnexpectedSyntax? unexpected = null;
+        if (TrackUnexpectedTokens)
+        {
+            if (token.Kind == TokenKind.Newline)
+            {
+                // Here-document collection can move the reader past the token's physical line.
+                var read = Position > _lastPhysicalNewline && _input[Position - 1] == (byte)'\n' ? Position - 1 : Position;
+                unexpected = new UnexpectedSyntax(UnexpectedSyntax.NewlineToken, _input.GetPhysicalLine(_lastPhysicalNewline, out _), read);
+            }
+            else if (token.Kind != TokenKind.EndOfInput)
+                unexpected = GetUnexpectedSyntax(token);
+            else if (!_spacingContinuedAtEndOfInput)
+                unexpected = new UnexpectedSyntax(UnexpectedSyntax.NewlineToken, _input.GetPhysicalLine(Position, out _), Position);
+        }
+        RecordFailure(new ParserFailure(new SyntaxError("Expected a word after redirection operator.", Position),
+            ParserFailureKind.RedirectionOperand) { UnexpectedToken = unexpected });
     }
 
     internal void RecordFailure(ParserFailure failure)
@@ -576,7 +600,7 @@ internal sealed class Tokenizer
             start = Position;
             if (Position >= span.Length)
             {
-                _continuedAtEndOfInput |= Position > beforeSpacing && EndsInLineContinuation(span);
+                _spacingContinuedAtEndOfInput |= Position > beforeSpacing && EndsInLineContinuation(span);
                 if (HereDocuments is { HasPending: true } pending)
                 {
                     if (AllowEofHereDocuments)
@@ -603,6 +627,7 @@ internal sealed class Tokenizer
                 return Located(Token.EndOfInput());
             if (current == (byte)'\n')
             {
+                _lastPhysicalNewline = Position;
                 Position++;
                 var skippedBodies = SkipCollectedHereDocuments();
                 if (HereDocuments is { HasPending: true })

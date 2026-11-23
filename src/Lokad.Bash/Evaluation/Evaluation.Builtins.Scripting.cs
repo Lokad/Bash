@@ -333,26 +333,34 @@ public sealed partial class Evaluation
             {
                 if (!commands.MoveNext())
                     break;
-                if (commands.Current.HereDocumentWarnings is { } warnings)
-                    await ReportHereDocumentWarningsAsync(warnings, lineOffset).ConfigureAwait(false);
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
+                var path = scope.Context.CallerSource?.Path;
+                var diagnosticLine = failedUnit == null ? 0 : lineOffset + failedUnit.DiagnosticLine;
+                if (commands.Current.HereDocumentWarnings is { } warnings)
+                {
+                    var warningPrefix = failedUnit?.Failure is { Kind: ParserFailureKind.RedirectionOperand, UnexpectedToken: not null }
+                        ? new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, diagnosticLine) : default;
+                    await ReportHereDocumentWarningsAsync(warnings, lineOffset, warningPrefix).ConfigureAwait(false);
+                }
                 var skipExecution = result.Flow is FlowControlKind.Break or FlowControlKind.Continue;
                 ICommand command;
                 if (failedUnit != null)
                 {
+                    if (failedUnit.Failure.CaptureWarnings is { } captureWarnings)
+                        await ReportCaptureHereDocumentWarningsAsync(captureWarnings, path, lineOffset,
+                            failedUnit.Failure.CaptureEndOfInput == null ? diagnosticLine : diagnosticLine - 1).ConfigureAwait(false);
                     if (failedUnit.Failure.CaptureEndOfInput is { } captureEnd)
                     {
-                        await ReportCaptureEndOfInputAsync(captureEnd, lineOffset + failedUnit.DiagnosticLine, lineOffset,
-                            scope.Context.CallerSource?.Path, diagnosticOrigin).ConfigureAwait(false);
+                        await ReportCaptureEndOfInputAsync(captureEnd, diagnosticLine, path, diagnosticOrigin).ConfigureAwait(false);
                     }
                     else if (failedUnit.Failure.UnexpectedToken is { } token)
-                        await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path,
-                            diagnosticOrigin, lineOffset + failedUnit.DiagnosticLine, includeLine: true).ConfigureAwait(false);
+                        await ReportUnexpectedSyntaxAsync(token, path, diagnosticOrigin, diagnosticLine, includeLine: true)
+                            .ConfigureAwait(false);
                     else if (failedUnit.Failure.ConditionalQuoteEnd is { } quoteEnd)
                         await ReportUnclosedConditionalQuoteAsync(quoteEnd).ConfigureAwait(false);
-                    else if (diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution && failedUnit.DiagnosticLine != 0)
-                        await ReportCaptureGrammarEndOfInputAsync(scope.Context.CallerSource?.Path,
-                            lineOffset + failedUnit.DiagnosticLine).ConfigureAwait(false);
+                    else if (failedUnit.DiagnosticLine != 0 && (diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
+                        || failedUnit.Failure.Kind == ParserFailureKind.RedirectionOperand))
+                        await ReportReaderGrammarEndOfInputAsync(path, diagnosticOrigin, diagnosticLine).ConfigureAwait(false);
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)

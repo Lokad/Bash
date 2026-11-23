@@ -3922,18 +3922,19 @@ public sealed partial class Evaluation : IFileTester
             await ExecuteWriteAsync(descriptor, MissingConditionalGroup).ConfigureAwait(false);
     }
 
-    internal Task ReportCaptureEndOfInputAsync(CaptureEndOfInput endOfInput) =>
-        ReportCaptureEndOfInputAsync(endOfInput, line: 0, offset: 0, path: null, SyntaxDiagnosticOrigin.Script);
+    internal async Task ReportCaptureEndOfInputAsync(CaptureEndOfInput endOfInput, CaptureHereDocumentWarnings? warnings)
+    {
+        if (warnings is { } captureWarnings)
+            await ReportCaptureHereDocumentWarningsAsync(captureWarnings, path: null, offset: 0, line: 0).ConfigureAwait(false);
+        await ReportCaptureEndOfInputAsync(endOfInput, line: 0, path: null, SyntaxDiagnosticOrigin.Script).ConfigureAwait(false);
+    }
 
     private async Task ReportCaptureEndOfInputAsync(
-        CaptureEndOfInput endOfInput, int line, int offset, string? path, SyntaxDiagnosticOrigin origin)
+        CaptureEndOfInput endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
-        if (endOfInput.Warnings is { } warnings)
-            await ReportHereDocumentWarningsAsync(warnings, offset + endOfInput.WarningOffset,
-                new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, Math.Max(1, line - 1))).ConfigureAwait(false);
         var prefix = new SyntaxDiagnosticPrefix(path, origin, line);
         await WriteSyntaxDiagnosticLineAsync(descriptor, prefix,
                 Utf8Text.EncodeLine($"unexpected EOF while looking for matching `{endOfInput.Delimiter}'"))
@@ -3942,11 +3943,11 @@ public sealed partial class Evaluation : IFileTester
             await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, UnreadConditionalToken).ConfigureAwait(false);
     }
 
-    private async Task ReportCaptureGrammarEndOfInputAsync(string? path, int line)
+    private async Task ReportReaderGrammarEndOfInputAsync(string? path, SyntaxDiagnosticOrigin origin, int line)
     {
         var descriptor = GetStdErrDescriptor();
         if (!descriptor.IsClosed)
-            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.CommandSubstitution, line),
+            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, line),
                 UnexpectedSyntaxEndOfInput).ConfigureAwait(false);
     }
 
@@ -3970,6 +3971,10 @@ public sealed partial class Evaluation : IFileTester
 
     private Task ReportHereDocumentWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, int offset) =>
         ReportHereDocumentWarningsAsync(warnings, offset, default);
+
+    private Task ReportCaptureHereDocumentWarningsAsync(CaptureHereDocumentWarnings captured, string? path, int offset, int line) =>
+        ReportHereDocumentWarningsAsync(captured.Warnings, offset + captured.LineOffset,
+            new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, Math.Max(1, line)));
 
     private async Task ReportHereDocumentWarningsAsync(
         IReadOnlyList<HereDocumentWarning> warnings, int offset, SyntaxDiagnosticPrefix prefix)

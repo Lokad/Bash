@@ -17,6 +17,7 @@ public sealed record SyntaxError(string Message, int Offset)
 internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
     internal CaptureEndOfInput? CaptureEndOfInput { get; init; }
+    internal CaptureHereDocumentWarnings? CaptureWarnings { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
     internal ConditionalQuoteEnd? ConditionalQuoteEnd { get; init; }
     internal bool IsNestedSubstitution { get; init; }
@@ -27,7 +28,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 
     internal ParserFailure InSubstitution() => Kind switch
     {
-        ParserFailureKind.Grammar => this with { Kind = ParserFailureKind.SubstitutionGrammar },
+        ParserFailureKind.Grammar or ParserFailureKind.RedirectionOperand => this with { Kind = ParserFailureKind.SubstitutionGrammar },
         ParserFailureKind.ArithmeticForHeader => this with { Kind = ParserFailureKind.SubstitutionForHeader },
         ParserFailureKind.SubstitutionForHeader or ParserFailureKind.QuotedSubstitutionForHeader
             when !IsNestedSubstitution => this with { IsNestedSubstitution = true },
@@ -41,6 +42,8 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 /// <summary>Byte slices and reader position for a reached token diagnostic.</summary>
 internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int ReadPosition)
 {
+    internal static ShellSource NewlineToken { get; } = ShellSource.FromText("newline");
+
     /// <summary>Byte offset where the enclosing capture starts reading its payload.</summary>
     internal int CapturePayloadStart { get; init; }
     internal ConditionalArgumentError ConditionalError { get; init; }
@@ -60,14 +63,16 @@ internal readonly record struct ConditionalQuoteEnd(bool DoubleQuoted)
 internal sealed record CaptureEndOfInput(char Delimiter, int ReadPosition)
 {
     internal int LineAdvance { get; init; }
-    internal IReadOnlyList<HereDocumentWarning>? Warnings { get; init; }
-    internal int WarningOffset { get; init; }
     internal bool InsideConditional { get; init; }
 }
+
+/// <summary>Warnings collected inside a capture, with each document line relative to its payload.</summary>
+internal readonly record struct CaptureHereDocumentWarnings(IReadOnlyList<HereDocumentWarning> Warnings, int LineOffset);
 
 internal enum ParserFailureKind
 {
     Grammar,
+    RedirectionOperand,
     Delimiter,
     Limit,
     ArithmeticForHeader,

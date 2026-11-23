@@ -142,6 +142,21 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
+    [InlineData("value=$(cat <<", "newline", "value=$(cat <<")]
+    [InlineData("value=$(cat <<;\r\n)\n", ";", "value=$(cat <<;\r")]
+    public async Task MissingRedirectionOperandReportsTheRejectedTokenAndItsPhysicalLine(
+        string malformed, string token, string line)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("printf before\n" + malformed, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal($"syntax error near unexpected token `{token}'\n`{line}'\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("(", ")", "2:source-arg;2")]
     [InlineData("value=$(", "); printf '%s' \"$value\"", "1:caller-arg;0")]
     public async Task SourceSyntaxExitStaysAtItsChildShellBoundary(string open, string close, string output)
