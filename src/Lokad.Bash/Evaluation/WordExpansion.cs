@@ -290,7 +290,7 @@ internal static partial class WordExpansion
     {
         if (word == null && !quoteSegment || captures == null && word?.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted }])
         {
-            await ReportAsync(segment.ToValue()).ConfigureAwait(false);
+            await ReportParameterSyntaxAsync(segment.ToValue(), missingBrace, scope, hereDocument: false).ConfigureAwait(false);
             return;
         }
         using var source = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
@@ -299,13 +299,18 @@ internal static partial class WordExpansion
         else if (!FunctionDefinitionFormatter.TryAppendWordSource(word, source, scope.Effects.Memory.Budget,
                 scope.Effects.CancellationToken, captures))
             throw new ByteMemoryBuilder.LimitExceededException();
-        await ReportAsync(ShellValue.FromBytes(source.ToMemory())).ConfigureAwait(false);
+        await ReportParameterSyntaxAsync(ShellValue.FromBytes(source.ToMemory()), missingBrace, scope, hereDocument: false)
+            .ConfigureAwait(false);
+    }
 
-        Task ReportAsync(ShellValue spelling) => missingBrace
-            ? scope.Effects.ReportUnitExpansionFailureAsync([ShellValue.FromText("bad substitution")],
-                [ShellValue.FromText("no closing `}' in "), spelling], scope, ExpansionFailureKind.WordSyntax)
-            : scope.Effects.ReportUnitExpansionFailureAsync([spelling], [ShellValue.FromText("bad substitution")],
-                scope, ExpansionFailureKind.WordSyntax);
+    private static Task ReportParameterSyntaxAsync(ShellValue spelling, bool missingBrace, ScopedEvaluation scope, bool hereDocument)
+    {
+        var badSubstitution = ShellValue.FromText("bad substitution");
+        ReadOnlySpan<ShellValue> subject = missingBrace ? [badSubstitution] : [spelling];
+        ReadOnlySpan<ShellValue> message = missingBrace ? [ShellValue.FromText("no closing `}' in "), spelling] : [badSubstitution];
+        return hereDocument
+            ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, required: false)
+            : scope.Effects.ReportUnitExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
     }
 
     // Lexical assignment operands still go through ordinary field processing.
@@ -951,9 +956,12 @@ internal static partial class WordExpansion
                     }
                     if (quoteContext == ExpansionQuoteContext.HereDocument)
                     {
-                        await RejectHereDocumentAsync(scope, parameterStatus is BracedParameterScanStatus.Unterminated
-                            or BracedParameterScanStatus.UnterminatedCommandSubstitution
-                            ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid, parameterError).ConfigureAwait(false);
+                        if (parameterStatus is BracedParameterScanStatus.Unterminated or BracedParameterScanStatus.UnterminatedOperand)
+                            await ReportParameterSyntaxAsync(content.ToValue(),
+                                parameterStatus == BracedParameterScanStatus.UnterminatedOperand, scope, hereDocument: true).ConfigureAwait(false);
+                        else
+                            await RejectHereDocumentAsync(scope, parameterStatus == BracedParameterScanStatus.UnterminatedCommandSubstitution
+                                ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid, parameterError).ConfigureAwait(false);
                         return null;
                     }
                     if (output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)

@@ -10,6 +10,52 @@ namespace Lokad.Bash.Tests;
 public sealed class ParameterOperatorTests
 {
     [Theory]
+    [InlineData("(exit 7) | (exit 4)\n{ cat; } <<DOC; printf same\n${name\nDOC\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        0, "<1:1>", "line 4: ${name\n: bad substitution\n", null, null)]
+    [InlineData("cat <<DOC; printf '<%s>' \"$?\"\n${x.y}\nDOC\nprintf next",
+        0, "<1>next", "line 1: ${x.y}\n: bad substitution\n", null, null)]
+    [InlineData("{ cat; } <<DOC; printf skipped\nlead ${items[1]:-value\nDOC\nprintf '<%s>' \"$?\"",
+        0, "<1>", "line 3: bad substitution: no closing `}' in lead ${items[1]:-value\n\n", null, null)]
+    [InlineData("s=prefix\n{ cat; } <<DOC; printf skipped\nfirst\r\n$s ${name\r\nDOC\nprintf '<%s>' \"$?\"",
+        0, "<1>", "line 5: first\r\n$s ${name\r\n: bad substitution\n", null, null)]
+    [InlineData("set -e; trap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" >&2' EXIT\n"
+        + "{ cat; } 2>errors <<DOC || printf skipped\n${name\nDOC\nprintf next",
+        1, "", "", "line 4: ${name\n: bad substitution\n<exit:1:1>", null)]
+    [InlineData("set -e; trap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" >&2' EXIT\n"
+        + "[[ x ]] 2>errors <<DOC || printf skipped\n${name:?message \"$(printf nested)\"}\nDOC\nprintf next",
+        1, "", "", "line 2: name: message nested\n<exit:1:1>", null)]
+    [InlineData("source ./fixture; printf caller",
+        1, "", "./fixture: line 4: name: message\n", null,
+        "# preface\n{ cat; } <<DOC; printf skipped\n${name:?message}\nDOC\nprintf loaded\n")]
+    [InlineData("v=$(\nprintf inside\n{ cat; } <<DOC; printf skipped\n${name\nDOC\nprintf more\n);"
+        + " printf '<%s:%s>' \"$?\" \"$v\"",
+        0, "<1:inside>", "line 10: ${name\n: bad substitution\n", null, null)]
+    public async Task HereDocumentParameterFailuresKeepTheReaderAndRedirectionScope(
+        string source, int status, string output, string diagnostic, string? redirectedDiagnostic, string? sourcedInput)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            if (sourcedInput != null)
+                host.AddFile("/fixture", sourcedInput);
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, CancellationToken.None)
+                : await host.RunAsync(source, CancellationToken.None);
+
+            Assert.Equal(status, result.ExitCode);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(diagnostic, host.StandardError.TextContent);
+            if (redirectedDiagnostic != null)
+                Assert.Equal(redirectedDiagnostic, host.ReadFile("/errors"));
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
     [InlineData("a=(); i=0; saved=prior\nsaved=${a[@]:=$((++i))}; printf skipped\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",
         0, "[2:2:1:prior]", "line 2: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0; saved=prior\nsaved=\"${a[@]:=$((++i))}\" true; printf skipped\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",

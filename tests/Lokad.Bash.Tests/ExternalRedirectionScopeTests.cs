@@ -4,16 +4,16 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ExternalRedirectionScopeTests
 {
-    // Bash 5.2 -s: omit diagnostic source locations; enable pipefail explicitly in its control.
+    // The pinned Bash comparisons enable pipefail and check the reader line for here-document failures.
     [Theory]
     [InlineData("unset HDS_VALUE HDS_READ; hds_fn(){ printf 'fn:%s\\n' \"${HDS_VALUE-unset}\"; }\ncat <<HDS_END\n${HDS_VALUE:=set}\nHDS_END\nprintf 'status=%s value=%s read=%s' \"$?\" \"${HDS_VALUE-unset}\" \"${HDS_READ-unset}\"", "set\nstatus=0 value=unset read=unset", "", 0)]
-    [InlineData("unset HDS_MISSING; hds_fn(){ printf wrong; }\ncat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nprintf 'after:%s' \"$?\"", "after:1", "HDS_MISSING: stop\n", 0)]
+    [InlineData("unset HDS_MISSING; hds_fn(){ printf wrong; }\ncat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nprintf 'after:%s' \"$?\"", "after:1", "line 2: HDS_MISSING: stop\n", 0)]
     [InlineData("HDS_COUNT=0; unset HDS_VALUE\ncat <<HDS_END\n$((HDS_COUNT+=1)):${HDS_VALUE:=set}:$(printf seen >&2; printf captured)\nHDS_END\nprintf 'after:%s:%s:%s' \"$?\" \"$HDS_COUNT\" \"${HDS_VALUE-unset}\"", "1:set:captured\nafter:0:0:unset", "seen", 0)]
-    [InlineData("HDS_COUNT=0; unset HDS_MISSING\ncat <<HDS_END\n$((HDS_COUNT+=1))${HDS_MISSING:?stop}$(printf wrong >&2)\nHDS_END\nprintf 'after:%s:%s' \"$?\" \"$HDS_COUNT\"", "after:1:0", "HDS_MISSING: stop\n", 0)]
-    [InlineData("unset HDS_MISSING\n! cat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nprintf 'after:%s' \"$?\"", "after:0", "HDS_MISSING: stop\n", 0)]
-    [InlineData("unset HDS_MISSING\ncat <<HDS_END || printf recovered\n${HDS_MISSING:?stop}\nHDS_END\nprintf 'after:%s' \"$?\"", "recoveredafter:0", "HDS_MISSING: stop\n", 0)]
-    [InlineData("unset HDS_MISSING\nif cat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nthen printf wrong; else printf recovered; fi\nprintf after", "recoveredafter", "HDS_MISSING: stop\n", 0)]
-    [InlineData("unset HDS_MISSING\nHDS_CAPTURE=$(cat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nprintf after)\nprintf 'status=%s capture=%s' \"$?\" \"$HDS_CAPTURE\"", "status=0 capture=after", "HDS_MISSING: stop\n", 0)]
+    [InlineData("HDS_COUNT=0; unset HDS_MISSING\ncat <<HDS_END\n$((HDS_COUNT+=1))${HDS_MISSING:?stop}$(printf wrong >&2)\nHDS_END\nprintf 'after:%s:%s' \"$?\" \"$HDS_COUNT\"", "after:1:0", "line 2: HDS_MISSING: stop\n", 0)]
+    [InlineData("unset HDS_MISSING\n! cat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nprintf 'after:%s' \"$?\"", "after:0", "line 2: HDS_MISSING: stop\n", 0)]
+    [InlineData("unset HDS_MISSING\ncat <<HDS_END || printf recovered\n${HDS_MISSING:?stop}\nHDS_END\nprintf 'after:%s' \"$?\"", "recoveredafter:0", "line 2: HDS_MISSING: stop\n", 0)]
+    [InlineData("unset HDS_MISSING\nif cat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nthen printf wrong; else printf recovered; fi\nprintf after", "recoveredafter", "line 2: HDS_MISSING: stop\n", 0)]
+    [InlineData("unset HDS_MISSING\nHDS_CAPTURE=$(cat <<HDS_END\n${HDS_MISSING:?stop}\nHDS_END\nprintf after)\nprintf 'status=%s capture=%s' \"$?\" \"$HDS_CAPTURE\"", "status=0 capture=after", "line 5: HDS_MISSING: stop\n", 0)]
     [InlineData("unset HDS_MISSING\ncat <<'HDS_END'\n${HDS_MISSING:?stop}\nHDS_END\nprintf 'after:%s' \"$?\"", "${HDS_MISSING:?stop}\nafter:0", "", 0)]
     [InlineData("unset HDS_MISSING; cat <<< \"${HDS_MISSING:?stop}\"; printf 'after:%s' \"$?\"", "after:1", "HDS_MISSING: stop\n", 0)]
     [InlineData("unset HDS_VALUE\ncat <<HDS_FIRST <<HDS_SECOND\n${HDS_VALUE:=first}:$(printf first >&2)\nHDS_FIRST\n${HDS_VALUE-unset}:$(printf second >&2)\nHDS_SECOND\nprintf 'after:%s:%s' \"$?\" \"${HDS_VALUE-unset}\"", "first:\nafter:0:unset", "firstsecond", 0)]

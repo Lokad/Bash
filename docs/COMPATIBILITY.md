@@ -461,6 +461,12 @@ the capture's rendered layout supplies that boundary. A previously
 defined function uses the opening line of its body. Arithmetic and
 conditional commands put the end of their expression in the warning
 prefix while retaining the document's own line inside the warning.
+When an expanded here-document contains a malformed parameter, the
+diagnostic includes the document bytes and the reached reader line.
+A failed required parameter reports its expanded message at that same
+line. These failures in compound redirections publish status 1 and a
+single pipeline status of 1. With errexit active, EXIT sees those
+statuses through the redirections already applied to the command.
 When a streamed command list encounters an unexpected closer or separator, the
 diagnostic shows the token and the physical source line. Missing conditional
 operands identify the unary or binary grammar role and any open parentheses.

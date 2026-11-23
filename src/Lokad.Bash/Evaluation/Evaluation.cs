@@ -664,11 +664,22 @@ public sealed partial class Evaluation : IFileTester
         {
             if (_state.TryConsumeExpansionError(out var redirectionExitCode, out var errorKind))
             {
-                if (errorKind == ExpansionErrorKind.HereDocumentSyntax && _state.FatalExpansion == null)
+                var parameterFailure = errorKind == ExpansionErrorKind.HereDocumentParameter;
+                if (parameterFailure)
                 {
-                    result = ReaderErrexitEnabled(scope)
-                        ? await RunExitTrapAsync(scope, EvaluationResult.Exit(2), ExitTrapKind.Expansion).ConfigureAwait(false)
-                        : EvaluationResult.DiscardCompoundRedirectionUnit();
+                    _state.LastExitCode = redirectionExitCode;
+                    PublishExpansionPipelineStatus(redirectionExitCode, scope);
+                }
+                if (parameterFailure || errorKind == ExpansionErrorKind.HereDocumentSyntax && _state.FatalExpansion == null)
+                {
+                    if (ReaderErrexitEnabled(scope))
+                    {
+                        var exitStatus = parameterFailure ? redirectionExitCode : 2;
+                        result = await RunExitTrapAsync(scope, EvaluationResult.Exit(exitStatus), ExitTrapKind.Expansion).ConfigureAwait(false);
+                    }
+                    else
+                        result = _state.FatalExpansion is { } fatal ? EvaluationResult.Exit(fatal.ExitCode)
+                            : EvaluationResult.DiscardCompoundRedirectionUnit();
                 }
                 else
                     result = await FinalizeResultAsync(EvaluationResult.FromExitCode(redirectionExitCode), negated: false).ConfigureAwait(false);
@@ -3557,6 +3568,18 @@ public sealed partial class Evaluation : IFileTester
         _state.SetExpansionError(exitCode);
 
     internal void SetHereDocumentSyntaxError() => _state.SetHereDocumentSyntaxError();
+
+    internal Task ReportHereDocumentParameterFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
+        ScopedEvaluation scope, bool required)
+    {
+        if (_state.FatalExpansion.HasValue)
+            return Task.CompletedTask;
+        if (required)
+            SetFatalExpansionError(ExpansionFailureKind.RequiredParameter);
+        _state.SetHereDocumentParameterError();
+        var prefix = GetHereDocumentWarningPrefix(scope) ?? GetCommandDiagnosticPrefix(scope.Context, HereDocumentExpansionLine(scope));
+        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
+    }
 
     /// <summary>Reports the first fatal expansion through the active stderr mapping without decoding message bytes.</summary>
     internal Task ReportFatalExpansionAsync(ShellValue name, ShellValue message, ExpansionFailureKind kind) =>

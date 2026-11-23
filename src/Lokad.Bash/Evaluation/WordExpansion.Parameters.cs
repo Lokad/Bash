@@ -85,8 +85,7 @@ internal static partial class WordExpansion
             if (parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript && quoteContext == ExpansionQuoteContext.Unquoted)
                 await ReportParameterWordSyntaxAsync(originalWord, segment, missingBrace: false, scope).ConfigureAwait(false);
             else
-                await ReportBadSubstitutionAsync(parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript
-                    && quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+                await ReportBadSubstitutionAsync().ConfigureAwait(false);
             return;
         }
         var transform = parsed.Kind == BracedParameterOperatorKind.Transform ? parsed.Word[0] : (byte)0;
@@ -298,7 +297,7 @@ internal static partial class WordExpansion
                         message = messageWord.ToValue(scope.Effects.Memory);
                     }
                     if (scope.CanExpand)
-                        await ReportParameterFailureAsync(message, ExpansionFailureKind.RequiredParameter)
+                        await ReportRequiredParameterFailureAsync(message)
                             .ConfigureAwait(false);
                 }
                 else
@@ -374,10 +373,14 @@ internal static partial class WordExpansion
             return false;
         }
 
-        Task ReportParameterFailureAsync(ShellValue message, ExpansionFailureKind kind) =>
-            parsed.Modifier == ParameterModifier.Indirect
-                ? scope.Effects.ReportFatalExpansionAsync([ShellValue.FromText("!"), parsed.Name.ToValue()], [message], kind)
-                : scope.Effects.ReportFatalExpansionAsync(parsed.Name.ToValue(), message, kind);
+        Task ReportRequiredParameterFailureAsync(ShellValue message)
+        {
+            ReadOnlySpan<ShellValue> name = parsed.Modifier == ParameterModifier.Indirect
+                ? [ShellValue.FromText("!"), parsed.Name.ToValue()] : [parsed.Name.ToValue()];
+            return quoteContext == ExpansionQuoteContext.HereDocument
+                ? scope.Effects.ReportHereDocumentParameterFailureAsync(name, [message], scope, required: true)
+                : scope.Effects.ReportFatalExpansionAsync(name, [message], ExpansionFailureKind.RequiredParameter);
+        }
 
         async Task AppendParameterWordAsync()
         {
@@ -728,7 +731,7 @@ internal static partial class WordExpansion
 
                 if (reference.Kind == VariableReferenceKind.Element && reference.Subscript.Length == 0)
                 {
-                    await ReportBadSubstitutionAsync(quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+                    await ReportBadSubstitutionAsync().ConfigureAwait(false);
                     return new ParameterValue(reference.Kind, [], false, reference, null);
                 }
 
@@ -860,11 +863,12 @@ internal static partial class WordExpansion
                 [ShellValue.FromText("${"), ShellValue.FromBytes(content.Bytes), ShellValue.FromText("}")],
                 [ShellValue.FromText(message)], kind);
 
-        Task ReportBadSubstitutionAsync(bool useSegment)
+        Task ReportBadSubstitutionAsync()
         {
-            ReadOnlySpan<ShellValue> subject = useSegment ? [segment.ToValue()]
-                : [ShellValue.FromText("${"), content.ToValue(), ShellValue.FromText("}")];
-            return scope.Effects.ReportUnitExpansionFailureAsync(subject, [ShellValue.FromText("bad substitution")],
+            if (quoteContext == ExpansionQuoteContext.HereDocument)
+                return ReportParameterSyntaxAsync(segment.ToValue(), missingBrace: false, scope, hereDocument: true);
+            return scope.Effects.ReportUnitExpansionFailureAsync(
+                [ShellValue.FromText("${"), content.ToValue(), ShellValue.FromText("}")], [ShellValue.FromText("bad substitution")],
                 scope, ExpansionFailureKind.WordSyntax);
         }
 

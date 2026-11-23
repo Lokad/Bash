@@ -8,16 +8,16 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
-    // Bash 5.2.21 -s; source-location prefixes may appear on either output channel.
+    // Expanded here-document diagnostics include the reached reader line on the selected descriptor.
     [Theory]
     [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\ncat 2>/dev/null <<HPM_END\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "after:1", "", 0)]
-    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\ncat <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "after:1", "HPM_MISSING: stop\n", 0)]
+    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\ncat <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "after:1", "line 2: HPM_MISSING: stop\n", 0)]
     [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\n: 2>/dev/null <<HPM_END\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "", 1)]
-    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\n: <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "HPM_MISSING: stop\n", 1)]
+    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\n: <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "line 2: HPM_MISSING: stop\n", 1)]
     [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\nhpm_fn 2>/dev/null <<HPM_END\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "", 1)]
-    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\nhpm_fn <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "HPM_MISSING: stop\n", 1)]
+    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\nhpm_fn <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "line 2: HPM_MISSING: stop\n", 1)]
     [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\n{ :; } 2>/dev/null <<HPM_END\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "", 1)]
-    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\n{ :; } <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "HPM_MISSING: stop\n", 1)]
+    [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\n{ :; } <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "line 4: HPM_MISSING: stop\n", 1)]
     [InlineData("unset HPM_MISSING; cat 2>/dev/null <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\" >&2", "", "after:1", 0)]
     [InlineData("unset HPM_MISSING; cat 2>&- <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\"", "after:1", "", 0)]
     [InlineData("unset HPM_MISSING; cat 2>&1 >/dev/null <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\"", "HPM_MISSING: stop\nafter:1", "", 0)]

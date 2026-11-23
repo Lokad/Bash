@@ -50,7 +50,7 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
     internal bool UseInheritedPipelineExitAction { get; init; }
 }
 
-internal enum ExpansionErrorKind { General, HereDocumentSyntax }
+internal enum ExpansionErrorKind { General, HereDocumentSyntax, HereDocumentParameter }
 
 [Flags]
 internal enum FunctionAttributes
@@ -535,6 +535,8 @@ internal sealed class EvaluationState
     public void SetExpansionError(int exitCode) => _pendingExpansionError = (exitCode, ExpansionErrorKind.General);
 
     internal void SetHereDocumentSyntaxError() => _pendingExpansionError = (1, ExpansionErrorKind.HereDocumentSyntax);
+
+    internal void SetHereDocumentParameterError() => _pendingExpansionError = (1, ExpansionErrorKind.HereDocumentParameter);
 
     /// <summary>Redefinition retains attributes and fails without changing a readonly function.</summary>
     public bool TryRegisterFunction(FunctionDefinition functionDefinition, Evaluation.EvaluationContext context, EvaluationMemory memory)

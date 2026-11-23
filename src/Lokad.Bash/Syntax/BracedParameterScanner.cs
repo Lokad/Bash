@@ -216,6 +216,7 @@ internal static class BracedParameterScanner
             var openingBracket = nameEnd > nameStart && nameEnd < text.Length
                 && text[nameEnd] == (byte)'[' ? nameEnd : -1;
             var selectorDepth = 0;
+            var selectorEnd = -1;
             var quotePattern = quotes == LexicalQuotes.DoubleQuoted &&
                 IsPatternOperator(text, nameEnd == nameStart ? ReadSpecialNameEnd(text, start) : nameEnd);
             var lateSelectorEnd = -1;
@@ -354,8 +355,12 @@ internal static class BracedParameterScanner
                             rejectedSelectorDepth = 0;
                         }
                         selectorDepth--;
-                        if (selectorDepth == 0 && quotes == LexicalQuotes.DoubleQuoted)
-                            quotePattern = IsPatternOperator(text, cursor.Position + 1);
+                        if (selectorDepth == 0)
+                        {
+                            selectorEnd = cursor.Position + 1;
+                            if (quotes == LexicalQuotes.DoubleQuoted)
+                                quotePattern = IsPatternOperator(text, selectorEnd);
+                        }
                     }
                 }
                 cursor.Advance();
@@ -378,6 +383,17 @@ internal static class BracedParameterScanner
             }
             if (hasLateSubscript)
                 subscriptFailure = ParameterSubscriptFailure.Nested;
+            if (phase == ScanPhase.Expansion && context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
+            {
+                var operandStart = openingBracket >= 0 ? selectorEnd
+                    : nameEnd != nameStart ? nameEnd : ReadSpecialNameEnd(text, start);
+                // These special parameter spellings enter the brace reader even without a suffix.
+                if (start < text.Length && (text[start] == (byte)'@'
+                    || lengthForm && nameStart < text.Length && text[nameStart] is (byte)'@' or (byte)'?'))
+                    return BracedParameterScanStatus.UnterminatedOperand;
+                if (operandStart > start && operandStart < text.Length && ParameterNameTerminators.Contains(text[operandStart]))
+                    return BracedParameterScanStatus.UnterminatedOperand;
+            }
             return BracedParameterScanStatus.Unterminated;
         }
         finally
@@ -550,6 +566,8 @@ internal enum BracedParameterScanStatus
 
     /// <summary>The outer expansion or a non-command nested expansion is incomplete.</summary>
     Unterminated,
+    /// <summary>An unclosed here-document parameter reached the brace-delimited operand reader.</summary>
+    UnterminatedOperand,
 
     /// <summary>A nested command substitution is incomplete.</summary>
     UnterminatedCommandSubstitution,
