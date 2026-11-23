@@ -540,20 +540,31 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Equal("END", Assert.Single(redirection.HereDocumentDelimiter.Parts).GetUtf8Text());
     }
 
-    [Theory]
-    [InlineData("`if`", "if")]
-    [InlineData("$(cat <<END)", "cat <<END")]
-    public void DeferredSyntaxKeepsItsExecutionTimeFailure(string source, string payload)
+    [Fact]
+    public void LegacySyntaxKeepsItsExecutionTimeFailure()
     {
+        const string source = "`if`";
         var word = Tokenizer.ReadExpansionWord(ShellSource.FromText(source), ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
         var part = Assert.IsType<CommandSubstitutionWordPart>(Assert.Single(word.Parts));
-        var deferred = part.Substitution;
-        if (deferred is CommandSubstitutionSyntax.Legacy legacy)
-            Assert.Equal(source, legacy.Spelling.ToUtf8String());
-        else
-            Assert.IsType<CommandSubstitutionSyntax.Deferred>(deferred);
-        Assert.Equal(payload, deferred.Source.ToUtf8String());
-        Assert.Throws<SyntaxException>(() => Parser.Parse(deferred.Source.Bytes));
+        var legacy = Assert.IsType<CommandSubstitutionSyntax.Legacy>(part.Substitution);
+        Assert.Equal(source, legacy.Spelling.ToUtf8String());
+        Assert.Equal("if", legacy.Source.ToUtf8String());
+        Assert.Throws<SyntaxException>(() => Parser.Parse(legacy.Source.Bytes));
+    }
+
+    [Fact]
+    public void DeferredHereDocumentCompletesWhenItsSourceIsRead()
+    {
+        var word = Tokenizer.ReadExpansionWord(ShellSource.FromText("$(cat <<END)"), ExpansionWordSyntax.Parameter,
+            ShellQuoteKind.None);
+        var part = Assert.IsType<CommandSubstitutionWordPart>(Assert.Single(word.Parts));
+        var deferred = Assert.IsType<CommandSubstitutionSyntax.Deferred>(part.Substitution);
+        Assert.Equal("cat <<END", deferred.Source.ToUtf8String());
+        var script = Parser.Parse(deferred.Source.Bytes);
+        var command = Assert.IsType<SimpleCommand>(Assert.Single(script.Commands));
+        Assert.Empty(Assert.Single(Assert.Single(command.Redirections).Target.Parts).GetUtf8Text());
+        var warning = Assert.Single(script.Locations?.GetHereDocumentWarnings(command) ?? []);
+        Assert.Equal("END", warning.Delimiter.ToUtf8String());
     }
 
     [Fact]

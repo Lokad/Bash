@@ -23,6 +23,7 @@ internal sealed class Tokenizer
     private int _nextOmittedSeparator;
 
     internal bool TrackCommandLocations { get; init; }
+    internal bool AllowEofHereDocuments { get; init; }
     internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
@@ -61,6 +62,9 @@ internal sealed class Tokenizer
                 WrapperOperandEndLine = wrapperOperandEndLine
             }, _scanContext.SyntaxMemory);
     }
+
+    internal void RecordHereDocumentWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings) =>
+        (Locations ??= new CommandLocations()).SetHereDocumentWarnings(command, warnings, _scanContext.SyntaxMemory);
 
     private ParserFailure? _failure;
 
@@ -461,8 +465,13 @@ internal sealed class Tokenizer
             start = Position;
             if (Position >= span.Length)
             {
-                if (HereDocuments is { HasPending: true })
-                    RecordError("Unterminated here-document.", Position);
+                if (HereDocuments is { HasPending: true } pending)
+                {
+                    if (AllowEofHereDocuments)
+                        pending.TryReadBodies(this);
+                    else
+                        RecordError("Unterminated here-document.", Position);
+                }
                 return Located(Token.EndOfInput());
             }
 
@@ -668,7 +677,7 @@ internal sealed class Tokenizer
     /// <param name="stripTabs">Whether to strip leading tabs from lines and delimiter.</param>
     /// <param name="joinContinuations">Whether the unquoted delimiter permits removing escaped LF before comparison.</param>
     /// <param name="body">The collected body with continuation/tab normalization, without value expansion.</param>
-    /// <returns>Whether the delimiter was found; failure records the syntax error.</returns>
+    /// <returns>Whether the delimiter was found. A script reader can use the collected EOF body.</returns>
     internal bool TryReadHereDocument(
         ShellSource delimiter,
         bool stripTabs,
@@ -685,6 +694,7 @@ internal sealed class Tokenizer
             var physicalLineStart = Position;
             var lineStart = content?.Length ?? 0;
             var runStart = physicalLineStart;
+            var hasContinuedBytes = false;
             while (Position < span.Length && span[Position] != (byte)'\n')
             {
                 if (joinContinuations && span[Position] == (byte)'\\' && Position + 1 < span.Length)
@@ -692,6 +702,7 @@ internal sealed class Tokenizer
                     if (span[Position + 1] == (byte)'\n')
                     {
                         content ??= StartContent();
+                        hasContinuedBytes |= Position != runStart;
                         AppendRun(content, span[runStart..Position]);
                         Position += 2;
                         runStart = Position;
@@ -705,6 +716,10 @@ internal sealed class Tokenizer
             }
 
             var run = span[runStart..Position];
+            // A final continuation alone did not supply a logical body line.
+            if (AllowEofHereDocuments && Position == span.Length && run.IsEmpty
+                && runStart != physicalLineStart && !hasContinuedBytes)
+                break;
             var line = run;
             if (content != null)
             {
@@ -728,13 +743,13 @@ internal sealed class Tokenizer
                 return true;
             }
 
-            if (content == null && line.Length != run.Length)
+            if (content == null && (line.Length != run.Length || newlineLength == 0 && AllowEofHereDocuments))
             {
-                // Tabs on the closing marker alone do not change the body.
+                // A partial final body line receives LF. A matching delimiter returns above.
                 content = StartContent();
                 content.Append(line);
             }
-            if (newlineLength > 0)
+            if (newlineLength > 0 || AllowEofHereDocuments)
                 content?.Append((byte)'\n');
 
             ByteMemoryBuilder StartContent()
@@ -754,7 +769,10 @@ internal sealed class Tokenizer
             }
         }
 
-        RecordError("Unterminated here-document.", Position);
+        if (AllowEofHereDocuments)
+            body = content == null ? _input.Slice(bodyStart, Position - bodyStart) : ShellSource.FromBytes(content.ToMemory());
+        else
+            RecordError("Unterminated here-document.", Position);
         return false;
     }
 

@@ -12,7 +12,7 @@ public sealed class ParserFailureTests
     [InlineData("printf A |")]
     [InlineData("'unterminated")]
     [InlineData("\"unterminated")]
-    [InlineData("cat <<EOF\nbody")]
+    [InlineData("{ cat <<EOF\nbody")]
     [InlineData("if true; then\nprintf wrong\n")]
     [InlineData("for 1 in value; do :")]
     [InlineData("case x in x) :")]

@@ -328,6 +328,8 @@ public sealed partial class Evaluation
             {
                 if (!commands.MoveNext())
                     break;
+                if (commands.Current.HereDocumentWarnings is { } warnings)
+                    await ReportHereDocumentWarningsAsync(warnings, lineOffset).ConfigureAwait(false);
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
                 var skipExecution = result.Flow is FlowControlKind.Break or FlowControlKind.Continue;
                 ICommand command;

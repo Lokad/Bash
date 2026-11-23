@@ -5,6 +5,8 @@ using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
+internal readonly record struct HereDocumentWarning(int Line, ShellSource Delimiter);
+
 /// <summary>
 /// Collects bodies in lexical order at a physical newline, independently of command boundaries.
 /// Replaces provisional redirections before publishing the AST; constructor inputs stay untouched.
@@ -13,8 +15,10 @@ internal sealed class HereDocumentReader
 {
     private readonly Queue<Redirection> _pending = new();
     private readonly Dictionary<Redirection, Redirection> _completed = new();
+    private List<HereDocumentWarning>? _warnings;
 
     internal bool HasPending => _pending.Count != 0;
+    internal IReadOnlyList<HereDocumentWarning>? Warnings => _warnings;
 
     internal void Enqueue(Redirection redirection) => _pending.Enqueue(redirection);
 
@@ -30,9 +34,23 @@ internal sealed class HereDocumentReader
                 delimiter = syntax.Value;
             }
             else delimiter = GetHereDocumentDelimiter(redirection.Target, tokenizer.ScanContext.SyntaxMemory, out allowExpansion);
+            var bodyStart = tokenizer.Position;
             if (!tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
                     joinContinuations: allowExpansion, out var content))
-                return false;
+            {
+                if (!tokenizer.AllowEofHereDocuments)
+                    return false;
+
+                var memory = tokenizer.ScanContext.SyntaxMemory;
+                if (_warnings == null)
+                {
+                    memory?.Grow(32);
+                    _warnings = [];
+                }
+                memory?.PrepareListCapacity(_warnings, 1);
+                // The reader starts after the header LF or the previous delimiter line.
+                _warnings.Add(new HereDocumentWarning(tokenizer.GetLine(Math.Max(0, bodyStart - 1)), delimiter));
+            }
             var kind = allowExpansion ? WordPartKind.HereDocument : WordPartKind.SingleQuoted;
             _completed.Add(redirection, new Redirection(redirection.Kind, redirection.FileDescriptor,
                 new Word([WordPart.FromSource(kind, content, tokenizer.ScanContext.SyntaxMemory)]), redirection.VariableName, redirection.Target)

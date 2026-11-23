@@ -99,6 +99,8 @@ public sealed partial class Evaluation
             CheckCancellation();
             if (_state.FatalExpansion is { } failure)
                 return EvaluationResult.Exit(failure.ExitCode);
+            if (scope.Context.Coordinates.Locations?.GetHereDocumentWarnings(command) is { } warnings)
+                await ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Offset).ConfigureAwait(false);
 
             switch (command)
             {

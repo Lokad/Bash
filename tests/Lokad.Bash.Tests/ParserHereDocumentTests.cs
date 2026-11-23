@@ -243,12 +243,32 @@ public sealed class ParserHereDocumentTests
         Assert.Equal(10000, count);
     }
 
-    // The parser deliberately rejects incomplete bodies instead of Bash's warning-and-accept behavior.
     [Theory]
-    [InlineData("cat <<END | cat")]
-    [InlineData("cat <<END; printf after")]
-    [InlineData("{ cat; } <<END")]
-    [InlineData("cat <<ONE | cat <<TWO\nfirst\nONE\nmissing second delimiter\n")]
-    public void MissingBodies_AreNotPublishedAsDelimiterWords(string source) =>
-        Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+    [InlineData("cat <<END | cat", "END", "", 1)]
+    [InlineData("cat <<END; printf after", "END", "", 1)]
+    [InlineData("{ cat; } <<END", "END", "", 1)]
+    [InlineData("cat <<ONE | cat <<TWO\nfirst\nONE\nmissing second delimiter\n", "TWO", "missing second delimiter\n", 3)]
+    public void EofCompletesBodiesAndRetainsWarningsOnTheUnit(string source, string delimiter, string body, int line)
+    {
+        var script = Parser.Parse(source);
+        var command = Assert.Single(script.Commands);
+        var anchor = command is ListCommand sequence ? sequence.Left : command;
+        var locations = Assert.IsType<CommandLocations>(script.Locations);
+        var warning = Assert.Single(locations.GetHereDocumentWarnings(anchor) ?? []);
+        Assert.Equal(line, warning.Line);
+        Assert.Equal(delimiter, warning.Delimiter.ToUtf8String());
+
+        var redirection = Assert.Single(Redirections(command), entry =>
+            entry.HereDocumentDelimiter is { } word && Assert.Single(word.Parts).GetUtf8Text() == delimiter);
+        Assert.Equal(body, Assert.Single(redirection.Target.Parts).GetUtf8Text());
+
+        static IEnumerable<Redirection> Redirections(ICommand node) => node switch
+        {
+            PipelineCommand pipeline => Redirections(pipeline.Left).Concat(Redirections(pipeline.Right)),
+            ListCommand list => Redirections(list.Left).Concat(Redirections(list.Right)),
+            RedirectedCommand redirected => redirected.Redirections,
+            SimpleCommand simple => simple.Redirections,
+            _ => []
+        };
+    }
 }

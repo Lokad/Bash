@@ -41,7 +41,7 @@ public sealed class ParserCommandUnitTests
     }
 
     [Theory]
-    [InlineData("cat <<EOF\nbody")]
+    [InlineData("{ cat <<EOF\nbody")]
     [InlineData("if true; then\nprintf wrong\n")]
     [InlineData("for 1 in value; do :")]
     [InlineData("printf A &&")]

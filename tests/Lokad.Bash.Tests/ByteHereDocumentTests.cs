@@ -9,6 +9,52 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteHereDocumentTests
 {
+    private const string EofWarning = "warning: here-document at line 1 delimited by end-of-file (wanted `END')\n";
+
+    [Theory]
+    [InlineData("cat <<END\nbody", "body\n", EofWarning, 0)]
+    [InlineData("cat <<END\n\\\n", "", EofWarning, 0)]
+    [InlineData("cat <<FIRST <<SECOND\nbody", "",
+        "warning: here-document at line 1 delimited by end-of-file (wanted `FIRST')\n"
+        + "warning: here-document at line 2 delimited by end-of-file (wanted `SECOND')\n", 0)]
+    [InlineData("exit 9\ncat <<END\nbody", "", "", 9)]
+    [InlineData("exit 9; cat <<END\nbody", "", EofWarning, 9)]
+    [InlineData("printf 'prior\\n' >&2\nprintf 'same\\n' >&2; cat <<END\nbody", "body\n",
+        "prior\nwarning: here-document at line 2 delimited by end-of-file (wanted `END')\nsame\n", 0)]
+    [InlineData("false && cat <<END\n$(printf forbidden >&2)\n", "", EofWarning, 1)]
+    public async Task EofWarningsBelongToTheReachedCommandUnit(string source, string output, string error, int exitCode)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, CancellationToken.None)
+                : await host.RunAsync(source, CancellationToken.None);
+
+            Assert.Equal(exitCode, result.ExitCode);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task EofWarningPreservesLiteralDelimiterBytes()
+    {
+        byte[] source = [.. "cat <<'"u8, 0xff, .. "'\nbody"u8];
+        byte[] warning = [.. "warning: here-document at line 1 delimited by end-of-file (wanted `"u8, 0xff, .. "')\n"u8];
+        await using var host = new TestHost();
+        var result = await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("body\n", host.StandardOutput.TextContent);
+        Assert.Equal(warning, host.StandardError.Content.ToArray());
+    }
+
     [Theory]
     [InlineData("IFS=:; set -- left right; a=([2]=left [40]=right)",
         "[$*][${!a[*]}][${a[*]}][${a[*]:2}]", "[left right][2 40][left:right][left right]")]

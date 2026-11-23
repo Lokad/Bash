@@ -3730,6 +3730,26 @@ public sealed partial class Evaluation : IFileTester
             .ConfigureAwait(false);
     }
 
+    private static readonly ShellValue HereDocumentWarningName = ShellValue.FromText("warning");
+    private static readonly ShellValue HereDocumentWarningPrefix = ShellValue.FromText("here-document at line ");
+    private static readonly ShellValue HereDocumentWarningDelimiter = ShellValue.FromText(" delimited by end-of-file (wanted `");
+    private static readonly ShellValue HereDocumentWarningClose = ShellValue.FromText("')");
+
+    private async Task ReportHereDocumentWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, int offset)
+    {
+        var descriptor = GetStdErrDescriptor();
+        if (descriptor.IsClosed)
+            return;
+
+        foreach (var warning in warnings)
+        {
+            CheckCancellation();
+            await WriteDiagnosticAsync(descriptor, [HereDocumentWarningName],
+                [HereDocumentWarningPrefix, ShellValue.FromInteger(warning.Line + offset), HereDocumentWarningDelimiter,
+                    warning.Delimiter.ToValue(), HereDocumentWarningClose], scope: null).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>
     /// Emits an append operation, retaining downstream closure and any known failure cause.
     /// </summary>

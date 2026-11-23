@@ -16,6 +16,16 @@ internal sealed class CommandLocations
     private ICommand? _first;
     private CommandLocation _firstLocation;
     private Dictionary<ICommand, CommandLocation>? _entries;
+    private EndOfInputWarnings? _hereDocumentWarnings;
+
+    internal IReadOnlyList<HereDocumentWarning>? GetHereDocumentWarnings(ICommand command) =>
+        _hereDocumentWarnings is { } warnings && ReferenceEquals(command, warnings.Command) ? warnings.Warnings : null;
+
+    internal void SetHereDocumentWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings, MemoryCapacity? memory)
+    {
+        memory?.Grow(40);
+        _hereDocumentWarnings = new EndOfInputWarnings(command, warnings);
+    }
 
     internal bool TryGet(ICommand command, out CommandLocation location)
     {
@@ -44,6 +54,8 @@ internal sealed class CommandLocations
 
     internal void Replace(ICommand original, ICommand replacement)
     {
+        if (_hereDocumentWarnings is { } warnings && ReferenceEquals(original, warnings.Command))
+            warnings.Command = replacement;
         if (ReferenceEquals(original, _first))
             _first = replacement;
         else if (_entries != null && _entries.Remove(original, out var location))
@@ -56,5 +68,11 @@ internal sealed class CommandLocations
             _firstLocation = location;
         else
             _entries![command] = location;
+    }
+
+    private sealed class EndOfInputWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings)
+    {
+        internal ICommand Command { get; set; } = command;
+        internal IReadOnlyList<HereDocumentWarning> Warnings { get; } = warnings;
     }
 }

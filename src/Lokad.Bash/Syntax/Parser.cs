@@ -163,7 +163,11 @@ public static class Parser
             return false;
         }
         context.LegacyOrigin = LegacySubstitutionOrigin.Script;
-        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context) { TrackCommandLocations = true };
+        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context)
+        {
+            TrackCommandLocations = true,
+            AllowEofHereDocuments = true
+        };
         SkipNewlines(tokenizer);
         var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, retainUnitBoundaries: true);
         SkipNewlines(tokenizer);
@@ -200,6 +204,7 @@ public static class Parser
         var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, scanContext)
         {
             TrackCommandLocations = true,
+            AllowEofHereDocuments = true,
             EndInputOnQuotedSubstitutionFailure = true
         };
         while (true)
@@ -210,18 +215,23 @@ public static class Parser
             var trailing = tokenizer.PeekTokenCore();
             if (trailing.Kind is not TokenKind.Newline and not TokenKind.EndOfInput)
                 tokenizer.RecordError("Unexpected token after command list.", trailing.Source.Start.Value);
+            var warnings = tokenizer.HereDocuments?.Warnings;
 
             if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
             {
                 var prefix = tokenizer.Error == null && command != null && tokenizer.HereDocuments is not { HasPending: true }
                     ? CompleteHereDocuments(tokenizer, command) : null;
                 yield return new CommandUnitParseResult.Failed(quotedFailure)
-                    { CompletedPrefix = prefix, Locations = prefix != null ? tokenizer.Locations : null };
+                {
+                    CompletedPrefix = prefix,
+                    Locations = prefix != null ? tokenizer.Locations : null,
+                    HereDocumentWarnings = warnings
+                };
                 yield break;
             }
             if (tokenizer.Failure is { } failure)
             {
-                yield return new CommandUnitParseResult.Failed(failure);
+                yield return new CommandUnitParseResult.Failed(failure) { HereDocumentWarnings = warnings };
                 yield break;
             }
             if (command == null)
@@ -231,7 +241,8 @@ public static class Parser
             tokenizer.HereDocuments = null;
             if (trailing.Kind == TokenKind.Newline)
                 tokenizer.NextTokenCore();
-            yield return new CommandUnitParseResult.Parsed(completed) { Locations = tokenizer.Locations };
+            yield return new CommandUnitParseResult.Parsed(completed)
+                { Locations = tokenizer.Locations, HereDocumentWarnings = warnings };
         }
     }
 
@@ -1681,6 +1692,7 @@ public static class Parser
             return (null, false);
 
         ICommand current = left;
+        var unitStart = left;
         var trailingTerminator = false;
         while (true)
         {
@@ -1713,6 +1725,9 @@ public static class Parser
                 break;
             }
 
+            if (startsCommandUnit)
+                unitStart = right;
+
             current = new ListCommand(current, ListOperator.Sequence, right)
             {
                 StartsCommandUnit = startsCommandUnit,
@@ -1722,6 +1737,15 @@ public static class Parser
             trailingTerminator = false;
         }
 
+        if (retainUnitBoundaries && tokenizer.HereDocuments?.Warnings is { } warnings)
+        {
+            // The warning belongs to the whole unit, including commands before a semicolon.
+            while (unitStart is ListCommand list)
+                unitStart = list.Left;
+            while (unitStart is NegatedCommand negated)
+                unitStart = negated.Inner;
+            tokenizer.RecordHereDocumentWarnings(unitStart, warnings);
+        }
         return (current, trailingTerminator);
     }
 
