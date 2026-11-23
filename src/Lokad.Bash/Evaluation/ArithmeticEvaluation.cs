@@ -69,19 +69,19 @@ public static partial class ArithmeticEvaluation
         Func<string, long> resolveVariable,
         Action<string, long> assignVariable)
     {
-        var assignments = new AssignmentLog();
+        AssignmentLog? assignments = null;
         if (!TryEvaluate(expression, ResolveStagedVariable, StageAssignment, out var value, out _))
             return 0;
 
-        assignments.Commit(assignVariable);
+        assignments?.Commit(assignVariable);
         return value;
 
         long ResolveStagedVariable(string name) =>
-            assignments.TryResolve(name, out var staged) ? staged : resolveVariable(name);
+            assignments != null && assignments.TryResolve(name, out var staged) ? staged : resolveVariable(name);
 
         ArithmeticError? StageAssignment(string name, long assigned)
         {
-            assignments.Add(name, assigned);
+            (assignments ??= new AssignmentLog()).Add(name, assigned);
             return null;
         }
     }

@@ -214,6 +214,21 @@ public sealed class ArithmeticEvaluationTests
     }
 
     [Fact]
+    public void Evaluate_CommitsReachedWritesInOrder()
+    {
+        var writes = new List<(string Name, long Value)>();
+        var result = ArithmeticEvaluation.Evaluate("x = 1, 0 && (x = 8), x += 2, y = y + x, y".AsSpan(), name =>
+        {
+            Assert.Equal("y", name);
+            Assert.Empty(writes);
+            return 1;
+        }, (name, value) => writes.Add((name, value)));
+
+        Assert.Equal(4, result);
+        Assert.Equal([("x", 1L), ("x", 3L), ("y", 4L)], writes);
+    }
+
+    [Fact]
     public void Evaluate_InvalidExpressionDoesNotAssign()
     {
         var variables = new Dictionary<string, long>(StringComparer.Ordinal)
