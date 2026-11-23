@@ -910,7 +910,7 @@ internal static partial class WordExpansion
                     (byte)'E' => ShellEscapeDecoder.DecodeAnsiCValue(value, scratch),
                     (byte)'Q' => QuoteParameterField(value, scratch),
                     _ => TransformCase(value, transform == (byte)'L' ? CaseTransformation.Lowercase : CaseTransformation.Uppercase,
-                        transform == (byte)'u', scratch, cancellationToken)
+                        transform == (byte)'u', matcher: null, scratch, cancellationToken)
                 });
                 return;
             }
@@ -1100,12 +1100,12 @@ internal static partial class WordExpansion
             var casePattern = caseFields.Count == 0 ? null : JoinOperandFields(caseFields);
             var canMatchCase = casePattern == null || TryUnescapePattern(casePattern, out casePattern);
             var caseMatcher = canMatchCase && casePattern != null
-                ? new CasePatternMatcher(casePattern, budget.Workspace) : default;
+                ? new CasePatternMatcher(casePattern, budget.Workspace) : null;
             var conversion = parsed.Kind is BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll
                 ? CaseTransformation.Uppercase : CaseTransformation.Lowercase;
             var firstOnly = parsed.Kind is BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.LowerFirst;
             EmitTransformedFields((value, scratch) =>
-                canMatchCase ? TransformCase(value, conversion, firstOnly, ref caseMatcher, scratch, cancellationToken) : value);
+                canMatchCase ? TransformCase(value, conversion, firstOnly, caseMatcher, scratch, cancellationToken) : value);
 
             bool TryUnescapePattern(ParameterOperand operand, out ParameterOperand pattern)
             {
@@ -1479,22 +1479,14 @@ internal static partial class WordExpansion
     private enum ParameterReplacementMode { First, All, Prefix, Suffix }
 
     internal static ShellValue ChangeAssignmentCase(ShellValue value, CaseTransformation conversion, EvaluationMemory? memory) =>
-        TransformCase(value, conversion, firstOnly: false, memory?.Workspace,
+        TransformCase(value, conversion, firstOnly: false, matcher: null, memory?.Workspace,
             memory?.CancellationToken ?? CancellationToken.None);
 
-    private static ShellValue TransformCase(ShellValue value, CaseTransformation conversion, bool firstOnly,
-        MemoryCapacity? scratch, CancellationToken cancellationToken)
-    {
-        var matcher = default(CasePatternMatcher);
-        return TransformCase(value, conversion, firstOnly, ref matcher, scratch, cancellationToken);
-    }
-
     private static ShellValue TransformCase(
-        ShellValue value, CaseTransformation conversion, bool firstOnly, ref CasePatternMatcher matcher,
+        ShellValue value, CaseTransformation conversion, bool firstOnly, CasePatternMatcher? matcher,
         MemoryCapacity? scratch, CancellationToken cancellationToken)
     {
         var bytes = value.Bytes.Span;
-        var hasPattern = matcher.HasPattern;
         ByteMemoryBuilder? builder = null;
         Span<byte> encoded = stackalloc byte[4];
         var copiedThrough = 0;
@@ -1506,7 +1498,7 @@ internal static partial class WordExpansion
                 var valid = Rune.DecodeFromUtf8(bytes[position..], out var rune, out var length) == OperationStatus.Done;
                 if (!valid)
                     length = 1;
-                if (valid && (!hasPattern || matcher.Matches(rune, bytes.Slice(position, length), cancellationToken)))
+                if (valid && (matcher == null || matcher.Matches(rune, bytes.Slice(position, length), cancellationToken)))
                 {
                     var upper = conversion == CaseTransformation.Uppercase
                         || conversion == CaseTransformation.Capitalize && position == 0;
@@ -1538,21 +1530,16 @@ internal static partial class WordExpansion
     private sealed record ParameterOperand(ShellValue Value, GlobMask Mask);
 
     /// <summary>Reuses character matches across the fields of a single expanded pattern.</summary>
-    private struct CasePatternMatcher(ParameterOperand operand, MemoryCapacity memory)
+    private sealed class CasePatternMatcher(ParameterOperand operand, MemoryCapacity memory)
     {
         private const int EntryCount = 32;
-        private readonly ParameterOperand? _operand = operand;
+        private readonly ParameterOperand _operand = operand;
         private readonly bool _bytePattern = !System.Text.Unicode.Utf8.IsValid(operand.Value.Bytes.Span);
-        private readonly MemoryCapacity? _memory = memory;
+        private readonly MemoryCapacity _memory = memory;
         private Entries _entries;
-
-        public readonly bool HasPattern => _operand != null;
 
         public bool Matches(Rune rune, ReadOnlySpan<byte> character, CancellationToken cancellationToken)
         {
-            if (_operand is not { } pattern)
-                return true;
-
             // Every candidate is a decoded scalar. Zero marks an unused slot and the low bit stores the result.
             var scalar = rune.Value;
             var key = (scalar + 1) << 1;
@@ -1560,8 +1547,8 @@ internal static partial class WordExpansion
             if ((entry & ~1) == key)
                 return (entry & 1) != 0;
 
-            var mask = pattern.Mask.AsSpan();
-            var matched = TextGlobMatcher.MatchUtf8(pattern.Value.Bytes.Span, in mask, character, requireEnd: true,
+            var mask = _operand.Mask.AsSpan();
+            var matched = TextGlobMatcher.MatchUtf8(_operand.Value.Bytes.Span, in mask, character, requireEnd: true,
                 _bytePattern, _memory, cancellationToken, out _) == GlobMatchResult.Match;
             entry = key | (matched ? 1 : 0);
             return matched;
