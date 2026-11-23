@@ -36,6 +36,34 @@ public sealed class ConditionalExpansionTests
     }
 
     [Theory]
+    [InlineData(@"$'\n2'", "000")]
+    [InlineData(@"$'\r2'", "000")]
+    [InlineData(@"$'\v2'", "000")]
+    [InlineData(@"$'\f2'", "000")]
+    [InlineData(@"$'2\n'", "111")]
+    [InlineData(@"$'2\r'", "111")]
+    [InlineData(@"$'2\v'", "111")]
+    [InlineData(@"$'2\f'", "111")]
+    [InlineData(@"$' +02\t '", "000")]
+    [InlineData(@"$'2\n\t '", "111")]
+    [InlineData("3", "111")]
+    public async Task PositionalPresenceUsesBuiltinDecimalWhitespace(string operand, string expected)
+    {
+        var script = $$"""
+            set -- first ''
+            [[ -v {{operand}} ]]; conditional=$?
+            test -v {{operand}}; tested=$?
+            [ -v {{operand}} ]; printf '%s%s%s' "$conditional" "$tested" "$?"
+            """;
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
+    [Theory]
     [InlineData("[[ yes || -v a[i++] ]]", "0 3")]
     [InlineData("test yes -o -v 'a[i++]'", "0 4")]
     [InlineData("[ '' -a -v 'a[i++]' ]", "1 4")]

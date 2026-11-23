@@ -358,7 +358,7 @@ internal static partial class WordExpansion
         if (!scope.CanExpand)
             return Task.FromResult(false);
         if (predicate == UnaryPredicateKind.VariableIsSet
-            && Integers.TryParseNumber(Integers.TrimWhitespace(operand.Bytes.Span), out var position))
+            && Integers.TryParseBuiltinNumber(operand.Bytes.Span, scope.Effects.CancellationToken, out var position))
             return Task.FromResult(position >= 0 && position <= scope.Variables.PositionalParameters.Count);
         if (!VariableReference.TryParse(ShellSource.FromBytes(operand.Bytes), scope.Effects.Memory, out var reference))
             return Task.FromResult(false);

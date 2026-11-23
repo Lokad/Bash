@@ -919,6 +919,8 @@ All other option names return false.
 
 `[[ … ]]`, `test` and `[` recognize `-v` and `-R`. An assigned empty value counts as
 set. `-v` accepts variable names, array selectors and numeric positional parameters.
+Positional indexes accept signed ASCII decimal with leading ASCII whitespace
+and trailing spaces or tabs.
 A bare array name queries element zero. For indexed arrays, `[@]` and `[*]` query
 element presence across the array. For associative arrays, they denote the literal
 keys `@` and `*`. `-R` tests whether the named binding is an initialized nameref,
