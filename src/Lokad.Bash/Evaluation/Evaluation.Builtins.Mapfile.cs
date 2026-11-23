@@ -18,7 +18,6 @@ public sealed partial class Evaluation
     {
         var variables = scope.Variables;
         const int ReadBatchRecords = 128;
-        const int RecordListEntryBytes = 64; // Includes list capacity and resize overlap.
         using var diagnostics = new BuiltinDiagnosticScope(this);
         var input = ResolveInputBinding(LogicalDescriptor.StdIn);
         var delimiter = (byte)'\n';
@@ -92,7 +91,7 @@ public sealed partial class Evaluation
         // outlive their batch independently after publication.
         using var integerInputMemory = integer && callback == null ? Memory.Budget.CreateScope() : null;
         var values = callback.HasValue ? null : new List<ShellValue>();
-        using var inputMemory = values != null ? Memory.Budget.Reserve(0) : null;
+        using var inputMemory = values != null ? new MemoryCapacity(Memory.Budget, 0) : null;
         long stagedBytes = 0;
         Variables.IndexedInputAssignment? callbackAssignment = null;
         var toCallback = quantum;
@@ -219,11 +218,9 @@ public sealed partial class Evaluation
                 // Admit geometric list growth, including replacement overlap, before allocation.
                 if (values.Count == values.Capacity)
                 {
-                    var capacity = values.Capacity == 0 ? 4 : checked(2 * values.Capacity);
-                    // The bulk list and its reservation are created together.
-                    (inputMemory ?? throw new InvalidOperationException("Bulk records require a reservation."))
-                        .Resize((long)RecordListEntryBytes * capacity);
-                    values.Capacity = capacity;
+                    var storage = inputMemory ?? throw new InvalidOperationException("Bulk records require a reservation.");
+                    storage.PrepareListCapacity(values, 1);
+                    storage.ReleaseUnusedCapacity();
                 }
                 if (value.IsEmpty)
                     value = ShellValue.Empty;

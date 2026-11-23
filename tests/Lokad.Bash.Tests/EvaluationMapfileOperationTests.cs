@@ -261,6 +261,64 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MapfileAdmitsRecordListOverlapAndRefundsOldBacking(bool refuseGrowth)
+    {
+        var budget = new MemoryGovernor(2 * 1024 * 1024);
+        using var owner = budget.CreateScope();
+        var state = new Eval(Parser.Parse("arr=(old); mapfile -tn130 arr"));
+        state.Memory.Budget = owner;
+
+        var first = await NextReadAsync(state);
+        var before = budget.ReservedBytes;
+        var lines = Utf8Bytes(new string('\n', 128));
+        using var firstBatch = Assert.IsAssignableFrom<IMemoryBudget>(first.DestinationBudget).Reserve(lines.Length);
+        first.SetResult(ReadResult.Success(lines, Enumerable.Range(1, 127).ToArray(), reachedEoF: false));
+
+        var growth = await NextReadAsync(state);
+        Assert.Equal(2, growth.Limit);
+        Assert.Equal(0, firstBatch.Bytes);
+        var beforeGrowth = budget.ReservedBytes;
+        Assert.Equal(ShellValue.FromText("old"), Assert.Single(state.IndexedArrays["arr"]));
+
+        var replacement = MemoryCapacity.ArrayBackingBytes<ShellValue>(256);
+        using var held = budget.Reserve(refuseGrowth ? budget.LimitBytes - beforeGrowth - replacement + 1 : 0);
+        growth.SetResult(ReadResult.Success(Utf8Bytes("\n"), [], reachedEoF: false));
+        var afterGrowth = 0L;
+        if (refuseGrowth)
+        {
+            var diagnostic = await NextWriteAsync(state);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+        }
+        else
+        {
+            var last = await NextReadAsync(state);
+            Assert.Equal(1, last.Limit);
+            afterGrowth = budget.ReservedBytes;
+            last.SetResult(ReadResult.Success(Utf8Bytes("last\n"), [], reachedEoF: false));
+        }
+        Assert.Null(await NextStepAsync(state));
+
+        var result = state.IndexedArrays["arr"];
+        Assert.Equal(refuseGrowth ? 2 : 0, state.LastExitCode);
+        if (refuseGrowth)
+            Assert.Equal(ShellValue.FromText("old"), Assert.Single(result));
+        else
+        {
+            Assert.Equal(130, result.Count);
+            Assert.Equal(ShellValue.FromText("last"), result[129]);
+            Assert.Equal(replacement, afterGrowth - before);
+        }
+        Assert.Equal(MemoryCapacity.ArrayBackingBytes<ShellValue>(128), beforeGrowth - before);
+        owner.Dispose();
+        held.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("arr=(old)", "old")]
     [InlineData("declare -ai arr=(99)", "99")]
     public async Task Evaluation_MapfileBuiltin_RefundsSkippedBatchesBeforeCollecting(string setup, string previous)

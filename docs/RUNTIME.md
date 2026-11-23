@@ -96,7 +96,9 @@ advance their own cursor. The scanner retains only indexes and an offset.
 bounded batches from the default or explicitly selected input descriptor.
 Skipping releases each discarded batch before the next read. A positive count
 caps the retained records and the final batch. Without a callback, publication
-follows that count or successful EOF, once replacement storage is admitted. Ordinary array entries
+follows that count or successful EOF, once replacement storage is admitted.
+The staged record list admits overlapping backing during growth and returns
+the previous array's allowance after replacement. Ordinary array entries
 receive compact values whose storage can be reclaimed as entries are replaced
 or removed. An explicit origin updates existing sparse positions in place.
 Integer-array input evaluates records in order while the original binding is
