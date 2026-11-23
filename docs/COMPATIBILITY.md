@@ -401,7 +401,11 @@ retain the original timing separator so reparsing a definition preserves the
 point of validation.
 Parenthesized capture rendering can omit a semicolon after a flushed
 here-document. The resulting command list can combine operands or attach a
-redirection to the preceding command. If the rendered list fails to parse,
+redirection to the preceding command. When a sequential connector drains a
+pending body, the delimiter's line break separates the commands. After an
+earlier command in the same chain, the flush leaves later semicolons intact.
+The formatter retains the authored connector placement when rendering a
+capture whose execution uses the replayed tree. If the rendered list fails to parse,
 the reached substitution reports the unexpected token and rendered line
 before any of its commands run. The rendered line retains enclosing word
 punctuation and literal suffixes through the reached operand boundary. With

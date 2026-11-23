@@ -358,6 +358,9 @@ syntax owner. The reader admits its physical body ranges, buffered line position
 and warnings before growing their backing lists. Streamed parsing releases the
 range index with each command unit. Prepared evaluation keeps the completed
 capture and warnings with their owning syntax.
+When replaying a capture with an omitted separator changes the command
+tree, the syntax owner keeps the already-admitted authored commands for
+formatting. The parser keeps the replayed locations with the executable tree.
 Literal payloads, assignment-name slices and completed expansion segments avoid
 pinning disproportionately large builder buffers after their parsing/command
 owner ends. An unchanged ANSI-C literal takes one exact copy of its payload.

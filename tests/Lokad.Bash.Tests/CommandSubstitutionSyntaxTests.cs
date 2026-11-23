@@ -115,6 +115,29 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Theory]
+    [InlineData("cat <<DOC; printf same; printf last\nbody\nDOC", "leftbody\nsamelast")]
+    [InlineData("{ cat; } <<DOC; printf same\nbody\nDOC", "leftbody\nsame")]
+    [InlineData("printf unused | cat <<DOC; printf same\nbody\nDOC", "leftbody\nsame")]
+    [InlineData("{ cat <<DOC; printf same; printf last\nbody\nDOC\n}; printf after", "leftbody\nsameafter")]
+    public async Task CaptureExecutesLaterCommandsAfterDrainingHereDocument(string commands, string expectedCapture)
+    {
+        var source = "value=$(\nprintf left\n" + commands + "\n); printf '<%s:%s>' \"$?\" \"$value\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            Assert.Equal(0, await RunAsync(source, host, prepared));
+            Assert.Equal("<0:" + expectedCapture + ">", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Empty(host.CaptureEntries());
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RejectedHereDocumentCaptureUnderErrexitReportsOnlyTheToken(bool prepared)

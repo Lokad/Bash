@@ -65,6 +65,22 @@ public sealed class FunctionDefinitionOutputTests
         Assert.EndsWith("    cat <<END\nbody\nEND\n\n}\n", Utf8Text.Decode(output.ToMemory()));
     }
 
+    [Theory]
+    [InlineData("cat <<DOC; printf same; printf last\nbody\nDOC",
+        "cat <<DOC\nbody\nDOC\n printf same; printf last")]
+    [InlineData("cat <<DOC\nbody\nDOC\nprintf same",
+        "cat <<DOC\nbody\nDOC\n\nprintf same")]
+    [InlineData("{ cat <<DOC; printf same; printf last\nbody\nDOC\n}; printf after",
+        "{ cat <<DOC\nbody\nDOC\n printf same printf last; }; printf after")]
+    public void CaptureListingPreservesTheShapeBeforeSeparatorReplay(string commands, string expected)
+    {
+        var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(
+            "f() { value=$(\nprintf left\n" + commands + "\n); }").Commands));
+        using var output = new ByteMemoryBuilder(0, new MemoryGovernor(TestMemoryBudget.FunctionFormattingBytes));
+        Assert.True(FunctionDefinitionFormatter.TryAppend(definition, output));
+        Assert.Equal("f () \n{ \n    value=$(printf left\n" + expected + ")\n}\n", Utf8Text.Decode(output.ToMemory()));
+    }
+
     [Fact]
     public void WideDefinitionAdmitsTraversalBeforeSchedulingItsOperands()
     {

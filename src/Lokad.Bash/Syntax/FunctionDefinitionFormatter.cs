@@ -51,7 +51,7 @@ internal static class FunctionDefinitionFormatter
         }
 
         var counter = new LineCounter(collectOmittedSeparators, memory);
-        TryAppend(new Step.Script(script), counter, memory?.Budget, Format.CaptureCoordinates, CancellationToken.None, locations);
+        TryAppend(new Step.Commands(script.Commands), counter, memory?.Budget, Format.CaptureCoordinates, CancellationToken.None, locations);
         script.RenderedLineBreaks = counter.Line - 1;
         return counter.OmittedSeparators;
     }
@@ -74,22 +74,25 @@ internal static class FunctionDefinitionFormatter
             return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken, style)
                 && output.TryAppend((byte)')');
         if (substitution is CommandSubstitutionSyntax.Parsed parsed && CanRender(parsed, style))
-            return output.TryAppend(StartsWithParenthesis(parsed.Script) ? "$( "u8 : "$("u8)
-                && TryAppend(new Step.Script(parsed.Script), output, budget, style switch
+        {
+            var commands = parsed.Script.AuthoredCaptureCommands ?? parsed.Script.Commands;
+            return output.TryAppend(StartsWithParenthesis(commands) ? "$( "u8 : "$("u8)
+                && TryAppend(new Step.Commands(commands), output, budget, style switch
                 {
                     CaptureSpelling.Display => Format.SubstitutionDisplay,
                     CaptureSpelling.Diagnostic => Format.SubstitutionDiagnostic,
                     _ => Format.SubstitutionSource
                 }, cancellationToken)
                 && output.TryAppend((byte)')');
+        }
         return output.TryAppend("$("u8) && output.TryAppend(substitution.Source.AsSpan()) && output.TryAppend((byte)')');
 
-        static bool StartsWithParenthesis(ParsedScript script)
+        static bool StartsWithParenthesis(IReadOnlyList<ICommand> commands)
         {
-            if (script.Commands.Count == 0)
+            if (commands.Count == 0)
                 return false;
             // A leading literal parenthesis after the opener would select arithmetic.
-            var first = script.Commands[0];
+            var first = commands[0];
             while (true)
             {
                 switch (first)
@@ -210,16 +213,16 @@ internal static class FunctionDefinitionFormatter
                 case Step.WordTail(var parts, var firstPart):
                     if (!AppendWordParts(parts, firstPart)) return false;
                     break;
-                case Step.Script(var script):
-                    PrepareWork(Math.Max(0, checked(2 * script.Commands.Count - 1)));
-                    for (var index = script.Commands.Count - 1; index >= 0; index--)
+                case Step.Commands(var commands):
+                    PrepareWork(Math.Max(0, checked(2 * commands.Count - 1)));
+                    for (var index = commands.Count - 1; index >= 0; index--)
                     {
-                        work.Push(new Step.Command(script.Commands[index], 0));
+                        work.Push(new Step.Command(commands[index], 0));
                         if (index != 0)
-                            work.Push(new Step.CommandSeparator(Newline: false, default, 0));
+                            work.Push(new Step.CommandSeparator(Newline: false, default, 0, FollowsCommandChain: false));
                     }
                     break;
-                case Step.CommandSeparator(var newline, var separator, var indent):
+                case Step.CommandSeparator(var newline, var separator, var indent, var followsCommandChain):
                     var pendingDocuments = hereDocuments.Count != 0;
                     var followsFlushedDocuments = !pendingDocuments && flushedHereDocuments;
                     if ((capture || displayRedirections) && followsFlushedDocuments)
@@ -249,7 +252,11 @@ internal static class FunctionDefinitionFormatter
                     }
                     else if (substitutionSource)
                     {
-                        if (pendingDocuments)
+                        if (pendingDocuments && !newline)
+                        {
+                            if (!FlushCaptureDocuments() || !Append(" ")) return false;
+                        }
+                        else if (pendingDocuments)
                         {
                             if (!WriteLine(indent, terminate: false)) return false;
                         }
@@ -260,6 +267,10 @@ internal static class FunctionDefinitionFormatter
                         if (!Append("; ")) return false;
                     }
                     else if (!Append("\n") || !FlushHereDocuments() || !Append("\n")) return false;
+                    // A separator after a chain drains its pending body without affecting the next
+                    // connector. A flush after the first command can still suppress a later separator.
+                    if ((capture || substitutionSource) && followsCommandChain && pendingDocuments)
+                        flushedHereDocuments = false;
                     break;
                 case Step.LogicalSeparator(var operation):
                     if (capture)
@@ -484,10 +495,10 @@ internal static class FunctionDefinitionFormatter
                             }
                             break;
                         case ListCommand list:
-                            if (capture) PushStep(new Step.FlushDocuments());
                             Push(new Step.Command(list.Left, indent), list.Operator == ListOperator.Sequence
                                     ? display || inlineSource || capture || importValidation
-                                        ? new Step.CommandSeparator(list.HasNewlineConnector, list.SeparatorSource, indent)
+                                        ? new Step.CommandSeparator(list.HasNewlineConnector, list.SeparatorSource, indent,
+                                            list.Left is ListCommand or PipelineCommand or TimedCommand { Inner: PipelineCommand })
                                         : new Step.Line(indent, Terminate: true)
                                     : new Step.LogicalSeparator(list.Operator),
                                 new Step.Command(list.Right, indent));
@@ -523,7 +534,6 @@ internal static class FunctionDefinitionFormatter
                             break;
                         case PipelineCommand pipeline:
                             if (pipeline.Negated && !Append("! ")) return false;
-                            if (capture) PushStep(new Step.FlushDocuments());
                             Push(new Step.Command(pipeline.Left, indent), new Step.Pipe(pipeline.Operator),
                                 new Step.Command(pipeline.Right, indent));
                             break;
@@ -927,14 +937,14 @@ internal static class FunctionDefinitionFormatter
         public sealed record Source(ShellSource Value) : Step;
         public sealed record Layout(int Indent) : Step;
         public sealed record Line(int Indent, bool Terminate) : Step;
-        public sealed record CommandSeparator(bool Newline, Range SeparatorRange, int Indent) : Step;
+        public sealed record CommandSeparator(bool Newline, Range SeparatorRange, int Indent, bool FollowsCommandChain) : Step;
         public sealed record LogicalSeparator(ListOperator Operator) : Step;
         public sealed record FlushDocuments : Step;
         public sealed record CompactEnd(string Closer, bool Terminate) : Step;
         public sealed record EnterFunction : Step;
         public sealed record LeaveFunction(bool ResetHereDocuments) : Step;
         public sealed record Location(ICommand Node, LocationEdge Edge) : Step;
-        public sealed record Script(ParsedScript Value) : Step;
+        public sealed record Commands(IReadOnlyList<ICommand> Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;
         public sealed record Word(Syntax.Word Value) : Step;
         public sealed record WordTail(IReadOnlyList<WordPart> Parts, int FirstPart) : Step;

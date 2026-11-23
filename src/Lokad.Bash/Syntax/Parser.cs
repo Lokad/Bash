@@ -422,7 +422,9 @@ public static class Parser
             if (status == ShellScanStatus.Complete && replayEnd == closingParenthesisIndex
                 && replay.HereDocuments is not { HasPending: true })
             {
+                var authoredCommands = parsed.Commands;
                 parsed = CompleteScript(replay, corrected);
+                parsed.AuthoredCaptureCommands = authoredCommands;
                 parsed.HasReadAheadHereDocuments = (context.HereDocumentReadAhead?.CaptureCount ?? 0) != readAheadBefore;
                 if (context.SubstitutionFailure != SubstitutionSyntaxFailure.None)
                     failure = ClassifyNestedFailure(context.SubstitutionFailure, adjacentParenthesis);
