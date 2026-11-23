@@ -41,7 +41,7 @@ public sealed partial class Variables
 
     private static int ReadDecimalPrefix(ShellValue value)
     {
-        var bytes = Integers.TrimWhitespace(value.Bytes.Span);
+        var bytes = AsciiByte.TrimLeadingPosixWhitespace(value.Bytes.Span);
         if (Utf8Parser.TryParse(bytes, out long parsed, out _))
             return unchecked((int)parsed);
 

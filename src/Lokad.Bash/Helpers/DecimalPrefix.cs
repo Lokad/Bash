@@ -44,7 +44,7 @@ public readonly ref struct DecimalPrefix
     {
         cancellationToken.ThrowIfCancellationRequested();
         value = syntax == DecimalPrefixSyntax.GeneralNumeric
-            ? value.TrimStart(" \t\r\n\v\f"u8)
+            ? AsciiByte.TrimLeadingPosixWhitespace(value)
             : AsciiByte.TrimLeadingSortBlanks(value);
         var negative = !value.IsEmpty && value[0] == (byte)'-';
         if (negative || syntax == DecimalPrefixSyntax.GeneralNumeric && !value.IsEmpty && value[0] == (byte)'+')

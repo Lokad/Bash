@@ -267,6 +267,48 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData(@"$'\v2'", "<0:b:3>")]
+    [InlineData(@"$'\f2'", "<0:b:3>")]
+    [InlineData("2suffix", "<0:b:3>")]
+    [InlineData("0x2", "<0:a:2>")]
+    public async Task GetoptsSeeksUsingTheStoredDecimalPrefix(string operand, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            set -- -a -b -c
+            declare +i OPTIND
+            OPTIND={{operand}}
+            getopts abc opt
+            printf '<%s:%s:%s>' "$?" "$opt" "$OPTIND"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(@"$'\v1'", true)]
+    [InlineData(@"$'\f1'", true)]
+    [InlineData(@"$' \v+1rest'", true)]
+    [InlineData("0rest", false)]
+    public async Task GetoptsSelectsWarningsUsingTheStoredDecimalPrefix(string operand, bool warns)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($$"""
+            OPTERR={{operand}}
+            OPTARG=old
+            getopts abc opt -z 2>notices
+            printf '<%s:%s:%s:%s>' "$?" "$opt" "$OPTIND" "${OPTARG-unset}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:?:2:unset>", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(warns ? "getopts: illegal option -- z\n" : "", host.ReadFile("/notices"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Getopts_TemporarySeekKeepsTheBundleConsumedByTheCommand()
     {

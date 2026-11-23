@@ -22,6 +22,9 @@ public static class AsciiByte
     public static bool IsPosixWhitespace(byte value) =>
         IsWhitespace(value) || value is (byte)'\v' or (byte)'\f';
 
+    internal static ReadOnlySpan<byte> TrimLeadingPosixWhitespace(ReadOnlySpan<byte> value) =>
+        value.TrimStart(" \t\r\n\v\f"u8);
+
     /// <summary>GNU sort recognizes LF as a blank even in NUL-terminated records.</summary>
     public static bool IsSortBlank(byte value) =>
         value is (byte)' ' or (byte)'\t' or (byte)'\n';
