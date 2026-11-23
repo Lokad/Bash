@@ -658,8 +658,9 @@ internal static class FunctionDefinitionFormatter
         {
             if (displayRedirections && terminate && hereDocuments.Count == 0 && !Append(";")) return false;
             if (!Append("\n")) return false;
+            // The layout line resumes after the body, so its LF also counts in capture coordinates.
             if (hereDocuments.Count != 0
-                && (!FlushHereDocuments() || displayRedirections && !Append("\n"))) return false;
+                && (!FlushHereDocuments() || (displayRedirections || capture) && !Append("\n"))) return false;
             return !(display || inlineSource) || output.TryAppend(indent, (byte)' ');
         }
 

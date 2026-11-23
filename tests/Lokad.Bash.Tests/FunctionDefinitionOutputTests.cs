@@ -235,6 +235,11 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("printf '<%s>' \"$LINENO\"", "<1>:1|<7>:8")]
     [InlineData("printf '<%s>' \"$LINENO\"\nprintf '<%s>' \"$LINENO\"", "<2><3>:2|<9><10>:10")]
     [InlineData("printf '<%s>' \"$LINENO\" # skipped\n", "<2>:2|<8>:9")]
+    [InlineData("case k in k) cat <<END\nbody\nEND\n;; esac\nprintf '<%s>' \"$LINENO\"",
+        "body\n<13>:5|body\n<27>:20")]
+    [InlineData("case k in k) cat <<END\nbody\nEND\n;& next) printf '<%s>' \"$LINENO\";; esac\nprintf '<%s>' \"$LINENO\"",
+        "body\n<13><16>:5|body\n<30><33>:23")]
+    [InlineData("while false; do cat <<END\nbody\nEND\ndone\nprintf '<%s>' \"$LINENO\"", "<11>:5|<23>:18")]
     public async Task DefinitionReloadPreservesCaptureCoordinates(string body, string expected)
     {
         var script = "f(){ v=$(" + body + "); printf '%s:%s' \"$v\" \"$LINENO\"; }\n"
