@@ -256,12 +256,13 @@ internal static class ArithmeticExpansionScanner
                 {
                     var source = text.Slice(expressionStart, cursor.Position - expressionStart);
                     if (trackRenderedLines && containsCommandSubstitution && context.SubstitutionFailure is
-                        SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator)
+                        SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator
+                        or SubstitutionSyntaxFailure.MissingPipelinePrefixCommand or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand)
                     {
                         var edits = new BracedParameterScanner.ParameterSpellingEdits();
                         try
                         {
-                            FunctionDefinitionFormatter.AddRejectedCaptureEdits(source, 0, source.Length, context, ref edits);
+                            FunctionDefinitionFormatter.AddDiagnosticCaptureEdits(source, 0, source.Length, context, ref edits);
                             var normalized = edits.BuildPayload(context, source, 0, source.Length, ref renderedLineAdjustment);
                             expression = new SourceSpelling(normalized, edits.Captures);
                         }

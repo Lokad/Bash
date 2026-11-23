@@ -309,13 +309,13 @@ public static class Parser
             // substitutions still undergo validation when Bash reads that body.
             var adjacentParenthesis = ShellSourceCursor.TryMatchLogicalText(input.AsSpan(), payloadStart, "(", out _);
             var nestedFailure = context.SubstitutionFailure;
-            var bareTime = tokenizer.HasSubshellEndingInBareTime || EndsInBareTime(command);
-            preserveAdjacentOpening = adjacentParenthesis && (bareTime || nestedFailure != SubstitutionSyntaxFailure.None);
+            var barePrefix = tokenizer.HasSubshellEndingInBarePipelinePrefix || EndsInBarePipelinePrefix(command);
+            preserveAdjacentOpening = adjacentParenthesis && (barePrefix || nestedFailure != SubstitutionSyntaxFailure.None);
             if (nestedFailure != SubstitutionSyntaxFailure.None
                 && !(rawHereDocument && IsHereDocumentSeparatorFailure(nestedFailure)))
                 failure = ClassifyNestedFailure(nestedFailure, adjacentParenthesis);
-            else if (!adjacentParenthesis && bareTime)
-                failure = SubstitutionSyntaxFailure.MissingTimedCommand;
+            else if (!adjacentParenthesis && barePrefix)
+                failure = SubstitutionSyntaxFailure.MissingPipelinePrefixCommand;
 
             var collectedAhead = false;
             if (tokenizer.HereDocuments is { HasPending: true } pending)
@@ -345,7 +345,7 @@ public static class Parser
             if (failure != SubstitutionSyntaxFailure.None || preserveAdjacentOpening || rawHereDocument)
             {
                 if (preserveAdjacentOpening && !rawHereDocument && !parsed.HasReadAheadHereDocuments
-                    && IsHereDocumentSeparatorFailure(nestedFailure))
+                    && (IsHereDocumentSeparatorFailure(nestedFailure) || IsPipelinePrefixFailure(nestedFailure)))
                 {
                     using var workspace = context.SyntaxMemory is { } syntax ? new MemoryCapacity(syntax.Budget, 0) : null;
                     // The enclosing matched pair stays intact while its failed inner capture can be displayed.
@@ -528,7 +528,12 @@ public static class Parser
         static SubstitutionSyntaxFailure ClassifyNestedFailure(SubstitutionSyntaxFailure nested, bool adjacent) =>
             IsHereDocumentSeparatorFailure(nested)
                 ? adjacent ? SubstitutionSyntaxFailure.HereDocumentSeparator : SubstitutionSyntaxFailure.NestedHereDocumentSeparator
-                : adjacent ? SubstitutionSyntaxFailure.MissingTimedCommand : SubstitutionSyntaxFailure.NestedSyntax;
+                : IsPipelinePrefixFailure(nested)
+                    ? adjacent ? SubstitutionSyntaxFailure.MissingPipelinePrefixCommand : SubstitutionSyntaxFailure.NestedPipelinePrefixCommand
+                    : adjacent ? SubstitutionSyntaxFailure.AdjacentNestedSyntax : SubstitutionSyntaxFailure.NestedSyntax;
+
+        static bool IsPipelinePrefixFailure(SubstitutionSyntaxFailure failure) =>
+            failure is SubstitutionSyntaxFailure.MissingPipelinePrefixCommand or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand;
 
         static bool IsHereDocumentSeparatorFailure(SubstitutionSyntaxFailure nested) =>
             nested is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
@@ -544,19 +549,16 @@ public static class Parser
     private static ICommand CompleteHereDocuments(Tokenizer tokenizer, ICommand command) =>
         tokenizer.HereDocuments?.Complete(command, tokenizer.Locations, tokenizer.ScanContext.SyntaxMemory?.Budget) ?? command;
 
-    private static bool EndsInBareTime(ICommand? command)
+    private static bool EndsInBarePipelinePrefix(ICommand? command)
     {
         while (true)
         {
             switch (command)
             {
                 case ListCommand list: command = list.Right; break;
+                case NegatedCommand { Inner: SimpleCommand { IsEmpty: true } }: return true;
                 case NegatedCommand negated: command = negated.Inner; break;
-                default:
-                    return command is TimedCommand
-                    {
-                        Inner: SimpleCommand { Words.Count: 0, Assignments.Count: 0, Redirections.Count: 0 }
-                    };
+                default: return command is TimedCommand { Inner: SimpleCommand { IsEmpty: true } };
             }
         }
     }
@@ -585,7 +587,7 @@ public static class Parser
             var right = ParsePipelineCore(tokenizer);
             if (right == null)
             {
-                tokenizer.RecordError("Expected command after list operator.", tokenizer.Position);
+                tokenizer.RecordMissingCommand("Expected command after list operator.");
                 return null;
             }
 
@@ -653,7 +655,7 @@ public static class Parser
         if (first == null)
         {
             if (prefixed)
-                RecordMissingCommand(negated ? "Expected command after !." : "Expected command after pipeline prefix.");
+                tokenizer.RecordMissingCommand(negated ? "Expected command after !." : "Expected command after pipeline prefix.");
             return null;
         }
 
@@ -670,7 +672,7 @@ public static class Parser
             var right = ParseCommandAtom(tokenizer, afterPipe: true);
             if (right == null)
             {
-                RecordMissingCommand("Expected command after pipeline operator.");
+                tokenizer.RecordMissingCommand("Expected command after pipeline operator.");
                 return null;
             }
 
@@ -678,14 +680,6 @@ public static class Parser
         }
 
         return Wrap(current);
-
-        void RecordMissingCommand(string message)
-        {
-            if (tokenizer.Error != null)
-                return;
-            var reached = tokenizer.PeekTokenCore();
-            tokenizer.RecordUnexpectedToken(message, reached, tokenizer.Position);
-        }
 
         ICommand Wrap(ICommand body)
         {
@@ -861,7 +855,7 @@ public static class Parser
         }
 
         tokenizer.NextTokenCore();
-        tokenizer.HasSubshellEndingInBareTime |= EndsInBareTime(result.Command);
+        tokenizer.HasSubshellEndingInBarePipelinePrefix |= EndsInBarePipelinePrefix(result.Command);
         return new SubshellCommand(result.Command);
     }
 

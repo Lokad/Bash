@@ -158,6 +158,22 @@ internal sealed class Tokenizer
 
     internal void RecordError(SyntaxError error) => RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar));
 
+    internal void RecordMissingCommand(string message)
+    {
+        if (Error != null)
+            return;
+        var reached = PeekTokenCore();
+        if (reached.Kind == TokenKind.EndOfInput && Position == _input.Length && QuotedEndOfInputFailure == null)
+        {
+            RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.Grammar)
+            {
+                MissingCommandAtEndOfInput = true
+            });
+        }
+        else
+            RecordUnexpectedToken(message, reached, Position);
+    }
+
     internal void RecordUnexpectedToken(string message, Token token, int errorOffset)
     {
         var error = new SyntaxError(message, errorOffset);
@@ -255,8 +271,8 @@ internal sealed class Tokenizer
     internal bool HasPendingHereDocumentRegion(Token boundary) => HereDocuments is { HasPending: true }
         || _scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, boundary.Source.Start.Value) > 0;
 
-    /// <summary>A parsed subshell whose final bare timer needs a separator before its closer.</summary>
-    internal bool HasSubshellEndingInBareTime { get; set; }
+    /// <summary>A parsed subshell whose final bare pipeline prefix needs a separator before its closer.</summary>
+    internal bool HasSubshellEndingInBarePipelinePrefix { get; set; }
 
     /// <summary>Creates a tokenizer positioned at the beginning of <paramref name="input"/>.</summary>
     public Tokenizer(ShellSource input)

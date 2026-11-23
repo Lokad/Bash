@@ -285,7 +285,7 @@ internal sealed class ShellSourceCursor
                             && context.TryGetCommandSubstitution(source, first, out var cached))
                         {
                             if (cached.Substitution is CommandSubstitutionSyntax.Parsed capture
-                                && (capture.CanRenderBody || !prepareReplay && (capture.CanDisplayBody || capture.AdjacentSpelling != null)))
+                                && (capture.CanRenderBody || !prepareReplay && (capture.HasDiagnosticSpelling || capture.AdjacentSpelling != null)))
                             {
                                 if (captures == null)
                                 {

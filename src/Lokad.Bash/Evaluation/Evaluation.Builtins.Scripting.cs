@@ -366,9 +366,14 @@ public sealed partial class Evaluation
                             .ConfigureAwait(false);
                     else if (failedUnit.Failure.ConditionalQuoteEnd is { } quoteEnd)
                         await ReportUnclosedConditionalQuoteAsync(quoteEnd).ConfigureAwait(false);
-                    else if (failedUnit.DiagnosticLine != 0 && (diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
+                    else if (failedUnit.DiagnosticLine != 0 && (failedUnit.Failure.MissingCommandAtEndOfInput
+                        || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
                         || failedUnit.Failure.Kind == ParserFailureKind.RedirectionOperand))
-                        await ReportReaderGrammarEndOfInputAsync(path, diagnosticOrigin, diagnosticLine).ConfigureAwait(false);
+                    {
+                        var eofOrigin = failedUnit.Failure.MissingCommandAtEndOfInput && diagnosticOrigin == SyntaxDiagnosticOrigin.Script
+                            ? SyntaxDiagnosticOrigin.ScriptLine : diagnosticOrigin;
+                        await ReportReaderGrammarEndOfInputAsync(path, eofOrigin, diagnosticLine).ConfigureAwait(false);
+                    }
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)

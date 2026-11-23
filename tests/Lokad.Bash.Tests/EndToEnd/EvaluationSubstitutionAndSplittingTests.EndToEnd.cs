@@ -21,7 +21,8 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
 
         Assert.Equal(0, status);
         Assert.Equal("<1:seed>", host.StandardOutput.TextContent);
-        Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.Equal("command substitution: line 4: syntax error near unexpected token `)'\n"
+            + "command substitution: line 4: `printf child > effect; time )'\n", host.StandardError.TextContent);
         Assert.False(await EndToEndHarness.FileExistsAsync(host, "/effect"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -43,7 +44,9 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         Assert.Equal(reached ? 2 : 0, status);
         Assert.Equal(reached ? "earlier" : "earlierlater", host.StandardOutput.TextContent);
         if (reached)
-            Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+            Assert.Equal("command substitution: line 4: syntax error near unexpected token `)'\n"
+                + "command substitution: line 4: `printf child > effect; true || inner=$(time ); :)'\n",
+                host.StandardError.TextContent);
         else
             Assert.Empty(host.StandardError.Content.ToArray());
         Assert.False(await EndToEndHarness.FileExistsAsync(host, "/effect"));
@@ -51,16 +54,17 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("$((time;);)", "<0:>", false)]
-    [InlineData("$( (time;);)", "<1:seed>", true)]
-    public async Task AdjacentSubshellOpeningPreservesItsFinalTimingSeparator(string substitution, string expected, bool diagnosed)
+    [InlineData("$((time;);)", "<0:>", "")]
+    [InlineData("$( (time;);)", "<1:seed>", "command substitution: line 4: syntax error near unexpected token `)'\n"
+        + "command substitution: line 4: ` ( time  ))'\n")]
+    public async Task AdjacentSubshellOpeningPreservesItsFinalTimingSeparator(string substitution, string expected, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync("TIMEFORMAT=\nvalue=seed\nvalue=" + substitution
             + "\nprintf '<%s:%s>' \"$?\" \"$value\"\n");
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expected, result.StdOut);
-        Assert.Equal(diagnosed, result.StdErr.Contains("syntax error:", StringComparison.Ordinal));
+        Assert.Equal(diagnostic, result.StdErr);
     }
 
     [Theory]
@@ -76,7 +80,29 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
 
         Assert.Equal(2, status);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.Equal("command substitution: line 4: syntax error near unexpected token `)'\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("$(!;)", "! )")]
+    [InlineData("$(! time -p;)", "time -p ! )")]
+    [InlineData("\"${missing:-$(time;)}\"", "time )}\"")]
+    public async Task FinalBarePrefixReportsTheRenderedCaptureAndPreservesTheAssignment(string operand, string displayed)
+    {
+        var source = "TIMEFORMAT=\nvalue=seed\nvalue=" + operand + "\nprintf '<%s:%s>' \"$?\" \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+                : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<1:seed>", host.StandardOutput.TextContent);
+            Assert.Equal("command substitution: line 4: syntax error near unexpected token `)'\n"
+                + $"command substitution: line 4: `{displayed}'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Theory]

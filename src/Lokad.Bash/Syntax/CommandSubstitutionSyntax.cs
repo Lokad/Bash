@@ -13,6 +13,8 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
             or SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
         internal bool HasRejectedDisplaySpelling => (Failure is SubstitutionSyntaxFailure.HereDocumentSeparator
             or SubstitutionSyntaxFailure.NestedHereDocumentSeparator) && (CanDisplayBody || AdjacentSpelling != null);
+        internal bool HasDiagnosticSpelling => HasRejectedDisplaySpelling
+            || Failure is SubstitutionSyntaxFailure.MissingPipelinePrefixCommand or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand;
         internal SourceSpelling? AdjacentSpelling { get; init; }
     }
 
@@ -34,7 +36,9 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
 internal enum SubstitutionSyntaxFailure
 {
     None,
-    MissingTimedCommand,
+    MissingPipelinePrefixCommand,
+    NestedPipelinePrefixCommand,
+    AdjacentNestedSyntax,
     NestedSyntax,
     HereDocumentSeparator,
     NestedHereDocumentSeparator,

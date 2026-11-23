@@ -363,8 +363,9 @@ newline counts as that token if the input reaches it before the operand. At
 the end of a continuation in token spacing, an open capture instead reports
 its missing closer. An earlier here-document can advance the reported reader
 line while the displayed text still comes from the redirection header.
-A final bare `time` in an affected parenthesized substitution reports a syntax
-error when the substitution is reached, before executing any of its commands.
+A final bare `time` or `!` in an affected parenthesized substitution reports
+the unexpected closer and rendered source when reached, before executing any
+of the substitution's commands.
 The enclosing command unit ends with status 1 and earlier bindings retain their
 values. The failure ends the script with status 2 under errexit. An invalid nested
 here-document spelling in an ordinary rendered substitution ends the root script
@@ -413,6 +414,8 @@ also reports the unread token. Earlier complete command units can already
 have executed. Prepared parsing reports the syntax error before any evaluation.
 If a pipeline operator or prefix still needs a command at a closing token,
 the streamed reader shows that token and its physical source line.
+When a pipe or list operator reaches EOF while waiting for its next command,
+the streamed reader reports grammar EOF at the reached line.
 A reached adjacent or backtick capture attributes token and grammar EOF
 diagnostics to the command substitution reader.
 An adjacent `(` at the start of a capture preserves the payload through its

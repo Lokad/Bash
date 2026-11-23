@@ -21,6 +21,8 @@ public sealed record SimpleCommand(
     IReadOnlyList<Redirection> Redirections,
     IReadOnlyDictionary<Word, AssignmentWord> DeclarationAssignments) : ICommand
 {
+    internal bool IsEmpty => Assignments.Count == 0 && Words.Count == 0 && Redirections.Count == 0;
+
     internal static IReadOnlyDictionary<Word, AssignmentWord> NoDeclarationAssignments { get; } =
         new Dictionary<Word, AssignmentWord>();
 }

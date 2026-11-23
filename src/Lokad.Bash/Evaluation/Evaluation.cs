@@ -3674,16 +3674,17 @@ public sealed partial class Evaluation : IFileTester
 
         var terminatesReader = failure == SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
         var separatorFailure = terminatesReader || failure == SubstitutionSyntaxFailure.HereDocumentSeparator;
+        var prefixFailure = failure is SubstitutionSyntaxFailure.MissingPipelinePrefixCommand or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand;
         var errexit = separatorFailure ? ReaderErrexitEnabled(scope) : _state.ErrexitEnabled;
         var exitCode = terminatesReader ? ReaderSyntaxExitCode(scope)
-            : errexit || failure == SubstitutionSyntaxFailure.NestedSyntax ? 2 : 1;
+            : errexit || failure is SubstitutionSyntaxFailure.NestedSyntax or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand ? 2 : 1;
         var kind = terminatesReader ? ExpansionFailureKind.ReaderSyntax : ExpansionFailureKind.CommandSubstitutionSyntax;
         SetFatalExpansionError(new ExpansionFailure(kind, exitCode)
         {
             UseInheritedPipelineExitAction = separatorFailure && UsesInheritedPipelineExitAction(scope)
         });
         _state.LastExitCode = exitCode;
-        if (separatorFailure && (capture != null || scope.ExpansionWord != null || !rejectedSelector.Operand.IsEmpty)
+        if ((separatorFailure || prefixFailure) && (capture != null || scope.ExpansionWord != null || !rejectedSelector.Operand.IsEmpty)
             && !GetStdErrDescriptor().IsClosed)
         {
             // The rendered word supplies the delimiters and literal text following a rejected capture.
@@ -3721,7 +3722,14 @@ public sealed partial class Evaluation : IFileTester
             }
             if (token != null)
             {
-                var line = GetCaptureDiagnosticLine(token, spelling.ToMemory(), scope.Context.Coordinates.Line);
+                var renderedSource = spelling.ToMemory();
+                var line = GetCaptureDiagnosticLine(token, renderedSource, scope.Context.Coordinates.Line);
+                if (prefixFailure)
+                {
+                    var start = renderedSource.Span[..token.ReadPosition].LastIndexOf((byte)'\n') + 1;
+                    if (start < token.CapturePayloadStart)
+                        token = token with { Line = token.Line.Slice(token.CapturePayloadStart - start) };
+                }
                 await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
                     line, includeLine: !errexit).ConfigureAwait(false);
                 if (rejectedSelector.NeedsParameterDiagnostic && !errexit && word != null)

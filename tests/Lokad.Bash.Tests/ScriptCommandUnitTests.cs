@@ -46,6 +46,37 @@ public sealed class ScriptCommandUnitTests
         AssertUnitsAsync("eval '" + source.Replace("'", "'\\''", StringComparison.Ordinal) + "'", output, status, syntaxError);
 
     [Theory]
+    [InlineData("|&\\\n", "Expected command after pipeline operator.")]
+    [InlineData("&&", "Expected command after list operator.")]
+    public async Task MissingCommandAtEndOfInputReportsTheReachedReaderLine(string ending, string parserMessage)
+    {
+        var source = "printf before\nprintf discarded " + ending;
+        Assert.False(Parser.TryParse(source, out _, out var error));
+        Assert.Equal(parserMessage, error?.Message);
+
+        await using var host = new TestHost();
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal("line 3: syntax error: unexpected end of file\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task SourcedMissingCommandReportsEndOfInputThroughTheReachedDescriptor()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/fixture", "printf inside\nprintf discarded ||");
+        var result = await host.RunAsync("source ./fixture 2>report\nprintf 'outer:%s' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("insideouter:2", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./fixture: line 3: syntax error: unexpected end of file\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("printf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"; (exit 7); value=", "<2:2>|7:7", 7)]
     [InlineData("printf discarded; printf unfinished >", "|2:2", 2)]
     public async Task QuotedSubstitutionFailurePublishesParserStatusBeforeAnyCompletePrefix(

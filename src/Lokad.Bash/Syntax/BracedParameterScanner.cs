@@ -275,14 +275,15 @@ internal static class BracedParameterScanner
                         if (nested.Kind == ShellNestedExpansionKind.Command
                             && context.TryGetCommandSubstitution(text, nestedStart, out var cached)
                             && cached.Substitution is CommandSubstitutionSyntax.Parsed normalized
-                            && (normalized.HasRejectedDisplaySpelling || selectorDepth == 0 && normalized.CanRenderBody))
+                            && (normalized.HasDiagnosticSpelling || selectorDepth == 0 && normalized.CanRenderBody))
                             edits.AddCapture(context, nestedStart, cursor.Position, normalized);
                         else if ((nested.Kind == ShellNestedExpansionKind.Arithmetic
                                 || nested.Kind == ShellNestedExpansionKind.Parameter && selectorDepth != 0)
                             && nested.ContainsCommandSubstitution
                             && (context.SubstitutionFailure is SubstitutionSyntaxFailure.HereDocumentSeparator
-                                or SubstitutionSyntaxFailure.NestedHereDocumentSeparator))
-                            FunctionDefinitionFormatter.AddRejectedCaptureEdits(text, nestedStart, cursor.Position, context, ref edits);
+                                or SubstitutionSyntaxFailure.NestedHereDocumentSeparator or SubstitutionSyntaxFailure.MissingPipelinePrefixCommand
+                                or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand))
+                            FunctionDefinitionFormatter.AddDiagnosticCaptureEdits(text, nestedStart, cursor.Position, context, ref edits);
                     }
                     continue;
                 }
