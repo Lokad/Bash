@@ -13,31 +13,47 @@ internal readonly record struct CommandLocation(int StartLine, int FirstElementE
 /// <summary>Cumulative line change after a spelling edit at a physical source position.</summary>
 internal readonly record struct SourceLineAdjustment(int End, int Delta);
 
+/// <summary>Counts LF coordinates incrementally from an offset in one immutable source.</summary>
+internal struct SourceLineCursor(int start)
+{
+    private int _offset = start;
+    private int _breaks;
+
+    internal int GetLine(ShellSource source, int offset)
+    {
+        var bytes = source.AsSpan();
+        _breaks += offset >= _offset ? bytes[_offset..offset].Count((byte)'\n')
+            : -bytes[offset.._offset].Count((byte)'\n');
+        _offset = offset;
+        return _breaks + 1;
+    }
+}
+
 /// <summary>Parser-owned locations that use node identity and leave public AST equality intact.</summary>
 internal sealed class CommandLocations
 {
     private ICommand? _first;
     private CommandLocation _firstLocation;
     private Dictionary<ICommand, CommandLocation>? _entries;
-    private EndOfInputWarnings? _hereDocumentWarnings;
-    private Dictionary<ICommand, IReadOnlyList<HereDocumentWarning>>? _otherWarnings;
+    private ReadDiagnosticEntry? _firstReadDiagnostics;
+    private Dictionary<ICommand, CommandReadDiagnostics>? _otherReadDiagnostics;
 
-    internal IReadOnlyList<HereDocumentWarning>? GetHereDocumentWarnings(ICommand command) =>
-        _hereDocumentWarnings is { } warnings && ReferenceEquals(command, warnings.Command) ? warnings.Warnings
-            : _otherWarnings != null && _otherWarnings.TryGetValue(command, out var later) ? later : null;
+    internal CommandReadDiagnostics GetReadDiagnostics(ICommand command) =>
+        _firstReadDiagnostics is { } entry && ReferenceEquals(command, entry.Command) ? entry.Diagnostics
+            : _otherReadDiagnostics != null && _otherReadDiagnostics.TryGetValue(command, out var later) ? later : default;
 
-    internal void SetHereDocumentWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings, MemoryCapacity? memory)
+    internal void SetReadDiagnostics(ICommand command, CommandReadDiagnostics diagnostics, MemoryCapacity? memory)
     {
-        if (_hereDocumentWarnings == null)
+        if (_firstReadDiagnostics == null)
         {
             memory?.Grow(40);
-            _hereDocumentWarnings = new EndOfInputWarnings(command, warnings);
+            _firstReadDiagnostics = new ReadDiagnosticEntry(command, diagnostics);
         }
         else
         {
             memory?.Grow(128);
-            (_otherWarnings ??= new Dictionary<ICommand, IReadOnlyList<HereDocumentWarning>>(ReferenceEqualityComparer.Instance))
-                .Add(command, warnings);
+            (_otherReadDiagnostics ??= new Dictionary<ICommand, CommandReadDiagnostics>(ReferenceEqualityComparer.Instance))
+                .Add(command, diagnostics);
         }
     }
 
@@ -68,10 +84,10 @@ internal sealed class CommandLocations
 
     internal void Replace(ICommand original, ICommand replacement)
     {
-        if (_hereDocumentWarnings is { } warnings && ReferenceEquals(original, warnings.Command))
-            warnings.Command = replacement;
-        else if (_otherWarnings != null && _otherWarnings.Remove(original, out var later))
-            _otherWarnings.Add(replacement, later);
+        if (_firstReadDiagnostics is { } entry && ReferenceEquals(original, entry.Command))
+            entry.Command = replacement;
+        else if (_otherReadDiagnostics != null && _otherReadDiagnostics.Remove(original, out var later))
+            _otherReadDiagnostics.Add(replacement, later);
         if (ReferenceEquals(original, _first))
             _first = replacement;
         else if (_entries != null && _entries.Remove(original, out var location))
@@ -86,9 +102,9 @@ internal sealed class CommandLocations
             _entries![command] = location;
     }
 
-    private sealed class EndOfInputWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings)
+    private sealed class ReadDiagnosticEntry(ICommand command, CommandReadDiagnostics diagnostics)
     {
         internal ICommand Command { get; set; } = command;
-        internal IReadOnlyList<HereDocumentWarning> Warnings { get; } = warnings;
+        internal CommandReadDiagnostics Diagnostics { get; } = diagnostics;
     }
 }

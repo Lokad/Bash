@@ -104,9 +104,15 @@ internal static class CommandSubstitutionScanner
 
     private static void RecordSyntaxFailure(ShellScanContext context, CommandSubstitutionSyntax? substitution)
     {
-        if (context.SubstitutionFailure == SubstitutionSyntaxFailure.None
-            && substitution is CommandSubstitutionSyntax.Parsed parsed)
+        if (substitution is not CommandSubstitutionSyntax.Parsed parsed)
+            return;
+        if (context.SubstitutionFailure == SubstitutionSyntaxFailure.None)
             context.SubstitutionFailure = parsed.Failure;
+        if (parsed.HasRejectedDisplaySpelling)
+        {
+            context.RejectedCaptureReads++;
+            context.LastRejectedCaptureRead = parsed.Failure;
+        }
     }
 
     private static ShellScanStatus ScanParsedCore(

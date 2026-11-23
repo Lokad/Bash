@@ -51,6 +51,10 @@ internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int
     internal int UnclosedGroups { get; init; }
 }
 
+/// <summary>A quoted bracketed item whose capture is diagnosed as its unit is read.</summary>
+internal readonly record struct CompoundItemReadDiagnostic(Word Item, int EndLine,
+    ShellSource DeclarationPrefix, int PrefixEndLine, SubstitutionSyntaxFailure CaptureFailure);
+
 internal enum ConditionalArgumentError { None, UnaryOperand, BinaryOperand, BinaryOperator }
 
 internal readonly record struct ConditionalQuoteEnd(bool DoubleQuoted)

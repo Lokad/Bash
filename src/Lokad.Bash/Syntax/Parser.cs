@@ -218,7 +218,8 @@ public static class Parser
             var trailing = tokenizer.PeekTokenCore();
             if (trailing.Kind is not TokenKind.Newline and not TokenKind.EndOfInput)
                 tokenizer.RecordUnexpectedToken("Unexpected token after command list.", trailing, trailing.Source.Start.Value);
-            var warnings = scanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.Warnings);
+            var diagnostics = new CommandReadDiagnostics(scanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.Warnings),
+                scanContext.TakeCompoundItemDiagnostics());
 
             if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
             {
@@ -228,7 +229,7 @@ public static class Parser
                 {
                     CompletedPrefix = prefix,
                     Locations = prefix != null ? tokenizer.Locations : null,
-                    HereDocumentWarnings = warnings
+                    ReadDiagnostics = diagnostics
                 };
                 yield break;
             }
@@ -236,7 +237,7 @@ public static class Parser
             {
                 yield return new CommandUnitParseResult.Failed(failure)
                 {
-                    HereDocumentWarnings = warnings,
+                    ReadDiagnostics = diagnostics,
                     DiagnosticLine = failure switch
                     {
                         { CaptureEndOfInput: { } captureEnd } =>
@@ -258,7 +259,7 @@ public static class Parser
             if (trailing.Kind == TokenKind.Newline)
                 tokenizer.NextTokenCore();
             yield return new CommandUnitParseResult.Parsed(completed)
-                { Locations = tokenizer.Locations, HereDocumentWarnings = warnings };
+                { Locations = tokenizer.Locations, ReadDiagnostics = diagnostics };
         }
     }
 
@@ -1295,7 +1296,7 @@ public static class Parser
             return false;
         }
         var tokenizer = CreateCompoundInitializerTokenizer(source, memory, trackDiagnostics: false);
-        items = ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput);
+        items = ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput, declaration: false);
         error = tokenizer.Error ?? tokenizer.QuotedEndOfInputFailure?.Error;
         return error == null;
     }
@@ -1304,7 +1305,7 @@ public static class Parser
     internal static ParserFailure? ReadCompoundInitializerFailure(ShellSource source, MemoryCapacity memory, out int line)
     {
         var tokenizer = CreateCompoundInitializerTokenizer(source, memory, trackDiagnostics: true);
-        ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput);
+        ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput, declaration: false);
         var failure = tokenizer.Failure;
         line = tokenizer.GetLine(failure?.UnexpectedToken?.ReadPosition ?? tokenizer.Position);
         return failure;
@@ -1317,7 +1318,7 @@ public static class Parser
             TrackUnexpectedTokens = trackDiagnostics
         };
 
-    private static IReadOnlyList<CompoundArrayItem> ReadCompoundArrayValues(Tokenizer tokenizer, TokenKind terminator)
+    private static IReadOnlyList<CompoundArrayItem> ReadCompoundArrayValues(Tokenizer tokenizer, TokenKind terminator, bool declaration)
     {
         List<CompoundArrayItem>? values = null;
         while (true)
@@ -1342,7 +1343,7 @@ public static class Parser
                 tokenizer.RecordError("Expected word in array assignment.", tokenizer.Position);
                 break;
             }
-            if (!tokenizer.TryReadCompoundArrayItem(wordToken, out var item, out _))
+            if (!tokenizer.TryReadCompoundArrayItem(wordToken, declaration, out var item, out _))
                 break;
 
             (values ??= []).Add(item);
@@ -1495,7 +1496,7 @@ public static class Parser
                                 return null;
                             }
 
-                            var arrayValues = ReadCompoundArrayValues(tokenizer, TokenKind.CloseParen);
+                            var arrayValues = ReadCompoundArrayValues(tokenizer, TokenKind.CloseParen, declaration: !allowAssignments);
                             if (tokenizer.Error != null)
                                 return null;
                             if (tokenizer.IsAtWordBoundary())
@@ -1893,7 +1894,7 @@ public static class Parser
             var startsCommandUnit = retainUnitBoundaries
                 && (token.Kind == TokenKind.Newline || tokenizer.PeekTokenCore().Kind == TokenKind.Newline);
             if (startsCommandUnit)
-                SetUnitWarnings(unitStart);
+                SetUnitDiagnostics(unitStart);
             if (!IsEndTokenKind(tokenizer, endTokenKind))
                 SkipNewlines(tokenizer);
             trailingTerminator = true;
@@ -1923,19 +1924,22 @@ public static class Parser
         }
 
         if (retainUnitBoundaries)
-            SetUnitWarnings(unitStart);
+            SetUnitDiagnostics(unitStart);
         return (current, trailingTerminator);
 
-        void SetUnitWarnings(ICommand anchor)
+        void SetUnitDiagnostics(ICommand anchor)
         {
-            if (tokenizer.ScanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.TakeWarnings()) is not { } warnings)
+            var diagnostics = new CommandReadDiagnostics(
+                tokenizer.ScanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.TakeWarnings()),
+                tokenizer.ScanContext.TakeCompoundItemDiagnostics());
+            if (diagnostics.IsEmpty)
                 return;
-            // The warning belongs to the whole unit, including commands before a semicolon.
+            // These messages precede the whole unit, including commands before a semicolon.
             while (anchor is ListCommand list)
                 anchor = list.Left;
             while (anchor is NegatedCommand negated)
                 anchor = negated.Inner;
-            tokenizer.RecordHereDocumentWarnings(anchor, warnings);
+            tokenizer.RecordReadDiagnostics(anchor, diagnostics);
         }
     }
 

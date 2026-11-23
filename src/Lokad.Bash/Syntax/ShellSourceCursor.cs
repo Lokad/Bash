@@ -738,9 +738,13 @@ internal sealed class ShellScanContext
     internal bool PreserveDelimiterLookahead { get; set; }
     internal bool RetainCaptureLookahead { get; set; }
     internal SubstitutionSyntaxFailure SubstitutionFailure { get; set; }
+    internal int RejectedCaptureReads { get; set; }
+    internal SubstitutionSyntaxFailure LastRejectedCaptureRead { get; set; }
     internal ShellSource ScriptInput { get; set; }
     internal HereDocumentReadAhead? HereDocumentReadAhead { get; private set; }
     private List<HereDocumentWarning>? _captureWarnings;
+    private SourceLineCursor _scriptDiagnosticLines;
+    private (HashSet<int> Starts, List<CompoundItemReadDiagnostic> Items)? _compoundItemDiagnostics;
 
     internal ByteMemoryBuilder CreateByteBuilder(int capacity) => SyntaxMemory is { } memory
         ? new ByteMemoryBuilder(capacity, memory) : ByteMemoryBuilder.CreateUnaccounted(capacity);
@@ -757,6 +761,34 @@ internal sealed class ShellScanContext
     }
 
     internal bool CanReadAhead(ShellSource source) => !ScriptInput.IsEmpty && source.Bytes.Equals(ScriptInput.Bytes);
+
+    // Capture tokenizers count relative to their bodies. Reader diagnostics use the enclosing script.
+    internal int GetScriptDiagnosticLine(int offset) => _scriptDiagnosticLines.GetLine(ScriptInput, offset)
+        + (HereDocumentReadAhead?.GetBufferedLineAdvance(ScriptInput, offset) ?? 0);
+
+    internal void RecordCompoundItemDiagnostic(int start, CompoundItemReadDiagnostic diagnostic)
+    {
+        if (_compoundItemDiagnostics is not { } pending)
+        {
+            SyntaxMemory?.Grow(160);
+            pending = ([], []);
+            _compoundItemDiagnostics = pending;
+        }
+        if (pending.Starts.Contains(start))
+            return;
+        // Covers the entry and growth of the temporary set until the command unit completes.
+        SyntaxMemory?.Grow(48);
+        pending.Starts.Add(start);
+        SyntaxMemory?.PrepareListCapacity(pending.Items, 1);
+        pending.Items.Add(diagnostic);
+    }
+
+    internal IReadOnlyList<CompoundItemReadDiagnostic>? TakeCompoundItemDiagnostics()
+    {
+        var diagnostics = _compoundItemDiagnostics?.Items;
+        _compoundItemDiagnostics = null;
+        return diagnostics;
+    }
 
     internal HereDocumentReadAhead BeginHereDocumentReadAhead()
     {

@@ -18,8 +18,7 @@ internal sealed class Tokenizer
     private readonly ShellScanContext _scanContext;
 
     private ArraySubscriptScanner.Lookahead? _arraySubscripts;
-    private int _lineOffset;
-    private int _line = 1;
+    private SourceLineCursor _lines;
     private int _nextOmittedSeparator;
     private HereDocumentReadAhead? _readingAhead;
     private bool _continuedAtEndOfInput;
@@ -48,11 +47,7 @@ internal sealed class Tokenizer
     {
         if (!TrackCommandLocations)
             return 0;
-        var source = _input.AsSpan();
-        _line += offset >= _lineOffset
-            ? source[_lineOffset..offset].Count((byte)'\n')
-            : -source[offset.._lineOffset].Count((byte)'\n');
-        _lineOffset = offset;
+        var line = _lines.GetLine(_input, offset);
         var adjustment = 0;
         if (LineAdjustments is { } changes)
         {
@@ -69,7 +64,7 @@ internal sealed class Tokenizer
             if (lower != 0)
                 adjustment = changes[lower - 1].Delta;
         }
-        return _line + adjustment + (_scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, offset) ?? 0);
+        return line + adjustment + (_scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, offset) ?? 0);
     }
 
     internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine) =>
@@ -86,8 +81,8 @@ internal sealed class Tokenizer
             }, _scanContext.SyntaxMemory);
     }
 
-    internal void RecordHereDocumentWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings) =>
-        (Locations ??= new CommandLocations()).SetHereDocumentWarnings(command, warnings, _scanContext.SyntaxMemory);
+    internal void RecordReadDiagnostics(ICommand command, CommandReadDiagnostics diagnostics) =>
+        (Locations ??= new CommandLocations()).SetReadDiagnostics(command, diagnostics, _scanContext.SyntaxMemory);
 
     internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
 
@@ -269,7 +264,7 @@ internal sealed class Tokenizer
         _scanContext = scanContext;
         Position = position;
         ConsumedPosition = position;
-        _lineOffset = position;
+        _lines = new SourceLineCursor(position);
     }
 
     /// <summary>
@@ -412,7 +407,7 @@ internal sealed class Tokenizer
             return false;
         _arraySubscripts ??= new ArraySubscriptScanner.Lookahead(_input, _scanContext);
         if (_arraySubscripts.Scan(position, out var closing) != ShellScanStatus.Complete
-            || !TryReadSubscriptAssignment(token, position, closing, out var element))
+            || !TryReadSubscriptAssignment(token, position, closing, out var element, out _))
             return false;
 
         // The leading word part already has the logical name. Selector spelling still needs its
@@ -429,9 +424,9 @@ internal sealed class Tokenizer
 
     /// <summary>Reads compound items, retaining whitespace inside an unquoted bracket prefix.</summary>
     internal CompoundArrayItem ReadCompoundArrayItem(WordToken token) =>
-        TryReadCompoundArrayItem(token, out var item, out var error) ? item : throw error.ToException();
+        TryReadCompoundArrayItem(token, declaration: false, out var item, out var error) ? item : throw error.ToException();
 
-    internal bool TryReadCompoundArrayItem(WordToken token,
+    internal bool TryReadCompoundArrayItem(WordToken token, bool declaration,
         [NotNullWhen(true)] out CompoundArrayItem? item, [NotNullWhen(false)] out SyntaxError? error)
     {
         var parsed = ReadItem(token);
@@ -446,21 +441,25 @@ internal sealed class Tokenizer
                 return new CompoundArrayItem(token.Word, null);
 
             _arraySubscripts ??= new ArraySubscriptScanner.Lookahead(_input, _scanContext);
-            if (_arraySubscripts.Scan(start, out var closing) != ShellScanStatus.Complete)
+            if (_arraySubscripts.Scan(start, out var closing, out var quotedCapture) != ShellScanStatus.Complete)
             {
                 RecordError("Invalid bracketed array item.", start);
                 return new CompoundArrayItem(new Word([]), null);
             }
 
-            if (!TryReadSubscriptAssignment(token, start, closing, out var element))
+            if (!TryReadSubscriptAssignment(token, start, closing, out var element, out var assignmentPrefixEnd))
             {
                 if (token.Token.Source.End.Value > closing)
+                {
+                    CollectDiagnostic(token.Word, token.Token.Source.End.Value, 0);
                     return new CompoundArrayItem(token.Word, null);
+                }
 
                 // Brackets group source, not expansion results: normal field splitting still applies.
                 Position = start;
-                return new CompoundArrayItem(ReadWord(_input.AsSpan(), closing + 1,
-                    ExpansionWordSyntax.Parameter, ShellQuoteKind.None), null);
+                var grouped = ReadWord(_input.AsSpan(), closing + 1, ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
+                CollectDiagnostic(grouped, Position, 0);
+                return new CompoundArrayItem(grouped, null);
             }
 
             var word = token.Word;
@@ -472,7 +471,18 @@ internal sealed class Tokenizer
                 if (child.Error is { } error)
                     RecordError(error);
             }
+            CollectDiagnostic(word, Position, declaration ? assignmentPrefixEnd : 0);
             return new CompoundArrayItem(word, element);
+
+            void CollectDiagnostic(Word itemWord, int end, int prefixEnd)
+            {
+                if (quotedCapture == SubstitutionSyntaxFailure.None || !TrackCommandLocations || Error != null)
+                    return;
+                var prefix = prefixEnd == 0 ? default : _input.Slice(start, prefixEnd - start);
+                var prefixLine = prefixEnd == 0 ? 0 : _scanContext.GetScriptDiagnosticLine(prefixEnd);
+                _scanContext.RecordCompoundItemDiagnostic(start,
+                    new CompoundItemReadDiagnostic(itemWord, _scanContext.GetScriptDiagnosticLine(end), prefix, prefixLine, quotedCapture));
+            }
         }
     }
 
@@ -481,9 +491,11 @@ internal sealed class Tokenizer
         WordToken token,
         int opening,
         int closing,
-        [NotNullWhen(true)] out CompoundArrayElement? element)
+        [NotNullWhen(true)] out CompoundArrayElement? element,
+        out int prefixEnd)
     {
         element = null;
+        prefixEnd = 0;
         var source = _input.AsSpan();
         var equals = ShellSourceCursor.SkipLineContinuations(source, closing + 1);
         var operation = AssignmentOperator.Replace;
@@ -495,7 +507,8 @@ internal sealed class Tokenizer
         if (equals >= source.Length || source[equals] != (byte)'=')
             return false;
 
-        Position = ShellSourceCursor.SkipLineContinuations(source, equals + 1);
+        prefixEnd = equals + 1;
+        Position = ShellSourceCursor.SkipLineContinuations(source, prefixEnd);
         Word value;
         if (Position >= source.Length || IsWordDelimiter(source[Position]))
             value = new Word([]);

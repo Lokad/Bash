@@ -11,8 +11,7 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
     private readonly List<Range> _bodies = [];
     private readonly List<HeaderAdvance> _headerAdvances = [];
     private int _headerEnd;
-    private int _linePosition;
-    private int _line = 1;
+    private SourceLineCursor _lines;
 
     internal int CaptureCount => _headerAdvances.Count;
 
@@ -69,13 +68,7 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
         return low > 0 && position < _headerAdvances[low - 1].End ? _headerAdvances[low - 1].Lines : 0;
     }
 
-    internal int GetLine(int position)
-    {
-        _line += position >= _linePosition ? source.AsSpan()[_linePosition..position].Count((byte)'\n')
-            : -source.AsSpan()[position.._linePosition].Count((byte)'\n');
-        _linePosition = position;
-        return _line;
-    }
+    internal int GetLine(int position) => _lines.GetLine(source, position);
 
     internal int SkipBodies(ShellSource view, int position)
     {

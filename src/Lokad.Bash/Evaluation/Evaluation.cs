@@ -2481,7 +2481,7 @@ public sealed partial class Evaluation : IFileTester
                     using var syntaxMemory = new MemoryCapacity(Memory.Budget, 0);
                     if (!Parser.TryParseCompoundInitializer(listSource, syntaxMemory, out var items, out var error))
                     {
-                        var status = _state.ErrexitEnabled && !executionScope.LoadedReaderIgnoresErrexit ? 2 : 1;
+                        var status = ReaderErrexitEnabled(executionScope) ? 2 : 1;
                         await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName),
                             ShellValue.FromText("syntax error in array initializer: " + error.Message)).ConfigureAwait(false);
                         _state.LastExitCode = status;
@@ -3603,8 +3603,11 @@ public sealed partial class Evaluation : IFileTester
     private bool PipelineInheritsLoadedUnitStatus => _state.ForkKind == ShellForkKind.PipelineSimpleCommand
         && _pipelineUsesLoadedUnitStatus;
 
+    private bool ReaderErrexitEnabled(ScopedEvaluation scope) =>
+        _state.ErrexitEnabled && !scope.LoadedReaderIgnoresErrexit;
+
     private int ReaderSyntaxExitCode(ScopedEvaluation scope) =>
-        !_state.ErrexitEnabled && scope.LoadedSyntaxFunctionDepth.HasValue ? 1 : 2;
+        !ReaderErrexitEnabled(scope) && scope.LoadedSyntaxFunctionDepth.HasValue ? 1 : 2;
 
     private bool IsDirectPipelineStageScope(ScopedEvaluation scope) =>
         _state.ForkKind == ShellForkKind.PipelineSimpleCommand && !scope.InNestedCommandUnits
@@ -3621,8 +3624,9 @@ public sealed partial class Evaluation : IFileTester
 
         var terminatesReader = failure == SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
         var separatorFailure = terminatesReader || failure == SubstitutionSyntaxFailure.HereDocumentSeparator;
+        var errexit = separatorFailure ? ReaderErrexitEnabled(scope) : _state.ErrexitEnabled;
         var exitCode = terminatesReader ? ReaderSyntaxExitCode(scope)
-            : _state.ErrexitEnabled || failure == SubstitutionSyntaxFailure.NestedSyntax ? 2 : 1;
+            : errexit || failure == SubstitutionSyntaxFailure.NestedSyntax ? 2 : 1;
         var kind = terminatesReader ? ExpansionFailureKind.ReaderSyntax : ExpansionFailureKind.CommandSubstitutionSyntax;
         SetFatalExpansionError(new ExpansionFailure(kind, exitCode)
         {
@@ -3667,11 +3671,10 @@ public sealed partial class Evaluation : IFileTester
             }
             if (token != null)
             {
-                var capturePrefix = spelling.ToMemory().Span[token.CapturePayloadStart..token.ReadPosition];
-                var line = Math.Max(1, scope.Context.Coordinates.Line) + capturePrefix.Count((byte)'\n') + 1;
+                var line = GetCaptureDiagnosticLine(token, spelling.ToMemory(), scope.Context.Coordinates.Line);
                 await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
-                    line, includeLine: !_state.ErrexitEnabled).ConfigureAwait(false);
-                if (rejectedSelector.NeedsParameterDiagnostic && !_state.ErrexitEnabled && word != null)
+                    line, includeLine: !errexit).ConfigureAwait(false);
+                if (rejectedSelector.NeedsParameterDiagnostic && !errexit && word != null)
                 {
                     var descriptor = GetStdErrDescriptor();
                     var prefix = new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path,
@@ -3697,6 +3700,9 @@ public sealed partial class Evaluation : IFileTester
             : "Unexpected ')' after a pipeline prefix in command substitution.";
         await ReportSyntaxErrorAsync(new SyntaxError(message, 0)).ConfigureAwait(false);
     }
+
+    private static int GetCaptureDiagnosticLine(UnexpectedSyntax token, ReadOnlyMemory<byte> spelling, int baseLine) =>
+        Math.Max(1, baseLine) + spelling.Span[token.CapturePayloadStart..token.ReadPosition].Count((byte)'\n') + 1;
 
     private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
     private const int DiagnosticPunctuationBytes = 3; // Colon, space and LF.

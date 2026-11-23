@@ -605,7 +605,7 @@ public sealed class CommandSubstitutionSyntaxTests
         var script = Parser.Parse(deferred.Source.Bytes);
         var command = Assert.IsType<SimpleCommand>(Assert.Single(script.Commands));
         Assert.Empty(Assert.Single(Assert.Single(command.Redirections).Target.Parts).GetUtf8Text());
-        var warning = Assert.Single(script.Locations?.GetHereDocumentWarnings(command) ?? []);
+        var warning = Assert.Single(script.Locations?.GetReadDiagnostics(command).HereDocumentWarnings ?? []);
         Assert.Equal("END", warning.Delimiter.ToUtf8String());
     }
 

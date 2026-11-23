@@ -376,6 +376,12 @@ with status 2. Under `source` or `eval`, EXIT sees parser status 257 and
 completion returns 1, or status 2 with errexit enabled. Compound prefix
 items expand in order and the capture diagnostic includes the closing
 parenthesis when it appears on the reported line.
+If a quoted bracketed initializer item contains a rejected capture, the
+command reader reports the item before executing the unit. It reports this
+diagnostic even when the unit skips the assignment or only defines a function.
+A declaration's assignment head can report before the complete item. An
+earlier unit's active errexit makes the read fatal and omits the displayed
+line. A tested `source` or `eval` retains the caller's errexit suppression.
 An adjacent subshell opener retains its source separators, and a nested spelling
 failure there ends the unit under ordinary execution. Function display and export
 retain the original timing separator so reparsing a definition preserves the

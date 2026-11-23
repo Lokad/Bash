@@ -337,12 +337,18 @@ public sealed partial class Evaluation
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
                 var path = scope.Context.CallerSource?.Path;
                 var diagnosticLine = failedUnit == null ? 0 : lineOffset + failedUnit.DiagnosticLine;
-                if (commands.Current.HereDocumentWarnings is { } warnings)
+                var readDiagnostics = commands.Current.ReadDiagnostics;
+                if (readDiagnostics.HereDocumentWarnings is { } warnings)
                 {
                     var warningPrefix = failedUnit?.Failure is { Kind: ParserFailureKind.RedirectionOperand, UnexpectedToken: not null }
                         ? new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, diagnosticLine) : default;
                     await ReportHereDocumentWarningsAsync(warnings, lineOffset, warningPrefix).ConfigureAwait(false);
                 }
+                if (readDiagnostics.CompoundItems is { } items
+                    && await ReportCompoundItemReadDiagnosticsAsync(items, scope, lineOffset).ConfigureAwait(false) is { } readFailure)
+                    return IsNestedLoadedReader(kind)
+                        ? await ExitLoadedExpansionSyntaxAsync(scope, readFailure).ConfigureAwait(false)
+                        : EvaluationResult.Exit(readFailure.ExitCode);
                 var skipExecution = result.Flow is FlowControlKind.Break or FlowControlKind.Continue;
                 ICommand command;
                 if (failedUnit != null)
@@ -414,12 +420,7 @@ public sealed partial class Evaluation
                 {
                     if (IsNestedLoadedReader(kind)
                         && _state.FatalExpansion is { Kind: ExpansionFailureKind.ReaderSyntax } failure)
-                    {
-                        _state.FatalExpansion = null;
-                        _state.TryConsumeExpansionError(out _);
-                        return await ExitLoadedSyntaxFailureAsync(scope, ExitActionStatus(failure), unwindChildFirst: false)
-                            .ConfigureAwait(false);
-                    }
+                        return await ExitLoadedExpansionSyntaxAsync(scope, failure).ConfigureAwait(false);
                     // Recover only the expansion failures that end the current command unit.
                     // Explicit exit, errexit and unrecoverable expansion failures still terminate.
                     result = await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
@@ -437,6 +438,13 @@ public sealed partial class Evaluation
             }
         }
         return await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
+    }
+
+    private ValueTask<EvaluationResult> ExitLoadedExpansionSyntaxAsync(ScopedEvaluation scope, ExpansionFailure failure)
+    {
+        _state.FatalExpansion = null;
+        _state.TryConsumeExpansionError(out _);
+        return ExitLoadedSyntaxFailureAsync(scope, ExitActionStatus(failure), unwindChildFirst: false);
     }
 
     private async ValueTask<EvaluationResult> ExitLoadedSyntaxFailureAsync(ScopedEvaluation scope, int status, bool unwindChildFirst)

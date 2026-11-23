@@ -212,7 +212,7 @@ public sealed partial class Evaluation
         _state.LastExitCode = status;
         if (failure.UnexpectedToken is { } token)
             await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ArrayAssignment,
-                line, includeLine: !_state.ErrexitEnabled).ConfigureAwait(false);
+                line, includeLine: !ReaderErrexitEnabled(scope)).ConfigureAwait(false);
         else
             await ReportSyntaxErrorAsync(failure.Error).ConfigureAwait(false);
         return false;
@@ -226,6 +226,52 @@ public sealed partial class Evaluation
                 rendered.Append((byte)' ');
             if (!FunctionDefinitionFormatter.TryAppendWordDisplay(items[index].Word, rendered, Memory.Budget, _cancellationToken))
                 throw new ByteMemoryBuilder.LimitExceededException();
+        }
+    }
+
+    private async ValueTask<ExpansionFailure?> ReportCompoundItemReadDiagnosticsAsync(
+        IReadOnlyList<CompoundItemReadDiagnostic> items, ScopedEvaluation scope, int lineOffset)
+    {
+        var errexit = ReaderErrexitEnabled(scope);
+        foreach (var item in items)
+        {
+            CheckCancellation();
+            var fatal = errexit || item.CaptureFailure == SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
+            var reported = false;
+            if (!item.DeclarationPrefix.IsEmpty)
+            {
+                using var workspace = new MemoryCapacity(Memory.Budget, 0);
+                if (Tokenizer.TryReadExpansionWord(item.DeclarationPrefix, ExpansionWordSyntax.Parameter,
+                        ShellQuoteKind.None, workspace, out var prefix, out _))
+                    reported = await ReportWordAsync(prefix, item.PrefixEndLine).ConfigureAwait(false);
+            }
+
+            if (!reported || !fatal)
+                reported = await ReportWordAsync(item.Item, item.EndLine).ConfigureAwait(false) || reported;
+
+            if (fatal && reported)
+            {
+                var failure = new ExpansionFailure(ExpansionFailureKind.ReaderSyntax, ReaderSyntaxExitCode(scope));
+                SetFatalExpansionError(failure);
+                _state.LastExitCode = failure.ExitCode;
+                return failure;
+            }
+        }
+        return null;
+
+        async ValueTask<bool> ReportWordAsync(Word word, int line)
+        {
+            using var spelling = new ByteMemoryBuilder(0, Memory.Budget);
+            using var workspace = new MemoryCapacity(Memory.Budget, 0);
+            if (!FunctionDefinitionFormatter.TryAppendWordDisplay(word, spelling, Memory.Budget, _cancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            var source = ShellSource.FromBytes(spelling.ToMemory());
+            var token = Tokenizer.ReadUnexpectedWordToken(source, new ShellScanContext { SyntaxMemory = workspace });
+            if (token == null)
+                return false;
+            await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
+                GetCaptureDiagnosticLine(token, source.Bytes, lineOffset + line), includeLine: !errexit).ConfigureAwait(false);
+            return true;
         }
     }
 

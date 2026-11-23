@@ -522,6 +522,10 @@ from the failed unit to the runtime diagnostic. The line counter includes any
 buffered here-document advance, and the displayed bytes come from the physical
 line at the failure. The source owner and diagnostic record remain admitted
 through stderr write completion.
+Quoted bracketed initializer items retain their reader diagnostics with the
+command unit. The prepared tree associates them with the same unit boundary
+used for here-document warnings. Execution reports them before dispatching the
+unit and uses the option state established by earlier units.
 Conditional display retains the local spelling and borrows nested capture
 syntax for rendering on demand. Spacing edits use parser scratch that refunds
 when the conditional is prepared.

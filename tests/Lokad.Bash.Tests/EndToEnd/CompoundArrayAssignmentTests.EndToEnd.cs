@@ -7,6 +7,72 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class CompoundArrayAssignmentTestsEndToEnd
 {
+    private const string RejectedQuotedKey = "[\"lead$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\"]";
+
+    [Theory]
+    [InlineData("printf 'unit\\n' >&2; values=({earlier} {item} tail) printf unreached", "after:1\n", "unit\nearly\n", "=text tail)")]
+    [InlineData("false && values=({earlier} {item}) printf unreached", "after:1\n", "", "")]
+    [InlineData("f() { values=({earlier} {item}) printf unreached; }\nprintf 'defined\\n'", "defined\nafter:0\n", "", "")]
+    public async Task QuotedBracketDiagnosticPrecedesEveryCommandInTheUnit(
+        string form, string output, string effects, string expandedSuffix)
+    {
+        const string earlier = "\"$(printf 'early\\n' >&2; printf item)\"";
+        var body = form.Replace("{earlier}", earlier).Replace("{item}", RejectedQuotedKey + "=text");
+        var error = CaptureRecord(9, "=text") + effects;
+        if (expandedSuffix.Length != 0)
+            error += CaptureRecord(9, expandedSuffix);
+
+        await AssertReadDiagnosticAsync(body, 0, output, error);
+    }
+
+    [Theory]
+    [InlineData("set -e; ", 0, "after:1\n")]
+    [InlineData("set -e\n", 2, "")]
+    public async Task QuotedBracketDiagnosticUsesOptionsAtTheStartOfTheUnit(string prefix, int status, string output)
+    {
+        var body = prefix + "false && values=(" + RejectedQuotedKey + "=text) printf unreached";
+        var error = status == 2 ? "command substitution: line 10: syntax error near unexpected token `printf'\n"
+            : CaptureRecord(9, "=text");
+
+        await AssertReadDiagnosticAsync(body, status, output, error);
+    }
+
+    [Fact]
+    public async Task DeclarationReaderReportsTheAssignmentHeadBeforeTheCompleteItem()
+    {
+        await AssertReadDiagnosticAsync("declare -a values=(" + RejectedQuotedKey + "=\"one\ntwo\")", 2, "",
+            CaptureRecord(9, "=") + CaptureRecord(10, "=\"one")
+            + "array assign: line 4: syntax error near unexpected token `printf'\n"
+            + "array assign: line 4: ` } printf extra)tail\"]=\"one'\n");
+    }
+
+    [Fact]
+    public async Task NestedBracketDiagnosticUsesTheEnclosingReaderLine()
+    {
+        await AssertReadDiagnosticAsync("value=\"$(values=(" + RejectedQuotedKey + "=text) printf unreached)\"", 2, "",
+            CaptureRecord(9, "=text") + CaptureRecord(9, "=text) printf unreached)\""));
+    }
+
+    private static string CaptureRecord(int line, string suffix) =>
+        $"command substitution: line {line}: syntax error near unexpected token `printf'\n"
+        + $"command substitution: line {line}: ` }} printf extra)tail\"]{suffix}'\n";
+
+    private static async Task AssertReadDiagnosticAsync(string body, int expectedStatus, string output, string error)
+    {
+        var script = "printf 'before\\n'\n" + body + "\nprintf 'after:%s\\n' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(expectedStatus, status);
+            Assert.Equal("before\n" + output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Theory]
     [InlineData("values=(\n{0}\n{1} \"one\ntwo\"\n)", 2, "before\n", "", "array assign: line 4: ", " } printf extra)tail\" \"one")]
     [InlineData("declare -A values=([first]={0} [next]={1})", 2, "before\n", "", "array assign: line 4: ", " } printf extra)tail\"")]

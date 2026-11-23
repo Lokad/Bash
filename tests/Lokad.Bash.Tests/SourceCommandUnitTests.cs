@@ -349,6 +349,31 @@ public sealed class SourceCommandUnitTests
         }
     }
 
+    [Fact]
+    public async Task RejectedBracketUsesTestedSourceReaderStatus()
+    {
+        const string body = "printf 'before\\n'\nset -e\ndeclare -a values=([\"$({ cat <<DATA\nbody\nDATA\n}; printf extra)\"]=text)\nprintf unreached\n";
+        const string script = "trap 'printf \"trap:%s:<%s>\\n\" \"$?\" \"$1\"' EXIT\nset -- outer\n"
+            + "source ./fixture inner || printf recovered\nprintf unreached\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(1, status);
+            Assert.Equal("before\ntrap:257:<inner>\n", host.StandardOutput.TextContent);
+            Assert.Equal("./fixture: command substitution: line 10: syntax error near unexpected token `printf'\n"
+                + "./fixture: command substitution: line 10: ` } printf extra)\"]='\n"
+                + "./fixture: command substitution: line 10: syntax error near unexpected token `printf'\n"
+                + "./fixture: command substitution: line 10: ` } printf extra)\"]=text'\n"
+                + "./fixture: array assign: line 4: syntax error near unexpected token `printf'\n"
+                + "./fixture: array assign: line 4: ` } printf extra)\"]=text'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

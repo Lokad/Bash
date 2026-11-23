@@ -254,7 +254,7 @@ public sealed class ParserHereDocumentTests
         var command = Assert.Single(script.Commands);
         var anchor = command is ListCommand sequence ? sequence.Left : command;
         var locations = Assert.IsType<CommandLocations>(script.Locations);
-        var warning = Assert.Single(locations.GetHereDocumentWarnings(anchor) ?? []);
+        var warning = Assert.Single(locations.GetReadDiagnostics(anchor).HereDocumentWarnings ?? []);
         Assert.Equal(line, warning.Line);
         Assert.Equal(delimiter, warning.Delimiter.ToUtf8String());
 

@@ -99,8 +99,13 @@ public sealed partial class Evaluation
             CheckCancellation();
             if (_state.FatalExpansion is { } failure)
                 return EvaluationResult.Exit(failure.ExitCode);
-            if (scope.Context.Coordinates.Locations?.GetHereDocumentWarnings(command) is { } warnings)
+            var readDiagnostics = scope.Context.Coordinates.Locations?.GetReadDiagnostics(command) ?? default;
+            if (readDiagnostics.HereDocumentWarnings is { } warnings)
                 await ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Offset).ConfigureAwait(false);
+            if (readDiagnostics.CompoundItems is { } items
+                && await ReportCompoundItemReadDiagnosticsAsync(items, scope, scope.Context.Coordinates.Offset)
+                    .ConfigureAwait(false) is { } readFailure)
+                return EvaluationResult.Exit(readFailure.ExitCode);
 
             switch (command)
             {
