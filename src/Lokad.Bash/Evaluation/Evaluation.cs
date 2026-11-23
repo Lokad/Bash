@@ -3194,6 +3194,36 @@ public sealed partial class Evaluation : IFileTester
 
         async Task<bool> AppendAsync()
         {
+            if (!scope.CanExpand)
+                return true;
+
+            if (word.Parts is [SourceWordPart { Kind: WordPartKind.DoubleQuoted } part]
+                && (part.Source.AsSpan().SequenceEqual("$@"u8) || part.Source.AsSpan().SequenceEqual("${@}"u8)))
+            {
+                CheckCancellation();
+                var arguments = scope.Variables.PositionalParameters;
+                var count = arguments.Count;
+                Memory.PrepareListCapacity(backingOwner, operands, count);
+                for (var index = 0; index < count; index++)
+                {
+                    CheckCancellation();
+                    var value = arguments[index];
+                    if (value.IsEmpty)
+                    {
+                        operands.Add(ShellValue.Empty);
+                        continue;
+                    }
+
+                    // A later operand or loop body can replace the positional frame.
+                    var compact = value.TryGetCompactArrayCapacity(out var capacity);
+                    Memory.Charge(MemoryCapacity.ArrayBackingBytes<byte>(compact ? capacity : value.Bytes.Length));
+                    if (!compact)
+                        value = ShellValue.FromBytes(value.Bytes.ToArray());
+                    operands.Add(value);
+                }
+                return true;
+            }
+
             var expanded = await WordExpansion.ExpandToWordsAsync(word, scope).ConfigureAwait(false);
             return await AppendExpandedWordsAsync(expanded, operands, backingOwner, static value => value)
                 .ConfigureAwait(false);

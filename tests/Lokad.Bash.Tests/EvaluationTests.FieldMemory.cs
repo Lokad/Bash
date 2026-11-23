@@ -85,7 +85,8 @@ public partial class EvaluationTests
         var state = new Eval(Parser.Parse(invocation + " \"${late:=value}\" >target"));
         var fields = Enumerable.Repeat(ShellValue.FromText("operand"), count);
         state.ReplacePositionalParameters((nameFixed ? fields : fields.Prepend(ShellValue.FromText("tool"))).ToArray());
-        var budget = new MemoryGovernor(448 * 1024);
+        // Allow the positional field vector but leave insufficient room to capture every field as a word.
+        var budget = new MemoryGovernor(160 * 1024);
         using var owner = budget.CreateScope();
         var host = new TestOperationVisitor([]) { MemoryBudget = owner, RecordAppends = true };
         host.EnqueueAppendResult(DescriptorWriteResult.Open);

@@ -70,4 +70,33 @@ public partial class EvaluationTests
             return (whilePending, afterBreak);
         }
     }
+
+    [Fact]
+    public async Task QuotedPositionalItems_KeepNoncompactValuesAfterTheFrameIsCleared()
+    {
+        var state = new Eval(Parser.Parse("for item in \"${@}\"; do set --; test -e body; done"));
+        var backing = new byte[4096];
+        backing[123] = 0xFF;
+        state.ReplacePositionalParameters([ShellValue.FromText("first"), ShellValue.FromBytes(backing.AsMemory(123, 1))]);
+        var budget = new MemoryGovernor(128 * 1024);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
+
+        var first = await NextPathKindsAsync(state);
+        Assert.Equal("first", GetVariable(state, "item"));
+        Assert.Empty(state.PositionalParameters);
+        first.SetResult([PathKindResult(FilePathKind.File)]);
+
+        var second = await NextPathKindsAsync(state);
+        var item = state.Variables["item"];
+        Assert.Equal(new byte[] { 0xFF }, item.Bytes.ToArray());
+        Assert.True(item.TryGetCompactArrayCapacity(out var capacity));
+        Assert.Equal(1, capacity);
+        second.SetResult([PathKindResult(FilePathKind.File)]);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
 }
