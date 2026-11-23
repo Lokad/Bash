@@ -8,9 +8,9 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
 {
     [Theory]
     [InlineData("arr[-1]=x", "arr[-1]: bad array subscript\n", true, false)]
-    [InlineData("arr[1/0]=x", "1/0: division by 0 (error token is \"0\")\n", false, false)]
-    [InlineData("arr[$((1/0))]=x", "1/0: division by 0 (error token is \"0\")\n", true, false)]
-    [InlineData("arr[0]=$((1/0))", "1/0: division by 0 (error token is \"0\")\n", true, false)]
+    [InlineData("arr[1/0]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", false, true)]
+    [InlineData("arr[$((1/0))]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", true, true)]
+    [InlineData("arr[0]=$((1/0))", "line 1: 1/0: division by 0 (error token is \"0\")\n", true, true)]
     [InlineData("readonly arr; arr[0]=x", "line 1: arr: readonly variable\n", true, true)]
     [InlineData("readonly arr; arr=x", "line 1: arr: readonly variable\n", true, true)]
     [InlineData("declare -A arr; key=; arr[$key]=x", "arr[$key]: bad array subscript\n", true, false)]
@@ -96,18 +96,18 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("1/0: division by 0 (error token is \"0\")\n", result.StdErr);
+        Assert.Equal("line 1: 1/0: division by 0 (error token is \"0\")\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
     [Theory]
-    [InlineData("arr[1/0]=bad", "[1:1]declare -a arr=([7]=\"old\")\n")]
-    [InlineData("arr=([1/0]=bad [2]=later)", "[1:1]declare -a arr=()\n")]
-    [InlineData("arr=([1]=early [1/0]=bad [2]=later)", "[1:1]declare -a arr=([1]=\"early\")\n")]
-    [InlineData("arr+=([8]=early [1/0]=bad [9]=later)", "[1:1]declare -a arr=([7]=\"old\" [8]=\"early\")\n")]
-    [InlineData("f", "[1:7 0]declare -a arr=([7]=\"old\")\n")]
+    [InlineData("arr[1/0]=bad", "[1:1]declare -a arr=([7]=\"old\")\n", 4)]
+    [InlineData("arr=([1/0]=bad [2]=later)", "[1:1]declare -a arr=()\n", 4)]
+    [InlineData("arr=([1]=early [1/0]=bad [2]=later)", "[1:1]declare -a arr=([1]=\"early\")\n", 4)]
+    [InlineData("arr+=([8]=early [1/0]=bad [9]=later)", "[1:1]declare -a arr=([7]=\"old\" [8]=\"early\")\n", 4)]
+    [InlineData("f", "[1:7 0]declare -a arr=([7]=\"old\")\n", 2)]
     public async Task InvalidNumericIndexPublishesStatusInTheReachedScopeAndKeepsCompletedWrites(
-        string assignment, string expectedOutput)
+        string assignment, string expectedOutput, int line)
     {
         var script = "declare -a arr=([7]=old)\nf() { local -a PIPESTATUS=(4 5); arr[1/0]=bad; }\n(exit 7) | true\n" + assignment
             + "; printf skipped\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p arr";
@@ -120,7 +120,7 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
 
             Assert.Equal(0, exitCode);
             Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
-            Assert.Equal("1/0: division by 0 (error token is \"0\")\n", host.StandardError.TextContent);
+            Assert.Equal($"line {line}: 1/0: division by 0 (error token is \"0\")\n", host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
         }
     }
@@ -184,8 +184,8 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [Theory]
     [InlineData("arr[1 + 2]=three; printf '<%s>\\n' \"${arr[3]}\"", "<three>\n", "", 0)]
     [InlineData("arr[\"1\"]=value; printf '<%s>\\n' \"${arr[1]}\"", "<value>\n", "", 0)]
-    [InlineData("arr['1']=value; printf after", "", "'1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
-    [InlineData("arr[$'\\x31']=value; printf after", "", "'1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
+    [InlineData("arr['1']=value; printf after", "", "line 1: '1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
+    [InlineData("arr[$'\\x31']=value; printf after", "", "line 1: '1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
     [InlineData("arr=(one two); arr[~0]=value; printf '<%s>\\n' \"${arr[1]}\"", "<value>\n", "", 0)]
     [InlineData("printf '<%s>\\n' arr[1 + 2]=three", "<arr[1>\n<+>\n<2]=three>\n", "", 0)]
     [InlineData("key=literal; printf '<%s>\\n' map[\"$key\"]=value", "<map[literal]=value>\n", "", 0)]

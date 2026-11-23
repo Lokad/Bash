@@ -126,7 +126,7 @@ public sealed class ArithmeticOperandTests
     [InlineData("x=2; let \"i=$x\"; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=0 i=2\n", "", 0)]
     [InlineData("let \"i=$(printf 'effect\\n' >&2; printf 2)\"; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=0 i=2\n", "effect\n", 0)]
     [InlineData("x=9; f(){ local x=2; let \"x=$x+1\"; printf 'inner=%s\\n' \"$x\"; }; f; printf 'outer=%s\\n' \"$x\"\n\n", "inner=3\nouter=9\n", "", 0)]
-    [InlineData("i=0; readonly j=1; ((i=$((i+=1))+1,j=3)); printf 's=%s i=%s j=%s\\n' \"$?\" \"$i\" \"$j\"\n\n", "s=1 i=2 j=1\n", "j: readonly variable\n", 0)]
+    [InlineData("i=0; readonly j=1; ((i=$((i+=1))+1,j=3)); printf 's=%s i=%s j=%s\\n' \"$?\" \"$i\" \"$j\"\n\n", "s=1 i=2 j=1\n", "line 1: j: readonly variable\n", 0)]
     [InlineData("((x=${missing:-1)); printf after\n\n", "", "bad substitution: no closing `}' in x=${missing:-1\n", 1)]
     [InlineData("false && ((x=${missing:-1)); printf after\n\n", "after", "", 0)]
     public async Task Evaluation_ArithmeticOperandsPreserveScopeAndTiming(

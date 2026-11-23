@@ -66,7 +66,7 @@ public sealed class ConditionalExpansionTests
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal("[1]", host.StandardOutput.TextContent);
-            Assert.Equal($"{operand}: syntax error: operand expected (error token is \"{operand}\")\n",
+            Assert.Equal($"line 1: {operand}: syntax error: operand expected (error token is \"{operand}\")\n",
                 host.StandardError.TextContent);
         }
     }
@@ -158,7 +158,7 @@ public sealed class ConditionalExpansionTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Equal("1+: syntax error: operand expected (error token is \"+\")\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: 1+: syntax error: operand expected (error token is \"+\")\n", host.StandardError.TextContent);
     }
 
     [Theory]

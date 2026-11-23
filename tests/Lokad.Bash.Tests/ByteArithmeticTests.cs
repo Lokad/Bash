@@ -31,7 +31,7 @@ public sealed class ByteArithmeticTests
         if (errorSubjectHex.Length == 0)
             Assert.True(error.IsEmpty);
         else
-            Assert.True(error.Span.StartsWith(Convert.FromHexString(errorSubjectHex + "3A20")));
+            Assert.True(error.Span.StartsWith([.. "line 1: "u8, .. Convert.FromHexString(errorSubjectHex + "3A20")]));
     }
 
     [Theory]

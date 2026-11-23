@@ -167,7 +167,7 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
-    [InlineData("${a[i++}]", 1, "i++}: syntax error: invalid arithmetic operator (error token is \"}\")\n")]
+    [InlineData("${a[i++}]", 1, "line 2: i++}: syntax error: invalid arithmetic operator (error token is \"}\")\n")]
     [InlineData("\"${a[i++}]\"", 0, "bad substitution: no closing `}' in \"${a[i++}]\"\n")]
     [InlineData("${a[i++}]suffix", 0, "${a[i++}]suffix: bad substitution\n")]
     [InlineData("${saved:-${a[i++}]}", 0, "bad substitution: no closing `}' in ${saved:-${a[i++}]}\n")]

@@ -73,7 +73,7 @@ public sealed class ByteParameterReaderTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.StartsWith(effectPrefix + "1/0:", result.StdErr);
+        Assert.StartsWith(effectPrefix + "line 1: 1/0:", result.StdErr);
         Assert.Contains("division by 0", result.StdErr);
         Assert.False(result.Host.StandardError.Content.Span.EndsWith("later"u8));
     }

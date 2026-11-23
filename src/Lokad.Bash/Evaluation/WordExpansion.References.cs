@@ -622,9 +622,10 @@ internal static partial class WordExpansion
         {
             var message = ShellValue.FromText("bad array subscript");
             var referenceName = reference.Name.ToValue();
-            if (use is ReferenceUse.Read or ReferenceUse.Presence
-                || use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
+            if (use is ReferenceUse.Read or ReferenceUse.Presence)
                 return scope.Effects.ReportExpansionDiagnosticAsync(referenceName, message);
+            if (use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
+                return scope.Effects.ReportBuiltinDiagnosticAsync([referenceName], [message], scope.Context);
 
             var subscript = preparedSubscript is { } prepared
                 ? prepared.Value
@@ -637,8 +638,9 @@ internal static partial class WordExpansion
             ReadOnlySpan<ShellValue> subject = [prefix, referenceName, ShellValue.FromText("["), subscript, closingBracket];
             return use switch
             {
-                ReferenceUse.Unset or ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign
-                    or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead =>
+                ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead =>
+                    scope.Effects.ReportBuiltinDiagnosticAsync(subject, [message], scope.Context),
+                ReferenceUse.Unset or ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign =>
                     scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]),
                 ReferenceUse.Assign => scope.Effects.ReportParameterDefaultFailureAsync(subject, [message], scope),
                 ReferenceUse.DirectAssign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.AssignmentTarget),

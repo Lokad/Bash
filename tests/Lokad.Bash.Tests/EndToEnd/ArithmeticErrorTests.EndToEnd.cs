@@ -7,6 +7,39 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArithmeticErrorTestsEndToEnd
 {
     [Theory]
+    [InlineData(": \\\n\"$((8/0))\"", 3, "8/0: division by 0 (error token is \"0\")", 0, "<1><3>")]
+    [InlineData(": first \\\n\"$((8/0))\"", 2, "8/0: division by 0 (error token is \"0\")", 0, "<1><3>")]
+    [InlineData("((8/\n0))", 3, "((: 8/\n0: division by 0 (error token is \"\n0\")", 0, "<1><3>")]
+    [InlineData("declare -i value=target=4", 2, "target: readonly variable", 1, "")]
+    public async Task ArithmeticDiagnosticFollowsTheReachedSourceLocation(
+        string command, int line, string message, int exitCode, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", ":\n" + command + "\n");
+        var result = await host.RunAsync("readonly target=3\nsource /unit 2>report; printf '<%s><%s>' \"$?\" \"$target\"",
+            CancellationToken.None);
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal($"/unit: line {line}: {message}\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("i=8/0 \t ;i<2;i++", "i=8/0 \t ", "0 \t ")]
+    [InlineData("i=0;\n 8/0 \n;i++", "\n 8/0 \n", "0 \n")]
+    [InlineData("i=0;i<2;\n i=8/0 \n", "\n i=8/0 \n", "0 \n")]
+    public async Task ArithmeticForDiagnosticsRetainClauseWhitespace(string clauses, string operand, string token)
+    {
+        var result = await EvaluationTestHelper.RunAsync($":\nfor (({clauses})); do :; done");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal($"line 2: ((: {operand}: division by 0 (error token is \"{token}\")\n", result.StdErr);
+    }
+
+    [Theory]
     [InlineData("x=$((1+))", "[1:1]")]
     [InlineData("printf '%s' \"${text:1+}\"", "[1:1]")]
     [InlineData("eval 'printf -v \"a[1+]\" bad\nprintf inside'", "[1:1]")]
@@ -24,16 +57,16 @@ public sealed class ArithmeticErrorTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("(( 1 + ))", "((: 1 + : syntax error: operand expected (error token is \"+ \")\n")]
-    [InlineData("let '08 + 2'", "let: 08: value too great for base (error token is \"08\")\n")]
-    [InlineData("let '1 / 0 @'", "let: 1 / 0 @: syntax error: invalid arithmetic operator (error token is \"@\")\n")]
-    [InlineData("let '10 / (2 - 2) + 8'", "let: 10 / (2 - 2) + 8: division by 0 (error token is \"(2 - 2) + 8\")\n")]
-    [InlineData("let '(1 = 2)'", "let: (1 = 2): attempted assignment to non-variable (error token is \"= 2)\")\n")]
-    [InlineData("let '1 ? 2'", "let: 1 ? 2: `:' expected for conditional expression (error token is \"2\")\n")]
-    [InlineData("let 'i=2,a['", "let: i=2,a[: bad array subscript (error token is \"a[\")\n")]
-    [InlineData("x='2 / 0'; let 'x + 3'", "let: 2 / 0: division by 0 (error token is \"0\")\n")]
-    [InlineData("[[ '2 / 0' -eq 0 ]]", "[[: 2 / 0: division by 0 (error token is \"0\")\n")]
-    [InlineData("x=abcd; r=x; printf '%s' \"${!r:1/0}\"", "!r: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("(( 1 + ))", "line 1: ((: 1 + : syntax error: operand expected (error token is \"+ \")\n")]
+    [InlineData("let '08 + 2'", "line 1: let: 08: value too great for base (error token is \"08\")\n")]
+    [InlineData("let '1 / 0 @'", "line 1: let: 1 / 0 @: syntax error: invalid arithmetic operator (error token is \"@\")\n")]
+    [InlineData("let '10 / (2 - 2) + 8'", "line 1: let: 10 / (2 - 2) + 8: division by 0 (error token is \"(2 - 2) + 8\")\n")]
+    [InlineData("let '(1 = 2)'", "line 1: let: (1 = 2): attempted assignment to non-variable (error token is \"= 2)\")\n")]
+    [InlineData("let '1 ? 2'", "line 1: let: 1 ? 2: `:' expected for conditional expression (error token is \"2\")\n")]
+    [InlineData("let 'i=2,a['", "line 1: let: i=2,a[: bad array subscript (error token is \"a[\")\n")]
+    [InlineData("x='2 / 0'; let 'x + 3'", "line 1: let: 2 / 0: division by 0 (error token is \"0\")\n")]
+    [InlineData("[[ '2 / 0' -eq 0 ]]", "line 1: [[: 2 / 0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=abcd; r=x; printf '%s' \"${!r:1/0}\"", "line 1: !r: 1/0: division by 0 (error token is \"0\")\n")]
     public async Task ArithmeticDiagnosticsPreserveTheReachedRoleAndToken(string script, string expectedError)
     {
         foreach (var prepared in new[] { false, true })
@@ -94,15 +127,15 @@ public sealed class ArithmeticErrorTestsEndToEnd
 
         Assert.Equal(expectedOutput, result.StdOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("y=30,1/0: division by 0 (error token is \"0\")\n", result.StdErr);
+        Assert.Equal("/script: line 1: y=30,1/0: division by 0 (error token is \"0\")\n", result.StdErr);
     }
 
     [Theory]
-    [InlineData("source /outer; printf after")]
-    [InlineData("eval 'source /inner; printf middle'; printf after")]
-    [InlineData("source /eval; printf after")]
-    [InlineData("f() { source /inner; printf middle; }; f; printf after")]
-    public async Task SourceAndEval_ArithmeticFailureStopsOnlyTheInnermostText(string script)
+    [InlineData("source /outer; printf after", "/inner")]
+    [InlineData("eval 'source /inner; printf middle'; printf after", "/inner")]
+    [InlineData("source /eval; printf after", "/eval")]
+    [InlineData("f() { source /inner; printf middle; }; f; printf after", "/inner")]
+    public async Task SourceAndEval_ArithmeticFailureStopsOnlyTheInnermostText(string script, string source)
     {
         var tree = EndToEndHarness.BuildTree([
             ("/inner", "x=$((1/0)); printf bad"),
@@ -112,20 +145,20 @@ public sealed class ArithmeticErrorTestsEndToEnd
 
         Assert.Equal("middleafter", result.StdOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("1/0: division by 0 (error token is \"0\")\n", result.StdErr);
+        Assert.Equal($"{source}: line 1: 1/0: division by 0 (error token is \"0\")\n", result.StdErr);
     }
 
     [Theory]
     [InlineData("exit 7", "source /script; printf bad", "", 7, "")]
-    [InlineData("exec cat <<<\"$((x=30,1/0))\"; printf bad", "x=10; source /script; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("exec cat <<<\"$((x=30,1/0))\"; printf bad", "x=10; source /script; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "/script: line 1: x=30,1/0: division by 0 (error token is \"0\")\n")]
     [InlineData("exec cat <<<\"${MISSING:?required}\"; printf bad", "source /script; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("exec cat <<<'ok'; printf bad", "source /script; printf bad", "ok\n", 0, "")]
     [InlineData("x=${MISSING:?required}", "source /script; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("x=$((1+${MISSING:?required}))", "source /script; printf bad", "", 1, "MISSING: required\n")]
-    [InlineData("printf bad", "source /script \"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("printf bad", "source /script <<<\"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("x=$((1/0)); printf bad", "source /script; printf '%s' \"$((2/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n2/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("x=$((1/0)); printf bad", "source /script 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
+    [InlineData("printf bad", "source /script \"$((1/0))\"; printf bad", "", 1, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("printf bad", "source /script <<<\"$((1/0))\"; printf bad", "", 1, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=$((1/0)); printf bad", "source /script; printf '%s' \"$((2/0))\"; printf bad", "", 1, "/script: line 1: 1/0: division by 0 (error token is \"0\")\nline 1: 2/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=$((1/0)); printf bad", "source /script 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\n/script: line 1: 1/0: division by 0 (error token is \"0\")\n", 0, "")]
     public async Task Source_ArithmeticRecoveryPreservesOtherFailureAndRedirectionSemantics(
         string content, string script, string expectedOutput, int expectedStatus, string expectedError)
     {
@@ -137,27 +170,27 @@ public sealed class ArithmeticErrorTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("x=10; y=20; eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "y=30,1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("eval 'x=$((1/0)); printf bad' || printf caught; printf after", "caughtafter", 0, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("! eval 'x=$((1/0)); printf bad'; printf '%s' \"$?\"", "0", 0, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("inner='x=$((1/0)); printf bad'; eval 'eval \"$inner\"; printf middle'; printf outer", "middleouter", 0, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("f() { eval 'x=$((1/0)); printf bad'; printf inner; }; f; printf outer", "innerouter", 0, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("eval 'f() { x=$((1/0)); printf bad; }; f; printf bad'; printf after", "after", 0, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("x=10; y=20; x=15 eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "y=30,1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("readonly r=1; eval 'x=$((r=2)); printf bad'; printf '%s:%s' \"$?\" \"$r\"", "1:1", 0, "r: readonly variable\n")]
-    [InlineData("eval 'x=$((1/0))' 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
-    [InlineData("eval 'x=$((1/0))'; printf '%s' \"$((2/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n2/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("eval \"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("eval 'printf bad' <<<\"$((1/0))\"; printf bad", "", 1, "1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; y=20; eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "line 1: y=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'x=$((1/0)); printf bad' || printf caught; printf after", "caughtafter", 0, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("! eval 'x=$((1/0)); printf bad'; printf '%s' \"$?\"", "0", 0, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("inner='x=$((1/0)); printf bad'; eval 'eval \"$inner\"; printf middle'; printf outer", "middleouter", 0, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("f() { eval 'x=$((1/0)); printf bad'; printf inner; }; f; printf outer", "innerouter", 0, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'f() { x=$((1/0)); printf bad; }; f; printf bad'; printf after", "after", 0, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; y=20; x=15 eval 'x=$((y=30,1/0)); printf bad'; printf '%s:%s:%s' \"$?\" \"$x\" \"$y\"", "1:10:30", 0, "line 1: y=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("readonly r=1; eval 'x=$((r=2)); printf bad'; printf '%s:%s' \"$?\" \"$r\"", "1:1", 0, "line 1: r: readonly variable\n")]
+    [InlineData("eval 'x=$((1/0))' 2>/error; printf '%s\\n' \"$?\"; cat /error", "1\nline 1: 1/0: division by 0 (error token is \"0\")\n", 0, "")]
+    [InlineData("eval 'x=$((1/0))'; printf '%s' \"$((2/0))\"; printf bad", "", 1, "line 1: 1/0: division by 0 (error token is \"0\")\nline 1: 2/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval \"$((1/0))\"; printf bad", "", 1, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'printf bad' <<<\"$((1/0))\"; printf bad", "", 1, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
     [InlineData("eval 'x=${MISSING:?required}; printf bad'; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("eval 'x=$((1+${MISSING:?required})); printf bad'; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("eval 'exit 7'; printf bad", "", 7, "")]
-    [InlineData("x=10; eval 'exec cat <<<\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("x=10; eval 'exec cat <\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("x=10; eval 'exec cat >\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("x=10; eval 'exec cat <<EOF\n$((x=30,1/0))\nEOF\nprintf bad'; printf '%s:%s' \"$?\" \"$x\"", "bad0:30", 0, "x=30,1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("eval 'command exec cat <<<\"$((1/0))\"; printf bad' || printf caught; printf after", "caughtafter", 0, "1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("eval 'exec cat 2>/error <<<\"$((1/0))\"'; printf '%s\\n' \"$?\"; cat /error", "1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
+    [InlineData("x=10; eval 'exec cat <<<\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "line 1: x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; eval 'exec cat <\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "line 1: x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; eval 'exec cat >\"$((x=30,1/0))\"; printf bad'; printf '%s:%s' \"$?\" \"$x\"", "1:30", 0, "line 1: x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("x=10; eval 'exec cat <<EOF\n$((x=30,1/0))\nEOF\nprintf bad'; printf '%s:%s' \"$?\" \"$x\"", "bad0:30", 0, "line 4: x=30,1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'command exec cat <<<\"$((1/0))\"; printf bad' || printf caught; printf after", "caughtafter", 0, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
+    [InlineData("eval 'exec cat 2>/error <<<\"$((1/0))\"'; printf '%s\\n' \"$?\"; cat /error", "1\nline 1: 1/0: division by 0 (error token is \"0\")\n", 0, "")]
     [InlineData("eval 'exec cat <<<\"${MISSING:?required}\"; printf bad'; printf bad", "", 1, "MISSING: required\n")]
     [InlineData("eval 'exec cat <<<ok; printf bad'; printf bad", "ok\n", 0, "")]
     public async Task Eval_HandlesOnlyArithmeticFailuresInsideItsText(
@@ -240,7 +273,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
     [InlineData("cat \"$((1/0))\"; printf after", "", 1, "division by 0")]
     [InlineData("exec cat <<< \"$((1/0))\"; printf after", "", 1, "division by 0")]
     [InlineData("cat <<< \"$((1/0))\"; printf '%s' \"$((2/0))\"; printf after", "", 1, "division by 0")]
-    [InlineData("cat 2>/error <<< \"$((1/0))\"; printf 'after:%s\\n' \"$?\"; cat /error", "after:1\n1/0: division by 0 (error token is \"0\")\n", 0, "")]
+    [InlineData("cat 2>/error <<< \"$((1/0))\"; printf 'after:%s\\n' \"$?\"; cat /error", "after:1\nline 1: 1/0: division by 0 (error token is \"0\")\n", 0, "")]
     public async Task ArithmeticErrors_PreserveEarlierEffectsAndApplyContextStatus(
         string script, string expectedOutput, int expectedStatus, string diagnostic)
     {
@@ -262,7 +295,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
             EndToEndHarness.BuildTree([]));
 
         Assert.Equal(Convert.FromHexString("313A3C33303E3A3CFF3E"), result.Host.StandardOutput.Content.ToArray());
-        Assert.Equal("let: a=30,1/0: division by 0 (error token is \"0\")\n", result.StdErr);
+        Assert.Equal("line 1: let: a=30,1/0: division by 0 (error token is \"0\")\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -273,7 +306,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("1:<30>:<20>\n", result.StdOut);
-        Assert.Equal("locked: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: locked: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -284,7 +317,7 @@ public sealed class ArithmeticErrorTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("value: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: value: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 }

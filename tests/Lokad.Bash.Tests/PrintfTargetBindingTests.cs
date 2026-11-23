@@ -180,7 +180,7 @@ public sealed class PrintfTargetBindingTests
     [InlineData("printf -v 'a[-1]' '%s' value; printf '<%s>' \"$?\"", "3C313E", "615B2D315D3A20626164206172726179207375627363726970740A", 0)]
     [InlineData("printf -v 'a[]' '%s' value; printf '<%s>' \"$?\"", "3C323E", "7072696E74663A2060615B5D273A206E6F7420612076616C6964206964656E7469666965720A", 0)]
     [InlineData("declare -A a; k=; printf -v 'a[$k]' '%s' value; printf '<%s><%s>' \"$?\" \"${#a[@]}\"", "3C313E3C303E", "615B246B5D3A20626164206172726179207375627363726970740A", 0)]
-    [InlineData("i=0; printf -v 'a[(i++,1/0)]' '%s' value; printf '<%s><%s>' \"$?\" \"$i\"", "", "28692B2B2C312F30293A206469766973696F6E206279203020286572726F7220746F6B656E2069732022302922290A", 1)]
+    [InlineData("i=0; printf -v 'a[(i++,1/0)]' '%s' value; printf '<%s><%s>' \"$?\" \"$i\"", "", "6C696E6520313A2028692B2B2C312F30293A206469766973696F6E206279203020286572726F7220746F6B656E2069732022302922290A", 1)]
     [InlineData("i=outer; i=0 printf -v 'a[i++]' '%s' value; printf '<%s><%s>' \"$i\" \"${!a[@]}\"", "3C313E3C303E", "", 0)]
     [InlineData("a=outer; f(){ local -A a; k=$'\\377'; printf -v 'a[$k]' '%s' value; printf '<%s>' \"${a[$k]}\"; }; f; printf '<%s>' \"$a\"", "3C76616C75653E3C6F757465723E", "", 0)]
     [InlineData("printf -v $'\\377' '%s' value; printf '<%s>' \"$?\"", "3C323E", "7072696E74663A2060FF273A206E6F7420612076616C6964206964656E7469666965720A", 0)]

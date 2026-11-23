@@ -142,7 +142,7 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
         var result = await new Engine().RunAsync(state, host, CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal(commandPrefix + "1+: syntax error: operand expected (error token is \"+\")\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: " + commandPrefix + "1+: syntax error: operand expected (error token is \"+\")\n", host.StandardError.TextContent);
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
         var values = state.IndexedArrays["a"];

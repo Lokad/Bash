@@ -23,7 +23,7 @@ public sealed class SourceCommandUnitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expected, result.StdOut);
-        Assert.StartsWith("1/0: division by 0 (error token is \"0\")\n", result.StdErr);
+        Assert.StartsWith("/source: line 1: 1/0: division by 0 (error token is \"0\")\n", result.StdErr);
         Assert.Equal(hasSyntaxError, result.StdErr.Contains("syntax error near unexpected token `)'", StringComparison.Ordinal));
     }
 

@@ -70,17 +70,23 @@ internal sealed class ArithmeticForSyntax
         ShellSource expression, ArithmeticForSeparators separators, bool preserveLineOnlyCondition)
     {
         if (separators.First is not int firstSeparator)
-            return (expression.TrimBlanks(), ShellSource.Empty, ShellSource.Empty);
+            return (PrepareClause(expression, preserveLineOnly: false), ShellSource.Empty, ShellSource.Empty);
 
-        var init = expression.Slice(0, firstSeparator).TrimBlanks();
+        var init = PrepareClause(expression.Slice(0, firstSeparator), preserveLineOnly: false);
         var conditionEnd = separators.Second ?? expression.Length;
         var conditionSource = expression.Slice(firstSeparator + 1, conditionEnd - firstSeparator - 1);
-        var condition = conditionSource.TrimBlanks();
-        // A clause consisting of blanks and physical LF still evaluates as an explicit zero.
-        if (preserveLineOnlyCondition && condition.IsEmpty && conditionSource.AsSpan().Contains((byte)'\n'))
-            condition = conditionSource;
+        var condition = PrepareClause(conditionSource, preserveLineOnlyCondition);
         var update = separators.Second is int secondSeparator
-            ? expression.Slice(secondSeparator + 1).TrimBlanks() : ShellSource.Empty;
+            ? PrepareClause(expression.Slice(secondSeparator + 1), preserveLineOnly: false) : ShellSource.Empty;
         return (init, condition, update);
+
+        static ShellSource PrepareClause(ShellSource clause, bool preserveLineOnly)
+        {
+            var text = clause.AsSpan().TrimStart(" \t"u8);
+            // A condition containing only blanks and LF still evaluates as an explicit zero.
+            if (text.TrimEnd(" \t\n"u8).IsEmpty)
+                return preserveLineOnly && !text.IsEmpty ? clause : ShellSource.Empty;
+            return clause.Slice(clause.Length - text.Length);
+        }
     }
 }

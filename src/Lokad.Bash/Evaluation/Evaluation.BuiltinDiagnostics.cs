@@ -22,7 +22,7 @@ public sealed partial class Evaluation
     private Task ReportBuiltinDiagnosticAsync(ShellValue name, string message, EvaluationContext context) =>
         ReportBuiltinDiagnosticAsync([name], [ShellValue.FromText(message)], context);
 
-    private Task ReportBuiltinDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+    internal Task ReportBuiltinDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         EvaluationContext context) => WriteDiagnosticAsync(name, message, _builtinDiagnostics,
             ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(context));
 

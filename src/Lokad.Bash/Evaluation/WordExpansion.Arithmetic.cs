@@ -372,7 +372,8 @@ internal static partial class WordExpansion
         Task ReportAsync(ArithmeticError error)
         {
             var message = ShellValue.FromText(error.Message);
-            var showCommand = !command.IsEmpty && (error.Token.HasValue || failureMode == ArithmeticFailureMode.IntegerAssignment);
+            var showCommand = !command.IsEmpty && (error.Token.HasValue
+                || failureMode == ArithmeticFailureMode.IntegerAssignment && error.Kind != ArithmeticErrorKind.ReadonlyVariable);
             ReadOnlySpan<ShellValue> subject = showCommand
                 ? [command, ShellValue.FromText(": "), error.Subject]
                 : [error.Subject];
@@ -380,9 +381,9 @@ internal static partial class WordExpansion
                 ? [message, ShellValue.FromText(" (error token is \""), token, ShellValue.FromText("\")")]
                 : [message];
             if (failureMode == ArithmeticFailureMode.Diagnostic)
-                return scope.Effects.ReportExpansionDiagnosticAsync(subject, detail);
+                return scope.Effects.ReportBuiltinDiagnosticAsync(subject, detail, scope.Context);
             if (failureMode == ArithmeticFailureMode.IntegerAssignment)
-                return scope.Effects.ReportFatalExpansionAsync(subject, detail, ExpansionFailureKind.IntegerAssignment);
+                return scope.Effects.ReportIntegerAssignmentFailureAsync(subject, detail, scope);
             var failure = failureMode == ArithmeticFailureMode.ArrayIndex
                 ? ExpansionFailureKind.ArrayIndex : ExpansionFailureKind.Arithmetic;
             return scope.Effects.ReportUnitExpansionFailureAsync(subject, detail, scope, failure);

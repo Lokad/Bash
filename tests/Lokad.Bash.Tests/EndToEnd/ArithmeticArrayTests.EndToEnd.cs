@@ -9,13 +9,13 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArithmeticArrayTestsEndToEnd
 {
     [Theory]
-    [InlineData("((a[]))", "[1:0:prior]", "a[]: bad array subscript\na[]: bad array subscript\n")]
+    [InlineData("((a[]))", "[1:0:prior]", "line 2: a[]: bad array subscript\nline 2: a[]: bad array subscript\n")]
     [InlineData("let 'a[]=7,i++'", "[1:1:prior]", "let: `a[]': not a valid identifier\n")]
     [InlineData("value=$((a[b[0]]))", "[0:0:20]", "")]
-    [InlineData("value=$((a[b[0]]+$i))", "[1:0:prior]", "b\\[0\\]: syntax error: invalid arithmetic operator (error token is \"\\[0\\]\")\n")]
-    [InlineData("value=$((a[~0+2]))", "[1:0:prior]", "\\~0+2: syntax error: operand expected (error token is \"\\~0+2\")\n")]
+    [InlineData("value=$((a[b[0]]+$i))", "[1:0:prior]", "line 2: b\\[0\\]: syntax error: invalid arithmetic operator (error token is \"\\[0\\]\")\n")]
+    [InlineData("value=$((a[~0+2]))", "[1:0:prior]", "line 2: \\~0+2: syntax error: operand expected (error token is \"\\~0+2\")\n")]
     [InlineData("changed='i=3'; key='changed~'; value=$((a[$key]))", "[1:0:prior]",
-        "changed\\~: syntax error: invalid arithmetic operator (error token is \"\\~\")\n")]
+        "line 2: changed\\~: syntax error: invalid arithmetic operator (error token is \"\\~\")\n")]
     public async Task ArithmeticSelectorSpellingPreservesTheConsumerAndEffectOrder(string command, string output, string error)
     {
         var script = "a=(10 20); b=(1); i=0; value=prior\n" + command

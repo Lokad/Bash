@@ -35,7 +35,7 @@ public sealed class CommandSubstitutionReuseTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Equal("printf wrong >decoy: syntax error in expression (error token is \"wrong >decoy\")\n",
+        Assert.Equal("line 1: printf wrong >decoy: syntax error in expression (error token is \"wrong >decoy\")\n",
             host.StandardError.TextContent);
         Assert.Empty(host.CaptureEntries());
     }

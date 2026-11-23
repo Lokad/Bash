@@ -29,6 +29,12 @@ public sealed record ArithmeticForCommand : ICommand
         && Equals(Body, other.Body);
     public override int GetHashCode() => HashCode.Combine(Expression.Bytes, Body);
 
-    internal void Split(out ShellSource init, out ShellSource condition, out ShellSource update) =>
-        (init, condition, update) = (Initialization.Source, Condition.Source, Update.Source);
+    internal void Split(out ShellSource init, out ShellSource condition, out ShellSource update)
+    {
+        init = Initialization.Source.TrimBlanks();
+        condition = Condition.Source.TrimBlanks();
+        if (condition.IsEmpty)
+            condition = Condition.Source;
+        update = Update.Source.TrimBlanks();
+    }
 }
