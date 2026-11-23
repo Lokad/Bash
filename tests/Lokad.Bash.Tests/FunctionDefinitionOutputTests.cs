@@ -315,6 +315,12 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ cat <<END\n$x\nEND\n\n}", "f () \n{ \n    cat <<END\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<ONE | cat <<'TWO'\nfirst\nONE\nsecond\nTWO\n\n}", "f () \n{ \n    cat <<ONE |\nfirst\nONE\n  cat <<'TWO'\nsecond\nTWO\n\n}\n")]
     [InlineData("f(){ cat <<END\nx\nEND\necho after;\n}", "f () \n{ \n    cat <<END\nx\nEND\n\n    echo after\n}\n")]
+    [InlineData("f(){ (cat <<END\nbody\nEND\n); printf '%s' after; }",
+        "f () \n{ \n    ( cat <<END\nbody\nEND\n )\n    printf '%s' after\n}\n")]
+    [InlineData("f(){ { { cat <<END\nbody\nEND\n}; :; }; printf '%s' after; }",
+        "f () \n{ \n    { \n        { \n            cat <<END\nbody\nEND\n\n        }\n        :\n    };\n    printf '%s' after\n}\n")]
+    [InlineData("f(){ case k in k) cat <<END\nbody\nEND\n;; other) :;; esac; printf '%s' after; }",
+        "f () \n{ \n    case k in \n        k)\n            cat <<END\nbody\nEND\n\n        ;;\n        other)\n            :\n        ;;\n    esac\n    printf '%s' after\n}\n")]
     [InlineData("f(){ printf '%s' 'a\r\nb';\n}", "f () \n{ \n    printf '%s' 'a\r\nb'\n}\n")]
     [InlineData("f() (echo x)", "f () \n{ \n    ( echo x )\n}\n")]
     [InlineData("function f (printf '%s' \"$1\")", "f () \n{ \n    ( printf '%s' \"$1\" )\n}\n")]

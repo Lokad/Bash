@@ -140,15 +140,7 @@ internal static class FunctionDefinitionFormatter
                     else if (!Append(" ")) return false;
                     break;
                 case Step.Line(var indent, var terminate):
-                    if ((display || substitutionSource) && terminate && hereDocuments.Count == 0 && !Append(";")) return false;
-                    if (!Append("\n")) return false;
-                    if (hereDocuments.Count != 0)
-                    {
-                        if (!FlushHereDocuments()) return false;
-                        if (capture) flushedHereDocuments = true;
-                        if ((display || substitutionSource) && !Append("\n")) return false;
-                    }
-                    if ((display || inlineSource) && !output.TryAppend(indent, (byte)' ')) return false;
+                    if (!WriteLine(indent, terminate)) return false;
                     break;
                 case Step.EnterFunction:
                     functionDepth++;
@@ -206,6 +198,13 @@ internal static class FunctionDefinitionFormatter
                         }
                         var breaks = functionDepth != 0 ? newline && !afterDocuments ? 2 : 1 : newline ? 1 : 0;
                         if (!output.TryAppend(breaks, (byte)'\n')) return false;
+                    }
+                    else if (display)
+                    {
+                        // A body printed inside the left command suppresses this connector's semicolon.
+                        var terminate = !flushedHereDocuments;
+                        flushedHereDocuments = false;
+                        if (!WriteLine(indent, terminate)) return false;
                     }
                     else if (substitutionSource && functionDepth != 0)
                     {
@@ -284,7 +283,7 @@ internal static class FunctionDefinitionFormatter
                     }
                     break;
                 case Step.Redirections(var redirections, var leadingSpace, var firstElement):
-                    if (capture && redirections.Count != 0)
+                    if ((capture || display) && redirections.Count != 0)
                         flushedHereDocuments = false;
                     PrepareWork(redirections.Count + (firstElement != null ? 1 : 0));
                     for (var index = redirections.Count - 1; index >= 0; index--)
@@ -369,9 +368,9 @@ internal static class FunctionDefinitionFormatter
                             new Step.LeaveFunction(body is not RedirectedCommand { Body: GroupCommand }),
                             new Step.Text(grouped ? "" : "\n}"));
                     }
-                    else if (substitutionSource)
+                    else if (substitutionSource || display && nested)
                         Push(new Step.Layout(indent), new Step.EnterFunction(), new Step.Command(body, indent),
-                            new Step.LeaveFunction(ResetHereDocuments: false));
+                            new Step.LeaveFunction(display && body is not RedirectedCommand { Body: GroupCommand }));
                     else Push(new Step.Layout(indent), new Step.Command(body, indent));
                     break;
                 case Step.IfArm(var conditional, var arm, var indent):
@@ -429,7 +428,7 @@ internal static class FunctionDefinitionFormatter
                         case ListCommand list:
                             if (capture) PushStep(new Step.FlushDocuments());
                             Push(new Step.Command(list.Left, indent), list.Operator == ListOperator.Sequence
-                                    ? inlineSource || capture
+                                    ? display || inlineSource || capture
                                         ? new Step.CommandSeparator(list.HasNewlineConnector, list.SeparatorSource, indent)
                                         : new Step.Line(indent, Terminate: true)
                                     : new Step.LogicalSeparator(list.Operator),
@@ -448,7 +447,7 @@ internal static class FunctionDefinitionFormatter
                             if (capture)
                                 Push(new Step.Command(subshell.Body, indent), new Step.FlushDocuments());
                             else Push(new Step.Text("( "), new Step.Command(subshell.Body, indent),
-                                substitutionSource ? new Step.CompactEnd(" )", Terminate: false) : new Step.Text(" )"));
+                                displayRedirections ? new Step.CompactEnd(" )", Terminate: false) : new Step.Text(" )"));
                             break;
                         case RedirectedCommand redirected:
                             Push(new Step.Command(redirected.Body, indent),
@@ -652,12 +651,22 @@ internal static class FunctionDefinitionFormatter
         bool FlushCaptureDocuments()
         {
             if (hereDocuments.Count == 0) return true;
-            flushedHereDocuments = true;
             return Append("\n") && FlushHereDocuments();
+        }
+
+        bool WriteLine(int indent, bool terminate)
+        {
+            if (displayRedirections && terminate && hereDocuments.Count == 0 && !Append(";")) return false;
+            if (!Append("\n")) return false;
+            if (hereDocuments.Count != 0
+                && (!FlushHereDocuments() || displayRedirections && !Append("\n"))) return false;
+            return !(display || inlineSource) || output.TryAppend(indent, (byte)' ');
         }
 
         bool FlushHereDocuments()
         {
+            if (hereDocuments.Count != 0)
+                flushedHereDocuments = true;
             while (hereDocuments.TryDequeue(out var redirection))
             {
                 foreach (var part in redirection.Target.Parts)
