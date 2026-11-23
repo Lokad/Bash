@@ -335,7 +335,13 @@ public sealed partial class Evaluation
                 ICommand command;
                 if (failedUnit != null)
                 {
-                    await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
+                    if (failedUnit.Failure.HereDocumentEndOfInput is { } hereDocumentEnd)
+                    {
+                        await ReportCapturedHereDocumentEndOfInputAsync(failedUnit.Error, hereDocumentEnd, lineOffset)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                        await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)
                     {
                         PreparePipelineStatusStorage(1);
@@ -361,7 +367,8 @@ public sealed partial class Evaluation
                             var exit = await RunExitTrapAsync(scope, EvaluationResult.Exit(status)).ConfigureAwait(false);
                             return exit.WithExitCode(exit.ExitCode & byte.MaxValue);
                         }
-                        if (failedUnit.Failure.Kind == ParserFailureKind.ArrayQuotedSubstitutionForHeader)
+                        if (failedUnit.Failure.Kind is ParserFailureKind.ArrayQuotedSubstitutionForHeader
+                            or ParserFailureKind.ArraySubstitutionDelimiter)
                             return result.WithExitCode(1);
                         if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
                             return EvaluationResult.Exit(2);

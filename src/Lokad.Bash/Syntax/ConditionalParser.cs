@@ -358,7 +358,9 @@ internal sealed class ConditionalParser
             {
                 case ShellNestedExpansionScan.Complete: continue;
                 case ShellNestedExpansionScan.Invalid { Failure: { } failure }:
-                    _failure ??= failure;
+                    _failure ??= failure.HereDocumentEndOfInput is { } missingCloser
+                        ? failure with { HereDocumentEndOfInput = missingCloser with { InsideConditional = true } }
+                        : failure;
                     return new(TokenKind.Invalid, default, failure.Error.Offset);
                 case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid:
                     Fail("Invalid expansion in conditional operand.", cursor.Position);

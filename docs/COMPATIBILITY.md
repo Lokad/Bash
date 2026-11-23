@@ -362,6 +362,11 @@ redirection to the preceding command. If the rendered list fails to parse,
 the reached substitution reports a syntax error before any of its commands
 run. Backtick captures and captures read directly from a here-document use
 their source separators.
+When a script ends in a parenthesized capture with a here-document and no
+matching `)`, the script reader reports any pending here-document warnings
+before the missing-parenthesis diagnostic. Earlier complete command units can
+already have executed. Prepared parsing reports the syntax error before any
+evaluation.
 Legacy `$[expression]` uses the same arithmetic evaluation as `$((expression))`,
 with a single closing bracket outside nested brackets. Within a double-quoted
 word, an unescaped inner double quote at that level causes a substitution failure

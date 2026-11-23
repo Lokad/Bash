@@ -1,6 +1,8 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
 
@@ -565,6 +567,64 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Empty(Assert.Single(Assert.Single(command.Redirections).Target.Parts).GetUtf8Text());
         var warning = Assert.Single(script.Locations?.GetHereDocumentWarnings(command) ?? []);
         Assert.Equal("END", warning.Delimiter.ToUtf8String());
+    }
+
+    private const string MatchingParenthesisEof = "unexpected EOF while looking for matching `)'\n";
+    private const string MissingCaptureBodyOnLineTwo =
+        "warning: here-document at line 2 delimited by end-of-file (wanted `END')\n";
+
+    [Theory]
+    [InlineData("printf prior\nv=$(cat <<END\nbody\n)\nprintf tail", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior; printf '%s' \"$(cat <<END\nbody\n)\"", "",
+        "warning: here-document at line 1 delimited by end-of-file (wanted `END')\n" + MatchingParenthesisEof, 2)]
+    [InlineData("exit 7\nv=$(cat <<END\nbody\n)", "", "", 7)]
+    [InlineData("printf prior\nv=$(cat <<END", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<END\\\n", "prior", MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<END\nbody\nEND\n", "prior", MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<FIRST <<SECOND\nbody\nFIRST\nbody\n)", "prior",
+        "warning: here-document at line 4 delimited by end-of-file (wanted `SECOND')\n" + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=${x:-$(printf '%s' \"$(cat <<END\nbody\n)\")}\n", "prior",
+        MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\na=(\"$(cat <<END\nbody\n)\")", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 1)]
+    [InlineData("printf prior\neval 'v=$(cat <<END\nbody\n)' && printf unexpected; printf tail", "priortail",
+        "warning: here-document at line 4 delimited by end-of-file (wanted `END')\n" + MatchingParenthesisEof, 0)]
+    public async Task EndOfInputInHereDocumentCaptureReportsAtTheReachedReadBoundary(
+        string source, string output, string diagnostics, int exitCode)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(diagnostics, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task EndOfInputInConditionalCapturePreservesTheUnexpectedTokenByte()
+    {
+        var source = "printf prior\n[[ $(cat <<END\nbody\n) == body ]] && printf unexpected";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        byte[] diagnostic = [.. Utf8Text.Encode(MissingCaptureBodyOnLineTwo + MatchingParenthesisEof).Span,
+            .. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("prior", host.StandardOutput.TextContent);
+        Assert.Equal(diagnostic, host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public void PreparedParserRejectsAnUnclosedHereDocumentCaptureAtTheInputEnd()
+    {
+        const string source = "printf prior\nv=$(cat <<END\nbody\n)\n";
+        Assert.False(Parser.TryParse(source, out var script, out var error));
+        Assert.Null(script);
+        Assert.Equal(new SyntaxError(MatchingParenthesisEof.TrimEnd('\n'), source.Length), error);
     }
 
     [Fact]

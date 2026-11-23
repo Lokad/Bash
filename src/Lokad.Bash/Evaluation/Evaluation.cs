@@ -3734,6 +3734,21 @@ public sealed partial class Evaluation : IFileTester
     private static readonly ShellValue HereDocumentWarningPrefix = ShellValue.FromText("here-document at line ");
     private static readonly ShellValue HereDocumentWarningDelimiter = ShellValue.FromText(" delimited by end-of-file (wanted `");
     private static readonly ShellValue HereDocumentWarningClose = ShellValue.FromText("')");
+    private static readonly byte[] UnreadConditionalToken =
+        [.. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
+
+    private async Task ReportCapturedHereDocumentEndOfInputAsync(SyntaxError error,
+        CapturedHereDocumentEndOfInput endOfInput, int offset)
+    {
+        var descriptor = GetStdErrDescriptor();
+        if (descriptor.IsClosed)
+            return;
+        if (endOfInput.Warnings is { } warnings)
+            await ReportHereDocumentWarningsAsync(warnings, offset + endOfInput.LineOffset).ConfigureAwait(false);
+        await ExecuteWriteAsync(descriptor, Utf8Text.EncodeLine(error.Message)).ConfigureAwait(false);
+        if (endOfInput.InsideConditional)
+            await ExecuteWriteAsync(descriptor, UnreadConditionalToken).ConfigureAwait(false);
+    }
 
     private async Task ReportHereDocumentWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, int offset)
     {

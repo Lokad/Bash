@@ -24,6 +24,7 @@ internal sealed class Tokenizer
 
     internal bool TrackCommandLocations { get; init; }
     internal bool AllowEofHereDocuments { get; init; }
+    internal bool IsCommandSubstitution { get; init; }
     internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
@@ -91,6 +92,8 @@ internal sealed class Tokenizer
 
     internal void MarkCompoundArrayFailure()
     {
+        if (_failure is { Kind: ParserFailureKind.Delimiter, HereDocumentEndOfInput: not null } missingCloser)
+            _failure = missingCloser with { Kind = ParserFailureKind.ArraySubstitutionDelimiter };
         if ((_failure ?? QuotedEndOfInputFailure) is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
         {
             _failure = failure with { Kind = ParserFailureKind.ArrayQuotedSubstitutionForHeader };
@@ -468,7 +471,11 @@ internal sealed class Tokenizer
                 if (HereDocuments is { HasPending: true } pending)
                 {
                     if (AllowEofHereDocuments)
-                        pending.TryReadBodies(this);
+                    {
+                        // A continued final header never reaches its here-document boundary.
+                        if (!IsCommandSubstitution || !EndsInLineContinuation(span))
+                            pending.TryReadBodies(this);
+                    }
                     else
                         RecordError("Unterminated here-document.", Position);
                 }
@@ -599,6 +606,16 @@ internal sealed class Tokenizer
             }
             return token with { Source = start..Position };
         }
+    }
+
+    private static bool EndsInLineContinuation(ReadOnlySpan<byte> source)
+    {
+        if (source.Length < 2 || source[^1] != (byte)'\n')
+            return false;
+        var start = source.Length - 1;
+        while (start > 0 && source[start - 1] == (byte)'\\')
+            start--;
+        return (source.Length - 1 - start) % 2 != 0;
     }
 
     private bool SkipOmittedSeparator(ReadOnlySpan<byte> source, int end)

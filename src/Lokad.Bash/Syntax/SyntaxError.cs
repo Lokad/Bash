@@ -16,6 +16,7 @@ public sealed record SyntaxError(string Message, int Offset)
 /// <summary>Retains the parser's failure class independently of the public diagnostic.</summary>
 internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
+    internal CapturedHereDocumentEndOfInput? HereDocumentEndOfInput { get; init; }
     internal bool IsNestedSubstitution { get; init; }
 
     internal bool ExitsSubstitution => Kind is ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader;
@@ -35,6 +36,12 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
         ? this with { Kind = ParserFailureKind.QuotedSubstitutionForHeader } : this;
 }
 
+/// <summary>Diagnostics from reading a capture that could not reach its closing parenthesis.</summary>
+internal sealed record CapturedHereDocumentEndOfInput(IReadOnlyList<HereDocumentWarning>? Warnings, int LineOffset)
+{
+    internal bool InsideConditional { get; init; }
+}
+
 internal enum ParserFailureKind
 {
     Grammar,
@@ -45,4 +52,5 @@ internal enum ParserFailureKind
     SubstitutionForHeader,
     QuotedSubstitutionForHeader,
     ArrayQuotedSubstitutionForHeader,
+    ArraySubstitutionDelimiter,
 }

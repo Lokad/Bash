@@ -274,7 +274,12 @@ public static class Parser
         {
             // The delimiter parse can replay a changed list while borrowing its original words and captures.
             context.RetainCaptureLookahead = true;
-            var tokenizer = new Tokenizer(input, payloadStart, context) { TrackCommandLocations = true };
+            var tokenizer = new Tokenizer(input, payloadStart, context)
+            {
+                TrackCommandLocations = true,
+                AllowEofHereDocuments = context.LegacyOrigin == LegacySubstitutionOrigin.Script,
+                IsCommandSubstitution = true
+            };
             var status = ReadBody(tokenizer, out var command, out closingParenthesisIndex, out syntaxError);
             if (status != ShellScanStatus.Complete)
                 return status;
@@ -291,7 +296,7 @@ public static class Parser
             else if (!adjacentParenthesis && bareTime)
                 failure = SubstitutionSyntaxFailure.MissingTimedCommand;
 
-            // Unconsumed bodies fail when reached, after the outer grammar has found their delimiter.
+            // Pending bodies after a closing parenthesis use the deferred capture path.
             if (tokenizer.HereDocuments is { HasPending: true })
                 return ShellScanStatus.Complete;
 
@@ -332,9 +337,26 @@ public static class Parser
             error = null;
             (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
             SkipNewlines(tokenizer);
-            if (tokenizer.Failure is { } bodyFailure)
+            var closing = tokenizer.PeekTokenCore();
+            var bodyFailure = tokenizer.Failure;
+            if (tokenizer is { AllowEofHereDocuments: true, HereDocuments: { } documents }
+                && tokenizer.Position == input.Length && closing.Kind == TokenKind.EndOfInput
+                && (bodyFailure == null || documents.Warnings != null) && !tokenizer.HasPendingClosingParenthesis
+                && !context.ParsingLimitExceeded)
             {
-                if (context.ParsingLimitExceeded || bodyFailure.Error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
+                var warnings = documents.Warnings;
+                error = new ParserFailure(new SyntaxError("unexpected EOF while looking for matching `)'", input.Length),
+                    ParserFailureKind.Delimiter)
+                {
+                    HereDocumentEndOfInput = new CapturedHereDocumentEndOfInput(warnings,
+                        warnings == null ? 0 : input.AsSpan(0, payloadStart).Count((byte)'\n'))
+                };
+                return ShellScanStatus.Invalid;
+            }
+            if (bodyFailure != null)
+            {
+                if (context.ParsingLimitExceeded || bodyFailure.HereDocumentEndOfInput != null
+                    || bodyFailure.Error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
                 {
                     error = bodyFailure.InSubstitution();
                     return ShellScanStatus.Invalid;
@@ -342,7 +364,6 @@ public static class Parser
                 return ShellScanStatus.Incomplete;
             }
 
-            var closing = tokenizer.PeekTokenCore();
             if (closing.Kind != TokenKind.CloseParen)
                 return closing.Kind == TokenKind.EndOfInput ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid;
             tokenizer.NextTokenCore();
