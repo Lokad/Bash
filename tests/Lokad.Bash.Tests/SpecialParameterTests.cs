@@ -52,4 +52,22 @@ public sealed class SpecialParameterTests
         Assert.Equal(expectedOutput, result.StdOut);
         Assert.Equal(expectedError, result.StdErr);
     }
+
+    [Theory]
+    [InlineData("set --; show() { printf '<%s>' \"$#\"; }; show \"${!1}\"; show ${!1}; printf '[%s:%s]' \"${!1:-default}\" \"${!1:+alternate}\"", "<1><0>[default:]", "", 0)]
+    [InlineData("set --; printf '<%s>' \"${!01-fallback}\"; set -- first; printf '<%s>' \"${!12-fallback}\"", "<fallback><fallback>", "", 0)]
+    [InlineData("set --; printf '<%s>' \"${!1@U}\" \"${!1:1:2}\" \"${!1/a/b}\"", "<><><>", "", 0)]
+    [InlineData("target=kept; set -- target; f(){ printf '<%s>' \"${!1:-inner}\"; }; f; printf '<%s>' \"${!1}\"", "<inner><kept>", "", 0)]
+    [InlineData("set --; printf '<%s>' \"${!1:?required}\"\nprintf after", "", "!1: required\n", 1)]
+    [InlineData("set --; printf '<%s>' \"${!1:=$(printf reached >&2; printf value)}\"; printf same\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"", "<1:1>", "!1: invalid indirect expansion\n", 0)]
+    [InlineData("set -e; set --; printf '<%s>' \"${!1:=$(printf reached >&2; printf value)}\"\nprintf after", "", "!1: invalid indirect expansion\n", 1)]
+    public async Task IndirectMissingPositionUsesTheReachedOperator(
+        string script, string expectedOutput, string expectedError, int expectedStatus)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(expectedStatus, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+    }
 }

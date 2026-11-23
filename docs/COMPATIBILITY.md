@@ -785,6 +785,13 @@ the second read introduces an at aggregate. When an initial aggregate becomes a
 scalar payload, empty fields contribute empty text and literal bytes remain
 data.
 
+A missing positional argument in `${!1}` or `${!12}` supplies an unset value.
+Its usage as a field and the ordinary default and alternate operators follow
+the same rules as for other unset positional arguments. An assigning default
+for a missing positional argument reports `invalid indirect expansion` before
+expanding its operand and discards the current command unit. When the argument
+is present, its value supplies the indirect name.
+
 A brace inside an array selector can belong to the selector when the same word
 contains its closing bracket. A complete expansion then reads the selector with
 that brace included. An unquoted reference with a complete selector can reach

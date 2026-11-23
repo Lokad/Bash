@@ -15,7 +15,7 @@ namespace Lokad.Bash.Evaluation;
 internal enum ExpansionFailureKind
 {
     Arithmetic,
-    /// <summary>A generated word fails substitution parsing and discards its command unit.</summary>
+    /// <summary>A reached substitution fails before emitting a value and discards its command unit.</summary>
     WordSyntax,
     /// <summary>A reached parenthesized substitution has invalid rendered syntax.</summary>
     CommandSubstitutionSyntax,

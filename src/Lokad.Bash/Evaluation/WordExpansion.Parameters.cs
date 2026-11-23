@@ -579,6 +579,16 @@ internal static partial class WordExpansion
             {
                 if (source.Kind is VariableReferenceKind.At or VariableReferenceKind.Star)
                     return new ParameterValue(VariableReferenceKind.Name, [ShellValue.Empty], false, null, null);
+                if (syntax.Special == SpecialParameterKind.Positional)
+                {
+                    // A missing argument supplies no name. Read operators see an unset value,
+                    // while an assigning default rejects the missing target before expanding its word.
+                    if (parsed.Kind == BracedParameterOperatorKind.AssignDefault)
+                        await scope.Effects.ReportUnitExpansionFailureAsync([ShellValue.FromText("!"), name.ToValue()],
+                            [ShellValue.FromText("invalid indirect expansion")], scope, ExpansionFailureKind.WordSyntax)
+                            .ConfigureAwait(false);
+                    return source;
+                }
                 await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
                 return source;
             }
