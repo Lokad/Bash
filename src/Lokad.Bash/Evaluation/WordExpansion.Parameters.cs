@@ -19,6 +19,7 @@ internal static partial class WordExpansion
     {
         internal sealed record Indexed(IndexedArray Array) : ParameterSource;
         internal sealed record Associative(AssociativeArray Array) : ParameterSource;
+        internal sealed record LiteralSlice(ParameterSource Source, long Offset, long? Length) : ParameterSource;
         internal sealed record Positional(IReadOnlyList<ShellValue> Arguments, ShellValue ArgumentZero) : ParameterSource
         {
             internal IEnumerable<ShellValue> ValuesFrom(long first, int count)
@@ -47,6 +48,7 @@ internal static partial class WordExpansion
             Associative associative => associative.Array.Count,
             Positional positional => positional.Arguments.Count,
             Keys keys => keys.KeyCount,
+            LiteralSlice slice => slice.Source.Count,
             _ => throw new InvalidOperationException("Unknown parameter source.")
         };
 
@@ -56,6 +58,7 @@ internal static partial class WordExpansion
             Associative associative => associative.Array.PresentValues,
             Positional positional => positional.Arguments,
             Keys keys => keys.Values,
+            LiteralSlice slice => slice.Source.Fields,
             _ => throw new InvalidOperationException("Unknown parameter source.")
         };
     }
@@ -712,13 +715,21 @@ internal static partial class WordExpansion
                             [ShellValue.FromInteger(length)], true, null, null);
                     }
 
-                    // Conditional branches inspect the array before choosing or expanding the word.
-                    // Operators that consume it after operand effects keep the command-owned source.
+                    // Operators that consume the array after expanding an operand keep the command-owned source.
                     var detachBorrowed = parsed.Kind is not (BracedParameterOperatorKind.None
                         or BracedParameterOperatorKind.UseDefault or BracedParameterOperatorKind.UseAlternate
                         or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset
-                        or BracedParameterOperatorKind.Transform);
+                        or BracedParameterOperatorKind.Transform or BracedParameterOperatorKind.Substring);
                     var (array, map) = variables.SelectExpansionArray(resolved, detachBorrowed);
+                    (long Offset, long? Length)? literalSliceBounds = null;
+                    if (parsed.Kind == BracedParameterOperatorKind.Substring && (array?.Count ?? map?.Count) is > 0)
+                    {
+                        // An empty slice source skips its bounds. A nonempty source can stay
+                        // borrowed when both reached bounds are already integer literals.
+                        literalSliceBounds = ReadLiteralSliceBounds(parsed.Word, scope.Effects.CancellationToken);
+                        if (literalSliceBounds == null)
+                            (array, map) = variables.SelectExpansionArray(resolved, detachBorrowed: true);
+                    }
                     var scalar = ShellValue.Empty;
                     var count = array?.Count ?? map?.Count ?? (variables.TryGetScalar(resolved, out scalar) ? 1 : 0);
 
@@ -726,6 +737,8 @@ internal static partial class WordExpansion
                     {
                         ParameterSource? source = array != null ? new ParameterSource.Indexed(array)
                             : map != null ? new ParameterSource.Associative(map) : null;
+                        if (source != null && literalSliceBounds is { } bounds)
+                            source = new ParameterSource.LiteralSlice(source, bounds.Offset, bounds.Length);
                         return new ParameterValue(reference.Kind, source == null && count != 0 ? [scalar] : [], count != 0, reference, null)
                             { RangeSource = source, InspectionBinding = inspection ? selected : null };
                     }
@@ -1093,6 +1106,18 @@ internal static partial class WordExpansion
                 ? value.Bytes[..start] : value.Bytes;
         }
 
+        static (long Offset, long? Length)? ReadLiteralSliceBounds(ShellSource expression, CancellationToken cancellationToken)
+        {
+            var separator = expression.AsSpan().IndexOf((byte)':');
+            var offset = separator < 0 ? expression : expression[..separator];
+            if (!ArithmeticEvaluation.TryParseIntegerLiteral(offset.TrimBlanks().AsSpan(), cancellationToken, out var first))
+                return null;
+            if (separator < 0)
+                return (first, null);
+            return ArithmeticEvaluation.TryParseIntegerLiteral(expression[(separator + 1)..].TrimBlanks().AsSpan(),
+                cancellationToken, out var length) ? (first, length) : null;
+        }
+
         static async Task ExpandSubstringAsync(
             ShellSource expression, ShellValue name, ParameterValue parameter, ScopedEvaluation scope,
             ExpandedWordBuilder output, bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext,
@@ -1104,28 +1129,41 @@ internal static partial class WordExpansion
                 return;
             }
 
-            var boundsScan = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
-            if (!TryFindSeparator(out var separator))
+            var source = parameter.RangeSource;
+            var separator = -1;
+            long start;
+            long? length = null;
+            if (source is ParameterSource.LiteralSlice bounds)
             {
-                if (boundsScan.HasCommandSubstitutionLookahead)
+                start = bounds.Offset;
+                length = bounds.Length;
+                source = bounds.Source;
+            }
+            else
+            {
+                var boundsScan = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
+                if (!TryFindSeparator(boundsScan, out separator))
                 {
-                    using var spelling = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-                    if (!FunctionDefinitionFormatter.TryAppendSourceWithCaptures(expression, boundsScan, spelling,
-                            scope.Effects.Memory.Budget, scope.Effects.CancellationToken))
-                        throw new ByteMemoryBuilder.LimitExceededException();
-                    await ReportUnclosedOffsetAsync(ShellValue.FromBytes(spelling.ToMemory())).ConfigureAwait(false);
+                    if (boundsScan.HasCommandSubstitutionLookahead)
+                    {
+                        using var spelling = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+                        if (!FunctionDefinitionFormatter.TryAppendSourceWithCaptures(expression, boundsScan, spelling,
+                                scope.Effects.Memory.Budget, scope.Effects.CancellationToken))
+                            throw new ByteMemoryBuilder.LimitExceededException();
+                        await ReportUnclosedOffsetAsync(ShellValue.FromBytes(spelling.ToMemory())).ConfigureAwait(false);
+                    }
+                    else
+                        await ReportUnclosedOffsetAsync(expression.ToValue()).ConfigureAwait(false);
+                    return;
                 }
-                else
-                    await ReportUnclosedOffsetAsync(expression.ToValue()).ConfigureAwait(false);
-                return;
+
+                var offset = await ExpandArithmeticOperandAsync(
+                    separator < 0 ? expression : expression[..separator], scope, arithmeticPurpose, name).ConfigureAwait(false);
+                if (offset is not { } selectedOffset)
+                    return;
+                start = selectedOffset;
             }
 
-            var offset = await ExpandArithmeticOperandAsync(
-                separator < 0 ? expression : expression[..separator], scope, arithmeticPurpose, name).ConfigureAwait(false);
-            if (offset is not { } start)
-                return;
-
-            var source = parameter.RangeSource;
             var value = source == null ? parameter.Value.Bytes : default;
             var scalarStart = 0;
             if (source == null)
@@ -1161,7 +1199,6 @@ internal static partial class WordExpansion
                 }
             }
 
-            long? length = null;
             if (separator >= 0)
             {
                 length = await ExpandArithmeticOperandAsync(expression[(separator + 1)..], scope, arithmeticPurpose, name)
@@ -1257,7 +1294,7 @@ internal static partial class WordExpansion
                 [ShellValue.FromText("bad substitution")], [ShellValue.FromText("no closing `)' in "), spelling],
                 scope, ExpansionFailureKind.WordSyntax);
 
-            bool TryFindSeparator(out int position)
+            bool TryFindSeparator(ShellScanContext boundsScan, out int position)
             {
                 position = -1;
                 var cursor = new ShellSourceCursor(expression, 0, boundsScan);

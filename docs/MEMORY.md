@@ -173,7 +173,8 @@ state. Element and array metadata reads use the visible slot directly. Reads
 return immutable bytes or metadata, and writes take independent mutable backing
 before publication. Aggregate values and keys can use the borrowed array when
 the expansion consumes it before running another operand. An operator that
-reads it after operand effects keeps the command-owned source. In-process
+reads it after operand effects keeps the command-owned source. Array slices
+with validated integer-literal bounds read from the borrowed source. In-process
 installation admits the saved caller set before publishing any prefix. It
 moves original slots to the saved store and consumes the prepared prefix slots.
 Retained outputs admit independent copies before staging, reusing

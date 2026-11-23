@@ -155,7 +155,19 @@ public sealed class PrefixScopeOwnershipTests
     [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]
-    public async Task AggregateAlternateUsesBorrowedArrayBeforeExpandingItsWord(ArrayKind kind)
+    public Task AggregateAlternateUsesBorrowedArrayBeforeExpandingItsWord(ArrayKind kind) =>
+        AssertBorrowedAggregateExpansionAsync(kind, "${array[@]:+chosen}", ShellValue.FromText("chosen"));
+
+    [Theory]
+    [InlineData(ArrayKind.Indexed, " -1:1")]
+    [InlineData(ArrayKind.Associative, " -1:1")]
+    [InlineData(ArrayKind.Indexed, "0x0:2#1")]
+    [InlineData(ArrayKind.Associative, "0x0:0")]
+    public Task LiteralArraySliceUsesBorrowedBacking(ArrayKind kind, string bounds) =>
+        AssertBorrowedAggregateExpansionAsync(kind, "${array[@]:" + bounds + "}",
+            ShellValue.FromBytes(new byte[] { 0xff }));
+
+    private static async Task AssertBorrowedAggregateExpansionAsync(ArrayKind kind, string expression, ShellValue expected)
     {
         const int Count = 1024;
         var caller = Variables.CreateEmpty();
@@ -171,11 +183,11 @@ public sealed class PrefixScopeOwnershipTests
         {
             var variables = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);
             var scope = new ScopedEvaluation(evaluation, variables, default);
-            var word = new Word([WordPart.FromText(WordPartKind.DoubleQuoted, "${array[@]:+chosen}")]);
+            var word = new Word([WordPart.FromText(WordPartKind.DoubleQuoted, expression)]);
 
             var fields = await WordExpansion.ExpandToWordsAsync(word, scope);
 
-            Assert.Equal(ShellValue.FromText("chosen"), Assert.Single(fields).ToValue(evaluation.Memory));
+            Assert.Equal(expected, Assert.Single(fields).ToValue(evaluation.Memory));
             Assert.Equal(Count, caller.GetArrayMetadata("array")?.Count);
         }
         finally { evaluation.Memory.Finish(retainVariables: false); }
