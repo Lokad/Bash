@@ -168,6 +168,26 @@ public sealed class ShellVariableValueTests
         }
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(8)]
+    public void SingleEntryAssociativeRangeSeeksWhenEnumerated(int count)
+    {
+        var array = new AssociativeArray(isInitialized: false);
+        foreach (var text in new[] { "c", "a", "d", "b" })
+        {
+            var value = ShellValue.FromText(text);
+            Assert.True(AssociativeArrayKey.TryCreate(value, out var key));
+            array.Set(key, value);
+        }
+        var range = array.ValuesFrom(2, count);
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("a"), out var removed));
+        array.Remove(removed);
+
+        Assert.Equal(ShellValue.FromText("d"), Assert.Single(range));
+        Assert.Empty(array.ValuesFrom(3, count));
+    }
+
     [Fact]
     public void AssociativeRefusedInsertionAndReplacementKeepExistingEntries()
     {

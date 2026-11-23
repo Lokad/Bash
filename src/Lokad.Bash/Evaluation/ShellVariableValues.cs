@@ -519,23 +519,34 @@ internal sealed class AssociativeArray
         if (_root is not { } root || count <= 0 || first >= root.Count)
             yield break;
 
-        var pending = new Stack<Entry>(root.Height);
-        for (Entry? entry = root; entry != null;)
+        first = Math.Max(0, first);
+        var pending = Math.Min(count, root.Count - first) == 1 ? null : new Stack<Entry>(root.Height);
+        Entry? selected = root;
+        while (selected != null)
         {
-            var leftCount = entry.Left?.Count ?? 0;
+            var leftCount = selected.Left?.Count ?? 0;
+            if (first == leftCount)
+                break;
             if (first > leftCount)
             {
                 first -= leftCount + 1;
-                entry = entry.Right;
+                selected = selected.Right;
             }
             else
             {
-                pending.Push(entry);
-                if (first == leftCount)
-                    break;
-                entry = entry.Left;
+                pending?.Push(selected);
+                selected = selected.Left;
             }
         }
+
+        if (pending == null)
+        {
+            if (selected != null)
+                yield return selected;
+            yield break;
+        }
+        if (selected != null)
+            pending.Push(selected);
 
         while (pending.TryPop(out var next))
         {
