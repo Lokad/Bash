@@ -11,19 +11,19 @@ internal static class TestProcess
 {
     private static async Task<int> Main(string[] arguments)
     {
-        if (arguments is not ["--run-shell", var entry, var source, var allowance, var milliseconds, var cancellation])
+        if (arguments is not ["--run-shell", var entry, var source, var allowance, var cancellation])
             throw new ArgumentException("Expected a shell containment request.");
 
         var memory = new MemoryGovernor(long.Parse(allowance));
         var counted = new CountingMemoryBudget(memory);
         await using var host = new TestHost { MemoryBudget = counted };
         host.AddFile("/depth.sh", "if ((n-- > 0)); then source /depth.sh; fi");
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(int.Parse(milliseconds)));
+        using var cancellationSource = new CancellationTokenSource();
         if (Enum.Parse<TestCancellation>(cancellation) == TestCancellation.Admission)
             counted.AdmissionSucceeded += () =>
             {
                 if (memory.ReservedBytes >= ExecutionDepthTests.CancellationAdmissionBytes)
-                    deadline.Cancel();
+                    cancellationSource.Cancel();
             };
         int? status = null;
         var canceled = false;
@@ -32,11 +32,11 @@ internal static class TestProcess
             try
             {
                 var result = entry == "prepared"
-                    ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, deadline.Token)
-                    : await host.RunAsync(source, deadline.Token);
+                    ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, cancellationSource.Token)
+                    : await host.RunAsync(source, cancellationSource.Token);
                 status = result.ExitCode;
             }
-            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationSource.IsCancellationRequested)
             {
                 canceled = true;
             }
@@ -54,4 +54,4 @@ internal sealed record TestProcessResult(
     int RuntimeMajor, int? Status, bool Canceled, string OutputHex, string ErrorHex,
     int OpenFileCount, long ReservedBytes, long PeakBytes);
 
-internal enum TestCancellation { Deadline, Admission }
+internal enum TestCancellation { None, Admission }

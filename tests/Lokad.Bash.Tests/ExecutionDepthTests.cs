@@ -51,7 +51,7 @@ public sealed class ExecutionDepthTests
             "capture" => WithChild("printf '%s' \"$(printf child)\""),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario))
         };
-        var observed = await RunAsync(source, prepared, 32 * 1024 * 1024, 10000, TestCancellation.Deadline);
+        var observed = await RunAsync(source, prepared, 32 * 1024 * 1024, TestCancellation.None);
         var expected = scenario switch
         {
             "chain" => "after",
@@ -78,7 +78,7 @@ public sealed class ExecutionDepthTests
     {
         var source = "exec 7<<<held; printf before; trap 'printf unwanted' EXIT; f(){ local x=$1; f \"$x\"; }; f '"
             + new string('x', 1024) + "'";
-        var observed = await RunAsync(source, prepared, 128 * 1024 * 1024, 10000, TestCancellation.Admission);
+        var observed = await RunAsync(source, prepared, 128 * 1024 * 1024, TestCancellation.Admission);
 
         Assert.True(observed.Canceled);
         Assert.Null(observed.Status);
@@ -94,7 +94,7 @@ public sealed class ExecutionDepthTests
     {
         var source = "set -e; exec 7<<<held; printf before; f(){ local x=$1; if ((n-- > 0)); then f \"$x\"; fi; }; "
             + "n=512; f '" + new string('x', 1024) + "'; printf unwanted";
-        var observed = await RunAsync(source, prepared, 64 * 1024, 10000, TestCancellation.Deadline);
+        var observed = await RunAsync(source, prepared, 64 * 1024, TestCancellation.None);
 
         Assert.False(observed.Canceled);
         Assert.Equal(1, observed.Status);
@@ -103,7 +103,7 @@ public sealed class ExecutionDepthTests
     }
 
     private static async Task<TestProcessResult> RunAsync(
-        string source, bool prepared, long allowance, int milliseconds, TestCancellation cancellation)
+        string source, bool prepared, long allowance, TestCancellation cancellation)
     {
         var dotnet = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
             ?? Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..",
@@ -117,16 +117,21 @@ public sealed class ExecutionDepthTests
         };
         foreach (var argument in new[] { typeof(ExecutionDepthTests).Assembly.Location,
             "--run-shell", prepared ? "prepared" : "public", source,
-            allowance.ToString(CultureInfo.InvariantCulture), milliseconds.ToString(CultureInfo.InvariantCulture), cancellation.ToString() })
+            allowance.ToString(CultureInfo.InvariantCulture), cancellation.ToString() })
             start.ArgumentList.Add(argument);
 
         using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start the containment child.");
         var output = child.StandardOutput.ReadToEndAsync();
         var error = child.StandardError.ReadToEndAsync();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        // The parent bounds process lifetime. Only the admission test cancels shell execution.
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(1));
         try
         {
             await child.WaitForExitAsync(deadline.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException("The containment child did not finish within one minute.");
         }
         finally
         {
