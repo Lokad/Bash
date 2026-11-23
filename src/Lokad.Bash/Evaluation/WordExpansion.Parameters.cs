@@ -722,6 +722,15 @@ internal static partial class WordExpansion
                         or BracedParameterOperatorKind.UseDefault or BracedParameterOperatorKind.UseAlternate
                         or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset
                         or BracedParameterOperatorKind.Transform or BracedParameterOperatorKind.Substring);
+                    if (detachBorrowed && parsed.Modifier == ParameterModifier.None
+                        && (removesPattern || parsed.Kind is BracedParameterOperatorKind.Replace
+                            or BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll
+                            or BracedParameterOperatorKind.LowerFirst or BracedParameterOperatorKind.LowerAll)
+                        && variables.IsBorrowedBinding(resolved))
+                    {
+                        // Literal patterns and replacements cannot change the selected array before projection.
+                        detachBorrowed = parsed.Word.AsSpan().IndexOfAny("$`~"u8) >= 0;
+                    }
                     var (array, map) = variables.SelectExpansionArray(resolved, detachBorrowed);
                     ParameterSource.DeferredSlice? deferredSlice = null;
                     (long Offset, long? Length)? literalSliceBounds = null;

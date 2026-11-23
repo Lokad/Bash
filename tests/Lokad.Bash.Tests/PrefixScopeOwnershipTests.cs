@@ -181,9 +181,31 @@ public sealed class PrefixScopeOwnershipTests
         AssertBorrowedAggregateExpansionAsync(kind, "${array[@]:2048+1:$((side=1))}", expected: null);
 
     [Theory]
+    [InlineData(ArrayKind.Indexed, "^^")]
+    [InlineData(ArrayKind.Associative, ",,[xX]")]
+    [InlineData(ArrayKind.Indexed, "##x")]
+    [InlineData(ArrayKind.Associative, "%x")]
+    [InlineData(ArrayKind.Indexed, "//x/y")]
+    [InlineData(ArrayKind.Associative, "/%x/y")]
+    public Task LiteralArrayPatternsUseBorrowedBacking(ArrayKind kind, string operation) =>
+        AssertBorrowedAggregateExpansionAsync(kind, "${array[*]" + operation + "}",
+            ShellValue.FromBytes(Enumerable.Repeat((byte)0xff, 1024).ToArray()));
+
+    [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]
-    public async Task ComputedSliceLengthWritesToItsSelectedCommandArray(ArrayKind kind)
+    public Task ComputedSliceLengthWritesToItsSelectedCommandArray(ArrayKind kind) =>
+        AssertSelectedCommandArrayWriteAsync(kind, "${array[@]:0+0:$((array[0]=23,1))}", "23");
+
+    [Theory]
+    [InlineData(ArrayKind.Indexed, "#$((array[0]=72,7))", "2")]
+    [InlineData(ArrayKind.Associative, "^^$((array[0]=72,7))", "72")]
+    [InlineData(ArrayKind.Indexed, "/7/$((array[0]=72,3))", "32")]
+    [InlineData(ArrayKind.Associative, "/7/$((array[0]=72,3))", "32")]
+    public Task DynamicArrayOperandsWriteToTheirSelectedCommandArray(ArrayKind kind, string operation, string expected) =>
+        AssertSelectedCommandArrayWriteAsync(kind, "${array[@]" + operation + "}", expected);
+
+    private static async Task AssertSelectedCommandArrayWriteAsync(ArrayKind kind, string expression, string expected)
     {
         var caller = Variables.CreateEmpty();
         var initial = ShellValue.FromText("1");
@@ -196,11 +218,11 @@ public sealed class PrefixScopeOwnershipTests
         {
             var command = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);
             var scope = new ScopedEvaluation(evaluation, command, default);
-            var word = new Word([WordPart.FromText(WordPartKind.DoubleQuoted, "${array[@]:0+0:$((array[0]=23,1))}")]);
+            var word = new Word([WordPart.FromText(WordPartKind.DoubleQuoted, expression)]);
 
             var fields = await WordExpansion.ExpandToWordsAsync(word, scope);
 
-            Assert.Equal(ShellValue.FromText("23"), Assert.Single(fields).ToValue(evaluation.Memory));
+            Assert.Equal(ShellValue.FromText(expected), Assert.Single(fields).ToValue(evaluation.Memory));
             Assert.True(caller.TryGetExpansionValue("array", out var retained));
             Assert.Equal(initial, retained);
         }
@@ -216,6 +238,7 @@ public sealed class PrefixScopeOwnershipTests
         var entries = kind == ArrayKind.Indexed ? Enumerable.Repeat(value, Count).ToArray()
             : Enumerable.Range(0, Count).SelectMany(index => new[] { ShellValue.FromInteger(index), value }).ToArray();
         Assert.True(caller.TryAssignArray("array", entries, kind));
+        Assert.True(caller.TrySetScalar("IFS", ShellValue.Empty));
 
         var governor = new MemoryGovernor(64 * 1024);
         var evaluation = new Eval(Parser.Parse(""), EvaluationDescriptorSetup.Standard,

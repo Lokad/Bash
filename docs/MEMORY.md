@@ -172,8 +172,10 @@ workspace. Missing command bindings hide caller names without deleting caller
 state. Element and array metadata reads use the visible slot directly. Reads
 return immutable bytes or metadata, and writes take independent mutable backing
 before publication. Aggregate values and keys can use the borrowed array when
-the expansion consumes it before running another operand. An operator that
-reads it after operand effects keeps the command-owned source. Array slices
+the expansion consumes it before running another operand. Direct pattern
+removal, replacement and case conversion also borrow when their operands have
+no expansion markers. An operator that reads after operand effects keeps the
+command-owned source. Array slices
 with validated integer-literal bounds read from the borrowed source. A direct
 computed slice borrows through numeric expressions that need no expansion or
 binding. It detaches before the first reached bound that may consult bindings or
