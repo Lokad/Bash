@@ -304,6 +304,64 @@ public sealed class QueryWriteFailureTests
     }
 
     [Fact]
+    public async Task QueryRunAdmissionFollowsChannelChangesAtEqualOperandWidth()
+    {
+        const int RowsPerChannel = 512;
+        const string OutputRow = "echo is a shell builtin\n";
+        const string ErrorRow = "type: missing: not found\n";
+        var grouped = await MeasureAsync(alternating: false);
+        var alternating = await MeasureAsync(alternating: true);
+        Assert.Equal(grouped.Lookup, alternating.Lookup);
+        Assert.InRange(alternating.PendingWrite - grouped.PendingWrite, 2 * 1024, 6 * 1024);
+
+        static async Task<(long Lookup, long PendingWrite)> MeasureAsync(bool alternating)
+        {
+            string[] pair = ["echo", "missing"];
+            var names = alternating ? Enumerable.Repeat(pair, RowsPerChannel).SelectMany(values => values)
+                : Enumerable.Repeat(pair[0], RowsPerChannel).Concat(Enumerable.Repeat(pair[1], RowsPerChannel));
+            var state = new Eval(Parser.Parse("type " + string.Join(' ', names)));
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            state.Memory.Budget = owner;
+            var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep(deadline.Token));
+            Assert.Equal(RowsPerChannel, lookup.CommandNames.Count);
+            Assert.All(lookup.CommandNames, name => Assert.Equal("missing", name));
+            var lookupBytes = governor.ReservedBytes;
+            lookup.SetResult(Enumerable.Repeat<CommandLookupResult>(new CommandLookupResult.Missing(), RowsPerChannel).ToArray());
+
+            var output = alternating ? OutputRow : string.Concat(Enumerable.Repeat(OutputRow, RowsPerChannel));
+            var error = alternating ? ErrorRow : string.Concat(Enumerable.Repeat(ErrorRow, RowsPerChannel));
+            var pendingBytes = 0L;
+            var runPairs = alternating ? RowsPerChannel : 1;
+            for (var pairIndex = 0; pairIndex < runPairs; pairIndex++)
+            {
+                await CheckWriteAsync(FileDescriptor.StdOut, output);
+                await CheckWriteAsync(FileDescriptor.StdErr, error);
+            }
+            Assert.Null(await state.GetNextStep(deadline.Token));
+            Assert.Equal(1, state.LastExitCode);
+            Assert.Empty(state.GetDescriptorsForCleanup());
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return (lookupBytes, pendingBytes);
+
+            async Task CheckWriteAsync(FileDescriptor descriptor, string content)
+            {
+                var write = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+                try
+                {
+                    if (pendingBytes == 0)
+                        pendingBytes = governor.ReservedBytes;
+                    Assert.Equal(descriptor, write.FileDescriptor);
+                    Assert.Equal(content, Encoding.UTF8.GetString(write.Content.Span));
+                }
+                finally { write.SetResult(DescriptorWriteResult.Open); }
+            }
+        }
+    }
+
+    [Fact]
     public async Task QueryKeepsUtf8OutputAdmittedThroughTheWrite()
     {
         var state = new Eval(Parser.Parse("type -p demo"));

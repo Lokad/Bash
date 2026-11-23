@@ -170,8 +170,9 @@ public sealed class HostedFunctionExportTests
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var first = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
         var cached = Assert.Single(first.Command.Functions).Source;
-        // A one-name query reserves its resolution record before host lookup.
-        budget.RefuseNext = copiedScript ? (child, bytes) => child && bytes > 0 : (child, bytes) => !child && bytes == 200;
+        var queryAdmission = Eval.EstimateCommandQueryResolutionBytes(nameCount: 1);
+        budget.RefuseNext = copiedScript ? (child, bytes) => child && bytes > 0
+            : (child, bytes) => !child && bytes == queryAdmission;
         first.SetResult(new CommandExecutionResult.Completed(0));
 
         var error = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));

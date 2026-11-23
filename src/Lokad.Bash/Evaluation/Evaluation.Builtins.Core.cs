@@ -228,18 +228,15 @@ public sealed partial class Evaluation
         if (nameCount == 0)
             return 0;
 
-        // Cover the resolution reference and record, output run, and function-owner
-        // list capacity including growth. Definitions and host result text stay borrowed.
-        const long ResolutionBytesPerName = 72;
-        // An all-matches operand can also hold a local definition record and a second output run.
-        const long ExtraResolutionBytesPerName = 40;
+        // An all-matches operand can also hold a local definition record.
+        const long ExtraResolutionBytesPerName = 32;
         var collectLocalMatches = listAll && lookupMode != CommandLookupMode.HostOnly;
         var extraBytes = collectLocalMatches
             ? checked(ExtraResolutionBytesPerName * nameCount + MemoryCapacity.ArrayBackingBytes<
                 (bool, CommandQueryResolution.Function?, bool)>(nameCount))
             : 0;
         CheckCancellation();
-        using var resolutionMemory = new MemoryCapacity(Memory.Budget, 128 + ResolutionBytesPerName * nameCount + extraBytes);
+        using var resolutionMemory = new MemoryCapacity(Memory.Budget, EstimateCommandQueryResolutionBytes(nameCount) + extraBytes);
         var localMatches = collectLocalMatches
             ? new (bool Keyword, CommandQueryResolution.Function? Function, bool Builtin)[nameCount]
             : null;
@@ -249,11 +246,13 @@ public sealed partial class Evaluation
             var resolutions = new CommandQueryResolution[nameCount];
             var hostResults = await ResolveCommandQueriesAsync(resolutions).ConfigureAwait(false);
             using var output = new ByteMemoryBuilder(0, Memory.Budget);
+            MemoryCapacity? runMemory = null;
             try
             {
                 // Build the whole display payload before emitting any channel; endpoints retain operand order.
-                var runs = new (int End, bool Diagnostic)[localMatches == null ? nameCount : checked(2 * nameCount)];
-                var runCount = 0;
+                // Positive end offsets select stdout, and negative offsets select stderr.
+                List<int>? earlierRunEnds = null;
+                var lastRunEnd = 0;
                 var foundCount = 0;
                 var unresolvedCount = 0;
                 var lookupFailed = false;
@@ -360,12 +359,15 @@ public sealed partial class Evaluation
 
                 void FinishRun(bool diagnostic)
                 {
-                    if (runCount == 0 ? output.Length == 0 : runs[runCount - 1].End == output.Length)
+                    if (Math.Abs(lastRunEnd) == output.Length)
                         return;
-                    if (runCount > 0 && runs[runCount - 1].Diagnostic == diagnostic)
-                        runs[runCount - 1] = (output.Length, diagnostic);
-                    else
-                        runs[runCount++] = (output.Length, diagnostic);
+                    if (lastRunEnd != 0 && (lastRunEnd < 0) != diagnostic)
+                    {
+                        var ends = earlierRunEnds ??= [];
+                        (runMemory ??= new MemoryCapacity(Memory.Budget, 0)).PrepareListCapacity(ends, 1);
+                        ends.Add(lastRunEnd);
+                    }
+                    lastRunEnd = diagnostic ? -output.Length : output.Length;
                 }
 
                 var queryExitCode = lookupFailed ? 1 : builtin == BuiltinKind.Command
@@ -374,6 +376,7 @@ public sealed partial class Evaluation
                 if (output.Length == 0)
                     return queryExitCode;
 
+                runMemory?.ReleaseUnusedCapacity();
                 var content = output.ToMemory();
                 var startOffset = 0;
                 var appendResult = DescriptorWriteResult.Open;
@@ -381,9 +384,12 @@ public sealed partial class Evaluation
                 var stderr = GetStdErrDescriptor();
                 var outputClosed = false;
                 var errorClosed = false;
-                for (var index = 0; index < runCount; index++)
+                var lastRunIndex = earlierRunEnds?.Count ?? 0;
+                for (var index = 0; index <= lastRunIndex; index++)
                 {
-                    var (endOffset, diagnostic) = runs[index];
+                    var runEnd = earlierRunEnds == null || index == lastRunIndex ? lastRunEnd : earlierRunEnds[index];
+                    var diagnostic = runEnd < 0;
+                    var endOffset = Math.Abs(runEnd);
                     if (!(diagnostic ? errorClosed : outputClosed))
                     {
                         var descriptor = diagnostic ? stderr : stdout;
@@ -411,10 +417,12 @@ public sealed partial class Evaluation
             catch (MemoryBudgetExceededException)
             {
                 output.Dispose();
+                runMemory?.Dispose();
                 await ReportExpansionDiagnosticAsync(builtinName, ShellValue.FromText("shared memory budget exhausted"))
                     .ConfigureAwait(false);
                 return 1;
             }
+            finally { runMemory?.Dispose(); }
 
             bool AppendText(string text)
             {
@@ -522,6 +530,10 @@ public sealed partial class Evaluation
                     owner.Release();
         }
     }
+
+    // Covers resolution references, records and function-owner list growth.
+    // Definitions and host result text stay borrowed.
+    internal static long EstimateCommandQueryResolutionBytes(int nameCount) => 128 + 64L * nameCount;
 
     private static long PreparedQueryDecodeBytes(ShellValue value) => 4L * ((long)value.Bytes.Length + 1);
 }

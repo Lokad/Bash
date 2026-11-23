@@ -120,6 +120,9 @@ Command-name and command-control preparation admit captured fields and
 borrow the unexpanded operand tail from its existing source owner.
 The builtin wrapper checks the target in the byte registry and decodes names
 only after the registry accepts them.
+Command queries build their output before writing. Output on one channel
+keeps its end offset inline. Channel changes admit an ordered list of the
+earlier offsets through the last write.
 If the host error output cannot be admitted, the evaluator reports a
 short memory refusal through the reached stderr and continues the original
 failure's status and cleanup path. A refusal uses the name `shell` when the
