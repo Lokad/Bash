@@ -111,7 +111,7 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
 
     [Theory]
     [InlineData("r=target", 1, "line 1: q: readonly variable\n")]
-    [InlineData(": ${r:=target}", 2, "q: readonly variable\n")]
+    [InlineData(": ${r:=target}", 2, "line 1: q: readonly variable\n")]
     public async Task CircularRetriesRespectReadonlyLocalReferents(string assignment, int exitCode, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(
@@ -151,7 +151,7 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
             + "; printf unreachable; }; f; printf unreachable");
 
         Assert.Empty(result.StdOut);
-        Assert.Equal(CircularFallbackWarnings + "`" + value + "': not a valid identifier\n", result.StdErr);
+        Assert.Equal(CircularFallbackWarnings + "line 1: `" + value + "': not a valid identifier\n", result.StdErr);
         Assert.Equal(exitCode, result.ExitCode);
     }
 
@@ -336,7 +336,7 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
 
     [Theory]
     [InlineData("r=target", 1, "line 1: s: readonly variable\n")]
-    [InlineData(": ${r:=target}", 2, "s: readonly variable\n")]
+    [InlineData(": ${r:=target}", 2, "line 1: s: readonly variable\n")]
     public async Task LocalNamerefFallbackWritesEnforceHiddenReadonlyAttributes(
         string assignment, int exitCode, string diagnostic)
     {
@@ -349,8 +349,8 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("eval", "declare -n r", "`bad name': not a valid identifier\n")]
-    [InlineData("source", "declare -n r", "`bad name': not a valid identifier\n")]
+    [InlineData("eval", "declare -n r", "line 1: `bad name': not a valid identifier\n")]
+    [InlineData("source", "declare -n r", "/script: line 1: `bad name': not a valid identifier\n")]
     [InlineData("eval", "declare -n r=s s", "")]
     [InlineData("source", "declare -n r=s s", "")]
     public async Task ScriptBoundariesRecoverNamerefDefaultFailures(
@@ -385,8 +385,8 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
 
     // Bash 5.2.21 (Linux) and 5.2.37 (Git Bash); failure handling depends on the assignment context.
     [Theory]
-    [InlineData("declare -n ref; ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "", "`bad name': not a valid identifier\n", 1)]
-    [InlineData("declare -n ref; ref=''; printf 'after=<%s>\\n' \"$?\"", "", "`': not a valid identifier\n", 1)]
+    [InlineData("declare -n ref; ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "", "line 1: `bad name': not a valid identifier\n", 1)]
+    [InlineData("declare -n ref; ref=''; printf 'after=<%s>\\n' \"$?\"", "", "line 1: `': not a valid identifier\n", 1)]
     [InlineData("target=value; declare -n ref; ref+=target; printf '<%s>\\n' \"$ref\"", "<value>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; first=target; printf 'after=<%s>\\n' \"$?\"", "", "", 1)]
     [InlineData("target=value; declare -n first=second second; first+=target; printf 'after=<%s>\\n' \"$?\"", "", "", 1)]
@@ -396,20 +396,20 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     [InlineData("target=value; declare -n first=second second; declare first=target; printf 'after=<%s>\\n' \"$?\"", "after=<0>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; export first=target; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "export: `': not a valid identifier\n", 0)]
     [InlineData("target=value; declare -n first=second second; first=target true; printf 'after=<%s>\\n' \"$?\"", "after=<0>\n", "", 0)]
-    [InlineData("declare -n ref; printf '<%s>\\n' \"${ref:=bad name}\"; printf 'after=<%s>\\n' \"$?\"", "", "`bad name': not a valid identifier\n", 2)]
+    [InlineData("declare -n ref; printf '<%s>\\n' \"${ref:=bad name}\"; printf 'after=<%s>\\n' \"$?\"", "", "line 1: `bad name': not a valid identifier\n", 2)]
     [InlineData("target=value; declare -n first=second second; printf '<%s>\\n' \"${first:=target}\"; printf 'after=<%s>\\n' \"$?\"", "", "", 2)]
-    [InlineData("declare -n ref; ref='bad name' || printf recovered; printf after", "", "`bad name': not a valid identifier\n", 1)]
+    [InlineData("declare -n ref; ref='bad name' || printf recovered; printf after", "", "line 1: `bad name': not a valid identifier\n", 1)]
     [InlineData("target=value; declare -n first=second second; (first=target; printf child); printf 'parent=<%s>\\n' \"$?\"", "parent=<1>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; out=$(first=target; printf child); printf 'status=<%s>:<%s>\\n' \"$?\" \"$out\"", "status=<1>:<>\n", "", 0)]
-    [InlineData("declare -nr ref; ref='bad name'; printf after", "", "`bad name': not a valid identifier\n", 1)]
+    [InlineData("declare -nr ref; ref='bad name'; printf after", "", "line 1: `bad name': not a valid identifier\n", 1)]
     [InlineData("target=value; declare -n first=second; first=target; printf '<%s>:<%s>\\n' \"$first\" \"$second\"", "<target>:<target>\n", "", 0)]
     [InlineData("declare -n first=second second; i=0; first=$((i++)); printf 'after=<%s>\\n' \"$i\"", "", "", 1)]
     [InlineData("target=value; declare -n ref; printf '<%s>\\n' \"${ref:=target}\"; printf '<%s>\\n' \"$ref\"", "<target>\n<value>\n", "", 0)]
     [InlineData("target=value; declare -nr ref; ref=target; printf after", "", "line 1: ref: readonly variable\n", 1)]
     [InlineData("declare -nr ref; declare ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "line 1: declare: ref: readonly variable\n", 0)]
-    [InlineData("declare -nr ref; printf '<%s>\\n' \"${ref:=bad name}\"; printf after", "", "`bad name': not a valid identifier\n", 2)]
+    [InlineData("declare -nr ref; printf '<%s>\\n' \"${ref:=bad name}\"; printf after", "", "line 1: `bad name': not a valid identifier\n", 2)]
     [InlineData("declare -nr first=second; declare -n second; first=target; printf after", "", "", 1)]
-    [InlineData("declare -n ref; (printf '<%s>\\n' \"${ref:=bad name}\"; printf child); printf 'parent=<%s>\\n' \"$?\"", "parent=<2>\n", "`bad name': not a valid identifier\n", 0)]
+    [InlineData("declare -n ref; (printf '<%s>\\n' \"${ref:=bad name}\"; printf child); printf 'parent=<%s>\\n' \"$?\"", "parent=<2>\n", "line 1: `bad name': not a valid identifier\n", 0)]
     [InlineData("declare -n ref; declare ref='bad name' after=kept; printf '<%s>:<%s>\\n' \"$?\" \"$after\"", "<1>:<kept>\n", "declare: `bad name': not a valid identifier\n", 0)]
     [InlineData("declare -n ref; export -n ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "export: `bad name': not a valid identifier\n", 0)]
     [InlineData("target=value; declare -n first=second second; export -n first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<1>:<>:<>\n", "", 0)]

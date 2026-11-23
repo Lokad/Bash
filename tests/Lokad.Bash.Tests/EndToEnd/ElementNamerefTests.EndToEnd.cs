@@ -107,6 +107,6 @@ public sealed class ElementNamerefTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expectedOutput, result.StdOut);
-        Assert.Equal("unset: a: cannot unset: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: unset: a: cannot unset: readonly variable\n", result.StdErr);
     }
 }

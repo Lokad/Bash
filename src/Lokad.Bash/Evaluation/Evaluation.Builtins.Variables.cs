@@ -117,8 +117,7 @@ public sealed partial class Evaluation
             {
                 exitCode = 1;
                 if (!target.ReadonlyName.IsEmpty)
-                    await ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
-                        [target.ReadonlyName.ToValue(), ShellValue.FromText(": cannot unset: readonly variable")]).ConfigureAwait(false);
+                    await ReportReadonlyUnsetAsync(target.ReadonlyName.ToValue(), function: false, context).ConfigureAwait(false);
                 continue;
             }
 
@@ -142,8 +141,7 @@ public sealed partial class Evaluation
             if (_state.TryUnsetFunction(name))
                 return Task.CompletedTask;
             exitCode = 1;
-            return ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")],
-                [name, ShellValue.FromText(": cannot unset: readonly function")]);
+            return ReportReadonlyUnsetAsync(name, function: true, context);
         }
 
         Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message, int status) =>

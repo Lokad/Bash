@@ -4209,7 +4209,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("unset: foo: cannot unset: readonly variable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: unset: foo: cannot unset: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

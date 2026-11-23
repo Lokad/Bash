@@ -3539,6 +3539,10 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope) => ReportFatalExpansionAsync(name, message, ExpansionFailureKind.IntegerAssignment,
             GetBuiltinDiagnosticPrefix(scope.Context));
 
+    internal Task ReportNamerefAssignmentFailureAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        ExpansionFailureKind kind, ScopedEvaluation scope) => ReportFatalExpansionAsync(name, message, kind,
+            kind == ExpansionFailureKind.AssignmentTarget ? GetCommandDiagnosticPrefix(scope) : GetBuiltinDiagnosticPrefix(scope.Context));
+
     private Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)
     {
@@ -3632,7 +3636,7 @@ public sealed partial class Evaluation : IFileTester
                 ? scope with { Variables = _vars } : scope;
             PublishExpansionPipelineStatus(exitCode, statusScope);
         }
-        return ReportExpansionDiagnosticAsync(subject, message);
+        return ReportBuiltinDiagnosticAsync(subject, message, scope.Context);
     }
 
     private void PublishExpansionPipelineStatus(int exitCode, ScopedEvaluation scope)

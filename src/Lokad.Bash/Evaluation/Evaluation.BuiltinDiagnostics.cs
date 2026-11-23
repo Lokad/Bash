@@ -26,6 +26,10 @@ public sealed partial class Evaluation
         EvaluationContext context) => WriteDiagnosticAsync(name, message, _builtinDiagnostics,
             ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(context));
 
+    internal Task ReportReadonlyUnsetAsync(ShellValue name, bool function, EvaluationContext context) =>
+        ReportBuiltinDiagnosticAsync([ShellValue.FromText("unset")],
+            [name, ShellValue.FromText(function ? ": cannot unset: readonly function" : ": cannot unset: readonly variable")], context);
+
     private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
         ShellValue command, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
         WriteInvalidShortOptionUnlessStderrClosedAsync(command, ShellValue.FromText("-"), flag, kind, name);

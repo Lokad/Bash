@@ -719,6 +719,7 @@ public static class Parser
             if (token.Kind is TokenKind.EndOfInput or TokenKind.CloseParen or TokenKind.CloseBrace)
                 return null;
             var startLine = tokenizer.GetLine(token.Source.Start.Value);
+            var firstElementEndLine = startLine;
             ICommand? command;
             switch (token.Kind)
             {
@@ -772,7 +773,9 @@ public static class Parser
 
                     if (IsKeyword(token, KeywordFor))
                     {
-                        command = ParseFor(tokenizer);
+                        command = ParseFor(tokenizer, out var bindingLine);
+                        if (bindingLine != 0)
+                            firstElementEndLine = bindingLine;
                         break;
                     }
 
@@ -799,7 +802,7 @@ public static class Parser
                 return null;
             }
 
-            tokenizer.RecordLocation(command, startLine, startLine);
+            tokenizer.RecordLocation(command, startLine, firstElementEndLine);
 
             var redirections = ReadTrailingRedirections(tokenizer);
             if (tokenizer.Error != null)
@@ -983,8 +986,9 @@ public static class Parser
     /// <summary>
     /// Parses a for-in or arithmetic for loop command.
     /// </summary>
-    private static ICommand? ParseFor(Tokenizer tokenizer)
+    private static ICommand? ParseFor(Tokenizer tokenizer, out int bindingLine)
     {
+        bindingLine = 0;
         if (!TryConsumeKeyword(tokenizer, KeywordFor, "for"))
             return null;
 
@@ -1012,6 +1016,7 @@ public static class Parser
             return null;
         }
 
+        bindingLine = tokenizer.GetLine(nameToken.Source.End.Value);
         var validName = TryGetPlainUnquotedSource(nameTokenWord.Word, out var nameSource)
             && VariableNames.IsValidVariableName(nameSource.AsSpan());
         var nameValue = validName ? nameSource.ToValue() : tokenizer.ReadForNameSpelling(nameTokenWord);

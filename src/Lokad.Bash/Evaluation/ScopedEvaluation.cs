@@ -13,7 +13,7 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
     {
         Line = Offset + (command switch
         {
-            SimpleCommand => location.FirstElementEndLine,
+            SimpleCommand or ForCommand => location.FirstElementEndLine,
             ArithmeticCommand or ConditionalCommand => location.EndLine,
             _ => location.StartLine
         }),

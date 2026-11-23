@@ -241,7 +241,7 @@ public sealed class EvaluationParameterOperatorTestsEndToEnd
     [InlineData("count=0; unset value; printf '<%s>:<%s>:<%s>\\n' \"${value:=$((count+=1))}\" \"$value\" \"$count\"", "<1>:<1>:<1>\n", "", 0)]
     [InlineData("unset value; printf '<%s>\\n' \"${value:-$(printf once >&2; printf 'two words')}\"", "<two words>\n", "once", 0)]
     [InlineData("value=set; printf '<%s>\\n' \"${value:-$(printf unused >&2; printf 'two words')}\"", "<set>\n", "", 0)]
-    [InlineData("readonly value=; printf '<%s>\\n' \"${value:=assigned}\"; printf continued", "", "value: readonly variable\n", 2)]
+    [InlineData("readonly value=; printf '<%s>\\n' \"${value:=assigned}\"; printf continued", "", "line 1: value: readonly variable\n", 2)]
     [InlineData("unset value inner; printf '%s' \"${value:=${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
     [InlineData("unset value inner; printf '%s' \"${value:-${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
     [InlineData("unset inner; printf '%s' \"$((${inner:?missing} + 1))$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
@@ -252,13 +252,22 @@ public sealed class EvaluationParameterOperatorTestsEndToEnd
         string expectedError,
         int expectedStatus)
     {
-        // Readonly operand failures retain the engine's common fatal status 1;
-        // Bash script files use 2 for that case.
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(expectedOutput, result.StdOut);
         Assert.Equal(expectedError, result.StdErr);
         Assert.Equal(expectedStatus, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ContinuedParameterDefaultReportsTheLocationOfBothSubscriptFailures()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            ":\ntarget=(old)\n: \\\n \"${target[-4]:=new}\"\nprintf '<%s:%s>' \"$?\" \"$target\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2:old>", result.StdOut);
+        Assert.Equal("line 4: target: bad array subscript\nline 4: target[-4]: bad array subscript\n", result.StdErr);
     }
 
     public static TheoryData<string, string, string, string, int> ConditionalOperators =>

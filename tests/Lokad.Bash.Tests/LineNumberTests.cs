@@ -16,6 +16,7 @@ public sealed class LineNumberTests
     [InlineData("f(){\nprintf '<%s>' \"$LINENO\"\n}\nLINENO=42 f\nprintf '<%s>' \"$LINENO\"", "<42><5>")]
     [InlineData("\n[[ $LINENO = 2 &&\n $LINENO = 2 ]] && printf opening || printf later", "later")]
     [InlineData("\n(( LINENO == 2 \n )) && printf opening || printf later", "later")]
+    [InlineData(":\nfor \\\n x \\\n in \"$LINENO\"; do printf '<%s:%s>\\n' \"$x\" \"$LINENO\"; done", "<3:4>\n")]
     [InlineData("\n\neval 'printf \"<%s>\" \"$LINENO\"\nprintf \"<%s>\" \"$LINENO\"'\nprintf '<%s>' \"$LINENO\"", "<4><5><5>")]
     [InlineData("trap 'printf \"<%s>\" \"$LINENO\"\nprintf \"<%s>\" \"$LINENO\"' EXIT\n\n: done", "<1><2>")]
     public Task BindingFollowsTheActiveCommandAndScope(string script, string expected) =>

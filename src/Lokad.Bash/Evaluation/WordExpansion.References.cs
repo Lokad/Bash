@@ -157,9 +157,7 @@ internal static partial class WordExpansion
         // protection, and a rejected unset does not evaluate its selector.
         if (variables.IsReadonly(name))
         {
-            await scope.Effects.ReportExpansionDiagnosticAsync(
-                [ShellValue.FromText("unset: "), name.ToValue()],
-                [ShellValue.FromText("cannot unset: readonly variable")]).ConfigureAwait(false);
+            await scope.Effects.ReportReadonlyUnsetAsync(name.ToValue(), function: false, scope.Context).ConfigureAwait(false);
             return new(false, BindingName.Empty);
         }
         var resolvedName = variables.ResolveNamerefName(name);
@@ -304,11 +302,8 @@ internal static partial class WordExpansion
             }
             if (binding.Owner.IsReadonly(target.Name))
             {
-                if (failure == ExpansionFailureKind.AssignmentTarget)
-                    await scope.Effects.ReportAssignmentTargetFailureAsync(target.Name.ToValue(), "readonly variable", scope).ConfigureAwait(false);
-                else
-                    await scope.Effects.ReportFatalExpansionAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable"), failure)
-                        .ConfigureAwait(false);
+                await scope.Effects.ReportNamerefAssignmentFailureAsync([target.Name.ToValue()],
+                    [ShellValue.FromText("readonly variable")], failure, scope).ConfigureAwait(false);
                 return new(NamerefAssignmentAction.Fail, value);
             }
             var written = await target.AssignValueAsync(scope with { ExpansionWriteTarget = null, SelectorBindings = null },
@@ -327,9 +322,9 @@ internal static partial class WordExpansion
         async Task<NamerefAssignmentResult> RejectAssignmentAsync(NamerefAssignmentFailure reason)
         {
             if (reason == NamerefAssignmentFailure.InvalidTarget)
-                await scope.Effects.ReportFatalExpansionAsync(
+                await scope.Effects.ReportNamerefAssignmentFailureAsync(
                     [ShellValue.FromText("`"), value, ShellValue.FromText("'")],
-                    [ShellValue.FromText("not a valid identifier")], failure).ConfigureAwait(false);
+                    [ShellValue.FromText("not a valid identifier")], failure, scope).ConfigureAwait(false);
             else
                 scope.Effects.SetFatalExpansionError(failure);
             return new(NamerefAssignmentAction.Fail, value);
@@ -456,7 +451,8 @@ internal static partial class WordExpansion
         if (!scope.CanExpand)
             return null;
         var convertedNameref = false;
-        if (use is ReferenceUse.Read or ReferenceUse.Length or ReferenceUse.Presence && reference.Kind != VariableReferenceKind.Name
+        if (use is ReferenceUse.Read or ReferenceUse.DefaultRead or ReferenceUse.Length or ReferenceUse.Presence
+            && reference.Kind != VariableReferenceKind.Name
             && !targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out _))
         {
             var selected = await ResolveReadBindingAsync(reference, use, scope, targetVariables).ConfigureAwait(false);
@@ -471,7 +467,7 @@ internal static partial class WordExpansion
         {
             var sourceName = reference.Name;
             VariableBinding binding;
-            if (use is ReferenceUse.Read or ReferenceUse.Length)
+            if (use is ReferenceUse.Read or ReferenceUse.DefaultRead or ReferenceUse.Length)
             {
                 var selected = await ResolveReadBindingAsync(reference, use, scope, targetVariables).ConfigureAwait(false);
                 if (selected is not { } readBinding)
@@ -624,7 +620,7 @@ internal static partial class WordExpansion
             var referenceName = reference.Name.ToValue();
             if (use is ReferenceUse.Read or ReferenceUse.Presence)
                 return scope.Effects.ReportExpansionDiagnosticAsync(referenceName, message);
-            if (use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
+            if (use == ReferenceUse.DefaultRead || use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
                 return scope.Effects.ReportBuiltinDiagnosticAsync([referenceName], [message], scope.Context);
 
             var subscript = preparedSubscript is { } prepared
@@ -676,6 +672,7 @@ internal static partial class WordExpansion
     private enum ReferenceUse
     {
         Read,
+        DefaultRead,
         Length,
         Presence,
         Assign,

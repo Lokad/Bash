@@ -441,7 +441,7 @@ sh -c 'printf ""unexported-child=<%s>\n"" ""${LK_EXPORT_PROBE-unset}""';".Replac
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("unset: foo: cannot unset: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: unset: foo: cannot unset: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

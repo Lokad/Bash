@@ -11,27 +11,27 @@ public sealed class ParameterOperatorTests
 {
     [Theory]
     [InlineData("a=(); i=0; saved=prior\nsaved=${a[@]:=$((++i))}; printf skipped\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",
-        0, "[2:2:1:prior]", "a[@]: bad array subscript\n")]
+        0, "[2:2:1:prior]", "line 2: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0; saved=prior\nsaved=\"${a[@]:=$((++i))}\" true; printf skipped\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",
-        0, "[2:2:1:prior]", "a[@]: bad array subscript\n")]
+        0, "[2:2:1:prior]", "line 2: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\nf() { local PIPESTATUS=(8 9); printf '%s' \"${a[*]:=$((++i))}\"; }; f; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        0, "[2:0:1]", "a[*]: bad array subscript\n")]
+        0, "[2:0:1]", "line 2: a[*]: bad array subscript\n")]
     [InlineData("a=(); i=0\nf() { local -; set +e; printf '%s' \"${a[@]:=$((++i))}\"; }; set -e\neval 'f; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"'",
-        0, "[1:1:1]", "a[@]: bad array subscript\n")]
+        0, "[1:1:1]", "line 2: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\nset -e\nsource ./fixture || printf alternative\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        0, "[1:1:1][0:0:1]", "a[@]: bad array subscript\n")]
+        0, "[1:1:1][0:0:1]", "./fixture: line 1: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\nprintf '%s' \"${a[@]:=$((++i))}\" | cat\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        0, "[2:2 0:0]", "a[@]: bad array subscript\n")]
+        0, "[2:2 0:0]", "line 2: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\neval 'printf \"%s\" \"${a[@]:=$((++i))}\" | cat\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"\n{ printf \"%s\" \"${a[@]:=$((++i))}\"; } | cat\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"'",
-        0, "[1:1 0:0][2:2 0:0]", "a[@]: bad array subscript\na[@]: bad array subscript\n")]
+        0, "[1:1 0:0][2:2 0:0]", "line 5: a[@]: bad array subscript\nline 7: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\nsaved=$(printf prior; printf '%s' \"${a[@]:=$((++i))}\"\nprintf skipped)\nprintf '[%s:%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$saved\"",
-        0, "[1:1:0:prior]", "a[@]: bad array subscript\n")]
+        0, "[1:1:0:prior]", "line 3: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\ntrap 'printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\nset -e\n! printf '%s' \"${a[@]:=$((++i))}\"\nprintf skipped",
-        1, "[1:0:1]", "a[@]: bad array subscript\n")]
+        1, "[1:0:1]", "line 4: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\ntrap 'printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\nset -e\n(exit 7) && :\nprintf '%s' \"${a[@]:=$((++i))}\"",
-        7, "[7:7:1]", "a[@]: bad array subscript\n")]
+        7, "[7:7:1]", "line 5: a[@]: bad array subscript\n")]
     [InlineData("a=(); i=0\ntrap 'printf \"%s\" \"${a[@]:=$((++i))}\" | cat\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\nexit 7",
-        7, "[7:7 0:0]", "a[@]: bad array subscript\n")]
+        7, "[7:7 0:0]", "line 1: a[@]: bad array subscript\n")]
     public async Task RejectedIndexedAggregateDefaultUsesTheReachedReadersStatus(string script, int status, string output, string error)
     {
         foreach (var prepared in new[] { false, true })
@@ -51,15 +51,15 @@ public sealed class ParameterOperatorTests
 
     [Theory]
     [InlineData("readonly v=\"\"; i=0\nsaved=prior\nsaved=${v:=$((++i))}; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"; printf \"|%s\" \"$saved\"",
-        "[2:2:1]|prior", "v: readonly variable\n")]
+        "[2:2:1]|prior", "line 3: v: readonly variable\n")]
     [InlineData("a=(); i=0\nprintf \"%s\" \"${a[-2]:=$((++i))}\"; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        "[2:2:1]", "a: bad array subscript\na[-2]: bad array subscript\n")]
+        "[2:2:1]", "line 2: a: bad array subscript\nline 2: a[-2]: bad array subscript\n")]
     [InlineData("declare -A a=(); key=\"\"; i=0\nprintf \"%s\" \"${a[$key]:=$((++i))}\"; printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        "[2:2:1]", "a: bad array subscript\na[$key]: bad array subscript\n")]
+        "[2:2:1]", "line 2: a: bad array subscript\nline 2: a[$key]: bad array subscript\n")]
     [InlineData("a=(); i=0\nprintf \"<%s>\" \"${a[-2]:=$((++i, a[2]=8, i))}\"\nprintf \"|%s\" \"${a[1]}\"; printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        "<1>|1[0:0:1]", "a: bad array subscript\n")]
+        "<1>|1[0:0:1]", "line 2: a: bad array subscript\n")]
     [InlineData("readonly v=; i=0; declare -n r=v\n: \"${r:=$((++i))}\"; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        "[2:2:1]", "v: readonly variable\n")]
+        "[2:2:1]", "line 2: v: readonly variable\n")]
     public async Task DefaultAssignmentSelectsTheWriteTargetAfterItsRightHandSide(string script, string output, string error)
     {
         foreach (var prepared in new[] { false, true })

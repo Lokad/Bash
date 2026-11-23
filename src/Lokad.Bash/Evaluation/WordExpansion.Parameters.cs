@@ -806,7 +806,9 @@ internal static partial class WordExpansion
                 }
 
                 var target = await ResolveReferenceAsync(reference,
-                        modifier == ParameterModifier.Length ? ReferenceUse.Length : ReferenceUse.Read, scope, arithmeticPurpose)
+                        modifier == ParameterModifier.Length ? ReferenceUse.Length
+                            : parsed.Kind == BracedParameterOperatorKind.AssignDefault ? ReferenceUse.DefaultRead : ReferenceUse.Read,
+                        scope, arithmeticPurpose)
                     .ConfigureAwait(false);
                 var value = ShellValue.Empty;
                 var isSet = target != null && target.TryRead(scope.Variables, out value);

@@ -843,7 +843,8 @@ The root policy also applies to failing commands in tested positions within a un
 A tested `eval` or `source` invocation can recover within its nested units.
 An invalid variable name in a complete for-in loop reports status 1 when the
 loop is reached, before expanding its items. Prepared scripts use the same
-execution rule. Missing loop syntax still fails during parsing.
+execution rule. For-in item expansion and readonly binding diagnostics use the
+ending line of the variable name. Missing loop syntax still fails during parsing.
 
 `eval`, `source` and `.` consume one leading `--` from their expanded fields.
 Other multi-byte dash options report status 2. A leading `--help` prints the
@@ -913,8 +914,9 @@ and selector diagnostics follow the indexed arithmetic recovery rules. A
 parameter operator still requires an enclosing brace before its operand runs.
 
 A rejected parameter-default write to a readonly binding or with a bad array
-subscript retains the effects of its reached operand. With errexit disabled,
-the root reader continues at the next command unit with status 2. The failure
+subscript retains the effects of its reached operand. Its diagnostic includes
+the reached source line and the filename for a named sourced file. With errexit
+disabled, the root reader continues at the next command unit with status 2. The failure
 publishes `PIPESTATUS=(2)` in the reached binding scope. In-process `eval`
 and `source` publish status 1 at their own unit boundary. A command capture
 retains earlier bytes when it stops and
@@ -1110,6 +1112,8 @@ removal selects the originally named reference and preserves the terminal
 declaration. Function fallback still applies before that removal.
 `unset -n` selects the named reference for removal. A readonly last reference
 with an assigned target blocks removal and supplies the diagnostic name.
+Readonly variable and function diagnostics use the reached builtin's source
+line and include the filename for a named sourced file.
 Lokad.Bash also preserves a readonly reference when the command would
 remove that binding by its own name. Both pinned GNU Bash builds can remove
 the named readonly reference when a later writable reference supplies

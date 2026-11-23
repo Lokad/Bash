@@ -67,7 +67,19 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expected, result.StdOut);
-        Assert.Equal("x: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: x: readonly variable\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task ReadonlyLoopReportsTheEndOfTheContinuedVariableName()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            ":\nreadonly target=old\nfor \\\n tar\\\nget \\\n in seed; do printf body; done\n"
+            + "printf '<%s:%s>' \"$?\" \"$target\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:old>", result.StdOut);
+        Assert.Equal("line 5: target: readonly variable\n", result.StdErr);
     }
 
     [Theory]
@@ -104,7 +116,7 @@ public sealed class EvaluationForTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("readonly x=old", "x: readonly variable\n", 1, "")]
+    [InlineData("readonly x=old", "line 1: x: readonly variable\n", 1, "")]
     [InlineData("declare -nr x=old", "`bad-name': not a valid identifier\n", 0, "fallback:1")]
     public async Task TestedLoopAssignmentFailureDistinguishesReadonlyFromInvalidTarget(
         string setup, string expectedError, int exitCode, string expectedOutput)

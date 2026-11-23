@@ -55,7 +55,8 @@ public sealed partial class Evaluation
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
             if (failure == ForAssignmentFailure.Readonly)
             {
-                await ReportExpansionDiagnosticAsync(GetDiagnosticName(name), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                await ReportCommandDiagnosticAsync([GetDiagnosticName(name)], [ShellValue.FromText("readonly variable")], scope)
+                    .ConfigureAwait(false);
                 // A readonly loop assignment exits with errexit enabled, even in a tested position.
                 if (_state.ErrexitEnabled)
                     return EvaluationResult.Exit(1);
