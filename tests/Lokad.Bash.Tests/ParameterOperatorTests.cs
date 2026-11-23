@@ -217,6 +217,92 @@ public sealed class ParameterOperatorTests
         }
     }
 
+    private const string MarkedSelectorCapture = "$(printf reached >&2; printf ok)";
+
+    [Theory]
+    [InlineData("value=\"${map[}" + MarkedSelectorCapture + "tail]:-fallback}\"")]
+    [InlineData("value=\"${map[}" + MarkedSelectorCapture + "\"\"tail]:-fallback}\"")]
+    [InlineData("value=\"${outer:-${map[}" + MarkedSelectorCapture + "tail]:-fallback}}\"")]
+    public async Task AClosedLateSelectorConsumesItsCaptureExactlyOnce(string assignment)
+    {
+        var source = "declare -A map\nmap['}oktail']=selected\n" + assignment
+            + "\nprintf '<%s:%s>' \"$?\" \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+                : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<0:selected>", host.StandardOutput.TextContent);
+            Assert.Equal("reached", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task ABracketInTheNextWordCannotCompleteAQuotedSelector()
+    {
+        const string source = "printf '%s' \"${map[}" + MarkedSelectorCapture
+            + "\" 'tail]:-fallback}'\nprintf '<%s>' \"$?\"";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Equal("bad substitution: no closing `}' in \"${map[}$(printf reached 1>&2; printf ok)\"\n",
+            host.StandardError.TextContent);
+    }
+
+    private const string RejectedSelectorBody = "$({ cat <<DATA\nbody\nDATA\n}; printf extra)";
+    private const string RenderedSelectorBody = "$({ cat <<DATA\nbody\nDATA\n } printf extra)";
+    private const string SelectorTokenDiagnostic = "command substitution: line 9: syntax error near unexpected token `printf'\n";
+
+    [Theory]
+    [InlineData("\"${map[}", "tail]:-fallback}\"", " } printf extra)tail")]
+    [InlineData("\"${map[", "}tail]:-fallback}\"", " } printf extra)}tail")]
+    public async Task ARejectedCaptureReportsThroughTheLateSelectorBoundary(string opening, string closing, string line)
+    {
+        var source = "value=initial\nvalue=" + opening + RejectedSelectorBody + closing
+            + "\nprintf '<%s:%s>' \"$?\" \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+                : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<1:initial>", host.StandardOutput.TextContent);
+            Assert.Equal(SelectorTokenDiagnostic + $"command substitution: line 9: `{line}'\n",
+                host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("${map[\"lead", "tail\"]:-fallback}", " } printf extra)tail\"]:-fallback}",
+        "command substitution: line 10: unexpected EOF while looking for matching `)'\n",
+        "${map[\"lead" + RenderedSelectorBody + "tail\"]:-fallback}: bad substitution\n")]
+    [InlineData("${map[\"1+", "+2\"]:-fallback}", " } printf extra)+2\"]:-fallback}", "",
+        "${map[\"1+" + RenderedSelectorBody + "+2\"]:-fallback}: bad substitution\n")]
+    [InlineData("\"${map[${missing:-", "end}+2]:-fallback}tail\"", " } printf extra)end}+2]:-fallback}tail\"", "",
+        "bad substitution: no closing `}' in \"${map[${missing:-" + RenderedSelectorBody + "end}+2]:-fallback}tail\"\n")]
+    public async Task ARejectedSelectorReportsTheFollowupForItsQuotedOrNestedRole(
+        string opening, string closing, string line, string eof, string parameterError)
+    {
+        var source = "value=initial\nvalue=" + opening + RejectedSelectorBody + closing
+            + "\nprintf '<%s:%s>' \"$?\" \"$value\"\n";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:initial>", host.StandardOutput.TextContent);
+        Assert.Equal(SelectorTokenDiagnostic + $"command substitution: line 9: `{line}'\n" + eof + parameterError,
+            host.StandardError.TextContent);
+    }
+
     [Theory]
     [InlineData(":1:2", "bc")]
     [InlineData("#a", "bcdef")]

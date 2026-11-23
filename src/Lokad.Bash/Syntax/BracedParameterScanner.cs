@@ -8,6 +8,7 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Scans braced parameter expansions while honoring nested expansions, quotes, and substitutions.</summary>
 internal static class BracedParameterScanner
 {
+    private static ReadOnlySpan<byte> ParameterNameTerminators => "#%^,:-=?+/@}"u8;
     private enum ScanPhase { Lexical, Operand, Expansion }
     internal enum LexicalQuotes { Preserve, Unquoted, DoubleQuoted }
 
@@ -113,6 +114,7 @@ internal static class BracedParameterScanner
         out ParameterSubscriptFailure subscriptFailure,
         bool trackRenderedLines,
         LexicalQuotes quotes,
+        bool resolveLateSubscripts,
         out bool hasSpellingEdits,
         out bool expandedQuoteSyntax)
     {
@@ -121,7 +123,7 @@ internal static class BracedParameterScanner
         {
             var status = ScanCore(context, text, startIndex, out endIndex, out errorIndex, out var payload, out _,
                 out renderedLineAdjustment, out error, out subscriptFailure, out _, capturePayload: true, trackRenderedLines,
-                ScanPhase.Lexical, quotes, ref edits);
+                resolveLateSubscripts ? ScanPhase.Operand : ScanPhase.Lexical, quotes, ref edits);
             hasSpellingEdits = edits.HasEdits;
             expandedQuoteSyntax = edits.HasUnprotectedEdits;
             spelling = new SourceSpelling(payload, edits.Captures);
@@ -140,7 +142,7 @@ internal static class BracedParameterScanner
         out ShellSource payload,
         out ParserFailure? error,
         out ParameterSubscriptFailure subscriptFailure,
-        out ShellSource rejectedSelector)
+        out RejectedSelectorCapture rejectedSelector)
     {
         var edits = new ParameterSpellingEdits();
         var status = ScanCore(context, text, startIndex, out endIndex, out _, out payload, out _, out _, out error,
@@ -251,13 +253,22 @@ internal static class BracedParameterScanner
                     hasLateSubscript |= nested.HasLateSubscript;
                     if (nested.ParameterSubscriptFailure is ParameterSubscriptFailure.Direct or ParameterSubscriptFailure.Nested)
                         subscriptFailure = ParameterSubscriptFailure.Nested;
-                    if (phase == ScanPhase.Expansion && capturePayload && selectorDepth != 0 && !cursor.IsQuoted
-                        && nested.Kind == ShellNestedExpansionKind.Command && previousFailure == SubstitutionSyntaxFailure.None
+                    if (phase == ScanPhase.Expansion && capturePayload && selectorDepth != 0
+                        && previousFailure == SubstitutionSyntaxFailure.None
                         && (context.SubstitutionFailure is SubstitutionSyntaxFailure.HereDocumentSeparator
                             or SubstitutionSyntaxFailure.NestedHereDocumentSeparator))
                     {
-                        rejectedSelectorStart = nestedStart;
-                        rejectedSelectorDepth = selectorDepth;
+                        if (nested.Kind == ShellNestedExpansionKind.Command && !cursor.IsQuoted)
+                        {
+                            rejectedSelectorStart = nestedStart;
+                            rejectedSelectorDepth = selectorDepth;
+                        }
+                        else if (!lengthForm)
+                            edits.RejectedSelector = new RejectedSelectorCapture(default, NeedsParameterDiagnostic: true)
+                            {
+                                NeedsCaptureEofDiagnostic = nested.Kind == ShellNestedExpansionKind.Command && cursor.IsDoubleQuoted
+                                    && !HasParameterNameTerminator(text.AsSpan(openingBracket + 1, nestedStart - openingBracket - 1))
+                            };
                     }
                     if (quotes != LexicalQuotes.Preserve)
                     {
@@ -266,7 +277,9 @@ internal static class BracedParameterScanner
                             && cached.Substitution is CommandSubstitutionSyntax.Parsed normalized
                             && (normalized.HasRejectedDisplaySpelling || selectorDepth == 0 && normalized.CanRenderBody))
                             edits.AddCapture(context, nestedStart, cursor.Position, normalized);
-                        else if (nested.Kind == ShellNestedExpansionKind.Arithmetic && nested.ContainsCommandSubstitution
+                        else if ((nested.Kind == ShellNestedExpansionKind.Arithmetic
+                                || nested.Kind == ShellNestedExpansionKind.Parameter && selectorDepth != 0)
+                            && nested.ContainsCommandSubstitution
                             && (context.SubstitutionFailure is SubstitutionSyntaxFailure.HereDocumentSeparator
                                 or SubstitutionSyntaxFailure.NestedHereDocumentSeparator))
                             FunctionDefinitionFormatter.AddRejectedCaptureEdits(text, nestedStart, cursor.Position, context, ref edits);
@@ -293,15 +306,29 @@ internal static class BracedParameterScanner
 
                 if (!cursor.IsDoubleQuoted && cursor.Current == (byte)'}')
                 {
+                    if (selectorDepth != 0 && lateSelectorEnd >= 0)
+                    {
+                        cursor.Advance();
+                        continue;
+                    }
                     // Operand boundaries treat the leading '#' as an operator. A directly
                     // reached length expression scans its name through the array selector.
+                    var failureBeforeLookahead = context.SubstitutionFailure;
                     if (selectorDepth != 0 && resolveLateSubscripts && (!lengthForm || phase == ScanPhase.Expansion)
                         && context.TryScanLateSubscript(text, openingBracket, cursor.Position, out lateSelectorEnd))
                     {
                         hasLateSubscript = true;
-                        selectorDepth = 0;
                         firstBrace = cursor.Position;
-                        cursor = new ShellSourceCursor(text, lateSelectorEnd + 1, context);
+                        if (capturePayload)
+                        {
+                            context.SubstitutionFailure = failureBeforeLookahead;
+                            cursor.Advance();
+                        }
+                        else
+                        {
+                            selectorDepth = 0;
+                            cursor = new ShellSourceCursor(text, lateSelectorEnd + 1, context);
+                        }
                         continue;
                     }
 
@@ -321,7 +348,8 @@ internal static class BracedParameterScanner
                     {
                         if (selectorDepth == rejectedSelectorDepth)
                         {
-                            edits.RejectedSelector = text.Slice(rejectedSelectorStart, cursor.Position - rejectedSelectorStart);
+                            edits.RejectedSelector = new RejectedSelectorCapture(
+                                text.Slice(rejectedSelectorStart, cursor.Position - rejectedSelectorStart), NeedsParameterDiagnostic: false);
                             rejectedSelectorDepth = 0;
                         }
                         selectorDepth--;
@@ -337,7 +365,7 @@ internal static class BracedParameterScanner
             {
                 subscriptFailure = lengthForm ? ParameterSubscriptFailure.Length : ParameterSubscriptFailure.Direct;
                 var next = ShellSourceCursor.SkipLineContinuations(text.AsSpan(), lateSelectorEnd + 1);
-                var completeName = next == text.Length || "#%^,:-=?+/@}"u8.Contains(text[next]);
+                var completeName = next == text.Length || ParameterNameTerminators.Contains(text[next]);
                 endIndex = completeName ? lateSelectorEnd : firstBrace;
                 if (capturePayload)
                 {
@@ -363,6 +391,20 @@ internal static class BracedParameterScanner
         return position < text.Length && "#%/^,"u8.Contains(text[position]);
     }
 
+    private static bool HasParameterNameTerminator(ReadOnlySpan<byte> selectorPrefix)
+    {
+        // The unquoted parameter reader falls back to its name terminators when rereading a failed selector.
+        for (var offset = 0; offset < selectorPrefix.Length; offset++)
+        {
+            var value = selectorPrefix[offset];
+            if (value == (byte)'\\')
+                offset++;
+            else if (ParameterNameTerminators.Contains(value))
+                return true;
+        }
+        return false;
+    }
+
     private static int ReadSpecialNameEnd(ShellSource text, int position)
     {
         var bytes = text.AsSpan();
@@ -384,8 +426,7 @@ internal static class BracedParameterScanner
         private bool _hasQuoteEdits;
 
         internal readonly bool HasEdits => _edits != null;
-        /// <summary>Diagnostic suffix starting at a rejected capture and ending at its selector boundary.</summary>
-        internal ShellSource RejectedSelector { get; set; }
+        internal RejectedSelectorCapture RejectedSelector { get; set; }
         internal bool HasUnprotectedEdits { get; private set; }
         internal readonly IReadOnlyList<SpellingCapture>? Captures => _captures;
 
@@ -485,6 +526,12 @@ internal static class BracedParameterScanner
         while (index < text.Length && VariableNames.IsNamePart((char)text[index]));
         return index;
     }
+}
+
+/// <summary>The narrowed diagnostic operand or the outer parameter failure after a rejected selector.</summary>
+internal readonly record struct RejectedSelectorCapture(ShellSource Operand, bool NeedsParameterDiagnostic)
+{
+    internal bool NeedsCaptureEofDiagnostic { get; init; }
 }
 
 internal enum ParameterSubscriptFailure : byte { None, Direct, Nested, Length }

@@ -1180,6 +1180,7 @@ internal sealed class Tokenizer
         var renderedLineAdjustment = 0;
         var subscriptFailure = ParameterSubscriptFailure.None;
         var expandedParameterQuoteSyntax = false;
+        var quoteBounds = quotedOperand ? new QuotedWordBounds(Position, delimiterStart) : default;
 
         void AddPart(WordPart part)
         {
@@ -1228,7 +1229,7 @@ internal sealed class Tokenizer
                 continue;
             }
             if (TryReadBracedParameterExpansion(ref unquoted, quotedOperand, syntax, spelling, ref renderedLineAdjustment,
-                    ref subscriptFailure, ref expandedParameterQuoteSyntax))
+                    ref subscriptFailure, ref expandedParameterQuoteSyntax, ref quoteBounds))
             {
                 continue;
             }
@@ -1465,7 +1466,7 @@ internal sealed class Tokenizer
     /// </summary>
     private bool TryReadBracedParameterExpansion(ref WordPartBuffer content, bool quoted, ExpansionWordSyntax syntax,
         ConditionalParser.OperandSpelling spelling, ref int renderedLineAdjustment, ref ParameterSubscriptFailure subscriptFailure,
-        ref bool expandedParameterQuoteSyntax)
+        ref bool expandedParameterQuoteSyntax, ref QuotedWordBounds quoteBounds)
     {
         if (!BracedParameterScanner.HasPrefix(_input, Position))
         {
@@ -1487,11 +1488,37 @@ internal sealed class Tokenizer
             out var adjustment,
             out var error,
             out var incompleteSubscript,
-            trackRenderedLines: true, quotes,
+            trackRenderedLines: true, quotes, resolveLateSubscripts: false,
             out var hasSpellingEdits,
             out var expandedQuotes);
         if (status == BracedParameterScanStatus.Found)
         {
+            if (incompleteSubscript is ParameterSubscriptFailure.Direct or ParameterSubscriptFailure.Nested
+                && quoteBounds.IsActive)
+            {
+                if (quoteBounds.End == 0)
+                    quoteBounds.End = ShellSourceCursor.FindDoubleQuoteEnd(_scanContext, _input, endIndex + 1);
+                if (quoteBounds.End >= endIndex + 1)
+                {
+                    var source = _input.Slice(quoteBounds.Start, quoteBounds.End - quoteBounds.Start);
+                    var failure = _scanContext.SubstitutionFailure;
+                    if (BracedParameterScanner.ScanWithPayload(_scanContext, source, start - quoteBounds.Start,
+                            out var relativeEnd, out _, out var complete, out var completeAdjustment, out _, out var completeness,
+                            trackRenderedLines: true, quotes, resolveLateSubscripts: true,
+                            out var completeEdits, out var completeQuotes) == BracedParameterScanStatus.Found
+                        && completeness == ParameterSubscriptFailure.None && quoteBounds.Start + relativeEnd >= endIndex)
+                    {
+                        endIndex = quoteBounds.Start + relativeEnd;
+                        payload = complete;
+                        adjustment = completeAdjustment;
+                        hasSpellingEdits = completeEdits;
+                        expandedQuotes = completeQuotes;
+                        incompleteSubscript = ParameterSubscriptFailure.None;
+                    }
+                    else
+                        _scanContext.SubstitutionFailure = failure;
+                }
+            }
             content.AppendParameter(start, endIndex + 1, payload);
             if (hasSpellingEdits)
             {
@@ -1527,6 +1554,7 @@ internal sealed class Tokenizer
         ConditionalParser.OperandSpelling spelling)
     {
         var quoteStart = Position - 1;
+        var quoteBounds = new QuotedWordBounds(Position, 0);
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var parts = new List<WordPart>();
         var renderedLineAdjustment = 0;
@@ -1624,7 +1652,7 @@ internal sealed class Tokenizer
             }
 
             if (TryReadBracedParameterExpansion(ref content, quoted: true, syntax, spelling, ref renderedLineAdjustment,
-                    ref subscriptFailure, ref expandedParameterQuoteSyntax))
+                    ref subscriptFailure, ref expandedParameterQuoteSyntax, ref quoteBounds))
             {
                 continue;
             }
@@ -1658,6 +1686,13 @@ internal sealed class Tokenizer
         }
         RecordUnclosedQuote('"', quoteStart, "Unterminated double-quoted string.");
         return parts;
+    }
+
+    private struct QuotedWordBounds(int start, int end)
+    {
+        internal bool IsActive { get; } = true;
+        internal int Start { get; } = start;
+        internal int End { get; set; } = end;
     }
 
     /// <summary>Tracks a contiguous source part until an edit requires independent assembly.</summary>

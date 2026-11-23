@@ -48,6 +48,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Retains the enclosing lexical word through nested operand expansion for diagnostics.</summary>
     internal Word? ExpansionWord { get; init; }
 
+    /// <summary>Overrides the assignment default for a rejected selector's parameter diagnostic.</summary>
+    internal bool? SelectorParameterDiagnostics { get; init; }
+
     /// <summary>Source role of words read during expansion, including nested operands.</summary>
     internal LegacySubstitutionOrigin ExpansionOrigin { get; init; }
 

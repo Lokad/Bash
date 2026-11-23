@@ -3595,7 +3595,7 @@ public sealed partial class Evaluation : IFileTester
         && _pipelineUsesLoadedUnitStatus;
 
     internal async Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure,
-        CommandSubstitutionSyntax.Parsed? capture, ScopedEvaluation scope, bool quoted, ShellSource rejectedSelector = default)
+        CommandSubstitutionSyntax.Parsed? capture, ScopedEvaluation scope, bool quoted, RejectedSelectorCapture rejectedSelector)
     {
         if (_state.FatalExpansion.HasValue)
             return;
@@ -3605,7 +3605,7 @@ public sealed partial class Evaluation : IFileTester
         SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode));
         _state.LastExitCode = exitCode;
         var separatorFailure = failure is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
-        if (separatorFailure && (capture != null || scope.ExpansionWord != null || !rejectedSelector.IsEmpty)
+        if (separatorFailure && (capture != null || scope.ExpansionWord != null || !rejectedSelector.Operand.IsEmpty)
             && !GetStdErrDescriptor().IsClosed)
         {
             // The rendered word supplies the delimiters and literal text following a rejected capture.
@@ -3613,7 +3613,7 @@ public sealed partial class Evaluation : IFileTester
             using var workspace = new MemoryCapacity(Memory.Budget, 0);
             UnexpectedSyntax? token = null;
             var word = scope.ExpansionWord;
-            if (!rejectedSelector.IsEmpty && Tokenizer.TryReadExpansionWord(rejectedSelector, ExpansionWordSyntax.Parameter,
+            if (!rejectedSelector.Operand.IsEmpty && Tokenizer.TryReadExpansionWord(rejectedSelector.Operand, ExpansionWordSyntax.Parameter,
                 ShellQuoteKind.None, workspace, out var selectorWord, out _))
                 word = selectorWord;
             if (word != null)
@@ -3641,6 +3641,23 @@ public sealed partial class Evaluation : IFileTester
                 var line = Math.Max(1, scope.Context.Coordinates.Line) + capturePrefix.Count((byte)'\n') + 1;
                 await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
                     line, includeLine: !_state.ErrexitEnabled).ConfigureAwait(false);
+                if (rejectedSelector.NeedsParameterDiagnostic && !_state.ErrexitEnabled && word != null)
+                {
+                    var descriptor = GetStdErrDescriptor();
+                    var prefix = new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.Script,
+                        Math.Max(1, scope.Context.Coordinates.Line));
+                    var badSubstitution = ShellValue.FromText("bad substitution");
+                    var rendered = ShellValue.FromBytes(spelling.ToMemory());
+                    if (!quoted && rejectedSelector.NeedsCaptureEofDiagnostic)
+                        await WriteSyntaxDiagnosticLineAsync(descriptor,
+                            new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution, line + 1),
+                            MissingCommandSubstitutionClose).ConfigureAwait(false);
+                    if (quoted)
+                        await WriteDiagnosticAsync(descriptor, [badSubstitution],
+                            [ShellValue.FromText("no closing `}' in "), rendered], scope: null, prefix).ConfigureAwait(false);
+                    else
+                        await WriteDiagnosticAsync(descriptor, [rendered], [badSubstitution], scope: null, prefix).ConfigureAwait(false);
+                }
                 return;
             }
         }
@@ -3899,6 +3916,7 @@ public sealed partial class Evaluation : IFileTester
     private static readonly byte[] UnreadConditionalToken =
         [.. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
     private static readonly byte[] UnexpectedSyntaxEndOfInput = "syntax error: unexpected end of file\n"u8.ToArray();
+    private static readonly byte[] MissingCommandSubstitutionClose = "unexpected EOF while looking for matching `)'\n"u8.ToArray();
     private static readonly byte[] MissingConditionalDoubleQuote = "unexpected EOF while looking for matching `\"'\n"u8.ToArray();
     private static readonly byte[] MissingConditionalSingleQuote = "unexpected EOF while looking for matching `''\n"u8.ToArray();
     private static readonly byte[] MissingConditionalUnaryArgument = "unexpected argument to conditional unary operator\n"u8.ToArray();
@@ -3937,7 +3955,8 @@ public sealed partial class Evaluation : IFileTester
             return;
         var prefix = new SyntaxDiagnosticPrefix(path, origin, line);
         await WriteSyntaxDiagnosticLineAsync(descriptor, prefix,
-                Utf8Text.EncodeLine($"unexpected EOF while looking for matching `{endOfInput.Delimiter}'"))
+                endOfInput.Delimiter == ')' ? MissingCommandSubstitutionClose
+                    : Utf8Text.EncodeLine($"unexpected EOF while looking for matching `{endOfInput.Delimiter}'"))
             .ConfigureAwait(false);
         if (endOfInput.InsideConditional)
             await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, UnreadConditionalToken).ConfigureAwait(false);

@@ -239,7 +239,8 @@ public sealed partial class Evaluation
                         : assignment.Target.ToValue();
                     if (HasPendingExpansionError)
                         break;
-                    var value = await AwaitWordExpansionAsync(WordExpansion.ExpandAssignmentValueAsync(assignment.Value, scope))
+                    var value = await AwaitWordExpansionAsync(WordExpansion.ExpandAssignmentValueAsync(assignment.Value,
+                        scope with { SelectorParameterDiagnostics = false }))
                         .ConfigureAwait(false);
                     if (HasPendingExpansionError)
                         break;

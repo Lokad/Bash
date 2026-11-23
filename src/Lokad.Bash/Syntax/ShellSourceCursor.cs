@@ -272,7 +272,7 @@ internal sealed class ShellSourceCursor
                             out var payload, out _, out _, out _, trackRenderedLines: false,
                             cursor.IsDoubleQuoted ? BracedParameterScanner.LexicalQuotes.DoubleQuoted
                                 : BracedParameterScanner.LexicalQuotes.Unquoted,
-                            out _, out _) == BracedParameterScanStatus.Found)
+                            resolveLateSubscripts: false, out _, out _) == BracedParameterScanStatus.Found)
                     {
                         cursor.Position = close + 1;
                         ProjectNested(first, payloadStart, close, cursor.Position, "${"u8, "}"u8, payload, CountLines(payload));
@@ -546,6 +546,43 @@ internal sealed class ShellSourceCursor
 
     internal static bool IsDoubleQuoteEscape(byte value) =>
         value is (byte)'$' or (byte)'`' or (byte)'"' or (byte)'\\' or (byte)'\n';
+
+    /// <summary>Bounds late selector lookahead within adjacent double-quoted segments of one word.</summary>
+    internal static int FindDoubleQuoteEnd(ShellScanContext context, ShellSource source, int position)
+    {
+        var cursor = new ShellSourceCursor(source, position, context) { _quote = ShellQuoteKind.Double };
+        var failure = context.SubstitutionFailure;
+        try
+        {
+            while (!cursor.IsAtEnd)
+            {
+                if (cursor.TrySkipReadAheadBodies())
+                    continue;
+                if (cursor.Current == (byte)'"')
+                {
+                    var next = SkipLineContinuations(source.AsSpan(), cursor.Position + 1);
+                    if (next >= source.Length || source[next] != (byte)'"')
+                        return cursor.Position;
+                    cursor.Position = next + 1;
+                    continue;
+                }
+                if (cursor.TryConsumeQuoteOrEscape())
+                    continue;
+                switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
+                {
+                    case ShellNestedExpansionScan.Complete:
+                        continue;
+                    case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid:
+                        return -1;
+                    default:
+                        cursor.Advance();
+                        break;
+                }
+            }
+            return -1;
+        }
+        finally { context.SubstitutionFailure = failure; }
+    }
 
     /// <summary>
     /// Attempts to consume one nested arithmetic, parameter, or command substitution.

@@ -971,6 +971,9 @@ internal static partial class WordExpansion
 
                 if (parameterScan.SubstitutionFailure != SubstitutionSyntaxFailure.None && !scope.PreserveCommandSubstitutionSpelling)
                 {
+                    var reportParameterDiagnostic = scope.SelectorParameterDiagnostics ?? output.Purpose == ExpansionPurpose.Assignment;
+                    if (!reportParameterDiagnostic && rejectedSelector.NeedsParameterDiagnostic)
+                        rejectedSelector = default;
                     await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parameterScan.SubstitutionFailure, null, scope, globQuoted,
                         rejectedSelector)
                         .ConfigureAwait(false);
@@ -1077,7 +1080,7 @@ internal static partial class WordExpansion
 
         if (script is CommandSubstitutionSyntax.Parsed { Failure: not SubstitutionSyntaxFailure.None } parsed)
         {
-            await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parsed.Failure, parsed, scope, globQuoted).ConfigureAwait(false);
+            await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parsed.Failure, parsed, scope, globQuoted, default).ConfigureAwait(false);
             return;
         }
 

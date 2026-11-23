@@ -66,7 +66,8 @@ public sealed partial class Evaluation
         }
 
         Task<IReadOnlyList<ExpandedWord>> ExpandAsync(Word word) => WordExpansion.ExpandWithoutBraceAsync(
-            word, scope, allowWordSplitting: false, ExpansionPurpose.Scalar, TildeExpansion.Leading);
+            word, scope with { SelectorParameterDiagnostics = true }, allowWordSplitting: false,
+            ExpansionPurpose.Scalar, TildeExpansion.Leading);
 
         async Task<int> EvaluatePredicateAsync(ConditionalExpression expression)
         {

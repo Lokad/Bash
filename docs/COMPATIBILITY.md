@@ -876,7 +876,11 @@ A forked shell stops at the indirect error, including inside a loaded reader.
 
 A brace inside an array selector can belong to the selector when the same word
 contains its closing bracket. A complete expansion then reads the selector with
-that brace included. An unquoted reference with a complete selector can reach
+that brace included. A selector can span a command substitution or adjacent
+double-quoted segments within the word. A rejected capture in a bare selector
+reports through the selector boundary. A quoted or nested capture in a selector
+can report a subsequent parameter error during assignment or conditional
+expansion. An unquoted reference with a complete selector can reach
 the selector read before failing for a missing enclosing brace. Indexed effects
 and selector diagnostics follow the indexed arithmetic recovery rules. A
 parameter operator still requires an enclosing brace before its operand runs.
