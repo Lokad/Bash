@@ -10,7 +10,7 @@ public static partial class PrintfFormatting
 {
     private sealed partial class Formatter
     {
-        public async ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode)> RunAsync(
+        public async ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode, bool DiscardedSuffix)> RunAsync(
             Func<PrintfVariableAssignment, ValueTask<bool>> assignCount)
         {
             var diagnosticOutputClosed = false;
@@ -25,7 +25,7 @@ public static partial class PrintfFormatting
                 do
                 {
                     var argumentIndexAtCycleStart = _argumentIndex;
-                    _cycleOutputStart = _output.Length;
+                    _cycleOutputStart = OutputLength;
                     _cycleCountAdjustment = 0;
                     await FormatCycleAsync().ConfigureAwait(false);
 
@@ -43,7 +43,7 @@ public static partial class PrintfFormatting
                 catch (MemoryBudgetExceededException) { } // Report the refusal without retrying a queued record.
                 if (reportDiagnostic != null && !diagnosticOutputClosed)
                     await reportDiagnostic(Diagnostic.MemoryRefusal).ConfigureAwait(false);
-                return (ReadOnlyMemory<byte>.Empty, 1);
+                return (ReadOnlyMemory<byte>.Empty, 1, false);
             }
             finally
             {
@@ -318,7 +318,7 @@ public static partial class PrintfFormatting
 
                             await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
                             if (!_stop && !await assignCount(new PrintfVariableAssignment(
-                                    variable.ToUtf8String(), _output.Length - _cycleOutputStart + _cycleCountAdjustment)).ConfigureAwait(false))
+                                    variable.ToUtf8String(), OutputLength - _cycleOutputStart + _cycleCountAdjustment)).ConfigureAwait(false))
                                 _stop = true;
                             return;
                         }
@@ -502,7 +502,7 @@ public static partial class PrintfFormatting
                 void AppendEscapedString(FormatSpecification escapedSpecification)
                 {
                     var argument = GetValueArgument().Bytes;
-                    var bytes = GetTemporaryOutput(argument.Length, _output.RemainingLength);
+                    var bytes = GetTemporaryOutput(argument.Length, OutputRemainingLength);
                     for (var index = 0; index < argument.Length;)
                     {
                         if (argument.Span[index] != (byte)'\\')
@@ -560,7 +560,7 @@ public static partial class PrintfFormatting
                     var bytes = argument[..Math.Min(argument.Length, rawByteLimit)];
                     // Empty %q syntax can be truncated by precision before consuming the final output budget.
                     var quoted = bytes.IsEmpty
-                        ? GetTemporaryOutput(2, 2) : GetTemporaryOutput(bytes.Length, _output.RemainingLength);
+                        ? GetTemporaryOutput(2, 2) : GetTemporaryOutput(bytes.Length, OutputRemainingLength);
                     if (!ShellArgumentEscaping.TryAppendQuoted(quoted, bytes.Span,
                             quotedSpecification.Flags.HasFlag(FormatFlags.Alternate)
                                 ? ShellQuoteStyle.SingleQuoted : ShellQuoteStyle.Backslash))
@@ -601,7 +601,7 @@ public static partial class PrintfFormatting
                     }
 
                     var paddedLength = Math.Max(bytes.Length, GetFieldWidth(textSpecification.Width, bytes.Length));
-                    if (paddedLength > _output.RemainingLength)
+                    if (paddedLength > OutputRemainingLength)
                     {
                         FailOutputLimit();
                         return;
@@ -633,7 +633,7 @@ public static partial class PrintfFormatting
                     };
                     var length = sign.Length + number.Prefix.Length + number.Text.Length;
                     var paddingLength = Math.Max(0L, GetFieldWidth(numberSpecification.Width, length) - length);
-                    if (length + paddingLength > _output.RemainingLength)
+                    if (length + paddingLength > OutputRemainingLength)
                     {
                         FailOutputLimit();
                         return;
@@ -672,8 +672,13 @@ public static partial class PrintfFormatting
                     if (field.SuppressOutput)
                     {
                         // The Linux conversion contributes -1 to %n and can rewind the assignment buffer.
-                        if (assignOutput && _output.Length > 0)
-                            _output.Truncate(_output.Length - 1);
+                        if (assignOutput && OutputLength > 0)
+                        {
+                            if (_discardedOutputBytes != 0)
+                                _discardedOutputBytes--;
+                            else
+                                _output.Truncate(_output.Length - 1);
+                        }
                         else
                             _cycleCountAdjustment--;
                         return true;
@@ -727,8 +732,8 @@ public static partial class PrintfFormatting
                 finally { pending.Clear(); }
             }
 
-            (ReadOnlyMemory<byte> Output, int ExitCode) BuildResult() =>
-                (_output.DetachSnapshot(), _failed || _conversionError ? 1 : 0);
+            (ReadOnlyMemory<byte> Output, int ExitCode, bool DiscardedSuffix) BuildResult() =>
+                (_output.DetachSnapshot(), _failed || _conversionError ? 1 : 0, _discardedOutputBytes != 0);
         }
     }
 

@@ -44,8 +44,11 @@ public static partial class PrintfFormatting
         DateTimeOffset timestamp, IMemoryBudget memoryBudget) => EvaluateSynchronously(format, arguments, timestamp, allowAssignments: true, memoryBudget);
 
     /// <summary>Runs count writes and diagnostics in conversion order; false stops later formatting.</summary>
-    /// <remarks>A null diagnostic callback discards records while retaining their effect on status.</remarks>
-    internal static ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode)> EvaluateAsync(
+    /// <remarks>
+    /// A null diagnostic callback discards records while retaining their effect on status.
+    /// Assignment output contains the retained prefix and reports whether it discarded a suffix.
+    /// </remarks>
+    internal static ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode, bool DiscardedSuffix)> EvaluateAsync(
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool assignOutput, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
         Func<Diagnostic, ValueTask<bool>>? reportDiagnostic, CancellationToken cancellationToken) =>
@@ -53,7 +56,7 @@ public static partial class PrintfFormatting
             reportDiagnostic, cancellationToken);
 
     /// <summary>Borrows the expanded operand suffix through conversion and its callbacks.</summary>
-    internal static ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode)> EvaluateAsync(
+    internal static ValueTask<(ReadOnlyMemory<byte> Output, int ExitCode, bool DiscardedSuffix)> EvaluateAsync(
         ShellValue format, IReadOnlyList<ShellValue> arguments, int firstArgument, DateTimeOffset timestamp, bool assignOutput,
         IMemoryBudget memoryBudget, Func<PrintfVariableAssignment, ValueTask<bool>> assignCount,
         Func<Diagnostic, ValueTask<bool>>? reportDiagnostic, CancellationToken cancellationToken) =>
@@ -100,7 +103,7 @@ public static partial class PrintfFormatting
         }
     }
 
-    private static (ReadOnlyMemory<byte> Output, int ExitCode) RunSynchronously(
+    private static (ReadOnlyMemory<byte> Output, int ExitCode, bool DiscardedSuffix) RunSynchronously(
         ShellValue format, IReadOnlyList<ShellValue> arguments, DateTimeOffset timestamp, bool allowAssignments, IMemoryBudget memoryBudget,
         Func<PrintfVariableAssignment, ValueTask<bool>> assignCount, Func<Diagnostic, ValueTask<bool>>? reportDiagnostic)
     {
@@ -148,6 +151,10 @@ public static partial class PrintfFormatting
 
         private readonly BoundedByteMemoryBuilder _output = new(
             0, MaximumOutputBytes, memoryBudget);
+        // Assignment output retains the prefix and counts the first NUL and all later bytes.
+        private int _discardedOutputBytes;
+        private int OutputLength => _output.Length + _discardedOutputBytes;
+        private int OutputRemainingLength => MaximumOutputBytes - OutputLength;
         private List<Diagnostic>? _pendingDiagnostics;
         private MemoryCapacity? _diagnosticMemory;
         private BoundedByteMemoryBuilder? _temporaryOutput;
@@ -198,9 +205,15 @@ public static partial class PrintfFormatting
             if (_failed)
                 return;
 
-            if (count > _output.RemainingLength)
+            if (count > OutputRemainingLength)
             {
                 FailOutputLimit();
+                return;
+            }
+            if (count > 0 && _discardedOutputBytes != 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _discardedOutputBytes += count;
                 return;
             }
             while (count > 0)
@@ -221,6 +234,9 @@ public static partial class PrintfFormatting
             if (_failed)
                 return false;
 
+            if (assignOutput && ReferenceEquals(output, _output) && (_discardedOutputBytes != 0 || value == 0))
+                return TryAppendBytes(output, new ReadOnlySpan<byte>(in value));
+
             if (output.TryAppend(value))
                 return true;
 
@@ -232,6 +248,21 @@ public static partial class PrintfFormatting
         {
             if (_failed)
                 return false;
+
+            if (assignOutput && ReferenceEquals(output, _output))
+            {
+                var prefixLength = _discardedOutputBytes != 0 ? 0 : values.IndexOf((byte)0);
+                if (prefixLength >= 0)
+                {
+                    if (values.Length <= OutputRemainingLength && output.TryAppend(values[..prefixLength]))
+                    {
+                        _discardedOutputBytes += values.Length - prefixLength;
+                        return true;
+                    }
+                    FailOutputLimit();
+                    return false;
+                }
+            }
 
             if (output.TryAppend(values))
                 return true;

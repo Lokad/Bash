@@ -176,6 +176,42 @@ public sealed class ByteStoredValueTests
         Assert.True(storage.Array.Length <= 16, $"Retained {storage.Array.Length} bytes for a truncated value.");
     }
 
+    [Fact]
+    public async Task Printf_AssignmentCompactsALargePrefixBeforeNul()
+    {
+        var evaluation = new Evaluation.Evaluation(Parser.Parse(
+            "printf -v value 'a%65536s\\0tail' z"));
+
+        Assert.Null(await evaluation.GetNextStep());
+        Assert.Equal(0, evaluation.LastExitCode);
+        var stored = evaluation.Variables["value"];
+        Assert.Equal(65_537, stored.Bytes.Length);
+        Assert.Equal((byte)'a', stored.Bytes.Span[0]);
+        Assert.Equal((byte)'z', stored.Bytes.Span[^1]);
+        Assert.True(MemoryMarshal.TryGetArray(stored.Bytes, out var storage));
+        Assert.Equal(stored.Bytes.Length, storage.Array?.Length);
+    }
+
+    [Fact]
+    public async Task Printf_AssignmentCountsWidePaddingAfterNulWithinPrefixBudget()
+    {
+        var evaluation = new Evaluation.Evaluation(Parser.Parse(
+            "printf -v value 'a%n\\0%524288s%n' before x after"));
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText("a"), evaluation.Variables["value"]);
+        Assert.Equal(ShellValue.FromText("1"), evaluation.Variables["before"]);
+        Assert.Equal(ShellValue.FromText("524290"), evaluation.Variables["after"]);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false, "5C78", "78")]
     [InlineData(true, "5C78", "78")]

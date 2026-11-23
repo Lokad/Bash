@@ -84,11 +84,12 @@ public sealed partial class Evaluation
 
             if (outputReference is { } destination && !HasPendingExpansionError && diagnostics.Result.CanAcceptMore)
             {
-                var value = ShellValue.FromBytes(result.Output).BeforeFirstNul();
+                // Admit the formatter's retained prefix to the variable owner before publication.
+                var value = ShellValue.FromBytes(result.Output);
                 Memory.Charge(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
-                if (value.Bytes.Length < result.Output.Length)
+                if (result.DiscardedSuffix)
                 {
-                    // Admit the compact copy before releasing the discarded formatted buffer.
+                    // Keep the retained value independent of spare formatting capacity.
                     value = ShellValue.FromBytes(ScopedMemory.Copy(value.Bytes, Memory.Budget, out truncatedMemory));
                     outputMemory.Dispose();
                 }

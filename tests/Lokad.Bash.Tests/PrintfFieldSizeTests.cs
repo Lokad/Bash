@@ -1,5 +1,6 @@
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Formatting;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
@@ -417,6 +418,47 @@ public sealed class PrintfFieldSizeTests
         Assert.Equal(PrintfFormatting.Diagnostic.MemoryRefusal, Assert.Single(diagnostics));
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task AssignmentOutputLimitIncludesDiscardedBytes()
+    {
+        var limit = ByteMemoryBuilder.MaxMemoryBuilderBytes - 1;
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var diagnostics = new List<PrintfFormatting.Diagnostic>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText($"a\\0%{limit - 2}s%n!"),
+            [ShellValue.FromText("x"), ShellValue.FromText("atLimit")], DateTimeOffset.UnixEpoch,
+            assignOutput: true, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            diagnostic => { diagnostics.Add(diagnostic); return ValueTask.FromResult(true); }, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("a"u8.ToArray(), result.Output.ToArray());
+        Assert.Equal(new PrintfVariableAssignment("atLimit", limit), Assert.Single(counts));
+        Assert.Equal($"output exceeds {limit} bytes", Assert.Single(diagnostics).Suffix);
+    }
+
+    [Theory]
+    [InlineData("A\\0", "AZ", 1)]
+    [InlineData("A\\0Y", "A", 2)]
+    public async Task SuppressedAssignmentConversionRewindsLogicalOutput(string prefix, string expected, int count)
+    {
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText(prefix + "%.2147483648s%nZ"),
+            [ShellValue.FromText("text"), ShellValue.FromText("count")], DateTimeOffset.UnixEpoch,
+            assignOutput: true, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            _ => throw new InvalidOperationException("Unexpected diagnostic."), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText(expected), ShellValue.FromBytes(result.Output));
+        Assert.Equal(new PrintfVariableAssignment("count", count), Assert.Single(counts));
     }
 
     [Fact]

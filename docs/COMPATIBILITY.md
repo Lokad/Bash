@@ -941,6 +941,9 @@ its next field before the scan can reach help.
 When a reached `printf -v` has no destination field, it reports that the
 option requires an argument and follows with usage. A supplied destination
 with no format reports usage alone.
+`printf -v` assigns the bytes before the first NUL. Later formatted bytes
+still contribute to `%n` and the output length limit. Later conversions
+retain their normal diagnostic and count-assignment effects.
 
 `unset` follows the same help status and output rules. Leading option groups
 are scanned in order. An earlier invalid option reports usage, and `--`
