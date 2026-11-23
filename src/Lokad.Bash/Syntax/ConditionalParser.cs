@@ -443,8 +443,8 @@ internal sealed class ConditionalParser : IDisposable
             {
                 case ShellNestedExpansionScan.Complete: continue;
                 case ShellNestedExpansionScan.Invalid { Failure: { } failure }:
-                    _failure ??= failure.HereDocumentEndOfInput is { } missingCloser
-                        ? failure with { HereDocumentEndOfInput = missingCloser with { InsideConditional = true } }
+                    _failure ??= failure.CaptureEndOfInput is { } missingCloser
+                        ? failure with { CaptureEndOfInput = missingCloser with { InsideConditional = true } }
                         : failure;
                     return new(TokenKind.Invalid, default, failure.Error.Offset);
                 case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid:

@@ -150,7 +150,9 @@ internal static class CommandSubstitutionScanner
                     : new CommandSubstitutionSyntax.Parsed(payload, parsed, failure, preserveAdjacentOpening)
                         { AdjacentSpelling = adjacentSpelling };
             }
-            else if (status == ShellScanStatus.Invalid && error is { HereDocumentEndOfInput: null } && context.LimitError == null
+            else if (status == ShellScanStatus.Incomplete && error is { CaptureEndOfInput: not null })
+                error = error with { Error = error.Error with { Offset = startIndex } };
+            else if (status == ShellScanStatus.Invalid && error is { CaptureEndOfInput: null } && context.LimitError == null
                 && ArithmeticExpansionScanner.TryScanAdjacentSubshell(context, text, startIndex, out var adjacentEnd))
             {
                 endIndex = adjacentEnd;

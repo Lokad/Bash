@@ -293,9 +293,14 @@ public sealed partial class Evaluation
         finally { sourceMemory.Release(); }
     }
 
+    private Task<EvaluationResult> EvaluateCommandUnitsAsync(
+        ShellSource source, ScopedEvaluation scope, ScriptExecutionKind kind) =>
+        EvaluateCommandUnitsAsync(source, scope, kind,
+            kind == ScriptExecutionKind.Eval ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.Script);
+
     /// <summary>Shares complete-command parsing and execution across the public entry point, source, eval and EXIT actions.</summary>
     private async Task<EvaluationResult> EvaluateCommandUnitsAsync(
-        ShellSource source, ScopedEvaluation scope, ScriptExecutionKind kind)
+        ShellSource source, ScopedEvaluation scope, ScriptExecutionKind kind, SyntaxDiagnosticOrigin diagnosticOrigin)
     {
         // A reached nested parser needs its own stack headroom for syntax guards,
         // independently of the caller's function/eval execution depth.
@@ -335,17 +340,19 @@ public sealed partial class Evaluation
                 ICommand command;
                 if (failedUnit != null)
                 {
-                    if (failedUnit.Failure.HereDocumentEndOfInput is { } hereDocumentEnd)
+                    if (failedUnit.Failure.CaptureEndOfInput is { } captureEnd)
                     {
-                        await ReportCapturedHereDocumentEndOfInputAsync(failedUnit.Error, hereDocumentEnd, lineOffset)
-                            .ConfigureAwait(false);
+                        await ReportCaptureEndOfInputAsync(captureEnd, lineOffset + failedUnit.DiagnosticLine, lineOffset,
+                            scope.Context.CallerSource?.Path, diagnosticOrigin).ConfigureAwait(false);
                     }
                     else if (failedUnit.Failure.UnexpectedToken is { } token)
                         await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path,
-                            kind == ScriptExecutionKind.Eval ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.Script,
-                            lineOffset + failedUnit.DiagnosticLine, includeLine: true).ConfigureAwait(false);
+                            diagnosticOrigin, lineOffset + failedUnit.DiagnosticLine, includeLine: true).ConfigureAwait(false);
                     else if (failedUnit.Failure.ConditionalQuoteEnd is { } quoteEnd)
                         await ReportUnclosedConditionalQuoteAsync(quoteEnd).ConfigureAwait(false);
+                    else if (diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution && failedUnit.DiagnosticLine != 0)
+                        await ReportCaptureGrammarEndOfInputAsync(scope.Context.CallerSource?.Path,
+                            lineOffset + failedUnit.DiagnosticLine).ConfigureAwait(false);
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)

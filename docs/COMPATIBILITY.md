@@ -374,11 +374,14 @@ listing reports its invalid syntax. Host function exports preserve the authored
 capture so the child can import it and validate it when reached. Backtick
 captures and captures read directly from a here-document use their source
 separators.
-When a script ends in a parenthesized capture with a here-document and no
-matching `)`, the script reader reports any pending here-document warnings
-before the missing-parenthesis diagnostic. Earlier complete command units can
-already have executed. Prepared parsing reports the syntax error before any
-evaluation.
+When a script ends inside a parenthesized capture, the script reader reports
+the delimiter it was matching. A named source and an `eval` reader include
+their reader coordinates. A pending here-document warning precedes the
+missing-closer diagnostic and uses its own warning line. A conditional reader
+also reports the unread token. Earlier complete command units can already
+have executed. Prepared parsing reports the syntax error before any evaluation.
+A reached adjacent or backtick capture attributes token and grammar EOF
+diagnostics to the command substitution reader.
 When `)` closes a capture with documents still pending, the script reader
 warns and collects their bodies from the next unread line. The remainder of
 the header still parses, and body expansion waits for the capture to execute.

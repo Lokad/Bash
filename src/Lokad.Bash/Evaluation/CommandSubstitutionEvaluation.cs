@@ -22,7 +22,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                 if (script is CommandSubstitutionSyntax.Parsed retained)
                     parsed = retained.Script;
                 else if (script is CommandSubstitutionSyntax.AdjacentSubshell adjacent)
-                    parsed = new ParsedScript([new ScriptCommand(adjacent.Source)]);
+                    parsed = new ParsedScript([new ScriptCommand(adjacent.Source) { SourceReader = ScriptCommand.Reader.AdjacentCapture }]);
                 else if (script is CommandSubstitutionSyntax.Legacy legacy)
                 {
                     var temporary = legacy.Origin == LegacySubstitutionOrigin.Temporary;
@@ -52,7 +52,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                         }
 
                         // A body with a grammar error can still have earlier complete units to execute.
-                        parsed = new ParsedScript([new ScriptCommand(legacy.Source) { IsLegacyCapture = true }]);
+                        parsed = new ParsedScript([new ScriptCommand(legacy.Source) { SourceReader = ScriptCommand.Reader.LegacyCapture }]);
                     }
                 }
                 else

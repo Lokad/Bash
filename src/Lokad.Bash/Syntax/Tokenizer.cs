@@ -22,6 +22,7 @@ internal sealed class Tokenizer
     private int _line = 1;
     private int _nextOmittedSeparator;
     private HereDocumentReadAhead? _readingAhead;
+    private bool _continuedAtEndOfInput;
 
     internal bool TrackCommandLocations { get; init; }
     internal bool TrackUnexpectedTokens { get; init; }
@@ -87,6 +88,16 @@ internal sealed class Tokenizer
         (Locations ??= new CommandLocations()).SetHereDocumentWarnings(command, warnings, _scanContext.SyntaxMemory);
 
     internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
+
+    /// <summary>Whether reaching EOF also completes a final logical line without a terminating LF.</summary>
+    internal int EndOfInputLineAdvance
+    {
+        get
+        {
+            var source = _input.AsSpan();
+            return source.IsEmpty || source[^1] != (byte)'\n' || _continuedAtEndOfInput ? 1 : 0;
+        }
+    }
 
     private bool SkipCollectedHereDocuments()
     {
@@ -170,7 +181,7 @@ internal sealed class Tokenizer
 
     internal void MarkCompoundArrayFailure()
     {
-        if (_failure is { Kind: ParserFailureKind.Delimiter, HereDocumentEndOfInput: not null } missingCloser)
+        if (_failure is { Kind: ParserFailureKind.Delimiter, CaptureEndOfInput: not null } missingCloser)
             _failure = missingCloser with { Kind = ParserFailureKind.ArraySubstitutionDelimiter };
         if ((_failure ?? QuotedEndOfInputFailure) is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
         {
@@ -182,6 +193,19 @@ internal sealed class Tokenizer
     private void RecordExpansionFailure(ParserFailure? failure, bool quoted, string missingDelimiter, int start) =>
         RecordFailure(failure?.InDoubleQuotes(quoted)
             ?? new ParserFailure(new SyntaxError(missingDelimiter, start), ParserFailureKind.Delimiter));
+
+    private void RecordUnclosedQuote(char delimiter, int start, string message)
+    {
+        if (IsCommandSubstitution && AllowEofHereDocuments)
+        {
+            RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.Delimiter)
+            {
+                CaptureEndOfInput = new CaptureEndOfInput(delimiter, start)
+            });
+        }
+        else
+            RecordError(message, Position);
+    }
 
     private bool TryReserveSyntax()
     {
@@ -538,6 +562,7 @@ internal sealed class Tokenizer
         var start = Position;
         while (true)
         {
+            var beforeSpacing = Position;
             Position = ShellSourceCursor.SkipTokenSpacing(span, Position);
             if (SkipCollectedHereDocuments())
                 continue;
@@ -551,6 +576,7 @@ internal sealed class Tokenizer
             start = Position;
             if (Position >= span.Length)
             {
+                _continuedAtEndOfInput |= Position > beforeSpacing && EndsInLineContinuation(span);
                 if (HereDocuments is { HasPending: true } pending)
                 {
                     if (AllowEofHereDocuments)
@@ -808,6 +834,7 @@ internal sealed class Tokenizer
                         hasContinuedBytes |= Position != runStart;
                         AppendRun(content, span[runStart..Position]);
                         Position += 2;
+                        _continuedAtEndOfInput |= Position == span.Length;
                         runStart = Position;
                         continue;
                     }
@@ -1287,6 +1314,7 @@ internal sealed class Tokenizer
                 if (escaped == (byte)'\n')
                 {
                     Position++;
+                    _continuedAtEndOfInput |= Position == span.Length;
                     continue;
                 }
 
@@ -1331,11 +1359,12 @@ internal sealed class Tokenizer
 
         ShellValue ReadQuotedLiteral()
         {
+            var start = Position;
             var cursor = new ShellSourceCursor(_input, Position, _scanContext);
             var complete = cursor.TryReadQuotedLiteral(out var value, allowUnterminated: braceExpanded);
             Position = cursor.Position;
             if (!complete)
-                RecordError("Unterminated single-quoted string.", Position);
+                RecordUnclosedQuote('\'', start, "Unterminated single-quoted string.");
             return value;
         }
     }
@@ -1391,8 +1420,11 @@ internal sealed class Tokenizer
                 return new BraceExpansionFailureWordPart(
                     BraceExpansionFailureWordPart.FormatMissingDelimiter(_input.Slice(start), delimiter, memory));
             }
-            RecordExpansionFailure(error, kind == WordPartKind.CommandSubstitutionQuoted,
-                "Unterminated command substitution.", start);
+            if (status == ShellScanStatus.Incomplete && IsCommandSubstitution && _input[start] == (byte)'`')
+                RecordUnclosedQuote('`', start, "Unterminated command substitution.");
+            else
+                RecordExpansionFailure(error, kind == WordPartKind.CommandSubstitutionQuoted,
+                    "Unterminated command substitution.", start);
             return null;
         }
 
@@ -1469,6 +1501,7 @@ internal sealed class Tokenizer
     private List<WordPart> ReadDoubleQuotedParts(ReadOnlySpan<byte> span, ExpansionWordSyntax syntax,
         ConditionalParser.OperandSpelling spelling)
     {
+        var quoteStart = Position - 1;
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var parts = new List<WordPart>();
         var renderedLineAdjustment = 0;
@@ -1598,7 +1631,7 @@ internal sealed class Tokenizer
             Flush(allowEmpty: true);
             return parts;
         }
-        RecordError("Unterminated double-quoted string.", Position);
+        RecordUnclosedQuote('"', quoteStart, "Unterminated double-quoted string.");
         return parts;
     }
 

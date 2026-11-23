@@ -685,7 +685,7 @@ public sealed class CommandSubstitutionSyntaxTests
         MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
     [InlineData("printf prior\na=(\"$(cat <<END\nbody\n)\")", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 1)]
     [InlineData("printf prior\neval 'v=$(cat <<END\nbody\n)' && printf unexpected; printf tail", "priortail",
-        "warning: here-document at line 4 delimited by end-of-file (wanted `END')\n" + MatchingParenthesisEof, 0)]
+        "warning: here-document at line 4 delimited by end-of-file (wanted `END')\n" + "eval: line 7: " + MatchingParenthesisEof, 0)]
     public async Task EndOfInputInHereDocumentCaptureReportsAtTheReachedReadBoundary(
         string source, string output, string diagnostics, int exitCode)
     {

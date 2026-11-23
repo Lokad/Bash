@@ -106,7 +106,10 @@ public sealed partial class Evaluation
             {
                 case ScriptCommand scriptCommand:
                     return ApplyNegation(await EvaluateCommandUnitsAsync(scriptCommand.Source, scope,
-                            scriptCommand.IsLegacyCapture ? ScriptExecutionKind.LegacyCapture : ScriptExecutionKind.Root)
+                            scriptCommand.SourceReader == ScriptCommand.Reader.LegacyCapture
+                                ? ScriptExecutionKind.LegacyCapture : ScriptExecutionKind.Root,
+                            scriptCommand.SourceReader == ScriptCommand.Reader.Root
+                                ? SyntaxDiagnosticOrigin.Script : SyntaxDiagnosticOrigin.CommandSubstitution)
                         .ConfigureAwait(false), negated);
                 case ListCommand listCommand:
                     return await EvaluateListAsync(listCommand, scope, negated).ConfigureAwait(false);

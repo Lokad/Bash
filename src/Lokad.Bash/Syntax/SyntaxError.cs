@@ -16,7 +16,7 @@ public sealed record SyntaxError(string Message, int Offset)
 /// <summary>Retains the parser's failure class independently of the public diagnostic.</summary>
 internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
-    internal CapturedHereDocumentEndOfInput? HereDocumentEndOfInput { get; init; }
+    internal CaptureEndOfInput? CaptureEndOfInput { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
     internal ConditionalQuoteEnd? ConditionalQuoteEnd { get; init; }
     internal bool IsNestedSubstitution { get; init; }
@@ -57,8 +57,11 @@ internal readonly record struct ConditionalQuoteEnd(bool DoubleQuoted)
 }
 
 /// <summary>Diagnostics from reading a capture that could not reach its closing parenthesis.</summary>
-internal sealed record CapturedHereDocumentEndOfInput(IReadOnlyList<HereDocumentWarning>? Warnings, int LineOffset)
+internal sealed record CaptureEndOfInput(char Delimiter, int ReadPosition)
 {
+    internal int LineAdvance { get; init; }
+    internal IReadOnlyList<HereDocumentWarning>? Warnings { get; init; }
+    internal int WarningOffset { get; init; }
     internal bool InsideConditional { get; init; }
 }
 

@@ -251,6 +251,77 @@ public sealed class SourceCommandUnitTests
         }
     }
 
+    [Theory]
+    [InlineData("printf prior\nvalue=$(printf before\n", "prior", 3, ')')]
+    [InlineData("value=$(printf before\\\n", "", 3, ')')]
+    [InlineData("value=$(printf \"first\nsecond\n", "", 1, '"')]
+    public async Task IncompleteCaptureUsesTheSourceReaderCoordinate(string body, string stdout, int line, char delimiter)
+    {
+        const string script = "source ./fixture\nprintf 'tail:%s' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(stdout + "tail:2", host.StandardOutput.TextContent);
+            Assert.Equal($"./fixture: line {line}: unexpected EOF while looking for matching `{delimiter}'\n",
+                host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task EvalCaptureEndOfInputKeepsWarningAndConditionalReaderOrigins()
+    {
+        const string script = "source ./fixture\nprintf 'outer:%s' \"$?\"\n";
+        const string fixture = "printf 'sourced\\n'\neval '[[ $(cat <<DATA\nbody\n'\nprintf 'inner:%s\\n' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", fixture);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("sourced\ninner:2\nouter:0", host.StandardOutput.TextContent);
+            byte[] diagnostics =
+            [
+                .. "./fixture: line 5: warning: here-document at line 4 delimited by end-of-file (wanted `DATA')\n"u8,
+                .. "./fixture: eval: line 6: unexpected EOF while looking for matching `)'\n"u8,
+                .. "./fixture: eval: line 6: unexpected token `"u8, 0xff, .. "' in conditional command\n"u8
+            ];
+            Assert.Equal(diagnostics, host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("value=$((printf first) printf extra)\n",
+        "./fixture: command substitution: line 1: syntax error near unexpected token `printf'\n"
+        + "./fixture: command substitution: line 1: `(printf first) printf extra'\n")]
+    [InlineData("value=$((printf ok); :\nprintf body |\n)\n",
+        "./fixture: command substitution: line 5: syntax error: unexpected end of file\n")]
+    [InlineData("value=`printf ok |`\n", "./fixture: command substitution: line 2: syntax error: unexpected end of file\n")]
+    public async Task ReachedCaptureReportsTheInnerReader(string body, string diagnostics)
+    {
+        const string script = "source ./fixture\nprintf 'tail:%s' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("tail:2", host.StandardOutput.TextContent);
+            Assert.Equal(diagnostics, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Fact]
     public async Task HostSyntaxExceptionDuringExecutionIsNotTreatedAsAParserFailure()
     {

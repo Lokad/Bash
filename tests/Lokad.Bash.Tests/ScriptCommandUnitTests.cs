@@ -125,11 +125,11 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
-    [InlineData("for ((i=7)); do :; done", "2")]
-    [InlineData("value=\"$(for ((i=7)); do :; done)\"", "2")]
-    [InlineData("value=(\"$(for ((i=7)); do :; done)\")", "1")]
-    [InlineData("value=$(printf hidden |", "2")]
-    public async Task RecoverableSourceSyntaxFailureReturnsToCaller(string malformed, string builtinStatus)
+    [InlineData("for ((i=7)); do :; done", "2", "syntax error:")]
+    [InlineData("value=\"$(for ((i=7)); do :; done)\"", "2", "syntax error:")]
+    [InlineData("value=(\"$(for ((i=7)); do :; done)\")", "1", "syntax error:")]
+    [InlineData("value=$(printf hidden |", "2", "unit: line 3: unexpected EOF while looking for matching `)'")]
+    public async Task RecoverableSourceSyntaxFailureReturnsToCaller(string malformed, string builtinStatus, string diagnostic)
     {
         await using var host = new TestHost();
         host.AddFile("/unit", "printf before\n" + malformed);
@@ -137,7 +137,7 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("before:" + builtinStatus + ":after", host.StandardOutput.TextContent);
-        Assert.Contains("syntax error:", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.Contains(diagnostic, host.StandardError.TextContent, StringComparison.Ordinal);
         Assert.Equal(0, host.OpenFileCount);
     }
 

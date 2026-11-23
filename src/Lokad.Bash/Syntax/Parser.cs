@@ -237,7 +237,16 @@ public static class Parser
                 yield return new CommandUnitParseResult.Failed(failure)
                 {
                     HereDocumentWarnings = warnings,
-                    DiagnosticLine = failure.UnexpectedToken is { } diagnostic ? tokenizer.GetLine(diagnostic.ReadPosition) : 0
+                    DiagnosticLine = failure switch
+                    {
+                        { CaptureEndOfInput: { } captureEnd } =>
+                            tokenizer.GetLine(captureEnd.ReadPosition) + captureEnd.LineAdvance,
+                        { UnexpectedToken: { } diagnostic } => tokenizer.GetLine(diagnostic.ReadPosition),
+                        { Kind: ParserFailureKind.Grammar } when trailing.Kind == TokenKind.EndOfInput
+                            && failure.Error.Offset == input.Length && tokenizer.Position == input.Length =>
+                            tokenizer.GetLine(input.Length) + tokenizer.EndOfInputLineAdvance,
+                        _ => 0
+                    }
                 };
                 yield break;
             }
@@ -314,7 +323,7 @@ public static class Parser
                 {
                     tokenizer.ReadHereDocumentExpansionCaptureBodies(pending);
                     syntaxError = MissingCloser(pending.Warnings, GetWarningOffset(pending.Warnings, input, payloadStart),
-                        input.Length);
+                        input.Length, tokenizer.EndOfInputLineAdvance);
                     return ShellScanStatus.Invalid;
                 }
                 if (!context.CanReadAhead(input))
@@ -452,29 +461,34 @@ public static class Parser
             SkipNewlines(tokenizer);
             var closing = tokenizer.PeekTokenCore();
             var bodyFailure = tokenizer.Failure;
-            if (tokenizer is { AllowEofHereDocuments: true, HereDocuments: { } documents }
-                && tokenizer.Position == source.Length && closing.Kind == TokenKind.EndOfInput
-                && (bodyFailure == null || documents.Warnings != null) && !tokenizer.HasPendingClosingParenthesis
-                && !context.ParsingLimitExceeded)
+            var reachedEnd = tokenizer.Position == source.Length && closing.Kind == TokenKind.EndOfInput
+                && !tokenizer.HasPendingClosingParenthesis && !context.ParsingLimitExceeded;
+            if (reachedEnd && tokenizer is { AllowEofHereDocuments: true, HereDocuments: { } documents }
+                && (bodyFailure == null || documents.Warnings != null))
             {
                 var warnings = documents.Warnings;
-                error = MissingCloser(warnings, GetWarningOffset(warnings, source, start), source.Length);
+                error = MissingCloser(warnings, GetWarningOffset(warnings, source, start), source.Length,
+                    tokenizer.EndOfInputLineAdvance);
                 return ShellScanStatus.Invalid;
             }
-            if (bodyFailure != null)
+            if (bodyFailure != null && (context.ParsingLimitExceeded || bodyFailure.CaptureEndOfInput != null
+                || bodyFailure.Error.Offset < source.Length || tokenizer.HasPendingClosingParenthesis))
             {
-                if (context.ParsingLimitExceeded || bodyFailure.HereDocumentEndOfInput != null
-                    || bodyFailure.Error.Offset < source.Length || tokenizer.HasPendingClosingParenthesis)
-                {
-                    error = bodyFailure.InSubstitution();
-                    if (error.UnexpectedToken is { } unexpected)
-                        error = error with { UnexpectedToken = unexpected with { CapturePayloadStart = start } };
-                    return ShellScanStatus.Invalid;
-                }
-                return ShellScanStatus.Incomplete;
+                error = bodyFailure.InSubstitution();
+                if (error.UnexpectedToken is { } unexpected)
+                    error = error with { UnexpectedToken = unexpected with { CapturePayloadStart = start } };
+                return ShellScanStatus.Invalid;
             }
 
-            if (closing.Kind == TokenKind.EndOfInput)
+            if (reachedEnd && tokenizer.AllowEofHereDocuments)
+            {
+                error = new ParserFailure(new SyntaxError("Unterminated command substitution.", start), ParserFailureKind.Delimiter)
+                {
+                    CaptureEndOfInput = new CaptureEndOfInput(')', source.Length) { LineAdvance = tokenizer.EndOfInputLineAdvance }
+                };
+                return ShellScanStatus.Incomplete;
+            }
+            if (bodyFailure != null || closing.Kind == TokenKind.EndOfInput)
                 return ShellScanStatus.Incomplete;
             if (closing.Kind != TokenKind.CloseParen)
             {
@@ -490,10 +504,11 @@ public static class Parser
             return ShellScanStatus.Complete;
         }
 
-        static ParserFailure MissingCloser(IReadOnlyList<HereDocumentWarning>? warnings, int lineOffset, int eofOffset) =>
+        static ParserFailure MissingCloser(IReadOnlyList<HereDocumentWarning>? warnings, int lineOffset, int eofOffset, int lineAdvance) =>
             new(new SyntaxError("unexpected EOF while looking for matching `)'", eofOffset), ParserFailureKind.Delimiter)
             {
-                HereDocumentEndOfInput = new CapturedHereDocumentEndOfInput(warnings, lineOffset)
+                CaptureEndOfInput = new CaptureEndOfInput(')', eofOffset)
+                    { Warnings = warnings, WarningOffset = lineOffset, LineAdvance = lineAdvance }
             };
 
         static int GetWarningOffset(IReadOnlyList<HereDocumentWarning>? warnings, ShellSource source, int start) =>
