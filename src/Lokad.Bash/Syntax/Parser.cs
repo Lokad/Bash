@@ -410,7 +410,7 @@ public static class Parser
         new ParsedScript([CompleteHereDocuments(tokenizer, command)])
         {
             Locations = tokenizer.Locations,
-            HasAnsiCLiterals = tokenizer.HasAnsiCLiterals
+            HasNormalizedSpelling = tokenizer.HasNormalizedSpelling
         };
 
     private static ICommand CompleteHereDocuments(Tokenizer tokenizer, ICommand command) =>

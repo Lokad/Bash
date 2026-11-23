@@ -427,7 +427,8 @@ internal static class FunctionDefinitionFormatter
                             break;
                         case ConditionalCommand conditional:
                             if (capture) PushStep(new Step.Condition(conditional.Condition));
-                            else Push(new Step.Text("[[ "), new Step.Source(conditional.Spelling), new Step.Text(" ]]"));
+                            else if (!Append("[[ ") || !AppendConditionalSpelling(conditional.Spelling) || !Append(" ]]"))
+                                return false;
                             break;
                         case CaseCommand selection:
                             PushStep(new Step.Text("esac"));
@@ -465,6 +466,21 @@ internal static class FunctionDefinitionFormatter
         }
         if (capture) return FlushCaptureDocuments();
         return !braceSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
+
+        bool AppendConditionalSpelling(ConditionalSpelling spelling)
+        {
+            var source = spelling.Source.AsSpan();
+            var written = 0;
+            if (spelling.Captures is { } nested)
+                foreach (var substitution in nested)
+                {
+                    if (!output.TryAppend(source[written..substitution.Offset])
+                        || !TryAppendSubstitutionSource(substitution.Syntax, output, budget, cancellationToken))
+                        return false;
+                    written = substitution.Offset;
+                }
+            return output.TryAppend(source[written..]);
+        }
 
         bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart)
         {

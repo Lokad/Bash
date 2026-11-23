@@ -116,14 +116,14 @@ public sealed class ConditionalParserTests
     }
 
     [Theory]
-    [InlineData("x == x # ]] $( '\n", "x == x \n")]
-    [InlineData("x == x # comment\n&& y == y", "x == x \n&& y == y")]
-    [InlineData("x == x # trailing without LF", "x == x ")]
+    [InlineData("x == x # ]] $( '\n", "x == x")]
+    [InlineData("x == x # comment\n&& y == y", "x == x && y == y")]
+    [InlineData("x == x # trailing without LF", "x == x")]
     [InlineData("x\\\n\\\ny == xy", "xy == xy")]
     [InlineData("\"x\\\n\\\ny\" == xy", "\"xy\" == xy")]
     [InlineData("$\\\n\\\n'x' == x", "'x' == x")]
     [InlineData("'x\\\ny' == 'x\\\ny'", "'x\\\ny' == 'x\\\ny'")]
-    public void CallerSourceStaysPhysicalWhileReplaySpellingRemovesOnlyItsLexicalEdits(string source, string expected)
+    public void CallerExpressionKeepsItsBytesWhenDefinitionSpellingIsCanonicalized(string source, string expected)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(source);
         ConditionalCommand? command = null;

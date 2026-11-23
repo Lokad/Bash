@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Lokad.Bash.Syntax;
 
 /// <summary>
@@ -15,18 +17,23 @@ public sealed class ConditionalCommand : ICommand
         Spelling = spelling;
     }
 
-    internal ConditionalCommand(ShellSource expression, ConditionalExpression condition, ShellSource spelling, bool hasAnsiCLiterals)
+    internal ConditionalCommand(ShellSource expression, ConditionalExpression condition, ConditionalSpelling spelling, bool hasNormalizedSpelling)
     {
         Expression = expression;
         Condition = condition;
         Spelling = spelling;
-        HasAnsiCLiterals = hasAnsiCLiterals;
+        HasNormalizedSpelling = hasNormalizedSpelling;
     }
 
     /// <summary>The original, unexpanded conditional source.</summary>
     public ShellSource Expression { get; }
-    /// <summary>Lexically normalized spelling for replay, without a trailing source comment swallowing ]].</summary>
-    internal ShellSource Spelling { get; }
-    internal bool HasAnsiCLiterals { get; }
+    /// <summary>Canonical conditional syntax for definition display and export.</summary>
+    internal ConditionalSpelling Spelling { get; }
+    internal bool HasNormalizedSpelling { get; }
     internal ConditionalExpression Condition { get; }
 }
+
+/// <summary>Spelling at one conditional level with nested captures rendered on demand.</summary>
+internal readonly record struct ConditionalSpelling(ShellSource Source, IReadOnlyList<ConditionalSpellingCapture>? Captures);
+
+internal readonly record struct ConditionalSpellingCapture(int Offset, CommandSubstitutionSyntax Syntax);

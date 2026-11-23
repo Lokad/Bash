@@ -30,7 +30,7 @@ internal sealed class Tokenizer
     internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
-    internal bool HasAnsiCLiterals { get; private set; }
+    internal bool HasNormalizedSpelling { get; private set; }
 
     internal ShellScanContext ScanContext => _scanContext;
 
@@ -984,7 +984,7 @@ internal sealed class Tokenizer
             return false;
         }
         Position = end;
-        HasAnsiCLiterals |= command.HasAnsiCLiterals;
+        HasNormalizedSpelling |= command.HasNormalizedSpelling;
         if (TrackCommandLocations)
             ConsumedPosition = end;
         return true;
@@ -1183,7 +1183,7 @@ internal sealed class Tokenizer
                     return new Word([]);
                 if (current == (byte)'$')
                 {
-                    HasAnsiCLiterals = true;
+                    HasNormalizedSpelling = true;
                     spelling.RecordAnsiCLiteral(literalStart, Position, content);
                 }
                 if (syntax == ExpansionWordSyntax.ArithmeticSource && !quotedOperand)
@@ -1222,6 +1222,11 @@ internal sealed class Tokenizer
                 && ShellSourceCursor.TryMatchLogicalText(span, Position, "$\"", out quoteContentStart))
             {
                 FlushUnquoted();
+                if (current == (byte)'$')
+                {
+                    HasNormalizedSpelling = true;
+                    spelling.RecordLocalePrefix(Position, quoteContentStart - 1);
+                }
                 Position = quoteContentStart;
                 var quotedParts = ReadDoubleQuotedParts(span, syntax, spelling);
                 parts.AddRange(quotedParts);
@@ -1366,10 +1371,10 @@ internal sealed class Tokenizer
 
         Position = endIndex + 1;
         var parsed = payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax.");
-        if (parsed is CommandSubstitutionSyntax.Parsed { Script.HasAnsiCLiterals: true })
+        if (parsed is CommandSubstitutionSyntax.Parsed { Script.HasNormalizedSpelling: true })
         {
-            HasAnsiCLiterals = true;
-            spelling.RecordAnsiCCapture(start, Position, parsed);
+            HasNormalizedSpelling = true;
+            spelling.RecordCapture(start, Position, parsed);
         }
         return new CommandSubstitutionWordPart(kind, parsed);
     }

@@ -509,6 +509,9 @@ from the failed unit to the runtime diagnostic. The line counter includes any
 buffered here-document advance, and the displayed bytes come from the physical
 line at the failure. The source owner and diagnostic record remain admitted
 through stderr write completion.
+Conditional display retains the local spelling and borrows nested capture
+syntax for rendering on demand. Spacing edits use parser scratch that refunds
+when the conditional is prepared.
 `source` and `eval` select operands from completed byte fields after command
 resolution. They validate leading options before performing a file lookup or
 allocating copied script source. `source` decodes its selected filename and

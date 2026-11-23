@@ -18,6 +18,12 @@ public sealed partial class ConditionalLexingTests
     [InlineData("$\\\n'hello\\nworld' == $'hello\\nworld'", "'hello\nworld' == 'hello\nworld'")]
     [InlineData("\"$'marked\\ntext'\" == \"$'marked\\ntext'\"", "\"$'marked\\ntext'\" == \"$'marked\\ntext'\"")]
     [InlineData("\"$(printf %s $'a\\nb')\" == $'a\\nb'", "\"$(printf %s 'a\nb')\" == 'a\nb'")]
+    [InlineData("! ! (yes&&yes) || no", "( -n yes && -n yes ) || -n no")]
+    [InlineData("yes && # comment\n yes", "-n yes && -n yes")]
+    [InlineData("$\\\n\"yes\" == yes", "\"yes\" == yes")]
+    [InlineData("! ! ! \"\"", "! -n \"\"")]
+    [InlineData("\"$([[ x ]]; printf a)$([[ $\"y\" == y ]] && printf b)\" == ab",
+        "\"$([[ -n x ]]; printf a)$([[ \"y\" == y ]] && printf b)\" == ab")]
     public async Task ConditionalDisplayRendersDecodedOperandsAndKeepsTheirMeaning(string condition, string spelling)
     {
         var script = "f(){ [[ " + condition + " ]] && printf hit; }; declare -f f; d=$(declare -f f); unset -f f; eval \"$d\"; f";
@@ -37,6 +43,20 @@ public sealed partial class ConditionalLexingTests
             owner.Dispose();
             Assert.Equal(0, governor.ReservedBytes);
         }
+    }
+
+    [Fact]
+    public async Task ExportedConditionalKeepsItsCanonicalSpellingAndProtectedData()
+    {
+        const string script = "f(){ [[ \"$([[ yes ]]; printf yes)\" == $\"yes\" && (! \"\") ]]; }; "
+            + "export -f f; bash -c 'declare -f f; f; printf \"[%s]\" \"$?\"'";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("f () \n{ \n    [[ \"$([[ -n yes ]]; printf yes)\" == \"yes\" && ( ! -n \"\" ) ]]\n}\n[0]",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
     }
 
     [Fact]
