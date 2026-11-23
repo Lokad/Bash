@@ -61,8 +61,7 @@ internal sealed class ConditionalParser : IDisposable
         var spelling = parser._spellingEdits == null && parser._spacingEdits == null
             ? new SourceSpelling(original, Captures: null)
             : parser.GetSpelling(parser._firstTokenStart, parser._previousTokenEnd, display: true);
-        command = new ConditionalCommand(original, expression, spelling,
-            parser._ignoredRanges != null || parser._spacingEdits != null || parser._spellingEdits != null);
+        command = new ConditionalCommand(original, expression, spelling);
         end = parser._position;
         return true;
     }

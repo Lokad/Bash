@@ -187,6 +187,11 @@ definitions inherit the executing function's source, independently of its caller
 Retired bindings and settled child namespaces release their ownership; copied
 eval/trap source does not keep unrelated source-file buffers admitted.
 
+Definition listings render modern command substitutions from their retained syntax.
+Nested conditional and parameter spellings reference the same parsed captures,
+and traversal and pending here-documents use the formatter's admitted workspace.
+Printing a listing leaves the originating definition's command locations intact.
+
 Each immutable function binding shares its serialized export across attribute
 copies and child namespaces. First serialization charges the creator's installed
 evaluation owner. Unset/redefinition releases retired storage after the last

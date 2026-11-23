@@ -409,9 +409,7 @@ public static class Parser
         command == null ? new ParsedScript([]) :
         new ParsedScript([CompleteHereDocuments(tokenizer, command)])
         {
-            Locations = tokenizer.Locations,
-            HasNormalizedSpelling = tokenizer.HasNormalizedSpelling,
-            HasConditionalSyntax = tokenizer.HasConditionalSyntax
+            Locations = tokenizer.Locations
         };
 
     private static ICommand CompleteHereDocuments(Tokenizer tokenizer, ICommand command) =>

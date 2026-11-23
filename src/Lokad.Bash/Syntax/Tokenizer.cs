@@ -30,8 +30,6 @@ internal sealed class Tokenizer
     internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
-    internal bool HasNormalizedSpelling { get; private set; }
-    internal bool HasConditionalSyntax { get; private set; }
 
     internal ShellScanContext ScanContext => _scanContext;
 
@@ -985,8 +983,6 @@ internal sealed class Tokenizer
             return false;
         }
         Position = end;
-        HasConditionalSyntax = true;
-        HasNormalizedSpelling |= command.HasNormalizedSpelling;
         if (TrackCommandLocations)
             ConsumedPosition = end;
         return true;
@@ -1190,10 +1186,7 @@ internal sealed class Tokenizer
                 if (Error != null)
                     return new Word([]);
                 if (current == (byte)'$')
-                {
-                    HasNormalizedSpelling = true;
                     spelling.RecordAnsiCLiteral(literalStart, Position, content);
-                }
                 if (syntax == ExpansionWordSyntax.ArithmeticSource && !quotedOperand)
                 {
                     // ((...)) and $((...)) retain the decoded quotes before expanding their contents.
@@ -1231,10 +1224,7 @@ internal sealed class Tokenizer
             {
                 FlushUnquoted();
                 if (current == (byte)'$')
-                {
-                    HasNormalizedSpelling = true;
                     spelling.RecordLocalePrefix(Position, quoteContentStart - 1);
-                }
                 Position = quoteContentStart;
                 var quotedParts = ReadDoubleQuotedParts(span, syntax, spelling);
                 parts.AddRange(quotedParts);
@@ -1379,12 +1369,8 @@ internal sealed class Tokenizer
 
         Position = endIndex + 1;
         var parsed = payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax.");
-        if (parsed is CommandSubstitutionSyntax.Parsed { Script.RequiresCanonicalSpelling: true } capture)
-        {
-            HasNormalizedSpelling |= capture.Script.HasNormalizedSpelling;
-            HasConditionalSyntax |= capture.Script.HasConditionalSyntax;
+        if (parsed is CommandSubstitutionSyntax.Parsed { CanRenderBody: true })
             spelling.RecordCapture(start, Position, parsed);
-        }
         return new CommandSubstitutionWordPart(kind, parsed);
     }
 
@@ -1423,12 +1409,8 @@ internal sealed class Tokenizer
             content.AppendParameter(start, endIndex + 1, payload);
             if (hasSpellingEdits)
             {
-                HasNormalizedSpelling = true;
                 spelling.RecordParameter(start, endIndex + 1, payload);
                 expandedParameterQuoteSyntax |= expandedQuotes;
-                if (payload.Captures is { } captures)
-                    foreach (var capture in captures)
-                        HasConditionalSyntax |= capture.Syntax is CommandSubstitutionSyntax.Parsed { Script.HasConditionalSyntax: true };
             }
             renderedLineAdjustment += adjustment;
             if (quoted && subscriptFailure == ParameterSubscriptFailure.None

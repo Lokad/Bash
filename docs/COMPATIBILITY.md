@@ -737,6 +737,11 @@ The runtime does not import process environment variables or startup files.
 Both function-definition forms require a compound command body. In `function name`,
 the optional empty `()` header is distinguished from a subshell body beginning with
 `(`. Function-body redirections apply when the function is invoked.
+When listing a definition, parsed `$(...)` bodies use Bash's command layout.
+Newlines between commands and in literal data remain part of the spelling.
+Trailing comments and blank lines are omitted, and a here-document keeps the
+newlines needed to delimit its body. Reloading the listing with `eval` locates
+commands using the printed lines.
 
 `getopts` scans explicit arguments or the current positional parameters one option
 byte at a time, including bundled flags. A colon after an option byte requires an

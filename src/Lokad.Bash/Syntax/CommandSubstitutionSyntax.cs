@@ -6,7 +6,10 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
     /// <summary>A parenthesized body parsed by the delimiter grammar, including completed here-documents.</summary>
     internal sealed record Parsed(ShellSource SourceText, ParsedScript Script, SubstitutionSyntaxFailure Failure,
         bool PreserveAdjacentOpening)
-        : CommandSubstitutionSyntax(SourceText);
+        : CommandSubstitutionSyntax(SourceText)
+    {
+        internal bool CanRenderBody => Failure == SubstitutionSyntaxFailure.None && !PreserveAdjacentOpening;
+    }
 
     /// <summary>Legacy executable bytes and their original delimiters/escapes, validated only when reached.</summary>
     internal sealed record Legacy(ShellSource SourceText, ShellSource Spelling, LegacySubstitutionOrigin Origin)

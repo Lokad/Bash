@@ -243,7 +243,7 @@ internal static class BracedParameterScanner
                         subscriptFailure = ParameterSubscriptFailure.Nested;
                     if (quotes != LexicalQuotes.Preserve && selectorDepth == 0 && nested.Kind == ShellNestedExpansionKind.Command
                         && context.TryGetCommandSubstitution(text, nestedStart, out var cached)
-                        && cached.Substitution is CommandSubstitutionSyntax.Parsed { Script.RequiresCanonicalSpelling: true } normalized)
+                        && cached.Substitution is CommandSubstitutionSyntax.Parsed { CanRenderBody: true } normalized)
                         edits.AddCapture(context, nestedStart, cursor.Position, normalized);
                     continue;
                 }

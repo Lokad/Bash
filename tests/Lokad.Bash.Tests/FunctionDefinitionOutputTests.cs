@@ -230,10 +230,26 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    // Both Bash pins agree before and after reloading the displayed definition.
+    [Theory]
+    [InlineData("printf '<%s>' \"$LINENO\"", "<1>:1|<7>:8")]
+    [InlineData("printf '<%s>' \"$LINENO\"\nprintf '<%s>' \"$LINENO\"", "<2><3>:2|<9><10>:10")]
+    [InlineData("printf '<%s>' \"$LINENO\" # skipped\n", "<2>:2|<8>:9")]
+    public async Task DefinitionReloadPreservesCaptureCoordinates(string body, string expected)
+    {
+        var script = "f(){ v=$(" + body + "); printf '%s:%s' \"$v\" \"$LINENO\"; }\n"
+            + "f; printf '|'\nsaved=$(declare -f f)\nunset -f f\neval \"$saved\"\nf\n";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     // Git Bash 5.2.37 output, except retained CR, equivalent quoting/substitution delimiters and flat elif chains.
     [Theory]
     // The escaped dollar outside the quotes remains separate from the next quoted group.
-    [InlineData("f(){ printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one)\"$(printf two)\"; cat <<'END'\nbody\nEND\n}", "f () \n{ \n    printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one\n)\"$(printf two\n)\";\n    cat <<'END'\nbody\nEND\n\n}\n")]
+    [InlineData("f(){ printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one)\"$(printf two)\"; cat <<'END'\nbody\nEND\n}", "f () \n{ \n    printf '%s\\n' plain'single'\"double\\\"\\\\\"\\$\"\\$\"$(printf one)\"$(printf two)\";\n    cat <<'END'\nbody\nEND\n\n}\n")]
     [InlineData("f(){ :;\n}", "f () \n{ \n    :\n}\n")]
     [InlineData("f(){ true || : `if`; printf ok; }", "f () \n{ \n    true || : `if`;\n    printf ok\n}\n")]
     [InlineData("f(){ false && : \"`)`\"; printf ok; }", "f () \n{ \n    false && : \"`)`\";\n    printf ok\n}\n")]
@@ -257,11 +273,21 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ [[ $x == a* && -n \"$y\" ]];\n}", "f () \n{ \n    [[ $x == a* && -n \"$y\" ]]\n}\n")]
     [InlineData("f(){ printf '%s' \"$([[ yes ]]; printf yes)\"; }",
         "f () \n{ \n    printf '%s' \"$([[ -n yes ]]; printf yes)\"\n}\n")]
+    [InlineData("f(){ printf '<%s>' \"$(printf %s $'a\\nb' # skipped\n)\"; }",
+        "f () \n{ \n    printf '<%s>' \"$(printf %s 'a\nb')\"\n}\n")]
+    [InlineData("f(){ printf '<%s>' \"$(if false; then :; elif :; then printf yes; fi)\"; }",
+        "f () \n{ \n    printf '<%s>' \"$(if false; then\n    :;\nelse\n    if :; then\n        printf yes;\n    fi;\nfi)\"\n}\n")]
+    [InlineData("f(){ printf '<%s>' \"$(g(){ printf one; printf two\nprintf three; }; g)\"; }",
+        "f () \n{ \n    printf '<%s>' \"$(function g () \n{ \n    printf one;\n    printf two\n\n    printf three\n}; g)\"\n}\n")]
+    [InlineData("f(){ printf '<%s>' \"$( (cat <<END\none\nEND\n))\"; }",
+        "f () \n{ \n    printf '<%s>' \"$( ( cat <<END\none\nEND\n ))\"\n}\n")]
+    [InlineData("f(){ printf '<%s>' \"$(cat <<END && printf two\none\nEND\n)\"; }",
+        "f () \n{ \n    printf '<%s>' \"$(cat <<END && \none\nEND\n printf two)\"\n}\n")]
     [InlineData("f(){ ((x+=1));\n}", "f () \n{ \n    ((x+=1))\n}\n")]
     [InlineData("f(){ g(){ printf '%s\\n' \"$1\"; }; g x;\n}", "f () \n{ \n    function g () \n    { \n        printf '%s\\n' \"$1\"\n    };\n    g x\n}\n")]
     [InlineData("f(){ echo x 2>err >out; cat <in; echo y >&2; true 3>&-;\n}", "f () \n{ \n    echo x 2> err > out;\n    cat < in;\n    echo y 1>&2;\n    true 3>&-\n}\n")]
     [InlineData("f(){ x='a b' y+=c printf '%s\\n' \"$x\"; declare -a arr=([2]='a b' tail); arr+=(one);\n}", "f () \n{ \n    x='a b' y+=c printf '%s\\n' \"$x\";\n    declare -a arr=([2]='a b' tail);\n    arr+=(one)\n}\n")]
-    [InlineData("f(){ printf '%s\\n' 'a b' \"$x\" \"a\\$x\" \"${x:-a b}\" a\\ b \"$(printf x)\";\n}", "f () \n{ \n    printf '%s\\n' 'a b' \"$x\" \"a\\$x\" \"${x:-a b}\" a\\ b \"$(printf x\n)\"\n}\n")]
+    [InlineData("f(){ printf '%s\\n' 'a b' \"$x\" \"a\\$x\" \"${x:-a b}\" a\\ b \"$(printf x)\";\n}", "f () \n{ \n    printf '%s\\n' 'a b' \"$x\" \"a\\$x\" \"${x:-a b}\" a\\ b \"$(printf x)\"\n}\n")]
     [InlineData("f(){ cat <<'END'\n$x\nEND\n\n}", "f () \n{ \n    cat <<'END'\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<END\n$x\nEND\n\n}", "f () \n{ \n    cat <<END\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<ONE | cat <<'TWO'\nfirst\nONE\nsecond\nTWO\n\n}", "f () \n{ \n    cat <<ONE |\nfirst\nONE\n  cat <<'TWO'\nsecond\nTWO\n\n}\n")]
