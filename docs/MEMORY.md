@@ -171,9 +171,12 @@ Only reached bindings acquire admitted, independent containers in command
 workspace. Missing command bindings hide caller names without deleting caller
 state. Element and array metadata reads use the visible slot directly. Reads
 return immutable bytes or metadata, and writes take independent mutable backing
-before publication. In-process installation admits the saved caller set before
-publishing any prefix. It moves original slots to the saved store and consumes
-the prepared prefix slots. Retained outputs admit independent copies before staging, reusing
+before publication. Aggregate values and keys can use the borrowed array when
+the expansion consumes it before running another operand. An operator that
+reads it after operand effects keeps the command-owned source. In-process
+installation admits the saved caller set before publishing any prefix. It
+moves original slots to the saved store and consumes the prepared prefix slots.
+Retained outputs admit independent copies before staging, reusing
 the surrounding command's capacity for later replacements. Valueless declaration
 lookup admits its prefix selection buffer in command workspace as it grows.
 Each operand clears the selected references before the next lookup.

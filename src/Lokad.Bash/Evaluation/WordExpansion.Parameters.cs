@@ -712,8 +712,13 @@ internal static partial class WordExpansion
                             [ShellValue.FromInteger(length)], true, null, null);
                     }
 
-                    var array = variables.IndexedArrays.GetValueOrDefault(resolved);
-                    var map = array == null ? variables.AssociativeArrays.GetValueOrDefault(resolved) : null;
+                    // Conditional branches inspect the array before choosing or expanding the word.
+                    // Operators that consume it after operand effects keep the command-owned source.
+                    var detachBorrowed = parsed.Kind is not (BracedParameterOperatorKind.None
+                        or BracedParameterOperatorKind.UseDefault or BracedParameterOperatorKind.UseAlternate
+                        or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset
+                        or BracedParameterOperatorKind.Transform);
+                    var (array, map) = variables.SelectExpansionArray(resolved, detachBorrowed);
                     var scalar = ShellValue.Empty;
                     var count = array?.Count ?? map?.Count ?? (variables.TryGetScalar(resolved, out scalar) ? 1 : 0);
 

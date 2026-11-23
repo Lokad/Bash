@@ -212,6 +212,16 @@ public sealed partial class Variables
             _ => null
         } : null;
 
+    /// <summary>Selects an array for expansion under the active command scope.</summary>
+    /// <remarks>Immediate consumers can enumerate the borrowed source before running another operand.</remarks>
+    internal (IndexedArray? Indexed, AssociativeArray? Associative) SelectExpansionArray(BindingName name, bool detachBorrowed) =>
+        TryGetBinding(name, detachBorrowed, out var slot) ? slot switch
+        {
+            IndexedSlot indexed => (indexed.Value, null),
+            AssociativeSlot map => (null, map.Value),
+            _ => default
+        } : default;
+
     internal bool TryReadArrayElement(BindingName name, IndexedArrayIndex index, out ShellValue value)
     {
         if (TryGetBinding(name, detachBorrowed: false, out var slot) && slot is IndexedSlot indexed)

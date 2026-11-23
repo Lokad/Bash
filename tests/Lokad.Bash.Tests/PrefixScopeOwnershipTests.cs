@@ -152,6 +152,36 @@ public sealed class PrefixScopeOwnershipTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
+    public async Task AggregateAlternateUsesBorrowedArrayBeforeExpandingItsWord(ArrayKind kind)
+    {
+        const int Count = 1024;
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromBytes(new byte[] { 0xff });
+        var entries = kind == ArrayKind.Indexed ? Enumerable.Repeat(value, Count).ToArray()
+            : Enumerable.Range(0, Count).SelectMany(index => new[] { ShellValue.FromInteger(index), value }).ToArray();
+        Assert.True(caller.TryAssignArray("array", entries, kind));
+
+        var governor = new MemoryGovernor(64 * 1024);
+        var evaluation = new Eval(Parser.Parse(""), EvaluationDescriptorSetup.Standard,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        try
+        {
+            var variables = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);
+            var scope = new ScopedEvaluation(evaluation, variables, default);
+            var word = new Word([WordPart.FromText(WordPartKind.DoubleQuoted, "${array[@]:+chosen}")]);
+
+            var fields = await WordExpansion.ExpandToWordsAsync(word, scope);
+
+            Assert.Equal(ShellValue.FromText("chosen"), Assert.Single(fields).ToValue(evaluation.Memory));
+            Assert.Equal(Count, caller.GetArrayMetadata("array")?.Count);
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public void FullChildCloneDetachesMergedBindingsAndPositionalEntries()
     {
