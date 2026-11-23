@@ -1,5 +1,6 @@
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
@@ -16,6 +17,58 @@ public sealed class ConditionalExpansionTests
         Assert.Equal(0, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("declare -A a=([key]=value); [[ -v a[$'key'] ]]", "0", "")]
+    [InlineData("declare -A a=([key]=value); [[ -v \"a[$'key']\" ]]", "1", "")]
+    [InlineData("declare -A a; k='$key'; a[$k]=value; [[ -v \"a[$'key']\" ]]", "0", "")]
+    [InlineData("declare -A a; k='$key'; a[$k]=value; ref=\"a[\\$'key']\"; [[ -v \"$ref\" ]]", "0", "")]
+    [InlineData("declare -A a; k='$key'; a[$k]=value; [ -v \"a[$'key']\" ]", "0", "")]
+    [InlineData("declare -A a; k='$key'; a[$k]=value; test -v \"a[$'key']\"", "0", "")]
+    [InlineData("declare -A a=([key]=value); [[ -v \"a[\\\"$(printf key; printf read >&2)\\\"]\" ]]", "0", "read")]
+    [InlineData("declare -A a; k='$ke\\y'; a[$k]=value; [[ -v \"a[$'ke\\'y']\" ]]", "1", "")]
+    [InlineData("a=([1]=value); [[ -n enabled || -v \"a[$'1']\" ]]", "0", "")]
+    public async Task VariablePresenceUsesTheQuoteGrammarOfTheSelectorSource(string setup, string status, string error)
+    {
+        var script = setup + "; printf '%s' \"$?\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(status, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
+    [InlineData("[[ -v \"a[$'1']\" ]]", "$1")]
+    [InlineData("test -v \"a[$'1']\"", "$'1'")]
+    [InlineData("[ -v \"a[$'1']\" ]", "$'1'")]
+    public async Task ExpandedIndexedPresenceReportsTheActualOperandAndEndsTheCurrentUnit(string predicate, string operand)
+    {
+        var script = "a=([1]=value); " + predicate + "; printf forbidden\nprintf '[%s]' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(script)), host, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("[1]", host.StandardOutput.TextContent);
+            Assert.Equal($"{operand}: syntax error: operand expected (error token is \"{operand}\")\n",
+                host.StandardError.TextContent);
+        }
     }
 
     [Theory]

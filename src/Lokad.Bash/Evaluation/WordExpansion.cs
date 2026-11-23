@@ -30,8 +30,12 @@ internal static partial class WordExpansion
 
     internal static Task<ShellValue> ExpandSubscriptAsync(
         ShellSource source, ScopedEvaluation scope, ExpansionPurpose purpose, bool allowLeadingTilde) =>
+        ExpandSubscriptAsync(source, scope, purpose, allowLeadingTilde, GetOperandSyntax(purpose));
+
+    private static Task<ShellValue> ExpandSubscriptAsync(
+        ShellSource source, ScopedEvaluation scope, ExpansionPurpose purpose, bool allowLeadingTilde, ExpansionWordSyntax syntax) =>
         ExpandUnsplitValueAsync(
-            Tokenizer.ReadExpansionWord(source, GetOperandSyntax(purpose), ShellQuoteKind.None, scope.Effects.Memory.Workspace),
+            Tokenizer.ReadExpansionWord(source, syntax, ShellQuoteKind.None, scope.Effects.Memory.Workspace),
             scope, purpose, allowLeadingTilde ? TildeExpansion.Leading : TildeExpansion.None);
 
     private static async Task<ShellValue> ExpandUnsplitValueAsync(

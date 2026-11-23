@@ -282,7 +282,7 @@ internal static class ArithmeticExpansionScanner
             if (cursor.Current == (byte)'\\' && position + 1 < expression.Length)
             {
                 // The enclosing quote removes only the escape before a double quote here.
-                // Other escapes belong to the arithmetic operand's own expansion.
+                // Other escapes belong to the bracketed operand's own expansion.
                 if (expression[position + 1] == (byte)'"')
                 {
                     normalized ??= context.CreateByteBuilder(expression.Length);

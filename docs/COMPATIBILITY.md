@@ -971,6 +971,10 @@ A bare array name queries element zero. For indexed arrays, `[@]` and `[*]` quer
 element presence across the array. For associative arrays, they denote the literal
 keys `@` and `*`. `-R` tests whether the named binding is an initialized nameref,
 including a reference to an unset target.
+For an associative array, `[[ -v a[$'key'] ]]` checks `key` and
+`[[ -v "a[$'key']" ]]` checks the literal `$key`. A reference produced as a
+value uses the latter quote handling. When indexed arithmetic rejects the
+resulting selector, the failed command unit ends with status 1.
 
 Printf numeric operands use byte-oriented C-locale prefix parsing. Invalid suffixes
 retain the converted prefix, report a byte-preserving diagnostic and return status 1;

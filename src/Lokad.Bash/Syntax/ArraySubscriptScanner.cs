@@ -11,7 +11,7 @@ internal static class ArraySubscriptScanner
         private readonly Dictionary<int, ScanResult> _results = [];
 
         public ShellScanStatus Scan(int openingBracketIndex, out int closingBracketIndex) =>
-            ArraySubscriptScanner.Scan(context, source, openingBracketIndex, _results, out closingBracketIndex);
+            ArraySubscriptScanner.Scan(context, source, openingBracketIndex, _results, recognizeAnsiC: true, out closingBracketIndex);
     }
 
     private readonly record struct ScanResult(ShellScanStatus Status, int ClosingBracketIndex);
@@ -28,20 +28,25 @@ internal static class ArraySubscriptScanner
         ShellSource text,
         int openingBracketIndex,
         out int closingBracketIndex) =>
-        Scan(context, text, openingBracketIndex, null, out closingBracketIndex) == ShellScanStatus.Complete;
+        TryScan(context, text, openingBracketIndex, recognizeAnsiC: true, out closingBracketIndex);
+
+    internal static bool TryScan(ShellScanContext context, ShellSource text, int openingBracketIndex,
+        bool recognizeAnsiC, out int closingBracketIndex) =>
+        Scan(context, text, openingBracketIndex, null, recognizeAnsiC, out closingBracketIndex) == ShellScanStatus.Complete;
 
     /// <summary>Distinguishes an absent bracket, complete subscript, incomplete input, and malformed syntax.</summary>
     public static ShellScanStatus Scan(
         ShellSource text,
         int openingBracketIndex,
         out int closingBracketIndex) =>
-        Scan(new ShellScanContext(), text, openingBracketIndex, null, out closingBracketIndex);
+        Scan(new ShellScanContext(), text, openingBracketIndex, null, recognizeAnsiC: true, out closingBracketIndex);
 
     private static ShellScanStatus Scan(
         ShellScanContext context,
         ShellSource text,
         int openingBracketIndex,
         Dictionary<int, ScanResult>? results,
+        bool recognizeAnsiC,
         out int closingBracketIndex)
     {
         closingBracketIndex = openingBracketIndex;
@@ -74,7 +79,7 @@ internal static class ArraySubscriptScanner
             {
                 if (cursor.TrySkipReadAheadBodies())
                     continue;
-                if (cursor.TryConsumeQuoteOrEscape())
+                if (cursor.TryConsumeQuoteOrEscape(recognizeAnsiC))
                     continue;
 
                 var nestedResult = cursor.SkipNestedExpansion(BracedParameterRecognition.All);

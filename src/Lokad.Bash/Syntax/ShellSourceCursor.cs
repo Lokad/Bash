@@ -278,7 +278,9 @@ internal sealed class ShellSourceCursor
     /// ANSI-C quotes protect escaped apostrophes and suppress all nested expansions.
     /// </summary>
     /// <returns>True when at least the current character was consumed.</returns>
-    public bool TryConsumeQuoteOrEscape()
+    public bool TryConsumeQuoteOrEscape() => TryConsumeQuoteOrEscape(recognizeAnsiC: true);
+
+    internal bool TryConsumeQuoteOrEscape(bool recognizeAnsiC)
     {
         var current = Current;
         if (_quote == ShellQuoteKind.AnsiC)
@@ -298,7 +300,7 @@ internal sealed class ShellSourceCursor
             return true;
         }
 
-        if (_quote == ShellQuoteKind.None && current == (byte)'$'
+        if (recognizeAnsiC && _quote == ShellQuoteKind.None && current == (byte)'$'
             && TryMatchLogicalText(_text.AsSpan(), Position, "$'", out var literalStart))
         {
             _quote = ShellQuoteKind.AnsiC;

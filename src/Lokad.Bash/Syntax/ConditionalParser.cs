@@ -230,23 +230,36 @@ internal sealed class ConditionalParser
             cursor.Advance();
         }
         var opening = cursor.Position;
-        if (cursor.IsAtEnd || opening == 0
-            || !ArraySubscriptScanner.TryScan(_context, source, opening, out var closing)
-            || closing != source.Length - 1)
+        if (cursor.IsAtEnd || opening == 0)
+            return null;
+
+        var quoted = nameQuote == ShellQuoteKind.Double;
+        var selectorSource = source;
+        var selectorOpening = opening;
+        if (quoted && source.AsSpan()[opening..].IndexOf("\\\""u8) >= 0)
+        {
+            selectorSource = FunctionDefinitionFormatter.RenderReadAheadCaptures(source.Slice(opening), _context);
+            // An enclosing double quote can supply escaped quotes to the selector grammar.
+            _ = ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(_context, ref selectorSource);
+            selectorOpening = 0;
+        }
+        if (!ArraySubscriptScanner.TryScan(_context, selectorSource, selectorOpening, recognizeAnsiC: !quoted, out var closing)
+            || closing != selectorSource.Length - 1)
             return null;
 
         var name = ParseWord(new Token(TokenKind.Word, source.Slice(0, opening), offset), nameQuote,
-            recordSpelling: nameQuote == ShellQuoteKind.None);
-        var selector = ParseWord(new Token(TokenKind.Word, source.Slice(opening + 1, closing - opening - 1), offset + opening + 1),
-            ShellQuoteKind.None, recordSpelling: nameQuote == ShellQuoteKind.None);
+            ExpansionWordSyntax.Parameter, recordSpelling: !quoted);
+        var selector = ParseWord(new Token(TokenKind.Word, selectorSource.Slice(selectorOpening + 1, closing - selectorOpening - 1),
+                offset + opening + 1),
+            ShellQuoteKind.None, quoted ? ExpansionWordSyntax.ExpandedSelector : ExpansionWordSyntax.Parameter, recordSpelling: !quoted);
         return name == null || selector == null ? null : new ConditionalExpression.VariableElement(name, selector);
     }
 
-    private Word? ParseWord(Token token) => ParseWord(token, ShellQuoteKind.None, recordSpelling: true);
+    private Word? ParseWord(Token token) => ParseWord(token, ShellQuoteKind.None, ExpansionWordSyntax.Parameter, recordSpelling: true);
 
-    private Word? ParseWord(Token token, ShellQuoteKind quote, bool recordSpelling)
+    private Word? ParseWord(Token token, ShellQuoteKind quote, ExpansionWordSyntax syntax, bool recordSpelling)
     {
-        if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, quote, _context,
+        if (Tokenizer.TryReadExpansionWord(token.Source, syntax, quote, _context,
                 recordSpelling ? new OperandSpelling(this, token.Offset) : default,
                 out var word, out var error))
             return word;

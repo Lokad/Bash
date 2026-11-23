@@ -64,7 +64,13 @@ internal readonly record struct VariableReference
     internal static bool TryParse(ShellSource text, EvaluationMemory? memory, out VariableReference reference)
         => TryParseSource(text, memory?.Workspace, out reference);
 
-    internal static bool TryParseSource(ShellSource text, MemoryCapacity? memory, out VariableReference reference)
+    internal static bool TryParseSource(ShellSource text, MemoryCapacity? memory, out VariableReference reference) =>
+        TryParseSource(text, memory, recognizeAnsiC: true, out reference);
+
+    internal static bool TryParseExpandedOperand(ShellSource text, MemoryCapacity memory, out VariableReference reference) =>
+        TryParseSource(text, memory, recognizeAnsiC: false, out reference);
+
+    private static bool TryParseSource(ShellSource text, MemoryCapacity? memory, bool recognizeAnsiC, out VariableReference reference)
     {
         reference = default;
         var opening = text.AsSpan().IndexOf((byte)'[');
@@ -79,7 +85,7 @@ internal readonly record struct VariableReference
         }
 
         if (!VariableNames.IsValidVariableName(text.AsSpan(0, opening))
-            || !ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = memory }, text, opening, out var closing)
+            || !ArraySubscriptScanner.TryScan(new ShellScanContext { SyntaxMemory = memory }, text, opening, recognizeAnsiC, out var closing)
             || closing != text.Length - 1)
             return false;
 

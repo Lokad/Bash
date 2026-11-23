@@ -1077,7 +1077,10 @@ internal sealed class Tokenizer
         var unquoted = new WordPartBuffer(_input, _scanContext);
         var quotedOperand = outerQuote == ShellQuoteKind.Double;
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
-        var arithmetic = syntax is not (ExpansionWordSyntax.Parameter or ExpansionWordSyntax.BraceExpanded);
+        var arithmetic = syntax is not (ExpansionWordSyntax.Parameter or ExpansionWordSyntax.BraceExpanded
+            or ExpansionWordSyntax.ExpandedSelector);
+        var dollarQuotes = syntax is not (ExpansionWordSyntax.DecodedArithmetic or ExpansionWordSyntax.ExpandedSelector
+            or ExpansionWordSyntax.ExpandedArithmeticSelector);
         var continuesQuote = false;
         var renderedLineAdjustment = 0;
         var subscriptFailure = ParameterSubscriptFailure.None;
@@ -1152,7 +1155,7 @@ internal sealed class Tokenizer
 
             // Decoded arithmetic source must not reinterpret generated $' sequences.
             if (current == '\'' && !quotedOperand && !arithmetic
-                || current == '$' && syntax != ExpansionWordSyntax.DecodedArithmetic
+                || current == '$' && dollarQuotes
                 && ShellSourceCursor.TryMatchLogicalText(span, Position, "$'", out _))
             {
                 FlushUnquoted();
@@ -1199,7 +1202,7 @@ internal sealed class Tokenizer
 
             var quoteContentStart = Position + 1;
             // The invariant profile uses the original text of a locale-quoted word.
-            if (current == (byte)'"' || current == (byte)'$' && syntax != ExpansionWordSyntax.DecodedArithmetic
+            if (current == (byte)'"' || current == (byte)'$' && dollarQuotes
                 && ShellSourceCursor.TryMatchLogicalText(span, Position, "$\"", out quoteContentStart))
             {
                 FlushUnquoted();
@@ -1635,6 +1638,9 @@ internal enum ExpansionWordSyntax
     // Arithmetic commands/expansions retain ANSI-C quotes after decoding their payload.
     ArithmeticSource,
     DecodedArithmetic,
+    // Expansion of a variable-test selector after the original word was read.
+    ExpandedSelector,
+    ExpandedArithmeticSelector,
 }
 
 /// <summary>Identifies the type of token returned by the tokenizer.</summary>

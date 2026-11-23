@@ -265,6 +265,10 @@ predicates use the existing file-operation path in source order. The distinct
 and filesystem execution with `[[`. Variable predicates share the binding and
 array selector resolver. A lexical conditional selector retains its own word
 and expands once when reached, before indexed arithmetic or associative lookup.
+Dollar-quote syntax belongs to the original lexical word. A selector in a
+wholly double-quoted reference or supplied through an expanded value uses
+ordinary selector quoting in the subsequent pass. Indexed predicate errors
+retain the arithmetic operand bytes and the command-unit failure path.
 In `test`, both sides of `-a` and `-o` are evaluated. Expressions with variable
 predicates evaluate file and variable predicates in argument order.
 

@@ -360,7 +360,7 @@ internal static partial class WordExpansion
         if (predicate == UnaryPredicateKind.VariableIsSet
             && Integers.TryParseBuiltinNumber(operand.Bytes.Span, scope.Effects.CancellationToken, out var position))
             return Task.FromResult(position >= 0 && position <= scope.Variables.PositionalParameters.Count);
-        if (!VariableReference.TryParse(ShellSource.FromBytes(operand.Bytes), scope.Effects.Memory, out var reference))
+        if (!VariableReference.TryParseExpandedOperand(ShellSource.FromBytes(operand.Bytes), scope.Effects.Memory.Workspace, out var reference))
             return Task.FromResult(false);
         if (predicate == UnaryPredicateKind.NamerefIsSet)
             return Task.FromResult(reference.Kind == VariableReferenceKind.Name
@@ -554,13 +554,16 @@ internal static partial class WordExpansion
             return null;
 
         var purpose = associative ? ExpansionPurpose.Scalar : arithmeticPurpose;
+        var syntax = use == ReferenceUse.Presence
+            ? associative ? ExpansionWordSyntax.ExpandedSelector : ExpansionWordSyntax.ExpandedArithmeticSelector
+            : GetOperandSyntax(purpose);
         // Indexed compound items have a word-expansion pass before replacement, then an
         // arithmetic-source pass against the array being built. Associative keys are already final.
         var expanded = preparedSubscript is { } prepared ? prepared.Value
             : associative && stagedSubscript is { } keyValue
             ? keyValue
             : await ExpandSubscriptAsync(selector.Subscript, scope, purpose,
-                allowLeadingTilde: associative && use == ReferenceUse.DirectAssign).ConfigureAwait(false);
+                allowLeadingTilde: associative && use == ReferenceUse.DirectAssign, syntax).ConfigureAwait(false);
         if (!scope.CanExpand)
             return null;
         if (associative)
