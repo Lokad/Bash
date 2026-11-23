@@ -69,16 +69,17 @@ internal sealed class Tokenizer
     }
 
     internal void RecordLocation(ICommand command, int startLine, int commandLine) =>
-        RecordLocation(command, startLine, commandLine, 0);
+        RecordLocation(command, startLine, commandLine, 0, 0);
 
-    internal void RecordLocation(ICommand command, int startLine, int commandLine, int redirectionDiagnosticLine)
+    internal void RecordLocation(ICommand command, int startLine, int commandLine, int redirectionDiagnosticLine, int redirectionOpenLine)
     {
         if (!TrackCommandLocations)
             return;
         (Locations ??= new CommandLocations()).Add(command,
             new CommandLocation(startLine, commandLine, GetLine(ConsumedPosition))
             {
-                RedirectionDiagnosticLine = redirectionDiagnosticLine
+                RedirectionDiagnosticLine = redirectionDiagnosticLine,
+                RedirectionOpenLine = redirectionOpenLine
             }, _scanContext.SyntaxMemory);
     }
 
@@ -87,8 +88,12 @@ internal sealed class Tokenizer
 
     internal void RecordRedirectedCommandLocation(RedirectedCommand command, int startLine)
     {
-        RecordLocation(command, startLine, startLine);
-        if (!TrackCommandLocations || command.Body is SubshellCommand
+        if (!TrackCommandLocations)
+            return;
+        var openLine = command.Body is ArithmeticCommand or ConditionalCommand
+            && Locations?.TryGet(command.Body, out var body) == true ? body.EndLine : 0;
+        RecordLocation(command, startLine, startLine, 0, openLine);
+        if (command.Body is SubshellCommand
             || !command.Redirections.Any(redirection => redirection.Kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs))
             return;
         if (_compoundHereDocuments == null)

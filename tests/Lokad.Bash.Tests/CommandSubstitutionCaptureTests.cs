@@ -229,7 +229,7 @@ public sealed class CommandSubstitutionCaptureTests
 
         Assert.Equal(exitCode, result.ExitCode);
         Assert.Equal(output, result.StdOut);
-        Assert.Equal("missing: No such file or directory\n", result.StdErr);
+        Assert.Equal("line 1: missing: No such file or directory\n", result.StdErr);
         Assert.Equal(0, result.Host.OpenFileCount);
     }
 

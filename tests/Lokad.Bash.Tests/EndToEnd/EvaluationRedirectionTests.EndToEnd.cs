@@ -11,6 +11,49 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationRedirectionTestsEndToEnd
 {
     [Theory]
+    [InlineData(": \\\n <./missing", "line 2: ./missing: No such file or directory\n")]
+    [InlineData(": < \\\n missing", "line 1: missing: No such file or directory\n")]
+    [InlineData(": \\\n {fd}< \\\n missing", "line 2: missing: No such file or directory\n")]
+    [InlineData(": >\"\"", "line 1: : No such file or directory\n")]
+    [InlineData(": <>\"\"", "line 1: : No such file or directory\n")]
+    [InlineData(": >>file/leaf", "line 1: file/leaf: Not a directory\n")]
+    [InlineData("{\n :\n} <missing", "line 3: missing: No such file or directory\n")]
+    [InlineData("(\n :\n) <missing", "line 3: missing: No such file or directory\n")]
+    [InlineData("{\n :\n} <<EOF <missing\nbody\nEOF\n", "line 5: missing: No such file or directory\n")]
+    [InlineData("f()\n{\n :\n} <missing\nf", "line 2: missing: No such file or directory\n")]
+    [InlineData("v=$(\n <missing\n)", "line 3: missing: No such file or directory\n")]
+    [InlineData("eval '\n : <missing\n '", "line 4: missing: No such file or directory\n")]
+    [InlineData("source ./part", "./part: line 2: missing: No such file or directory\n")]
+    public async Task FailedOpenReportsTheExpandedPathAndReaderLine(string script, string error)
+    {
+        await using var host = EndToEndHarness.BuildTree([("/file", ""), ("/part", "\n: <missing\n")]);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("", host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task FailedOpenUsesEarlierErrorMappingAndExpandsTheTargetOnce()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "p() { printf x >&3; printf './missing'; }\n" +
+            "{ : 2>error <\"$(p)\" >later; } 3>calls\n" +
+            "printf '<%s>' \"$?\"; printf after >&2", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Equal("after", host.StandardError.TextContent);
+        Assert.Equal("x", host.ReadFile("/calls"));
+        Assert.Equal("line 2: ./missing: No such file or directory\n", host.ReadFile("/error"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/later"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("", "<1>", "$(f): ambiguous redirect\n", null)]
     [InlineData("2>error", "<1>", "", "$(f): ambiguous redirect\n")]
     [InlineData("2>&1", "$(f): ambiguous redirect\n<1>", "", null)]

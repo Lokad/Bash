@@ -1276,6 +1276,9 @@ public static class Parser
     private static ICommand? ParseFunctionBody(Tokenizer tokenizer)
     {
         var body = ParseCommandAtom(tokenizer, afterPipe: false);
+        if (body is RedirectedCommand { Body: GroupCommand } group
+            && tokenizer.Locations is { } locations && locations.TryGet(group, out var location))
+            locations.Update(group, location with { RedirectionOpenLine = location.StartLine });
         var compound = body;
         while (compound is RedirectedCommand redirected)
             compound = redirected.Body;
@@ -1425,6 +1428,7 @@ public static class Parser
         var commandLine = 0;
         var trackNextTokenLine = false;
         var redirectionDiagnosticLine = 0;
+        var redirectionOpenLine = 0;
 
         while (true)
         {
@@ -1483,7 +1487,10 @@ public static class Parser
                 case TokenKind.Redirection:
                     sawAny = true;
                     if (trackRedirectionLine)
+                    {
+                        redirectionOpenLine = tokenizer.GetLine(token.Source.Start.Value);
                         RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(token));
+                    }
                     ReadRedirection(tokenizer, token, null, string.Empty, ref redirections);
                     if (trackRedirectionLine)
                         redirectionDiagnosticLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
@@ -1502,7 +1509,7 @@ public static class Parser
                     {
                         if (trackRedirectionLine)
                         {
-                            redirectionDiagnosticLine = tokenizer.GetLine(token.Source.End.Value);
+                            redirectionDiagnosticLine = redirectionOpenLine = tokenizer.GetLine(token.Source.End.Value);
                             RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(redirectionToken));
                         }
                         ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, ref redirections);
@@ -1513,7 +1520,7 @@ public static class Parser
                     {
                         if (trackRedirectionLine)
                         {
-                            redirectionDiagnosticLine = tokenizer.GetLine(token.Source.End.Value);
+                            redirectionDiagnosticLine = redirectionOpenLine = tokenizer.GetLine(token.Source.End.Value);
                             RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(allocationToken));
                         }
                         var operandOffset = ReadRedirection(tokenizer, allocationToken, null, variableName, ref redirections);
@@ -1615,7 +1622,7 @@ public static class Parser
                 words is null ? Array.Empty<Word>() : words,
                 redirections is null ? Array.Empty<Redirection>() : redirections,
                 declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
-            tokenizer.RecordLocation(command, startLine, commandLine, redirectionDiagnosticLine);
+            tokenizer.RecordLocation(command, startLine, commandLine, redirectionDiagnosticLine, redirectionOpenLine);
             return command;
         }
 

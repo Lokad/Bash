@@ -8,6 +8,8 @@ internal readonly record struct CommandLocation(int StartLine, int CommandLine, 
 {
     /// <summary>Diagnostic line for a redirection immediately after an initial word.</summary>
     internal int RedirectionDiagnosticLine { get; init; }
+    /// <summary>Overrides the command line when reporting a failed redirection open.</summary>
+    internal int RedirectionOpenLine { get; init; }
     /// <summary>Line reached by the reader before a compound here-document redirection expands.</summary>
     internal int CompoundHereDocumentLine { get; init; }
 }

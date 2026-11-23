@@ -160,12 +160,6 @@ internal sealed class RedirectionEvaluation
         {
             return;
         }
-        if (_origin == RedirectionOrigin.InputSubstitution && path.Length == 0)
-        {
-            await ReportOpenFailureAsync(scope, path, mode, null).ConfigureAwait(false);
-            return;
-        }
-
         await OpenResolvedPathAsync(scope, path, targetDescriptor, mode, secondaryTargetDescriptor).ConfigureAwait(false);
     }
 
@@ -174,6 +168,12 @@ internal sealed class RedirectionEvaluation
         ScopedEvaluation scope, string path, LogicalDescriptor targetDescriptor, FileOpenMode mode,
         LogicalDescriptor? secondaryTargetDescriptor)
     {
+        if (path.Length == 0)
+        {
+            await ReportOpenFailureAsync(scope, path, mode,
+                new OperationError("No such file or directory\n") { Kind = OperationErrorKind.NotFound }).ConfigureAwait(false);
+            return;
+        }
         if (string.Equals(path, FileDescriptor.DevNullPath.Path, StringComparison.Ordinal))
         {
             SetOpenedBinding(new DescriptorBinding(FileDescriptor.ForDevNull(mode)));
@@ -407,6 +407,8 @@ internal sealed class RedirectionEvaluation
     private Task ReportOpenFailureAsync(ScopedEvaluation scope, string path, FileOpenMode mode, OperationError? error)
     {
         InputOpenFailed = _origin == RedirectionOrigin.InputSubstitution;
+        if (error is { Kind: not OperationErrorKind.Unknown, Message.Length: > 0 })
+            return ReportFailureAsync(scope, path, error);
         var detail = error is { Message: not null } failure ? failure : new OperationError("No such file or directory\n");
         return mode == FileOpenMode.Read && _origin == RedirectionOrigin.Command
             ? ReportFailureAsync(scope, error)
@@ -420,7 +422,8 @@ internal sealed class RedirectionEvaluation
     {
         var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
         if (!standardError.IsClosed && error is { Message.Length: > 0 } failure)
-            await scope.Effects.WriteOperationDiagnosticAsync(standardError, string.Empty, path, failure).ConfigureAwait(false);
+            await scope.Effects.WriteRedirectionOperationDiagnosticAsync(standardError, path, failure,
+                scope.Context).ConfigureAwait(false);
         scope.Effects.SetExpansionError(1);
     }
 

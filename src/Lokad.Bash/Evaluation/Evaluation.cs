@@ -3180,6 +3180,15 @@ public sealed partial class Evaluation : IFileTester
     internal Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, string prefix, string? path, OperationError error) =>
         WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, prefix, path, error, default);
 
+    internal Task WriteRedirectionOperationDiagnosticAsync(FileDescriptor descriptor, string? path, OperationError error,
+        EvaluationContext context)
+    {
+        var coordinates = context.Coordinates;
+        var line = coordinates.RedirectionOpenLine == 0 ? coordinates.Line : coordinates.RedirectionOpenLine;
+        var prefix = path != null && error.Kind != OperationErrorKind.Unknown ? GetCommandDiagnosticPrefix(context, line) : default;
+        return WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, path, error, prefix);
+    }
+
     internal Task WriteDescriptorAssignmentErrorAsync(FileDescriptor descriptor, ShellValue variable, EvaluationContext context) =>
         WriteOperationDiagnosticAsync(descriptor, variable, string.Empty, path: null,
             new OperationError("cannot assign fd to variable\n"), GetBuiltinDiagnosticPrefix(context));

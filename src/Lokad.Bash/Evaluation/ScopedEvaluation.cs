@@ -7,6 +7,7 @@ namespace Lokad.Bash.Evaluation;
 internal readonly record struct CommandCoordinates(CommandLocations? Locations, int Offset, int Line, int EndLine)
 {
     internal int RedirectionDiagnosticLine { get; init; }
+    internal int RedirectionOpenLine { get; init; }
     internal int CompoundHereDocumentLine { get; init; }
     /// <summary>Overrides a here-document warning's prefix while retaining the document's own line.</summary>
     internal int HereDocumentWarningLine { get; init; }
@@ -24,6 +25,13 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
         }),
         EndLine = Offset + location.EndLine,
         RedirectionDiagnosticLine = location.RedirectionDiagnosticLine == 0 ? 0 : Offset + location.RedirectionDiagnosticLine,
+        RedirectionOpenLine = command switch
+        {
+            _ when location.RedirectionOpenLine != 0 => Offset + location.RedirectionOpenLine,
+            RedirectedCommand when location.CompoundHereDocumentLine != 0 => Offset + location.CompoundHereDocumentLine,
+            RedirectedCommand => Offset + location.EndLine,
+            _ => 0
+        },
         CompoundHereDocumentLine = location.CompoundHereDocumentLine == 0 ? 0 : Offset + location.CompoundHereDocumentLine
     };
 }
