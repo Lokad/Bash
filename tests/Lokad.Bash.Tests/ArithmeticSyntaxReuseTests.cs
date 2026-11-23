@@ -32,8 +32,26 @@ public sealed class ArithmeticSyntaxReuseTests
     }
 
     [Theory]
+    [InlineData(" \t\n ", 0L)]
+    [InlineData("123", 123L)]
+    [InlineData(" \t64#_ \n", 63L)]
+    [InlineData("0x", 0L)]
+    public void PreparedLiteralDoesNotAdmitUnusedLexicalIndexes(string expression, long expected)
+    {
+        var governor = new MemoryGovernor(0);
+        using var memory = new MemoryCapacity(governor, 0);
+        var source = new ArithmeticSource(ShellSource.FromText(expression), memory);
+        Assert.Equal(expected, source.Syntax?.LiteralValue);
+        Assert.NotNull(source.DirectOperand);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("  64#_ \n")]
+    [InlineData(" \t1 + 2\n ")]
+    [InlineData(" \t09\n ")]
+    [InlineData("7\r")]
     [InlineData("09")]
     [InlineData("++1")]
     [InlineData("1--2")]

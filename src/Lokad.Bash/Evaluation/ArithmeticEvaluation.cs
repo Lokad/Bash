@@ -453,15 +453,13 @@ public static partial class ArithmeticEvaluation
 
         private void SkipWhitespace()
         {
-            static bool IsWhitespace(byte value) => value is (byte)' ' or (byte)'\t' or (byte)'\n';
-
             if (_operand.Syntax is { } syntax && syntax.TrySkipBlanks(_index, out var end))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 _index = end;
                 return;
             }
-            while (_index < Span.Length && IsWhitespace(Span[_index]))
+            while (_index < Span.Length && IsArithmeticBlank(Span[_index]))
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 _index++;

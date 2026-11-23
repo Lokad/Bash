@@ -69,6 +69,8 @@ public static partial class ArithmeticEvaluation
         BinaryToken Binary, AssignmentOperator? Assignment);
     internal readonly record struct CachedReference(VariableReference Syntax, int End, int Bracket, bool IsIncomplete);
 
+    private static bool IsArithmeticBlank(byte value) => value is (byte)' ' or (byte)'\t' or (byte)'\n';
+
     private static BinaryToken GetBinaryToken(ReadOnlySpan<byte> token, ArithmeticTokenKind kind) =>
         kind == ArithmeticTokenKind.Operator ? token switch
         {
@@ -166,62 +168,110 @@ public static partial class ArithmeticEvaluation
     /// <summary>Immutable lexical decisions owned by source syntax; no binding or execution state is retained.</summary>
     internal sealed class LexicalSyntax
     {
-        private readonly Dictionary<int, CachedToken> _tokens = new();
-        private readonly Dictionary<int, CachedReference> _references = new();
-        private readonly Dictionary<int, int> _blanks = new();
+        private readonly Dictionary<int, CachedToken>? _tokens;
+        private readonly Dictionary<int, CachedReference>? _references;
+        private readonly Dictionary<int, int>? _blanks;
         public long? LiteralValue { get; }
 
         public LexicalSyntax(ShellSource source, MemoryCapacity? memory)
         {
+            Dictionary<int, CachedToken>? tokens = null;
+            Dictionary<int, CachedReference>? references = null;
+            Dictionary<int, int>? blanks = null;
             var bytes = source.AsSpan();
-            var ordinaryTokens = 0;
-            long? literal = 0;
-            for (var index = 0; index < bytes.Length;)
+            var previousEnd = 0;
+            while (true)
             {
-                if (bytes[index] is (byte)' ' or (byte)'\t' or (byte)'\n')
+                var index = SkipBlanks(bytes, previousEnd);
+                if (index == bytes.Length)
                 {
-                    var start = index++;
-                    while (index < bytes.Length && bytes[index] is (byte)' ' or (byte)'\t' or (byte)'\n') index++;
-                    memory?.Grow(128); // Coarse dictionary capacity, including growth overlap.
-                    _blanks.Add(start, index);
-                    continue;
+                    if (tokens == null)
+                    {
+                        LiteralValue = 0;
+                        return;
+                    }
+                    RememberBlanks(previousEnd, index);
+                    break;
                 }
+
                 var shape = ReadTokenShape(bytes[index..], CancellationToken.None);
                 var token = bytes.Slice(index, shape.Length);
                 long value = 0;
                 var numberError = shape.Kind == ArithmeticTokenKind.Number
                     ? ReadIntegerLiteral(token, CancellationToken.None, out value) : null;
+                var end = index + shape.Length;
+                var next = end;
+                if (tokens == null && shape.Kind == ArithmeticTokenKind.Number && numberError == null)
+                {
+                    next = SkipBlanks(bytes, end);
+                    if (next == bytes.Length)
+                    {
+                        LiteralValue = value;
+                        return;
+                    }
+                }
+
+                RememberBlanks(previousEnd, index);
                 memory?.Grow(256);
-                _tokens.Add(index, new CachedToken(shape, numberError, value, GetBinaryToken(token, shape.Kind), GetAssignment(token)));
-                ordinaryTokens++;
-                literal = ordinaryTokens == 1 && shape.Kind == ArithmeticTokenKind.Number && numberError == null ? value : null;
+                (tokens ??= new()).Add(index, new CachedToken(shape, numberError, value, GetBinaryToken(token, shape.Kind), GetAssignment(token)));
                 if (shape.Kind == ArithmeticTokenKind.Operator && token.Length == 2
                     && token[0] == token[1] && token[0] is (byte)'+' or (byte)'-')
                 {
                     var tail = ReadTokenShape(bytes[(index + 1)..], CancellationToken.None);
                     var tailText = bytes.Slice(index + 1, tail.Length);
                     memory?.Grow(256);
-                    _tokens.Add(index + 1, new CachedToken(tail, null, 0, GetBinaryToken(tailText, tail.Kind), GetAssignment(tailText)));
+                    tokens.Add(index + 1, new CachedToken(tail, null, 0, GetBinaryToken(tailText, tail.Kind), GetAssignment(tailText)));
                 }
-                var end = index + shape.Length;
+                RememberBlanks(end, next);
                 if (shape.Kind == ArithmeticTokenKind.Identifier)
                 {
                     memory?.Grow(256);
                     var reference = ReadReferenceSyntax(source, index, shape.Length, memory);
-                    end = reference.End;
-                    _references.Add(index, reference);
+                    next = reference.End;
+                    (references ??= new()).Add(index, reference);
                     // No execution can pass a malformed reference. Avoid rescanning its
                     // remainder for another incomplete selector at every identifier.
                     if (reference.IsIncomplete)
                         break;
                 }
-                index = end;
+                previousEnd = next;
             }
-            LiteralValue = literal;
+            _tokens = tokens;
+            _references = references;
+            _blanks = blanks;
+
+            static int SkipBlanks(ReadOnlySpan<byte> bytes, int start)
+            {
+                while (start < bytes.Length && IsArithmeticBlank(bytes[start]))
+                    start++;
+                return start;
+            }
+
+            void RememberBlanks(int start, int end)
+            {
+                if (start == end)
+                    return;
+                memory?.Grow(128); // Coarse dictionary capacity, including growth overlap.
+                (blanks ??= new()).Add(start, end);
+            }
         }
 
-        public bool TryGetToken(int start, out CachedToken token) => _tokens.TryGetValue(start, out token);
-        public bool TryGetReference(int start, out CachedReference reference) => _references.TryGetValue(start, out reference);
-        public bool TrySkipBlanks(int start, out int end) => _blanks.TryGetValue(start, out end);
+        public bool TryGetToken(int start, out CachedToken token)
+        {
+            token = default;
+            return _tokens?.TryGetValue(start, out token) == true;
+        }
+
+        public bool TryGetReference(int start, out CachedReference reference)
+        {
+            reference = default;
+            return _references?.TryGetValue(start, out reference) == true;
+        }
+
+        public bool TrySkipBlanks(int start, out int end)
+        {
+            end = default;
+            return _blanks?.TryGetValue(start, out end) == true;
+        }
     }
 }

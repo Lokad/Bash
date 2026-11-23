@@ -313,6 +313,9 @@ preparation. Keyword, builtin and descriptor classification borrow source bytes;
 stored loop/allocation names admit their text before decoding. Pure caller-owned
 preparation remains unbudgeted. This is not complete allocation coverage; parser
 structural guards remain independent of admission and execution duration.
+An arithmetic operand consisting of one valid integer or only blanks retains its
+value without token, reference or whitespace indexes. Other static operands admit
+each lexical index on first use and retain it with the source owner.
 Each running arithmetic parser admits its pending productions and traversal
 backing before growth. Repeated productions at the same depth reuse this
 allowance. It stays live through pending bindings and writes, including nested
