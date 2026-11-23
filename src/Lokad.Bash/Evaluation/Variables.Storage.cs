@@ -201,6 +201,33 @@ public sealed partial class Variables
     private bool HasAttribute(BindingName name, BindingAttributes attribute) =>
         TryGetBinding(name, detachBorrowed: false, out var slot) && (slot.Attributes & attribute) != 0;
 
+    internal readonly record struct ArrayMetadata(ArrayKind Kind, int Count, bool IsInitialized, long? MaxIndex);
+
+    /// <summary>Reads array metadata through the visible slot without retaining its mutable backing.</summary>
+    internal ArrayMetadata? GetArrayMetadata(BindingName name) =>
+        TryGetBinding(name, detachBorrowed: false, out var slot) ? slot switch
+        {
+            IndexedSlot indexed => new(ArrayKind.Indexed, indexed.Value.Count, indexed.Value.IsInitialized, indexed.Value.MaxIndex),
+            AssociativeSlot map => new(ArrayKind.Associative, map.Value.Count, map.Value.IsInitialized, null),
+            _ => null
+        } : null;
+
+    internal bool TryReadArrayElement(BindingName name, IndexedArrayIndex index, out ShellValue value)
+    {
+        if (TryGetBinding(name, detachBorrowed: false, out var slot) && slot is IndexedSlot indexed)
+            return indexed.Value.TryGet(index, out value);
+        value = ShellValue.Empty;
+        return false;
+    }
+
+    internal bool TryReadArrayElement(BindingName name, AssociativeArrayKey key, out ShellValue value)
+    {
+        if (TryGetBinding(name, detachBorrowed: false, out var slot) && slot is AssociativeSlot map)
+            return map.Value.TryGet(key, out value);
+        value = ShellValue.Empty;
+        return false;
+    }
+
     internal BindingAttributes GetAssignmentAttributes(BindingName name) =>
         TryGetBinding(name, out var slot) ? slot.Attributes : BindingAttributes.None;
 

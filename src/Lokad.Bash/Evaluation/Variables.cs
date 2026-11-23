@@ -879,11 +879,8 @@ public sealed partial class Variables
             return false;
         }
 
-        if (Scalars.TryGetValue(resolved, out var stored))
-        {
-            value = stored;
-            return true;
-        }
+        if (TryGetBinding(resolved, detachBorrowed: false, out var slot) && slot is ScalarSlot scalar)
+            return TryReadScalarSlot(resolved, scalar, out value);
 
         value = ShellValue.Empty;
         return false;
@@ -892,30 +889,27 @@ public sealed partial class Variables
     /// <summary>Reads a scalar or array element zero for expansion, after nameref resolution.</summary>
     internal bool TryGetExpansionValue(BindingName name, out ShellValue value)
     {
-        if (TryResolveWholeName(name, out var resolved) && !resolved.IsEmpty)
+        if (TryResolveWholeName(name, out var resolved) && !resolved.IsEmpty
+            && TryGetBinding(resolved, detachBorrowed: false, out var slot))
         {
-            if (Scalars.TryGetValue(resolved, out var scalar))
+            switch (slot)
             {
-                value = scalar;
-                return true;
-            }
-            if (IndexedArrays.TryGetValue(resolved, out var indexed)
-                && IndexedArrayIndex.TryCreate(0, out var index)
-                && indexed.TryGet(index, out var indexedValue))
-            {
-                value = indexedValue;
-                return true;
-            }
-            if (AssociativeArrays.TryGetValue(resolved, out var associative)
-                && AssociativeArrayKey.TryCreate(ShellValue.FromText("0"), out var key)
-                && associative.TryGet(key, out var associativeValue))
-            {
-                value = associativeValue;
-                return true;
+                case ScalarSlot scalar: return TryReadScalarSlot(resolved, scalar, out value);
+                case IndexedSlot indexed: return indexed.Value.TryGet(default, out value);
+                case AssociativeSlot map: return map.Value.TryGet(AssociativeArrayKey.Zero, out value);
             }
         }
         value = ShellValue.Empty;
         return false;
+    }
+
+    private bool TryReadScalarSlot(BindingName name, ScalarSlot scalar, out ShellValue value)
+    {
+        // The line-number getter caches formatted bytes in its slot.
+        if (scalar is LineNumberSlot)
+            return Scalars.TryGetValue(name, out value);
+        value = scalar.Value;
+        return true;
     }
 
     /// <summary>Expansion assignments update element zero without replacing an existing array.</summary>
@@ -1355,8 +1349,7 @@ public sealed partial class Variables
             memory?.Charge(BindingOverheadBytes);
             var array = CreatePromotedIndexedArray(resolved, memory);
             if (index.Value != 0 && slot is AssociativeSlot previous
-                && AssociativeArrayKey.TryCreate(ShellValue.FromText("0"), out var zero)
-                && previous.Value.TryGet(zero, out var element))
+                && previous.Value.TryGet(AssociativeArrayKey.Zero, out var element))
                 array.Set(default, element, memory);
             array.Set(index, value, memory, prepaidBytes);
             ReplaceValue(resolved, new IndexedSlot(array));
@@ -1762,8 +1755,8 @@ public sealed partial class Variables
             else if (!AssociativeArrays.ContainsKey(resolved))
             {
                 var array = new AssociativeArray(isInitialized: false);
-                if (Scalars.TryGetValue(resolved, out var scalar) && AssociativeArrayKey.TryCreate(ShellValue.FromText("0"), out var key))
-                    array.Set(key, scalar);
+                if (Scalars.TryGetValue(resolved, out var scalar))
+                    array.Set(AssociativeArrayKey.Zero, scalar);
                 ReplaceValue(resolved, new AssociativeSlot(array));
             }
         }

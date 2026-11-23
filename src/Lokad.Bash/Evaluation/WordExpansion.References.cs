@@ -35,21 +35,11 @@ internal static partial class WordExpansion
                 case Scalar:
                     return variables.TryGetScalar(Name, out value);
                 case Indexed indexed:
-                    if (variables.IndexedArrays.TryGetValue(Name, out var array)
-                        && array.TryGet(indexed.Index, out var element))
-                    {
-                        value = element;
+                    if (variables.TryReadArrayElement(Name, indexed.Index, out value))
                         return true;
-                    }
                     return indexed.Index.Value == 0 && variables.TryGetScalar(Name, out value);
                 case Associative associative:
-                    if (variables.AssociativeArrays.TryGetValue(Name, out var map)
-                        && map.TryGet(associative.Key, out var entry))
-                    {
-                        value = entry;
-                        return true;
-                    }
-                    return false;
+                    return variables.TryReadArrayElement(Name, associative.Key, out value);
                 default:
                     throw new InvalidOperationException("Unknown variable reference.");
             }
@@ -405,8 +395,9 @@ internal static partial class WordExpansion
             var binding = await ResolveReadBindingAsync(reference, ReferenceUse.Read, scope, variables).ConfigureAwait(false);
             if (binding is not { Reference.Kind: VariableReferenceKind.Name } selected)
                 return false;
-            if (!selected.Owner.AssociativeArrays.ContainsKey(selected.Name))
-                return selected.Owner.IndexedArrays.TryGetValue(selected.Name, out var indexed)
+            var array = selected.Owner.GetArrayMetadata(selected.Name);
+            if (array is not { Kind: ArrayKind.Associative })
+                return array is { } indexed
                     ? indexed.Count != 0
                     : selected.Owner.Scalars.ContainsKey(selected.Name);
         }
@@ -559,8 +550,7 @@ internal static partial class WordExpansion
 
         // A declaration alone does not enable length-selector effects; even an empty assignment does.
         if (use == ReferenceUse.Length && !targetVariables.Scalars.ContainsKey(name)
-            && (!targetVariables.IndexedArrays.TryGetValue(name, out var indexed) || !indexed.IsInitialized)
-            && (!targetVariables.AssociativeArrays.TryGetValue(name, out var map) || !map.IsInitialized))
+            && targetVariables.GetArrayMetadata(name) is not { IsInitialized: true })
             return null;
 
         var purpose = associative ? ExpansionPurpose.Scalar : arithmeticPurpose;
@@ -592,7 +582,7 @@ internal static partial class WordExpansion
 
             if (index < 0)
             {
-                var maximum = indexVariables.IndexedArrays.TryGetValue(name, out var array)
+                var maximum = indexVariables.GetArrayMetadata(name) is { Kind: ArrayKind.Indexed } array
                     ? array.MaxIndex
                     : use is ReferenceUse.Assign or ReferenceUse.DirectAssign or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign
                         && indexVariables.Scalars.ContainsKey(name) ? 0L : (long?)null;
@@ -651,9 +641,9 @@ internal static partial class WordExpansion
         {
             if (variables.IndexedArrays.ContainsKey(name))
                 return new ResolvedVariableReference.Indexed(name, default) { ReadOwner = variables, IsWholeBindingRead = true };
-            if (variables.AssociativeArrays.ContainsKey(name)
-                && AssociativeArrayKey.TryCreate(ShellValue.FromText("0"), out var key))
-                return new ResolvedVariableReference.Associative(name, key) { ReadOwner = variables, IsWholeBindingRead = true };
+            if (variables.AssociativeArrays.ContainsKey(name))
+                return new ResolvedVariableReference.Associative(name, AssociativeArrayKey.Zero)
+                    { ReadOwner = variables, IsWholeBindingRead = true };
             return new ResolvedVariableReference.Scalar(name) { ReadOwner = variables, IsWholeBindingRead = true };
         }
     }

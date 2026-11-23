@@ -169,9 +169,11 @@ Command-prefix preparation and isolated external redirection expansion borrow
 the caller's store and positional frame.
 Only reached bindings acquire admitted, independent containers in command
 workspace. Missing command bindings hide caller names without deleting caller
-state. In-process installation admits the saved caller set before publishing any
-prefix. It moves original slots to the saved store and consumes the prepared
-prefix slots. Retained outputs admit independent copies before staging, reusing
+state. Element and array metadata reads use the visible slot directly. Reads
+return immutable bytes or metadata, and writes take independent mutable backing
+before publication. In-process installation admits the saved caller set before
+publishing any prefix. It moves original slots to the saved store and consumes
+the prepared prefix slots. Retained outputs admit independent copies before staging, reusing
 the surrounding command's capacity for later replacements. Valueless declaration
 lookup admits its prefix selection buffer in command workspace as it grows.
 Each operand clears the selected references before the next lookup.

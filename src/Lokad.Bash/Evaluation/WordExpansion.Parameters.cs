@@ -704,14 +704,18 @@ internal static partial class WordExpansion
                     var variables = selected?.Owner ?? scope.Variables;
                     var resolved = selected is { Reference.Kind: VariableReferenceKind.Name } binding
                         ? binding.Name : BindingName.Empty;
+                    if (modifier == ParameterModifier.Length)
+                    {
+                        var length = variables.GetArrayMetadata(resolved)?.Count
+                            ?? (variables.TryGetScalar(resolved, out _) ? 1 : 0);
+                        return new ParameterValue(VariableReferenceKind.Name,
+                            [ShellValue.FromInteger(length)], true, null, null);
+                    }
+
                     var array = variables.IndexedArrays.GetValueOrDefault(resolved);
                     var map = array == null ? variables.AssociativeArrays.GetValueOrDefault(resolved) : null;
                     var scalar = ShellValue.Empty;
                     var count = array?.Count ?? map?.Count ?? (variables.TryGetScalar(resolved, out scalar) ? 1 : 0);
-
-                    if (modifier == ParameterModifier.Length)
-                        return new ParameterValue(VariableReferenceKind.Name,
-                            [ShellValue.FromInteger(count)], true, null, null);
 
                     if (modifier == ParameterModifier.None)
                     {

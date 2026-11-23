@@ -178,7 +178,7 @@ public sealed partial class TildePrefixTests
     [Theory]
     [InlineData("~\"\"", "~")]
     [InlineData("~:tail\"\"", "~:tail")]
-    public async Task AnIneligiblePrefixDoesNotDetachAnUnreachedHomeArray(string source, string expected)
+    public async Task AnIneligiblePrefixDoesNotLookUpHome(string source, string expected)
     {
         var caller = Variables.CreateEmpty();
         Assert.True(caller.TryAssignArray("HOME", Enumerable.Repeat(ShellValue.FromText("home"), 4096).ToArray(), ArrayKind.Indexed));
@@ -187,9 +187,11 @@ public sealed partial class TildePrefixTests
         using var callerStorage = governor.Reserve(caller.EstimatedMemoryBytes);
         var evaluation = new Eval(Parser.Parse(""), EvaluationDescriptorSetup.Standard,
             publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        using var lookup = new CancellationTokenSource();
         try
         {
-            var variables = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);
+            var variables = Variables.CreateCommandScope(caller, evaluation.Memory, lookup.Token);
+            lookup.Cancel();
             var token = new Tokenizer(ShellSource.FromText(source)).NextToken();
             Assert.True(token.TryGetWordToken(out var parsed));
             var word = Assert.IsType<WordToken>(parsed).Word;
@@ -202,7 +204,8 @@ public sealed partial class TildePrefixTests
             Assert.Equal(ShellValue.FromText(expected), Assert.Single(fields).ToValue(evaluation.Memory));
             Assert.Same(original, caller.IndexedArrays["HOME"]);
             Assert.Equal(4096, original.Count);
-            Assert.Throws<MemoryBudgetExceededException>(() => variables.TryGetScalar("HOME", out _));
+            var reached = Assert.Throws<OperationCanceledException>(() => variables.TryGetExpansionValue("HOME", out _));
+            Assert.Equal(lookup.Token, reached.CancellationToken);
         }
         finally { evaluation.Memory.Finish(retainVariables: false); }
         Assert.Equal(callerStorage.Bytes, governor.ReservedBytes);

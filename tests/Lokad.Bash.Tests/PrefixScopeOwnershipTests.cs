@@ -108,6 +108,50 @@ public sealed class PrefixScopeOwnershipTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
+    public void ArrayReadsBorrowAcrossOverlaysUntilAnElementIsWritten(ArrayKind kind)
+    {
+        var caller = Variables.CreateEmpty();
+        var original = ShellValue.FromBytes(new byte[] { 0xff, 0x20 });
+        var replacement = ShellValue.FromText("changed");
+        var zero = ShellValue.FromText("0");
+        var entries = kind == ArrayKind.Indexed ? new[] { original } : new[] { zero, original };
+        Assert.True(caller.TryAssignArray("array", entries, kind));
+        WordExpansion.ResolvedVariableReference element = kind == ArrayKind.Indexed
+            ? new WordExpansion.ResolvedVariableReference.Indexed("array", default)
+            : new WordExpansion.ResolvedVariableReference.Associative("array", AssociativeArrayKey.Zero);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var middle = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
+            var inner = Variables.CreateCommandScope(middle, memory, CancellationToken.None);
+            memory.ReleaseUnusedCapacity();
+            var workspace = memory.Workspace.Bytes;
+            using (governor.Reserve(governor.LimitBytes - governor.ReservedBytes))
+            {
+                Assert.True(element.TryRead(inner, out var selected));
+                Assert.Equal(original, selected);
+                Assert.True(inner.TryGetExpansionValue("array", out var bareValue));
+                Assert.Equal(original, bareValue);
+                Assert.False(inner.TryGetScalar("array", out _));
+                Assert.Equal(new Variables.ArrayMetadata(kind, 1, true, kind == ArrayKind.Indexed ? 0L : null),
+                    inner.GetArrayMetadata("array"));
+                Assert.Equal(workspace, memory.Workspace.Bytes);
+            }
+
+            Assert.True(inner.TrySetArrayElement("array", zero, replacement, kind));
+            Assert.True(element.TryRead(inner, out var changed));
+            Assert.Equal(replacement, changed);
+            Assert.True(element.TryRead(middle, out var retained));
+            Assert.Equal(original, retained);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public void FullChildCloneDetachesMergedBindingsAndPositionalEntries()
     {

@@ -49,6 +49,8 @@ internal readonly record struct IndexedArrayIndex
 /// <summary>A validated, immutable, non-empty associative-array key.</summary>
 internal sealed record AssociativeArrayKey
 {
+    internal static AssociativeArrayKey Zero { get; } = new(ShellValue.FromText("0"));
+
     private AssociativeArrayKey(ShellValue value)
     {
         Value = value;
