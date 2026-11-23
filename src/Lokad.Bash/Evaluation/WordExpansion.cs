@@ -862,7 +862,8 @@ internal static partial class WordExpansion
                     scope.Variables.PositionalParameters,
                     allowWordSplitting,
                     globQuoted,
-                    quoteContext);
+                    quoteContext,
+                    AtFieldSource.Positional);
                 index++;
                 continue;
             }

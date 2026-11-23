@@ -131,7 +131,7 @@ internal static partial class WordExpansion
         void Emit(IEnumerable<ShellValue> fields)
         {
             if (!output.TryAppendSelectedFields(parameter.FieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
-                AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit, arrayOperand: false);
+                AppendParameterFields(kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
         }
 
         void EmitValues(IEnumerable<ShellValue> fields)

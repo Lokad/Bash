@@ -829,9 +829,14 @@ internal static partial class WordExpansion
                     return;
                 }
             }
-            var arrayOperand = parsed.Kind == BracedParameterOperatorKind.None
-                && parameter.RangeSource is ParameterSource.Indexed or ParameterSource.Associative;
-            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit, arrayOperand);
+            var source = (parameter.RangeSource, parsed.Kind) switch
+            {
+                (ParameterSource.Indexed or ParameterSource.Associative, BracedParameterOperatorKind.None) => AtFieldSource.Array,
+                (ParameterSource.Positional, BracedParameterOperatorKind.None or BracedParameterOperatorKind.UseDefault
+                    or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset) => AtFieldSource.Positional,
+                _ => AtFieldSource.Other,
+            };
+            AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit, source);
         }
 
         // Operand expansion may have changed which values the selected array holds.
@@ -1227,7 +1232,7 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
                     output.AppendHereDocumentFields(fields, HereDocumentJoin.SpaceBetweenProtectedValues);
                 else
-                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit, arrayOperand: false);
+                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
             }
 
             Task ReportInvalidLengthAsync() => scope.Effects.ReportFatalExpansionAsync(
@@ -1395,10 +1400,11 @@ internal static partial class WordExpansion
 
     private static void AppendParameterFields(
         VariableReferenceKind kind, IEnumerable<ShellValue> fields, ExpandedWordBuilder output,
-        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit, bool arrayOperand)
+        bool allowWordSplitting, bool globQuoted, ExpansionQuoteContext quoteContext, PositionalStarSplit starSplit,
+        AtFieldSource source = AtFieldSource.Other)
     {
         if (kind == VariableReferenceKind.At)
-            output.AppendFields(fields, allowWordSplitting, globQuoted, quoteContext, arrayOperand);
+            output.AppendFields(fields, allowWordSplitting, globQuoted, quoteContext, source);
         else if (kind == VariableReferenceKind.Star)
             output.AppendJoinedFields(fields, allowWordSplitting, globQuoted, starSplit);
         else
