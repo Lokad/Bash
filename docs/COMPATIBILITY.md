@@ -625,7 +625,11 @@ contains DEL.
 In a case pattern, quoted `$@` and quoted array `[@]` can produce separate
 fields. The matcher uses the first field, including a supplied empty field,
 after the whole pattern has expanded. With empty IFS, the pattern can retain
-the joined fields. Unquoted `$@` joins with spaces and quoted `$*` uses the
+the joined fields. Unquoted `$@` joins with spaces. If IFS is nonempty and
+its first character differs from a space, unquoted `$@` and `${array[@]}`
+protect their values from glob matching. This protection also applies when
+a parameter default or alternate supplies those fields. Wildcards in the
+rest of the pattern still participate in matching. Quoted `$*` uses the
 first IFS character as its separator.
 
 In parameter replacement text, later empty fields from quoted `$@` or

@@ -370,7 +370,7 @@ internal sealed class ExpandedWordBuilder
         var protectFields = quoteContext == ExpansionQuoteContext.DoubleQuoted
             || (Purpose == ExpansionPurpose.ErrorMessage && !allowWordSplitting
                 && !fieldSeparators.IsEmpty && fieldSeparators.Bytes.Span[0] != (byte)' ');
-        // Non-space IFS can protect aggregate bytes from field selection while retaining glob activity.
+        // In an unsplit case pattern, a non-space first IFS byte protects unquoted @ values from globbing.
         var protectCaseFields = Purpose == ExpansionPurpose.CasePattern && HasNonSpaceSeparator(fieldSeparators);
         var quotedAggregate = Purpose == ExpansionPurpose.Normal && quoteContext == ExpansionQuoteContext.DoubleQuoted
             && _doubleQuote != DoubleQuoteState.Outside;
@@ -398,7 +398,7 @@ internal sealed class ExpandedWordBuilder
             else if (protectCaseFields || positionalStarWithEmptyIfs)
             {
                 if (!positionalStarWithEmptyIfs || !value.IsEmpty)
-                    AppendValue(value, globQuoted);
+                    AppendValue(value, globQuoted || protectCaseFields);
             }
             else if (unquotedAggregate)
             {
