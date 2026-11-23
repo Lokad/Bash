@@ -673,7 +673,8 @@ breaks between the subject and `in` and an optional opening `(` before each arm'
 patterns. A reached `;;` ends the case. A reached `;&` executes the next arm
 without expanding its patterns. A reached `;;&` resumes pattern matching against
 the original expanded subject. The case returns the last selected arm's status,
-with zero for an empty arm or when no arm is selected. Inside an explicitly
+with zero for an empty arm or when no arm is selected. Definition listings
+leave the body line of an empty arm blank. Inside an explicitly
 parenthesized arm, an unquoted `esac` can be
 a literal pattern. Lokad.Bash applies that grammar inside command substitutions
 and captures the selected arm's output and status. In the recorded conformance

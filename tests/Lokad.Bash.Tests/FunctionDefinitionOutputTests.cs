@@ -269,6 +269,12 @@ public sealed class FunctionDefinitionOutputTests
         "f () \n{ \n    { \n        printf O;\n        printf E 1>&2\n    } > out 2>&1 | cat\n}\n")]
     [InlineData("f(){ case \"$1\" in a|'b c') echo yes;; *) :;; esac;\n}", "f () \n{ \n    case \"$1\" in \n        a | 'b c')\n            echo yes\n        ;;\n        *)\n            :\n        ;;\n    esac\n}\n")]
     [InlineData("f(){ case esac\nin (esac) printf match;; esac; }", "f () \n{ \n    case esac in \n        (esac)\n            printf match\n        ;;\n    esac\n}\n")]
+    [InlineData("f(){ case k in k) # empty\nesac; }",
+        "f () \n{ \n    case k in \n        k)\n\n        ;;\n    esac\n}\n")]
+    [InlineData("f(){ value=$(case k in k) ;;& k) printf body;; esac); printf \"<%s:%s>\" \"$?\" \"$value\"; }",
+        "f () \n{ \n    value=$(case k in \n    k)\n\n    ;;&\n    k)\n        printf body\n    ;;\nesac);\n    printf \"<%s:%s>\" \"$?\" \"$value\"\n}\n")]
+    [InlineData("f(){ case k in k) >out;; esac; }",
+        "f () \n{ \n    case k in \n        k)\n            > out\n        ;;\n    esac\n}\n")]
     [InlineData("f(){ for x in a 'b c' \"$@\"; { printf '%s\\n' \"$x\"; }; }", "f () \n{ \n    for x in a 'b c' \"$@\";\n    do\n        printf '%s\\n' \"$x\";\n    done\n}\n")]
     [InlineData("f(){ [[ $x == a* && -n \"$y\" ]];\n}", "f () \n{ \n    [[ $x == a* && -n \"$y\" ]]\n}\n")]
     [InlineData("f(){ printf '%s' \"$([[ yes ]]; printf yes)\"; }",
