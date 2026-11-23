@@ -58,6 +58,7 @@ public sealed partial class Evaluation
     {
         using var diagnostics = new BuiltinDiagnosticScope(this);
         static string Usage() => "read: usage: " + BuiltinDocumentation.For(BuiltinKind.Read).Synopsis("read");
+        var command = words[0];
         var options = new ShortOptionCursor(words);
         var backslashMode = ReadBackslashMode.InterpretEscapes;
         var delimiter = (byte)'\n';
@@ -90,7 +91,7 @@ public sealed partial class Evaluation
             if (flag is (byte)'n' or (byte)'N')
             {
                 if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var length) || length is < 0 or > int.MaxValue)
-                    return await FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([words[0]],
+                    return await FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([command],
                         [operand, ShellValue.FromText(": invalid number")], diagnostics), 1).ConfigureAwait(false);
                 count = (int)length;
                 ignoreDelimiter |= flag == (byte)'N';
@@ -110,7 +111,7 @@ public sealed partial class Evaluation
             var (number, binding) = ResolveInputDescriptorOperand(operand.Bytes.Span);
             if (number is not { } logical || binding.Handle.IsClosed)
             {
-                await ReportInvalidInputDescriptorAsync(ShellValue.FromText("read"), operand, number)
+                await ReportInvalidInputDescriptorAsync(command, operand, number)
                     .ConfigureAwait(false);
                 return await FinishAsync(1).ConfigureAwait(false);
             }
@@ -118,18 +119,17 @@ public sealed partial class Evaluation
             inputBinding = binding;
         }
         if (options.RequestedHelp)
-            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Read, "read", negated)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Read, "read", negated)
                 .ConfigureAwait(false);
 
         var argumentIndex = options.ArgumentIndex;
         var hasPositionals = argumentIndex < words.Count;
         var implicitReply = arrayName == null && !hasPositionals;
         var fieldCount = arrayName.HasValue ? 0 : implicitReply ? 1 : words.Count - argumentIndex;
-        var firstName = implicitReply ? ShellValue.FromText("REPLY") : hasPositionals ? words[argumentIndex] : default;
-        VariableReference firstReference = default;
+        var firstReference = implicitReply ? VariableReference.ForName("REPLY") : default;
         // A first positional operand is validated even when -a selects the only assignment destination.
-        if ((hasPositionals || implicitReply) && !TryParseTarget(firstName, out firstReference))
-            return await InvalidTargetAsync(firstName).ConfigureAwait(false);
+        if (hasPositionals && !TryParseTarget(words[argumentIndex], out firstReference))
+            return await InvalidTargetAsync(words[argumentIndex]).ConfigureAwait(false);
 
         var memory = _readWorkspace ??= new ReadWorkspace(Memory.Budget);
         memory.Content.Truncate(0);
@@ -146,7 +146,7 @@ public sealed partial class Evaluation
             {
                 // Bash consumes the record before checking an array destination.
                 var (target, status) = await SelectIndexedInputTargetAsync(
-                    words[0], destination, scope.Variables, warn: !GetStdErrDescriptor().IsClosed).ConfigureAwait(false);
+                    command, destination, scope.Variables, warn: !GetStdErrDescriptor().IsClosed).ConfigureAwait(false);
                 if (target == null)
                     return await FinishAsync(status == 0 ? exitCode : status).ConfigureAwait(false);
                 arrayTarget = target;
@@ -163,7 +163,7 @@ public sealed partial class Evaluation
                 var attributes = scope.Variables.GetAssignmentAttributes(array.Name);
                 if ((attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0)
                 {
-                    var assigned = await AssignIntegerIndexedInputAsync(array.Name, fields, null, scope, words[0])
+                    var assigned = await AssignIntegerIndexedInputAsync(array.Name, fields, null, scope, command)
                         .ConfigureAwait(false);
                     return await FinishAsync(assigned ? exitCode : 1).ConfigureAwait(false);
                 }
@@ -184,12 +184,11 @@ public sealed partial class Evaluation
             }
             for (var index = 0; index < fieldCount; index++)
             {
-                var name = implicitReply ? firstName : words[argumentIndex + index];
                 var reference = firstReference;
-                if (index != 0 && !TryParseTarget(name, out reference))
-                    return await InvalidTargetAsync(name).ConfigureAwait(false);
+                if (index != 0 && !TryParseTarget(words[argumentIndex + index], out reference))
+                    return await InvalidTargetAsync(words[argumentIndex + index]).ConfigureAwait(false);
                 var assignment = await AssignBuiltinAsync(reference, RetainField(fields[index], input.Content.Span), scope,
-                    bindings, BuiltinAssignmentKind.Read, ShellValue.FromText("read"), expansionWriteTarget: null).ConfigureAwait(false);
+                    bindings, BuiltinAssignmentKind.Read, command, expansionWriteTarget: null).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
                     exitCode = 1;
@@ -222,14 +221,14 @@ public sealed partial class Evaluation
             return ShellValue.FromBytes(value.Bytes.ToArray());
         }
 
-        Task ReportInputRefusalAsync() => ReportExpansionDiagnosticAsync(ShellValue.FromText("read"),
+        Task ReportInputRefusalAsync() => ReportExpansionDiagnosticAsync(command,
             ShellValue.FromText("shared memory budget exhausted"));
 
         Task<EvaluationResult> FinishAsync(int status) => FinalizeResultAsync(
             EvaluationResult.FromExitCode(diagnostics.Result.IsError ? 1 : status), negated);
 
         Task<EvaluationResult> FailUsageAsync(ReadOnlySpan<ShellValue> message) =>
-            FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("read")], message, diagnostics), 2);
+            FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([command], message, diagnostics), 2);
 
         async Task<EvaluationResult> FinishFailureAsync(Task diagnostic, int status)
         {
@@ -242,7 +241,7 @@ public sealed partial class Evaluation
             && (reference.Kind == VariableReferenceKind.Name || !reference.Subscript.IsEmpty);
 
         Task<EvaluationResult> InvalidTargetAsync(ShellValue name) =>
-            FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("read"), name,
+            FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(command, name,
                 diagnostics, ClosedStderrHandling.AttemptWrite), 1);
 
         async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectInputAsync()
@@ -336,7 +335,7 @@ public sealed partial class Evaluation
 
             async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> ReadFailureAsync(OperationError error)
             {
-                await ReportBuiltinOperationErrorAsync(ShellValue.FromText("read"), $"read error: {inputNumber}: ", path: null, error)
+                await ReportBuiltinOperationErrorAsync(command, $"read error: {inputNumber}: ", path: null, error)
                     .ConfigureAwait(false);
                 return (1, default, true);
             }

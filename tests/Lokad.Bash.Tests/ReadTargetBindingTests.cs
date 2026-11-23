@@ -10,6 +10,28 @@ namespace Lokad.Bash.Tests;
 public sealed class ReadTargetBindingTests
 {
     [Theory]
+    [InlineData("a=([1]=old [4]=seed); declare -n REPLY='a[4]'; builtin read -r; status=$?",
+        "${a[1]}", "${a[4]}")]
+    [InlineData("declare -A a=([keep]=old [key]=seed); f(){ local -n REPLY='a[key]'; command read -r; }; f; status=$?",
+        "${a[keep]}", "${a[key]}")]
+    public async Task ReadImplicitReplyResolvesAnArrayElementAndPreservesWhitespace(
+        string read, string untouched, string destination)
+    {
+        var script = $$"""
+            {{read}}
+            IFS= read -r next
+            printf '<%s>' "$status" "{{untouched}}" "{{destination}}" "$next"
+            """;
+        var host = EndToEndHarness.BuildTree([]);
+        var result = await EndToEndHarness.RunScriptAsync(script, host, "  one\\two  \nnext\n"u8.ToArray());
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><old><  one\\two  ><next>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("""a=([2]=old [9]=keep); REPLY=reply; read -a a <<< 'one two three'; printf '<%s><%s>' "${#a[@]}" "$REPLY"; printf '[%s]' "${a[@]}" """,
         "<3><reply>[one][two][three]", "")]
     [InlineData("""a=(old); read -a a </dev/null; printf '<%s><%s>' "$?" "${#a[@]}" """,
