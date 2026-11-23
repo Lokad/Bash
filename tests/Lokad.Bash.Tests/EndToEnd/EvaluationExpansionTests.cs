@@ -18,6 +18,75 @@ public sealed class EvaluationExpansionTests
         var budget = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
         Assert.Same(word, ExpandedWord.JoinWithSpaces([word], budget));
+        Assert.Same(word, ExpandedWord.JoinCasePatternOperandWithSpaces([word], budget));
+        Assert.Equal(0, budget.Workspace.Bytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void JoinedWordAdmitsItsSegmentArrayAndBorrowsTheOperandBytes(bool casePattern)
+    {
+        var left = new ExpandedSegment(ShellValue.FromBytes(new byte[] { 0xff, (byte)'*' }), isGlobQuoted: true);
+        var right = new ExpandedSegment(ShellValue.FromText("tail"), isGlobQuoted: false)
+        {
+            IsCasePatternIfsProtected = true
+        };
+        ExpandedWord[] fields = [new([left]), new([]), new([right])];
+        var required = MemoryCapacity.ArrayBackingBytes<ExpandedSegment>(4);
+        var governor = new MemoryGovernor(required);
+        using (var owner = governor.CreateScope())
+        {
+            var memory = new EvaluationMemory(owner);
+            var segments = Join(memory).Segments;
+            Assert.Equal(4, segments.Count);
+            Assert.Equal(left.Content.Bytes, segments[0].Content.Bytes);
+            Assert.True(segments[0].IsGlobQuoted);
+            Assert.Equal(casePattern, segments[0].IsCasePatternIfsProtected);
+            foreach (var separator in segments.Skip(1).Take(2))
+            {
+                Assert.Equal(" ", separator.Content.ToUtf8String());
+                Assert.False(separator.IsGlobQuoted);
+                Assert.Equal(casePattern, separator.IsCasePatternIfsProtected);
+            }
+            Assert.Equal(right.Content.Bytes, segments[3].Content.Bytes);
+            Assert.False(segments[3].IsGlobQuoted);
+            Assert.True(segments[3].IsCasePatternIfsProtected);
+            Assert.Equal(required, memory.Workspace.Bytes);
+        }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        var constrained = new MemoryGovernor(required - 1);
+        using var refusedOwner = constrained.CreateScope();
+        Assert.Throws<MemoryBudgetExceededException>(() => Join(new EvaluationMemory(refusedOwner)));
+        Assert.Equal(0, constrained.ReservedBytes);
+
+        ExpandedWord Join(EvaluationMemory memory) => casePattern
+            ? ExpandedWord.JoinCasePatternOperandWithSpaces(fields, memory)
+            : ExpandedWord.JoinWithSpaces(fields, memory);
+    }
+
+    [Fact]
+    public async Task QuotedRegexJoinsPositionalFieldsWithinTheCommandBudget()
+    {
+        const int Count = 256;
+        var args = Enumerable.Repeat("a.b", Count).ToArray();
+        var subject = string.Join(' ', args);
+        var script = Parser.Parse("[[ $subject =~ \"$@\" ]]; printf '<%s:%s>' \"$?\" \"${BASH_REMATCH[0]-}\"");
+        var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(script);
+        evaluation.ReplacePositionalParameters(args.Select(ShellValue.FromText).ToArray());
+        evaluation.SetVariable("subject", ShellValue.FromText(subject));
+        var budget = new MemoryGovernor(320 * 1024);
+        using (var owner = budget.CreateScope())
+        {
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal("<0:" + subject + ">", host.StandardOutput.TextContent);
+            Assert.True(budget.ReservedBytes < budget.PeakBytes);
+        }
+        Assert.Equal(0, budget.ReservedBytes);
     }
 
     [Theory]

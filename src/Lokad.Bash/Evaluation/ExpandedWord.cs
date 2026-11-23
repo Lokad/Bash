@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -43,8 +44,9 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
             segmentCount += words[index].Segments.Count;
         if (segmentCount >= Array.MaxLength)
             throw new ByteMemoryBuilder.LimitExceededException();
-        memory.Charge(checked(256L * segmentCount));
-        var segments = new ExpandedSegment[(int)segmentCount];
+        var count = (int)segmentCount;
+        memory.Charge(MemoryCapacity.ArrayBackingBytes<ExpandedSegment>(count));
+        var segments = new ExpandedSegment[count];
         var separator = new ExpandedSegment(Space, isGlobQuoted: false)
         {
             IsCasePatternIfsProtected = protectCasePatternFields,

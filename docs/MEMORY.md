@@ -264,8 +264,9 @@ An implicit `for` list shares fixed quoted positional syntax across parse owners
 The expanded argument snapshot belongs to each loop invocation.
 Scalar assignment and byte-only selectors use the same field join to copy
 expanded bytes and separators into their admitted result. Shell-pattern
-consumers project bytes and quote masks directly from the fields. Regex pattern
-translation retains the joined segments it needs for escaping.
+consumers project bytes and quote masks directly from the fields. Joins for
+regex translation and case-pattern splicing admit the final segment array in
+the command workspace. The array borrows the already admitted bytes.
 Parameter case conversion passes unchanged values through to field expansion.
 Changed values join original byte ranges with the converted characters in an
 admitted buffer. Parameter replacement expands both operands before matching. It
