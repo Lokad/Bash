@@ -20,6 +20,7 @@ internal sealed class SourceMemory
         ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript>.Empty;
     public IMemoryScope Budget { get; }
     public MemoryCapacity SyntaxMemory { get; }
+    internal string? DiagnosticPath { get; private set; }
 
     public SourceMemory(IMemoryScope budget) : this(budget, parent: null) { }
 
@@ -28,7 +29,18 @@ internal sealed class SourceMemory
         Budget = budget;
         SyntaxMemory = new MemoryCapacity(budget, 0);
         _parent = parent;
+        DiagnosticPath = parent?.DiagnosticPath;
         parent?.Retain();
+    }
+
+    /// <summary>Admits the reader path before publication through a root source owner.</summary>
+    internal string OwnDiagnosticPath(string path, bool prefixCurrentDirectory)
+    {
+        var length = path.Length + (prefixCurrentDirectory ? 2L : 0L);
+        SyntaxMemory.Grow(24L + 2L * length);
+        var spelling = prefixCurrentDirectory ? "./" + path : path;
+        DiagnosticPath = spelling;
+        return spelling;
     }
 
     /// <summary>The caller must already hold a live reference while acquiring another.</summary>

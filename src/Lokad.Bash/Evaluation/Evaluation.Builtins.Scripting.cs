@@ -183,7 +183,7 @@ public sealed partial class Evaluation
             : WriteOperationDiagnosticAsync(standardError, string.Empty, path, error);
     }
 
-    private async Task<(FileOpenResult Result, string Path)> SearchSourcePathAsync(
+    private async Task<(FileOpenResult Result, string Path, bool CurrentSearchEntry)> SearchSourcePathAsync(
         RawShellPath fileName, ReadOnlyMemory<byte> searchPath, ScopedEvaluation scope, MemoryCapacity lookupMemory)
     {
         FileOpenResult? currentDirectoryAttempt = null;
@@ -201,7 +201,7 @@ public sealed partial class Evaluation
                     currentDirectoryAttempt = open;
                 if (open.Error is not { Kind: OperationErrorKind.NotFound or OperationErrorKind.NotDirectory
                     or OperationErrorKind.IsDirectory or OperationErrorKind.PermissionDenied })
-                    return (open, candidate.Raw);
+                    return (open, candidate.Raw, workingDirectory);
             }
 
             lookupMemory.Resize(0);
@@ -211,7 +211,7 @@ public sealed partial class Evaluation
         }
 
         return (currentDirectoryAttempt ?? await OpenCandidateAsync(fileName).ConfigureAwait(false),
-            fileName.Raw);
+            fileName.Raw, false);
 
         Task<FileOpenResult> OpenCandidateAsync(RawShellPath candidate)
         {
@@ -279,6 +279,10 @@ public sealed partial class Evaluation
         var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
         try
         {
+            var diagnosticPath = kind == ScriptExecutionKind.Trap
+                ? scope.Context.CallerSource?.Path : scope.Context.SourceMemory?.DiagnosticPath;
+            if (diagnosticPath != null)
+                sourceMemory.OwnDiagnosticPath(diagnosticPath, prefixCurrentDirectory: false);
             using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
             for (var index = start; index < words.Count; index++)
             {

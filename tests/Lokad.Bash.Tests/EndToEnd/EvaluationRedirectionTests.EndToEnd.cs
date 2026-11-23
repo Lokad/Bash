@@ -54,6 +54,30 @@ public sealed class EvaluationRedirectionTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("source ./defines\nf\n: <later", "./defines: line 2: missing: No such file or directory\nline 3: later: No such file or directory\n")]
+    [InlineData("source ./defines\nsource ./calls", "./defines: line 2: missing: No such file or directory\n./calls: line 2: later: No such file or directory\n")]
+    [InlineData("f(){\n : <missing\n}\nsource ./calls", "line 2: missing: No such file or directory\n./calls: line 2: later: No such file or directory\n")]
+    [InlineData("source ./defines\ng", "./defines: line 5: missing: No such file or directory\n")]
+    [InlineData("source ./defines\nh", "./defines: line 8: missing: No such file or directory\n")]
+    [InlineData("source ./from-eval\nf", "./from-eval: line 4: missing: No such file or directory\n")]
+    [InlineData("PATH=:unused\nsource defines\nf", "./defines: line 2: missing: No such file or directory\n")]
+    [InlineData("PATH=unused\nsource defines\nf", "defines: line 2: missing: No such file or directory\n")]
+    public async Task FailedOpenUsesTheSourceThatDefinedTheFunction(string script, string error)
+    {
+        await using var host = EndToEndHarness.BuildTree([
+            ("/defines", "f(){\n : <missing\n}\ng(){\n eval ': <missing'\n}\nh(){\n v=$(<missing)\n}\n"),
+            ("/from-eval", "eval 'f(){\n : <missing\n}'\n"),
+            ("/calls", "f\n: <later\n")
+        ]);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("", host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("", "<1>", "$(f): ambiguous redirect\n", null)]
     [InlineData("2>error", "<1>", "", "$(f): ambiguous redirect\n")]
     [InlineData("2>&1", "$(f): ambiguous redirect\n<1>", "", null)]

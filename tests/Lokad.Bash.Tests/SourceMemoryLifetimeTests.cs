@@ -141,7 +141,8 @@ public sealed class SourceMemoryLifetimeTests
 
         var write = Assert.IsType<WriteOperation>(await state.GetNextStep(token));
         Assert.Equal(new byte[] { 0xff, 13 }, write.Content.ToArray());
-        Assert.Equal(body.Length, source.OwnBytes);
+        // The source owns its displayed path after the descriptor closes and while the function runs.
+        Assert.Equal(body.Length + 24L + 2L * "/a".Length, source.OwnBytes);
         Assert.Equal(0, host.OpenFileCount);
         await ShellOperationDispatcher.DispatchAsync(write, host, token);
         Assert.Null(await state.GetNextStep(token));

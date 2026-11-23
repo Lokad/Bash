@@ -3185,7 +3185,8 @@ public sealed partial class Evaluation : IFileTester
     {
         var coordinates = context.Coordinates;
         var line = coordinates.RedirectionOpenLine == 0 ? coordinates.Line : coordinates.RedirectionOpenLine;
-        var prefix = path != null && error.Kind != OperationErrorKind.Unknown ? GetCommandDiagnosticPrefix(context, line) : default;
+        var prefix = path != null && error.Kind != OperationErrorKind.Unknown && coordinates.Locations != null
+            ? new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line) : default;
         return WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, path, error, prefix);
     }
 
@@ -4515,9 +4516,9 @@ public sealed partial class Evaluation : IFileTester
         var searchPath = !path.Contains('/') && scope.Variables.TryGetScalar("PATH", out var value)
             ? value.Bytes : ReadOnlyMemory<byte>.Empty;
         using var lookupMemory = searchPath.IsEmpty ? null : new MemoryCapacity(Memory.Budget, 0);
-        var (open, openedPath) = lookupMemory != null && RawShellPath.TryParse(path, out var fileName)
+        var (open, openedPath, currentSearchEntry) = lookupMemory != null && RawShellPath.TryParse(path, out var fileName)
             ? await SearchSourcePathAsync(fileName, searchPath, scope, lookupMemory).ConfigureAwait(false)
-            : (await ExecuteOpenFileAsync(path, FileOpenMode.Read).ConfigureAwait(false), path);
+            : (await ExecuteOpenFileAsync(path, FileOpenMode.Read).ConfigureAwait(false), path, false);
         var descriptor = open.FileDescriptor;
         if (!descriptor.HasValue)
         {
@@ -4568,8 +4569,9 @@ public sealed partial class Evaluation : IFileTester
                 return EvaluationResult.FromExitCode(2);
             }
 
-            // The displayed path survives the lookup in the active source frame.
-            lookupMemory?.Resize(ReferenceEquals(openedPath, path) ? 0 : 24L + 2L * openedPath.Length);
+            // The source can outlive this invocation through its function definitions.
+            var diagnosticPath = sourceMemory.OwnDiagnosticPath(openedPath, currentSearchEntry);
+            lookupMemory?.Dispose();
             // The active command owns the frame until the sourced invocation and its children settle.
             Memory.Charge(48);
             var sourceScope = scope with
@@ -4578,7 +4580,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     GlobalPrefixes = scope.Context.GlobalPrefixes,
                     ErrexitIgnored = scope.Context.ErrexitIgnored,
-                    CallerSource = new SourceCallerFrame(openedPath, scope.Context.FunctionContext?.Depth ?? 0,
+                    CallerSource = new SourceCallerFrame(diagnosticPath, scope.Context.FunctionContext?.Depth ?? 0,
                         scope.Context.CallerSource),
                     SourceMemory = sourceMemory
                 }
