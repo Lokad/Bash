@@ -305,7 +305,7 @@ internal static partial class WordExpansion
 
                 var operand = await ExpandOperatorWordAsync(
                         parsed.Word, scanContext, scope, ExpansionQuoteContext.Unquoted, ExpansionPurpose.Scalar,
-                        ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, assigningHereDocumentParent: null)
+                        ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, enclosingWord: null)
                     .ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
@@ -386,7 +386,7 @@ internal static partial class WordExpansion
                         or ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource
                         ? ImplicitEmptyPolicy.Preserve : ImplicitEmptyPolicy.Remove,
                     assignmentTildes ? TildeExpansion.Assignment : TildeExpansion.Leading,
-                    assigningHereDocumentParent: null)
+                    enclosingWord: output)
                 .ConfigureAwait(false);
             if (scope.CanExpand)
                 output.AppendSelectedOperand(operand, allowWordSplitting, globQuoted, quoteContext);
@@ -799,7 +799,9 @@ internal static partial class WordExpansion
             return scope.Effects.ReportFatalExpansionAsync(subject, ShellValue.FromText(message), ExpansionFailureKind.Parameter);
         }
 
-        void Emit(IEnumerable<ShellValue> fields)
+        void Emit(IEnumerable<ShellValue> fields) => EmitFields(fields, projected: false);
+
+        void EmitFields(IEnumerable<ShellValue> fields, bool projected)
         {
             if (parsed.Modifier == ParameterModifier.Length
                 || parsed.Modifier == ParameterModifier.None && parsed.Kind == BracedParameterOperatorKind.None
@@ -831,7 +833,9 @@ internal static partial class WordExpansion
             }
             var source = (parameter.RangeSource, parsed.Kind) switch
             {
-                (ParameterSource.Indexed or ParameterSource.Associative, BracedParameterOperatorKind.None) => AtFieldSource.Array,
+                _ when projected => AtFieldSource.Projected,
+                (ParameterSource.Indexed or ParameterSource.Associative, _)
+                    when parsed.Kind == BracedParameterOperatorKind.None || output.Purpose == ExpansionPurpose.CasePattern => AtFieldSource.Array,
                 (ParameterSource.Positional, BracedParameterOperatorKind.None or BracedParameterOperatorKind.UseDefault
                     or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset) => AtFieldSource.Positional,
                 _ => AtFieldSource.Other,
@@ -841,7 +845,7 @@ internal static partial class WordExpansion
 
         // Operand expansion may have changed which values the selected array holds.
         void EmitTransformedFields(Func<ShellValue, MemoryCapacity, ShellValue> project) =>
-            Emit(ProjectParameterFields(parameter.SelectedFields, project, scope));
+            EmitFields(ProjectParameterFields(parameter.SelectedFields, project, scope), projected: true);
 
         async Task EmitValueOperatorAsync()
         {
@@ -1059,7 +1063,7 @@ internal static partial class WordExpansion
             async Task<ParameterOperand> ExpandOperandAsync(ShellSource source, ExpansionPurpose purpose)
             {
                 var operand = await ExpandOperatorWordAsync(source, scanContext, scope, ExpansionQuoteContext.Unquoted,
-                    purpose, ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, assigningHereDocumentParent: null).ConfigureAwait(false);
+                    purpose, ImplicitEmptyPolicy.Preserve, TildeExpansion.Leading, enclosingWord: null).ConfigureAwait(false);
                 var (value, mask) = ExpandedWord.JoinPatternWithSpaces(operand?.Build() ?? [], budget);
                 return new ParameterOperand(value, mask);
             }
@@ -1232,7 +1236,8 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
                     output.AppendHereDocumentFields(fields, HereDocumentJoin.SpaceBetweenProtectedValues);
                 else
-                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext, starSplit);
+                    AppendParameterFields(parameter.Kind, fields, output, allowWordSplitting, globQuoted, quoteContext,
+                        starSplit, AtFieldSource.Projected);
             }
 
             Task ReportInvalidLengthAsync() => scope.Effects.ReportFatalExpansionAsync(

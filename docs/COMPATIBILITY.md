@@ -624,8 +624,16 @@ contains DEL.
 
 In a case pattern, quoted `$@` and quoted array `[@]` can produce separate
 fields. The matcher uses the first field, including a supplied empty field,
-after the whole pattern has expanded. With empty IFS, the pattern can retain
-the joined fields. Unquoted `$@` joins with spaces. If IFS is nonempty and
+after the whole pattern has expanded. When expansion starts with empty IFS,
+a direct aggregate keeps the separator chosen when it expands. A quoted `@`
+aggregate contributes a DEL byte (`0x7F`) for an empty argument unless it is
+the pattern's sole byte. When an earlier expansion sets a non-space IFS,
+direct unquoted `$@` also keeps these bytes and joins using the first IFS
+character. A direct unquoted named array keeps these bytes and joins with
+spaces. A slice in this case keeps its join bytes and leaves unquoted
+wildcards active. A literal DEL remains data.
+
+With stable IFS, unquoted `$@` joins with spaces. If IFS is nonempty and
 its first character differs from a space, unquoted `$@` and `${array[@]}`
 protect their values from glob matching. This protection also applies when
 a parameter default or alternate supplies those fields. Wildcards in the

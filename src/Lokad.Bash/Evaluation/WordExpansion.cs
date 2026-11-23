@@ -1087,7 +1087,7 @@ internal static partial class WordExpansion
         ExpansionPurpose purpose,
         ImplicitEmptyPolicy implicitEmptyPolicy,
         TildeExpansion tildeExpansion,
-        ExpandedWordBuilder? assigningHereDocumentParent)
+        ExpandedWordBuilder? enclosingWord)
     {
         if (expression.Length == 0)
             return null;
@@ -1095,10 +1095,14 @@ internal static partial class WordExpansion
         var word = quoteContext == ExpansionQuoteContext.HereDocument ? null
             : Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose),
                 quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double, scanContext);
+        var assigningHereDocument = quoteContext == ExpansionQuoteContext.HereDocument && enclosingWord != null;
         var builder = new ExpandedWordBuilder(
             scope.Variables, scope.Effects.Memory, purpose, implicitEmptyPolicy, scope.Effects.CancellationToken)
         {
-            AssigningHereDocumentOperand = assigningHereDocumentParent != null,
+            AssigningHereDocumentOperand = assigningHereDocument,
+            CaseOperand = purpose != ExpansionPurpose.CasePattern ? CasePatternOperand.None
+                : enclosingWord?.PreservesCasePatternQuotedNulls == true ? CasePatternOperand.PreserveQuotedNulls
+                : CasePatternOperand.SelectFields,
             OperandFields = purpose == ExpansionPurpose.Normal && quoteContext == ExpansionQuoteContext.Unquoted
                 ? FieldSeparators.FromVariables(scope.Variables).IsEmpty
                     ? ParameterOperandFields.UnquotedWithEmptyIfs : ParameterOperandFields.Unquoted
@@ -1116,7 +1120,8 @@ internal static partial class WordExpansion
         }
         if (!scope.CanExpand)
             return null;
-        assigningHereDocumentParent?.IncludeOperand(builder);
+        if (assigningHereDocument)
+            enclosingWord?.IncludeOperand(builder);
         return builder;
     }
 
