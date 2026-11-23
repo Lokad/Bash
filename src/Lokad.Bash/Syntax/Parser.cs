@@ -646,7 +646,7 @@ public static class Parser
         if (first == null)
         {
             if (prefixed)
-                tokenizer.RecordError(negated ? "Expected command after !." : "Expected command after pipeline prefix.", tokenizer.Position);
+                RecordMissingCommand(negated ? "Expected command after !." : "Expected command after pipeline prefix.");
             return null;
         }
 
@@ -663,7 +663,7 @@ public static class Parser
             var right = ParseCommandAtom(tokenizer, afterPipe: true);
             if (right == null)
             {
-                tokenizer.RecordError("Expected command after pipeline operator.", tokenizer.Position);
+                RecordMissingCommand("Expected command after pipeline operator.");
                 return null;
             }
 
@@ -671,6 +671,14 @@ public static class Parser
         }
 
         return Wrap(current);
+
+        void RecordMissingCommand(string message)
+        {
+            if (tokenizer.Error != null)
+                return;
+            var reached = tokenizer.PeekTokenCore();
+            tokenizer.RecordUnexpectedToken(message, reached, tokenizer.Position);
+        }
 
         ICommand Wrap(ICommand body)
         {

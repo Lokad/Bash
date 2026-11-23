@@ -85,7 +85,7 @@ public sealed class ScriptCommandUnitTests
 
     [Theory]
     [InlineData(true, "value=$(for ((i=7)); do : >body; break; done)", 2, "2:inner:source-arg", "Arithmetic for header")]
-    [InlineData(false, "value=\"$(printf hidden |)\"", 1, "257:inner:caller-arg", "Expected command after pipeline operator")]
+    [InlineData(false, "value=\"$(printf hidden |)\"", 1, "257:inner:caller-arg", "syntax error near unexpected token `)'")]
     public async Task FatalSubstitutionInsideScriptBuiltinRunsExitWithActiveScope(
         bool source, string malformed, int status, string trapOutput, string diagnostic)
     {

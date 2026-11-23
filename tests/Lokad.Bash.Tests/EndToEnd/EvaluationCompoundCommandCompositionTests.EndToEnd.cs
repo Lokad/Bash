@@ -28,7 +28,21 @@ public sealed class EvaluationCompoundCommandCompositionTestsEndToEnd
 
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("earlier", host.StandardOutput.TextContent);
-        Assert.StartsWith("syntax error:", host.StandardError.TextContent);
+        Assert.Equal("syntax error near unexpected token `)'\n`true || value=$(time)'\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task ContinuedPipelineReportsTheReachedCloserInASourcedCapture()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/fixture", "printf entry\nvalue=$(printf hidden |&\n)\nprintf inner\n");
+
+        var result = await host.RunAsync("source ./fixture\nprintf outer\n", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("entry", host.StandardOutput.TextContent);
+        Assert.Equal("./fixture: line 3: syntax error near unexpected token `)'\n./fixture: line 3: `)'\n",
+            host.StandardError.TextContent);
     }
 
     [Theory]

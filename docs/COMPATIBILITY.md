@@ -409,6 +409,8 @@ their reader coordinates. A pending here-document warning precedes the
 missing-closer diagnostic and uses its own warning line. A conditional reader
 also reports the unread token. Earlier complete command units can already
 have executed. Prepared parsing reports the syntax error before any evaluation.
+If a pipeline operator or prefix still needs a command at a closing token,
+the streamed reader shows that token and its physical source line.
 A reached adjacent or backtick capture attributes token and grammar EOF
 diagnostics to the command substitution reader.
 When `)` closes a capture with documents still pending, the script reader
