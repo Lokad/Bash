@@ -108,7 +108,8 @@ public sealed partial class Evaluation
                         targetVariables.RecreateDeclarationArray(name, kind);
                     if (memberAssignment || (!local || targetLocal) && targetVariables.IsReadonly(name))
                     {
-                        await ReportFatalExpansionAsync(bracket >= 0 ? assignment.Target.ToValue() : name.ToValue(), ShellValue.FromText(memberAssignment ? "cannot assign list to array member" : "readonly variable"), ExpansionFailureKind.AssignmentTarget)
+                        await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(),
+                                memberAssignment ? "cannot assign list to array member" : "readonly variable", scope)
                             .ConfigureAwait(false);
                         break;
                     }
@@ -139,8 +140,12 @@ public sealed partial class Evaluation
                                 new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
                                 declarationKind, isNameref: false, inherit, caseChange: default, Memory))
                         {
-                            var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
-                            await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(message)).ConfigureAwait(false);
+                            if (targetVariables.IsReadonly(name))
+                                await ReportCommandDiagnosticAsync([function.FunctionName],
+                                    [name.ToValue(), ShellValue.FromText(": readonly variable")], scope).ConfigureAwait(false);
+                            else
+                                await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(ArrayConversionMessage(kind)))
+                                    .ConfigureAwait(false);
                             // Dispatch still visits this name and later operands; a shadowing function can also run.
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;

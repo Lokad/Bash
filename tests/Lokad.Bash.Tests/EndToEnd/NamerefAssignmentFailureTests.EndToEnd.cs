@@ -110,16 +110,16 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("r=target", 1)]
-    [InlineData(": ${r:=target}", 2)]
-    public async Task CircularRetriesRespectReadonlyLocalReferents(string assignment, int exitCode)
+    [InlineData("r=target", 1, "line 1: q: readonly variable\n")]
+    [InlineData(": ${r:=target}", 2, "q: readonly variable\n")]
+    public async Task CircularRetriesRespectReadonlyLocalReferents(string assignment, int exitCode, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(
             "q=old; declare -n r=q s=t t=s; f(){ local -r q=local; local -n r=s s; "
             + assignment + "; printf unreachable; }; f; printf unreachable");
 
         Assert.Empty(result.StdOut);
-        Assert.Equal(CircularFallbackWarnings + "q: readonly variable\n", result.StdErr);
+        Assert.Equal(CircularFallbackWarnings + diagnostic, result.StdErr);
         Assert.Equal(exitCode, result.ExitCode);
     }
 
@@ -335,15 +335,16 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("r=target", 1)]
-    [InlineData(": ${r:=target}", 2)]
-    public async Task LocalNamerefFallbackWritesEnforceHiddenReadonlyAttributes(string assignment, int exitCode)
+    [InlineData("r=target", 1, "line 1: s: readonly variable\n")]
+    [InlineData(": ${r:=target}", 2, "s: readonly variable\n")]
+    public async Task LocalNamerefFallbackWritesEnforceHiddenReadonlyAttributes(
+        string assignment, int exitCode, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(
             "s=old; f(){ local -n r=s s; declare -gr s; " + assignment + "; printf unreachable; }; f; printf unreachable");
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("s: readonly variable\n", result.StdErr);
+        Assert.Equal(diagnostic, result.StdErr);
         Assert.Equal(exitCode, result.ExitCode);
     }
 
@@ -378,7 +379,7 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
             + "new later=kept; printf '%s/<%s>/<%s>/<%s>' \"$?\" \"$x\" \"$r\" \"$later\"");
 
         Assert.Equal("1/<old>/<old>/<kept>", result.StdOut);
-        Assert.Equal("declare: r: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: declare: r: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -404,8 +405,8 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     [InlineData("target=value; declare -n first=second; first=target; printf '<%s>:<%s>\\n' \"$first\" \"$second\"", "<target>:<target>\n", "", 0)]
     [InlineData("declare -n first=second second; i=0; first=$((i++)); printf 'after=<%s>\\n' \"$i\"", "", "", 1)]
     [InlineData("target=value; declare -n ref; printf '<%s>\\n' \"${ref:=target}\"; printf '<%s>\\n' \"$ref\"", "<target>\n<value>\n", "", 0)]
-    [InlineData("target=value; declare -nr ref; ref=target; printf after", "", "ref: readonly variable\n", 1)]
-    [InlineData("declare -nr ref; declare ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "declare: ref: readonly variable\n", 0)]
+    [InlineData("target=value; declare -nr ref; ref=target; printf after", "", "line 1: ref: readonly variable\n", 1)]
+    [InlineData("declare -nr ref; declare ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "line 1: declare: ref: readonly variable\n", 0)]
     [InlineData("declare -nr ref; printf '<%s>\\n' \"${ref:=bad name}\"; printf after", "", "`bad name': not a valid identifier\n", 2)]
     [InlineData("declare -nr first=second; declare -n second; first=target; printf after", "", "", 1)]
     [InlineData("declare -n ref; (printf '<%s>\\n' \"${ref:=bad name}\"; printf child); printf 'parent=<%s>\\n' \"$?\"", "parent=<2>\n", "`bad name': not a valid identifier\n", 0)]

@@ -40,7 +40,7 @@ public sealed class ByteCompoundArrayTests
     [InlineData("a=('", "' '' last); printf '<%s>' \"${a[@]}\"\n", "3CFF3E3C3E3C6C6173743E", "", 0)]
     [InlineData("false && a=([", "]=$(printf forbidden >&2)); printf done\n", "646F6E65", "", 0)]
     [InlineData("a=([0]=$(printf first >&2) [", "]=$(printf rhs >&2) $(printf later >&2)); printf after\n", "", "66697273747268736C61746572FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
-    [InlineData("a[", "]=($(printf forbidden >&2)); printf after\n", "", "615BFF5D3A2063616E6E6F742061737369676E206C69737420746F206172726179206D656D6265720A", 1)]
+    [InlineData("a[", "]=($(printf forbidden >&2)); printf after\n", "", "6C696E6520313A20615BFF5D3A2063616E6E6F742061737369676E206C69737420746F206172726179206D656D6265720A", 1)]
     [InlineData("a=([", "]=${missing:?boom}); printf after\n", "", "6D697373696E673A20626F6F6D0A", 1)]
     public async Task Evaluation_CompoundSourcePreservesBytesAndEffectOrder(
         string prefix, string suffix, string outputHex, string errorHex, int exitCode)

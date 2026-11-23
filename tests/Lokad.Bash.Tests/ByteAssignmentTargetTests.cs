@@ -15,7 +15,7 @@ public sealed class ByteAssignmentTargetTests
     [InlineData("i=0; a[i++]=$((i+=10))$'\\377'; printf '%s|%s' \"$i\" \"${a[10]}\"\n", "31317C3130FF", "", 0)]
     [InlineData("index=$'\\377'; a[$index]=$(printf rhs >&2); printf after\n", "", "726873FF3A2073796E746178206572726F723A206F706572616E6420657870656374656420286572726F7220746F6B656E2069732022FF22290A", 1)]
     [InlineData("a[$(printf selector >&2)]=\"${missing:?$'\\377'}\"; printf after\n", "", "6D697373696E673A20FF0A", 1)]
-    [InlineData("a=old; readonly a; declare -n r=a; r[0]=$(printf rhs >&2); printf after\n", "", "726873723A20726561646F6E6C79207661726961626C650A", 1)]
+    [InlineData("a=old; readonly a; declare -n r=a; r[0]=$(printf rhs >&2); printf after\n", "", "7268736C696E6520313A20723A20726561646F6E6C79207661726961626C650A", 1)]
     public async Task Evaluation_TargetSelectionPreservesByteValuesAndEffects(
         string script, string outputHex, string errorHex, int exitCode)
     {

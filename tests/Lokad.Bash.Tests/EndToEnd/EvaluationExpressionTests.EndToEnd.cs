@@ -41,12 +41,12 @@ public sealed class EvaluationExpressionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("FOO: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: FOO: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
     [Theory]
-    [InlineData("reference=new", "target: readonly variable\n")]
+    [InlineData("reference=new", "line 1: target: readonly variable\n")]
     [InlineData("value=${MISSING:?first}", "MISSING: first\n")]
     [InlineData("values=(first ${MISSING:?first})", "MISSING: first\n")]
     public async Task FatalAssignment_UsesEnclosingStderrAndSkipsItsRedirections(string assignment, string diagnostic)

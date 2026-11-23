@@ -203,22 +203,23 @@ public sealed class ScriptCommandUnitTests
 
     [Theory]
     [InlineData("readonly v=; i=0\n(exit 7) && :\nv=$((++i)) >skipped; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        0, "[1:1:1]")]
+        0, "[1:1:1]", "line 3: ")]
     [InlineData("readonly v=; i=0\nf() { local PIPESTATUS=(8 9); v=$((++i)); }\nf; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        0, "[1:0:1]")]
+        0, "[1:0:1]", "line 2: ")]
     [InlineData("readonly v=; i=0\nf(){ local -; set -e; (exit 7) && :\nv=$((++i)); }\nf\nprintf skipped",
-        7, "")]
+        7, "", "line 3: ")]
     [InlineData("readonly v=; i=0\nf(){ local -; set +e; v=$((++i)); }\nset -e\nsource ./fixture\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        0, "[1:1:1][0:0:1]")]
+        0, "[1:1:1][0:0:1]", "./fixture: line 2: ")]
     [InlineData("readonly v=; i=0\nset -e\n(exit 7) && :\neval 'v=$((++i)); printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' || printf alternative\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        0, "[1:1:1][0:0:1]")]
+        0, "[1:1:1][0:0:1]", "line 5: ")]
     [InlineData("readonly v=; i=0\nset -e\n(eval 'v=$((++i)); printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' || printf alternative)\nprintf skipped",
-        1, "")]
+        1, "", "line 4: ")]
     [InlineData("readonly v=; i=0\ntext=$(printf begin; eval 'v=$((++i)); printf skipped\nprintf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"')\nprintf '[%s:%s:%s]<%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$text\"",
-        0, "[1:1:0]<begin>")]
+        0, "[1:1:0]<begin>", "line 4: ")]
     [InlineData("readonly v=; i=0\nset -e\ntrap 'printf \"[%s:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\" \"$i\"' EXIT\n(exit 7) && :\nv=$((++i)); printf skipped",
-        7, "[7:7:1]")]
-    public async Task RejectedAssignmentsPublishStatusAtTheReachedReader(string script, int expectedStatus, string expectedOutput)
+        7, "[7:7:1]", "line 5: ")]
+    public async Task RejectedAssignmentsPublishStatusAtTheReachedReader(
+        string script, int expectedStatus, string expectedOutput, string diagnosticPrefix)
     {
         foreach (var prepared in new[] { false, true })
         {
@@ -230,7 +231,7 @@ public sealed class ScriptCommandUnitTests
 
             Assert.Equal(expectedStatus, status);
             Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
-            Assert.Equal("v: readonly variable\n", host.StandardError.TextContent);
+            Assert.Equal(diagnosticPrefix + "v: readonly variable\n", host.StandardError.TextContent);
             Assert.False(host.FileExists("/skipped"));
             Assert.Equal(0, host.OpenFileCount);
         }

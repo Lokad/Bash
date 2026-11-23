@@ -84,7 +84,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("x=original; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"",
         "<1><original>", "local: can only be used in a function\n")]
     [InlineData("readonly x=original; f(){ local x=hidden; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"; }; f; declare -p x",
-        "<1><original>declare -r x=\"original\"\n", "local: x: readonly variable\nlocal: x: readonly variable\n")]
+        "<1><original>declare -r x=\"original\"\n", "line 1: local: x: readonly variable\nline 1: local: x: readonly variable\n")]
     public async Task LocalGlobalUsesGlobalWritesAndKeepsLocalInspection(
         string script, string output, string error)
     {
@@ -155,7 +155,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
             "declare -n r=s s; f(){ local s=local; " + prefix + "declare " + flags + " r; s=changed; printf should-not-run; }; f");
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("s: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: s: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -231,9 +231,9 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
 
     [Theory]
     [InlineData("local a=(local)", "-gr +n", "new", "$r", "")]
-    [InlineData("local -r a=(local)", "-g +n", "local", "$r", "a: readonly variable\n")]
+    [InlineData("local -r a=(local)", "-g +n", "local", "$r", "line 1: a: readonly variable\n")]
     [InlineData("local a=(local)", "-gr", "new", "${!r}", "")]
-    [InlineData("local -r a=(local)", "-g", "local", "${!r}", "a: readonly variable\n")]
+    [InlineData("local -r a=(local)", "-g", "local", "${!r}", "line 1: a: readonly variable\n")]
     public async Task GlobalNamerefElementSeparatesReadonlyAttributeAndWriteOwners(
         string localDeclaration, string flags, string localValue, string referenceExpansion, string error)
     {
@@ -291,13 +291,13 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
             + "; printf '<%s>/' \"${a[0]}\"; a[0]=still-local; }; f; a[0]=fail; printf should-not-run");
 
         Assert.Equal("<" + value + ">/", result.StdOut);
-        Assert.Equal("a: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: a: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
     [Theory]
-    [InlineData("", "a: readonly variable\n")]
-    [InlineData("=new", "a: readonly variable\na: readonly variable\n")]
+    [InlineData("", "line 1: a: readonly variable\n")]
+    [InlineData("=new", "line 1: a: readonly variable\nline 1: a: readonly variable\n")]
     public async Task GlobalElementReadonlyAttributesOutliveTopLevelPrefixes(string initializer, string error)
     {
         var result = await EvaluationTestHelper.RunAsync(
@@ -353,7 +353,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
             + "printf '<%s>/<%s>;' \"$r\" \"$t\"; }; f; r=detached; t=fail; printf should-not-run");
 
         Assert.Equal("<t>/<local>;", result.StdOut);
-        Assert.Equal("t: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: t: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -402,7 +402,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
             + "value; printf '%s:<%s>' \"$?\" \"${r[*]}\"; " + target + "=fail; printf should-not-run; }; f");
 
         Assert.Equal("0:<" + output + ">", result.StdOut);
-        Assert.Equal(target + ": readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: " + target + ": readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -455,7 +455,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("arr=(global); i=0; f() { local -a arr=(local); local i=2; declare -ga arr=([i++]=changed); printf 'inside=<%s>:<%s>\\n' \"${arr[0]}\" \"$i\"; }; f; printf 'outside=<%s>:<%s>:<%s>\\n' \"${arr[0]-unset}\" \"${arr[2]-unset}\" \"$i\"", "inside=<local>:<3>\noutside=<unset>:<changed>:<0>\n", "", 0)]
     [InlineData("arr=(global); f() { local -a arr=(local); declare -ga arr+=(\"${arr[0]}\"); printf 'inside=<%s>\\n' \"${arr[@]}\"; }; f; printf 'outside=<%s>\\n' \"${arr[@]}\"", "inside=<local>\noutside=<global>\noutside=<local>\n", "", 0)]
     [InlineData("declare -A arr=([key]=global); f() { local -A arr=([key]=local); declare -gA arr=([key]=\"${arr[key]}\" [next]=changed); printf 'inside=<%s>:<%s>\\n' \"${arr[key]}\" \"${arr[next]-unset}\"; }; f; printf 'outside=<%s>:<%s>\\n' \"${arr[key]}\" \"${arr[next]}\"", "inside=<local>:<unset>\noutside=<local>:<changed>\n", "", 0)]
-    [InlineData("x=global; f() { local x=local; declare -gr x=changed; x=stilllocal; printf '<%s>\\n' \"$x\"; }; f; x=fail; printf '<%s>\\n' \"$x\"", "<stilllocal>\n", "x: readonly variable\n", 1)]
+    [InlineData("x=global; f() { local x=local; declare -gr x=changed; x=stilllocal; printf '<%s>\\n' \"$x\"; }; f; x=fail; printf '<%s>\\n' \"$x\"", "<stilllocal>\n", "line 1: x: readonly variable\n", 1)]
     [InlineData("x=global; f() { local -r x=local; declare -g x=changed; printf '<%s>\\n' \"$x\"; }; f; printf '<%s>\\n' \"$x\"", "<local>\n<changed>\n", "", 0)]
     [InlineData("f() { local x=local; declare -g x; printf 'inside=<%s>\\n' \"$x\"; }; f; printf 'outside=<%s>\\n' \"${x-unset}\"; declare -g x=changed; printf '<%s>\\n' \"$x\"", "inside=<local>\noutside=<unset>\n<changed>\n", "", 0)]
     [InlineData("x=global; f() { local x=local; (declare -g x=child; printf 'child=<%s>\\n' \"$x\"); printf 'parent=<%s>\\n' \"$x\"; }; x=prefix f; printf 'global=<%s>\\n' \"$x\"", "child=<local>\nparent=<local>\nglobal=<global>\n", "", 0)]

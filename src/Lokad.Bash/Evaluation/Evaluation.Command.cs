@@ -32,9 +32,11 @@ public sealed partial class Evaluation
 
         var coordinates = scope.Context.Coordinates;
         var lineScope = default(Variables.LineNumberScope);
-        if (coordinates.Locations is { } locations && locations.TryGet(command, out var location))
+        var locationCommand = _pipelineStageSource is { } source && _state.Script.Commands is [var stage]
+            && ReferenceEquals(stage, command) ? source : command;
+        if (coordinates.Locations is { } locations && locations.TryGet(locationCommand, out var location))
         {
-            coordinates = coordinates.At(command, location);
+            coordinates = coordinates.At(locationCommand, location);
             scope = scope with { Context = scope.Context.WithCoordinates(coordinates) };
             lineScope = scope.Variables.EnterLineNumber(coordinates.Line);
         }

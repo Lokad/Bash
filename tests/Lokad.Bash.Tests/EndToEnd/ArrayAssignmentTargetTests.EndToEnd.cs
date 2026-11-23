@@ -7,28 +7,51 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArrayAssignmentTargetTestsEndToEnd
 {
     [Theory]
-    [InlineData("arr[-1]=x", "arr[-1]: bad array subscript\n", true)]
-    [InlineData("arr[1/0]=x", "1/0: division by 0 (error token is \"0\")\n", false)]
-    [InlineData("arr[$((1/0))]=x", "1/0: division by 0 (error token is \"0\")\n", true)]
-    [InlineData("arr[0]=$((1/0))", "1/0: division by 0 (error token is \"0\")\n", true)]
-    [InlineData("readonly arr; arr[0]=x", "arr: readonly variable\n", true)]
-    [InlineData("readonly arr; arr=x", "arr: readonly variable\n", true)]
-    [InlineData("declare -A arr; key=; arr[$key]=x", "arr[$key]: bad array subscript\n", true)]
-    [InlineData("arr[${missing:?bad}]=x", "missing: bad\n", false)]
-    [InlineData("readonly arr; : ${arr:=x}", "arr: readonly variable\n", true)]
+    [InlineData("arr[-1]=x", "arr[-1]: bad array subscript\n", true, false)]
+    [InlineData("arr[1/0]=x", "1/0: division by 0 (error token is \"0\")\n", false, false)]
+    [InlineData("arr[$((1/0))]=x", "1/0: division by 0 (error token is \"0\")\n", true, false)]
+    [InlineData("arr[0]=$((1/0))", "1/0: division by 0 (error token is \"0\")\n", true, false)]
+    [InlineData("readonly arr; arr[0]=x", "line 1: arr: readonly variable\n", true, true)]
+    [InlineData("readonly arr; arr=x", "line 1: arr: readonly variable\n", true, true)]
+    [InlineData("declare -A arr; key=; arr[$key]=x", "arr[$key]: bad array subscript\n", true, false)]
+    [InlineData("arr[${missing:?bad}]=x", "missing: bad\n", false, false)]
+    [InlineData("readonly arr; : ${arr:=x}", "arr: readonly variable\n", true, false)]
     public async Task Evaluation_AssignmentFailures_RespectEvalAndSourceBoundaries(
-        string assignment, string expectedError, bool recoverable)
+        string assignment, string expectedError, bool recoverable, bool reportsSourcePath)
     {
         var content = assignment + "; printf inside";
         var tree = EndToEndHarness.BuildTree([("/assignment", content)]);
-        foreach (var invocation in new[] { $"eval '{content}'", "source /assignment" })
+        foreach (var (invocation, path) in new[] { ($"eval '{content}'", ""), ("source /assignment", "/assignment: ") })
         {
             var result = await EndToEndHarness.RunScriptAsync(
                 invocation + "; printf 'after:%s' \"$?\"", tree, ReadOnlyMemory<byte>.Empty);
 
             Assert.Equal(recoverable ? "after:1" : string.Empty, result.StdOut);
-            Assert.Equal(expectedError, result.StdErr);
+            Assert.Equal(reportsSourcePath ? path + expectedError : expectedError, result.StdErr);
             Assert.Equal(recoverable ? 0 : 1, result.ExitCode);
+        }
+    }
+
+    [Theory]
+    [InlineData("values=(\n new\n) other=(\n more\n)", "line 5: values: readonly variable\n")]
+    [InlineData("first=\"one\ntwo\" \\\nvalues=(\n new\n)", "line 4: values: readonly variable\n")]
+    [InlineData("2>\"first\nsecond\" values=(\n new\n)", "line 4: values: readonly variable\n")]
+    [InlineData("values=(\n new\n) |& cat", "line 5: values: readonly variable\n")]
+    [InlineData("declare -n ref=values\ndeclare -a ref=(\n new\n)", "line 4: ref: readonly variable\n")]
+    public async Task AssignmentDiagnosticUsesTheFirstCommandElement(string body, string diagnostic)
+    {
+        var script = "printf 'before\\n'\nvalues=(old); readonly values\n" + body
+            + "\nprintf '<%s>:<%s>\\n' \"$?\" \"${values[0]}\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("before\n<1>:<old>\n", host.StandardOutput.TextContent);
+            Assert.Equal(diagnostic, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
         }
     }
 
@@ -166,13 +189,13 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [InlineData("arr=(one two); arr[~0]=value; printf '<%s>\\n' \"${arr[1]}\"", "<value>\n", "", 0)]
     [InlineData("printf '<%s>\\n' arr[1 + 2]=three", "<arr[1>\n<+>\n<2]=three>\n", "", 0)]
     [InlineData("key=literal; printf '<%s>\\n' map[\"$key\"]=value", "<map[literal]=value>\n", "", 0)]
-    [InlineData("arr=(old); readonly arr; arr[1]=new; printf after", "", "arr: readonly variable\n", 1)]
+    [InlineData("arr=(old); readonly arr; arr[1]=new; printf after", "", "line 1: arr: readonly variable\n", 1)]
     [InlineData("arr=(old); arr[-2]=new; printf after", "", "arr[-2]: bad array subscript\n", 1)]
     [InlineData("arr[]=new; printf after", "", "arr[]: bad array subscript\n", 1)]
     [InlineData("declare -A map; key=; map[$key]=new; printf after", "", "map[$key]: bad array subscript\n", 1)]
     [InlineData("HOME=/home/test; declare -A map; map[~]=value; printf '<%s>\\n' \"${!map[@]}\"", "</home/test>\n", "", 0)]
     [InlineData("i=0; arr[$(printf 2; printf selector >&2)]=$(printf value; printf rhs >&2); printf '<%s>\\n' \"${arr[2]}\"", "<value>\n", "rhsselector", 0)]
-    [InlineData("arr=(old); readonly arr; arr[$(printf 1; printf selector >&2)]=$(printf value; printf rhs >&2); printf after", "", "rhsselectorarr: readonly variable\n", 1)]
+    [InlineData("arr=(old); readonly arr; arr[$(printf 1; printf selector >&2)]=$(printf value; printf rhs >&2); printf after", "", "rhsselectorline 1: arr: readonly variable\n", 1)]
     [InlineData("arr=(old); arr[-2]=$(printf value; printf rhs >&2); printf after", "", "rhsarr[-2]: bad array subscript\n", 1)]
     [InlineData("arr[2]=old; declare -n ref=arr; ref[2]=new; printf '<%s>:<%s>\\n' \"${arr[2]}\" \"${ref[2]}\"", "<new>:<new>\n", "", 0)]
     [InlineData("x=wrong; declare -A map; map['$x']=value; printf '<%s>\\n' \"${map[\\$x]}\"", "<value>\n", "", 0)]

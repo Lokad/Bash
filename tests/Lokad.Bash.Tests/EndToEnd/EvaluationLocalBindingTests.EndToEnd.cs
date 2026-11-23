@@ -118,7 +118,7 @@ public sealed class EvaluationLocalBindingTestsEndToEnd
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal(declaration.Split(' ')[0] + ": x: readonly variable\nx: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: " + declaration.Split(' ')[0] + ": x: readonly variable\nline 1: x: readonly variable\n", result.StdErr);
     }
 
     [Theory]

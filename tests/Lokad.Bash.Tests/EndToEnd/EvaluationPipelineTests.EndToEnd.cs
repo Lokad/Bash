@@ -33,6 +33,16 @@ public sealed class EvaluationPipelineTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Fact]
+    public async Task PipeAndErrorKeepsTheStageLineNumber()
+    {
+        var result = await EvaluationTestHelper.RunAsync(":\nprintf '%s\\n' \"$LINENO\" |& cat");
+
+        Assert.Equal("2\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Theory]
     [InlineData(">out", "", "OE", "previous")]
     [InlineData("2>err", "OE", null, "")]
@@ -146,7 +156,7 @@ public sealed class EvaluationPipelineTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("ignored\n", result.StdOut);
-        Assert.Equal("value: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: value: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

@@ -298,7 +298,7 @@ public sealed class ExportDeclarationEffectsTestsEndToEnd
             + "; printf '<%s>/' \"${x-unset}\"; }; x=prefix f; printf '<%s>/' \"${x-unset}\"; x=after; printf should-not-run");
 
         Assert.Equal("<" + value + ">/<" + value + ">/", result.StdOut);
-        Assert.Equal("x: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: x: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -570,24 +570,24 @@ public sealed class ExportDeclarationEffectsTestsEndToEnd
     [InlineData("x=outer; x=temp export -n x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<0> value=<new> after=<unset>\n", "", false, false)]
     [InlineData("export x=outer; x=temp declare +x x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<0> value=<outer> after=<unset>\n", "", true, false)]
     [InlineData("export x=outer; x=temp export -n x; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<0> value=<outer> after=<unset>\n", "", true, false)]
-    [InlineData("export x=old; readonly x; export -n x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "x: readonly variable\n", false, true)]
-    [InlineData("export x=old; readonly x; declare +x x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "declare: x: readonly variable\n", true, true)]
-    [InlineData("x=old; readonly x; export x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "x: readonly variable\n", true, true)]
-    [InlineData("x=old; readonly x; readonly x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "x: readonly variable\n", false, true)]
-    [InlineData("export x=old; readonly x; export -n x=new after=kept; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<kept>\n", "x: readonly variable\n", false, true)]
+    [InlineData("export x=old; readonly x; export -n x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "line 1: x: readonly variable\n", false, true)]
+    [InlineData("export x=old; readonly x; declare +x x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "line 1: declare: x: readonly variable\n", true, true)]
+    [InlineData("x=old; readonly x; export x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "line 1: x: readonly variable\n", true, true)]
+    [InlineData("x=old; readonly x; readonly x=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<unset>\n", "line 1: x: readonly variable\n", false, true)]
+    [InlineData("export x=old; readonly x; export -n x=new after=kept; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<1> value=<old> after=<kept>\n", "line 1: x: readonly variable\n", false, true)]
     [InlineData("export x=outer; f() { export -n x=new; printf 'inside=<%s>\\n' \"$x\"; }; x=temp f; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "inside=<new>\nstatus=<0> value=<outer> after=<unset>\n", "", true, false)]
     [InlineData("export x=outer; f() { x=temp export -n x=new; printf 'inside=<%s>\\n' \"$x\"; }; f; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "inside=<new>\nstatus=<0> value=<new> after=<unset>\n", "", true, false)]
     [InlineData("export x=outer; f() { local x=local; x=temp export -n x=new; printf 'inside=<%s>\\n' \"$x\"; }; f; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "inside=<new>\nstatus=<0> value=<outer> after=<unset>\n", "", true, false)]
     [InlineData("export x=outer; declare -n ref=x; x=temp export -n ref=new; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<0> value=<outer> after=<unset>\n", "", true, false)]
     [InlineData("export x=outer; x=temp export -n x+=tail; printf 'status=<%s> value=<%s> after=<%s>\\n' \"$?\" \"$x\" \"${after-unset}\"", "status=<0> value=<outertail> after=<unset>\n", "", true, false)]
-    [InlineData("x=old; readonly x; declare -n ref=x; export -n ref=new; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<1> value=<old> second=<unset>\n", "x: readonly variable\n", false, true)]
-    [InlineData("x=old; readonly x; declare -n ref=x; export ref=new; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<1> value=<old> second=<unset>\n", "x: readonly variable\n", true, true)]
-    [InlineData("x=old; readonly x; declare -n ref=x; readonly ref=new; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<1> value=<old> second=<unset>\n", "x: readonly variable\n", false, true)]
+    [InlineData("x=old; readonly x; declare -n ref=x; export -n ref=new; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<1> value=<old> second=<unset>\n", "line 1: x: readonly variable\n", false, true)]
+    [InlineData("x=old; readonly x; declare -n ref=x; export ref=new; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<1> value=<old> second=<unset>\n", "line 1: x: readonly variable\n", true, true)]
+    [InlineData("x=old; readonly x; declare -n ref=x; readonly ref=new; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<1> value=<old> second=<unset>\n", "line 1: x: readonly variable\n", false, true)]
     [InlineData("export x=outer; x=temp export -n x=first x+=tail; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<0> value=<firsttail> second=<unset>\n", "", true, false)]
     [InlineData("export x=outer; x=temp export -n x+=\"$x\"; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<0> value=<outerouter> second=<unset>\n", "", true, false)]
     [InlineData("x=(outer extra); x=temp export -n x+=tail; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<0> value=<outertail> second=<extra>\n", "", false, false)]
     [InlineData("x=outer; declare -n ref=x; ref=temp export -n ref=new; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "status=<0> value=<outer> second=<unset>\n", "", false, false)]
-    [InlineData("export x=old; readonly x; (export -n x=new); printf 'child=<%s>\\n' \"$?\"; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "child=<1>\nstatus=<0> value=<old> second=<unset>\n", "x: readonly variable\n", true, true)]
+    [InlineData("export x=old; readonly x; (export -n x=new); printf 'child=<%s>\\n' \"$?\"; printf 'status=<%s> value=<%s> second=<%s>\\n' \"$?\" \"$x\" \"${x[1]-unset}\"", "child=<1>\nstatus=<0> value=<old> second=<unset>\n", "line 1: x: readonly variable\n", true, true)]
     public async Task Evaluation_ExportWrites_KeepValueAndAttributeEffectsSeparate(
         string script, string expectedOutput, string expectedError, bool expectedExport, bool expectedReadonly)
     {

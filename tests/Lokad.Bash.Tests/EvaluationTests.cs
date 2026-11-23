@@ -417,7 +417,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(pipeline.Stages[0].Evaluation);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("X: readonly variable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: X: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         var open = await NextOpenFileAsync(pipeline.Stages[0].Evaluation);
@@ -457,7 +457,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(pipeline.Stages[0].Evaluation);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("X: readonly variable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: X: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         var hereStringPipe = await NextPipeAsync(pipeline.Stages[0].Evaluation);
@@ -1156,7 +1156,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("FOO: readonly variable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: FOO: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -3477,7 +3477,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("VALUE: readonly variable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: VALUE: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         var lookup = await NextResolveCommandsAsync(state);

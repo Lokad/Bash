@@ -22,7 +22,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
         "<1>declare -ax x=([0]=\"old\" [1]=\"spare\")\ndeclare -Ax later=([0]=\"next\" )\n",
         "export: x: cannot convert indexed to associative array\n")]
     [InlineData("readonly x=old; export -a x=edited; printf '<%s>' \"$?\"; declare -p x",
-        "<1>declare -rx x=\"old\"\n", "export: x: readonly variable\n")]
+        "<1>declare -rx x=\"old\"\n", "line 1: export: x: readonly variable\n")]
     [InlineData("x=outer; f(){ local x=inner; export -a x+=tail; declare -p x; }; f; declare -p x",
         "declare -ax x=([0]=\"innertail\")\ndeclare -ax x=([0]=\"outer\")\n", "")]
     [InlineData("x=outer; f(){ local x=inner; export -n -A x=edited; declare -p x; }; f; declare -p x",
@@ -34,7 +34,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("x=old; x=prefix export -a x=edited; declare -p x",
         "declare -ax x=([0]=\"prefix\")\n", "")]
     [InlineData("x=old; x=prefix readonly -A x=edited; declare -p x",
-        "declare -Arx x=([0]=\"edited\" )\n", "x: readonly variable\n")]
+        "declare -Arx x=([0]=\"edited\" )\n", "line 1: x: readonly variable\n")]
     [InlineData("x=old; x=prefix readonly -n -a x=edited; declare -p x",
         "declare -a x=([0]=\"edited\")\n", "")]
     [InlineData("x=outer; f(){ local -A x=([0]=old [key]=other); export -a x=edited; declare -p x; }; f; declare -p x",
@@ -81,7 +81,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("v=old; declare -n r=v\nreadonly -n r=new\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r v",
         "[0:0]declare -n r=\"v\"\ndeclare -- v=\"new\"\n", "")]
     [InlineData("readonly r=old\nreadonly -n r=new new=ok\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r new",
-        "[1:1]declare -r r=\"old\"\ndeclare -- new=\"ok\"\n", "r: readonly variable\n")]
+        "[1:1]declare -r r=\"old\"\ndeclare -- new=\"ok\"\n", "line 2: r: readonly variable\n")]
     [InlineData("readonly -an r=(first second)\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r",
         "[0:0]declare -a r=([0]=\"first\" [1]=\"second\")\n", "")]
     [InlineData("f(){ :; }; readonly -f f\nreadonly -fn f\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -pF f",
@@ -132,7 +132,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + "f; printf '/<%s>' \"${a[*]}\"");
 
         Assert.Equal("0/2/<>/<kept>/<old tail>", result.StdOut);
-        Assert.Equal("r: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: r: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -144,7 +144,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + "printf '%s/<%s>' \"$?\" \"${a[*]}\"; }; f");
 
         Assert.Equal("1/<old tail>", result.StdOut);
-        Assert.Equal("local: a: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: local: a: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -161,7 +161,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("0/2/<old tail>/<kept>", result.StdOut);
-        Assert.Equal("a: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: a: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -175,7 +175,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + "new'; printf '%s/<%s>/<%s>' \"$?\" \"${a[key]}\" \"${a[0]}\"");
 
         Assert.Equal("0/<old>/<zero>", result.StdOut);
-        Assert.Equal("a: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: a: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -186,7 +186,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             "declare -r 'a[1]=new'; declare -A a; printf '%s/<%s>' \"$?\" \"${a[*]}\"");
 
         Assert.Equal("1/<>", result.StdOut);
-        Assert.Equal("a: readonly variable\ndeclare: a: cannot convert indexed to associative array\n", result.StdErr);
+        Assert.Equal("line 1: a: readonly variable\ndeclare: a: cannot convert indexed to associative array\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -227,7 +227,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + "printf '%s/<%s>/<%s>/<%s>' \"$?\" \"${a[*]}\" \"$r\" \"$s\"");
 
         Assert.Equal("0/<old tail>/<a>/<a>", result.StdOut);
-        Assert.Equal("r: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: r: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -342,7 +342,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + " r" + assignment + "new later=kept; printf '%s/%s/<%s>/<%s>/<%s>' \"$?\" \"$i\" \"${a[*]}\" \"$r\" \"$later\"");
 
         Assert.Equal((alreadyReadonly ? "1/0" : "0/1") + "/<old tail>/<a[i++]>/<kept>", result.StdOut);
-        Assert.Equal((alreadyReadonly ? "declare: " : "") + "a: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: " + (alreadyReadonly ? "declare: " : "") + "a: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -357,7 +357,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + " r=new; printf '%s/<%s>/<%s>' \"$?\" \"${a[key]}\" \"$r\"");
 
         Assert.Equal((alreadyReadonly ? "1" : "0") + "/<old>/<a[key]>", result.StdOut);
-        Assert.Equal((alreadyReadonly ? "declare: " : "") + "a: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: " + (alreadyReadonly ? "declare: " : "") + "a: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -393,15 +393,15 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + "printf 'i=%s;' \"$i\"; r=detached; a[0]=fail; printf should-not-run");
 
         Assert.Equal("i=0;", result.StdOut);
-        Assert.Equal("a: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: a: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
     // Bash 5.2: scalar -an converts the reference itself; compound preparation happens first.
     [Theory]
     [InlineData("declare -n r=s s; declare -an r", "0:<s>/<>", "")]
-    [InlineData("declare -nr r=s; declare -n s; declare -an r=value", "1:<>/<>", "declare: r: readonly variable\n")]
-    [InlineData("declare -nr r=s; declare -n s; declare -an r", "1:<>/<>", "declare: r: readonly variable\n")]
+    [InlineData("declare -nr r=s; declare -n s; declare -an r=value", "1:<>/<>", "line 1: declare: r: readonly variable\n")]
+    [InlineData("declare -nr r=s; declare -n s; declare -an r", "1:<>/<>", "line 1: declare: r: readonly variable\n")]
     [InlineData("declare -n r=s s; declare -an r=(one two)", "1:<one two>/<>", "declare: r: reference variable cannot be an array\n")]
     [InlineData("declare -nr r=s; declare -n s; declare -an r=(one two)", "1:<one two>/<>", "declare: r: reference variable cannot be an array\n")]
     [InlineData("declare -n r=s s; declare -a +n r=value", "0:<value>/<>", "")]
@@ -419,7 +419,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("declare -n r=s s=t; declare +n r=value", "0:<t>/<t>/<value>", "")]
     [InlineData("declare -n r=s s=t; declare +n r+=value", "0:<t>/<t>/<oldvalue>", "")]
     [InlineData("declare -nr r=s; declare -n s=t; declare +n r=value", "0:<t>/<t>/<value>", "")]
-    [InlineData("declare -n r=s; declare -nr s=t; declare +n r=value", "1:<old>/<old>/<old>", "declare: r: readonly variable\n")]
+    [InlineData("declare -n r=s; declare -nr s=t; declare +n r=value", "1:<old>/<old>/<old>", "line 1: declare: r: readonly variable\n")]
     [InlineData("declare -n r=s s=t t=u; declare +n r", "0:<u>/<u>/<u>", "")]
     [InlineData("declare -n r=s s; declare +n r; s=value; value=final", "0:<final>/<final>/<old>", "")]
     public async Task NonlocalNamerefRemovalSelectsTheLastReference(string declaration, string output, string error)
@@ -443,7 +443,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             + "; s=detached; printf '<%s>/' \"$r\"; t=fail; printf should-not-run");
 
         Assert.Equal("<detached>/", result.StdOut);
-        Assert.Equal("t: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: t: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -517,7 +517,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("declare -n r; declare r=(one two); printf '%s:<%s>' \"${#r[@]}\" \"${r[*]}\"", "2:<one two>", "warning: r: removing nameref attribute\n", 0)]
     [InlineData("export x=old; export +n x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<1>:<old>\n", "export: `+n': not a valid identifier\n", 0)]
     [InlineData("export x=old; export +p x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<1>:<old>\n", "export: `+p': not a valid identifier\n", 0)]
-    [InlineData("readonly x=old; declare +r x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<1>:<old>\n", "declare: x: readonly variable\n", 0)]
+    [InlineData("readonly x=old; declare +r x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<1>:<old>\n", "line 1: declare: x: readonly variable\n", 0)]
     [InlineData("declare +r x=old; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<old>\n", "", 0)]
     [InlineData("declare -r +r x=old; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<old>\n", "", 0)]
     [InlineData("x=(old); declare +a x; printf '<%s>:<%s>\\n' \"$?\" \"${x[0]}\"", "<1>:<old>\n", "declare: x: cannot destroy array variables in this way\n", 0)]
@@ -560,7 +560,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("x=outer; f() { local -r x=inner; declare -A x; printf '<%s>:<%s>\\n' \"$?\" \"${x[0]}\"; }; f; printf '<%s>\\n' \"$x\"", "<0>:<>\n<outer>\n", "", 0)]
     [InlineData("f() { local x=old; declare -A x+=([key]=new); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${x[0]-unset}\" \"${x[key]}\"; }; f", "<0>:<unset>:<new>\n", "", 0)]
     [InlineData("f() { local x=old; declare -A x+=new; printf '<%s>:<%s>\\n' \"$?\" \"${x[0]-unset}\"; }; f", "<0>:<new>\n", "", 0)]
-    [InlineData("target=value; declare -nr ref=target; declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<1>:<value>\n", "declare: ref: readonly variable\n", 0)]
+    [InlineData("target=value; declare -nr ref=target; declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<1>:<value>\n", "line 1: declare: ref: readonly variable\n", 0)]
     [InlineData("declare -r value=changed; status=$?; printf '<%s>:<%s>\\n' \"$status\" \"${value-unset}\"", "<0>:<changed>\n", "", 0)]
     public async Task Evaluation_DeclarationAttributes_PreserveValuesAndScope(
         string script, string expectedOutput, string expectedError, int expectedExitCode)

@@ -75,6 +75,8 @@ public sealed partial class Evaluation : IFileTester
     // Simple stages can inherit the status rules of the reader that started the pipeline.
     private bool _pipelineUsesLoadedUnitStatus;
     private int? _loadedSyntaxFunctionDepth;
+    // A |& stage may replace its root command to append a redirection while borrowing the original locations.
+    private ICommand? _pipelineStageSource;
     /// <summary>
     /// Tracks descriptors inherited by a nested evaluator and therefore not owned by it.
     /// </summary>
@@ -853,9 +855,9 @@ public sealed partial class Evaluation : IFileTester
                     : bindings.ResolveBinding(LogicalDescriptor.StdIn);
                 var stdOut = index < links.Length ? new DescriptorBinding(pipes[index].Write, IsWriteOnly: true)
                     : bindings.ResolveBinding(LogicalDescriptor.StdOut);
-                var command = index == 0 ? first : links[index - 1].Right;
-                if (index < links.Length && links[index].Operator == PipelineOperator.PipeAndError)
-                    command = AppendPipeStandardError(command);
+                var sourceCommand = index == 0 ? first : links[index - 1].Right;
+                var command = index < links.Length && links[index].Operator == PipelineOperator.PipeAndError
+                    ? AppendPipeStandardError(sourceCommand) : sourceCommand;
                 var script = new ParsedScript([command]);
                 var descriptors = new EvaluationDescriptorSetup(
                     bindings.WithStandardStreams(stdIn, stdOut, bindings.ResolveBinding(LogicalDescriptor.StdErr)), borrowedDescriptors);
@@ -881,6 +883,8 @@ public sealed partial class Evaluation : IFileTester
                 };
 
                 stage._retainCompletedMemory = true;
+                if (!ReferenceEquals(sourceCommand, command))
+                    stage._pipelineStageSource = sourceCommand;
                 stage._loadedSyntaxFunctionDepth = scope.LoadedSyntaxFunctionDepth;
                 stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
                     && (scope.InNestedCommandUnits || _state.ForkKind == ShellForkKind.CommandSubstitution
@@ -1660,8 +1664,8 @@ public sealed partial class Evaluation : IFileTester
                 // Readonly belongs to the selected binding, not a reference followed to reach it.
                 if (commandVars.IsReadonlyBinding(selectedName))
                 {
-                    await ReportExpansionDiagnosticAsync(assignment.Target.ToValue(),
-                        ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                    await ReportCommandDiagnosticAsync([assignment.Target.ToValue()],
+                        [ShellValue.FromText("readonly variable")], scope).ConfigureAwait(false);
                     continue;
                 }
 
@@ -1711,8 +1715,8 @@ public sealed partial class Evaluation : IFileTester
                     if (!commandVars.TrySetScalar(name, value, memory: null, commandPrefix: true))
                     {
                         if (commandVars.IsReadonly(name))
-                            await ReportExpansionDiagnosticAsync(assignment.Target.ToValue(),
-                                ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                            await ReportCommandDiagnosticAsync([assignment.Target.ToValue()],
+                                [ShellValue.FromText("readonly variable")], scope).ConfigureAwait(false);
                         else
                             commandAssignmentsSuccessful = false;
                         continue;
@@ -2309,7 +2313,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     if (!targetVars.TryRemoveNamerefAttribute(name))
                     {
-                        await DiagnoseAsync(name, "readonly variable").ConfigureAwait(false);
+                        await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         continue;
                     }
                     await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
@@ -2326,18 +2330,19 @@ public sealed partial class Evaluation : IFileTester
                 {
                     if (arrayAttributeAssignment)
                     {
-                        await DiagnoseAsync(sourceName, "readonly variable").ConfigureAwait(false);
+                        await DiagnoseReadonlyAsync(sourceName).ConfigureAwait(false);
                         await ApplyNamedAttributesAsync(sourceName, assignmentPrefix).ConfigureAwait(false);
                     }
                     else if (operand.Value != null && setsNamedAttribute)
                     {
                         // These builtins apply attributes even when their assignment fails.
                         exitCode = 1;
-                        await ReportExpansionDiagnosticAsync(GetDiagnosticName(targetVars.ResolveNamerefName(name)), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                        await ReportCommandDiagnosticAsync([GetDiagnosticName(targetVars.ResolveNamerefName(name))],
+                            [ShellValue.FromText("readonly variable")], declarationScope).ConfigureAwait(false);
                         await ApplyAttributesAsync(name, targetVars, global, local, assignmentExport).ConfigureAwait(false);
                     }
                     else
-                        await DiagnoseAsync(declarationName, "readonly variable").ConfigureAwait(false);
+                        await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                     continue;
                 }
                 var keepLocalNameref = false;
@@ -2352,7 +2357,7 @@ public sealed partial class Evaluation : IFileTester
                         var retainedTarget = localTarget;
                         if (!targetVars.TryRemoveNamerefAttribute(name))
                         {
-                            await DiagnoseAsync(name, "readonly variable").ConfigureAwait(false);
+                            await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                             continue;
                         }
                         targetVars.TrySetResolvedScalar(name, retainedTarget, Memory);
@@ -2383,7 +2388,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         if (!targetVars.TryRemoveNamerefAttribute(name))
                         {
-                            await DiagnoseAsync(name, "readonly variable").ConfigureAwait(false);
+                            await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                             continue;
                         }
                         targetVars.TrySetResolvedScalar(name, arrayReference, Memory);
@@ -2410,11 +2415,14 @@ public sealed partial class Evaluation : IFileTester
                     if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
                             localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, options.CaseChange, Memory))
                     {
-                        var message = targetVars.IsReadonly(name) ? "readonly variable"
-                            : arrayKind != ArrayAssignmentKind.Auto
-                                ? ArrayConversionMessage(arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed)
-                                : "invalid local declaration";
-                        await DiagnoseAsync(declarationName, message).ConfigureAwait(false);
+                        if (targetVars.IsReadonly(name))
+                            await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
+                        else
+                        {
+                            var message = arrayKind == ArrayAssignmentKind.Auto ? "invalid local declaration"
+                                : ArrayConversionMessage(arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
+                            await DiagnoseAsync(declarationName, message).ConfigureAwait(false);
+                        }
                         continue;
                     }
                     localReferenceAssigned = options.Nameref || initializingReference;
@@ -2651,7 +2659,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     if (!targetVars.TryRemoveNamerefAttribute(name))
                     {
-                        await DiagnoseAsync(declarationName, "readonly variable").ConfigureAwait(false);
+                        await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                         continue;
                     }
                     if (formerTarget.IsEmpty || local) targetVars.TryDeclareName(name);
@@ -2728,7 +2736,7 @@ public sealed partial class Evaluation : IFileTester
                     attributes = attributes with { Owner = bindings.SavedVariables };
                 if (attributes.Owner.IsReadonly(attributes.Name))
                 {
-                    await DiagnoseAsync(attributes.Name, "readonly variable").ConfigureAwait(false);
+                    await DiagnoseReadonlyAsync(attributes.Name).ConfigureAwait(false);
                     return true; // Visit later operands, and still detach +n, without evaluating the selector.
                 }
                 SetAttributes(attributes.Name, attributes.Owner, exportChange);
@@ -2763,11 +2771,11 @@ public sealed partial class Evaluation : IFileTester
                     if (reference.Kind != VariableReferenceKind.Name)
                     {
                         // A newly applied -r rejects the element write but leaves the declaration successful.
-                        await ReportExpansionDiagnosticAsync(GetDiagnosticName(diagnosticName), ShellValue.FromText("readonly variable"))
+                        await ReportCommandDiagnosticAsync([GetDiagnosticName(diagnosticName)], [ShellValue.FromText("readonly variable")], declarationScope)
                             .ConfigureAwait(false);
                         return true;
                     }
-                    await DiagnoseAsync(diagnosticName, "readonly variable").ConfigureAwait(false);
+                    await DiagnoseReadonlyAsync(diagnosticName).ConfigureAwait(false);
                     return false;
                 }
                 if (!target.Name.IsEmpty && options.IntegerChange != DeclarationAttributeChange.Unchanged)
@@ -2786,7 +2794,7 @@ public sealed partial class Evaluation : IFileTester
                     if (!resolved.IsEmpty)
                     {
                         if (commandVars.IsReadonlyBinding(resolved))
-                            await ReportExpansionDiagnosticAsync(GetDiagnosticName(resolved), ShellValue.FromText("readonly variable"))
+                            await ReportCommandDiagnosticAsync([GetDiagnosticName(resolved)], [ShellValue.FromText("readonly variable")], declarationScope)
                                 .ConfigureAwait(false);
                         else
                             commandVars.SetResolvedValuePreservingArray(resolved, value, Memory);
@@ -2870,6 +2878,13 @@ public sealed partial class Evaluation : IFileTester
                 return ReportDeclarationOperandAsync(GetDiagnosticName(subject), message);
             }
 
+            Task DiagnoseReadonlyAsync(BindingName subject)
+            {
+                exitCode = 1;
+                return ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
+                    [GetDiagnosticName(subject), ShellValue.FromText(": readonly variable")], declarationScope);
+            }
+
             Task DiagnoseQuotedAsync(ShellValue subject, string message)
             {
                 exitCode = 1;
@@ -2879,7 +2894,7 @@ public sealed partial class Evaluation : IFileTester
         }
         async Task<bool> ApplyAssignmentAsync(AssignmentWord assignment)
         {
-            if (!assignment.IsCompoundArrayAssignment)
+            if (assignment.ArrayValues is not { } items)
             {
                 var value = await WordExpansion.ExpandAssignmentValueAsync(assignment.Value, scope).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
@@ -2892,14 +2907,13 @@ public sealed partial class Evaluation : IFileTester
             var name = scope.Variables.ResolveNamerefName(compoundTarget.Name);
             if (compoundTarget.Kind != VariableReferenceKind.Name || !name.IsIdentifier)
             {
-                await ReportFatalExpansionAsync(assignment.Target.ToValue(), ShellValue.FromText("cannot assign list to array member"), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
+                await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "cannot assign list to array member", scope)
+                    .ConfigureAwait(false);
                 return false;
             }
-            if (!name.IsIdentifier || assignment.ArrayValues is not { } items)
-                return false;
             if (scope.Variables.IsReadonly(name))
             {
-                await ReportFatalExpansionAsync(assignment.Target.ToValue(), ShellValue.FromText("readonly variable"), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
+                await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "readonly variable", scope).ConfigureAwait(false);
                 return false;
             }
             if (!await ValidateCompoundInitializerCapturesAsync(items, scope).ConfigureAwait(false))
@@ -3501,7 +3515,16 @@ public sealed partial class Evaluation : IFileTester
     internal Task ReportFatalExpansionAsync(ShellValue name, ShellValue message, ExpansionFailureKind kind) =>
         ReportFatalExpansionAsync([name], [message], kind);
 
-    internal Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message, ExpansionFailureKind kind)
+    internal Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message, ExpansionFailureKind kind) =>
+        ReportFatalExpansionAsync(name, message, kind, default);
+
+    /// <summary>Reports a rejected assignment with the lexical coordinate of the reached command.</summary>
+    internal Task ReportAssignmentTargetFailureAsync(ShellValue name, string message, ScopedEvaluation scope) =>
+        ReportFatalExpansionAsync([name], [ShellValue.FromText(message)], ExpansionFailureKind.AssignmentTarget,
+            GetCommandDiagnosticPrefix(scope));
+
+    private Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)
     {
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
@@ -3511,7 +3534,7 @@ public sealed partial class Evaluation : IFileTester
             SetFatalExpansionError(new ExpansionFailure(kind, previousStatus));
         else
             SetFatalExpansionError(kind);
-        return ReportExpansionDiagnosticAsync(name, message);
+        return WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
     }
 
     internal void SetFatalExpansionError(ExpansionFailureKind kind)
@@ -3726,8 +3749,23 @@ public sealed partial class Evaluation : IFileTester
     internal Task ReportExpansionDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message) =>
         WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite);
 
+    private Task ReportCommandDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        ScopedEvaluation scope) => WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+            GetCommandDiagnosticPrefix(scope));
+
+    private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(ScopedEvaluation scope)
+    {
+        var coordinates = scope.Context.Coordinates;
+        return coordinates.Locations == null ? default
+            : new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine, coordinates.Line);
+    }
+
     private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
-        BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr)
+        BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
+        WriteDiagnosticAsync(name, message, scope, closedStderr, default);
+
+    private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr, SyntaxDiagnosticPrefix prefix)
     {
         if (scope is { Result.CanAcceptMore: false })
             return Task.FromResult(scope.Result);
@@ -3739,7 +3777,7 @@ public sealed partial class Evaluation : IFileTester
             return Task.FromResult(DescriptorWriteResult.Closed);
         }
 
-        return WriteDiagnosticAsync(descriptor, name, message, scope);
+        return WriteDiagnosticAsync(descriptor, name, message, scope, prefix);
     }
 
     /// <summary>Writes one diagnostic to the descriptor reached during redirection.</summary>

@@ -117,7 +117,7 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
     [InlineData("""declare -n r; f(){ local -I r; declare -p r; }; f; declare -p r""",
         "declare -- r\ndeclare -n r\n", "")]
     [InlineData("""readonly x=outer; f(){ local -I x; printf '<%s>' "$?"; }; f; declare -p x""",
-        "<1>declare -r x=\"outer\"\n", "local: x: readonly variable\n")]
+        "<1>declare -r x=\"outer\"\n", "line 1: local: x: readonly variable\n")]
     [InlineData("""declare -A a=([k]=x); f(){ local -Ia a; printf '<%s>' "$?"; }; f; declare -p a""",
         "<1>declare -A a=([k]=\"x\" )\n", "local: a: cannot convert associative to indexed array\n")]
     [InlineData("""getopts ab x -ab; f(){ local -I OPTIND; getopts cd y -cd; printf '<%s:%s>' "$y" "$OPTIND"; }; f; getopts ab x -ab; printf '<%s:%s>' "$x" "$OPTIND" """,

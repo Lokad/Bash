@@ -223,9 +223,9 @@ internal static partial class WordExpansion
         if (await target.AssignValueAsync(scope, reference.Name, value, operation).ConfigureAwait(false) is not null)
             return true;
         if (scope.Variables.IsReadonly(target.Name))
-            await scope.Effects.ReportFatalExpansionAsync(
+            await scope.Effects.ReportAssignmentTargetFailureAsync(
                 (reference.Kind == VariableReferenceKind.Name ? target.Name : reference.Name).ToValue(),
-                ShellValue.FromText("readonly variable"), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
+                "readonly variable", scope).ConfigureAwait(false);
         return false;
     }
 
@@ -304,7 +304,11 @@ internal static partial class WordExpansion
             }
             if (binding.Owner.IsReadonly(target.Name))
             {
-                await scope.Effects.ReportFatalExpansionAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable"), failure).ConfigureAwait(false);
+                if (failure == ExpansionFailureKind.AssignmentTarget)
+                    await scope.Effects.ReportAssignmentTargetFailureAsync(target.Name.ToValue(), "readonly variable", scope).ConfigureAwait(false);
+                else
+                    await scope.Effects.ReportFatalExpansionAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable"), failure)
+                        .ConfigureAwait(false);
                 return new(NamerefAssignmentAction.Fail, value);
             }
             var written = await target.AssignValueAsync(scope with { ExpansionWriteTarget = null, SelectorBindings = null },
@@ -514,6 +518,8 @@ internal static partial class WordExpansion
                         return new ResolvedVariableReference.Scalar(reference.Name);
                     if (use is ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign)
                         await scope.Effects.ReportExpansionDiagnosticAsync(reference.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+                    else if (use == ReferenceUse.DirectAssign)
+                        await scope.Effects.ReportAssignmentTargetFailureAsync(reference.Name.ToValue(), "readonly variable", scope).ConfigureAwait(false);
                     else
                         await scope.Effects.ReportFatalExpansionAsync(reference.Name.ToValue(), ShellValue.FromText("readonly variable"),
                             use == ReferenceUse.Assign ? ExpansionFailureKind.Assignment : ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);

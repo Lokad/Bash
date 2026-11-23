@@ -918,6 +918,10 @@ unit with status 1 and publishes `PIPESTATUS=(1)` before its binding scope
 unwinds. In-process `eval`, `source` and EXIT action readers publish status 1
 as they recover. When errexit terminates the write, a prior nonzero status and
 the existing pipeline statuses survive. Forked execution ends at the failure.
+Readonly assignment targets and list-to-member errors report the line at the
+end of the command's first element. A named sourced file also supplies its path.
+Assignment-target errors retain the lexical or resolved name selected by the
+assignment form. `|&` stages use the original command's source coordinate.
 
 When arithmetic evaluation of an integer binding's assignment fails, the
 current command unit ends and reached functions, `eval`, and sourced files

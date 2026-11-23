@@ -136,7 +136,7 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
             "f(){ local -n r; " + declaration + "; " + assignment + "; printf should-not-run; }; f");
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("r: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: r: readonly variable\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

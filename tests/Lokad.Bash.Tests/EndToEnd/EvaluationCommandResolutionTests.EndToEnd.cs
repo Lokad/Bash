@@ -74,7 +74,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
             + "VALUE=changed type -t echo; echo type:$?");
 
         Assert.Equal("echo\ncommand:0\nbuiltin\ntype:0\n", result.StdOut);
-        Assert.Equal("VALUE: readonly variable\nVALUE: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: VALUE: readonly variable\nline 1: VALUE: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -353,7 +353,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
             "readonly VALUE; VALUE=(item) exec cat; echo unreachable");
 
         Assert.Equal("value\n", result.StdOut);
-        Assert.Equal("VALUE: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: VALUE: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
