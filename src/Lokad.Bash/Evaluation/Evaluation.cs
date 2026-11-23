@@ -657,9 +657,16 @@ public sealed partial class Evaluation : IFileTester
         OperationError? closeError = null;
         try
         {
-            if (_state.TryConsumeExpansionError(out var redirectionExitCode))
+            if (_state.TryConsumeExpansionError(out var redirectionExitCode, out var errorKind))
             {
-                result = await FinalizeResultAsync(EvaluationResult.FromExitCode(redirectionExitCode), negated: false).ConfigureAwait(false);
+                if (errorKind == ExpansionErrorKind.HereDocumentSyntax && _state.FatalExpansion == null)
+                {
+                    result = ReaderErrexitEnabled(scope)
+                        ? await RunExitTrapAsync(scope, EvaluationResult.Exit(2), ExitTrapKind.Expansion).ConfigureAwait(false)
+                        : EvaluationResult.DiscardCompoundRedirectionUnit();
+                }
+                else
+                    result = await FinalizeResultAsync(EvaluationResult.FromExitCode(redirectionExitCode), negated: false).ConfigureAwait(false);
             }
             else
                 result = await EvaluateCommandAsync(redirectedCommand.Body, scope, negated: false).ConfigureAwait(false);
@@ -3528,6 +3535,8 @@ public sealed partial class Evaluation : IFileTester
     internal void SetExpansionError(int exitCode) =>
         _state.SetExpansionError(exitCode);
 
+    internal void SetHereDocumentSyntaxError() => _state.SetHereDocumentSyntaxError();
+
     /// <summary>Reports the first fatal expansion through the active stderr mapping without decoding message bytes.</summary>
     internal Task ReportFatalExpansionAsync(ShellValue name, ShellValue message, ExpansionFailureKind kind) =>
         ReportFatalExpansionAsync([name], [message], kind);
@@ -4079,13 +4088,22 @@ public sealed partial class Evaluation : IFileTester
             || (_state.ForkKind == ShellForkKind.CommandSubstitution && !scope.InNestedCommandUnits)
             ? SyntaxDiagnosticOrigin.CommandSubstitution
             : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
-        await ReportCaptureEndOfInputAsync(endOfInput, scope.Context.Coordinates.Line + endOfInput.PayloadLine,
+        await ReportCaptureEndOfInputAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
             scope.Context.CallerSource?.Path, origin).ConfigureAwait(false);
     }
 
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>
-        ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Line, scope.Context.CallerSource?.Path,
+        ReportHereDocumentWarningsAsync(warnings, HereDocumentExpansionLine(scope), scope.Context.CallerSource?.Path,
             useDocumentLine: false, fixedPrefix: null);
+
+    internal static int HereDocumentExpansionLine(ScopedEvaluation scope)
+    {
+        var coordinates = scope.Context.Coordinates;
+        return coordinates.CompoundHereDocumentLine != 0
+            && (scope.Context.FunctionContext?.Depth ?? 0) <= scope.LoadedSyntaxFunctionDepth.GetValueOrDefault()
+            ? coordinates.CompoundHereDocumentLine
+            : coordinates.Line;
+    }
 
     private async Task ReportCaptureEndOfInputAsync(
         CaptureEndOfInput endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin)

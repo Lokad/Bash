@@ -12,7 +12,7 @@ public partial class Evaluation
         Exit
     }
 
-    private enum ExitCause { Completion, ExtraArguments, InvalidLoopCount, CompoundInitializerSyntax }
+    private enum ExitCause { Completion, ExtraArguments, InvalidLoopCount, CompoundInitializerSyntax, CompoundRedirectionSyntax }
 
     /// <summary> Represents the exit code and flow-control outcome of evaluating a node. </summary>
     private readonly struct EvaluationResult(int exitCode, FlowControlKind flow, int level, bool testedStatus)
@@ -60,7 +60,9 @@ public partial class Evaluation
         public bool DiscardsCommandUnit => Cause == ExitCause.ExtraArguments || DiscardsLoadedCommandUnit;
 
         /// <summary>Lets an active source or eval reader resume after its rejected unit.</summary>
-        public bool DiscardsLoadedCommandUnit => Cause == ExitCause.CompoundInitializerSyntax;
+        public bool DiscardsLoadedCommandUnit => Cause is ExitCause.CompoundInitializerSyntax or ExitCause.CompoundRedirectionSyntax;
+
+        public bool DiscardsCompoundRedirection => Cause == ExitCause.CompoundRedirectionSyntax;
 
         /// <summary>Restores a function's saved options before reaching the EXIT action.</summary>
         public bool RestoresLocalOptions => DiscardsCommandUnit || Cause == ExitCause.InvalidLoopCount;
@@ -115,6 +117,9 @@ public partial class Evaluation
 
         public static EvaluationResult DiscardCompoundInitializerUnit() =>
             Exit(1) with { Cause = ExitCause.CompoundInitializerSyntax };
+
+        public static EvaluationResult DiscardCompoundRedirectionUnit() =>
+            Exit(1) with { Cause = ExitCause.CompoundRedirectionSyntax };
 
         public static EvaluationResult InvalidLoopCount(int exitCode) =>
             Exit(exitCode) with { Cause = ExitCause.InvalidLoopCount };

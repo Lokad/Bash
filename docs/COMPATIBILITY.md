@@ -445,6 +445,13 @@ the enclosing command's line. If the inner reader itself reaches EOF, the
 diagnostic uses that reader's line. A pending inner document with only trailing
 line feeds after the header can complete with an empty body. Both the read
 and the subsequent execution report their warnings.
+A substitution syntax failure while setting up a here-document on a brace
+group, conditional or loop discards the remaining commands in the current
+unit. The root reader keeps a previous nonzero status and its pipeline
+statuses. A source or eval reader resumes with status 1. When errexit is
+active for this failure, EXIT runs with status 2 and the redirections
+already applied to the compound command. A simple command or a subshell
+with the same failure reports a redirection failure to its enclosing list.
 When a streamed command list encounters an unexpected closer or separator, the
 diagnostic shows the token and the physical source line. Missing conditional
 operands identify the unary or binary grammar role and any open parentheses.

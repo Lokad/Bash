@@ -1038,7 +1038,7 @@ internal static partial class WordExpansion
                     ShellValue.FromText(error?.Error.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
                         ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
             }
-            failedScope.Effects.SetExpansionError(1);
+            failedScope.Effects.SetHereDocumentSyntaxError();
         }
     }
 
@@ -1086,7 +1086,11 @@ internal static partial class WordExpansion
         }
 
         if (script is CommandSubstitutionSyntax.Deferred { ReadWarnings: { } warnings })
+        {
             await scope.Effects.ReportHereDocumentCaptureWarningsAsync(warnings, scope).ConfigureAwait(false);
+            var coordinates = scope.Context.Coordinates with { Line = Evaluation.HereDocumentExpansionLine(scope) };
+            scope = scope with { Context = scope.Context.WithCoordinates(coordinates) };
+        }
 
         var result = await scope.Effects.ExecuteCommandSubstitutionAsync(script, scope).ConfigureAwait(false);
         output.AppendExpansion(result, allowWordSplitting, globQuoted);

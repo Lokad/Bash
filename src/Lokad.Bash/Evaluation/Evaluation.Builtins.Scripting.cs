@@ -421,7 +421,8 @@ public sealed partial class Evaluation
                 if (_state.ForkKind == null
                     && (kind == ScriptExecutionKind.Root && result.DiscardsCommandUnit
                         || IsLoadedReader(kind) && result.DiscardsLoadedCommandUnit))
-                    result = await RecoverDiscardedCommandUnitAsync(scope).ConfigureAwait(false);
+                    result = await RecoverDiscardedCommandUnitAsync(scope,
+                        resetStatus: IsLoadedReader(kind) && result.DiscardsCompoundRedirection).ConfigureAwait(false);
                 else if (result.Flow == FlowControlKind.Exit)
                 {
                     if (IsNestedLoadedReader(kind)
@@ -530,11 +531,14 @@ public sealed partial class Evaluation
         _ => null
     };
 
-    private async ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(ScopedEvaluation scope)
+    private ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(ScopedEvaluation scope) =>
+        RecoverDiscardedCommandUnitAsync(scope, resetStatus: false);
+
+    private async ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(ScopedEvaluation scope, bool resetStatus)
     {
-        // The reader keeps a previous failure and its pipeline statuses.
+        // A loaded reader handling compound redirection syntax resets the previous status.
         var status = _state.LastExitCode.GetValueOrDefault();
-        if (status != 0)
+        if (status != 0 && !resetStatus)
             return EvaluationResult.FromExitCode(status);
 
         await PublishRecoveredPipelineStatusAsync(1, scope).ConfigureAwait(false);

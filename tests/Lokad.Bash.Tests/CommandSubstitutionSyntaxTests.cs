@@ -759,6 +759,64 @@ public sealed class CommandSubstitutionSyntaxTests
         }
     }
 
+    private const string RejectedDocumentBody = "\n$(cat <<INNER)\nbody\nOUTER\n";
+    private const string InnerDocumentWarning = " delimited by end-of-file (wanted `INNER')\n";
+    private const string DocumentOnFirstLine =
+        "line 3: warning: here-document at line 2" + InnerDocumentWarning + "line 1: " + MatchingParenthesisEof;
+    private const string CompoundDocumentOnFirstLine =
+        "line 6: warning: here-document at line 5" + InnerDocumentWarning + "line 4: " + MatchingParenthesisEof;
+    private const string CompoundDocumentOnSecondLine =
+        "line 7: warning: here-document at line 6" + InnerDocumentWarning + "line 5: " + MatchingParenthesisEof;
+
+    [Theory]
+    [InlineData("{ cat; } <<OUTER; printf same" + RejectedDocumentBody + "printf '<next:%s>' \"$?\"",
+        "<next:1>", CompoundDocumentOnFirstLine, 0)]
+    [InlineData("if :; then cat; fi <<OUTER || printf same" + RejectedDocumentBody + "printf '<next:%s>' \"$?\"",
+        "<next:1>", CompoundDocumentOnFirstLine, 0)]
+    [InlineData("! for x in one; do cat; done <<OUTER; printf same" + RejectedDocumentBody + "printf '<next:%s>' \"$?\"",
+        "<next:1>", CompoundDocumentOnFirstLine, 0)]
+    [InlineData("(cat) <<OUTER; printf '<same:%s>' \"$?\"" + RejectedDocumentBody + "printf '<next:%s>' \"$?\"",
+        "<same:1><next:0>", DocumentOnFirstLine, 0)]
+    [InlineData("(exit 7) | (exit 4)\n{ cat; } <<OUTER" + RejectedDocumentBody
+        + "printf '<next:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        "<next:4:7 4>", CompoundDocumentOnSecondLine, 0)]
+    [InlineData("f() { { cat; } <<OUTER; printf same" + RejectedDocumentBody + "printf function; }\nf || printf caller\n"
+        + "printf '<next:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        "<next:1:1>", DocumentOnFirstLine, 0)]
+    [InlineData("set -e; trap 'printf \"<exit:%s>\" \"$?\"' EXIT\n{ cat; } <<OUTER || printf same"
+        + RejectedDocumentBody + "printf next", "<exit:2>", CompoundDocumentOnSecondLine, 2)]
+    [InlineData("set -e; trap 'printf \"<exit:%s>\" \"$?\" >&2' EXIT\n{ cat; } 2>errors <<OUTER"
+        + RejectedDocumentBody + "printf next", "", "", 2, CompoundDocumentOnSecondLine + "<exit:2>")]
+    [InlineData("(exit 5)\nsource ./part; printf '<caller:%s>' \"$?\"\nprintf '<next:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        "<loaded:1:1><caller:0><next:0:0>",
+        "./part: line 7: warning: here-document at line 6" + InnerDocumentWarning + "./part: line 5: " + MatchingParenthesisEof,
+        0, null, "\n{ cat; } <<OUTER; printf same" + RejectedDocumentBody
+            + "printf '<loaded:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"\n")]
+    public async Task RejectedHereDocumentUsesItsCommandUnitBoundary(
+        string source, string output, string diagnostics, int exitCode, string? redirectedDiagnostics = null, string? loadedSource = null)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            if (loadedSource != null)
+                host.AddFile("/part", loadedSource);
+            var result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, CancellationToken.None)
+                : await host.RunAsync(source, CancellationToken.None);
+
+            Assert.Equal(exitCode, result.ExitCode);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(diagnostics, host.StandardError.TextContent);
+            if (redirectedDiagnostics != null)
+                Assert.Equal(redirectedDiagnostics, host.ReadFile("/errors"));
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
     [Fact]
     public async Task CaptureReadAheadPreservesRawBodyBytes()
     {

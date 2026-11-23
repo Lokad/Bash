@@ -8,6 +8,8 @@ internal readonly record struct CommandLocation(int StartLine, int CommandLine, 
 {
     /// <summary>Diagnostic line for a redirection immediately after an initial word.</summary>
     internal int RedirectionDiagnosticLine { get; init; }
+    /// <summary>Line reached by the reader before a compound here-document redirection expands.</summary>
+    internal int CompoundHereDocumentLine { get; init; }
 }
 
 /// <summary>Cumulative line change after a spelling edit at a physical source position.</summary>

@@ -21,6 +21,7 @@ internal sealed class Tokenizer
     private SourceLineCursor _lines;
     private int _nextOmittedSeparator;
     private HereDocumentReadAhead? _readingAhead;
+    private List<RedirectedCommand>? _compoundHereDocuments;
     private bool _continuedAtEndOfInput;
     private bool _spacingContinuedAtEndOfInput;
     private int _lastPhysicalNewline;
@@ -83,6 +84,35 @@ internal sealed class Tokenizer
 
     internal void RecordReadDiagnostics(ICommand command, CommandReadDiagnostics diagnostics) =>
         (Locations ??= new CommandLocations()).SetReadDiagnostics(command, diagnostics, _scanContext.SyntaxMemory);
+
+    internal void RecordRedirectedCommandLocation(RedirectedCommand command, int startLine)
+    {
+        RecordLocation(command, startLine, startLine);
+        if (!TrackCommandLocations || command.Body is SubshellCommand
+            || !command.Redirections.Any(redirection => redirection.Kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs))
+            return;
+        if (_compoundHereDocuments == null)
+        {
+            _scanContext.SyntaxMemory?.Grow(32);
+            _compoundHereDocuments = [];
+        }
+        _scanContext.SyntaxMemory?.PrepareListCapacity(_compoundHereDocuments, 1);
+        _compoundHereDocuments.Add(command);
+    }
+
+    internal void CompleteCompoundHereDocumentLocations()
+    {
+        if (_compoundHereDocuments == null || Locations == null)
+            return;
+        // Position follows the last byte consumed while reading the command unit.
+        var line = GetLine(Math.Max(0, Position - 1));
+        foreach (var command in _compoundHereDocuments)
+        {
+            if (Locations.TryGet(command, out var location))
+                Locations.Update(command, location with { CompoundHereDocumentLine = line });
+        }
+        _compoundHereDocuments = null;
+    }
 
     internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
 

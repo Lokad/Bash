@@ -559,8 +559,11 @@ public static class Parser
             Locations = tokenizer.Locations
         };
 
-    private static ICommand CompleteHereDocuments(Tokenizer tokenizer, ICommand command) =>
-        tokenizer.HereDocuments?.Complete(command, tokenizer.Locations, tokenizer.ScanContext.SyntaxMemory?.Budget) ?? command;
+    private static ICommand CompleteHereDocuments(Tokenizer tokenizer, ICommand command)
+    {
+        tokenizer.CompleteCompoundHereDocumentLocations();
+        return tokenizer.HereDocuments?.Complete(command, tokenizer.Locations, tokenizer.ScanContext.SyntaxMemory?.Budget) ?? command;
+    }
 
     private static bool EndsInBarePipelinePrefix(ICommand? command)
     {
@@ -832,7 +835,7 @@ public static class Parser
             if (redirections == null)
                 return command;
             var redirected = new RedirectedCommand(command, redirections);
-            tokenizer.RecordLocation(redirected, startLine, startLine);
+            tokenizer.RecordRedirectedCommandLocation(redirected, startLine);
             return redirected;
         }
         finally
@@ -1987,6 +1990,7 @@ public static class Parser
 
         void SetUnitDiagnostics(ICommand anchor)
         {
+            tokenizer.CompleteCompoundHereDocumentLocations();
             var diagnostics = new CommandReadDiagnostics(
                 tokenizer.ScanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.TakeWarnings()),
                 tokenizer.ScanContext.TakeCompoundItemDiagnostics());

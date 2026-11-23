@@ -50,6 +50,8 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
     internal bool UseInheritedPipelineExitAction { get; init; }
 }
 
+internal enum ExpansionErrorKind { General, HereDocumentSyntax }
+
 [Flags]
 internal enum FunctionAttributes
 {
@@ -181,12 +183,12 @@ internal sealed record FunctionBinding
 internal sealed class EvaluationState
 {
     /// <summary>
-    /// Stores a pending expansion error exit code; set by expansion failures and consumed on next check.
+    /// Stores the pending expansion exit code and its origin until preparation handles the failure.
     /// </summary>
-    private int? _pendingExpansionErrorExitCode;
+    private (int ExitCode, ExpansionErrorKind Kind)? _pendingExpansionError;
 
     /// <summary>Stops preparation before later operands or command effects after an expansion failure.</summary>
-    public bool HasPendingExpansionError => _pendingExpansionErrorExitCode.HasValue;
+    public bool HasPendingExpansionError => _pendingExpansionError.HasValue;
 
     /// <summary>Fatal noninteractive expansion failures cannot be consumed by an OR-list or negation.</summary>
     public ExpansionFailure? FatalExpansion { get; set; }
@@ -434,7 +436,7 @@ internal sealed class EvaluationState
         // Keep the parent's saved handlers admitted through restoration if the child clears them.
         memory.Charge(checked(EstimateForkBytes() + (Traps?.EstimatedMemoryBytes ?? 0)));
         var clone = CloneShellState(Script, _redirections.ForkForSubshell(), ShellForkKind.Subshell);
-        clone._pendingExpansionErrorExitCode = _pendingExpansionErrorExitCode;
+        clone._pendingExpansionError = _pendingExpansionError;
         clone.FatalExpansion = FatalExpansion;
         return clone;
     }
@@ -514,23 +516,25 @@ internal sealed class EvaluationState
     public FileDescriptor? GetStdErrOverride() => CurrentRedirectionTable?.StdErr;
 
     /// <summary>Consumes a pending expansion error, without clearing a fatal exit.</summary>
-    public bool TryConsumeExpansionError(out int exitCode)
+    public bool TryConsumeExpansionError(out int exitCode) => TryConsumeExpansionError(out exitCode, out _);
+
+    internal bool TryConsumeExpansionError(out int exitCode, out ExpansionErrorKind kind)
     {
-        if (_pendingExpansionErrorExitCode.HasValue)
+        if (_pendingExpansionError is { } error)
         {
-            exitCode = _pendingExpansionErrorExitCode.Value;
-            _pendingExpansionErrorExitCode = null;
+            (exitCode, kind) = error;
+            _pendingExpansionError = null;
             return true;
         }
 
         exitCode = 0;
+        kind = default;
         return false;
     }
 
-    public void SetExpansionError(int exitCode)
-    {
-        _pendingExpansionErrorExitCode = exitCode;
-    }
+    public void SetExpansionError(int exitCode) => _pendingExpansionError = (exitCode, ExpansionErrorKind.General);
+
+    internal void SetHereDocumentSyntaxError() => _pendingExpansionError = (1, ExpansionErrorKind.HereDocumentSyntax);
 
     /// <summary>Redefinition retains attributes and fails without changing a readonly function.</summary>
     public bool TryRegisterFunction(FunctionDefinition functionDefinition, Evaluation.EvaluationContext context, EvaluationMemory memory)

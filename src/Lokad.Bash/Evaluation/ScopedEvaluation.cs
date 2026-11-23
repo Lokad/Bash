@@ -7,6 +7,7 @@ namespace Lokad.Bash.Evaluation;
 internal readonly record struct CommandCoordinates(CommandLocations? Locations, int Offset, int Line, int EndLine)
 {
     internal int RedirectionDiagnosticLine { get; init; }
+    internal int CompoundHereDocumentLine { get; init; }
 
     internal CommandCoordinates At(ICommand command, CommandLocation location) => this with
     {
@@ -17,7 +18,8 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
             _ => location.StartLine
         }),
         EndLine = Offset + location.EndLine,
-        RedirectionDiagnosticLine = location.RedirectionDiagnosticLine == 0 ? 0 : Offset + location.RedirectionDiagnosticLine
+        RedirectionDiagnosticLine = location.RedirectionDiagnosticLine == 0 ? 0 : Offset + location.RedirectionDiagnosticLine,
+        CompoundHereDocumentLine = location.CompoundHereDocumentLine == 0 ? 0 : Offset + location.CompoundHereDocumentLine
     };
 }
 
