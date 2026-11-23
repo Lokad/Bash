@@ -402,6 +402,51 @@ public sealed class PrintfFieldSizeTests
     }
 
     [Fact]
+    public void LiteralFormatFitsTheCapacityOfItsOutput()
+    {
+        const int Length = 64 * 1024;
+        var data = new byte[Length];
+        data.AsSpan().Fill((byte)'x');
+        data[^1] = 0xff;
+        var memory = new MemoryGovernor(Length);
+        using var owner = memory.CreateScope();
+        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromBytes(data), [], owner);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(data, result.Output.ToArray());
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(Length, memory.PeakBytes);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(65535)]
+    [InlineData(65536)]
+    [InlineData(65537)]
+    public async Task LiteralRunsKeepTheReachedSyntaxAndCountInOrder(int width)
+    {
+        var text = ShellValue.FromText(new string('x', width)).Bytes.ToArray();
+        text[^1] = 0xff;
+        byte[] format = [.. text, .. "\\n%%%n%b%n"u8];
+        byte[] argument = [.. text, .. "\\x41\\q\\cignored"u8];
+        var memory = new MemoryGovernor(2 * 1024 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromBytes(format),
+            [ShellValue.FromText("before"), ShellValue.FromBytes(argument), ShellValue.FromText("after")],
+            DateTimeOffset.UnixEpoch, assignOutput: false, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            _ => throw new InvalidOperationException("Unexpected diagnostic."), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal<byte>([.. text, .. "\n%"u8, .. text, .. "A\\q"u8], result.Output.ToArray());
+        Assert.Equal(new PrintfVariableAssignment("before", width + 2), Assert.Single(counts));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
     public async Task PaddingRefusalKeepsEarlierCountEffectsAndSkipsLaterOnes()
     {
         var memory = new MemoryGovernor(64 * 1024);

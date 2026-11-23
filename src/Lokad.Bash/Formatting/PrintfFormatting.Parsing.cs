@@ -55,6 +55,7 @@ public static partial class PrintfFormatting
 
             async ValueTask FormatCycleAsync()
             {
+                var nextLiteralScan = 0;
                 for (var index = 0; index < format.Length && !_stop && !_failed;)
                 {
                     if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
@@ -83,7 +84,19 @@ public static partial class PrintfFormatting
 
                     if (current != '%')
                     {
-                        AppendByte(format.Span[index++]);
+                        if (index < nextLiteralScan)
+                        {
+                            AppendByte((byte)current);
+                            index++;
+                        }
+                        else
+                        {
+                            var length = AppendLiteralRun(_output, format.Span[index..], formatText: true);
+                            index += length;
+                            // Keep the byte path for a short window after a syntax-dense run.
+                            if (length < 4)
+                                nextLiteralScan = index + Math.Min(32, format.Length - index);
+                        }
                         continue;
                     }
 
@@ -507,7 +520,11 @@ public static partial class PrintfFormatting
                     {
                         if (argument.Span[index] != (byte)'\\')
                         {
-                            if (!TryAppendByte(bytes, argument.Span[index++]))
+                            if (index + 1 == argument.Length || argument.Span[index + 1] == (byte)'\\')
+                                TryAppendByte(bytes, argument.Span[index++]);
+                            else
+                                index += AppendLiteralRun(bytes, argument.Span[index..], formatText: false);
+                            if (_failed)
                                 return;
                             continue;
                         }

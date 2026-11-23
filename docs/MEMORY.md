@@ -112,6 +112,9 @@ assignment. `%b` and `%q` cap that scratch prefix at output field precision
 for both stdout and assignment. Decoding and quoting still count the full
 conversion. Assignment compacts a truncated value before the formatting
 buffer is released.
+Long literal format and `%b` runs append bounded spans to the same output
+buffers. Cancellation checks separate spans, and escape decoding resumes
+at each reached backslash.
 Prepared terminal diagnostics admit their final buffer in the command workspace,
 which holds it through later expansion, redirection setup and host writes.
 Prepared help retains the reached builtin and admits its output after
