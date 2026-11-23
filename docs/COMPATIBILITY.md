@@ -439,8 +439,12 @@ An EOF warning also reports the line where its document started. A subsequent
 capture on the same header includes the lines already read for earlier captures.
 An assignment selector retains those bodies when its source is used for
 expansion or included in a function listing.
-An unquoted here-document expanding such a capture reports the missing closing
-parenthesis and stops that redirection.
+During unquoted here-document expansion, reading text after a capture closer
+to collect an inner document can cause the match to fail. The diagnostic uses
+the enclosing command's line. If the inner reader itself reaches EOF, the
+diagnostic uses that reader's line. A pending inner document with only trailing
+line feeds after the header can complete with an empty body. Both the read
+and the subsequent execution report their warnings.
 When a streamed command list encounters an unexpected closer or separator, the
 diagnostic shows the token and the physical source line. Missing conditional
 operands identify the unary or binary grammar role and any open parentheses.

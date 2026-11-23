@@ -26,7 +26,11 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
     }
 
     /// <summary>Bytes still requiring execution-time parsing, including unfinished here-documents.</summary>
-    internal sealed record Deferred(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);
+    internal sealed record Deferred(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText)
+    {
+        /// <summary>Warnings from locating the closer during here-document expansion.</summary>
+        internal IReadOnlyList<HereDocumentWarning>? ReadWarnings { get; init; }
+    }
 
     /// <summary>Balanced adjacent subshell spelling to parse in complete units when reached.</summary>
     internal sealed record AdjacentSubshell(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);

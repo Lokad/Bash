@@ -276,12 +276,14 @@ public static class Parser
         out SubstitutionSyntaxFailure failure,
         out bool preserveAdjacentOpening,
         out SourceSpelling? adjacentSpelling,
+        out IReadOnlyList<HereDocumentWarning>? deferredWarnings,
         out ParserFailure? syntaxError)
     {
         parsed = null;
         failure = SubstitutionSyntaxFailure.None;
         preserveAdjacentOpening = false;
         adjacentSpelling = null;
+        deferredWarnings = null;
         syntaxError = null;
         closingParenthesisIndex = payloadStart;
         if (payloadStart < 0 || payloadStart > input.Length)
@@ -329,9 +331,13 @@ public static class Parser
                 }
                 if (context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
                 {
-                    tokenizer.ReadHereDocumentExpansionCaptureBodies(pending);
+                    if (tokenizer.ReadHereDocumentExpansionCaptureBodies(pending))
+                    {
+                        deferredWarnings = pending.Warnings;
+                        return ShellScanStatus.Complete;
+                    }
                     syntaxError = MissingCloser(GetCaptureWarnings(pending.Warnings, input, payloadStart),
-                        input.Length, tokenizer.EndOfInputLineAdvance);
+                        input.Length, tokenizer.EndOfInputLineAdvance, payloadLine: 0);
                     return ShellScanStatus.Invalid;
                 }
                 if (!context.CanReadAhead(input))
@@ -476,7 +482,7 @@ public static class Parser
                 && (bodyFailure == null || documents.Warnings != null))
             {
                 error = MissingCloser(GetCaptureWarnings(documents.Warnings, source, start), source.Length,
-                    tokenizer.EndOfInputLineAdvance);
+                    tokenizer.EndOfInputLineAdvance, GetPayloadEndLine(tokenizer, source.Length));
                 return ShellScanStatus.Invalid;
             }
             if (bodyFailure != null && (missingOperand || context.ParsingLimitExceeded || bodyFailure.CaptureEndOfInput != null
@@ -494,7 +500,11 @@ public static class Parser
             {
                 error = new ParserFailure(new SyntaxError("Unterminated command substitution.", start), ParserFailureKind.Delimiter)
                 {
-                    CaptureEndOfInput = new CaptureEndOfInput(')', source.Length) { LineAdvance = tokenizer.EndOfInputLineAdvance }
+                    CaptureEndOfInput = new CaptureEndOfInput(')', source.Length)
+                    {
+                        LineAdvance = tokenizer.EndOfInputLineAdvance,
+                        PayloadLine = GetPayloadEndLine(tokenizer, source.Length)
+                    }
                 };
                 return ShellScanStatus.Incomplete;
             }
@@ -514,10 +524,13 @@ public static class Parser
             return ShellScanStatus.Complete;
         }
 
-        static ParserFailure MissingCloser(CaptureHereDocumentWarnings? warnings, int eofOffset, int lineAdvance) =>
+        int GetPayloadEndLine(Tokenizer tokenizer, int end) => context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument
+            ? tokenizer.GetLine(end) + tokenizer.EndOfInputLineAdvance : 0;
+
+        static ParserFailure MissingCloser(CaptureHereDocumentWarnings? warnings, int eofOffset, int lineAdvance, int payloadLine) =>
             new(new SyntaxError("unexpected EOF while looking for matching `)'", eofOffset), ParserFailureKind.Delimiter)
             {
-                CaptureEndOfInput = new CaptureEndOfInput(')', eofOffset) { LineAdvance = lineAdvance },
+                CaptureEndOfInput = new CaptureEndOfInput(')', eofOffset) { LineAdvance = lineAdvance, PayloadLine = payloadLine },
                 CaptureWarnings = warnings
             };
 

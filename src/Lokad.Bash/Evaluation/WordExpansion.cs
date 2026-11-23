@@ -1030,7 +1030,7 @@ internal static partial class WordExpansion
         static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, ParserFailure? error)
         {
             if (error is { CaptureEndOfInput: { } missingCloser })
-                await failedScope.Effects.ReportCaptureEndOfInputAsync(missingCloser, error.CaptureWarnings)
+                await failedScope.Effects.ReportHereDocumentCaptureEndOfInputAsync(missingCloser, error.CaptureWarnings, failedScope)
                     .ConfigureAwait(false);
             else
             {
@@ -1084,6 +1084,9 @@ internal static partial class WordExpansion
             await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parsed.Failure, parsed, scope, globQuoted, default).ConfigureAwait(false);
             return;
         }
+
+        if (script is CommandSubstitutionSyntax.Deferred { ReadWarnings: { } warnings })
+            await scope.Effects.ReportHereDocumentCaptureWarningsAsync(warnings, scope).ConfigureAwait(false);
 
         var result = await scope.Effects.ExecuteCommandSubstitutionAsync(script, scope).ConfigureAwait(false);
         output.AppendExpansion(result, allowWordSplitting, globQuoted);

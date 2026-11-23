@@ -149,6 +149,7 @@ internal static class CommandSubstitutionScanner
                 out var failure,
                 out var preserveAdjacentOpening,
                 out var adjacentSpelling,
+                out var deferredWarnings,
                 out error);
             if (status == ShellScanStatus.Complete)
             {
@@ -157,7 +158,7 @@ internal static class CommandSubstitutionScanner
                 {
                     null when preserveAdjacentOpening =>
                         new CommandSubstitutionSyntax.AdjacentSubshell(ShellSourceCursor.RemoveLineContinuations(context, payload)),
-                    null => new CommandSubstitutionSyntax.Deferred(payload),
+                    null => new CommandSubstitutionSyntax.Deferred(payload) { ReadWarnings = deferredWarnings },
                     _ => new CommandSubstitutionSyntax.Parsed(payload, parsed, failure, preserveAdjacentOpening)
                         { AdjacentSpelling = adjacentSpelling }
                 };

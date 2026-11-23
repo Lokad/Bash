@@ -306,6 +306,7 @@ public sealed partial class Evaluation
         // independently of the caller's function/eval execution depth.
         if (kind is not (ScriptExecutionKind.Root or ScriptExecutionKind.LegacyCapture))
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        scope = scope with { InEvalReader = kind == ScriptExecutionKind.Eval };
         if (IsNestedLoadedReader(kind))
             scope = scope with
             {

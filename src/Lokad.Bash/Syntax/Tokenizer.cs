@@ -140,10 +140,13 @@ internal sealed class Tokenizer
         }
     }
 
-    internal void ReadHereDocumentExpansionCaptureBodies(HereDocumentReader pending)
+    /// <summary>Collects the inner bodies and reports whether only trailing LFs follow the header.</summary>
+    internal bool ReadHereDocumentExpansionCaptureBodies(HereDocumentReader pending)
     {
         Position = HereDocumentReadAhead.FindNextLineStart(_input, Position);
+        var bodyStart = Position;
         pending.TryReadBodies(this);
+        return _input.AsSpan(bodyStart, Position - bodyStart).TrimEnd((byte)'\n').IsEmpty;
     }
 
     private ParserFailure? _failure;
@@ -249,6 +252,9 @@ internal sealed class Tokenizer
             RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.Delimiter)
             {
                 CaptureEndOfInput = new CaptureEndOfInput(delimiter, start)
+                {
+                    PayloadLine = _scanContext.LegacyOrigin == LegacySubstitutionOrigin.HereDocument ? GetLine(start) : 0
+                }
             });
         }
         else

@@ -702,7 +702,7 @@ public sealed class CommandSubstitutionSyntaxTests
         "<item>", ReadAheadWarning, 0)]
     [InlineData("arr[$(printf selector >&2; cat <<A)]=$(printf value; printf rhs >&2; cat <<B)\n0\nA\n!\nB\nprintf '<%s>' \"${arr[0]}\"",
         "<value!>", ReadAheadWarning + "line 3: " + PendingDocumentWarning + "rhsselector", 0)]
-    [InlineData("cat <<OUTER\n<$(cat <<INNER)>\nbody\nINNER\nOUTER\nprintf tail", "tail", MatchingParenthesisEof, 0)]
+    [InlineData("cat <<OUTER\n<$(cat <<INNER)>\nbody\nINNER\nOUTER\nprintf tail", "tail", "line 1: " + MatchingParenthesisEof, 0)]
     public async Task PendingCaptureBodiesAreCollectedWhileReadingTheHeader(
         string source, string output, string diagnostics, int exitCode)
     {
@@ -716,6 +716,41 @@ public sealed class CommandSubstitutionSyntaxTests
                 : await host.RunAsync(source, CancellationToken.None);
 
             Assert.Equal(exitCode, result.ExitCode);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(diagnostics, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
+    [InlineData("printf before\n\ncat <<OUTER\nhead\n$(cat <<END)\nbody\nOUTER\nprintf '<%s>' \"$?\"",
+        "before<1>", "line 5: warning: here-document at line 4 delimited by end-of-file (wanted `END')\n"
+        + "line 3: " + MatchingParenthesisEof)]
+    [InlineData("cat <<OUTER\n$(cat <<END\nbody\nOUTER\nprintf '<%s>' \"$?\"",
+        "<1>", "line 3: " + MissingCaptureBodyOnLineTwo + "command substitution: line 4: " + MatchingParenthesisEof)]
+    [InlineData("cat <<OUTER\n<$(cat <<END)>\nOUTER\nprintf '<%s>' \"$?\"",
+        "<>\n<0>", "line 2: " + MissingCaptureBodyOnLineTwo
+        + "line 1: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n")]
+    [InlineData("cat <<OUTER\n$(cat <<END)\n\nOUTER\nprintf tail",
+        "\n\ntail", "line 3: " + MissingCaptureBodyOnLineTwo
+        + "line 1: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n")]
+    [InlineData("printf before\neval 'cat <<OUTER\nhead\n$(cat <<END)\ntext\nOUTER\nprintf tail'\nprintf after",
+        "beforetailafter", "line 9: warning: here-document at line 8 delimited by end-of-file (wanted `END')\n"
+        + "eval: line 7: " + MatchingParenthesisEof)]
+    public async Task ExpandedHereDocumentCaptureUsesTheReaderThatReachedEof(string source, string output, string diagnostics)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, CancellationToken.None)
+                : await host.RunAsync(source, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
             Assert.Equal(output, host.StandardOutput.TextContent);
             Assert.Equal(diagnostics, host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);

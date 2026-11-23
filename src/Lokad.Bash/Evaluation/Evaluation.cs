@@ -3717,7 +3717,7 @@ public sealed partial class Evaluation : IFileTester
                     spelling.Append((byte)'"');
                 var source = ShellSource.FromBytes(spelling.ToMemory());
                 Parser.ScanCommandSubstitutionEnd(new ShellScanContext { SyntaxMemory = workspace }, source, 2,
-                    out _, out _, out _, out _, out _, out var report);
+                    out _, out _, out _, out _, out _, out _, out var report);
                 token = report?.UnexpectedToken;
             }
             if (token != null)
@@ -4070,12 +4070,22 @@ public sealed partial class Evaluation : IFileTester
             await ExecuteWriteAsync(descriptor, MissingConditionalGroup).ConfigureAwait(false);
     }
 
-    internal async Task ReportCaptureEndOfInputAsync(CaptureEndOfInput endOfInput, CaptureHereDocumentWarnings? warnings)
+    internal async Task ReportHereDocumentCaptureEndOfInputAsync(
+        CaptureEndOfInput endOfInput, CaptureHereDocumentWarnings? warnings, ScopedEvaluation scope)
     {
         if (warnings is { } captureWarnings)
-            await ReportCaptureHereDocumentWarningsAsync(captureWarnings, path: null, offset: 0, line: 0).ConfigureAwait(false);
-        await ReportCaptureEndOfInputAsync(endOfInput, line: 0, path: null, SyntaxDiagnosticOrigin.Script).ConfigureAwait(false);
+            await ReportHereDocumentCaptureWarningsAsync(captureWarnings.Warnings, scope).ConfigureAwait(false);
+        var origin = endOfInput.PayloadLine != 0
+            || (_state.ForkKind == ShellForkKind.CommandSubstitution && !scope.InNestedCommandUnits)
+            ? SyntaxDiagnosticOrigin.CommandSubstitution
+            : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
+        await ReportCaptureEndOfInputAsync(endOfInput, scope.Context.Coordinates.Line + endOfInput.PayloadLine,
+            scope.Context.CallerSource?.Path, origin).ConfigureAwait(false);
     }
+
+    internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>
+        ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Line, scope.Context.CallerSource?.Path,
+            useDocumentLine: false, fixedPrefix: null);
 
     private async Task ReportCaptureEndOfInputAsync(
         CaptureEndOfInput endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin)

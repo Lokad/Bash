@@ -68,6 +68,8 @@ internal readonly record struct ConditionalQuoteEnd(bool DoubleQuoted)
 internal sealed record CaptureEndOfInput(char Delimiter, int ReadPosition)
 {
     internal int LineAdvance { get; init; }
+    /// <summary>Line in a here-document expansion payload when its reader reports the failure.</summary>
+    internal int PayloadLine { get; init; }
     internal bool InsideConditional { get; init; }
 }
 
