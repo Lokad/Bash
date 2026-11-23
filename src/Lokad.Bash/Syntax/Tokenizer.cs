@@ -444,14 +444,16 @@ internal sealed class Tokenizer
         if (!TryReadSubscriptAssignment(token, position, closing, out var element, out _))
             return false;
 
-        // The leading word part already has the logical name. Selector spelling still needs its
-        // physical bytes, including quotes and continuations, for the eventual array kind.
-        var selector = source.Slice(position, closing - position + 1);
-        var targetLength = checked(nameLength + selector.Length);
+        // The leading word part has the logical name. The selector retains quoting for
+        // the eventual array kind, with any read-ahead here-documents included.
+        var selector = element.Subscript.AsSpan();
+        var targetLength = checked(nameLength + selector.Length + 2);
         _scanContext.SyntaxMemory?.Grow(MemoryCapacity.ArrayBackingBytes<byte>(targetLength));
         var target = new byte[targetLength];
         first.Source.AsSpan(0, nameLength).CopyTo(target);
-        selector.CopyTo(target.AsSpan(nameLength));
+        target[nameLength] = (byte)'[';
+        selector.CopyTo(target.AsSpan(nameLength + 1));
+        target[^1] = (byte)']';
         assignment = new AssignmentWord(ShellSource.FromBytes(target), element.Value, element.Operator);
         return true;
     }
@@ -561,7 +563,9 @@ internal sealed class Tokenizer
             else
                 value = ReadWord(source);
         }
-        element = new CompoundArrayElement(_input.Slice(opening + 1, closing - opening - 1), value, operation);
+        var selector = FunctionDefinitionFormatter.RenderReadAheadCaptures(
+            _input.Slice(opening + 1, closing - opening - 1), _scanContext);
+        element = new CompoundArrayElement(selector, value, operation);
         return true;
     }
 

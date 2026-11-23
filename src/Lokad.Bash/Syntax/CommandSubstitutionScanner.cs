@@ -86,19 +86,20 @@ internal static class CommandSubstitutionScanner
             RecordSyntaxFailure(context, substitution);
             return ShellScanStatus.Complete;
         }
-        var previousPeak = keepLookahead ? context.BeginLookahead() : default;
+        var previousPeak = context.BeginLookahead();
         try
         {
             var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution, out error);
-            if (keepLookahead && substitution != null)
+            // Reading the same capture again must reuse the bodies already taken from its source.
+            if (substitution != null
+                && (keepLookahead || substitution is CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }))
                 context.StoreCommandSubstitution(text, startIndex, endIndex - startIndex + 1, substitution);
             RecordSyntaxFailure(context, substitution);
             return status;
         }
         finally
         {
-            if (keepLookahead)
-                context.EndLookahead(previousPeak);
+            context.EndLookahead(previousPeak);
         }
     }
 

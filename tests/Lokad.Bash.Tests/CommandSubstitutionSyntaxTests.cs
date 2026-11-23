@@ -689,6 +689,18 @@ public sealed class CommandSubstitutionSyntaxTests
     [InlineData("v=$(cat <<END) &\\\nbody\nEND\n& printf '<%s>' \"$v\"", "<body>", ReadAheadWarning, 0)]
     [InlineData("v=$((1 + $(cat <<END) )\\\n4\nEND\n); printf '<%s>' \"$v\"", "<5>", ReadAheadWarning, 0)]
     [InlineData("v=$(cat <<END); printf '<%s:%s>' \"$v\" 'head\nbody\nEND\nsuffix'", "<body:head\nsuffix>", ReadAheadWarning, 0)]
+    [InlineData("arr[$(cat <<END)]=item\n0\nEND\nprintf '<%s>' \"${arr[0]}\"", "<item>", ReadAheadWarning, 0)]
+    [InlineData("declare arr[\"$(cat <<END)\"]=item extra=other\n0\nEND\nprintf '<%s:%s>' \"${arr[0]}\" \"$extra\"",
+        "<item:other>", ReadAheadWarning, 0)]
+    [InlineData("declare -a arr=([$(cat <<END)]=item)\n0\nEND\nprintf '<%s>' \"${arr[0]}\"", "<item>", ReadAheadWarning, 0)]
+    [InlineData("false && declare arr[$(cat <<END)]=unused\n$(printf skipped >&2)\nEND\nprintf '<%s:%s>' \"$?\" \"${arr[0]}\"",
+        "<1:>", ReadAheadWarning, 0)]
+    [InlineData("declare arr[$(cat <<A)]=first arr[$(cat <<B)]=second\n0\nA\n1\nB\nprintf '<%s:%s>' \"${arr[0]}\" \"${arr[1]}\"",
+        "<first:second>", ReadAheadWarning + ReadAheadWarning, 0)]
+    [InlineData("f() { arr[$(cat <<END)]=item\n0\nEND\nprintf '<%s>' \"${arr[0]}\"; }\ntext=$(declare -f f); unset -f f; eval \"$text\"; f",
+        "<item>", ReadAheadWarning, 0)]
+    [InlineData("arr[$(printf selector >&2; cat <<A)]=$(printf value; printf rhs >&2; cat <<B)\n0\nA\n!\nB\nprintf '<%s>' \"${arr[0]}\"",
+        "<value!>", ReadAheadWarning + ReadAheadWarning + "rhsselector", 0)]
     [InlineData("cat <<OUTER\n<$(cat <<INNER)>\nbody\nINNER\nOUTER\nprintf tail", "tail", MatchingParenthesisEof, 0)]
     public async Task PendingCaptureBodiesAreCollectedWhileReadingTheHeader(
         string source, string output, string diagnostics, int exitCode)
@@ -721,6 +733,26 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(new byte[] { (byte)'<', 0xff, 0x0d, (byte)'>' }, host.StandardOutput.Content.ToArray());
         Assert.Equal(ReadAheadWarning, host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task ReadAheadBodyBytesSurviveAssignmentSelectorRendering()
+    {
+        byte[] source = [.. "declare -A arr; arr[$(cat <<'END')]=item\n"u8, 0xff, 0x0d,
+            .. "\nEND\nprintf '<%s:%s>' \"${!arr[@]}\" \"${arr[$'\\377\\r']}\""u8];
+        byte[] expected = [(byte)'<', 0xff, 0x0d, .. ":item>"u8];
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var script = prepared ? Parser.Parse(source)
+                : new ParsedScript([new ScriptCommand(ShellSource.FromBytes(source))]);
+            var result = await new Engine().RunAsync(
+                ShellEvaluationStartup.CreateForNewHost(script, EvaluationOptions.Default), host, CancellationToken.None);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(expected, host.StandardOutput.Content.ToArray());
+            Assert.Equal(ReadAheadWarning, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Theory]
