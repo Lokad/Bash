@@ -205,6 +205,9 @@ internal readonly struct ExpandedSegment(ShellValue content, bool isGlobQuoted)
     /// <summary>Identifies a synthesized DEL carried by a selected case-pattern operand.</summary>
     internal bool IsCaseQuotedNull { get; init; }
 
+    /// <summary>Carries the expansion-time treatment of Bash's quote bytes through selected operands.</summary>
+    internal CaseQuoteBytes CaseQuoteBytes { get; init; }
+
     /// <summary>Carries the treatment of spaces chosen while expanding a selected operand.</summary>
     internal OperandSpaces Spaces { get; init; }
 }

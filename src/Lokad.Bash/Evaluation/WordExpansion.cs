@@ -1103,6 +1103,7 @@ internal static partial class WordExpansion
             CaseOperand = purpose != ExpansionPurpose.CasePattern ? CasePatternOperand.None
                 : enclosingWord?.PreservesCasePatternQuotedNulls == true ? CasePatternOperand.PreserveQuotedNulls
                 : CasePatternOperand.SelectFields,
+            InheritsCaseDoubleQuotes = purpose == ExpansionPurpose.CasePattern && quoteContext == ExpansionQuoteContext.DoubleQuoted,
             OperandFields = purpose == ExpansionPurpose.Normal && quoteContext == ExpansionQuoteContext.Unquoted
                 ? FieldSeparators.FromVariables(scope.Variables).IsEmpty
                     ? ParameterOperandFields.UnquotedWithEmptyIfs : ParameterOperandFields.Unquoted

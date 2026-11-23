@@ -645,6 +645,13 @@ field, and a lone synthesized DEL is removed. A selected parameter default
 or alternate can join fields before the enclosing pattern splits them.
 Quoted `$*` uses the first IFS character as its separator.
 
+Case selection also follows Bash's quoting rules when IFS contains SOH
+(`0x01`) or DEL (`0x7F`). Those bytes can participate in field selection
+as delimiters or as part of the quoting representation. This applies to
+quoted groups and selected parameter operands before the final match.
+Each expansion uses its current IFS to record which quote bytes are
+exposed, and the later selection uses the IFS in effect at that point.
+
 In parameter replacement text, later empty fields from quoted `$@` or
 `${array[@]}` emit a DEL byte (`0x7F`) in the recorded Bash profile. A leading
 or single empty field contributes zero bytes. A literal DEL remains data.
