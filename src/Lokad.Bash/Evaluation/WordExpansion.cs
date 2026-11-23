@@ -188,6 +188,8 @@ internal static partial class WordExpansion
     {
         if (!scope.CanExpand)
             return;
+        if (scope.ExpansionWord == null && word.Parts is not [{ Kind: WordPartKind.HereDocument }])
+            scope = scope with { ExpansionWord = word };
         if (word.HasIncompleteQuotedParameterSubscript)
         {
             for (var part = firstPart; part < endPart; part++)
@@ -264,7 +266,7 @@ internal static partial class WordExpansion
             if (BracedParameterScanner.HasPrefix(source, cursor.Position))
             {
                 var status = BracedParameterScanner.ScanExpansion(context, source, cursor.Position, capturePayload: false,
-                    out var end, out _, out _, out var failure);
+                    out var end, out _, out _, out var failure, out _);
                 if (failure is ParameterSubscriptFailure.Direct or ParameterSubscriptFailure.Nested)
                     return failure;
                 if (status == BracedParameterScanStatus.Found)
@@ -779,11 +781,13 @@ internal static partial class WordExpansion
             var arithmeticStatus = ShellScanStatus.Complete;
             ParserFailure? arithmeticError = null;
             var invalidQuotedBracket = prepared is { Operand: null };
+            var bracketed = prepared?.Bracketed ?? false;
             if (!prepared.HasValue)
             {
                 var context = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
                 arithmeticStatus = ArithmeticExpansionScanner.Scan(context, content, index, out arithmeticEnd,
-                    out expression, out _, out var bracketed, out _, out arithmeticError);
+                    out var spelling, out _, out bracketed, out _, out arithmeticError);
+                expression = spelling.Source;
                 invalidQuotedBracket = arithmeticStatus == ShellScanStatus.Complete && bracketed
                     && quoteContext == ExpansionQuoteContext.DoubleQuoted
                     && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression);
@@ -799,7 +803,11 @@ internal static partial class WordExpansion
                 }
                 var arithmetic = prepared?.Operand;
                 // Arithmetic and braced parameter operands start their own expansion.
-                var operandScope = scope with { PreserveCommandSubstitutionSpelling = false };
+                var operandScope = scope with
+                {
+                    PreserveCommandSubstitutionSpelling = false,
+                    ExpansionWord = bracketed && quoteContext != ExpansionQuoteContext.DoubleQuoted ? null : scope.ExpansionWord
+                };
                 long? result;
                 if (arithmetic != null)
                     result = await ExpandArithmeticOperandAsync(arithmetic, operandScope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
@@ -915,7 +923,7 @@ internal static partial class WordExpansion
             {
                 parameterScan ??= CreateExpansionScanContext(scope);
                 var parameterStatus = BracedParameterScanner.ScanExpansion(parameterScan, content, index, capturePayload: true,
-                    out var closingIndex, out var payload, out var parameterError, out var subscriptFailure);
+                    out var closingIndex, out var payload, out var parameterError, out var subscriptFailure, out var rejectedSelector);
                 if (subscriptFailure == ParameterSubscriptFailure.Nested)
                 {
                     await ReportParameterWordSyntaxAsync(originalWord, content, missingBrace: true, scope).ConfigureAwait(false);
@@ -963,7 +971,8 @@ internal static partial class WordExpansion
 
                 if (parameterScan.SubstitutionFailure != SubstitutionSyntaxFailure.None && !scope.PreserveCommandSubstitutionSpelling)
                 {
-                    await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parameterScan.SubstitutionFailure, null, scope, globQuoted)
+                    await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parameterScan.SubstitutionFailure, null, scope, globQuoted,
+                        rejectedSelector)
                         .ConfigureAwait(false);
                     return null;
                 }

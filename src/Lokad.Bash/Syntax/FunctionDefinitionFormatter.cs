@@ -26,6 +26,10 @@ internal static class FunctionDefinitionFormatter
         CancellationToken cancellationToken, ShellScanContext? captures = null) =>
         TryAppend(new Step.Word(word), output, budget, Format.BraceSource, cancellationToken, captures: captures);
 
+    internal static bool TryAppendWordDisplay(Word word, IByteMemoryWriter output, IMemoryBudget budget,
+        CancellationToken cancellationToken) =>
+        TryAppend(new Step.Word(word), output, budget, Format.SubstitutionDisplay, cancellationToken);
+
     /// <summary>Renders a lexical suffix while borrowing the original word parts.</summary>
     internal static bool TryAppendWordSource(IReadOnlyList<WordPart> parts, int firstPart, IByteMemoryWriter output,
         IMemoryBudget budget, CancellationToken cancellationToken) =>
@@ -805,6 +809,22 @@ internal static class FunctionDefinitionFormatter
         }
         parsed = default;
         return -1;
+    }
+
+    internal static void AddRejectedCaptureEdits(ShellSource source, int start, int end, ShellScanContext context,
+        ref BracedParameterScanner.ParameterSpellingEdits edits)
+    {
+        var slice = source.Slice(start, end - start);
+        var next = 0;
+        while (true)
+        {
+            var position = FindNextCapture(slice, context, next, readAheadOnly: false, CancellationToken.None, out var parsed);
+            if (position < 0)
+                return;
+            next = position + parsed.Length;
+            if (parsed.Substitution is CommandSubstitutionSyntax.Parsed { HasRejectedDisplaySpelling: true })
+                edits.AddCapture(context, start + position, start + next, parsed.Substitution);
+        }
     }
 
     private sealed class LineCounter(bool collectOmittedSeparators, MemoryCapacity? memory) : IByteMemoryWriter

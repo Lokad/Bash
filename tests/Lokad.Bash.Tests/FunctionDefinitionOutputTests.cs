@@ -441,6 +441,23 @@ public sealed class FunctionDefinitionOutputTests
     }
 
     [Theory]
+    [InlineData("\"${missing:-", "}tail\"", "}tail\"", 13)]
+    [InlineData("$(( ", " + \\\n1 ))", " + 1 ))", 14)]
+    public async Task DefinitionReloadRejectsCapturesRenderedInsideExpansionOperands(
+        string opening, string closing, string displayedClosing, int line)
+    {
+        var script = "f(){ value=" + opening + "$({ cat <<DATA\nbody\nDATA\n}; printf extra)" + closing
+            + "; }\ndeclare -f f\nsaved=$(declare -f f)\nunset -f f\neval \"$saved\"\nprintf 'loaded:%s\\n' \"$?\"\n";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("f () \n{ \n    value=" + opening + "$({ cat <<DATA\nbody\nDATA\n } printf extra)"
+            + displayedClosing + "\n}\n", result.StdOut);
+        Assert.Equal($"eval: line {line}: syntax error near unexpected token `printf'\n"
+            + $"eval: line {line}: ` }} printf extra){displayedClosing}'\n", result.StdErr);
+    }
+
+    [Theory]
     [InlineData("((1)); # comment\\\nprintf wrong\nprintf kept", "[kept][kept]")]
     [InlineData("((1)); cat <<'END'\n$'a\\nb' literal\\\ncontinued\nEND\n", "['a\nb' literalcontinued]['a\nb' literalcontinued]")]
     public async Task AdjacentCaptureExecutesTheMatchedSpellingBeforeAndAfterReload(string body, string stdout)

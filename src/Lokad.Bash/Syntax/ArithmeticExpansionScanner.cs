@@ -36,16 +36,20 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out ShellSource expression,
-        out bool containsCommandSubstitution) =>
-        Scan(new ShellScanContext(), text, startIndex, out endIndex, out expression, out containsCommandSubstitution,
-            out _, out _, out _);
+        out bool containsCommandSubstitution)
+    {
+        var status = Scan(new ShellScanContext(), text, startIndex, out endIndex, out var spelling,
+            out containsCommandSubstitution, out _, out _, out _);
+        expression = spelling.Source;
+        return status;
+    }
 
     internal static ShellScanStatus Scan(
         ShellScanContext context,
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out ShellSource expression,
+        out SourceSpelling expression,
         out bool containsCommandSubstitution,
         out bool bracketed,
         out int renderedLineAdjustment,
@@ -100,15 +104,23 @@ internal static class ArithmeticExpansionScanner
         int startIndex,
         out int endIndex,
         out ShellSource expression,
-        out ParserFailure? error) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out _, out _, out error,
+        out ParserFailure? error)
+    {
+        var status = ScanCore(context, text, startIndex, out endIndex, out var spelling, out _, out _, out _, out _, out error,
             captureExpression: true, form: ArithmeticForm.Command);
+        expression = spelling.Source;
+        return status;
+    }
 
     internal static ShellScanStatus ScanForHeader(
         ShellScanContext context, ShellSource text, int startIndex,
-        out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators, out ParserFailure? error) =>
-        ScanCore(context, text, startIndex, out endIndex, out expression, out _, out _, out separators, out _, out error,
+        out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators, out ParserFailure? error)
+    {
+        var status = ScanCore(context, text, startIndex, out endIndex, out var spelling, out _, out _, out separators, out _, out error,
             captureExpression: true, form: ArithmeticForm.ForHeader);
+        expression = spelling.Source;
+        return status;
+    }
 
     /// <summary>Bounds adjacent subshell spelling after arithmetic selection and a failed body parse.</summary>
     internal static bool TryScanAdjacentSubshell(ShellScanContext context, ShellSource text, int startIndex,
@@ -121,7 +133,7 @@ internal static class ArithmeticExpansionScanner
         ShellSource text,
         int startIndex,
         out int endIndex,
-        out ShellSource expression,
+        out SourceSpelling expression,
         out bool containsCommandSubstitution,
         out bool bracketed,
         out ArithmeticForSeparators separators,
@@ -132,7 +144,7 @@ internal static class ArithmeticExpansionScanner
         bool trackRenderedLines = false)
     {
         endIndex = startIndex;
-        expression = ShellSource.Empty;
+        expression = default;
         containsCommandSubstitution = false;
         bracketed = false;
         separators = default;
@@ -243,10 +255,26 @@ internal static class ArithmeticExpansionScanner
                 if (captureExpression)
                 {
                     var source = text.Slice(expressionStart, cursor.Position - expressionStart);
-                    expression = form == ArithmeticForm.ForHeader
-                        ? ShellSourceCursor.ReadArithmeticForHeader(context,
-                            FunctionDefinitionFormatter.RenderReadAheadCaptures(source, context), out separators)
-                        : ShellSourceCursor.PrepareExpansionSource(context, source, ref renderedLineAdjustment);
+                    if (trackRenderedLines && containsCommandSubstitution && context.SubstitutionFailure is
+                        SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator)
+                    {
+                        var edits = new BracedParameterScanner.ParameterSpellingEdits();
+                        try
+                        {
+                            FunctionDefinitionFormatter.AddRejectedCaptureEdits(source, 0, source.Length, context, ref edits);
+                            var normalized = edits.BuildPayload(context, source, 0, source.Length, ref renderedLineAdjustment);
+                            expression = new SourceSpelling(normalized, edits.Captures);
+                        }
+                        finally { edits.Dispose(); }
+                    }
+                    else
+                    {
+                        var normalized = form == ArithmeticForm.ForHeader
+                            ? ShellSourceCursor.ReadArithmeticForHeader(context,
+                                FunctionDefinitionFormatter.RenderReadAheadCaptures(source, context), out separators)
+                            : ShellSourceCursor.PrepareExpansionSource(context, source, ref renderedLineAdjustment);
+                        expression = new SourceSpelling(normalized, null);
+                    }
                 }
                 return ShellScanStatus.Complete;
             }

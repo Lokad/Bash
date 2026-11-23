@@ -75,7 +75,7 @@ public sealed class SourceWordPart : WordPart
     internal int SourceOffset { get; }
 
     /// <summary>The selected lexical span and its operand. A missing operand fails if reached.</summary>
-    internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand);
+    internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand, bool Bracketed);
     internal SourceWordPart(WordPartKind kind, ShellSource source, MemoryCapacity? memory) : base(kind)
     {
         Source = source;
@@ -115,7 +115,7 @@ public sealed class SourceWordPart : WordPart
         if (_arithmetic.TryGetValue(checked(start + SourceOffset), out var cached)
             && cached.End < (long)SourceOffset + Source.Length)
         {
-            expansion = new ArithmeticExpansion(cached.End - SourceOffset, cached.Operand);
+            expansion = cached with { End = cached.End - SourceOffset };
             return true;
         }
         expansion = default;
@@ -138,16 +138,17 @@ public sealed class SourceWordPart : WordPart
                 continue;
             var context = new ShellScanContext { SyntaxMemory = memory };
             var status = ArithmeticExpansionScanner.Scan(context, source, index, out var end,
-                out var expression, out _, out var bracketed, out _, out _);
+                out var spelling, out _, out var bracketed, out _, out _);
             if (status != ShellScanStatus.Complete)
                 continue;
             memory?.Grow(256);
+            var expression = spelling.Source;
             var operand = bracketed && kind == WordPartKind.DoubleQuoted
                 && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression)
                 ? null
                 : new ArithmeticSource(expression, memory);
             (result ??= new Dictionary<int, ArithmeticExpansion>())
-                .Add(index, new ArithmeticExpansion(end, operand));
+                .Add(index, new ArithmeticExpansion(end, operand, bracketed));
             cursor = end + 1;
         }
         return result ?? NoArithmetic;

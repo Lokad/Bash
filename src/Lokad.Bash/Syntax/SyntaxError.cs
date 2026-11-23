@@ -41,6 +41,8 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 /// <summary>Byte slices and reader position for a reached token diagnostic.</summary>
 internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int ReadPosition)
 {
+    /// <summary>Byte offset where the enclosing capture starts reading its payload.</summary>
+    internal int CapturePayloadStart { get; init; }
     internal ConditionalArgumentError ConditionalError { get; init; }
     internal ShellSource Argument { get; init; }
     internal int UnclosedGroups { get; init; }

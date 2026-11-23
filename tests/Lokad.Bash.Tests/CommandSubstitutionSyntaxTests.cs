@@ -130,6 +130,30 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Theory]
+    [InlineData("value=\"${missing:-", "}tail\"", " } printf extra)}tail\"", 9)]
+    [InlineData("value='first\nsecond'\"", "tail\"", " } printf extra)tail\"", 10)]
+    [InlineData("value=$(( ", " + \\\n1 ))", " } printf extra) + 1 ))", 10)]
+    [InlineData("value=x$[ ", " + 1 ]tail", " } printf extra) + 1 ", 9)]
+    [InlineData("value=\"x$[ ", " + 1 ]tail\"", " } printf extra) + 1 ]tail\"", 9)]
+    [InlineData("value=\"${map[1+", "+2]:-fallback}tail\"", " } printf extra)+2", 9)]
+    public async Task RejectedCaptureReportsTheReachedWordSpelling(string prefix, string suffix, string lineText, int line)
+    {
+        var source = "value=initial\n" + prefix + "$({ cat <<DATA\nbody\nDATA\n}; printf extra)" + suffix
+            + "\nprintf 'after:%s:<%s>\\n' \"$?\" \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = await RunAsync(source, host, prepared);
+
+            Assert.Equal(0, status);
+            Assert.Equal("after:1:<initial>\n", host.StandardOutput.TextContent);
+            Assert.Equal($"command substitution: line {line}: syntax error near unexpected token `printf'\n"
+                + $"command substitution: line {line}: `{lineText}'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RenderedHereDocumentCanJoinPipelineArgumentsAndKeepTheirLine(bool prepared)

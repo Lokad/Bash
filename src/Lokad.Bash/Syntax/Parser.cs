@@ -467,6 +467,8 @@ public static class Parser
                     || bodyFailure.Error.Offset < source.Length || tokenizer.HasPendingClosingParenthesis)
                 {
                     error = bodyFailure.InSubstitution();
+                    if (error.UnexpectedToken is { } unexpected)
+                        error = error with { UnexpectedToken = unexpected with { CapturePayloadStart = start } };
                     return ShellScanStatus.Invalid;
                 }
                 return ShellScanStatus.Incomplete;
@@ -479,7 +481,7 @@ public static class Parser
                 error = new ParserFailure(new SyntaxError("Unexpected token after command substitution body.",
                     closing.Source.Start.Value), ParserFailureKind.SubstitutionGrammar)
                 {
-                    UnexpectedToken = tokenizer.GetUnexpectedSyntax(closing)
+                    UnexpectedToken = tokenizer.GetUnexpectedSyntax(closing) with { CapturePayloadStart = start }
                 };
                 return ShellScanStatus.Invalid;
             }

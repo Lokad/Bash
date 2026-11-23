@@ -1073,6 +1073,13 @@ internal sealed class Tokenizer
         return tokenizer.Error is { } error ? throw error.ToException() : word;
     }
 
+    internal static UnexpectedSyntax? ReadUnexpectedWordToken(ShellSource content, ShellScanContext context)
+    {
+        var tokenizer = new Tokenizer(content, 0, context) { TrackUnexpectedTokens = true };
+        tokenizer.ReadWord(content.AsSpan(), content.Length, ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
+        return tokenizer.Failure?.UnexpectedToken;
+    }
+
     private bool _retainArithmeticSubscripts;
     private bool _isExpansionOperand;
 
@@ -1633,11 +1640,14 @@ internal sealed class Tokenizer
             GetEdited().Append(opening).Append(payload.Bytes).Append(closing);
         }
 
-        public void AppendParameter(int start, int end, SourceSpelling payload)
+        public void AppendExpansion(int start, int end, ReadOnlySpan<byte> opening, SourceSpelling payload, ReadOnlySpan<byte> closing)
         {
-            payload.CopyCaptures(Length + 2, ref _captures, context.SyntaxMemory);
-            AppendExpansion(start, end, "${"u8, payload.Source, "}"u8);
+            payload.CopyCaptures(Length + opening.Length, ref _captures, context.SyntaxMemory);
+            AppendExpansion(start, end, opening, payload.Source, closing);
         }
+
+        public void AppendParameter(int start, int end, SourceSpelling payload) =>
+            AppendExpansion(start, end, "${"u8, payload, "}"u8);
 
         public SourceSpelling TakeSource()
         {

@@ -366,10 +366,12 @@ Parenthesized capture rendering can omit a semicolon after a flushed
 here-document. The resulting command list can combine operands or attach a
 redirection to the preceding command. If the rendered list fails to parse,
 the reached substitution reports the unexpected token and rendered line
-before any of its commands run. With errexit the diagnostic omits the rendered
-line. The function listing shows the rendered body, and reloading it reports
-its invalid syntax. Host function exports preserve the authored capture so
-the child can import it and validate the capture when reached. Backtick
+before any of its commands run. The rendered line retains enclosing word
+punctuation and literal suffixes through the reached operand boundary. With
+errexit the diagnostic omits the rendered line. Function listings show the
+rendered body in word, parameter and arithmetic operands, and reloading a
+listing reports its invalid syntax. Host function exports preserve the authored
+capture so the child can import it and validate it when reached. Backtick
 captures and captures read directly from a here-document use their source
 separators.
 When a script ends in a parenthesized capture with a here-document and no

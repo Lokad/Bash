@@ -11,6 +11,8 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
         internal bool CanRenderBody => Failure == SubstitutionSyntaxFailure.None && !PreserveAdjacentOpening;
         internal bool CanDisplayBody => !PreserveAdjacentOpening && Failure is SubstitutionSyntaxFailure.None
             or SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
+        internal bool HasRejectedDisplaySpelling => (Failure is SubstitutionSyntaxFailure.HereDocumentSeparator
+            or SubstitutionSyntaxFailure.NestedHereDocumentSeparator) && (CanDisplayBody || AdjacentSpelling != null);
         internal SourceSpelling? AdjacentSpelling { get; init; }
     }
 

@@ -3595,7 +3595,7 @@ public sealed partial class Evaluation : IFileTester
         && _pipelineUsesLoadedUnitStatus;
 
     internal async Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure,
-        CommandSubstitutionSyntax.Parsed? capture, ScopedEvaluation scope, bool quoted)
+        CommandSubstitutionSyntax.Parsed? capture, ScopedEvaluation scope, bool quoted, ShellSource rejectedSelector = default)
     {
         if (_state.FatalExpansion.HasValue)
             return;
@@ -3605,22 +3605,40 @@ public sealed partial class Evaluation : IFileTester
         SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode));
         _state.LastExitCode = exitCode;
         var separatorFailure = failure is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
-        if (separatorFailure && capture != null && !GetStdErrDescriptor().IsClosed)
+        if (separatorFailure && (capture != null || scope.ExpansionWord != null || !rejectedSelector.IsEmpty)
+            && !GetStdErrDescriptor().IsClosed)
         {
-            // Render on reach so a skipped capture never allocates a diagnostic source or replays its grammar.
+            // The rendered word supplies the delimiters and literal text following a rejected capture.
             using var spelling = new ByteMemoryBuilder(0, Memory.Budget);
-            if (!FunctionDefinitionFormatter.TryAppendSubstitutionDisplay(capture, spelling, Memory.Budget, _cancellationToken))
-                throw new ByteMemoryBuilder.LimitExceededException();
-            if (quoted)
-                spelling.Append((byte)'"');
-            var source = ShellSource.FromBytes(spelling.ToMemory());
-            ParserFailure? report;
-            using (var workspace = new MemoryCapacity(Memory.Budget, 0))
-                Parser.ScanCommandSubstitutionEnd(new ShellScanContext { SyntaxMemory = workspace }, source, 2,
-                    out _, out _, out _, out _, out _, out report);
-            if (report?.UnexpectedToken is { } token)
+            using var workspace = new MemoryCapacity(Memory.Budget, 0);
+            UnexpectedSyntax? token = null;
+            var word = scope.ExpansionWord;
+            if (!rejectedSelector.IsEmpty && Tokenizer.TryReadExpansionWord(rejectedSelector, ExpansionWordSyntax.Parameter,
+                ShellQuoteKind.None, workspace, out var selectorWord, out _))
+                word = selectorWord;
+            if (word != null)
             {
-                var line = Math.Max(1, scope.Context.Coordinates.Line) + source.AsSpan(0, token.ReadPosition).Count((byte)'\n') + 1;
+                if (!FunctionDefinitionFormatter.TryAppendWordDisplay(word, spelling, Memory.Budget, _cancellationToken))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                token = Tokenizer.ReadUnexpectedWordToken(ShellSource.FromBytes(spelling.ToMemory()),
+                    new ShellScanContext { SyntaxMemory = workspace });
+            }
+            if (token == null && capture != null)
+            {
+                spelling.Truncate(0);
+                if (!FunctionDefinitionFormatter.TryAppendSubstitutionDisplay(capture, spelling, Memory.Budget, _cancellationToken))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                if (quoted)
+                    spelling.Append((byte)'"');
+                var source = ShellSource.FromBytes(spelling.ToMemory());
+                Parser.ScanCommandSubstitutionEnd(new ShellScanContext { SyntaxMemory = workspace }, source, 2,
+                    out _, out _, out _, out _, out _, out var report);
+                token = report?.UnexpectedToken;
+            }
+            if (token != null)
+            {
+                var capturePrefix = spelling.ToMemory().Span[token.CapturePayloadStart..token.ReadPosition];
+                var line = Math.Max(1, scope.Context.Coordinates.Line) + capturePrefix.Count((byte)'\n') + 1;
                 await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
                     line, includeLine: !_state.ErrexitEnabled).ConfigureAwait(false);
                 return;
