@@ -94,7 +94,7 @@ public sealed partial class ComplexityRegressionTests
         Assert.All(host.Appends, diagnostic =>
         {
             Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
-            Assert.Equal("OPTIND: readonly variable\n", Utf8Text.Decode(diagnostic.Content));
+            Assert.Equal("line 1: OPTIND: readonly variable\n", Utf8Text.Decode(diagnostic.Content));
         });
         Assert.True(allocated < 4 * 1024 * 1024,
             $"Repeated getopts calls allocated {allocated:N0} bytes for an unchanged OPTIND.");

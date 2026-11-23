@@ -78,7 +78,7 @@ public sealed partial class Evaluation
         }
 
         var targetValue = options.ArgumentIndex < arguments.Count ? arguments[options.ArgumentIndex] : ShellValue.FromText("MAPFILE");
-        var (selected, targetStatus) = await SelectIndexedInputTargetAsync(arguments[0], targetValue, variables, warn: true)
+        var (selected, targetStatus) = await SelectIndexedInputTargetAsync(arguments[0], targetValue, scope, warn: true)
             .ConfigureAwait(false);
         if (selected is not { } target)
             return await FinishAsync(targetStatus).ConfigureAwait(false);
@@ -412,12 +412,13 @@ public sealed partial class Evaluation
 
     /// <summary>Selects a whole indexed-array destination without altering its binding.</summary>
     private async Task<(IndexedInputTarget? Target, int ExitCode)> SelectIndexedInputTargetAsync(
-        ShellValue command, ShellValue operand, Variables variables, bool warn)
+        ShellValue command, ShellValue operand, ScopedEvaluation scope, bool warn)
     {
         if (!VariableReference.TryParse(ShellSource.FromBytes(operand.Bytes), Memory, out var reference)
             || reference.Kind != VariableReferenceKind.Name)
             return await InvalidTargetAsync(operand).ConfigureAwait(false);
 
+        var variables = scope.Variables;
         var target = reference.Name;
         var resolvedBinding = variables.TryResolveBinding(target, selectOwner: null, out var binding);
         var resolved = resolvedBinding ? binding.Name : target;
@@ -443,7 +444,7 @@ public sealed partial class Evaluation
         // A cycle recreates the binding; otherwise readonly belongs to the selected array.
         if (resolvedBinding && variables.IsReadonly(resolved))
         {
-            await ReportExpansionDiagnosticAsync(operand, ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync(operand, "readonly variable", scope.Context).ConfigureAwait(false);
             return (null, 1);
         }
         if (variables.AssociativeArrays.ContainsKey(resolved))

@@ -8,6 +8,23 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationInputBuiltinsTestsEndToEnd
 {
     [Theory]
+    [InlineData("read", "ref", "value")]
+    [InlineData("read", "-a ref", "ref")]
+    [InlineData("readarray", "-t ref", "ref")]
+    public async Task ReadonlyInputTargetNamesTheReachedBindingAndSourceLine(string command, string operands, string name)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", ":\n" + command + " \\\n" + operands + " <<<input\n");
+        var result = await host.RunAsync("readonly -a value=(old); declare -n ref=value\n"
+            + "source /body; printf '<%s><%s>' \"$?\" \"${value[0]}\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1><old>", host.StandardOutput.TextContent);
+        Assert.Equal($"/body: line 3: {name}: readonly variable\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("read -ra values", "read")]
     [InlineData("mapfile -n1", "mapfile")]
     [InlineData("readarray -t", "readarray")]

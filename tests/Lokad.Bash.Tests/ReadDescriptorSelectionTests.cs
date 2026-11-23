@@ -28,7 +28,7 @@ public sealed class ReadDescriptorSelectionTests
     [InlineData("read -u0x3 value 3<<< selected; printf '<%s>' \"$?\"", "3C313E", "726561643A203078333A20696E76616C69642066696C652064657363726970746F722073706563696669636174696F6E0A")]
     [InlineData("read -u2147483647 value; printf '<%s>' \"$?\"", "3C313E", "726561643A20323134373438333634373A20696E76616C69642066696C652064657363726970746F723A204261642066696C652064657363726970746F720A")]
     [InlineData("declare -A a; read -u3 $'a[\\377]' 3<<< selected; printf '<%s>' \"${a[$'\\377']}\"", "3C73656C65637465643E", "")]
-    [InlineData("readonly value=old; read -u3 value 3<<< selected; printf '<%s><%s>' \"$?\" \"$value\"", "3C313E3C6F6C643E", "76616C75653A20726561646F6E6C79207661726961626C650A")]
+    [InlineData("readonly value=old; read -u3 value 3<<< selected; printf '<%s><%s>' \"$?\" \"$value\"", "3C313E3C6F6C643E", "6C696E6520313A2076616C75653A20726561646F6E6C79207661726961626C650A")]
     [InlineData("exec 3<<< $'first\\nsecond'; read -u3 value; read next <&3; printf '<%s><%s>' \"$value\" \"$next\"", "3C66697273743E3C7365636F6E643E", "")]
     [InlineData("{ read -u3 selected; read normal; printf '<%s><%s>' \"$selected\" \"$normal\"; } 3<<< selected <<< stdin", "3C73656C65637465643E3C737464696E3E", "")]
     [InlineData("exec 3<<< data; read -u3 1bad; read -u3 value; printf '<%s>' \"$value\"", "3C646174613E", "726561643A206031626164273A206E6F7420612076616C6964206964656E7469666965720A")]

@@ -233,7 +233,7 @@ public sealed class EvaluationPipelineTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("status:1\n", result.StdOut);
-        Assert.Equal("value: readonly variable\n", result.StdErr);
+        Assert.Equal("line 1: value: readonly variable\n", result.StdErr);
     }
 
     [Fact]

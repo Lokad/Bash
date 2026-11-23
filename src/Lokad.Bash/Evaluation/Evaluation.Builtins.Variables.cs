@@ -558,10 +558,10 @@ public sealed partial class Evaluation
         }
         if (destination.IsReadonly(target.Name))
         {
-            if (kind == BuiltinAssignmentKind.Directory)
-                await ReportBuiltinDiagnosticAsync(target.Name.ToValue(), "readonly variable", scope.Context).ConfigureAwait(false);
-            else
+            if (kind == BuiltinAssignmentKind.Descriptor)
                 await ReportExpansionDiagnosticAsync(target.Name.ToValue(), ShellValue.FromText("readonly variable")).ConfigureAwait(false);
+            else
+                await ReportBuiltinDiagnosticAsync(target.Name.ToValue(), "readonly variable", scope.Context).ConfigureAwait(false);
             return kind is BuiltinAssignmentKind.Directory or BuiltinAssignmentKind.Getopts
                 ? BuiltinAssignmentResult.Readonly : BuiltinAssignmentResult.Failed;
         }

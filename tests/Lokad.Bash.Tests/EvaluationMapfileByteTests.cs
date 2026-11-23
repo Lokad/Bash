@@ -163,7 +163,7 @@ public sealed class EvaluationMapfileByteTests
     [InlineData("mapfile; printf '[%s]' \"${MAPFILE[@]}\"", "\na\nb", "[\n][a\n][b]", "")]
     [InlineData("arr=scalar; arr[1000000]=sparse; mapfile -t arr; printf '<%s><%s>' \"${arr[0]}\" \"${arr[1000000]-missing}\"", "replacement\n", "<replacement><missing>", "")]
     [InlineData("arr=(old); declare -n ref=arr; mapfile -t ref; printf '<%s><%s>' \"${arr[0]}\" \"${ref[1]}\"", "first\nsecond\n", "<first><second>", "")]
-    [InlineData("readonly arr; mapfile arr; status=$?; read next; printf '%s:<%s>' \"$status\" \"$next\"", "still-available\n", "1:<still-available>", "arr: readonly variable\n")]
+    [InlineData("readonly arr; mapfile arr; status=$?; read next; printf '%s:<%s>' \"$status\" \"$next\"", "still-available\n", "1:<still-available>", "line 1: arr: readonly variable\n")]
     [InlineData("arr=(old); mapfile arr <&-; printf '<%s>:%s' \"${arr[0]-unset}\" \"$?\"", "", "<unset>:0", "")]
     [InlineData("declare -A map=([key]=old); declare -n ref='map[key]'; mapfile ref; status=$?; read next; printf '<%s><%s><%s>' \"$status\" \"${map[key]}\" \"$next\"", "line\n", "<1><old><line>", "mapfile: `map[key]': not a valid identifier\n")]
     public async Task InputAndTargetKindsRetainTheirContracts(string script, string input, string output, string error)

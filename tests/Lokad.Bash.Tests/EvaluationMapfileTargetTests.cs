@@ -16,14 +16,14 @@ public sealed class EvaluationMapfileTargetTests
     [InlineData("mapfile 'arr[0]' <<< line; printf '%s' \"$?\"", "31", "6D617066696C653A20606172725B305D273A206E6F7420612076616C6964206964656E7469666965720A", 0)]
     [InlineData("mapfile 'arr=value' <<< line; printf '%s' \"$?\"", "31", "6D617066696C653A20606172723D76616C7565273A206E6F7420612076616C6964206964656E7469666965720A", 0)]
     [InlineData("arr=(old); declare -nr ref=arr; mapfile -t ref <<< line; printf '%s:<%s>' \"$?\" \"${arr[@]}\"", "303A3C6C696E653E", "", 0)]
-    [InlineData("readonly arr; declare -n ref=arr; mapfile ref <<< line; printf '%s' \"$?\"", "31", "7265663A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("readonly arr; declare -n ref=arr; mapfile ref <<< line; printf '%s' \"$?\"", "31", "6C696E6520313A207265663A20726561646F6E6C79207661726961626C650A", 0)]
     [InlineData("declare -n ref; mapfile ref <<< line; printf '%s:<%s>' \"$?\" \"${ref[@]}\"", "303A3C6C696E650A3E", "7761726E696E673A207265663A2072656D6F76696E67206E616D65726566206174747269627574650A", 0)]
     [InlineData("declare -n first=second second=first; mapfile first <<< line; printf '%s:<%s>' \"$?\" \"${first[@]}\"", "303A3C6C696E650A3E", "7761726E696E673A2066697273743A2063697263756C6172206E616D65207265666572656E63650A", 0)]
     [InlineData("readarray bad-name <<< line; printf '%s' \"$?\"", "31", "7265616461727261793A20606261642D6E616D65273A206E6F7420612076616C6964206964656E7469666965720A", 0)]
     [InlineData("mapfile ${missing:?boom} \"$(printf forbidden >&2)\" <<< line; printf after", "", "6D697373696E673A20626F6F6D0A", 1)]
     [InlineData("printf 'still\\n' > input; declare -A arr=([key]=old); exec 3< input; mapfile arr <&3; status=$?; read next <&3; printf '%s:<%s>' \"$status\" \"$next\"", "313A3C7374696C6C3E", "6D617066696C653A206172723A206E6F7420616E20696E64657865642061727261790A", 0)]
     [InlineData("declare -nr first=second; declare -n second=first; mapfile first <<< line; printf '%s' \"$?\"", "30", "7761726E696E673A2066697273743A2063697263756C6172206E616D65207265666572656E63650A", 0)]
-    [InlineData("declare -nr ref; mapfile ref <<< line; printf '%s' \"$?\"", "31", "7761726E696E673A207265663A2072656D6F76696E67206E616D65726566206174747269627574650A7265663A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("declare -nr ref; mapfile ref <<< line; printf '%s' \"$?\"", "31", "7761726E696E673A207265663A2072656D6F76696E67206E616D65726566206174747269627574650A6C696E6520313A207265663A20726561646F6E6C79207661726961626C650A", 0)]
     [InlineData("declare -n first=second second; mapfile first <<< line; printf '%s:<%s>' \"$?\" \"${first[@]}\"", "303A3C6C696E650A3E", "7761726E696E673A2066697273743A2072656D6F76696E67206E616D65726566206174747269627574650A", 0)]
     public async Task TargetsRetainNativeBytesAndBindingPolicy(
         string script, string outputHex, string errorHex, int exitCode)

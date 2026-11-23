@@ -174,9 +174,9 @@ public sealed class PrintfTargetBindingTests
     [InlineData("i=0; printf -v 'a[i++]' '%Z'; printf '<%s><%s><%s><%s>' \"$?\" \"$i\" \"${!a[@]}\" \"${a[@]}\"", "3C313E3C313E3C303E3C3E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A", 0)]
     [InlineData("i=0; printf -v 'a[i]' 'abc%n' i; printf '<%s><%s><%s>' \"$i\" \"${!a[@]}\" \"${a[@]}\"", "3C333E3C333E3C6162633E", "", 0)]
     [InlineData("declare -A a; printf -v 'a[$(printf selector >&2; printf key)]' '%s' \"$(printf argument >&2; printf value)\"; printf '<%s>' \"${a[key]}\"", "3C76616C75653E", "617267756D656E7473656C6563746F72", 0)]
-    [InlineData("i=0; readonly -a a=(old); printf -v 'a[i++]' '%s' value; printf '<%s><%s><%s>' \"$?\" \"$i\" \"${a[0]}\"", "3C313E3C313E3C6F6C643E", "613A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("i=0; readonly -a a=(old); printf -v 'a[i++]' '%s' value; printf '<%s><%s><%s>' \"$?\" \"$i\" \"${a[0]}\"", "3C313E3C313E3C6F6C643E", "6C696E6520313A20613A20726561646F6E6C79207661726961626C650A", 0)]
     [InlineData("a=old; declare -rn ref=a; printf -v ref '%s' new; printf '<%s><%s><%s>' \"$?\" \"$a\" \"${!ref}\"", "3C303E3C6E65773E3C613E", "", 0)]
-    [InlineData("readonly a=old; declare -n ref=a; printf -v ref '%s' new; printf '<%s><%s>' \"$?\" \"$a\"", "3C313E3C6F6C643E", "613A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("readonly a=old; declare -n ref=a; printf -v ref '%s' new; printf '<%s><%s>' \"$?\" \"$a\"", "3C313E3C6F6C643E", "6C696E6520313A20613A20726561646F6E6C79207661726961626C650A", 0)]
     [InlineData("printf -v 'a[-1]' '%s' value; printf '<%s>' \"$?\"", "3C313E", "615B2D315D3A20626164206172726179207375627363726970740A", 0)]
     [InlineData("printf -v 'a[]' '%s' value; printf '<%s>' \"$?\"", "3C323E", "7072696E74663A2060615B5D273A206E6F7420612076616C6964206964656E7469666965720A", 0)]
     [InlineData("declare -A a; k=; printf -v 'a[$k]' '%s' value; printf '<%s><%s>' \"$?\" \"${#a[@]}\"", "3C313E3C303E", "615B246B5D3A20626164206172726179207375627363726970740A", 0)]
@@ -189,8 +189,8 @@ public sealed class PrintfTargetBindingTests
     [InlineData("declare -n ref; printf -v ref '%s' destination; printf '<%s><%s>' \"$ref\" \"${!ref}\"", "3C3E3C64657374696E6174696F6E3E", "", 0)]
     [InlineData("declare -n ref; printf -v ref '%s' 'bad name'; printf '<%s><%s>' \"$?\" \"${!ref}\"", "", "7072696E74663A2060626164206E616D65273A206E6F7420612076616C6964206964656E7469666965720A7265663A20696E76616C696420696E64697265637420657870616E73696F6E0A", 1)]
     [InlineData("declare -n ref; declare -n hop=ref; printf -v hop '%s' destination; printf '<%s><%s>' \"$?\" \"${!ref}\"", "", "7265663A20696E76616C696420696E64697265637420657870616E73696F6E0A", 1)]
-    [InlineData("declare -rn ref; printf -v ref '%s' destination; printf '<%s>' \"$?\"", "3C313E", "7265663A20726561646F6E6C79207661726961626C650A", 0)]
-    [InlineData("readonly a=old; printf -v a '%Z'; printf '<%s>' \"$?\"", "3C313E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A613A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("declare -rn ref; printf -v ref '%s' destination; printf '<%s>' \"$?\"", "3C313E", "6C696E6520313A207265663A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("readonly a=old; printf -v a '%Z'; printf '<%s>' \"$?\"", "3C313E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A6C696E6520313A20613A20726561646F6E6C79207661726961626C650A", 0)]
     [InlineData("printf -v 'a[-1]' '%Z'; printf '<%s>' \"$?\"", "3C313E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A615B2D315D3A20626164206172726179207375627363726970740A", 0)]
     [InlineData("i=0; printf -v 'a[i++]' -z format; printf '<%s><%s>' \"$?\" \"$i\"", "3C323E3C303E", "7072696E74663A202D7A3A20696E76616C6964206F7074696F6E0A7072696E74663A2075736167653A207072696E7466205B2D76207661725D20666F726D6174205B617267756D656E74735D0A", 0)]
     [InlineData("i=0; printf -v 'a[]' -v 'a[i++]' format; printf '<%s><%s>' \"$?\" \"$i\"", "3C323E3C303E", "7072696E74663A2060615B5D273A206E6F7420612076616C6964206964656E7469666965720A", 0)]
@@ -201,7 +201,7 @@ public sealed class PrintfTargetBindingTests
     [InlineData("declare -A a; printf -v 'a[@]' value; printf '<%s><%s>' \"$?\" \"${a[@]}\"", "3C303E3C76616C75653E", "", 0)]
     [InlineData("printf -v 'a[2147483648]' value; printf '<%s><%s>' \"${!a[@]}\" \"${a[@]}\"", "3C323134373438333634383E3C76616C75653E", "", 0)]
     [InlineData("i=0; printf -v 'a[(i++,-1)]' value; printf '<%s><%s>' \"$?\" \"$i\"", "3C313E3C313E", "615B28692B2B2C2D31295D3A20626164206172726179207375627363726970740A", 0)]
-    [InlineData("readonly -A a=(); printf -v 'a[$(printf selector >&2; printf key)]' value; printf '<%s>' \"$?\"", "3C313E", "73656C6563746F72613A20726561646F6E6C79207661726961626C650A", 0)]
+    [InlineData("readonly -A a=(); printf -v 'a[$(printf selector >&2; printf key)]' value; printf '<%s>' \"$?\"", "3C313E", "73656C6563746F726C696E6520313A20613A20726561646F6E6C79207661726961626C650A", 0)]
     public async Task AssignsSelectedLocationAfterFormatting(
         string script, string outputHex, string errorHex, int exitCode)
     {

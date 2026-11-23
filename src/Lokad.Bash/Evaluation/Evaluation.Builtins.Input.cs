@@ -146,7 +146,7 @@ public sealed partial class Evaluation
             {
                 // Bash consumes the record before checking an array destination.
                 var (target, status) = await SelectIndexedInputTargetAsync(
-                    command, destination, scope.Variables, warn: !GetStdErrDescriptor().IsClosed).ConfigureAwait(false);
+                    command, destination, scope, warn: !GetStdErrDescriptor().IsClosed).ConfigureAwait(false);
                 if (target == null)
                     return await FinishAsync(status == 0 ? exitCode : status).ConfigureAwait(false);
                 arrayTarget = target;

@@ -1080,6 +1080,11 @@ Write failures reported by the host still follow the builtin's status policy.
 options. Help describes the supported options and returns status 2, including
 when the shell has closed stdout. An option that expects an argument consumes
 its next field before the scan can reach help.
+Readonly output errors from `read`, `mapfile`, `readarray`, `getopts` and
+`printf` report the reached builtin line and any active `source` filename.
+Whole-array input reports the written destination, while resolved scalar
+and element assignments report the readonly binding's name.
+
 When a reached `printf -v` has no destination field, it reports that the
 option requires an argument and follows with usage. A supplied destination
 with no format reports usage alone.

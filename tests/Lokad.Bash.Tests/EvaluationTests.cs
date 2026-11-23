@@ -4228,7 +4228,7 @@ public partial class EvaluationTests
         read.SetResult(ReadResult.Success(Utf8Bytes("value\n"), [], reachedEoF: false));
 
         var diagnostic = await NextWriteAsync(state);
-        Assert.Equal("foo: readonly variable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: foo: readonly variable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.False(state.Variables.ContainsKey("foo"));

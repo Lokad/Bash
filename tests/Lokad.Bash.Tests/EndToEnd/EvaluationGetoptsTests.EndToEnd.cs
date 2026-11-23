@@ -9,6 +9,17 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationGetoptsTestsEndToEnd
 {
+    [Fact]
+    public async Task ReadonlyOptionTargetKeepsTheFirstOperandLineAndScanStatus()
+    {
+        var result = await EvaluationTestHelper.RunAsync("readonly option=old\ngetopts \\\na \\\noption -a\n"
+            + "printf '<%s><%s><%s>' \"$?\" \"$option\" \"$OPTIND\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2><old><2>", result.StdOut);
+        Assert.Equal("line 3: option: readonly variable\n", result.StdErr);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
