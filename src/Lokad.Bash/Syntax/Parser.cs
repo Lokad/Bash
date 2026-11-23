@@ -1294,12 +1294,28 @@ public static class Parser
             error = new SyntaxError(ScriptSizeLimitMessage, 0);
             return false;
         }
-        var context = new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Temporary };
-        var tokenizer = new Tokenizer(source, 0, context);
+        var tokenizer = CreateCompoundInitializerTokenizer(source, memory, trackDiagnostics: false);
         items = ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput);
         error = tokenizer.Error ?? tokenizer.QuotedEndOfInputFailure?.Error;
         return error == null;
     }
+
+    /// <summary>Finds the first error in the rendered spelling of a reached initializer.</summary>
+    internal static ParserFailure? ReadCompoundInitializerFailure(ShellSource source, MemoryCapacity memory, out int line)
+    {
+        var tokenizer = CreateCompoundInitializerTokenizer(source, memory, trackDiagnostics: true);
+        ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput);
+        var failure = tokenizer.Failure;
+        line = tokenizer.GetLine(failure?.UnexpectedToken?.ReadPosition ?? tokenizer.Position);
+        return failure;
+    }
+
+    private static Tokenizer CreateCompoundInitializerTokenizer(ShellSource source, MemoryCapacity memory, bool trackDiagnostics) =>
+        new(source, 0, new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Temporary })
+        {
+            TrackCommandLocations = trackDiagnostics,
+            TrackUnexpectedTokens = trackDiagnostics
+        };
 
     private static IReadOnlyList<CompoundArrayItem> ReadCompoundArrayValues(Tokenizer tokenizer, TokenKind terminator)
     {

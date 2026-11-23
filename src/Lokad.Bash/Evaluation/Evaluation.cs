@@ -711,6 +711,7 @@ public sealed partial class Evaluation : IFileTester
                 ErrexitRedirections = null,
                 Timing = null,
                 InNestedCommandUnits = false,
+                InheritsLoadedSyntaxStatus = scope.InNestedCommandUnits || scope.InheritsLoadedSyntaxStatus,
                 LoadedReaderIgnoresErrexit = false
             };
             if (redirections != null)
@@ -1725,12 +1726,13 @@ public sealed partial class Evaluation : IFileTester
             {
                 using var itemMemory = new MemoryCapacity(Memory.Budget, 0);
                 var items = new List<IReadOnlyList<ExpandedWord>>();
+                var prefixScope = assignmentScope with { CompoundPrefixItems = words };
                 var length = 2L;
                 foreach (var word in words)
                 {
                     // The enclosing await reports any limit once, before active redirections unwind.
                     var expanded = await WordExpansion.ExpandWithoutBraceAsync(
-                        word.Word, assignmentScope, allowWordSplitting: false, ExpansionPurpose.CompoundPrefix,
+                        word.Word, prefixScope, allowWordSplitting: false, ExpansionPurpose.CompoundPrefix,
                         TildeExpansion.None)
                         .ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
@@ -2895,6 +2897,8 @@ public sealed partial class Evaluation : IFileTester
                 await ReportFatalExpansionAsync(assignment.Target.ToValue(), ShellValue.FromText("readonly variable"), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
                 return false;
             }
+            if (!await ValidateCompoundInitializerCapturesAsync(items, scope).ConfigureAwait(false))
+                return false;
 
             var kind = scope.Variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
             return await ExpandAndApplyCompoundArrayItemsAsync(
@@ -3618,7 +3622,13 @@ public sealed partial class Evaluation : IFileTester
                 word = selectorWord;
             if (word != null)
             {
-                if (!FunctionDefinitionFormatter.TryAppendWordDisplay(word, spelling, Memory.Budget, _cancellationToken))
+                if (scope.CompoundPrefixItems is { } prefixItems && rejectedSelector.Operand.IsEmpty)
+                {
+                    spelling.Append((byte)'(');
+                    AppendCompoundInitializerDisplay(prefixItems, spelling);
+                    spelling.Append((byte)')');
+                }
+                else if (!FunctionDefinitionFormatter.TryAppendWordDisplay(word, spelling, Memory.Budget, _cancellationToken))
                     throw new ByteMemoryBuilder.LimitExceededException();
                 token = Tokenizer.ReadUnexpectedWordToken(ShellSource.FromBytes(spelling.ToMemory()),
                     new ShellScanContext { SyntaxMemory = workspace });
@@ -3644,7 +3654,8 @@ public sealed partial class Evaluation : IFileTester
                 if (rejectedSelector.NeedsParameterDiagnostic && !_state.ErrexitEnabled && word != null)
                 {
                     var descriptor = GetStdErrDescriptor();
-                    var prefix = new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.Script,
+                    var prefix = new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path,
+                        scope.CompoundPrefixItems == null ? SyntaxDiagnosticOrigin.Script : SyntaxDiagnosticOrigin.ScriptLine,
                         Math.Max(1, scope.Context.Coordinates.Line));
                     var badSubstitution = ShellValue.FromText("bad substitution");
                     var rendered = ShellValue.FromBytes(spelling.ToMemory());
@@ -3797,7 +3808,7 @@ public sealed partial class Evaluation : IFileTester
             .ConfigureAwait(false);
     }
 
-    private enum SyntaxDiagnosticOrigin { Script, Eval, CommandSubstitution }
+    private enum SyntaxDiagnosticOrigin { Script, ScriptLine, Eval, CommandSubstitution, ArrayAssignment }
 
     private readonly struct SyntaxDiagnosticPrefix
     {
@@ -3835,6 +3846,7 @@ public sealed partial class Evaluation : IFileTester
         {
             SyntaxDiagnosticOrigin.Eval => "eval: "u8,
             SyntaxDiagnosticOrigin.CommandSubstitution => "command substitution: "u8,
+            SyntaxDiagnosticOrigin.ArrayAssignment => "array assign: "u8,
             _ => []
         };
     }

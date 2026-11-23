@@ -21,10 +21,25 @@ public sealed class Word
             return;
         for (var index = 0; index < parts.Count; index++)
         {
-            if (parts[index] is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None })
-            {
+            var part = parts[index];
+            if (part is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None })
                 HasIncompleteQuotedParameterSubscript = true;
-                break;
+            if (HasRejectedCaptureSpelling)
+                continue;
+            if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed { HasRejectedDisplaySpelling: true } })
+                HasRejectedCaptureSpelling = true;
+            else if (part is SourceWordPart { SpellingCaptures: { } captures } source)
+            {
+                foreach (var capture in captures)
+                {
+                    var offset = capture.Offset - source.SourceOffset;
+                    if (offset >= 0 && capture.Length <= source.Source.Length - offset
+                        && capture.Syntax is CommandSubstitutionSyntax.Parsed { HasRejectedDisplaySpelling: true })
+                    {
+                        HasRejectedCaptureSpelling = true;
+                        break;
+                    }
+                }
             }
         }
 
@@ -59,6 +74,7 @@ public sealed class Word
     /// <summary>Frozen literal expansion scaffolding borrowing immutable syntax bytes.</summary>
     internal IReadOnlyList<ExpandedWord>? LiteralFields { get; }
     internal bool HasIncompleteQuotedParameterSubscript { get; }
+    internal bool HasRejectedCaptureSpelling { get; }
 
     /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
     internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)

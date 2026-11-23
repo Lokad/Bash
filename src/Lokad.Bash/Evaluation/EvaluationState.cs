@@ -19,6 +19,8 @@ internal enum ExpansionFailureKind
     WordSyntax,
     /// <summary>A reached parenthesized substitution has invalid rendered syntax.</summary>
     CommandSubstitutionSyntax,
+    /// <summary>A reached initializer fails when its rendered elements are read as an array list.</summary>
+    CompoundInitializerSyntax,
     Parameter,
     /// <summary>A failed indirect name read or write discards the current command unit.</summary>
     IndirectParameter,

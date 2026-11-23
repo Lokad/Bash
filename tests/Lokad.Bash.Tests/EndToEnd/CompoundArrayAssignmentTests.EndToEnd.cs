@@ -7,6 +7,53 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class CompoundArrayAssignmentTestsEndToEnd
 {
+    [Theory]
+    [InlineData("values=(\n{0}\n{1} \"one\ntwo\"\n)", 2, "before\n", "", "array assign: line 4: ", " } printf extra)tail\" \"one")]
+    [InlineData("declare -A values=([first]={0} [next]={1})", 2, "before\n", "", "array assign: line 4: ", " } printf extra)tail\"")]
+    [InlineData("values=({0} {1}) printf unreached", 0, "before\nafter:1\n", "earlier", "command substitution: line 9: ", " } printf extra)tail\")")]
+    [InlineData("declare -a 'values=({1})'", 0, "before\nafter:1\n", "", "command substitution: line 6: ", " } printf extra)tail\"")]
+    [InlineData("false && values=({0} {1})", 0, "before\nafter:1\n", "", "", "")]
+    [InlineData("set -e\nvalues=({1})", 2, "before\n", "", "array assign: line 4: ", "")]
+    public async Task RejectedCaptureUsesTheReachedInitializerReader(
+        string form, int exitCode, string output, string earlierError, string diagnostic, string displayedLine)
+    {
+        const string earlier = "\"$(printf earlier >&2; printf item)\"";
+        const string rejected = "\"$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\"";
+        var script = "printf 'before\\n'\n" + form.Replace("{0}", earlier).Replace("{1}", rejected)
+            + "\nprintf 'after:%s\\n' \"$?\"\n";
+        var error = diagnostic.Length == 0 ? ""
+            : earlierError + diagnostic + "syntax error near unexpected token `printf'\n";
+        if (displayedLine.Length != 0)
+            error += diagnostic + "`" + displayedLine + "'\n";
+
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(exitCode, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task RejectedPrefixSelectorReportsItsParenthesizedOperand()
+    {
+        const string item = "\"${map[\"lead$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\"]:-fallback}\"";
+        var result = await EvaluationTestHelper.RunAsync("printf 'before\\n'\nvalues=(" + item
+            + ") printf unreached\nprintf 'after:%s\\n' \"$?\"\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before\nafter:1\n", result.StdOut);
+        Assert.Equal("command substitution: line 9: syntax error near unexpected token `printf'\n"
+            + "command substitution: line 9: ` } printf extra)tail\"]:-fallback}\")'\n"
+            + "line 5: bad substitution: no closing `}' in (\"${map[\"lead$({ cat <<DATA\nbody\nDATA\n"
+            + " } printf extra)tail\"]:-fallback}\")\n", result.StdErr);
+    }
+
     // Bash 5.2.21: += preserves element-zero prefixing when an assignment becomes literal data.
     [Theory]
     [InlineData("a=(old); i='['; a+=([$i]=x tail); printf '<%s>' \"${a[@]}\"", "<old><old[[]=x><tail>")]

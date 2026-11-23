@@ -326,6 +326,32 @@ public sealed class SourceCommandUnitTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task RejectedInitializerCaptureUnwindsTheLoadedReader(bool eval)
+    {
+        const string body = "values=(\"$(printf earlier >&2)\" \"$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\")\nprintf unreached\n";
+        const string trap = "trap 'printf \"trap:%s:<%s>\" \"$?\" \"$1\"' EXIT\nset -- outer\n";
+        var reader = eval ? "eval '" + body + "'" : "source ./fixture inner";
+        var script = trap + reader + "\nprintf unreached\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (!eval)
+                host.AddFile("/fixture", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(1, status);
+            Assert.Equal(eval ? "trap:257:<outer>" : "trap:257:<inner>", host.StandardOutput.TextContent);
+            var prefix = eval ? "array assign: line 4: " : "./fixture: array assign: line 4: ";
+            Assert.Equal(prefix + "syntax error near unexpected token `printf'\n"
+                + prefix + "` } printf extra)tail\"'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task MissingCaptureRedirectionOperandUnwindsTheLoadedReader(bool eval)
     {
         const string body = "printf '<before>\\n'\nvalue=$(cat <<";

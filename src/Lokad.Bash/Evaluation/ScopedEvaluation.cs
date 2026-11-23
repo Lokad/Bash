@@ -51,6 +51,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Overrides the assignment default for a rejected selector's parameter diagnostic.</summary>
     internal bool? SelectorParameterDiagnostics { get; init; }
 
+    /// <summary>Retains the parenthesized scalar spelling of a compound prefix during item expansion.</summary>
+    internal IReadOnlyList<CompoundArrayItem>? CompoundPrefixItems { get; init; }
+
     /// <summary>Source role of words read during expansion, including nested operands.</summary>
     internal LegacySubstitutionOrigin ExpansionOrigin { get; init; }
 
@@ -61,6 +64,9 @@ internal readonly record struct ScopedEvaluation(
 
     /// <summary>Eval and source use a command-unit boundary even in a child shell.</summary>
     internal bool InNestedCommandUnits { get; init; }
+
+    /// <summary>An inline subshell inherits the loaded reader's syntax failure status.</summary>
+    internal bool InheritsLoadedSyntaxStatus { get; init; }
 
     /// <summary>Records whether a loaded reader was invoked as a tested command.</summary>
     internal bool LoadedReaderIgnoresErrexit { get; init; }

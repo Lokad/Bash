@@ -377,16 +377,9 @@ public sealed partial class Evaluation
                             return EvaluationResult.Exit(1);
                         if (IsNestedLoadedReader(kind) && failedUnit.Failure.ExitsSubstitution)
                         {
-                            // These child boundaries unwind the builtin before running their EXIT action.
-                            if (_state.ForkKind is ShellForkKind.CommandSubstitution or ShellForkKind.PipelineSimpleCommand)
-                                return EvaluationResult.Exit(1);
-
-                            // In the invoking shell, EXIT sees the full parser status and the active
-                            // builtin scope. The result crossing the shell boundary uses its low byte.
                             var status = failedUnit.Failure.Kind == ParserFailureKind.SubstitutionGrammar
                                 ? BuiltinSyntaxErrorStatus : 2;
-                            var exit = await RunExitTrapAsync(scope, EvaluationResult.Exit(status)).ConfigureAwait(false);
-                            return exit.WithExitCode(exit.ExitCode & byte.MaxValue);
+                            return await ExitLoadedSyntaxFailureAsync(scope, status).ConfigureAwait(false);
                         }
                         if (failedUnit.Failure.Kind is ParserFailureKind.ArrayQuotedSubstitutionForHeader
                             or ParserFailureKind.ArraySubstitutionDelimiter)
@@ -418,6 +411,13 @@ public sealed partial class Evaluation
                     result = await RecoverDiscardedCommandUnitAsync(scope).ConfigureAwait(false);
                 else if (result.Flow == FlowControlKind.Exit)
                 {
+                    if (IsNestedLoadedReader(kind)
+                        && _state.FatalExpansion is { Kind: ExpansionFailureKind.CompoundInitializerSyntax })
+                    {
+                        _state.FatalExpansion = null;
+                        _state.TryConsumeExpansionError(out _);
+                        return await ExitLoadedSyntaxFailureAsync(scope, BuiltinSyntaxErrorStatus).ConfigureAwait(false);
+                    }
                     // Recover only the expansion failures that end the current command unit.
                     // Explicit exit, errexit and unrecoverable expansion failures still terminate.
                     result = await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
@@ -435,6 +435,18 @@ public sealed partial class Evaluation
             }
         }
         return await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
+    }
+
+    private async ValueTask<EvaluationResult> ExitLoadedSyntaxFailureAsync(ScopedEvaluation scope, int status)
+    {
+        // These child boundaries unwind the builtin before running their EXIT action.
+        if (_state.ForkKind is ShellForkKind.CommandSubstitution or ShellForkKind.PipelineSimpleCommand)
+            return EvaluationResult.Exit(1);
+
+        // In the invoking shell, EXIT sees the full parser status and the active
+        // builtin scope. The result crossing the shell boundary uses its low byte.
+        var exit = await RunExitTrapAsync(scope, EvaluationResult.Exit(status)).ConfigureAwait(false);
+        return exit.WithExitCode(exit.ExitCode & byte.MaxValue);
     }
 
     /// <summary>Recovers unit-scoped expansion failures while preserving root versus nested status rules.</summary>

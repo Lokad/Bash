@@ -64,6 +64,8 @@ public sealed partial class Evaluation
                     IReadOnlyList<ExpandedArrayItem> expanded = [];
                     if (itemMemory != null)
                     {
+                        if (!await AwaitWordExpansionAsync(ValidateCompoundInitializerCapturesAsync(items, scope)).ConfigureAwait(false))
+                            break;
                         var context = compoundGlobal && kind == ArrayKind.Indexed && targetVariables.AssociativeArrays.ContainsKey(name)
                             ? AssignmentContext.QuotedIndexedDeclaration : AssignmentContext.Declaration;
                         var expandedItems = await AwaitWordExpansionAsync(ExpandCompoundArrayItemsAsync(

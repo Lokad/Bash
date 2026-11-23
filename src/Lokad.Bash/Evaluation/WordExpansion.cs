@@ -971,7 +971,8 @@ internal static partial class WordExpansion
 
                 if (parameterScan.SubstitutionFailure != SubstitutionSyntaxFailure.None && !scope.PreserveCommandSubstitutionSpelling)
                 {
-                    var reportParameterDiagnostic = scope.SelectorParameterDiagnostics ?? output.Purpose == ExpansionPurpose.Assignment;
+                    var reportParameterDiagnostic = scope.SelectorParameterDiagnostics
+                        ?? output.Purpose is ExpansionPurpose.Assignment or ExpansionPurpose.CompoundPrefix;
                     if (!reportParameterDiagnostic && rejectedSelector.NeedsParameterDiagnostic)
                         rejectedSelector = default;
                     await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parameterScan.SubstitutionFailure, null, scope, globQuoted,

@@ -181,6 +181,52 @@ public sealed partial class Evaluation
         }
     }
 
+    private async Task<bool> ValidateCompoundInitializerCapturesAsync(
+        IReadOnlyList<CompoundArrayItem> items, ScopedEvaluation scope)
+    {
+        var needsValidation = false;
+        foreach (var item in items)
+        {
+            CheckCancellation();
+            if (item.Word.HasRejectedCaptureSpelling)
+            {
+                needsValidation = true;
+                break;
+            }
+        }
+        if (!needsValidation)
+            return true;
+
+        using var rendered = new ByteMemoryBuilder(0, Memory.Budget);
+        AppendCompoundInitializerDisplay(items, rendered);
+        using var workspace = new MemoryCapacity(Memory.Budget, 0);
+        var source = ShellSource.FromBytes(rendered.ToMemory());
+        if (Parser.ReadCompoundInitializerFailure(source, workspace, out var line) is not { } failure)
+            return true;
+
+        var loadedStatus = scope.InNestedCommandUnits || scope.InheritsLoadedSyntaxStatus || PipelineInheritsLoadedUnitStatus;
+        var status = loadedStatus ? 1 : 2;
+        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CompoundInitializerSyntax, status));
+        _state.LastExitCode = status;
+        if (failure.UnexpectedToken is { } token)
+            await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ArrayAssignment,
+                line, includeLine: !_state.ErrexitEnabled).ConfigureAwait(false);
+        else
+            await ReportSyntaxErrorAsync(failure.Error).ConfigureAwait(false);
+        return false;
+    }
+
+    private void AppendCompoundInitializerDisplay(IReadOnlyList<CompoundArrayItem> items, ByteMemoryBuilder rendered)
+    {
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (index != 0)
+                rendered.Append((byte)' ');
+            if (!FunctionDefinitionFormatter.TryAppendWordDisplay(items[index].Word, rendered, Memory.Budget, _cancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+        }
+    }
+
     private ShellValue FlattenCompoundArrayItem(ShellValue selector, ShellValue value, AssignmentOperator operation)
     {
         var separator = operation == AssignmentOperator.Append ? "]+="u8 : "]="u8;

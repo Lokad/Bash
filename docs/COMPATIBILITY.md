@@ -363,6 +363,13 @@ error when the substitution is reached, before executing any of its commands.
 The enclosing command unit ends with status 1 and earlier bindings retain their
 values. The failure ends the script with status 2 under errexit. An invalid nested
 spelling in an ordinary rendered substitution also ends the script with status 2.
+A reached compound array initializer written in an assignment or declaration
+checks the rendered item list for rejected capture syntax before expanding any
+item. A rejected capture reports the line in that list and ends the root script
+with status 2. Under `source` or `eval`, EXIT sees parser status 257 and
+completion returns 1. In a compound prefix assignment, items expand in order
+and the capture diagnostic includes the closing parenthesis when it appears
+on the reported line.
 An adjacent subshell opener retains its source separators, and a nested spelling
 failure there ends the unit under ordinary execution. Function display and export
 retain the original timing separator so reparsing a definition preserves the
