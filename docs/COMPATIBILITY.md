@@ -791,6 +791,14 @@ the same rules as for other unset positional arguments. An assigning default
 for a missing positional argument reports `invalid indirect expansion` before
 expanding its operand and discards the current command unit. When the argument
 is present, its value supplies the indirect name.
+An indirect read of a missing element is also unset when its base variable
+exists, including a declaration without a value. A missing base variable,
+an uninitialized nameref or an invalid indirect name reports an expansion
+error. Invalid indirect assignments preserve effects reached before their
+target is rejected. These errors discard the current command unit. With
+errexit disabled, the next unit sees status 1, including inside `eval` and `source`.
+A tested `eval` or `source` can recover in the same way under errexit.
+A forked shell stops at the indirect error, including inside a loaded reader.
 
 A brace inside an array selector can belong to the selector when the same word
 contains its closing bracket. A complete expansion then reads the selector with

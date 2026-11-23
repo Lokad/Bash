@@ -15,11 +15,13 @@ namespace Lokad.Bash.Evaluation;
 internal enum ExpansionFailureKind
 {
     Arithmetic,
-    /// <summary>A reached substitution fails before emitting a value and discards its command unit.</summary>
+    /// <summary>A generated word fails substitution parsing and discards its command unit.</summary>
     WordSyntax,
     /// <summary>A reached parenthesized substitution has invalid rendered syntax.</summary>
     CommandSubstitutionSyntax,
     Parameter,
+    /// <summary>A failed indirect name read or write discards the current command unit.</summary>
+    IndirectParameter,
     /// <summary>A reached error-if-unset parameter expansion.</summary>
     RequiredParameter,
     /// <summary>An errexit-enabled file substitution could not open its input.</summary>

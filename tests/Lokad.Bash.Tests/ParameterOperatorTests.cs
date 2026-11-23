@@ -348,6 +348,42 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
+    [InlineData("unset p early late\nprintf '%s' \"${early:=one}\" \"${!p:-${late:=operand}}\" \"${late:=argument}\"; printf skipped\nprintf '<%s:%s:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\" \"${early-unset}\" \"${late-unset}\"",
+        "<1:1:one:unset>", "p: invalid indirect expansion\n", 0)]
+    [InlineData("a=(); p='a[0]'\nprintf '%s' \"${!p:=$(printf rhs: >&2; printf value)}\"; printf skipped\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        "<1:1>", "rhs:a[0]: invalid variable name\n", 0)]
+    [InlineData("f() { local -n p; printf '%s' \"${!p}\"; printf skipped; }\nf; printf skipped\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        "<1:1>", "p: invalid indirect expansion\n", 0)]
+    [InlineData("unset p\nset -e\nprintf '%s' \"${!p}\" || printf skipped\nprintf after",
+        "", "p: invalid indirect expansion\n", 1)]
+    [InlineData("unset p\nset -e\neval 'printf \"%s\" \"${!p}\"; printf skipped\nprintf \"<loaded:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"' || printf skipped\nprintf '<caller:%s>' \"$?\"",
+        "<loaded:1:1><caller:0>", "p: invalid indirect expansion\n", 0)]
+    [InlineData("unset p\nvalue=$(eval 'printf \"%s\" \"${!p}\"\nprintf skipped')\nprintf '<%s:%s>' \"$?\" \"$value\"",
+        "<1:>", "p: invalid indirect expansion\n", 0)]
+    [InlineData("a=([2]=present); i=0\nprintf '<%s:%s>' \"${!a[i++]:-fallback}\" \"$i\"",
+        "<fallback:1>", "", 0)]
+    [InlineData("unset a; i=0\nprintf '%s' \"${!a[i++]:-fallback}\"\nprintf '<%s:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        "<1:1:1>", "a[i++]: invalid indirect expansion\n", 0)]
+    [InlineData("declare -A a; export b\nprintf '<%s:%s>' \"${!a[missing]:-fallback}\" \"${!b[1]:-unset}\"",
+        "<fallback:unset>", "", 0)]
+    public async Task IndirectNameFailuresUseTheReachedCommandUnit(string script, string expectedOutput,
+        string expectedError, int expectedStatus)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(expectedStatus, status);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Equal(expectedError, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData("declare -n p=absent; printf '%s' \"${!p:-fallback}\"", "absent")]
     [InlineData("declare -n p; value=keep; printf '%s' \"${value:-${!p}}\"", "keep")]
     [InlineData("declare -n p; false && printf '%s' \"${!p}\"; printf after", "after")]

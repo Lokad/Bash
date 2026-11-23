@@ -192,14 +192,18 @@ internal static partial class WordExpansion
                 {
                     // Positional @/* indirection remains non-assignable, even if it names a variable.
                     var special = GetSpecialParameterKind(parsed.Name.AsSpan());
-                    if (parsed.Modifier == ParameterModifier.None && special != SpecialParameterKind.None
-                        || parsed.Modifier == ParameterModifier.Indirect && special is SpecialParameterKind.At or SpecialParameterKind.Star)
+                    if (parsed.Modifier == ParameterModifier.None && special != SpecialParameterKind.None)
                     {
-                        var prefix = parsed.Modifier == ParameterModifier.Indirect ? "$!" : "$";
                         await scope.Effects.ReportFatalExpansionAsync(
-                            [ShellValue.FromText(prefix), parsed.Name.ToValue()],
+                            [ShellValue.FromText("$"), parsed.Name.ToValue()],
                             [ShellValue.FromText("cannot assign in this way")], ExpansionFailureKind.Parameter)
                             .ConfigureAwait(false);
+                        return;
+                    }
+                    if (parsed.Modifier == ParameterModifier.Indirect && special is SpecialParameterKind.At or SpecialParameterKind.Star)
+                    {
+                        await ReportIndirectFailureAsync([ShellValue.FromText("$!"), parsed.Name.ToValue()],
+                            "cannot assign in this way").ConfigureAwait(false);
                         return;
                     }
                     var assignmentPurpose = output.Purpose switch
@@ -223,12 +227,12 @@ internal static partial class WordExpansion
                         && parameter.Source is not { Kind: VariableReferenceKind.Name })
                     {
                         if (indirectName is { } invalidTarget)
-                            await ReportFatalAsync(invalidTarget.ToValue(), "invalid variable name").ConfigureAwait(false);
+                            await ReportIndirectFailureAsync([invalidTarget.ToValue()], "invalid variable name").ConfigureAwait(false);
                         else
                         {
                             // An empty aggregate has no indirect target, but its assignment RHS still expands.
-                            await ReportParameterFailureAsync(ShellValue.FromText("invalid indirect expansion"), ExpansionFailureKind.Parameter)
-                                .ConfigureAwait(false);
+                            await ReportIndirectFailureAsync([ShellValue.FromText("!"), parsed.Name.ToValue()],
+                                "invalid indirect expansion").ConfigureAwait(false);
                         }
                         return;
                     }
@@ -559,7 +563,7 @@ internal static partial class WordExpansion
                 if (!scope.Variables.TryResolveBinding(binding.Name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
                     || !terminal.Owner.TryGetNameref(terminal.Name, out var referent) || referent.IsEmpty)
                 {
-                    await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
+                    await ReportIndirectFailureAsync([name.ToValue()], "invalid indirect expansion").ConfigureAwait(false);
                     return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
                 }
                 var initial = new ParameterValue(VariableReferenceKind.Name, [referent], true, null, null);
@@ -584,12 +588,15 @@ internal static partial class WordExpansion
                     // A missing argument supplies no name. Read operators see an unset value,
                     // while an assigning default rejects the missing target before expanding its word.
                     if (parsed.Kind == BracedParameterOperatorKind.AssignDefault)
-                        await scope.Effects.ReportUnitExpansionFailureAsync([ShellValue.FromText("!"), name.ToValue()],
-                            [ShellValue.FromText("invalid indirect expansion")], scope, ExpansionFailureKind.WordSyntax)
-                            .ConfigureAwait(false);
+                        await ReportIndirectFailureAsync([ShellValue.FromText("!"), name.ToValue()],
+                            "invalid indirect expansion").ConfigureAwait(false);
                     return source;
                 }
-                await ReportFatalAsync(name.ToValue(), "invalid indirect expansion").ConfigureAwait(false);
+                // A selected element can be absent while its base variable still exists.
+                if (syntax.Reference is { Kind: VariableReferenceKind.Element } && source.Target is { } location
+                    && (location.ReadOwner ?? scope.Variables).HasBindingOrAttributes(location.Name))
+                    return source;
+                await ReportIndirectFailureAsync([name.ToValue()], "invalid indirect expansion").ConfigureAwait(false);
                 return source;
             }
 
@@ -602,7 +609,7 @@ internal static partial class WordExpansion
                 || special == SpecialParameterKind.None
                     && (targetName.IsEmpty || !VariableNames.IsNameStart((char)targetName.Bytes.Span[0])))
             {
-                await ReportFatalAsync(targetName, "invalid variable name").ConfigureAwait(false);
+                await ReportIndirectFailureAsync([targetName], "invalid variable name").ConfigureAwait(false);
                 return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
             }
 
@@ -855,10 +862,8 @@ internal static partial class WordExpansion
                 scope, ExpansionFailureKind.WordSyntax);
         }
 
-        Task ReportFatalAsync(ShellValue subject, string message)
-        {
-            return scope.Effects.ReportFatalExpansionAsync(subject, ShellValue.FromText(message), ExpansionFailureKind.Parameter);
-        }
+        Task ReportIndirectFailureAsync(ReadOnlySpan<ShellValue> subject, string message) =>
+            scope.Effects.ReportUnitExpansionFailureAsync(subject, [ShellValue.FromText(message)], scope, ExpansionFailureKind.IndirectParameter);
 
         void Emit(IEnumerable<ShellValue> fields) => EmitFields(fields, projected: false);
 

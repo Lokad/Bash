@@ -149,6 +149,9 @@ public sealed partial class Variables
     internal bool HasBinding(BindingName name) =>
         TryGetBinding(name, detachBorrowed: false, out var slot) && slot is not AttributeSlot;
 
+    /// <summary>Checks for a visible declaration or value without detaching borrowed storage.</summary>
+    internal bool HasBindingOrAttributes(BindingName name) => TryGetBinding(name, detachBorrowed: false, out _);
+
     internal bool IsUnassignedScalar(BindingName name) =>
         TryGetBinding(name, out var slot) && slot is UnassignedSlot;
 
