@@ -365,6 +365,8 @@ Retained scalar, array, nameref and positional values keep the ordinary
 value estimate; syntax slices share immutable arithmetic metadata without reparsing.
 An unedited unquoted or double-quoted part takes one exact-sized copy. Edited
 parts assemble their bytes in the admitted builder as their spelling changes.
+Conditional display edits borrow the operands' decoded ANSI-C values and the
+retained capture trees. The normalized display bytes have their own admission.
 Structured here-document delimiters keep admitted compact spelling and closing
 bytes with the parsed redirection, for collection and later function serialization.
 Contiguous here-document bodies borrow their input source bytes. Tab removal or

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Syntax;
 
@@ -13,6 +14,7 @@ internal sealed class ConditionalParser
     private readonly ShellScanContext _context;
     private readonly bool _command;
     private List<(int Start, int End)>? _ignoredRanges;
+    private List<SpellingEdit>? _spellingEdits;
     private int _position;
     private Token? _lookahead;
     private ParserFailure? _failure;
@@ -33,7 +35,7 @@ internal sealed class ConditionalParser
             return false;
         }
         error = null;
-        spelling = parser.GetSpelling(0, source.Length);
+        spelling = parser.GetSpelling(0, source.Length, parser._spellingEdits);
         return true;
     }
 
@@ -48,7 +50,10 @@ internal sealed class ConditionalParser
         if (!parser.TryParse(out var expression, out error))
             return false;
         var closing = parser.Peek();
-        command = new ConditionalCommand(parser.GetSpelling(start, closing.Offset).TrimBlanks(), expression);
+        var original = parser.GetSpelling(start, closing.Offset, edits: null).TrimBlanks();
+        var spelling = parser._spellingEdits == null ? original
+            : parser.GetSpelling(start, closing.Offset, parser._spellingEdits).TrimBlanks();
+        command = new ConditionalCommand(original, expression, spelling, parser._spellingEdits != null);
         end = parser._position;
         return true;
     }
@@ -230,20 +235,45 @@ internal sealed class ConditionalParser
             || closing != source.Length - 1)
             return null;
 
-        var name = ParseWord(new Token(TokenKind.Word, source.Slice(0, opening), offset), nameQuote);
-        var selector = ParseWord(new Token(TokenKind.Word, source.Slice(opening + 1, closing - opening - 1), offset + opening + 1));
+        var name = ParseWord(new Token(TokenKind.Word, source.Slice(0, opening), offset), nameQuote,
+            recordSpelling: nameQuote == ShellQuoteKind.None);
+        var selector = ParseWord(new Token(TokenKind.Word, source.Slice(opening + 1, closing - opening - 1), offset + opening + 1),
+            ShellQuoteKind.None, recordSpelling: nameQuote == ShellQuoteKind.None);
         return name == null || selector == null ? null : new ConditionalExpression.VariableElement(name, selector);
     }
 
-    private Word? ParseWord(Token token) => ParseWord(token, ShellQuoteKind.None);
+    private Word? ParseWord(Token token) => ParseWord(token, ShellQuoteKind.None, recordSpelling: true);
 
-    private Word? ParseWord(Token token, ShellQuoteKind quote)
+    private Word? ParseWord(Token token, ShellQuoteKind quote, bool recordSpelling)
     {
         if (Tokenizer.TryReadExpansionWord(token.Source, ExpansionWordSyntax.Parameter, quote, _context,
+                recordSpelling ? new OperandSpelling(this, token.Offset) : default,
                 out var word, out var error))
             return word;
         Fail(error.Message, token.Offset + error.Offset);
         return null;
+    }
+
+    internal readonly struct OperandSpelling(ConditionalParser? parser, int offset)
+    {
+        internal void RecordAnsiCLiteral(int start, int end, ShellValue value) =>
+            Record(new SpellingEdit(offset + start, offset + end, value, null));
+
+        internal void RecordAnsiCCapture(int start, int end, CommandSubstitutionSyntax capture) =>
+            Record(new SpellingEdit(offset + start, offset + end, default, capture));
+
+        private void Record(SpellingEdit edit)
+        {
+            if (parser == null)
+                return;
+            if (parser._spellingEdits == null)
+            {
+                parser._context.SyntaxMemory?.Grow(32);
+                parser._spellingEdits = [];
+            }
+            parser._context.SyntaxMemory?.PrepareListCapacity(parser._spellingEdits, 1);
+            parser._spellingEdits.Add(edit);
+        }
     }
 
     private Token Peek() => _lookahead ??= Read(false);
@@ -442,26 +472,55 @@ internal sealed class ConditionalParser
         _ignoredRanges.Add((start, end));
     }
 
-    /// <summary>Copies only when this lexical layer removed comments/continuations; nested source stays borrowed.</summary>
-    private ShellSource GetSpelling(int start, int end)
+    /// <summary>Normalizes this lexical layer while preserving the original operand bytes on the AST.</summary>
+    private ShellSource GetSpelling(int start, int end, List<SpellingEdit>? edits)
     {
-        if (_ignoredRanges == null)
+        if (_ignoredRanges == null && edits == null)
             return FunctionDefinitionFormatter.RenderReadAheadCaptures(_source.Slice(start, end - start), _context);
-        var length = end - start;
-        foreach (var range in _ignoredRanges)
-            length -= range.End - range.Start;
-        using var output = _context.CreateByteBuilder(length);
-        foreach (var range in _ignoredRanges)
+        var capacity = end - start;
+        if (_ignoredRanges != null)
+            foreach (var range in _ignoredRanges)
+                capacity -= range.End - range.Start;
+        using var output = _context.CreateByteBuilder(edits == null ? capacity : Math.Min(capacity, ByteMemoryBuilder.DefaultCapacity));
+        var ignored = 0;
+        var edited = 0;
+        var ignoreCount = _ignoredRanges?.Count ?? 0;
+        var editCount = edits?.Count ?? 0;
+        while (ignored < ignoreCount || edited < editCount)
         {
-            AppendRange(start, range.Start);
-            start = range.End;
+            var nextIgnore = _ignoredRanges != null && ignored < ignoreCount ? _ignoredRanges[ignored] : (Start: int.MaxValue, End: int.MaxValue);
+            if (edits != null && edited < editCount && edits[edited].Start <= nextIgnore.Start)
+            {
+                var edit = edits[edited++];
+                AppendRange(start, edit.Start);
+                if (!AppendEdit(edit))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                start = edit.End;
+                continue;
+            }
+            ignored++;
+            if (nextIgnore.Start < start)
+                continue;
+            AppendRange(start, nextIgnore.Start);
+            start = nextIgnore.End;
         }
         AppendRange(start, end);
-        return ShellSource.FromBytes(output.ToMemory());
+        return ShellSource.FromBytes(edits == null ? output.ToMemory() : output.ToCompactMemory(_context.SyntaxMemory));
 
         void AppendRange(int beginning, int finish) => output.Append(FunctionDefinitionFormatter.RenderReadAheadCaptures(
             _source.Slice(beginning, finish - beginning), _context).AsSpan());
+
+        bool AppendEdit(SpellingEdit edit)
+        {
+            if (edit.Capture is { } capture)
+                return FunctionDefinitionFormatter.TryAppendSubstitutionSource(capture, output, _context.SyntaxMemory?.Budget, CancellationToken.None);
+            var bytes = edit.Value.Bytes.Span;
+            return bytes.SequenceEqual("'"u8) ? output.TryAppend("\\'"u8)
+                : ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, bytes);
+        }
     }
+
+    private readonly record struct SpellingEdit(int Start, int End, ShellValue Value, CommandSubstitutionSyntax? Capture);
 
     private enum TokenKind { End, Word, And, Or, Open, Close, Order, DescriptorNumber, EndCommand, Newline, Invalid }
     private sealed record Token(TokenKind Kind, ShellSource Source, int Offset);

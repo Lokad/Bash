@@ -121,7 +121,7 @@ public sealed class ConditionalParserTests
     [InlineData("x == x # trailing without LF", "x == x ")]
     [InlineData("x\\\n\\\ny == xy", "xy == xy")]
     [InlineData("\"x\\\n\\\ny\" == xy", "\"xy\" == xy")]
-    [InlineData("$\\\n\\\n'x' == x", "$'x' == x")]
+    [InlineData("$\\\n\\\n'x' == x", "'x' == x")]
     [InlineData("'x\\\ny' == 'x\\\ny'", "'x\\\ny' == 'x\\\ny'")]
     public void CallerSourceStaysPhysicalWhileReplaySpellingRemovesOnlyItsLexicalEdits(string source, string expected)
     {

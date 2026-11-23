@@ -29,6 +29,7 @@ internal sealed class Tokenizer
     internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
+    internal bool HasAnsiCLiterals { get; private set; }
 
     internal ShellScanContext ScanContext => _scanContext;
 
@@ -967,6 +968,7 @@ internal sealed class Tokenizer
             return false;
         }
         Position = end;
+        HasAnsiCLiterals |= command.HasAnsiCLiterals;
         if (TrackCommandLocations)
             ConsumedPosition = end;
         return true;
@@ -1014,9 +1016,14 @@ internal sealed class Tokenizer
     /// <summary>Consumes nested lookahead syntax without resetting its caller's structural allowance.</summary>
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         ShellScanContext context, [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
+        => TryReadExpansionWord(content, syntax, outerQuote, context, default, out word, out error);
+
+    internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
+        ShellScanContext context, ConditionalParser.OperandSpelling spelling,
+        [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
     {
         var tokenizer = new Tokenizer(content, 0, context) { _isExpansionOperand = true };
-        var parsed = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, outerQuote);
+        var parsed = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, outerQuote, spelling);
         error = tokenizer.Error;
         word = error == null ? parsed : null;
         return error == null;
@@ -1061,6 +1068,10 @@ internal sealed class Tokenizer
 
     /// <summary>Reads one word; delimiters before delimiterStart belong to a grouped prefix.</summary>
     private Word ReadWord(ReadOnlySpan<byte> span, int delimiterStart, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote)
+        => ReadWord(span, delimiterStart, syntax, outerQuote, default);
+
+    private Word ReadWord(ReadOnlySpan<byte> span, int delimiterStart, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
+        ConditionalParser.OperandSpelling spelling)
     {
         var parts = new List<WordPart>();
         var unquoted = new WordPartBuffer(_input, _scanContext);
@@ -1128,7 +1139,7 @@ internal sealed class Tokenizer
                 FlushUnquoted();
                 if (ReadCommandSubstitutionPart(
                         quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution,
-                        syntax) is not { } substitution)
+                        syntax, spelling) is not { } substitution)
                     return new Word([]);
                 AddPart(substitution);
                 continue;
@@ -1147,9 +1158,15 @@ internal sealed class Tokenizer
                 FlushUnquoted();
                 if (!TryReserveSyntax())
                     return new Word([]);
+                var literalStart = Position;
                 var content = ReadQuotedLiteral();
                 if (Error != null)
                     return new Word([]);
+                if (current == (byte)'$')
+                {
+                    HasAnsiCLiterals = true;
+                    spelling.RecordAnsiCLiteral(literalStart, Position, content);
+                }
                 if (syntax == ExpansionWordSyntax.ArithmeticSource && !quotedOperand)
                 {
                     // ((...)) and $((...)) retain the decoded quotes before expanding their contents.
@@ -1187,7 +1204,7 @@ internal sealed class Tokenizer
             {
                 FlushUnquoted();
                 Position = quoteContentStart;
-                var quotedParts = ReadDoubleQuotedParts(span, syntax);
+                var quotedParts = ReadDoubleQuotedParts(span, syntax, spelling);
                 parts.AddRange(quotedParts);
                 continuesQuote = false;
                 continue;
@@ -1300,7 +1317,8 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads a substitution, retaining the tree built by parenthesized delimiter parsing.
     /// </summary>
-    private WordPart? ReadCommandSubstitutionPart(WordPartKind kind, ExpansionWordSyntax syntax)
+    private WordPart? ReadCommandSubstitutionPart(WordPartKind kind, ExpansionWordSyntax syntax,
+        ConditionalParser.OperandSpelling spelling)
     {
         if (!TryReserveSyntax())
             return null;
@@ -1328,8 +1346,13 @@ internal sealed class Tokenizer
         }
 
         Position = endIndex + 1;
-        return new CommandSubstitutionWordPart(kind,
-            payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax."));
+        var parsed = payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax.");
+        if (parsed is CommandSubstitutionSyntax.Parsed { Script.HasAnsiCLiterals: true })
+        {
+            HasAnsiCLiterals = true;
+            spelling.RecordAnsiCCapture(start, Position, parsed);
+        }
+        return new CommandSubstitutionWordPart(kind, parsed);
     }
 
     /// <summary>
@@ -1383,7 +1406,8 @@ internal sealed class Tokenizer
     /// <summary>
     /// Reads double-quoted text, preserving escaped-character provenance.
     /// </summary>
-    private List<WordPart> ReadDoubleQuotedParts(ReadOnlySpan<byte> span, ExpansionWordSyntax syntax)
+    private List<WordPart> ReadDoubleQuotedParts(ReadOnlySpan<byte> span, ExpansionWordSyntax syntax,
+        ConditionalParser.OperandSpelling spelling)
     {
         var braceExpanded = syntax == ExpansionWordSyntax.BraceExpanded;
         var parts = new List<WordPart>();
@@ -1489,7 +1513,7 @@ internal sealed class Tokenizer
                 || current == (byte)'`' && (!braceExpanded || Position + 1 < span.Length))
             {
                 Flush(allowEmpty: false);
-                if (ReadCommandSubstitutionPart(WordPartKind.CommandSubstitutionQuoted, syntax) is not { } substitution)
+                if (ReadCommandSubstitutionPart(WordPartKind.CommandSubstitutionQuoted, syntax, spelling) is not { } substitution)
                     return parts;
                 AddPart(substitution);
                 continue;

@@ -15,16 +15,18 @@ public sealed class ConditionalCommand : ICommand
         Spelling = spelling;
     }
 
-    internal ConditionalCommand(ShellSource expression, ConditionalExpression condition)
+    internal ConditionalCommand(ShellSource expression, ConditionalExpression condition, ShellSource spelling, bool hasAnsiCLiterals)
     {
         Expression = expression;
         Condition = condition;
-        Spelling = expression;
+        Spelling = spelling;
+        HasAnsiCLiterals = hasAnsiCLiterals;
     }
 
     /// <summary>The original, unexpanded conditional source.</summary>
     public ShellSource Expression { get; }
     /// <summary>Lexically normalized spelling for replay, without a trailing source comment swallowing ]].</summary>
     internal ShellSource Spelling { get; }
+    internal bool HasAnsiCLiterals { get; }
     internal ConditionalExpression Condition { get; }
 }

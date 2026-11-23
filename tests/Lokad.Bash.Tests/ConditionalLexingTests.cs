@@ -11,6 +11,48 @@ namespace Lokad.Bash.Tests;
 public sealed partial class ConditionalLexingTests
 {
     [Theory]
+    [InlineData("$'body\\nsuffix' == $'body\\nsuffix'", "'body\nsuffix' == 'body\nsuffix'")]
+    [InlineData("-z $'\\0tail'", "-z ''")]
+    [InlineData("$'\\x27' == $'\\x27'", "\\' == \\'")]
+    [InlineData("'a.b' =~ ^$'a.b'$", "'a.b' =~ ^'a.b'$")]
+    [InlineData("$\\\n'hello\\nworld' == $'hello\\nworld'", "'hello\nworld' == 'hello\nworld'")]
+    [InlineData("\"$'marked\\ntext'\" == \"$'marked\\ntext'\"", "\"$'marked\\ntext'\" == \"$'marked\\ntext'\"")]
+    [InlineData("\"$(printf %s $'a\\nb')\" == $'a\\nb'", "\"$(printf %s 'a\nb')\" == 'a\nb'")]
+    public async Task ConditionalDisplayRendersDecodedOperandsAndKeepsTheirMeaning(string condition, string spelling)
+    {
+        var script = "f(){ [[ " + condition + " ]] && printf hit; }; declare -f f; d=$(declare -f f); unset -f f; eval \"$d\"; f";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("f () \n{ \n    [[ " + spelling + " ]] && printf hit\n}\nhit", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task ConditionalDisplayKeepsMalformedUtf8AndCarriageReturnAsBytes()
+    {
+        const string script = "f(){ [[ -n $'\\377\\r' ]]; }; type f";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        byte[] expected = [.. "f is a function\nf () \n{ \n    [[ -n '"u8, 0xff, 0x0d, .. "' ]]\n}\n"u8];
+        Assert.Equal(expected, host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
     [MemberData(nameof(NativeCases))]
     public async Task ConditionalLexicalRolesPreserveNativeBytesAndCompleteEffects(
         string name, string script, int status, string outputHex, bool diagnostic,

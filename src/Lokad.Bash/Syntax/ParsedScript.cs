@@ -29,4 +29,5 @@ public sealed class ParsedScript
     internal CommandLocations? Locations { get; init; }
     internal int? RenderedLineBreaks { get; set; }
     internal bool HasReadAheadHereDocuments { get; set; }
+    internal bool HasAnsiCLiterals { get; init; }
 }

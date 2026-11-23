@@ -404,7 +404,8 @@ public static class Parser
         command == null ? new ParsedScript([]) :
         new ParsedScript([CompleteHereDocuments(tokenizer, command)])
         {
-            Locations = tokenizer.Locations
+            Locations = tokenizer.Locations,
+            HasAnsiCLiterals = tokenizer.HasAnsiCLiterals
         };
 
     private static ICommand CompleteHereDocuments(Tokenizer tokenizer, ICommand command) =>

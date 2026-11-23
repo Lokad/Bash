@@ -14,6 +14,25 @@ namespace Lokad.Bash.Tests;
 public sealed class HostedFunctionExportTests
 {
     [Fact]
+    public async Task ExportedConditionalKeepsItsDecodedLiteralAndCanBeReadAgain()
+    {
+        var state = new Eval(Parser.Parse("f(){ [[ $'a\\'b' == $'a\\x27b' ]] && printf hit; }; export -f f; inspect"));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var invocation = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+        var source = Utf8Text.Decode(Assert.Single(invocation.Command.Functions).Source);
+        Assert.Contains("[[ 'a'\\''b' == 'a'\\''b' ]]", source, StringComparison.Ordinal);
+        invocation.SetResult(new CommandExecutionResult.Completed(0));
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        state.ReleaseFunctions();
+
+        await using var host = new TestHost();
+        var result = await host.RunAsync(source + "\nf", deadline.Token);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("hit", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
     public async Task HostedExportSelectionFollowsNamespaceOrderAndBindingChanges()
     {
         var state = new Eval(Parser.Parse("""

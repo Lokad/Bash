@@ -16,6 +16,10 @@ rebuilding the child tree at every conditional nesting level. Comment/continuati
 edits are recorded during that traversal and admitted to the syntax owner before
 normalization storage grows. Display/export spelling omits those lexical edits;
 caller-constructed ConditionalCommand.Expression retains its supplied source.
+Conditional display and export render ANSI-C word parts from their decoded
+bytes, including the words in retained command substitutions. The original
+expression and the operand tree remain available to source inspection and
+evaluation respectively.
 
 Tilde selection reads the complete unquoted prefix across adjacent word parts
 before resolving its value. Reached assignment colons open additional prefixes
