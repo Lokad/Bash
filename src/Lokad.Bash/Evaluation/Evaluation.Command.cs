@@ -104,7 +104,7 @@ public sealed partial class Evaluation
             var readDiagnostics = scope.Context.Coordinates.Locations?.GetReadDiagnostics(command) ?? default;
             if (readDiagnostics.HereDocumentWarnings is { } warnings)
                 await ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Offset,
-                    scope.Context.CallerSource?.Path, useDocumentLine: false, fixedPrefix: null).ConfigureAwait(false);
+                    scope.Context.CallerSource?.Path, useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
             if (readDiagnostics.CompoundItems is { } items
                 && await ReportCompoundItemReadDiagnosticsAsync(items, scope, scope.Context.Coordinates.Offset)
                     .ConfigureAwait(false) is { } readFailure)

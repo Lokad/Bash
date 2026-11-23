@@ -166,13 +166,18 @@ public sealed partial class Evaluation : IFileTester
     internal static Evaluation CreateCommandSubstitution(
         ScopedEvaluation scope,
         ParsedScript script,
-        FileDescriptor output)
+        FileDescriptor output,
+        int hereDocumentWarningLine)
     {
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
         var (variables, context) = scope.ForkBindings();
         var line = Math.Max(1, scope.Context.Coordinates.Line);
-        context = context.WithCoordinates(new CommandCoordinates(script.Locations, line - 1, line, line));
+        context = context.WithCoordinates(new CommandCoordinates(script.Locations, line - 1, line, line)
+        {
+            CaptureFunctionDepth = context.FunctionContext?.Depth ?? 0,
+            HereDocumentWarningLine = hereDocumentWarningLine
+        });
         var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution, outer.Memory);
         return new Evaluation(
             state,
@@ -649,7 +654,7 @@ public sealed partial class Evaluation : IFileTester
     {
         if (redirectedCommand.Body is SubshellCommand subshell)
             return await EvaluateSubshellAsync(subshell, scope, negated, redirectedCommand.Redirections).ConfigureAwait(false);
-        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope,
+        var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, HereDocumentRedirectionScope(scope),
             RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, RedirectionOrigin.Command)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
@@ -682,6 +687,22 @@ public sealed partial class Evaluation : IFileTester
         }
         result = await ApplyCloseErrorAsync(result, closeError).ConfigureAwait(false);
         return ApplyNegation(result, negated);
+
+        ScopedEvaluation HereDocumentRedirectionScope(ScopedEvaluation commandScope)
+        {
+            var coordinates = commandScope.Context.Coordinates;
+            if (coordinates.CompoundHereDocumentLine == 0
+                || redirectedCommand.Body is not (ArithmeticCommand or ConditionalCommand)
+                || coordinates.Locations?.TryGet(redirectedCommand.Body, out var location) != true)
+                return commandScope;
+            return commandScope with
+            {
+                Context = commandScope.Context.WithCoordinates(coordinates with
+                {
+                    HereDocumentWarningLine = coordinates.Offset + location.EndLine
+                })
+            };
+        }
     }
 
     /// <summary>
@@ -4085,7 +4106,7 @@ public sealed partial class Evaluation : IFileTester
         if (warnings is { } captureWarnings)
             await ReportHereDocumentCaptureWarningsAsync(captureWarnings.Warnings, scope).ConfigureAwait(false);
         var origin = endOfInput.PayloadLine != 0
-            || (_state.ForkKind == ShellForkKind.CommandSubstitution && !scope.InNestedCommandUnits)
+            || (scope.Context.Coordinates.CaptureFunctionDepth.HasValue && !scope.InNestedCommandUnits)
             ? SyntaxDiagnosticOrigin.CommandSubstitution
             : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
         await ReportCaptureEndOfInputAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
@@ -4094,15 +4115,25 @@ public sealed partial class Evaluation : IFileTester
 
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>
         ReportHereDocumentWarningsAsync(warnings, HereDocumentExpansionLine(scope), scope.Context.CallerSource?.Path,
-            useDocumentLine: false, fixedPrefix: null);
+            useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope));
+
+    private static SyntaxDiagnosticPrefix? GetHereDocumentWarningPrefix(ScopedEvaluation scope)
+    {
+        var line = scope.Context.Coordinates.HereDocumentWarningLine;
+        return line != 0
+            ? new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine, line)
+            : null;
+    }
 
     internal static int HereDocumentExpansionLine(ScopedEvaluation scope)
     {
         var coordinates = scope.Context.Coordinates;
-        return coordinates.CompoundHereDocumentLine != 0
-            && (scope.Context.FunctionContext?.Depth ?? 0) <= scope.LoadedSyntaxFunctionDepth.GetValueOrDefault()
-            ? coordinates.CompoundHereDocumentLine
-            : coordinates.Line;
+        if (coordinates.CompoundHereDocumentLine == 0)
+            return coordinates.Line;
+        var readerDepth = coordinates.CaptureFunctionDepth ?? scope.LoadedSyntaxFunctionDepth.GetValueOrDefault();
+        if ((scope.Context.FunctionContext?.Depth ?? 0) <= readerDepth)
+            return coordinates.CompoundHereDocumentLine;
+        return coordinates.FunctionBodyLine != 0 ? coordinates.FunctionBodyLine : coordinates.Line;
     }
 
     private async Task ReportCaptureEndOfInputAsync(

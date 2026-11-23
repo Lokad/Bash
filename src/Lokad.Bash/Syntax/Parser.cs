@@ -170,7 +170,7 @@ public static class Parser
             AllowEofHereDocuments = true
         };
         SkipNewlines(tokenizer);
-        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, retainUnitBoundaries: true);
+        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All);
         SkipNewlines(tokenizer);
         var trailing = tokenizer.PeekTokenCore();
         if (trailing.Kind != TokenKind.EndOfInput)
@@ -471,7 +471,8 @@ public static class Parser
         {
             end = start;
             error = null;
-            (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
+            (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen, [], null,
+                rawHereDocument ? CommandUnitMetadata.HereDocumentLocations : CommandUnitMetadata.None);
             SkipNewlines(tokenizer);
             var closing = tokenizer.PeekTokenCore();
             var bodyFailure = tokenizer.Failure;
@@ -1919,14 +1920,16 @@ public static class Parser
         TokenKind? closingKind,
         string[] endKeywords,
         TokenKind? endTokenKind) =>
-        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, retainUnitBoundaries: false);
+        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, CommandUnitMetadata.None);
+
+    private enum CommandUnitMetadata { None, HereDocumentLocations, All }
 
     private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
         Tokenizer tokenizer,
         TokenKind? closingKind,
         string[] endKeywords,
         TokenKind? endTokenKind,
-        bool retainUnitBoundaries)
+        CommandUnitMetadata unitMetadata)
     {
         SkipNewlines(tokenizer);
         if (IsEndKeyword(tokenizer, endKeywords) || IsEndTokenKind(tokenizer, endTokenKind))
@@ -1952,8 +1955,11 @@ public static class Parser
                 break;
 
             tokenizer.NextTokenCore();
-            var startsCommandUnit = retainUnitBoundaries
+            var endsCommandUnit = unitMetadata != CommandUnitMetadata.None
                 && (token.Kind == TokenKind.Newline || tokenizer.PeekTokenCore().Kind == TokenKind.Newline);
+            if (endsCommandUnit)
+                tokenizer.CompleteCompoundHereDocumentLocations();
+            var startsCommandUnit = endsCommandUnit && unitMetadata == CommandUnitMetadata.All;
             if (startsCommandUnit)
                 SetUnitDiagnostics(unitStart);
             if (!IsEndTokenKind(tokenizer, endTokenKind))
@@ -1984,13 +1990,12 @@ public static class Parser
             trailingTerminator = false;
         }
 
-        if (retainUnitBoundaries)
+        if (unitMetadata == CommandUnitMetadata.All)
             SetUnitDiagnostics(unitStart);
         return (current, trailingTerminator);
 
         void SetUnitDiagnostics(ICommand anchor)
         {
-            tokenizer.CompleteCompoundHereDocumentLocations();
             var diagnostics = new CommandReadDiagnostics(
                 tokenizer.ScanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.TakeWarnings()),
                 tokenizer.ScanContext.TakeCompoundItemDiagnostics());

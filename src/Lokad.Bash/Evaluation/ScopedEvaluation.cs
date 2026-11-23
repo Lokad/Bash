@@ -8,6 +8,11 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
 {
     internal int RedirectionDiagnosticLine { get; init; }
     internal int CompoundHereDocumentLine { get; init; }
+    /// <summary>Overrides a here-document warning's prefix while retaining the document's own line.</summary>
+    internal int HereDocumentWarningLine { get; init; }
+    /// <summary>Identifies the capture reader and the function depth where it began.</summary>
+    internal int? CaptureFunctionDepth { get; init; }
+    internal int FunctionBodyLine { get; init; }
 
     internal CommandCoordinates At(ICommand command, CommandLocation location) => this with
     {

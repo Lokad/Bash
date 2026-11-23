@@ -144,12 +144,14 @@ internal static class FunctionDefinitionFormatter
         var lines = output as LineCounter;
         var capture = lines != null;
         var functionDepth = 0;
+        var readerDepth = 0;
         var flushedHereDocuments = false;
         // Explicit work items keep long left-associated lists off the CLR call stack.
         using var workMemory = budget == null ? null : new MemoryCapacity(budget, 0);
         using var documentMemory = budget == null ? null : new MemoryCapacity(budget, 0);
         var work = new Stack<Step>();
         var hereDocuments = new Queue<Redirection>();
+        List<ICommand>? compoundDocumentLocations = null;
         var workCapacity = 0;
         var documentCapacity = 0;
         byte[] encodedFragment = [];
@@ -194,11 +196,13 @@ internal static class FunctionDefinitionFormatter
                     else if (terminate && !Append(";")) return false;
                     if (!Append(closer)) return false;
                     break;
-                case Step.Location(var command, var commandLine):
-                    if (locations!.TryGet(command, out var location))
-                        locations.Update(command, commandLine
-                            ? location with { CommandLine = lines!.Line }
-                            : location with { EndLine = lines!.Line });
+                case Step.Location(var command, var edge):
+                    if (edge == LocationEdge.ReaderEnd)
+                        readerDepth--;
+                    if (lines != null && locations?.TryGet(command, out var location) == true)
+                        locations.Update(command, edge == LocationEdge.FirstElement
+                            ? location with { CommandLine = lines.Line }
+                            : location with { EndLine = lines.Line });
                     break;
                 case Step.Word(var word):
                     if (!AppendWordParts(word.Parts, 0)) return false;
@@ -220,11 +224,14 @@ internal static class FunctionDefinitionFormatter
                     var followsFlushedDocuments = !pendingDocuments && flushedHereDocuments;
                     if ((capture || displayRedirections) && followsFlushedDocuments)
                         flushedHereDocuments = false;
-                    if (capture)
+                    if (lines != null)
                     {
                         if (!FlushCaptureDocuments()) return false;
+                        // A separator inside a compound still belongs to its enclosing reader unit.
+                        if (readerDepth == 0 && (newline || pendingDocuments))
+                            CompleteCompoundDocumentLocations(lines.Line - (pendingDocuments ? 1 : 0));
                         if (followsFlushedDocuments && !newline && functionDepth == 0)
-                            lines?.RecordOmittedSeparator(separator);
+                            lines.RecordOmittedSeparator(separator);
                         var breaks = functionDepth != 0
                             ? newline && !pendingDocuments && !followsFlushedDocuments ? 2 : 1
                             : newline ? 1 : 0;
@@ -326,7 +333,7 @@ internal static class FunctionDefinitionFormatter
                     for (var index = redirections.Count - 1; index >= 0; index--)
                     {
                         if (index == 0 && firstElement != null)
-                            work.Push(new Step.Location(firstElement, CommandLine: true));
+                            work.Push(new Step.Location(firstElement, LocationEdge.FirstElement));
                         work.Push(new Step.Redirection(redirections[index], leadingSpace || index != 0));
                     }
                     break;
@@ -433,10 +440,24 @@ internal static class FunctionDefinitionFormatter
                         new Step.Layout(indent + 4), new Step.Command(thenBody, indent + 4), new Step.Line(indent, Terminate: true));
                     break;
                 case Step.Command(var command, var indent):
-                    if (locations?.TryGet(command, out _) == true)
+                    if (lines != null && locations?.TryGet(command, out var physical) == true)
                     {
-                        locations.Update(command, new CommandLocation(lines!.Line, lines.Line, lines.Line));
-                        PushStep(new Step.Location(command, CommandLine: false));
+                        locations.Update(command, new CommandLocation(lines.Line, lines.Line, lines.Line));
+                        var opensReader = command is GroupCommand or SubshellCommand or IfCommand or CaseCommand
+                            or ForCommand or ArithmeticForCommand or WhileCommand or UntilCommand;
+                        if (opensReader)
+                            readerDepth++;
+                        PushStep(new Step.Location(command, opensReader ? LocationEdge.ReaderEnd : LocationEdge.CommandEnd));
+                        if (physical.CompoundHereDocumentLine != 0)
+                        {
+                            if (compoundDocumentLocations == null)
+                            {
+                                documentMemory?.Grow(32);
+                                compoundDocumentLocations = [];
+                            }
+                            documentMemory?.PrepareListCapacity(compoundDocumentLocations, 1);
+                            compoundDocumentLocations.Add(command);
+                        }
                     }
                     switch (command)
                     {
@@ -449,7 +470,7 @@ internal static class FunctionDefinitionFormatter
                             for (var index = simple.Words.Count - 1; index >= 0; index--)
                             {
                                 if (capture && index == commandLineWordIndex && simple.Assignments.Count == 0)
-                                    work.Push(new Step.Location(simple, CommandLine: true));
+                                    work.Push(new Step.Location(simple, LocationEdge.FirstElement));
                                 work.Push(simple.DeclarationAssignments.TryGetValue(simple.Words[index], out var assignment)
                                     ? new Step.Assignment(assignment) : new Step.Word(simple.Words[index]));
                                 if (index != 0 || simple.Assignments.Count != 0) work.Push(new Step.Text(" "));
@@ -457,7 +478,7 @@ internal static class FunctionDefinitionFormatter
                             for (var index = simple.Assignments.Count - 1; index >= 0; index--)
                             {
                                 if (capture && index == 0)
-                                    work.Push(new Step.Location(simple, CommandLine: true));
+                                    work.Push(new Step.Location(simple, LocationEdge.FirstElement));
                                 work.Push(new Step.Assignment(simple.Assignments[index]));
                                 if (index != 0) work.Push(new Step.Text(" "));
                             }
@@ -587,8 +608,24 @@ internal static class FunctionDefinitionFormatter
                     break;
             }
         }
-        if (capture) return FlushCaptureDocuments();
+        if (lines != null)
+        {
+            var pendingDocuments = hereDocuments.Count != 0;
+            if (!FlushCaptureDocuments()) return false;
+            CompleteCompoundDocumentLocations(lines.Line - (pendingDocuments ? 1 : 0));
+            return true;
+        }
         return !inlineSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
+
+        void CompleteCompoundDocumentLocations(int line)
+        {
+            if (locations == null || compoundDocumentLocations == null)
+                return;
+            foreach (var command in compoundDocumentLocations)
+                if (locations.TryGet(command, out var location))
+                    locations.Update(command, location with { CompoundHereDocumentLine = line });
+            compoundDocumentLocations.Clear();
+        }
 
         bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart)
         {
@@ -881,6 +918,8 @@ internal static class FunctionDefinitionFormatter
         internal void Adjust(int lineBreaks) => Line += lineBreaks;
     }
 
+    private enum LocationEdge { FirstElement, CommandEnd, ReaderEnd }
+
     /// <summary>Deferred syntax output; line steps also flush the current command line's here-documents.</summary>
     private abstract record Step
     {
@@ -894,7 +933,7 @@ internal static class FunctionDefinitionFormatter
         public sealed record CompactEnd(string Closer, bool Terminate) : Step;
         public sealed record EnterFunction : Step;
         public sealed record LeaveFunction(bool ResetHereDocuments) : Step;
-        public sealed record Location(ICommand Node, bool CommandLine) : Step;
+        public sealed record Location(ICommand Node, LocationEdge Edge) : Step;
         public sealed record Script(ParsedScript Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;
         public sealed record Word(Syntax.Word Value) : Step;

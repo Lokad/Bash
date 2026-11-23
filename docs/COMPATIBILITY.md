@@ -452,6 +452,11 @@ statuses. A source or eval reader resumes with status 1. When errexit is
 active for this failure, EXIT runs with status 2 and the redirections
 already applied to the compound command. A simple command or a subshell
 with the same failure reports a redirection failure to its enclosing list.
+The diagnostic uses the reached command-unit boundary, including when
+the capture's rendered layout supplies that boundary. A previously
+defined function uses the opening line of its body. Arithmetic and
+conditional commands put the end of their expression in the warning
+prefix while retaining the document's own line inside the warning.
 When a streamed command list encounters an unexpected closer or separator, the
 diagnostic shows the token and the physical source line. Missing conditional
 operands identify the unary or binary grammar role and any open parentheses.

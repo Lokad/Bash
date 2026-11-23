@@ -94,7 +94,9 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             outer.TrackOwnedDescriptor(pipe.Write);
             outer.CancellationToken.ThrowIfCancellationRequested();
             using var outputMemory = outer.Memory.Budget.CreateScope();
-            var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write);
+            var warningLine = script is CommandSubstitutionSyntax.Deferred { ReadWarnings: not null }
+                ? scope.Context.Coordinates.HereDocumentWarningLine : 0;
+            var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write, warningLine);
             CapturedEvaluationResult result;
             Exception? captureFailure = null;
             try

@@ -544,9 +544,12 @@ internal sealed class EvaluationState
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
         memory.Charge(256);
+        var coordinates = context.Coordinates;
+        var bodyLine = coordinates.Locations?.TryGet(functionDefinition.Body, out var body) == true
+            ? coordinates.Offset + body.StartLine : coordinates.Line;
         SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, context.SourceMemory, memory)
         {
-            Coordinates = context.Coordinates
+            Coordinates = coordinates with { FunctionBodyLine = bodyLine }
         });
         return true;
     }

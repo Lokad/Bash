@@ -783,6 +783,30 @@ public sealed class CommandSubstitutionSyntaxTests
     [InlineData("f() { { cat; } <<OUTER; printf same" + RejectedDocumentBody + "printf function; }\nf || printf caller\n"
         + "printf '<next:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
         "<next:1:1>", DocumentOnFirstLine, 0)]
+    [InlineData("printf prior\n\nf() {\n:\n{ cat; } <<OUTER; printf same" + RejectedDocumentBody
+        + "}\nf\nprintf '<next:%s>' \"$?\"",
+        "prior<next:1>", "line 5: warning: here-document at line 4" + InnerDocumentWarning + "line 3: " + MatchingParenthesisEof, 0)]
+    [InlineData("printf prior\n\n((\n1\n)) <<OUTER; printf same" + RejectedDocumentBody + "printf '<next:%s>' \"$?\"",
+        "prior<next:1>", "line 5: warning: here-document at line 9" + InnerDocumentWarning + "line 8: " + MatchingParenthesisEof, 0)]
+    [InlineData("printf prior\n[[ x ]] <<OUTER; printf same\n$(cat <<INNER)\n\n\nOUTER\nprintf '<next:%s>' \"$?\"",
+        "priorsame<next:0>", "line 2: warning: here-document at line 7" + InnerDocumentWarning
+        + "line 2: warning: here-document at line 6" + InnerDocumentWarning, 0)]
+    [InlineData("v=$(\n{ cat; } <<OUTER" + RejectedDocumentBody + "{ cat; } <<SECOND\n$(cat <<OTHER)\nmore\nSECOND\n"
+        + "printf inside\n); printf '<capt:%s:%s>' \"$?\" \"$v\"",
+        "<capt:1:>", "line 16: warning: here-document at line 15" + InnerDocumentWarning
+        + "command substitution: line 14: " + MatchingParenthesisEof, 0)]
+    [InlineData("v=$( if :; then { cat; } <<OUTER; printf same" + RejectedDocumentBody + "printf inner; fi\n"
+        + "printf inside ); printf '<capt:%s:%s>' \"$?\" \"$v\"",
+        "<capt:1:>", "line 15: warning: here-document at line 14" + InnerDocumentWarning
+        + "command substitution: line 13: " + MatchingParenthesisEof, 0)]
+    [InlineData("f() {\nv=$(\n{ cat; } <<OUTER; printf same" + RejectedDocumentBody
+        + "printf inside\n); printf '<capt:%s:%s>' \"$?\" \"$v\"\n}\nf\n",
+        "<capt:1:>", "line 13: warning: here-document at line 12" + InnerDocumentWarning
+        + "command substitution: line 11: " + MatchingParenthesisEof, 0)]
+    [InlineData("cat <<FIRST\n$( { cat; } <<OUTER; printf same" + RejectedDocumentBody
+        + "printf inside )\nFIRST\nprintf '<next:%s>' \"$?\"",
+        "\n<next:0>", "line 6: warning: here-document at line 5" + InnerDocumentWarning
+        + "command substitution: line 4: " + MatchingParenthesisEof, 0)]
     [InlineData("set -e; trap 'printf \"<exit:%s>\" \"$?\"' EXIT\n{ cat; } <<OUTER || printf same"
         + RejectedDocumentBody + "printf next", "<exit:2>", CompoundDocumentOnSecondLine, 2)]
     [InlineData("set -e; trap 'printf \"<exit:%s>\" \"$?\" >&2' EXIT\n{ cat; } 2>errors <<OUTER"
