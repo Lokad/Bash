@@ -366,8 +366,11 @@ Parenthesized capture rendering can omit a semicolon after a flushed
 here-document. The resulting command list can combine operands or attach a
 redirection to the preceding command. If the rendered list fails to parse,
 the reached substitution reports a syntax error before any of its commands
-run. Backtick captures and captures read directly from a here-document use
-their source separators.
+run. The function listing shows the rendered body, and reloading it reports
+its invalid syntax. Host function exports preserve the authored capture so
+the child can import it and validate the capture when reached. Backtick
+captures and captures read directly from a here-document use their source
+separators.
 When a script ends in a parenthesized capture with a here-document and no
 matching `)`, the script reader reports any pending here-document warnings
 before the missing-parenthesis diagnostic. Earlier complete command units can

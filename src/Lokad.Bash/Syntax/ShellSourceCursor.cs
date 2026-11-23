@@ -284,7 +284,8 @@ internal sealed class ShellSourceCursor
                         if (expansion.Kind == ShellNestedExpansionKind.Command
                             && context.TryGetCommandSubstitution(source, first, out var cached))
                         {
-                            if (cached.Substitution is CommandSubstitutionSyntax.Parsed { CanRenderBody: true } capture)
+                            if (cached.Substitution is CommandSubstitutionSyntax.Parsed capture
+                                && (capture.CanRenderBody || !prepareReplay && (capture.CanDisplayBody || capture.AdjacentSpelling != null)))
                             {
                                 if (captures == null)
                                 {

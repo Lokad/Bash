@@ -325,7 +325,17 @@ public static class Parser
             parsed = CompleteScript(tokenizer, command);
             parsed.HasReadAheadHereDocuments = (context.HereDocumentReadAhead?.CaptureCount ?? 0) != readAheadBefore;
             if (failure != SubstitutionSyntaxFailure.None || preserveAdjacentOpening || rawHereDocument)
+            {
+                if (preserveAdjacentOpening && !rawHereDocument && !parsed.HasReadAheadHereDocuments
+                    && IsHereDocumentSeparatorFailure(nestedFailure))
+                {
+                    using var workspace = context.SyntaxMemory is { } syntax ? new MemoryCapacity(syntax.Budget, 0) : null;
+                    // The enclosing matched pair stays intact while its failed inner capture can be displayed.
+                    adjacentSpelling = ShellSourceCursor.ReadAdjacentCaptureSpelling(context, input, payloadStart,
+                        closingParenthesisIndex, workspace, prepareReplay: false, out _, out _, out _);
+                }
                 return ShellScanStatus.Complete;
+            }
 
             if (adjacentParenthesis && !parsed.HasReadAheadHereDocuments)
             {

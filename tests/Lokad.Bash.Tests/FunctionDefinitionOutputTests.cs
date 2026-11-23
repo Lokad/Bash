@@ -230,6 +230,43 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Fact]
+    public async Task ReloadReportsTheRejectedCaptureShownInAFunctionListing()
+    {
+        const string script = "f(){ value=\"$( { cat <<DATA\nbody\nDATA\n}; printf extra)\"; printf tail; }\n"
+            + "declare -f f\nsaved=$(declare -f f)\nunset -f f\neval \"$saved\"\nprintf unreached\n";
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("f () \n{ \n    value=\"$({ cat <<DATA\nbody\nDATA\n } printf extra)\";\n    printf tail\n}\n",
+            result.StdOut);
+        Assert.Equal("eval: line 13: syntax error near unexpected token `printf'\n"
+            + "eval: line 13: ` } printf extra)\";'\n", result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("$(printf \"%s\" \"", "\")")]
+    [InlineData("$((printf \"%s\" \"", "\");)")]
+    public void NestedRejectedCapturesHaveDisplayAndImportSpelling(string opener, string closer)
+    {
+        const string authored = "$( { cat <<DATA\nbody\nDATA\n}; printf extra)";
+        const string shown = "$({ cat <<DATA\nbody\nDATA\n } printf extra)";
+        var source = "f(){ value=\"" + opener + authored + closer + "\"; printf tail; }";
+        var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(source).Commands));
+        var budget = new MemoryGovernor(TestMemoryBudget.FunctionFormattingBytes);
+        using var display = new ByteMemoryBuilder(0, budget);
+        using var export = new BoundedByteMemoryBuilder(0, 1024, budget);
+
+        Assert.True(FunctionDefinitionFormatter.TryAppend(definition, display));
+        Assert.Equal("f () \n{ \n    value=\"" + opener + shown + closer + "\";\n    printf tail\n}\n",
+            Utf8Text.Decode(display.ToMemory()));
+        Assert.True(FunctionDefinitionFormatter.TryAppendExport(definition, export));
+        Assert.Contains(authored, Utf8Text.Decode(export.ToMemory()));
+        Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(export.ToMemory()).Commands));
+    }
+
     // Both Bash pins agree before and after reloading the displayed definition.
     [Theory]
     [InlineData("printf '<%s>' \"$LINENO\"", "<1>:1|<7>:8")]

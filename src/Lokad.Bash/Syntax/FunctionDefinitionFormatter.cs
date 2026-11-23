@@ -10,7 +10,7 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Renders retained syntax and its line layout without evaluation.</summary>
 internal static class FunctionDefinitionFormatter
 {
-    private enum Format { Display, Export, BraceSource, SubstitutionSource, CaptureCoordinates }
+    private enum Format { Display, Export, BraceSource, SubstitutionSource, SubstitutionDisplay, CaptureCoordinates }
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppend(FunctionDefinition definition, ByteMemoryBuilder output) =>
@@ -48,16 +48,22 @@ internal static class FunctionDefinitionFormatter
     }
 
     internal static bool TryAppendSubstitutionSource(
-        CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget, CancellationToken cancellationToken)
+        CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget,
+        CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, display: false);
+
+    private static bool TryAppendSubstitution(CommandSubstitutionSyntax substitution, IByteMemoryWriter output,
+        IMemoryBudget? budget, CancellationToken cancellationToken, bool display)
     {
         if (substitution is CommandSubstitutionSyntax.Legacy legacy)
             return output.TryAppend(legacy.Spelling.AsSpan());
-        if (substitution is CommandSubstitutionSyntax.Parsed { AdjacentSpelling: { } spelling })
-            return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken)
+        if (substitution is CommandSubstitutionSyntax.Parsed { AdjacentSpelling: { } spelling } adjacent
+            && (display || !adjacent.PreserveAdjacentOpening))
+            return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken, display)
                 && output.TryAppend((byte)')');
-        if (substitution is CommandSubstitutionSyntax.Parsed { CanRenderBody: true } parsed)
+        if (substitution is CommandSubstitutionSyntax.Parsed parsed && (display ? parsed.CanDisplayBody : parsed.CanRenderBody))
             return output.TryAppend(StartsWithParenthesis(parsed.Script) ? "$( "u8 : "$("u8)
-                && TryAppend(new Step.Script(parsed.Script), output, budget, Format.SubstitutionSource, cancellationToken)
+                && TryAppend(new Step.Script(parsed.Script), output, budget,
+                    display ? Format.SubstitutionDisplay : Format.SubstitutionSource, cancellationToken)
                 && output.TryAppend((byte)')');
         return output.TryAppend("$("u8) && output.TryAppend(substitution.Source.AsSpan()) && output.TryAppend((byte)')');
 
@@ -82,7 +88,7 @@ internal static class FunctionDefinitionFormatter
     }
 
     private static bool AppendSpelling(SourceSpelling spelling, int sourceOffset, IByteMemoryWriter output,
-        IMemoryBudget? budget, CancellationToken cancellationToken)
+        IMemoryBudget? budget, CancellationToken cancellationToken, bool display)
     {
         var source = spelling.Source.AsSpan();
         var written = 0;
@@ -93,7 +99,7 @@ internal static class FunctionDefinitionFormatter
                 if (offset < 0 || offset + substitution.Length > source.Length)
                     continue;
                 if (!output.TryAppend(source[written..offset])
-                    || !TryAppendSubstitutionSource(substitution.Syntax, output, budget, cancellationToken))
+                    || !TryAppendSubstitution(substitution.Syntax, output, budget, cancellationToken, display))
                     return false;
                 written = offset + substitution.Length;
             }
@@ -104,7 +110,8 @@ internal static class FunctionDefinitionFormatter
         CancellationToken cancellationToken, CommandLocations? locations = null, ShellScanContext? captures = null)
     {
         var display = format == Format.Display;
-        var substitutionSource = format == Format.SubstitutionSource;
+        var displayCaptures = format is Format.Display or Format.SubstitutionDisplay;
+        var substitutionSource = format is Format.SubstitutionSource or Format.SubstitutionDisplay;
         var displayRedirections = display || substitutionSource;
         var inlineSource = format == Format.BraceSource || substitutionSource;
         var lines = output as LineCounter;
@@ -182,38 +189,41 @@ internal static class FunctionDefinitionFormatter
                     }
                     break;
                 case Step.CommandSeparator(var newline, var separator, var indent):
+                    var pendingDocuments = hereDocuments.Count != 0;
+                    var followsFlushedDocuments = !pendingDocuments && flushedHereDocuments;
+                    if ((capture || displayRedirections) && followsFlushedDocuments)
+                        flushedHereDocuments = false;
                     if (capture)
                     {
-                        var pendingDocuments = hereDocuments.Count != 0;
-                        var afterDocuments = flushedHereDocuments || pendingDocuments;
-                        if (pendingDocuments)
-                        {
-                            if (!FlushCaptureDocuments()) return false;
-                        }
-                        else if (flushedHereDocuments)
-                        {
-                            flushedHereDocuments = false;
-                            if (!newline && functionDepth == 0)
-                                lines?.RecordOmittedSeparator(separator);
-                        }
-                        var breaks = functionDepth != 0 ? newline && !afterDocuments ? 2 : 1 : newline ? 1 : 0;
+                        if (!FlushCaptureDocuments()) return false;
+                        if (followsFlushedDocuments && !newline && functionDepth == 0)
+                            lines?.RecordOmittedSeparator(separator);
+                        var breaks = functionDepth != 0
+                            ? newline && !pendingDocuments && !followsFlushedDocuments ? 2 : 1
+                            : newline ? 1 : 0;
                         if (!output.TryAppend(breaks, (byte)'\n')) return false;
                     }
                     else if (display)
                     {
                         // A body printed inside the left command suppresses this connector's semicolon.
-                        var terminate = !flushedHereDocuments;
-                        flushedHereDocuments = false;
-                        if (!WriteLine(indent, terminate)) return false;
+                        if (!WriteLine(indent, terminate: !followsFlushedDocuments)) return false;
                     }
                     else if (substitutionSource && functionDepth != 0)
                     {
-                        if (newline && hereDocuments.Count == 0 && !Append("\n")) return false;
-                        PushStep(new Step.Line(indent, Terminate: !newline));
+                        if (newline && !pendingDocuments && !followsFlushedDocuments && !Append("\n")) return false;
+                        PushStep(new Step.Line(indent, Terminate: !newline && !followsFlushedDocuments));
                     }
-                    else if (hereDocuments.Count == 0)
+                    else if (substitutionSource)
                     {
-                        if (!Append(substitutionSource && newline ? "\n" : "; ")) return false;
+                        if (pendingDocuments)
+                        {
+                            if (!WriteLine(indent, terminate: false)) return false;
+                        }
+                        else if (!Append(newline ? "\n" : followsFlushedDocuments ? " " : "; ")) return false;
+                    }
+                    else if (!pendingDocuments)
+                    {
+                        if (!Append("; ")) return false;
                     }
                     else if (!Append("\n") || !FlushHereDocuments() || !Append("\n")) return false;
                     break;
@@ -283,7 +293,7 @@ internal static class FunctionDefinitionFormatter
                     }
                     break;
                 case Step.Redirections(var redirections, var leadingSpace, var firstElement):
-                    if ((capture || display) && redirections.Count != 0)
+                    if ((capture || displayRedirections) && redirections.Count != 0)
                         flushedHereDocuments = false;
                     PrepareWork(redirections.Count + (firstElement != null ? 1 : 0));
                     for (var index = redirections.Count - 1; index >= 0; index--)
@@ -370,7 +380,7 @@ internal static class FunctionDefinitionFormatter
                     }
                     else if (substitutionSource || display && nested)
                         Push(new Step.Layout(indent), new Step.EnterFunction(), new Step.Command(body, indent),
-                            new Step.LeaveFunction(display && body is not RedirectedCommand { Body: GroupCommand }));
+                            new Step.LeaveFunction(body is not RedirectedCommand { Body: GroupCommand }));
                     else Push(new Step.Layout(indent), new Step.Command(body, indent));
                     break;
                 case Step.IfArm(var conditional, var arm, var indent):
@@ -501,7 +511,7 @@ internal static class FunctionDefinitionFormatter
                             break;
                         case ConditionalCommand conditional:
                             if (capture) PushStep(new Step.Condition(conditional.Condition));
-                            else if (!Append("[[ ") || !AppendSpelling(conditional.Spelling, 0, output, budget, cancellationToken)
+                            else if (!Append("[[ ") || !AppendSpelling(conditional.Spelling, 0, output, budget, cancellationToken, displayCaptures)
                                 || !Append(" ]]"))
                                 return false;
                             break;
@@ -567,7 +577,7 @@ internal static class FunctionDefinitionFormatter
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when !capture && part is SourceWordPart
                         { SpellingCaptures: { } nested } projected =>
                         AppendSpelling(new SourceSpelling(projected.Source, nested), projected.SourceOffset,
-                            output, budget, cancellationToken),
+                            output, budget, cancellationToken, displayCaptures),
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when captures != null && part is SourceWordPart source =>
                         TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
                     WordPartKind.Unquoted => output.TryAppend(content),
@@ -581,13 +591,14 @@ internal static class FunctionDefinitionFormatter
                         when capture && part is CommandSubstitutionWordPart command => CountCaptureWord(command.Substitution),
                     WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
                         when part is CommandSubstitutionWordPart command
-                            && (inlineSource || command.Substitution is CommandSubstitutionSyntax.Legacy
+                            && (inlineSource || displayCaptures && command.Substitution is CommandSubstitutionSyntax.Parsed { CanDisplayBody: true }
+                                || command.Substitution is CommandSubstitutionSyntax.Legacy
                                 or CommandSubstitutionSyntax.AdjacentSubshell
                                 or CommandSubstitutionSyntax.Parsed { CanRenderBody: true }
                                 or CommandSubstitutionSyntax.Parsed { AdjacentSpelling: not null }
                                 or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }
                                 or CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }) =>
-                        TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),
+                        TryAppendSubstitution(command.Substitution, output, budget, cancellationToken, displayCaptures),
                     WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
                         AppendCommandSubstitution(content),
                     _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")

@@ -9,6 +9,8 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
         : CommandSubstitutionSyntax(SourceText)
     {
         internal bool CanRenderBody => Failure == SubstitutionSyntaxFailure.None && !PreserveAdjacentOpening;
+        internal bool CanDisplayBody => !PreserveAdjacentOpening && Failure is SubstitutionSyntaxFailure.None
+            or SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
         internal SourceSpelling? AdjacentSpelling { get; init; }
     }
 
