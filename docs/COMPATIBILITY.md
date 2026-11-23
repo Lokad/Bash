@@ -315,8 +315,12 @@ increments remain literal.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
 An adjacent subshell opener can begin a command substitution, as in
 `$((printf value);)`. A complete `$((…))` arithmetic shape selects arithmetic
-even when its expression is invalid. The existing command grammar handles the
-subshell form and consumes completed here-documents as part of its body.
+even when its expression is invalid. The command grammar handles the subshell
+form and consumes case arm closers, comments and completed here-documents.
+Both pinned Bash builds reject some adjacent forms containing a case arm
+without its optional opening parenthesis or an unpaired parenthesis in a
+comment or here-document body. The corresponding sampled forms with a space
+before the subshell opener, as in `$( (commands);)`, agree with both pins.
 If that grammar rejects a balanced adjacent form, the capture reads its source
 in complete units when reached. A failing child unit reports its diagnostic and
 leaves any earlier complete units' output and effects available. A skipped

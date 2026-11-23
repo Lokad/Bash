@@ -162,6 +162,131 @@
       "fileEffects": []
     },
     {
+      "id": "adjacent-capture-case-arm",
+      "classification": "deviation",
+      "reason": "The capture uses the command grammar to consume a case arm without its optional opening parenthesis. Both Bash pins reject this adjacent spelling.",
+      "locale": "C",
+      "script": "trap 'printf \"|exit:%s\" \"$?\"' EXIT\n: >before\nprintf before\nv=$((case one in one) printf yes;; esac);)\nprintf '|status:%s|<%s>' \"$?\" \"${v-unset}\"\n: >after\nprintf after\n",
+      "scriptSha256": "557ea0f2a679f6d79ac0b0ac5811e71d5df654c8c56488ce89dfe33d173af726",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 2,
+      "stdoutHex": "6265666f72657c657869743a32",
+      "stderrHex": "6c6f6b61642d636f6e666f726d616e63653a202d633a206c696e6520343a2073796e746178206572726f72206e65617220756e657870656374656420746f6b656e206029270a6c6f6b61642d636f6e666f726d616e63653a202d633a206c696e6520343a2060763d24282863617365206f6e6520696e206f6e6529207072696e7466207965733b3b2065736163293b29270a",
+      "fileEffects": [
+        {
+          "path": "before",
+          "contentHex": ""
+        }
+      ],
+      "managedExpectation": {
+        "exitCode": 0,
+        "stdoutHex": "6265666f72657c7374617475733a307c3c7965733e61667465727c657869743a30",
+        "stderrHex": "",
+        "fileEffects": [
+          {
+            "path": "after",
+            "contentHex": ""
+          },
+          {
+            "path": "before",
+            "contentHex": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "adjacent-capture-parenthesized-case-arm",
+      "classification": "supported",
+      "reason": "",
+      "locale": "C",
+      "script": "trap 'printf \"|exit:%s\" \"$?\"' EXIT\n: >before\nprintf before\nv=$((case one in (one) printf yes;; esac);)\nprintf '|status:%s|<%s>' \"$?\" \"${v-unset}\"\n: >after\nprintf after\n",
+      "scriptSha256": "7cbea3240a29abd52dc284c22e11856ec3bbb1f74a68c2220c5bc599c570c509",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 0,
+      "stdoutHex": "6265666f72657c7374617475733a307c3c7965733e61667465727c657869743a30",
+      "stderrHex": "",
+      "fileEffects": [
+        {
+          "path": "after",
+          "contentHex": ""
+        },
+        {
+          "path": "before",
+          "contentHex": ""
+        }
+      ]
+    },
+    {
+      "id": "adjacent-capture-comment-paren",
+      "classification": "deviation",
+      "reason": "The capture uses the command grammar to ignore the closing parenthesis in the comment. Both Bash pins reject this adjacent spelling.",
+      "locale": "C",
+      "script": "trap 'printf \"|exit:%s\" \"$?\"' EXIT\n: >before\nprintf before\nv=$((printf '%s' ')'; # ) ignored\nprintf ok);)\nprintf '|status:%s|<%s>' \"$?\" \"${v-unset}\"\n: >after\nprintf after\n",
+      "scriptSha256": "21d37922abee9de380c0675e6d21878eec593533c1ba49331fbc950201bf42a8",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 2,
+      "stdoutHex": "6265666f72657c657869743a32",
+      "stderrHex": "6c6f6b61642d636f6e666f726d616e63653a202d633a206c696e6520353a2073796e746178206572726f72206e65617220756e657870656374656420746f6b656e206029270a6c6f6b61642d636f6e666f726d616e63653a202d633a206c696e6520353a20607072696e7466206f6b293b29270a",
+      "fileEffects": [
+        {
+          "path": "before",
+          "contentHex": ""
+        }
+      ],
+      "managedExpectation": {
+        "exitCode": 0,
+        "stdoutHex": "6265666f72657c7374617475733a307c3c296f6b3e61667465727c657869743a30",
+        "stderrHex": "",
+        "fileEffects": [
+          {
+            "path": "after",
+            "contentHex": ""
+          },
+          {
+            "path": "before",
+            "contentHex": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "adjacent-capture-here-document-paren",
+      "classification": "deviation",
+      "reason": "The capture uses the command grammar to read the closing parenthesis as here-document body data. Both Bash pins reject this adjacent spelling.",
+      "locale": "C",
+      "script": "trap 'printf \"|exit:%s\" \"$?\"' EXIT\n: >before\nprintf before\nv=$((IFS= read -r input <<END\n)body\nEND\nprintf '%s' \"$input\");)\nprintf '|status:%s|<%s>' \"$?\" \"${v-unset}\"\n: >after\nprintf after\n",
+      "scriptSha256": "88779a8dfe238f01e99bef623797953c99b85666c3efe6d0df811bc1a05b2baa",
+      "stdinHex": "",
+      "files": [],
+      "exitCode": 2,
+      "stdoutHex": "6265666f72657c657869743a32",
+      "stderrHex": "6c6f6b61642d636f6e666f726d616e63653a202d633a206c696e6520373a2073796e746178206572726f72206e65617220756e657870656374656420746f6b656e206029270a6c6f6b61642d636f6e666f726d616e63653a202d633a206c696e6520373a20607072696e74662027257327202224696e70757422293b29270a",
+      "fileEffects": [
+        {
+          "path": "before",
+          "contentHex": ""
+        }
+      ],
+      "managedExpectation": {
+        "exitCode": 0,
+        "stdoutHex": "6265666f72657c7374617475733a307c3c29626f64793e61667465727c657869743a30",
+        "stderrHex": "",
+        "fileEffects": [
+          {
+            "path": "after",
+            "contentHex": ""
+          },
+          {
+            "path": "before",
+            "contentHex": ""
+          }
+        ]
+      }
+    },
+    {
       "id": "malformed-byte-control",
       "classification": "supported",
       "reason": "",
