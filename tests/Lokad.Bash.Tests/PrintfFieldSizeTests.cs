@@ -490,6 +490,67 @@ public sealed class PrintfFieldSizeTests
         Assert.Equal(0, memory.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData('b', false, "a\\t", "a\t")]
+    [InlineData('b', true, "a\\t", "a\t")]
+    [InlineData('q', false, "a ", "a\\")]
+    [InlineData('q', true, "a ", "a\\")]
+    public async Task TextConversionPrecisionBoundsScratchAndKeepsPaddingAndCount(
+        char conversion, bool assignOutput, string operandPrefix, string outputPrefix)
+    {
+        var memory = new MemoryGovernor(16 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText($"<%5.2{conversion}>%n|%b"),
+            [ShellValue.FromText(operandPrefix + new string('x', 128 * 1024)),
+                ShellValue.FromText("count"), ShellValue.FromText("ok\\n")],
+            DateTimeOffset.UnixEpoch, assignOutput, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            _ => throw new InvalidOperationException("Unexpected diagnostic."), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText("<   " + outputPrefix + ">|ok\n"), ShellValue.FromBytes(result.Output));
+        Assert.Equal(new PrintfVariableAssignment("count", 7), Assert.Single(counts));
+        Assert.False(result.DiscardedSuffix);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public void QuotedPrecisionStillSelectsAnsiCSpellingFromTheWholeOperand()
+    {
+        var memory = new MemoryGovernor(16 * 1024);
+        using var owner = memory.CreateScope();
+        var value = ShellValue.FromText(new string('x', 128 * 1024) + "\n");
+        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText("<%.2q><%.0q>"), [value, value], owner);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<$'><>"u8.ToArray(), result.Output.ToArray());
+        Assert.Empty(result.Diagnostics);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task EscapedPrecisionStillReportsWarningsAndStopsPastTheRetainedPrefix()
+    {
+        var memory = new MemoryGovernor(16 * 1024);
+        using var owner = memory.CreateScope();
+        var diagnostics = new List<PrintfFormatting.Diagnostic>();
+        var value = ShellValue.FromText("a" + new string('x', 128 * 1024) + "\\x\\cignored");
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText("<%2.1b>%n"), [value, ShellValue.FromText("skipped")], DateTimeOffset.UnixEpoch,
+            assignOutput: false, owner, _ => throw new InvalidOperationException("Unexpected count assignment."),
+            diagnostic => { diagnostics.Add(diagnostic); return ValueTask.FromResult(true); }, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("< a"u8.ToArray(), result.Output.ToArray());
+        Assert.Equal("missing hex digit for \\x", Assert.Single(diagnostics).Suffix);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
     [Fact]
     public async Task QuotedAssignmentCanRetainBytesAfterTheNulIsRewound()
     {

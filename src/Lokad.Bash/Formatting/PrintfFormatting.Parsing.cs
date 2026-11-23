@@ -502,7 +502,7 @@ public static partial class PrintfFormatting
                 void AppendEscapedString(FormatSpecification escapedSpecification)
                 {
                     var argument = GetValueArgument().Bytes;
-                    var bytes = GetTemporaryOutput(argument.Length, _output.RemainingLength);
+                    var bytes = GetTemporaryOutput(argument.Length, _output.RemainingLength, escapedSpecification.Precision);
                     for (var index = 0; index < argument.Length;)
                     {
                         if (argument.Span[index] != (byte)'\\')
@@ -558,9 +558,10 @@ public static partial class PrintfFormatting
                         ? rawPrecision
                         : int.MaxValue;
                     var bytes = argument[..Math.Min(argument.Length, rawByteLimit)];
+                    var outputPrecision = quotedSpecification.Conversion == 'q' ? quotedSpecification.Precision : null;
                     // Empty %q syntax can be truncated by precision before consuming the final output budget.
-                    var quoted = bytes.IsEmpty
-                        ? GetTemporaryOutput(2, 2) : GetTemporaryOutput(bytes.Length, _output.RemainingLength);
+                    var quoted = GetTemporaryOutput(bytes.IsEmpty ? 2 : bytes.Length,
+                        bytes.IsEmpty ? 2 : _output.RemainingLength, outputPrecision);
                     if (!ShellArgumentEscaping.TryAppendQuoted(quoted, bytes.Span,
                             quotedSpecification.Flags.HasFlag(FormatFlags.Alternate)
                                 ? ShellQuoteStyle.SingleQuoted : ShellQuoteStyle.Backslash))

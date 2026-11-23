@@ -137,21 +137,23 @@ public static partial class PrintfFormatting
         }
     }
 
-    private enum OutputRetention { All, BeforeNul, None }
+    private enum OutputRetention { All, BeforeNul }
 
     /// <summary>Bounds the logical output and retains the bytes selected for publication.</summary>
-    private sealed class OutputBuffer(int capacity, int maximumLength, OutputRetention retention, IMemoryBudget budget)
+    private sealed class OutputBuffer(
+        int capacity, int maximumLength, int retainedLimit, OutputRetention retention, IMemoryBudget budget)
         : IByteMemoryWriter, IDisposable
     {
-        private readonly ByteMemoryBuilder _bytes = new(Math.Min(capacity, maximumLength), budget);
+        private readonly ByteMemoryBuilder _bytes = new(Math.Min(capacity, retainedLimit), budget);
         private int _maximumLength = maximumLength;
+        private int _retainedLimit = retainedLimit;
         private OutputRetention _retention = retention;
         private int _discarded;
 
         public int Length => _bytes.Length + _discarded;
         public int RemainingLength => _maximumLength - Length;
         public bool HasDiscardedBytes => _discarded != 0;
-        public bool IsDiscarding => _retention == OutputRetention.None || HasDiscardedBytes;
+        public bool IsDiscarding => HasDiscardedBytes || _bytes.Length == _retainedLimit;
         public ReadOnlyMemory<byte> RetainedBytes => _bytes.ToMemory();
 
         public bool TryAppend(byte value)
@@ -169,7 +171,12 @@ public static partial class PrintfFormatting
             if (count < 0 || count > RemainingLength)
                 return false;
             if (!IsDiscarding && (_retention != OutputRetention.BeforeNul || value != 0))
-                return _bytes.TryAppend(count, value);
+            {
+                var retained = Math.Min(count, _retainedLimit - _bytes.Length);
+                if (!_bytes.TryAppend(retained, value))
+                    return false;
+                count -= retained;
+            }
             _discarded += count;
             return true;
         }
@@ -183,6 +190,7 @@ public static partial class PrintfFormatting
                 return false;
             if (!IsDiscarding)
             {
+                prefix = prefix[..Math.Min(prefix.Length, _retainedLimit - _bytes.Length)];
                 var nul = _retention == OutputRetention.BeforeNul ? prefix.IndexOf((byte)0) : -1;
                 if (nul >= 0)
                     prefix = prefix[..nul];
@@ -202,10 +210,11 @@ public static partial class PrintfFormatting
                 _bytes.Truncate(_bytes.Length - 1);
         }
 
-        public void Reset(int lengthLimit, OutputRetention mode)
+        public void Reset(int lengthLimit, int retainedLimit, OutputRetention mode)
         {
             _bytes.Truncate(0);
             _maximumLength = lengthLimit;
+            _retainedLimit = retainedLimit;
             _retention = mode;
             _discarded = 0;
         }
@@ -227,7 +236,8 @@ public static partial class PrintfFormatting
         private const int MaximumOutputBytes = ByteMemoryBuilder.MaxMemoryBuilderBytes - 1;
 
         private readonly OutputBuffer _output = new(
-            0, MaximumOutputBytes, assignOutput ? OutputRetention.BeforeNul : OutputRetention.All, memoryBudget);
+            0, MaximumOutputBytes, MaximumOutputBytes,
+            assignOutput ? OutputRetention.BeforeNul : OutputRetention.All, memoryBudget);
         private List<Diagnostic>? _pendingDiagnostics;
         private MemoryCapacity? _diagnosticMemory;
         private OutputBuffer? _temporaryOutput;
@@ -340,16 +350,15 @@ public static partial class PrintfFormatting
             }
         }
 
-        private OutputBuffer GetTemporaryOutput(int requestedCapacity, int maximumLength)
+        private OutputBuffer GetTemporaryOutput(int requestedCapacity, int maximumLength, int? outputPrecision)
         {
-            var retention = _output.IsDiscarding ? OutputRetention.None
-                : assignOutput ? OutputRetention.BeforeNul : OutputRetention.All;
+            var retention = assignOutput ? OutputRetention.BeforeNul : OutputRetention.All;
+            var retainedLimit = _output.IsDiscarding ? 0 : Math.Min(maximumLength, outputPrecision ?? maximumLength);
             if (_temporaryOutput == null)
                 _temporaryOutput = new OutputBuffer(
-                    retention == OutputRetention.None ? 0 : Math.Min(Math.Max(requestedCapacity, 16), 4096),
-                    maximumLength, retention, memoryBudget);
+                    Math.Clamp(requestedCapacity, 16, 4096), maximumLength, retainedLimit, retention, memoryBudget);
             else
-                _temporaryOutput.Reset(maximumLength, retention);
+                _temporaryOutput.Reset(maximumLength, retainedLimit, retention);
             return _temporaryOutput;
         }
 

@@ -108,7 +108,9 @@ shell-closed stderr skip diagnostic storage.
 the first NUL and later bytes without storing them. Escaped and quoted
 conversions carry their logical lengths into field padding and precision.
 Their output scratch retains a prefix while those bytes can reach the
-assignment. Assignment compacts a truncated value before the formatting
+assignment. `%b` and `%q` cap that scratch prefix at output field precision
+for both stdout and assignment. Decoding and quoting still count the full
+conversion. Assignment compacts a truncated value before the formatting
 buffer is released.
 Prepared terminal diagnostics admit their final buffer in the command workspace,
 which holds it through later expansion, redirection setup and host writes.
