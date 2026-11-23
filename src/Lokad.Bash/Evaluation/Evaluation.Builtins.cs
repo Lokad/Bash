@@ -97,25 +97,20 @@ public sealed partial class Evaluation
         // Keep source words and surplus expansion fields separate; wrappers consume them without rebuilding the suffix.
         var wordIndex = 1;
         var lastReadArgument = commandValue;
-        // Byte-valued function names need no text allocation. Other names use the shared decode budget.
-        var commandName = _state.Functions.ContainsKey(commandValue) ? string.Empty
-            : await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
-        if (!BuiltinClassification.TryResolve(commandName.AsSpan(), out var initialBuiltin)
-            || initialBuiltin is not (BuiltinKind.Builtin or BuiltinKind.Command or BuiltinKind.Exec))
-            return Executable(sourceWords);
+        var resolution = ResolveCommandName(commandValue, lookupMode, out var registeredName);
+        var commandName = registeredName ?? await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
+        if (resolution is not CommandResolution.EvaluatorBuiltin
+            { Kind: BuiltinKind.Builtin or BuiltinKind.Command or BuiltinKind.Exec })
+            return Executable(sourceWords, resolution);
 
         using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
         var fields = new List<ShellValue>();
         var fieldIndex = 0;
 
-        while (BuiltinClassification.TryResolve(commandName.AsSpan(), out var builtinKind))
+        while (resolution is CommandResolution.EvaluatorBuiltin
+               { Kind: BuiltinKind.Builtin or BuiltinKind.Command or BuiltinKind.Exec } wrapper)
         {
-            if (lookupMode == CommandLookupMode.Normal
-                && _state.Functions.ContainsKey(commandValue))
-                break;
-
-            if (builtinKind is not (BuiltinKind.Builtin or BuiltinKind.Command or BuiltinKind.Exec))
-                break;
+            var builtinKind = wrapper.Kind;
 
             var next = await ReadFieldAsync().ConfigureAwait(false);
             if (builtinKind == BuiltinKind.Builtin)
@@ -133,16 +128,15 @@ public sealed partial class Evaluation
 
                 if (next is not { } name)
                     return Terminal(0, ShellValue.Empty, help: null, builtinKind);
-                if (!BuiltinClassification.TryResolve(name.Bytes.Span, out _))
+                if (!BuiltinClassification.TryResolve(name.Bytes.Span, out var targetName, out var targetKind))
                 {
                     return Terminal(1, BuildTerminalMessage(
                         [ShellValue.FromText("builtin: "), name, ShellValue.FromText(": not a shell builtin\n")]),
                         help: null, builtinKind);
                 }
 
-                // The registry only accepts short ASCII names.
-                Memory.Charge(checked(4L * name.Bytes.Length));
-                commandName = name.ToUtf8String();
+                resolution = CommandResolution.ForBuiltin(targetKind);
+                commandName = targetName;
                 commandValue = name;
                 lookupMode = CommandLookupMode.BuiltinOnly;
                 continue;
@@ -262,8 +256,9 @@ public sealed partial class Evaluation
                 return Terminal(0, ShellValue.Empty, help: null, builtinKind);
 
             commandValue = target;
-            commandName = await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
             lookupMode = CommandLookupMode.BypassFunctions;
+            resolution = ResolveCommandName(commandValue, lookupMode, out registeredName);
+            commandName = registeredName ?? await DecodeExpandedValueAsync(commandValue).ConfigureAwait(false);
             if (builtinKind == BuiltinKind.Exec)
             {
                 // A nested virtual exec selects a new name, but cannot restore already-cleared exports.
@@ -273,13 +268,13 @@ public sealed partial class Evaluation
             }
         }
 
-        return Executable(RemainingWords(commandValue));
+        return Executable(RemainingWords(commandValue), resolution);
 
-        PreparedCommand.Executable Executable(CommandWords words) => new(
+        PreparedCommand.Executable Executable(CommandWords words, CommandResolution selected) => new(
             words,
             commandValue,
             commandName,
-            ResolveCommandName(commandValue, lookupMode),
+            selected,
             executionOptions,
             UsesCommandWrapper: lookupMode != CommandLookupMode.Normal && executionOptions == null,
             completion,

@@ -462,7 +462,7 @@ public sealed partial class Evaluation
                         resolutions[index] = SelectFunction(function);
                         continue;
                     }
-                    var builtinKind = FindCommandBuiltin(value, lookupMode);
+                    var builtinKind = FindCommandBuiltin(value, lookupMode)?.Kind;
                     var hostBuiltin = builtinKind == BuiltinKind.ApplyPatch;
                     var evaluatorBuiltin = builtinKind.HasValue && !hostBuiltin;
                     if (localMatches != null)

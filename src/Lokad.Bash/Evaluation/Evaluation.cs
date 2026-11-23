@@ -1488,9 +1488,6 @@ public sealed partial class Evaluation : IFileTester
                 return CompleteCommandResult(builtinResult, executable.Completion, commandInvoked: true);
             }
 
-            if (executable.Resolution is CommandResolution.Missing)
-                return await FailPreparationAsync(127).ConfigureAwait(false);
-
             if (!TryBuildFunctionExports(out var functions))
             {
                 await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("exported function limit exceeded"))
@@ -2913,30 +2910,32 @@ public sealed partial class Evaluation : IFileTester
         return EvaluationResult.Exit(result.ExitCode);
     }
 
-    private CommandResolution ResolveCommandName(ShellValue commandName, CommandLookupMode lookupMode)
+    private CommandResolution ResolveCommandName(ShellValue commandName, CommandLookupMode lookupMode, out string? registeredName)
     {
         if (FindCommandFunction(commandName, lookupMode) is { } function)
+        {
+            // Functions can have byte-valued names that need no text representation for dispatch.
+            registeredName = string.Empty;
             return new CommandResolution.Function(function);
+        }
 
         if (FindCommandBuiltin(commandName, lookupMode) is { } builtin)
         {
-            return builtin == BuiltinKind.ApplyPatch
-                ? new CommandResolution.HostBuiltin(builtin)
-                : new CommandResolution.EvaluatorBuiltin(builtin);
+            registeredName = builtin.Name;
+            return CommandResolution.ForBuiltin(builtin.Kind);
         }
 
-        return lookupMode == CommandLookupMode.BuiltinOnly
-            ? CommandResolution.Missing.Instance
-            : CommandResolution.Host.Instance;
+        registeredName = null;
+        return CommandResolution.Host.Instance;
     }
 
     private FunctionBinding? FindCommandFunction(ShellValue name, CommandLookupMode lookupMode) =>
         lookupMode == CommandLookupMode.Normal && _state.Functions.TryGetValue(name, out var function)
             ? function : null;
 
-    private static BuiltinKind? FindCommandBuiltin(ShellValue name, CommandLookupMode lookupMode) =>
-        lookupMode != CommandLookupMode.HostOnly && BuiltinClassification.TryResolve(name.Bytes.Span, out var builtin)
-            ? builtin : null;
+    private static (string Name, BuiltinKind Kind)? FindCommandBuiltin(ShellValue name, CommandLookupMode lookupMode) =>
+        lookupMode != CommandLookupMode.HostOnly && BuiltinClassification.TryResolve(name.Bytes.Span, out var spelling, out var kind)
+            ? (spelling, kind) : null;
 
     /// <summary>
     /// Opens a lexical redirection scope and records ownership of every descriptor it creates.
@@ -4446,20 +4445,32 @@ public sealed partial class Evaluation : IFileTester
 
     private abstract record CommandResolution
     {
+        private static readonly EvaluatorBuiltin BuiltinWrapper = new(BuiltinKind.Builtin);
+        private static readonly EvaluatorBuiltin CommandWrapper = new(BuiltinKind.Command);
+        private static readonly EvaluatorBuiltin ExecWrapper = new(BuiltinKind.Exec);
+
         public sealed record Function(FunctionBinding Binding) : CommandResolution;
 
         public sealed record EvaluatorBuiltin(BuiltinKind Kind) : CommandResolution;
 
-        public sealed record HostBuiltin(BuiltinKind Kind) : CommandResolution;
+        public static CommandResolution ForBuiltin(BuiltinKind kind) => kind switch
+        {
+            BuiltinKind.ApplyPatch => HostBuiltin.Instance,
+            BuiltinKind.Builtin => BuiltinWrapper,
+            BuiltinKind.Command => CommandWrapper,
+            BuiltinKind.Exec => ExecWrapper,
+            _ => new EvaluatorBuiltin(kind),
+        };
+
+        // Host-backed builtins dispatch through the host with in-process redirection scope.
+        public sealed record HostBuiltin : CommandResolution
+        {
+            public static readonly HostBuiltin Instance = new();
+        }
 
         public sealed record Host : CommandResolution
         {
             public static readonly Host Instance = new();
-        }
-
-        public sealed record Missing : CommandResolution
-        {
-            public static readonly Missing Instance = new();
         }
     }
 

@@ -8,6 +8,20 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteCommandSelectionTests
 {
+    [Theory]
+    [InlineData("[")]
+    [InlineData(".")]
+    [InlineData("readarray")]
+    [InlineData("typeset")]
+    public void BuiltinByteLookupBorrowsTheExactRegisteredAlias(string spelling)
+    {
+        var registered = Assert.Single(BuiltinClassification.Entries, entry => entry.Name == spelling);
+
+        Assert.True(BuiltinClassification.TryResolve(Utf8Text.Encode(spelling).Span, out var name, out var kind));
+        Assert.Same(registered.Name, name);
+        Assert.Equal(registered.Kind, kind);
+    }
+
     // Bash 5.2.21/C.UTF-8 with pipefail; diagnostics omit only the executable/file/line prefix.
     [Theory]
     [InlineData("cmd=(printf '<%s>' $'\\377' '' $'\\376'); \"${cmd[@]}\"\n", "3CFF3E3C3E3CFE3E", "", 0)]

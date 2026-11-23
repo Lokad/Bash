@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Lokad.Bash.Helpers;
 
@@ -110,20 +111,23 @@ internal static class BuiltinClassification
 
     private static readonly int MaximumNameLength = Kinds.Keys.Max(static name => name.Length);
 
-    /// <summary>Classifies source bytes using the same registry without decoding arbitrary command words.</summary>
-    public static bool TryResolve(ReadOnlySpan<byte> word, out BuiltinKind kind)
+    public static bool TryResolve(ReadOnlySpan<byte> word, out BuiltinKind kind) => TryResolve(word, out _, out kind);
+
+    /// <summary>Returns the registered spelling and kind for a byte-valued builtin name.</summary>
+    public static bool TryResolve(ReadOnlySpan<byte> word, [NotNullWhen(true)] out string? name, out BuiltinKind kind)
     {
+        name = null;
         kind = default;
         if (word.Length > MaximumNameLength)
             return false;
-        Span<char> name = stackalloc char[MaximumNameLength];
+        Span<char> spelling = stackalloc char[MaximumNameLength];
         for (var index = 0; index < word.Length; index++)
         {
             if (word[index] > 127)
                 return false;
-            name[index] = (char)word[index];
+            spelling[index] = (char)word[index];
         }
-        return TryResolve(name[..word.Length], out kind);
+        return Kinds.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(spelling[..word.Length], out name, out kind);
     }
 }
 
