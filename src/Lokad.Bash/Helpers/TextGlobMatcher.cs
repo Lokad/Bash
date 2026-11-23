@@ -56,6 +56,57 @@ public static class TextGlobMatcher
         Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Search, memory),
             new GlobInput(text, byteCharacters, reverse: false), requireEnd: false, shortestPrefix: false, cancellationToken, out start, out length);
 
+    internal static bool TryFindLiteral(ReadOnlySpan<byte> pattern, ReadOnlySpan<byte> text, out int start, out int length)
+    {
+        start = text.IndexOf(pattern);
+        length = pattern.Length;
+        return start >= 0;
+    }
+
+    /// <summary>Reuses bracket preparation across successive searches under one caller's allowance.</summary>
+    internal ref struct Utf8Search
+    {
+        private readonly ReadOnlySpan<byte> _pattern;
+        private readonly GlobMaskSpan _mask;
+        private readonly bool _literal;
+        private readonly MemoryCapacity _memory;
+        private PatternInput _input;
+        private bool? _byteCharacters;
+
+        public Utf8Search(ReadOnlySpan<byte> pattern, GlobMaskSpan mask, bool literal, MemoryCapacity memory)
+        {
+            _pattern = pattern;
+            _mask = mask;
+            _literal = literal;
+            _memory = memory;
+        }
+
+        public bool TryFind(scoped ReadOnlySpan<byte> text, bool byteCharacters, CancellationToken cancellationToken,
+            out int start, out int length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_literal)
+                return TryFindLiteral(_pattern, text, out start, out length);
+
+            if (_byteCharacters != byteCharacters)
+            {
+                Dispose();
+                _input = new PatternInput(new GlobInput(_pattern, byteCharacters, reverse: false), _mask, default,
+                    PatternTraversal.Search, _memory);
+                _byteCharacters = byteCharacters;
+            }
+
+            return MatchCore(ref _input, new GlobInput(text, byteCharacters, reverse: false), requireEnd: false,
+                shortestPrefix: false, cancellationToken, out start, out length) == GlobMatchResult.Match;
+        }
+
+        public void Dispose()
+        {
+            _input.ReleaseBracketMemory();
+            _byteCharacters = null;
+        }
+    }
+
     /// <summary>Matches a suffix by reading pattern atoms and text characters in reverse.</summary>
     internal static GlobMatchResult MatchUtf8Suffix(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<int> atoms, ReadOnlySpan<byte> text,
@@ -128,7 +179,7 @@ public static class TextGlobMatcher
         finally { pattern.ReleaseBracketMemory(); }
     }
 
-    private static GlobMatchResult MatchCore(ref PatternInput pattern, GlobInput text, bool requireEnd,
+    private static GlobMatchResult MatchCore(ref PatternInput pattern, scoped GlobInput text, bool requireEnd,
         bool shortestPrefix, CancellationToken cancellationToken, out int start, out int length)
     {
         start = -1;
@@ -202,7 +253,7 @@ public static class TextGlobMatcher
         return length >= 0 ? GlobMatchResult.Match : GlobMatchResult.NoMatch;
 
         static bool TryAdvanceStar(ref int p, ref int t, int star, ref int match, ref int origin,
-            ref PatternInput pattern, GlobInput text, bool found)
+            ref PatternInput pattern, scoped GlobInput text, bool found)
         {
             // Once a search matches, keep its leftmost start while extending its own stars.
             if (star < 0 || match == text.Length || found && pattern.IsSearchStar(star))

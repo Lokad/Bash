@@ -226,6 +226,43 @@ public sealed class PatternTraversalTests
     }
 
     [Fact]
+    public void RepeatedSearchKeepsItsBracketUntilTheCharacterProfileChanges()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var value = ShellValue.FromText("[é" + new string('a', 32) + "]");
+            var mask = new GlobMask(ReadOnlyMemory<byte>.Empty);
+            var pattern = ShellPattern.FromUnescaped(value, mask, memory, CancellationToken.None);
+            var initial = memory.Workspace.Bytes;
+            using (var search = pattern.CreateSearch(memory.Workspace))
+            {
+                Assert.True(search.TryFind("a"u8, false, CancellationToken.None, out _, out _));
+                Assert.Equal(initial, memory.Workspace.Bytes);
+
+                Assert.True(search.TryFind("é"u8, false, CancellationToken.None, out var start, out var length));
+                Assert.Equal(0, start);
+                Assert.Equal(2, length);
+                var scalar = memory.Workspace.Bytes;
+                Assert.True(scalar > initial);
+                Assert.True(search.TryFind("é"u8, false, CancellationToken.None, out _, out _));
+                Assert.Equal(scalar, memory.Workspace.Bytes);
+
+                Assert.True(search.TryFind([0xC3], true, CancellationToken.None, out start, out length));
+                Assert.Equal(0, start);
+                Assert.Equal(1, length);
+                Assert.Equal(initial, memory.Workspace.Bytes);
+                Assert.True(search.TryFind([0xA9], true, CancellationToken.None, out _, out _));
+                Assert.True(memory.Workspace.Bytes > initial);
+            }
+            Assert.Equal(initial, memory.Workspace.Bytes);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void RetriedBracketsKeepIndependentQuotedAndNegatedMembership()
     {
         var pattern = "*[a-cxyzxyzxyzxyzxyz][![:digit:]xyzxyzxyzxyz]z"u8;

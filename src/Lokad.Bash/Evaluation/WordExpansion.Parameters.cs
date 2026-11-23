@@ -1048,6 +1048,7 @@ internal static partial class WordExpansion
                     }
                     var replaced = false;
                     using var builder = new ByteMemoryBuilder(0, scratch);
+                    using var search = mode == ParameterReplacementMode.All ? pattern.CreateSearch(scratch) : default;
                     var position = 0;
                     var copiedThrough = 0;
                     do
@@ -1065,6 +1066,8 @@ internal static partial class WordExpansion
                             found = pattern.TryMatchSuffix(bytes[position..], shortest: false, byteCharacters, cancellationToken, out offset);
                             length = found ? bytes.Length - position - offset : 0;
                         }
+                        else if (mode == ParameterReplacementMode.All)
+                            found = search.TryFind(bytes[position..], byteCharacters, cancellationToken, out offset, out length);
                         else
                             found = pattern.TryFind(bytes[position..], byteCharacters, cancellationToken, out offset, out length);
                         if (!found)

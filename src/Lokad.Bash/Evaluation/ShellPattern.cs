@@ -1,4 +1,5 @@
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -98,15 +99,14 @@ internal sealed class ShellPattern
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (_literal)
-        {
-            start = text.IndexOf(_value.Bytes.Span);
-            length = _value.Bytes.Length;
-            return start >= 0;
-        }
+            return TextGlobMatcher.TryFindLiteral(_value.Bytes.Span, text, out start, out length);
+
         var mask = _mask.AsSpan();
         return TextGlobMatcher.FindUtf8(_value.Bytes.Span, in mask, text,
             byteCharacters, _memory.Workspace, cancellationToken, out start, out length) == GlobMatchResult.Match;
     }
+
+    public TextGlobMatcher.Utf8Search CreateSearch(MemoryCapacity scratch) => new(_value.Bytes.Span, _mask.AsSpan(), _literal, scratch);
 
     public bool TryMatchSuffix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int start) =>
         TryMatchSuffix(text, shortest, UsesByteCharacters(text), cancellationToken, out start);
