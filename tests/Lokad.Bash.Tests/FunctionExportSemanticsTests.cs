@@ -9,6 +9,34 @@ namespace Lokad.Bash.Tests;
 // GNU Bash 5.2.21/5.2.37, file-backed C locale: export/import effects, separate from lifetime tests.
 public sealed class FunctionExportSemanticsTests
 {
+    [Theory]
+    [InlineData("false && value=$({ cat <<DATA\nbody\nDATA\n}; printf extra)", 3, " } printf extra);")]
+    [InlineData("value=$(case k in k) cat <<DATA\nbody\nDATA\n;; esac; printf extra)", 7, "esac printf extra);")]
+    [InlineData("value=$(if :; then cat <<DATA\nbody\nDATA\nfi; printf extra)", 5, "fi printf extra);")]
+    public async Task RejectedInheritedCaptureStopsChildBeforeItsFirstCommand(string body, int line, string lineText)
+    {
+        var source = "f(){ " + body + "; printf tail; }\nexport -f f\n"
+            + "bash -c 'printf child; : >ran' tag 2>report\nprintf '<%s>' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new ExportTestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, CancellationToken.None)
+                : await BashScript.RunAsync(host, source, EvaluationOptions.Default, CancellationToken.None);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("<2>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal($"bash: f: line {line}: syntax error near unexpected token `printf'\n"
+                + $"bash: f: line {line}: `{lineText}'\n", host.ReadFile("/report"));
+            Assert.Equal("report", Assert.Single(host.CaptureEntries()).Key);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
     public static IEnumerable<object[]> Cases()
     {
         foreach (var prepared in new[] { false, true })

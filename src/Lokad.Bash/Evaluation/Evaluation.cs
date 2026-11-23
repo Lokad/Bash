@@ -457,10 +457,15 @@ public sealed partial class Evaluation : IFileTester
                 {
                     LoadedSyntaxFunctionDepth = _loadedSyntaxFunctionDepth
                 };
-                result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
-                if (_state.ForkKind == ShellForkKind.Subshell)
-                    result = CompleteDiscardInChild(result);
-                result = await RunExitTrapAsync(scope, result).ConfigureAwait(false);
+                if (!await TryImportInheritedFunctionsAsync(scope).ConfigureAwait(false))
+                    result = EvaluationResult.FromExitCode(2);
+                else
+                {
+                    result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
+                    if (_state.ForkKind == ShellForkKind.Subshell)
+                        result = CompleteDiscardInChild(result);
+                    result = await RunExitTrapAsync(scope, result).ConfigureAwait(false);
+                }
             }
             catch (ByteMemoryBuilder.LimitExceededException)
             {
@@ -3907,17 +3912,23 @@ public sealed partial class Evaluation : IFileTester
     {
         private readonly string? _path;
         private readonly int _pathLength;
+        private readonly ShellValue _subject;
         private readonly SyntaxDiagnosticOrigin _origin;
         private readonly ReadOnlyMemory<byte> _lineNumber;
 
         internal SyntaxDiagnosticPrefix(string? path, SyntaxDiagnosticOrigin origin, int line)
+            : this(path, ShellValue.Empty, origin, line) { }
+
+        internal SyntaxDiagnosticPrefix(string? path, ShellValue subject, SyntaxDiagnosticOrigin origin, int line)
         {
             _path = path;
             _pathLength = path == null ? 0 : Utf8Text.StrictUtf8.GetByteCount(path);
+            _subject = subject;
             _origin = origin;
-            var hasPrefix = path != null || origin != SyntaxDiagnosticOrigin.Script;
+            var hasPrefix = path != null || !subject.IsEmpty || origin != SyntaxDiagnosticOrigin.Script;
             _lineNumber = hasPrefix ? NumberFormatting.FormatNumber(line) : ReadOnlyMemory<byte>.Empty;
-            Length = hasPrefix ? (path == null ? 0 : _pathLength + 2) + GetOrigin().Length
+            Length = hasPrefix ? (path == null ? 0 : _pathLength + 2)
+                + (subject.IsEmpty ? 0 : subject.Bytes.Length + 2) + GetOrigin().Length
                 + "line "u8.Length + _lineNumber.Length + ": "u8.Length : 0;
         }
 
@@ -3932,6 +3943,8 @@ public sealed partial class Evaluation : IFileTester
                 Utf8Text.StrictUtf8.GetBytes(_path, diagnostic.AppendSpan(_pathLength));
                 diagnostic.Append(": "u8);
             }
+            if (!_subject.IsEmpty)
+                diagnostic.Append(_subject.Bytes.Span).Append(": "u8);
             diagnostic.Append(GetOrigin()).Append("line "u8).Append(_lineNumber.Span).Append(": "u8);
         }
 
@@ -3944,8 +3957,12 @@ public sealed partial class Evaluation : IFileTester
         };
     }
 
-    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, SyntaxDiagnosticOrigin origin,
-        int line, bool includeLine)
+    private Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, SyntaxDiagnosticOrigin origin,
+        int line, bool includeLine) =>
+        ReportUnexpectedSyntaxAsync(syntax, path, ShellValue.Empty, origin, line, includeLine);
+
+    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, ShellValue subject,
+        SyntaxDiagnosticOrigin origin, int line, bool includeLine)
     {
         var descriptor = GetStdErrDescriptor();
         CheckCancellation();
@@ -3964,7 +3981,7 @@ public sealed partial class Evaluation : IFileTester
             ? "unexpected token `"u8 : "unexpected argument `"u8;
         var tokenPrefix = conditional ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
         var groupMessage = "expected `)'\n"u8;
-        var prefix = new SyntaxDiagnosticPrefix(path, origin, line);
+        var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);
         var prefixLength = prefix.Length;
         var length = prefixLength + tokenPrefix.Length + (long)syntax.Token.Length + 2
             + syntax.UnclosedGroups * (long)(prefixLength + groupMessage.Length);

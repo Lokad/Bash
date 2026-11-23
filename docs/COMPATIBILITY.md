@@ -400,7 +400,9 @@ punctuation and literal suffixes through the reached operand boundary. With
 errexit the diagnostic omits the rendered line. Function listings show the
 rendered body in word, parameter and arithmetic operands, and reloading a
 listing reports its invalid syntax. Host function exports preserve the authored
-capture so the child can import it and validate it when reached. Backtick
+capture. Inherited startup checks any rejected rendered capture before the
+child's script executes. The diagnostic identifies the function and position
+within the rendered import, and startup returns status 2. Backtick
 captures and captures read directly from a here-document use their source
 separators.
 When a script ends inside a parenthesized capture, the script reader reports

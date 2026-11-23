@@ -106,6 +106,48 @@ public sealed class EvaluationStartupTests
     }
 
     [Fact]
+    public async Task InheritedStartupImportsValidDefinitionsBesideHostOverrides()
+    {
+        var invocation = new CommandInvocation("bash", [], ShellPath.Root, [], null, null, null)
+        {
+            Functions = [new("f(){ printf inherited; }"u8.ToArray()), new("g(){ printf stable; }"u8.ToArray())]
+        };
+        var evaluation = ShellEvaluationStartup.CreateInherited(invocation, Parser.Parse("f; g"),
+            ShellValue.FromText("bash"), []);
+        evaluation.SetExportedFunction(Assert.IsType<FunctionDefinition>(
+            Assert.Single(Parser.Parse("f(){ printf host; }").Commands)));
+        await using var host = new MockFileSystem();
+        try
+        {
+            var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("hoststable"u8.ToArray(), host.GetOutputBytes(FileDescriptor.StdOut));
+            Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+        }
+        finally { evaluation.ReleaseFunctions(); }
+    }
+
+    [Fact]
+    public async Task InvalidInheritedSourceLeavesTheChildScriptAndStagedDefinitionsUnpublished()
+    {
+        var invocation = new CommandInvocation("bash", [], ShellPath.Root, [], null, null, null)
+        {
+            Functions = [new("f(){ printf inherited; }"u8.ToArray()), new("printf input"u8.ToArray())]
+        };
+        var evaluation = ShellEvaluationStartup.CreateInherited(invocation, Parser.Parse("printf script"),
+            ShellValue.FromText("bash"), []);
+        await using var host = new MockFileSystem();
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.GetOutputBytes(FileDescriptor.StdOut));
+        Assert.Equal("syntax error: Expected a single exported function definition.\n"u8.ToArray(),
+            host.GetOutputBytes(FileDescriptor.StdErr));
+        Assert.Equal(0, evaluation.RetainedFunctionMemoryBytes);
+    }
+
+    [Fact]
     public async Task DirectStartupUsesItsOwnStateAndStandardDescriptors()
     {
         var directory = new ShellPath("/work");

@@ -11,7 +11,7 @@ namespace Lokad.Bash;
 public static class ShellEvaluationStartup
 {
     /// <summary>Starts on the same host with captured bindings, borrowed handles and environment.</summary>
-    /// <remarks>The caller owns preparation. The engine installs its runtime budget when evaluation starts.</remarks>
+    /// <remarks>Function sources are borrowed until startup prepares them under the engine's runtime budget.</remarks>
     public static ShellEvaluation CreateInherited(
         CommandInvocation command,
         ParsedScript script,
@@ -21,9 +21,11 @@ public static class ShellEvaluationStartup
         var bindings = (command.TryGetInheritance<BashCommandInheritance>(out var inherited)
                 ? inherited.Bindings : DescriptorBindings.Snapshot.Standard)
             .WithStandardStreams(command.StdIn, command.StdOut, command.StdErr);
-        return new ShellEvaluation(script, new EvaluationOptions(0, command.CurrentDirectory),
+        var evaluation = new ShellEvaluation(script, new EvaluationOptions(0, command.CurrentDirectory),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(bindings), command.BorrowedDescriptors),
             command.Environment, argumentZero, positionalParameters);
+        evaluation.SetInheritedFunctions(command.CommandName, command.Functions);
+        return evaluation;
     }
 
     /// <summary>Starts with standard host descriptors and an independent environment.</summary>

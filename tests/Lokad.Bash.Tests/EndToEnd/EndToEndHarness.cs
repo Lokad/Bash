@@ -262,12 +262,6 @@ public class TestHost : MockFileSystem
         var child = ShellEvaluationStartup.CreateInherited(command, script, argumentZero, arguments.Skip(firstArgument).ToArray());
         try
         {
-            foreach (var exported in command.Functions)
-            {
-                if (Parser.Parse(exported.Source).Commands is not [FunctionDefinition definition])
-                    throw new InvalidOperationException("Export did not contain one function definition.");
-                child.SetExportedFunction(definition);
-            }
             var result = await new Engine().RunAsync(child, this, childMemory, cancel).ConfigureAwait(false);
             return new CommandExecutionResult.Completed(result.ExitCode);
         }

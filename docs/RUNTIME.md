@@ -477,7 +477,10 @@ is closed. Diagnostic bytes remain admitted through completion of the write.
 
 `CommandInvocation` carries byte arguments, environment, working directory, stdio,
 exported function definitions, ownership and an optional typed interpreter payload.
-Same-host Bash startup imports captured bindings. New-host startup uses its own
+Same-host Bash startup imports captured bindings and validates serialized
+definitions under its runtime budget before executing the child script. Function
+imports publish together after validation. A definition supplied explicitly by
+the host takes precedence over a matching name. New-host startup uses its own
 environment and descriptors. Child commands preserve captured descriptor bindings,
 exported functions and the working directory without taking ownership of borrowed
 handles. The host owns and admits any copies made by its argument consumers.

@@ -10,7 +10,7 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Renders retained syntax and its line layout without evaluation.</summary>
 internal static class FunctionDefinitionFormatter
 {
-    private enum Format { Display, Export, BraceSource, SubstitutionSource, SubstitutionDisplay, CaptureCoordinates }
+    private enum Format { Display, Export, ImportValidation, BraceSource, SubstitutionSource, SubstitutionDisplay, CaptureCoordinates }
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppend(FunctionDefinition definition, ByteMemoryBuilder output) =>
@@ -20,6 +20,10 @@ internal static class FunctionDefinitionFormatter
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppendExport(FunctionDefinition definition, BoundedByteMemoryBuilder output) =>
         TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.Export, CancellationToken.None);
+
+    internal static bool TryAppendImportValidation(FunctionDefinition definition, BoundedByteMemoryBuilder output,
+        CancellationToken cancellationToken) =>
+        TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.ImportValidation, cancellationToken);
 
     /// <summary>Renders the word's lexical structure, retaining its quotes and escapes.</summary>
     internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, IMemoryBudget budget,
@@ -118,7 +122,8 @@ internal static class FunctionDefinitionFormatter
         CancellationToken cancellationToken, CommandLocations? locations = null, ShellScanContext? captures = null)
     {
         var display = format == Format.Display;
-        var displayCaptures = format is Format.Display or Format.SubstitutionDisplay;
+        var importValidation = format == Format.ImportValidation;
+        var displayCaptures = format is Format.Display or Format.SubstitutionDisplay or Format.ImportValidation;
         var substitutionSource = format is Format.SubstitutionSource or Format.SubstitutionDisplay;
         var displayRedirections = display || substitutionSource;
         var inlineSource = format == Format.BraceSource || substitutionSource;
@@ -211,7 +216,7 @@ internal static class FunctionDefinitionFormatter
                             : newline ? 1 : 0;
                         if (!output.TryAppend(breaks, (byte)'\n')) return false;
                     }
-                    else if (display)
+                    else if (display || importValidation)
                     {
                         // A body printed inside the left command suppresses this connector's semicolon.
                         if (!WriteLine(indent, terminate: !followsFlushedDocuments)) return false;
@@ -446,7 +451,7 @@ internal static class FunctionDefinitionFormatter
                         case ListCommand list:
                             if (capture) PushStep(new Step.FlushDocuments());
                             Push(new Step.Command(list.Left, indent), list.Operator == ListOperator.Sequence
-                                    ? display || inlineSource || capture
+                                    ? display || inlineSource || capture || importValidation
                                         ? new Step.CommandSeparator(list.HasNewlineConnector, list.SeparatorSource, indent)
                                         : new Step.Line(indent, Terminate: true)
                                     : new Step.LogicalSeparator(list.Operator),
@@ -590,7 +595,7 @@ internal static class FunctionDefinitionFormatter
                         TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
                     WordPartKind.Unquoted => output.TryAppend(content),
                     // ANSI-C quoting keeps embedded apostrophes in one literal part on import.
-                    WordPartKind.SingleQuoted when format == Format.Export && content.Contains((byte)'\'') =>
+                    WordPartKind.SingleQuoted when (format == Format.Export || importValidation) && content.Contains((byte)'\'') =>
                         ShellArgumentEscaping.TryAppendQuoted(output, content, ShellQuoteStyle.AnsiC),
                     WordPartKind.SingleQuoted => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, content),
                     WordPartKind.DoubleQuoted => output.TryAppend(content),
@@ -675,7 +680,7 @@ internal static class FunctionDefinitionFormatter
 
         bool WriteLine(int indent, bool terminate)
         {
-            if (displayRedirections && terminate && hereDocuments.Count == 0 && !Append(";")) return false;
+            if ((displayRedirections || importValidation) && terminate && hereDocuments.Count == 0 && !Append(";")) return false;
             if (!Append("\n")) return false;
             // The layout line resumes after the body, so its LF also counts in capture coordinates.
             if (hereDocuments.Count != 0
