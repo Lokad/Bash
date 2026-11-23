@@ -1614,7 +1614,7 @@ public static class Parser
     /// <summary>
     /// Borrows source bytes when a word is a single unquoted part.
     /// </summary>
-    private static bool TryGetPlainUnquotedSource(Word word, out ShellSource source)
+    internal static bool TryGetPlainUnquotedSource(Word word, out ShellSource source)
     {
         if (word.Parts is [{ Kind: WordPartKind.Unquoted }])
         {

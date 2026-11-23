@@ -143,7 +143,7 @@ public sealed class FunctionDefinitionOutputTests
 
         Assert.True(FunctionDefinitionFormatter.TryAppend(function, display));
         Assert.True(FunctionDefinitionFormatter.TryAppendExport(function, export));
-        Assert.Equal("f () \n{ \n     {" + name + "}> out\n}\n", Utf8Text.Decode(display.ToMemory()));
+        Assert.Equal("f () \n{ \n    {" + name + "}> out\n}\n", Utf8Text.Decode(display.ToMemory()));
         foreach (var bytes in new[] { display.ToMemory(), export.ToMemory() })
         {
             var parsed = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(bytes).Commands));
@@ -286,6 +286,15 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ ((x+=1));\n}", "f () \n{ \n    ((x+=1))\n}\n")]
     [InlineData("f(){ g(){ printf '%s\\n' \"$1\"; }; g x;\n}", "f () \n{ \n    function g () \n    { \n        printf '%s\\n' \"$1\"\n    };\n    g x\n}\n")]
     [InlineData("f(){ echo x 2>err >out; cat <in; echo y >&2; true 3>&-;\n}", "f () \n{ \n    echo x 2> err > out;\n    cat < in;\n    echo y 1>&2;\n    true 3>&-\n}\n")]
+    [InlineData("f(){ >out 2>err; }", "f () \n{ \n    > out 2> err\n}\n")]
+    [InlineData("f(){ printf x | >out; }", "f () \n{ \n    printf x | > out\n}\n")]
+    [InlineData("f(){ printf '%s' \"$(<in)\"; }", "f () \n{ \n    printf '%s' \"$(< in)\"\n}\n")]
+    [InlineData("f(){ printf x 1>out; cat 0<in; printf y 3>other 1>&3; }",
+        "f () \n{ \n    printf x > out;\n    cat < in;\n    printf y 3> other 1>&3\n}\n")]
+    [InlineData("f(){ : <>in; : 0<&-; }", "f () \n{ \n    : 0<> in;\n    : 0>&-\n}\n")]
+    [InlineData("f(){ : >&\"1\"; : >&01; }", "f () \n{ \n    : >&\"1\";\n    : 1>&1\n}\n")]
+    [InlineData("f(){ printf '%s' \"$(cat 0<<'END'\nline\nEND\n)\"; }",
+        "f () \n{ \n    printf '%s' \"$(cat <<'END'\nline\nEND\n)\"\n}\n")]
     [InlineData("f(){ x='a b' y+=c printf '%s\\n' \"$x\"; declare -a arr=([2]='a b' tail); arr+=(one);\n}", "f () \n{ \n    x='a b' y+=c printf '%s\\n' \"$x\";\n    declare -a arr=([2]='a b' tail);\n    arr+=(one)\n}\n")]
     [InlineData("f(){ printf '%s\\n' 'a b' \"$x\" \"a\\$x\" \"${x:-a b}\" a\\ b \"$(printf x)\";\n}", "f () \n{ \n    printf '%s\\n' 'a b' \"$x\" \"a\\$x\" \"${x:-a b}\" a\\ b \"$(printf x)\"\n}\n")]
     [InlineData("f(){ cat <<'END'\n$x\nEND\n\n}", "f () \n{ \n    cat <<'END'\n$x\nEND\n\n}\n")]

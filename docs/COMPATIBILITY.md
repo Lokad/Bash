@@ -742,6 +742,9 @@ Newlines between commands and in literal data remain part of the spelling.
 Trailing comments and blank lines are omitted, and a here-document keeps the
 newlines needed to delimit its body. Reloading the listing with `eval` locates
 commands using the printed lines.
+Definition listings use Bash's spelling for default descriptors in file and
+here-input redirections. Descriptor duplications distinguish literal numbers
+from quoted or expanded target words.
 
 `getopts` scans explicit arguments or the current positional parameters one option
 byte at a time, including bundled flags. A colon after an option byte requires an

@@ -81,6 +81,14 @@ public sealed class Redirection
     /// <summary>Retains the parsed delimiter separately from the completed body in Target.</summary>
     public Word? HereDocumentDelimiter { get; }
 
+    internal int DefaultFileDescriptor => Kind switch
+    {
+        RedirectionKind.Input or RedirectionKind.InputOutput or RedirectionKind.DuplicateInput
+            or RedirectionKind.CloseInput or RedirectionKind.HereString or RedirectionKind.HereDocument
+            or RedirectionKind.HereDocumentStripTabs => 0,
+        _ => 1
+    };
+
     internal HereDocumentDelimiterSyntax? DelimiterSyntax { get; init; }
 
     /// <summary>Source-final move syntax is prepared once; expanded digits followed by '-' remain ordinary words.</summary>

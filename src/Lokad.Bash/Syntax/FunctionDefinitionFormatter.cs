@@ -83,6 +83,7 @@ internal static class FunctionDefinitionFormatter
     {
         var display = format == Format.Display;
         var substitutionSource = format == Format.SubstitutionSource;
+        var displayRedirections = display || substitutionSource;
         var inlineSource = format == Format.BraceSource || substitutionSource;
         var lines = output as LineCounter;
         var capture = lines != null;
@@ -260,7 +261,7 @@ internal static class FunctionDefinitionFormatter
                             break;
                     }
                     break;
-                case Step.Redirections(var redirections, var firstElement):
+                case Step.Redirections(var redirections, var leadingSpace, var firstElement):
                     if (capture && redirections.Count != 0)
                         flushedHereDocuments = false;
                     PrepareWork(redirections.Count + (firstElement != null ? 1 : 0));
@@ -268,26 +269,35 @@ internal static class FunctionDefinitionFormatter
                     {
                         if (index == 0 && firstElement != null)
                             work.Push(new Step.Location(firstElement, FirstElement: true));
-                        work.Push(new Step.Redirection(redirections[index]));
+                        work.Push(new Step.Redirection(redirections[index], leadingSpace || index != 0));
                     }
                     break;
-                case Step.Redirection(var redirection):
-                    if (!Append(" ")) return false;
+                case Step.Redirection(var redirection, var leadingSpace):
+                    if (leadingSpace && !Append(" ")) return false;
+                    var literalDescriptor = 0;
+                    var printLiteral = displayRedirections
+                        && redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput
+                        && TryGetLiteralDescriptor(redirection, out literalDescriptor);
                     if (redirection.VariableName.Length != 0)
                     {
                         if (!Append("{") || !Append(redirection.VariableName) || !Append("}")) return false;
                     }
-                    else if (redirection.FileDescriptor is { } descriptor)
+                    else
                     {
-                        if (!Append(descriptor.ToString(CultureInfo.InvariantCulture))) return false;
-                    }
-                    else if (redirection.Kind is RedirectionKind.DuplicateOutput or RedirectionKind.CloseOutput)
-                    {
-                        if (!Append("1")) return false;
-                    }
-                    else if (redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.CloseInput)
-                    {
-                        if (!Append("0")) return false;
+                        var defaultDescriptor = redirection.DefaultFileDescriptor;
+                        var descriptor = redirection.FileDescriptor ?? defaultDescriptor;
+                        var printDefault = redirection.Kind switch
+                        {
+                            RedirectionKind.CloseInput or RedirectionKind.CloseOutput => true,
+                            RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput => !displayRedirections || printLiteral,
+                            RedirectionKind.InputOutput => displayRedirections || redirection.FileDescriptor.HasValue,
+                            RedirectionKind.Input or RedirectionKind.Output or RedirectionKind.OutputAppend or RedirectionKind.ForceOutput
+                                or RedirectionKind.HereString or RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs =>
+                                !displayRedirections && redirection.FileDescriptor.HasValue,
+                            _ => redirection.FileDescriptor.HasValue
+                        };
+                        if ((printDefault || descriptor != defaultDescriptor)
+                            && !Append(descriptor.ToString(CultureInfo.InvariantCulture))) return false;
                     }
                     var redirectionOperator = redirection.Kind switch
                     {
@@ -297,6 +307,7 @@ internal static class FunctionDefinitionFormatter
                         RedirectionKind.InputOutput => "<> ",
                         RedirectionKind.ForceOutput => ">| ",
                         RedirectionKind.DuplicateOutput or RedirectionKind.CloseOutput => ">&",
+                        RedirectionKind.CloseInput when displayRedirections => ">&",
                         RedirectionKind.DuplicateInput or RedirectionKind.CloseInput => "<&",
                         RedirectionKind.OutputAndError => "&> ",
                         RedirectionKind.OutputAndErrorAppend => "&>> ",
@@ -306,7 +317,12 @@ internal static class FunctionDefinitionFormatter
                         _ => throw new ArgumentOutOfRangeException(nameof(redirection.Kind))
                     };
                     if (!Append(redirectionOperator)) return false;
-                    if (redirection.HereDocumentDelimiter is { } delimiterWord)
+                    if (printLiteral)
+                    {
+                        if (!Append(literalDescriptor.ToString(CultureInfo.InvariantCulture))
+                            || redirection.MovesDescriptor && !Append("-")) return false;
+                    }
+                    else if (redirection.HereDocumentDelimiter is { } delimiterWord)
                     {
                         QueueDocument(redirection);
                         PushStep(redirection.DelimiterSyntax is { } syntax
@@ -369,8 +385,9 @@ internal static class FunctionDefinitionFormatter
                     {
                         case SimpleCommand simple:
                             PrepareWork(Math.Max(1, checked(2 * (simple.Words.Count + simple.Assignments.Count))) + (capture ? 1 : 0));
-                            work.Push(new Step.Redirections(simple.Redirections,
-                                capture && simple.Words.Count == 0 && simple.Assignments.Count == 0 ? simple : null));
+                            var hasCommandElements = simple.Words.Count != 0 || simple.Assignments.Count != 0;
+                            work.Push(new Step.Redirections(simple.Redirections, !displayRedirections || hasCommandElements,
+                                capture && !hasCommandElements ? simple : null));
                             for (var index = simple.Words.Count - 1; index >= 0; index--)
                             {
                                 if (capture && index == 0 && simple.Assignments.Count == 0)
@@ -412,7 +429,8 @@ internal static class FunctionDefinitionFormatter
                                 substitutionSource ? new Step.CompactEnd(" )", Terminate: false) : new Step.Text(" )"));
                             break;
                         case RedirectedCommand redirected:
-                            Push(new Step.Command(redirected.Body, indent), new Step.Redirections(redirected.Redirections));
+                            Push(new Step.Command(redirected.Body, indent),
+                                new Step.Redirections(redirected.Redirections, LeadingSpace: true, FirstElement: null));
                             break;
                         case NegatedCommand negated:
                             Push(new Step.Text("! "), new Step.Command(negated.Inner, indent));
@@ -518,6 +536,17 @@ internal static class FunctionDefinitionFormatter
                     written = offset + substitution.Length;
                 }
             return output.TryAppend(source[written..]);
+        }
+
+        static bool TryGetLiteralDescriptor(Redirection redirection, out int descriptor)
+        {
+            descriptor = 0;
+            if (!Parser.TryGetPlainUnquotedSource(redirection.Target, out var source))
+                return false;
+            var bytes = source.AsSpan();
+            if (redirection.MovesDescriptor)
+                bytes = bytes[..^1];
+            return !bytes.StartsWith("-"u8) && Integers.TryParseExitStatus(bytes, out descriptor);
         }
 
         bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart)
@@ -800,8 +829,8 @@ internal static class FunctionDefinitionFormatter
         public sealed record WordTail(IReadOnlyList<WordPart> Parts, int FirstPart) : Step;
         public sealed record Condition(ConditionalExpression Value) : Step;
         public sealed record Assignment(AssignmentWord Value) : Step;
-        public sealed record Redirection(Syntax.Redirection Value) : Step;
-        public sealed record Redirections(IReadOnlyList<Syntax.Redirection> Values, SimpleCommand? FirstElement = null) : Step;
+        public sealed record Redirection(Syntax.Redirection Value, bool LeadingSpace) : Step;
+        public sealed record Redirections(IReadOnlyList<Syntax.Redirection> Values, bool LeadingSpace, SimpleCommand? FirstElement) : Step;
         public sealed record Function(FunctionDefinition Value, int Indent, bool Nested) : Step;
         public sealed record IfArm(IfCommand Value, int Arm, int Indent) : Step;
         public sealed record Command(ICommand Value, int Indent) : Step;

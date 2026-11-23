@@ -78,7 +78,7 @@ internal sealed class RedirectionEvaluation
             if (scope.Effects.HasPendingExpansionError)
                 break;
 
-            var targetDescriptor = GetTargetDescriptor(redirection);
+            var targetDescriptor = new LogicalDescriptor(redirection.FileDescriptor ?? redirection.DefaultFileDescriptor);
             var allocate = redirection.VariableName.Length != 0;
             if (redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput)
             {
@@ -144,18 +144,6 @@ internal sealed class RedirectionEvaluation
                 await BindAllocatedDescriptorAsync(scope, redirection.VariableName,
                     targetDescriptor, _descriptorTable.ResolveBinding(targetDescriptor), previouslyTouched, persistAllocations).ConfigureAwait(false);
         }
-
-        static LogicalDescriptor GetTargetDescriptor(Redirection redirection) => new(redirection.Kind switch
-        {
-            RedirectionKind.Input => redirection.FileDescriptor ?? 0,
-            RedirectionKind.InputOutput => redirection.FileDescriptor ?? 0,
-            RedirectionKind.DuplicateInput => redirection.FileDescriptor ?? 0,
-            RedirectionKind.CloseInput => redirection.FileDescriptor ?? 0,
-            RedirectionKind.HereString => redirection.FileDescriptor ?? 0,
-            RedirectionKind.HereDocument => redirection.FileDescriptor ?? 0,
-            RedirectionKind.HereDocumentStripTabs => redirection.FileDescriptor ?? 0,
-            _ => redirection.FileDescriptor ?? 1
-        });
     }
 
     /// <summary> Opens the redirection target and assigns the resulting descriptor to the mapping. </summary>
