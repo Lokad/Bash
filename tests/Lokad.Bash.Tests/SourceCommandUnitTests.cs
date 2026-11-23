@@ -1,5 +1,6 @@
 using Lokad.Bash.Files;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
@@ -23,7 +24,7 @@ public sealed class SourceCommandUnitTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expected, result.StdOut);
         Assert.StartsWith("1/0: division by 0 (error token is \"0\")\n", result.StdErr);
-        Assert.Equal(hasSyntaxError, result.StdErr.Contains("syntax error:"));
+        Assert.Equal(hasSyntaxError, result.StdErr.Contains("syntax error near unexpected token `)'", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -177,6 +178,46 @@ public sealed class SourceCommandUnitTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(new byte[] { (byte)'[', 0xff, 13, (byte)']' }, result.Host.StandardOutput.Content.ToArray());
         Assert.NotEmpty(result.Host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task CaptureReadAheadReportsTheReaderLineAndKeepsTheHeaderBytes()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/fixture", [.. "v=$(cat <<END); ) # "u8, 0xff, (byte)'\r', .. "\nbody\nEND\n"u8]);
+
+        var result = await host.RunAsync("source ./fixture 2>err; printf '%s' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("2", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        byte[] expected = [.. "warning: command substitution: 1 unterminated here-document\n"u8,
+            .. "./fixture: line 3: syntax error near unexpected token `)'\n./fixture: line 3: `v=$(cat <<END); ) # "u8,
+            0xff, (byte)'\r', .. "'\n"u8];
+        Assert.Equal(expected, host.ReadFileBytes("/err"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task EvalInASourceFileReportsItsOriginAndStillReturnsToBothCallers()
+    {
+        const string Script = "PATH=./dir source fixture; printf tail";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddDirectory("/dir");
+            host.AddFile("/dir/fixture", "eval 'printf prior\n)'; printf inner\n");
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(Script, host)).ExitCode
+                : (await host.RunAsync(Script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("priorinnertail", host.StandardOutput.TextContent);
+            Assert.Equal("./dir/fixture: eval: line 3: syntax error near unexpected token `)'\n"
+                + "./dir/fixture: eval: line 3: `)'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Fact]

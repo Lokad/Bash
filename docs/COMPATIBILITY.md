@@ -374,6 +374,13 @@ The warning belongs to the enclosing command unit, including short-circuited
 commands. Reading a function definition collects the bodies once for later calls.
 An unquoted here-document expanding such a capture reports the missing closing
 parenthesis and stops that redirection.
+When a streamed command list encounters an unexpected closer or separator, the
+diagnostic shows the token and the physical source line. Missing conditional
+operands identify the unary or binary grammar role and any open parentheses.
+Pending here-document warnings from the reached header precede these diagnostics.
+Sourced and evaluated commands include their reader line. Anonymous streamed
+roots use the diagnostic body directly. The displayed line retains its original
+bytes, including CR.
 Legacy `$[expression]` uses the same arithmetic evaluation as `$((expression))`,
 with a single closing bracket outside nested brackets. Within a double-quoted
 word, an unescaped inner double quote at that level causes a substitution failure

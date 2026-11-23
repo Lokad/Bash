@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
@@ -226,8 +227,92 @@ public sealed class ScriptCommandUnitTests
         var result = await BashScript.RunAsync(host, source, EvaluationOptions.Default, CancellationToken.None);
         Assert.Equal(status, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
-        Assert.Equal(syntaxError, host.StandardError.TextContent.Contains("syntax error:", StringComparison.Ordinal));
+        Assert.Equal(syntaxError, host.StandardError.TextContent.Contains("syntax error", StringComparison.Ordinal));
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("v=plain; \\\n ) # comment\n", ")", " ) # comment")]
+    [InlineData("v=plain;\\\n;\n", ";;", ";")]
+    [InlineData("&& :\n", "&&", "&& :")]
+    public async Task UnexpectedTokenShowsThePhysicalLineOfTheReachedUnit(string unit, string token, string line)
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+
+        var result = await host.RunAsync("printf prior\n" + unit + "printf wrong\n", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("prior", host.StandardOutput.TextContent);
+        Assert.Equal($"syntax error near unexpected token `{token}'\n`{line}'\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("[[ -n\nx ]]\n", "unexpected argument `newline' to conditional unary operator\n", "-n", "[[ -n")]
+    [InlineData("[[ -n ]]; :\n", "unexpected argument `]]' to conditional unary operator\n", ";", "[[ -n ]]; :")]
+    [InlineData("[[ x\n ]]\n", "unexpected token `newline', conditional binary operator expected\n", "x", "[[ x")]
+    [InlineData("[[ x =~ ]]\n", "unexpected argument `]]' to conditional binary operator\n", "]]", "[[ x =~ ]]")]
+    [InlineData("[[ ( ( x == # note\ny ) ) ]]\n",
+        "unexpected argument `newline' to conditional binary operator\nexpected `)'\nexpected `)'\n", "note", "[[ ( ( x == # note")]
+    public async Task ConditionalDiagnosticRetainsTheFailedGrammarRole(string script, string reason, string token, string line)
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal(reason + $"syntax error near `{token}'\n`{line}'\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("x ==", "", "")]
+    [InlineData("$(cat <<ONE) ==", "first\nONE\n", "warning: command substitution: 1 unterminated here-document\n")]
+    public async Task ConditionalFailureLeavesLaterCaptureUnread(string before, string body, string warnings)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("printf prior\n[[ " + before + "\n" + body
+            + "$(cat <<TWO) ]]\nsecond\nTWO\n", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("prior", host.StandardOutput.TextContent);
+        Assert.Equal(warnings + "unexpected argument `newline' to conditional binary operator\n"
+            + $"syntax error near `=='\n`[[ {before}'\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task SyntaxDiagnosticRetainsItsLargeRecordUntilTheWriteSettles()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var memory = new MemoryGovernor(256 * 1024);
+        var entered = new TaskCompletionSource<ReadOnlyMemory<byte>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var write = new TaskCompletionSource<DescriptorWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = new TestOperationVisitor([])
+        {
+            MemoryBudget = memory,
+            BeforeAppend = (_, bytes) => entered.SetResult(bytes)
+        };
+        host.EnqueueAppendTask(write.Task);
+        var line = ") # " + new string('x', 16 * 1024);
+        var running = BashScript.RunAsync(host, line, EvaluationOptions.Default, cancellation.Token);
+        try
+        {
+            var bytes = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal($"syntax error near unexpected token `)'\n`{line}'\n",
+                System.Text.Encoding.UTF8.GetString(bytes.Span));
+            cancellation.Cancel();
+            Assert.False(running.IsCompleted);
+            Assert.True(memory.ReservedBytes >= line.Length + bytes.Length);
+        }
+        finally
+        {
+            write.TrySetResult(DescriptorWriteResult.Open);
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, memory.ReservedBytes);
     }
 
     [Fact]
@@ -243,7 +328,7 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(2, result.ExitCode);
         Assert.Equal(new ShellPath("/work"), result.CurrentDirectory);
         Assert.Equal("firsttrap", host.ReadFile("/work/out"));
-        Assert.Contains("syntax error:", host.StandardError.TextContent);
+        Assert.Equal("syntax error near unexpected token `)'\n`)'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
     }

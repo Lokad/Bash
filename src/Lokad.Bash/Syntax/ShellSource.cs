@@ -38,6 +38,15 @@ public readonly struct ShellSource
     public ReadOnlySpan<byte> AsSpan() => Bytes.Span;
     public ReadOnlySpan<byte> AsSpan(int start, int length) => Bytes.Span.Slice(start, length);
 
+    /// <summary>Returns the physical source line at a read position, excluding its terminating LF.</summary>
+    internal ShellSource GetPhysicalLine(int position, out int start)
+    {
+        var source = Bytes.Span;
+        start = source[..position].LastIndexOf((byte)'\n') + 1;
+        var end = source[position..].IndexOf((byte)'\n');
+        return Slice(start, (end < 0 ? source.Length : position + end) - start);
+    }
+
     /// <summary>Trims shell blanks from a clause boundary; CR remains source data.</summary>
     internal ShellSource TrimBlanks()
     {

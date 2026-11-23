@@ -340,6 +340,9 @@ public sealed partial class Evaluation
                         await ReportCapturedHereDocumentEndOfInputAsync(failedUnit.Error, hereDocumentEnd, lineOffset)
                             .ConfigureAwait(false);
                     }
+                    else if (failedUnit.Failure.UnexpectedToken is { } token)
+                        await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path,
+                            kind == ScriptExecutionKind.Eval, lineOffset + failedUnit.DiagnosticLine).ConfigureAwait(false);
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)

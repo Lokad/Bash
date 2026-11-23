@@ -24,6 +24,7 @@ internal sealed class Tokenizer
     private HereDocumentReadAhead? _readingAhead;
 
     internal bool TrackCommandLocations { get; init; }
+    internal bool TrackUnexpectedTokens { get; init; }
     internal bool AllowEofHereDocuments { get; init; }
     internal bool IsCommandSubstitution { get; init; }
     internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
@@ -122,6 +123,21 @@ internal sealed class Tokenizer
     internal void RecordError(string message, int offset) => RecordError(new SyntaxError(message, offset));
 
     internal void RecordError(SyntaxError error) => RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar));
+
+    internal void RecordUnexpectedToken(string message, Token token, int errorOffset)
+    {
+        var error = new SyntaxError(message, errorOffset);
+        if (!TrackUnexpectedTokens || token.Kind == TokenKind.EndOfInput)
+        {
+            RecordError(error);
+            return;
+        }
+        var (start, end) = (token.Source.Start.Value, token.Source.End.Value);
+        RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar)
+        {
+            UnexpectedToken = new UnexpectedSyntax(_input.Slice(start, end - start), _input.GetPhysicalLine(end, out _), end)
+        });
+    }
 
     internal void RecordFailure(ParserFailure failure)
     {
@@ -961,7 +977,7 @@ internal sealed class Tokenizer
     /// </summary>
     internal bool TryReadConditionalCommand(Token opening, [NotNullWhen(true)] out ConditionalCommand? command)
     {
-        if (!ConditionalParser.TryReadCommand(_input, opening.Source.End.Value, _scanContext,
+        if (!ConditionalParser.TryReadCommand(_input, opening.Source.End.Value, _scanContext, TrackUnexpectedTokens,
                 out command, out var end, out var error))
         {
             RecordFailure(error);

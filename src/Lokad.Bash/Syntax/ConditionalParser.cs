@@ -10,24 +10,26 @@ namespace Lokad.Bash.Syntax;
 internal sealed class ConditionalParser
 {
     private static readonly Word EmptyRegexOperand = new([]);
+    private static readonly ShellSource NewlineArgument = ShellSource.FromText("newline");
     private readonly ShellSource _source;
     private readonly ShellScanContext _context;
     private readonly bool _command;
+    private readonly bool _trackUnexpectedTokens;
     private List<(int Start, int End)>? _ignoredRanges;
     private List<SpellingEdit>? _spellingEdits;
     private int _position;
     private Token? _lookahead;
     private ParserFailure? _failure;
 
-    private ConditionalParser(ShellSource source, int position, ShellScanContext context, bool command) =>
-        (_source, _position, _context, _command) = (source, position, context, command);
+    private ConditionalParser(ShellSource source, int position, ShellScanContext context, bool command, bool trackUnexpectedTokens) =>
+        (_source, _position, _context, _command, _trackUnexpectedTokens) = (source, position, context, command, trackUnexpectedTokens);
 
     internal static bool TryParse(ShellSource source,
         [NotNullWhen(true)] out ConditionalExpression? expression,
         out ShellSource spelling,
         [NotNullWhen(false)] out SyntaxError? error)
     {
-        var parser = new ConditionalParser(source, 0, new ShellScanContext(), command: false);
+        var parser = new ConditionalParser(source, 0, new ShellScanContext(), command: false, trackUnexpectedTokens: false);
         spelling = default;
         if (!parser.TryParse(out expression, out var failure))
         {
@@ -40,11 +42,11 @@ internal sealed class ConditionalParser
     }
 
     /// <summary>The operand grammar owns closing-delimiter recognition as well as comments and regex words.</summary>
-    internal static bool TryReadCommand(ShellSource source, int start, ShellScanContext context,
+    internal static bool TryReadCommand(ShellSource source, int start, ShellScanContext context, bool trackUnexpectedTokens,
         [NotNullWhen(true)] out ConditionalCommand? command, out int end,
         [NotNullWhen(false)] out ParserFailure? error)
     {
-        var parser = new ConditionalParser(source, start, context, command: true);
+        var parser = new ConditionalParser(source, start, context, command: true, trackUnexpectedTokens);
         command = null;
         end = start;
         if (!parser.TryParse(out var expression, out error))
@@ -62,10 +64,13 @@ internal sealed class ConditionalParser
         [NotNullWhen(false)] out ParserFailure? error)
     {
         expression = ParseOr(0);
-        var ending = Peek();
-        if (ending.Kind != (_command ? TokenKind.EndCommand : TokenKind.End))
-            Fail(ending.Kind == TokenKind.End ? "Unterminated conditional command."
-                : "Unexpected conditional operator or operand.", ending.Offset);
+        if (_failure?.UnexpectedToken == null)
+        {
+            var ending = Peek();
+            if (ending.Kind != (_command ? TokenKind.EndCommand : TokenKind.End))
+                Fail(ending.Kind == TokenKind.End ? "Unterminated conditional command."
+                    : "Unexpected conditional operator or operand.", ending.Offset);
+        }
         error = _context.LimitError is { } limit ? new ParserFailure(limit, ParserFailureKind.Limit) : _failure;
         if (error != null || expression == null)
         {
@@ -122,6 +127,8 @@ internal sealed class ConditionalParser
                 return null;
             }
             expression = ParseOr(depth + 1);
+            if (_failure?.UnexpectedToken != null)
+                return null;
             if (!Consume(TokenKind.Close))
                 Fail("Closing conditional parenthesis expected.", Peek().Offset);
         }
@@ -143,7 +150,7 @@ internal sealed class ConditionalParser
                 }
                 else
                 {
-                    var operand = ReadOperand(false);
+                    var operand = ReadOperand(false, ConditionalArgumentError.UnaryOperand, depth);
                     expression = operand == null ? null : new ConditionalExpression.Unary(unary, operand);
                 }
             }
@@ -153,18 +160,21 @@ internal sealed class ConditionalParser
                 if (ShellPredicates.TryGetBinaryPredicate(operation[..ReadOperator(Peek(), operation)], out var binary))
                 {
                     Take();
-                    var right = ReadOperand(binary.Operator == ShellPredicates.BinaryPredicateKind.RegexMatch);
+                    var right = ReadOperand(binary.Operator == ShellPredicates.BinaryPredicateKind.RegexMatch,
+                        ConditionalArgumentError.BinaryOperand, depth);
                     expression = left == null || right == null ? null : new ConditionalExpression.Binary(binary, left, right);
                 }
                 else
                 {
                     if (Peek().Kind == TokenKind.Newline)
-                        Fail("Conditional binary operator expected.", Peek().Offset);
+                        FailArgument("Conditional binary operator expected.", Peek(), ConditionalArgumentError.BinaryOperator, depth);
                     expression = left == null ? null : new ConditionalExpression.NonEmpty(left);
                 }
             }
         }
-        SkipNewlines();
+        // Looking beyond a reached argument failure can collect bodies from an unread line.
+        if (_failure?.UnexpectedToken == null)
+            SkipNewlines();
         return negated && expression != null ? new ConditionalExpression.Negated(expression) : expression;
 
         // Predicate tokens are at most three ASCII bytes; preserve physical operand slices.
@@ -184,14 +194,14 @@ internal sealed class ConditionalParser
         }
     }
 
-    private Word? ReadOperand(bool regex)
+    private Word? ReadOperand(bool regex, ConditionalArgumentError error, int depth)
     {
         // A regex operand has its own shell lexical context: | and balanced parentheses
         // belong to the regex word, while an unmatched ) closes a conditional group.
         var token = _lookahead == null ? Read(regex) : Take();
         if (token.Kind != TokenKind.Word)
         {
-            Fail("Conditional operand expected.", token.Offset);
+            FailArgument("Conditional operand expected.", token, error, depth);
             return null;
         }
         return regex && token.Source.IsEmpty ? EmptyRegexOperand : ParseWord(token);
@@ -459,6 +469,44 @@ internal sealed class ConditionalParser
     private void Fail(string message) => Fail(message, _position);
     private void Fail(string message, int offset) =>
         _failure ??= new ParserFailure(new SyntaxError(message, offset), ParserFailureKind.Grammar);
+
+    private void FailArgument(string message, Token token, ConditionalArgumentError error, int depth)
+    {
+        if (_failure != null)
+            return;
+        if (!_trackUnexpectedTokens)
+        {
+            Fail(message, token.Offset);
+            return;
+        }
+
+        var atLineEnd = token.Kind is TokenKind.Newline or TokenKind.End;
+        var readPosition = token.Offset + (atLineEnd ? 0 : token.Source.Length);
+        var line = _source.GetPhysicalLine(readPosition, out var lineStart);
+        _failure = new ParserFailure(new SyntaxError(message, token.Offset), ParserFailureKind.Grammar)
+        {
+            UnexpectedToken = new UnexpectedSyntax(FindNearToken(), line, readPosition)
+            {
+                Argument = atLineEnd ? NewlineArgument : token.Source,
+                ConditionalError = error,
+                UnclosedGroups = depth
+            }
+        };
+
+        ShellSource FindNearToken()
+        {
+            // Bash uses the physical reader line for this second diagnostic, including skipped comments.
+            // The byte at the read position can be the separator immediately after the rejected argument.
+            var nearEnd = Math.Min(line.Length, readPosition - lineStart + 1);
+            var preceding = line.AsSpan(0, nearEnd).TrimEnd(" \t"u8);
+            if (preceding.IsEmpty)
+                return token.Source;
+            var start = Math.Max(0, preceding.LastIndexOfAny(" \t;|&"u8));
+            if (preceding[start] is (byte)' ' or (byte)'\t')
+                start++;
+            return line.Slice(start, preceding.Length - start);
+        }
+    }
 
     private void IgnoreContinuations(int start, int end)
     {

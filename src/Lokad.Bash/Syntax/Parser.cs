@@ -174,7 +174,7 @@ public static class Parser
         SkipNewlines(tokenizer);
         var trailing = tokenizer.PeekTokenCore();
         if (trailing.Kind != TokenKind.EndOfInput)
-            tokenizer.RecordError("Unexpected token after command list.", trailing.Source.Start.Value);
+            tokenizer.RecordUnexpectedToken("Unexpected token after command list.", trailing, trailing.Source.Start.Value);
 
         failure = tokenizer.Failure;
         if (failure != null)
@@ -206,6 +206,7 @@ public static class Parser
         var tokenizer = new Tokenizer(scanContext.ScriptInput, 0, scanContext)
         {
             TrackCommandLocations = true,
+            TrackUnexpectedTokens = true,
             AllowEofHereDocuments = true,
             EndInputOnQuotedSubstitutionFailure = true
         };
@@ -216,7 +217,7 @@ public static class Parser
             var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], TokenKind.Newline);
             var trailing = tokenizer.PeekTokenCore();
             if (trailing.Kind is not TokenKind.Newline and not TokenKind.EndOfInput)
-                tokenizer.RecordError("Unexpected token after command list.", trailing.Source.Start.Value);
+                tokenizer.RecordUnexpectedToken("Unexpected token after command list.", trailing, trailing.Source.Start.Value);
             var warnings = scanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.Warnings);
 
             if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
@@ -233,7 +234,11 @@ public static class Parser
             }
             if (tokenizer.Failure is { } failure)
             {
-                yield return new CommandUnitParseResult.Failed(failure) { HereDocumentWarnings = warnings };
+                yield return new CommandUnitParseResult.Failed(failure)
+                {
+                    HereDocumentWarnings = warnings,
+                    DiagnosticLine = failure.UnexpectedToken is { } diagnostic ? tokenizer.GetLine(diagnostic.ReadPosition) : 0
+                };
                 yield break;
             }
             if (command == null)
@@ -744,13 +749,13 @@ public static class Parser
         if (!result.TrailingTerminator
             && (close.Kind != TokenKind.CloseBrace || !EndsInCompoundCommand(result.Command)))
         {
-            tokenizer.RecordError("Group list must end with a terminator before }.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken("Group list must end with a terminator before }.", close, tokenizer.Position);
             return null;
         }
 
         if (close.Kind != TokenKind.CloseBrace)
         {
-            tokenizer.RecordError("Expected } to close a group.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken("Expected } to close a group.", close, tokenizer.Position);
             return null;
         }
 
@@ -1275,7 +1280,7 @@ public static class Parser
 
                     if (peek.Kind == TokenKind.Semicolon)
                     {
-                        tokenizer.RecordError("Unexpected command terminator.", peek.Source.Start.Value);
+                        tokenizer.RecordUnexpectedToken("Unexpected command terminator.", peek, peek.Source.Start.Value);
                         return null;
                     }
 
@@ -1284,12 +1289,12 @@ public static class Parser
                 case TokenKind.ListOperator:
                     if (sawAny)
                         return CreateCommand();
-                    tokenizer.RecordError("Unexpected list operator.", tokenizer.Position);
+                    tokenizer.RecordUnexpectedToken("Unexpected list operator.", peek, tokenizer.Position);
                     return null;
                 case TokenKind.PipelineOperator:
                     if (sawAny)
                         return CreateCommand();
-                    tokenizer.RecordError("Unexpected pipeline operator.", tokenizer.Position);
+                    tokenizer.RecordUnexpectedToken("Unexpected pipeline operator.", peek, tokenizer.Position);
                     return null;
                 case TokenKind.CloseParen:
                     return sawAny

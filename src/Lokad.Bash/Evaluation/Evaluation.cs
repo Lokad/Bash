@@ -3730,6 +3730,85 @@ public sealed partial class Evaluation : IFileTester
             .ConfigureAwait(false);
     }
 
+    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, bool eval, int line)
+    {
+        var descriptor = GetStdErrDescriptor();
+        CheckCancellation();
+        if (descriptor.IsClosed)
+            return;
+
+        var conditional = syntax.ConditionalError != ConditionalArgumentError.None;
+        var reason = syntax.ConditionalError switch
+        {
+            ConditionalArgumentError.UnaryOperand => "' to conditional unary operator\n"u8,
+            ConditionalArgumentError.BinaryOperand => "' to conditional binary operator\n"u8,
+            ConditionalArgumentError.BinaryOperator => "', conditional binary operator expected\n"u8,
+            _ => ReadOnlySpan<byte>.Empty
+        };
+        var argumentPrefix = syntax.ConditionalError == ConditionalArgumentError.BinaryOperator
+            ? "unexpected token `"u8 : "unexpected argument `"u8;
+        var tokenPrefix = conditional ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
+        var groupMessage = "expected `)'\n"u8;
+        var encoding = Utf8Text.StrictUtf8;
+        var pathLength = path == null ? 0 : encoding.GetByteCount(path);
+        var hasPrefix = path != null || eval;
+        var lineNumber = hasPrefix ? NumberFormatting.FormatNumber(line) : ReadOnlyMemory<byte>.Empty;
+        var prefixLength = hasPrefix ? (path == null ? 0 : pathLength + 2) + (eval ? "eval: "u8.Length : 0)
+            + "line "u8.Length + lineNumber.Length + ": "u8.Length : 0;
+        var length = 2L * prefixLength + tokenPrefix.Length + syntax.Token.Length + 2 + syntax.Line.Length + 3
+            + syntax.UnclosedGroups * (long)(prefixLength + groupMessage.Length);
+        if (conditional)
+            length += prefixLength + argumentPrefix.Length + syntax.Argument.Length + reason.Length;
+        if (!TryReserveDiagnostic(length, out var reservation))
+            throw new MemoryBudgetExceededException();
+
+        using var memory = reservation;
+        using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
+        if (conditional)
+        {
+            AppendPrefix();
+            diagnostic.Append(argumentPrefix);
+            AppendToken(syntax.Argument.AsSpan());
+            diagnostic.Append(reason);
+            for (var group = 0; group < syntax.UnclosedGroups; group++)
+            {
+                AppendPrefix();
+                diagnostic.Append(groupMessage);
+            }
+        }
+        AppendPrefix();
+        diagnostic.Append(tokenPrefix);
+        AppendToken(syntax.Token.AsSpan());
+        diagnostic.Append("'\n"u8);
+        AppendPrefix();
+        diagnostic.Append((byte)'`').Append(syntax.Line.AsSpan()).Append("'\n"u8);
+        await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
+
+        void AppendPrefix()
+        {
+            if (!hasPrefix)
+                return;
+            if (path != null)
+            {
+                encoding.GetBytes(path, diagnostic.AppendSpan(pathLength));
+                diagnostic.Append(": "u8);
+            }
+            if (eval)
+                diagnostic.Append("eval: "u8);
+            diagnostic.Append("line "u8).Append(lineNumber.Span).Append(": "u8);
+        }
+
+        void AppendToken(ReadOnlySpan<byte> token)
+        {
+            while (token.IndexOf("\\\n"u8) is var continuation && continuation >= 0)
+            {
+                diagnostic.Append(token[..continuation]);
+                token = token[(continuation + 2)..];
+            }
+            diagnostic.Append(token);
+        }
+    }
+
     private static readonly ShellValue HereDocumentWarningName = ShellValue.FromText("warning");
     private static readonly ShellValue HereDocumentWarningPrefix = ShellValue.FromText("here-document at line ");
     private static readonly ShellValue HereDocumentWarningDelimiter = ShellValue.FromText(" delimited by end-of-file (wanted `");
@@ -4075,8 +4154,8 @@ public sealed partial class Evaluation : IFileTester
                 return EvaluationResult.FromExitCode(2);
             }
 
-            openedPath = path;
-            lookupMemory?.Dispose();
+            // The displayed path survives the lookup in the active source frame.
+            lookupMemory?.Resize(ReferenceEquals(openedPath, path) ? 0 : 24L + 2L * openedPath.Length);
             // The active command owns the frame until the sourced invocation and its children settle.
             Memory.Charge(48);
             var sourceScope = scope with
@@ -4085,7 +4164,8 @@ public sealed partial class Evaluation : IFileTester
                 {
                     GlobalPrefixes = scope.Context.GlobalPrefixes,
                     ErrexitIgnored = scope.Context.ErrexitIgnored,
-                    CallerSource = new SourceCallerFrame(scope.Context.FunctionContext?.Depth ?? 0, scope.Context.CallerSource),
+                    CallerSource = new SourceCallerFrame(openedPath, scope.Context.FunctionContext?.Depth ?? 0,
+                        scope.Context.CallerSource),
                     SourceMemory = sourceMemory
                 }
             };
@@ -4671,7 +4751,7 @@ public sealed partial class Evaluation : IFileTester
     internal enum ReturnTargetKind { None, Function, Source }
 
     /// <summary>An active source invocation above the recorded function depth.</summary>
-    internal sealed record SourceCallerFrame(int FunctionDepth, SourceCallerFrame? Enclosing);
+    internal sealed record SourceCallerFrame(string Path, int FunctionDepth, SourceCallerFrame? Enclosing);
 
     /// <summary>Carries control-flow boundaries independently of function-local binding ownership.</summary>
     internal readonly struct EvaluationContext(int loopDepth, FunctionContext? functionContext, ReturnTargetKind returnTarget)

@@ -17,6 +17,7 @@ public sealed record SyntaxError(string Message, int Offset)
 internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
     internal CapturedHereDocumentEndOfInput? HereDocumentEndOfInput { get; init; }
+    internal UnexpectedSyntax? UnexpectedToken { get; init; }
     internal bool IsNestedSubstitution { get; init; }
 
     internal bool ExitsSubstitution => Kind is ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader;
@@ -35,6 +36,16 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
     internal ParserFailure InDoubleQuotes(bool quoted) => quoted && Kind == ParserFailureKind.SubstitutionForHeader
         ? this with { Kind = ParserFailureKind.QuotedSubstitutionForHeader } : this;
 }
+
+/// <summary>Byte slices and reader position for a reached token diagnostic.</summary>
+internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int ReadPosition)
+{
+    internal ConditionalArgumentError ConditionalError { get; init; }
+    internal ShellSource Argument { get; init; }
+    internal int UnclosedGroups { get; init; }
+}
+
+internal enum ConditionalArgumentError { None, UnaryOperand, BinaryOperand, BinaryOperator }
 
 /// <summary>Diagnostics from reading a capture that could not reach its closing parenthesis.</summary>
 internal sealed record CapturedHereDocumentEndOfInput(IReadOnlyList<HereDocumentWarning>? Warnings, int LineOffset)

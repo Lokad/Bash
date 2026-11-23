@@ -18,5 +18,6 @@ internal abstract record CommandUnitParseResult
     {
         internal SyntaxError Error => Failure.Error;
         internal ICommand? CompletedPrefix { get; init; }
+        internal int DiagnosticLine { get; init; }
     }
 }
