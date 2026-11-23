@@ -57,8 +57,8 @@ public sealed class ByteFieldBoundaryTests
     public void SplitRunsReuseScratchWithinTheSameWord()
     {
         const int RunCount = 16;
-        var body = new string('x', 8192);
-        var input = ShellValue.FromText(" " + body + " ");
+        var bodies = Enumerable.Range(0, RunCount).Select(index => new string((char)('a' + index), 8192)).ToArray();
+        var quotedTail = ShellValue.FromText("! ");
         var marker = ShellValue.FromText("|");
         var governor = new MemoryGovernor(4 * 1024 * 1024);
         var memory = new EvaluationMemory(governor);
@@ -66,9 +66,10 @@ public sealed class ByteFieldBoundaryTests
         {
             var builder = new ExpandedWordBuilder(Variables.CreateEmpty(), memory,
                 ExpansionPurpose.Normal, ImplicitEmptyPolicy.Preserve);
-            for (var index = 0; index < RunCount; index++)
+            foreach (var body in bodies)
             {
-                builder.AppendExpansion(input, allowWordSplitting: true, globQuoted: false);
+                builder.AppendExpansion(ShellValue.FromText(" " + body), allowWordSplitting: true, globQuoted: false);
+                builder.AppendExpansion(quotedTail, allowWordSplitting: true, globQuoted: true);
                 builder.AppendValue(marker, globQuoted: true);
             }
 
@@ -77,11 +78,22 @@ public sealed class ByteFieldBoundaryTests
             using var held = governor.Reserve(governor.LimitBytes - governor.ReservedBytes - 768 * 1024);
             var fields = builder.Build();
             Assert.Equal(2 * RunCount, fields.Count);
-            for (var index = 0; index < fields.Count; index++)
+            for (var index = 0; index < fields.Count; index += 2)
             {
-                var segment = Assert.Single(fields[index].Segments);
-                Assert.Equal(index % 2 == 0 ? body : "|", segment.Content.ToUtf8String());
-                Assert.Equal(index % 2 != 0, segment.IsGlobQuoted);
+                Assert.Collection(fields[index].Segments,
+                    unquoted =>
+                    {
+                        Assert.Equal(bodies[index / 2], unquoted.Content.ToUtf8String());
+                        Assert.False(unquoted.IsGlobQuoted);
+                    },
+                    quoted =>
+                    {
+                        Assert.Equal("!", quoted.Content.ToUtf8String());
+                        Assert.True(quoted.IsGlobQuoted);
+                    });
+                var literal = Assert.Single(fields[index + 1].Segments);
+                Assert.Equal(marker, literal.Content);
+                Assert.True(literal.IsGlobQuoted);
             }
         }
         finally { memory.Finish(retainVariables: false); }
@@ -141,6 +153,33 @@ public sealed class ByteFieldBoundaryTests
 
             Assert.Equal(new[] { "C3A9", "78" }, builder.BuildCasePattern()
                 .Select(word => Convert.ToHexString(word.ToValue(memory).Bytes.Span)));
+        }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void CaseFieldSelectionBorrowsSlicesOfOneProjectedValue()
+    {
+        var variables = Variables.CreateInitial(
+            new Dictionary<BindingName, ShellValue> { ["IFS"] = ShellValue.FromText(":") }, []);
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using (var owner = governor.CreateScope())
+        {
+            var memory = new EvaluationMemory(owner);
+            var builder = new ExpandedWordBuilder(variables, memory, ExpansionPurpose.CasePattern, ImplicitEmptyPolicy.Preserve);
+            const int width = 16 * 1024;
+            var value = ShellValue.FromText(new string('a', width) + ":" + new string('b', width));
+            builder.AppendFields([value], allowWordSplitting: false, globQuoted: false,
+                ExpansionQuoteContext.Unquoted, AtFieldSource.Projected);
+
+            var fields = builder.BuildCasePattern();
+            Assert.Equal(2, fields.Count);
+            var left = Assert.Single(fields[0].Segments);
+            var right = Assert.Single(fields[1].Segments);
+            Assert.True(left.Content.Bytes.Equals(value.Bytes[..width]));
+            Assert.True(right.Content.Bytes.Equals(value.Bytes[(width + 1)..]));
+            Assert.False(left.IsGlobQuoted);
+            Assert.False(right.IsGlobQuoted);
         }
         Assert.Equal(0, governor.ReservedBytes);
     }

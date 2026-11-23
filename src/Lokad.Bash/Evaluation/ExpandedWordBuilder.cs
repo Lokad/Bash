@@ -856,12 +856,15 @@ internal sealed class ExpandedWordBuilder
                 continue;
             }
 
+            using var caseFieldScratch = splitCasePattern ? new MemoryCapacity(_memory.Budget, 0) : null;
             _memory.Charge(fieldStorage, 256);
             var field = new List<SegmentBuilder>();
             var borrowedTail = false;
             var emitEmpty = false;
             var caseNullCount = 0;
             var pendingBreak = false;
+            ReadOnlyMemory<byte> pendingSlice = default;
+            var pendingSliceQuoted = false;
             using var pendingBytes = new ByteMemoryBuilder(0, _memory.Budget);
             using var quoteScratch = new MemoryCapacity(_memory.Budget, 0);
             var quoteRuns = new List<QuoteRun>();
@@ -925,7 +928,7 @@ internal sealed class ExpandedWordBuilder
                         emitEmpty = true;
                     else
                     {
-                        field.Add(part.Segment);
+                        AddFieldSegment(part.Segment);
                         borrowedTail = true;
                     }
                     return;
@@ -992,6 +995,23 @@ internal sealed class ExpandedWordBuilder
             {
                 if (bytes.IsEmpty)
                     return;
+                if (pendingBytes.Length == 0)
+                {
+                    if (pendingSlice.IsEmpty)
+                    {
+                        pendingSlice = bytes;
+                        pendingSliceQuoted = globQuoted;
+                        return;
+                    }
+                    // Adjacent spans can form one separator character. Combine them before decoding.
+                    BufferExpansion(pendingSlice, pendingSliceQuoted);
+                    pendingSlice = default;
+                }
+                BufferExpansion(bytes, globQuoted);
+            }
+
+            void BufferExpansion(ReadOnlyMemory<byte> bytes, bool globQuoted)
+            {
                 pendingBytes.Append(bytes);
                 var run = new QuoteRun(pendingBytes.Length, globQuoted);
                 if (quoteRuns.Count > 0 && quoteRuns[^1].IsGlobQuoted == globQuoted)
@@ -1013,25 +1033,42 @@ internal sealed class ExpandedWordBuilder
                     return;
                 ApplyPendingBreak();
                 if (!HasFirstCasePatternField())
-                    AppendBytes(bytes, globQuoted);
+                    AppendBytes(bytes, globQuoted, borrowInput: false);
             }
 
-            void AppendBytes(ReadOnlyMemory<byte> bytes, bool globQuoted)
+            void AddFieldSegment(SegmentBuilder segment)
+            {
+                if (caseFieldScratch is { } scratch && field.Count == field.Capacity)
+                {
+                    // The splitter's initial estimate covers the first four references.
+                    if (field.Capacity == 0)
+                        field.Capacity = 4;
+                    else
+                        _memory.PrepareListCapacity(scratch, field, 1);
+                }
+                field.Add(segment);
+            }
+
+            void AppendBytes(ReadOnlyMemory<byte> bytes, bool globQuoted, bool borrowInput)
             {
                 if (field.Count == 0 || borrowedTail || field[^1].IsGlobQuoted != globQuoted)
                 {
-                    field.Add(new SegmentBuilder(globQuoted, _memory, fieldStorage));
+                    AddFieldSegment(new SegmentBuilder(globQuoted, _memory, fieldStorage));
                     borrowedTail = false;
                 }
-                field[^1].AppendCopy(bytes.Span);
+                if (borrowInput)
+                    field[^1].AppendBorrowed(bytes);
+                else
+                    field[^1].AppendCopy(bytes.Span);
             }
 
             void FlushExpansion()
             {
-                if (pendingBytes.Length == 0)
+                var buffered = pendingBytes.Length != 0;
+                var bytes = buffered ? pendingBytes.ToMemory() : pendingSlice;
+                if (bytes.IsEmpty)
                     return;
 
-                var bytes = pendingBytes.ToMemory();
                 var literalStart = 0;
                 var position = 0;
                 var quoteIndex = 0;
@@ -1094,15 +1131,25 @@ internal sealed class ExpandedWordBuilder
                 {
                     AppendPendingBytes(literalStart, bytes.Length);
                 }
-                // Output segment assembly copied the bytes before this buffer is reused.
-                pendingBytes.Truncate(0);
-                quoteRuns.Clear();
+                if (buffered)
+                {
+                    // Output segments own copies made from reusable scratch.
+                    pendingBytes.Truncate(0);
+                    quoteRuns.Clear();
+                }
+                pendingSlice = default;
 
                 void AppendPendingBytes(int start, int end)
                 {
                     ApplyPendingBreak();
                     if (HasFirstCasePatternField())
                         return;
+                    if (!buffered)
+                    {
+                        // Case fields and their immutable input share the pattern workspace.
+                        AppendBytes(bytes[start..end], pendingSliceQuoted, borrowInput: splitCasePattern);
+                        return;
+                    }
                     while (start < end)
                     {
                         _cancellationToken.ThrowIfCancellationRequested();
@@ -1110,7 +1157,7 @@ internal sealed class ExpandedWordBuilder
                             quoteIndex++;
                         var run = quoteRuns[quoteIndex];
                         var next = Math.Min(end, run.End);
-                        AppendBytes(bytes[start..next], run.IsGlobQuoted);
+                        AppendBytes(bytes[start..next], run.IsGlobQuoted, borrowInput: false);
                         start = next;
                     }
                 }
@@ -1127,7 +1174,8 @@ internal sealed class ExpandedWordBuilder
 
             void StartNewField()
             {
-                _memory.Charge(fieldStorage, 256);
+                if (!splitCasePattern)
+                    _memory.Charge(fieldStorage, 256);
                 pendingBreak = false;
                 CompleteField();
             }
@@ -1137,10 +1185,19 @@ internal sealed class ExpandedWordBuilder
                 _cancellationToken.ThrowIfCancellationRequested();
                 if (field.Count == 0 && !emitEmpty)
                     return;
-                ExpandedSegment[] segments = field.Count == 0 ? [] : new ExpandedSegment[field.Count];
-                for (var index = 0; index < segments.Length; index++)
-                    segments[index] = field[index].ToSegment();
-                results.Add(field.Count == 0 && caseNullCount == 1 ? CaseQuotedNullField : new ExpandedWord(segments));
+                if (splitCasePattern)
+                    _memory.PrepareListCapacity(fieldStorage, results, 1);
+                if (field.Count == 0 && caseNullCount == 1)
+                    results.Add(CaseQuotedNullField);
+                else
+                {
+                    if (splitCasePattern)
+                        _memory.Charge(fieldStorage, 64L + MemoryCapacity.ArrayBackingBytes<ExpandedSegment>(field.Count));
+                    ExpandedSegment[] segments = field.Count == 0 ? [] : new ExpandedSegment[field.Count];
+                    for (var index = 0; index < segments.Length; index++)
+                        segments[index] = field[index].ToSegment();
+                    results.Add(new ExpandedWord(segments));
+                }
                 field.Clear();
                 emitEmpty = false;
                 caseNullCount = 0;
@@ -1294,6 +1351,15 @@ internal sealed class ExpandedWordBuilder
         {
             IsCasePatternIfsProtected = IsCasePatternIfsProtected,
         };
+
+        /// <summary>Retains a span from immutable input already charged to the result's workspace.</summary>
+        public void AppendBorrowed(ReadOnlyMemory<byte> bytes)
+        {
+            if (_bytes == null && _retained.IsEmpty)
+                _retained = ShellValue.FromBytes(bytes);
+            else
+                AppendCopy(bytes.Span);
+        }
 
         public void AppendCopy(ReadOnlySpan<byte> bytes)
         {

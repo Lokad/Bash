@@ -157,6 +157,11 @@ the next alternative. Pattern scratch retires before a body runs. When matching
 will resume, compact subject backing keeps its charge and the expansion scratch
 retires before the first body. The subject retires before the final body chain
 or when matching ends. Retained binding effects survive workspace reuse.
+The field splitter scans a single input span in place and uses reusable
+scratch when it must decode adjacent spans together. Case fields can retain
+slices of immutable input through the pattern workspace. Fields that use
+the reusable scratch own their output bytes. The result list is admitted
+before growth, and the field-assembly list retires when splitting finishes.
 
 Command-prefix preparation and isolated external redirection expansion borrow
 the caller's store and positional frame.
