@@ -123,6 +123,8 @@ only after the registry accepts them.
 Command queries build their output before writing. Output on one channel
 keeps its end offset inline. Channel changes admit an ordered list of the
 earlier offsets through the last write.
+Raw `read` field splitting with up to three ASCII IFS bytes searches borrowed
+record spans directly and skips building an IFS membership index.
 If the host error output cannot be admitted, the evaluator reports a
 short memory refusal through the reached stderr and continues the original
 failure's status and cleanup path. A refusal uses the name `shell` when the

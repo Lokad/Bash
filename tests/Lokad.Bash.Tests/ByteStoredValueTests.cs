@@ -342,18 +342,42 @@ public sealed class ByteStoredValueTests
     }
 
     [Theory]
-    [InlineData("read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "2009C3A9FF09612020620D20090A", "3CC3A9FF3E3C612020620D3E")]
-    [InlineData("read -ra values; printf '<%s>' \"${values[@]}\"", "09C3A9FF2061625C63200A", "3CC3A9FF3E3C61625C633E")]
-    [InlineData("read -ra values; printf '<%s>' \"${#values[@]}\"", "2009200A", "3C303E")]
-    public async Task ReadWithDefaultIfsSplitsRawBytesOnAsciiWhitespace(string command, string inputHex, string outputHex)
+    [InlineData("unset IFS", "read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "2009C3A9FF09612020620D20090A", "3CC3A9FF3E3C612020620D3E")]
+    [InlineData("unset IFS", "read -ra values; printf '<%s>' \"${values[@]}\"", "09C3A9FF2061625C63200A", "3CC3A9FF3E3C61625C633E")]
+    [InlineData("unset IFS", "read -ra values; printf '<%s>' \"${#values[@]}\"", "2009200A", "3C303E")]
+    [InlineData("IFS=':'", "read -ra values; printf '<%s>' \"${values[@]}\"", "3A3A613AC3A93A3A2063203A0A", "3C3E3C3E3C613E3CC3A93E3C3E3C2063203E")]
+    [InlineData("IFS=$' \\t:'", "read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "20203A093AC3A9203A206320203A090A", "3C3E3C3AC3A9203A206320203A3E")]
+    [InlineData("IFS=' :'", "read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "203AC3A9FF203A2078FE20200A", "3C3E3CC3A9FF203A2078FE3E")]
+    public async Task ReadWithShortAsciiIfsPreservesRawBytesAndFields(string setup, string command, string inputHex, string outputHex)
     {
         await using var host = new TestHost();
-        var result = await EndToEndHarness.RunScriptAsync("unset IFS; " + command, host, Convert.FromHexString(inputHex));
+        var result = await EndToEndHarness.RunScriptAsync(setup + "; " + command, host, Convert.FromHexString(inputHex));
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(Convert.FromHexString(outputHex), host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public void RawReadWithShortAsciiIfsFitsWithoutAMembershipIndex()
+    {
+        var governor = new MemoryGovernor(256);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(" \t:")));
+        using (var scratch = new MemoryCapacity(owner, 0))
+        {
+            var options = new ReadBuiltinOptions(FieldSeparators.FromVariables(variables), ReadBackslashMode.Preserve, ReadFieldMode.Split);
+            var fields = ReadFieldSplitter.Split(" first \t:second:third \t "u8.ToArray(), 2,
+                options, scratch, variables, memory, CancellationToken.None);
+
+            Assert.Equal([ShellValue.FromText("first"), ShellValue.FromText("second:third")], fields);
+            Assert.Equal(0, memory.Workspace.Bytes);
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]
