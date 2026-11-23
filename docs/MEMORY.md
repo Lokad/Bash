@@ -151,9 +151,11 @@ before growing their backing lists. They admit reduction scratch before running
 any predicates that require it. Ordered host request and response storage uses
 the file lookup's own allowance through completion.
 Case selection holds its expanded subject across reached alternatives and any
-body chain that resumes matching. Each alternative keeps its expanded word and
-prepared matcher through comparison, then reuses the same command workspace for
-the next alternative. Pattern scratch retires before a body runs. When matching
+body chain that resumes matching. Each alternative keeps its expanded words and
+quote metadata through comparison, then reuses the same command workspace for
+the next alternative. Case alternatives and conditional `==` and `!=` compare
+each expanded pattern once without retaining a prepared matcher. Pattern
+scratch retires before a case body runs. When matching
 will resume, compact subject backing keeps its charge and the expansion scratch
 retires before the first body. The subject retires before the final body chain
 or when matching ends. Retained binding effects survive workspace reuse.

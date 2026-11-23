@@ -199,9 +199,11 @@ public sealed class PatternTraversalTests
         var reverse = Encoding.UTF8.GetBytes(member + before);
         try
         {
-            var head = Prepare("*" + bracket);
-            Assert.True(head.IsMatch(forward, CancellationToken.None));
-            Assert.False(head.IsMatch(Encoding.UTF8.GetBytes(before), CancellationToken.None));
+            var headValue = ShellValue.FromText("*" + bracket);
+            ExpandedWord[] words = [new([new(headValue, isGlobQuoted: false)])];
+            Assert.True(ShellPattern.MatchesWords(words, forward, memory, CancellationToken.None));
+            Assert.False(ShellPattern.MatchesWords(words, Encoding.UTF8.GetBytes(before), memory, CancellationToken.None));
+            var head = ShellPattern.FromUnescaped(headValue, mask, memory, CancellationToken.None);
             Assert.True(head.TryMatchPrefix(forward, shortest: true, CancellationToken.None, out var length));
             Assert.Equal(forward.Length, length);
 
@@ -250,6 +252,22 @@ public sealed class PatternTraversalTests
         Assert.Equal(text.Length, length);
     }
 
+    [Fact]
+    public void SingleComparisonBorrowsAnUnescapedLiteralPattern()
+    {
+        byte[] bytes = [0xff, (byte)'x'];
+        ExpandedWord[] words = [new([new(ShellValue.FromBytes(bytes), isGlobQuoted: false)])];
+        var governor = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.True(ShellPattern.MatchesWords(words, bytes, memory, CancellationToken.None));
+            Assert.False(ShellPattern.MatchesWords(words, [0xfe, (byte)'x'], memory, CancellationToken.None));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -261,21 +279,23 @@ public sealed class PatternTraversalTests
         var memory = new EvaluationMemory(admission);
         try
         {
-            var pattern = ShellPattern.FromUnescaped(ShellValue.FromText("*[" + new string('a', 4096) + "z]"),
-                new GlobMask(ReadOnlyMemory<byte>.Empty), memory, cancellation.Token);
+            var pattern = ShellValue.FromText("*[" + new string('a', 4096) + "z]");
+            ExpandedWord[] words = [new([new(pattern, isGlobQuoted: false)])];
             var baseline = memory.Workspace.Bytes;
-            Assert.True(pattern.IsMatch("z"u8, CancellationToken.None));
+            Assert.True(ShellPattern.MatchesWords(words, "z"u8, memory, CancellationToken.None));
             Assert.Equal(baseline, memory.Workspace.Bytes);
             if (cancel)
             {
                 admission.AdmissionSucceeded += cancellation.Cancel;
-                var failure = Assert.ThrowsAny<OperationCanceledException>(() => pattern.IsMatch("!!!z"u8, cancellation.Token));
+                var failure = Assert.ThrowsAny<OperationCanceledException>(() =>
+                    ShellPattern.MatchesWords(words, "!!!z"u8, memory, cancellation.Token));
                 Assert.Equal(cancellation.Token, failure.CancellationToken);
             }
             else
-                Assert.Throws<MemoryBudgetExceededException>(() => pattern.IsMatch("!!!z"u8, cancellation.Token));
+                Assert.Throws<MemoryBudgetExceededException>(() =>
+                    ShellPattern.MatchesWords(words, "!!!z"u8, memory, cancellation.Token));
             Assert.Equal(baseline, memory.Workspace.Bytes);
-            Assert.True(pattern.IsMatch("z"u8, CancellationToken.None));
+            Assert.True(ShellPattern.MatchesWords(words, "z"u8, memory, CancellationToken.None));
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);

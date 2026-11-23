@@ -28,37 +28,55 @@ internal sealed class ShellPattern
     public static ShellPattern FromWords(
         IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, memory);
-        _ = mask.TryUnescape(value, memory, cancellationToken, out value, out mask);
+        var (value, mask) = PrepareWords(words, memory, cancellationToken);
         return FromUnescaped(value, mask, memory, cancellationToken);
     }
 
     /// <summary>Retains an already unescaped value and its quoting metadata for this command's matching.</summary>
     public static ShellPattern FromUnescaped(ShellValue value, GlobMask mask, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var activity = mask.AsSpan();
-        var literal = true;
-        for (var index = 0; index < value.Bytes.Length; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (activity[index] == GlobMask.Active && value.Bytes.Span[index] is (byte)'*' or (byte)'?' or (byte)'[')
-                literal = false;
-        }
+        var literal = IsLiteral(value.Bytes.Span, mask.AsSpan(), cancellationToken);
         memory.Charge(256);
         return new ShellPattern(value, mask, literal, memory);
     }
 
-    /// <summary>Selects byte or Unicode-scalar matching for the supplied operand.</summary>
-    public bool UsesByteCharacters(ReadOnlySpan<byte> text) => !_validUtf8 || !System.Text.Unicode.Utf8.IsValid(text);
+    /// <summary>Compares expanded words once without retaining a prepared matcher.</summary>
+    public static bool MatchesWords(IReadOnlyList<ExpandedWord> words, ReadOnlySpan<byte> text,
+        EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        var (value, activity) = PrepareWords(words, memory, cancellationToken);
+        var bytes = value.Bytes.Span;
+        var mask = activity.AsSpan();
+        if (IsLiteral(bytes, mask, cancellationToken))
+            return text.SequenceEqual(bytes);
 
-    public bool IsMatch(ReadOnlySpan<byte> text, CancellationToken cancellationToken)
+        var byteCharacters = !System.Text.Unicode.Utf8.IsValid(bytes) || !System.Text.Unicode.Utf8.IsValid(text);
+        return TextGlobMatcher.MatchUtf8(bytes, in mask, text,
+            requireEnd: true, byteCharacters, memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
+    }
+
+    private static (ShellValue Value, GlobMask Mask) PrepareWords(
+        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, memory);
+        _ = mask.TryUnescape(value, memory, cancellationToken, out value, out mask);
+        return (value, mask);
+    }
+
+    private static bool IsLiteral(ReadOnlySpan<byte> bytes, GlobMaskSpan mask, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_literal) return text.SequenceEqual(_value.Bytes.Span);
-        var mask = _mask.AsSpan();
-        return TextGlobMatcher.MatchUtf8(_value.Bytes.Span, in mask, text,
-            requireEnd: true, UsesByteCharacters(text), _memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
+        for (var index = 0; index < bytes.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (mask[index] == GlobMask.Active && bytes[index] is (byte)'*' or (byte)'?' or (byte)'[')
+                return false;
+        }
+        return true;
     }
+
+    /// <summary>Selects byte or Unicode-scalar matching for the supplied operand.</summary>
+    public bool UsesByteCharacters(ReadOnlySpan<byte> text) => !_validUtf8 || !System.Text.Unicode.Utf8.IsValid(text);
 
     public bool TryMatchPrefix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int length) =>
         TryMatchPrefix(text, shortest, UsesByteCharacters(text), cancellationToken, out length);

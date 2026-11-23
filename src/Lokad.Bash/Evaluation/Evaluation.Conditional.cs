@@ -107,8 +107,7 @@ public sealed partial class Evaluation
                         return await MatchRegexAsync(left, ExpandedWord.JoinWithSpaces(rightFields, Memory)).ConfigureAwait(false);
                     if (predicate.Operator is BinaryPredicateKind.StringEqual or BinaryPredicateKind.StringNotEqual)
                     {
-                        var matched = ShellPattern.FromWords(rightFields, Memory, _cancellationToken)
-                            .IsMatch(left.Bytes.Span, _cancellationToken);
+                        var matched = ShellPattern.MatchesWords(rightFields, left.Bytes.Span, Memory, _cancellationToken);
                         return matched == (predicate.Operator == BinaryPredicateKind.StringEqual) ? 0 : 1;
                     }
                     var right = ExpandedWord.JoinValuesWithSpaces(rightFields, Memory);

@@ -92,8 +92,7 @@ public sealed partial class Evaluation
                         .ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return caseCommand.Items.Count;
-                    if (ShellPattern.FromWords(expanded, Memory, _cancellationToken)
-                        .IsMatch(subject.Bytes.Span, _cancellationToken))
+                    if (ShellPattern.MatchesWords(expanded, subject.Bytes.Span, Memory, _cancellationToken))
                         return index;
 
                     // Each alternative consumes its expanded pattern. Binding effects
