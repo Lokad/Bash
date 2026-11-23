@@ -664,22 +664,13 @@ public sealed partial class Evaluation : IFileTester
         {
             if (_state.TryConsumeExpansionError(out var redirectionExitCode, out var errorKind))
             {
-                var parameterFailure = errorKind == ExpansionErrorKind.HereDocumentParameter;
-                if (parameterFailure)
+                if (errorKind == ExpansionErrorKind.HereDocumentParameter)
+                    result = await CompleteHereDocumentParameterFailureAsync(redirectionExitCode, scope).ConfigureAwait(false);
+                else if (errorKind == ExpansionErrorKind.HereDocumentSyntax && _state.FatalExpansion == null)
                 {
-                    _state.LastExitCode = redirectionExitCode;
-                    PublishExpansionPipelineStatus(redirectionExitCode, scope);
-                }
-                if (parameterFailure || errorKind == ExpansionErrorKind.HereDocumentSyntax && _state.FatalExpansion == null)
-                {
-                    if (ReaderErrexitEnabled(scope))
-                    {
-                        var exitStatus = parameterFailure ? redirectionExitCode : 2;
-                        result = await RunExitTrapAsync(scope, EvaluationResult.Exit(exitStatus), ExitTrapKind.Expansion).ConfigureAwait(false);
-                    }
-                    else
-                        result = _state.FatalExpansion is { } fatal ? EvaluationResult.Exit(fatal.ExitCode)
-                            : EvaluationResult.DiscardCompoundRedirectionUnit();
+                    result = ReaderErrexitEnabled(scope)
+                        ? await RunExitTrapAsync(scope, EvaluationResult.Exit(2), ExitTrapKind.Expansion).ConfigureAwait(false)
+                        : EvaluationResult.DiscardCompoundRedirectionUnit();
                 }
                 else
                     result = await FinalizeResultAsync(EvaluationResult.FromExitCode(redirectionExitCode), negated: false).ConfigureAwait(false);
@@ -715,6 +706,22 @@ public sealed partial class Evaluation : IFileTester
             };
         }
     }
+
+    private ValueTask<EvaluationResult> CompleteHereDocumentParameterFailureAsync(int status, ScopedEvaluation scope)
+    {
+        _state.LastExitCode = status;
+        PublishExpansionPipelineStatus(status, scope);
+        if (ReaderErrexitEnabled(scope))
+            return RunExitTrapAsync(scope, EvaluationResult.Exit(status), ExitTrapKind.Expansion);
+        var result = _state.FatalExpansion is { } fatal
+            ? EvaluationResult.Exit(fatal.ExitCode) : EvaluationResult.DiscardCompoundRedirectionUnit();
+        return ValueTask.FromResult(result);
+    }
+
+    private ValueTask<EvaluationResult> CompleteSimpleRedirectionFailureAsync(int status, ExpansionErrorKind kind, ScopedEvaluation scope) =>
+        kind == ExpansionErrorKind.HereDocumentParameter && _state.FatalExpansion.HasValue
+            ? CompleteHereDocumentParameterFailureAsync(status, scope)
+            : new ValueTask<EvaluationResult>(FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false));
 
     /// <summary>
     /// Evaluates a subshell command and returns its exit code to the caller.
@@ -1091,11 +1098,15 @@ public sealed partial class Evaluation : IFileTester
                 // An isolated redirection produces its own status, including a local expansion failure.
                 if (isolateRedirections)
                     _state.FatalExpansion = null;
-                if (_state.TryConsumeExpansionError(out var assignmentRedirectionExitCode))
-                    exitCode = assignmentRedirectionExitCode;
-                else if (!isolateRedirections && exitCode == 0)
-                    exitCode = _state.LastCommandSubstitutionExitCode ?? 0;
-                assignmentResult = await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated: false).ConfigureAwait(false);
+                if (_state.TryConsumeExpansionError(out var assignmentRedirectionExitCode, out var errorKind))
+                    assignmentResult = await CompleteSimpleRedirectionFailureAsync(assignmentRedirectionExitCode, errorKind, scope)
+                        .ConfigureAwait(false);
+                else
+                {
+                    if (!isolateRedirections && exitCode == 0)
+                        exitCode = _state.LastCommandSubstitutionExitCode ?? 0;
+                    assignmentResult = await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated: false).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -1342,12 +1353,11 @@ public sealed partial class Evaluation : IFileTester
             // Exit only the child; the pending error still prevents invoking the command.
             if (externalRedirections)
                 _state.FatalExpansion = null;
-            if (_state.TryConsumeExpansionError(out var redirectionError))
+            if (_state.TryConsumeExpansionError(out var redirectionError, out var errorKind))
             {
                 // A failed redirection never enters exec, so it neither replaces the shell
-                // nor suppresses timing. Fatal expansion errors still terminate via FinalizeResultAsync.
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(redirectionError), false)
-                    .ConfigureAwait(false);
+                // nor suppresses timing. Fatal expansion errors still terminate the evaluator.
+                return await CompleteSimpleRedirectionFailureAsync(redirectionError, errorKind, scope).ConfigureAwait(false);
             }
 
             if (preparation.RedirectionLifetime == RedirectionLifetime.Evaluation
@@ -3570,15 +3580,32 @@ public sealed partial class Evaluation : IFileTester
     internal void SetHereDocumentSyntaxError() => _state.SetHereDocumentSyntaxError();
 
     internal Task ReportHereDocumentParameterFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
-        ScopedEvaluation scope, bool required)
+        ScopedEvaluation scope, ExpansionFailureKind? fatalKind)
     {
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
-        if (required)
-            SetFatalExpansionError(ExpansionFailureKind.RequiredParameter);
+        if (fatalKind is { } kind)
+            SetFatalExpansionError(kind);
         _state.SetHereDocumentParameterError();
         var prefix = GetHereDocumentWarningPrefix(scope) ?? GetCommandDiagnosticPrefix(scope.Context, HereDocumentExpansionLine(scope));
         return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
+    }
+
+    internal Task ReportInvalidParameterTransformAsync(ShellValue subject, ScopedEvaluation scope, bool hereDocument)
+    {
+        ReadOnlySpan<ShellValue> message = [ShellValue.FromText("bad substitution")];
+        if (hereDocument)
+            return ReportHereDocumentParameterFailureAsync([subject], message, scope, ExpansionFailureKind.InvalidParameterTransform);
+        if (_state.FatalExpansion.HasValue)
+            return Task.CompletedTask;
+        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.InvalidParameterTransform, 1)
+        {
+            UseInheritedPipelineExitAction = UsesInheritedPipelineExitAction(scope)
+        });
+        _state.LastExitCode = 1;
+        PublishExpansionPipelineStatus(1, scope);
+        return WriteDiagnosticAsync([subject], message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+            GetCommandDiagnosticPrefix(scope));
     }
 
     /// <summary>Reports the first fatal expansion through the active stderr mapping without decoding message bytes.</summary>

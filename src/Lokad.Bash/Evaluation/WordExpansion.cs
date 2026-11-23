@@ -309,7 +309,7 @@ internal static partial class WordExpansion
         ReadOnlySpan<ShellValue> subject = missingBrace ? [badSubstitution] : [spelling];
         ReadOnlySpan<ShellValue> message = missingBrace ? [ShellValue.FromText("no closing `}' in "), spelling] : [badSubstitution];
         return hereDocument
-            ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, required: false)
+            ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
             : scope.Effects.ReportUnitExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
     }
 

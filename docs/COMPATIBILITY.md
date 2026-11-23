@@ -467,6 +467,11 @@ A failed required parameter reports its expanded message at that same
 line. These failures in compound redirections publish status 1 and a
 single pipeline status of 1. With errexit active, EXIT sees those
 statuses through the redirections already applied to the command.
+Parameter transformations resolve the selected value before validating an
+unknown operator. An absent value yields the ordinary empty expansion.
+An assigned empty value reaches validation. A rejected transformation
+reports the reached operand with status 1. Command substitutions in a
+rejected operator can appear in the diagnostic without running.
 When a streamed command list encounters an unexpected closer or separator, the
 diagnostic shows the token and the physical source line. Missing conditional
 operands identify the unary or binary grammar role and any open parentheses.

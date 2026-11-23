@@ -30,7 +30,32 @@ public sealed class ParameterOperatorTests
     [InlineData("v=$(\nprintf inside\n{ cat; } <<DOC; printf skipped\n${name\nDOC\nprintf more\n);"
         + " printf '<%s:%s>' \"$?\" \"$v\"",
         0, "<1:inside>", "line 10: ${name\n: bad substitution\n", null, null)]
-    public async Task HereDocumentParameterFailuresKeepTheReaderAndRedirectionScope(
+    [InlineData("unset value\nprintf '<%s:%s>' \"${value@}\" \"${value@ZZ}\"; printf after",
+        0, "<:>after", "", null, null)]
+    [InlineData("value=([0]=zero); i=1\n{ cat; } <<DOC; printf same\n${value[i++]@Z}\nDOC\nprintf '<%s>' \"$i\"",
+        0, "\nsame<2>", "", null, null)]
+    [InlineData("value=\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"' EXIT\n(exit 7) | (exit 4)\n"
+        + "printf '%s' \"${value@Z}\"; printf skipped\nprintf next",
+        1, "<exit:1:1>", "line 4: ${value@Z}: bad substitution\n", null, null)]
+    [InlineData("value=set\nprintf '%s' \"lead${value@Z}tail\"",
+        1, "", "line 2: lead${value@Z}tail: bad substitution\n", null, null)]
+    [InlineData("value=set\nprintf '%s' \"lead\"${value@Z}tail",
+        1, "", "line 2: \"lead\"${value@Z}tail: bad substitution\n", null, null)]
+    [InlineData("value=set\nprintf '%s' \"${value@$(printf touched >&2; printf Z)}\"",
+        1, "", "line 2: ${value@$(printf touched 1>&2; printf Z)}: bad substitution\n", null, null)]
+    [InlineData("value=set\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" >&2' EXIT\n"
+        + "printf '%s' \"${value@Z}\" | cat\nprintf '<next:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        0, "<next:1:1 0>", "line 3: ${value@Z}: bad substitution\n<exit:1:1><exit:0:0>", null, null)]
+    [InlineData("value=set\nset -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" >&2' EXIT\n"
+        + "name=ok 2>errors <<DOC\n${value@Z}\nDOC\nprintf next",
+        1, "", "", "line 4: ${value@Z}\n: bad substitution\n<exit:1:1>", null)]
+    [InlineData("value=outer\nset -e\ntrap 'printf \"<exit:%s:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" \"$value\" >&2' EXIT\n"
+        + "f() {\nlocal value=inner\nprintf '%s' \"${value@Z}\"\n}\nf 2>errors\nprintf next",
+        1, "", "", "line 6: ${value@Z}: bad substitution\n<exit:1:1:inner>", null)]
+    [InlineData("set -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" >&2' EXIT\n"
+        + ": 2>errors <<DOC\n${value:?stop}\nDOC\nprintf next",
+        1, "", "", "line 3: value: stop\n<exit:1:1>", null)]
+    public async Task ParameterDiagnosticsFollowSelectionAndTheReachedReader(
         string source, int status, string output, string diagnostic, string? redirectedDiagnostic, string? sourcedInput)
     {
         foreach (var prepared in new[] { false, true })

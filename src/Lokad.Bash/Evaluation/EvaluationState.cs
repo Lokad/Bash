@@ -26,6 +26,8 @@ internal enum ExpansionFailureKind
     IndirectParameter,
     /// <summary>A reached error-if-unset parameter expansion.</summary>
     RequiredParameter,
+    /// <summary>A present value reached an invalid parameter transformation.</summary>
+    InvalidParameterTransform,
     /// <summary>An errexit-enabled file substitution could not open its input.</summary>
     InputSubstitution,
     Assignment,

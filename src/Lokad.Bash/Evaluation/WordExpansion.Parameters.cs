@@ -88,12 +88,12 @@ internal static partial class WordExpansion
                 await ReportBadSubstitutionAsync().ConfigureAwait(false);
             return;
         }
-        var transform = parsed.Kind == BracedParameterOperatorKind.Transform ? parsed.Word[0] : (byte)0;
+        var transform = parsed.Kind == BracedParameterOperatorKind.Transform && parsed.Word.Length == 1 ? parsed.Word[0] : (byte)0;
         var inspection = transform is (byte)'a' or (byte)'A' or (byte)'K' or (byte)'k';
         var removesPattern = parsed.Kind is BracedParameterOperatorKind.RemovePrefixShortest
             or BracedParameterOperatorKind.RemovePrefixLongest or BracedParameterOperatorKind.RemoveSuffixShortest
             or BracedParameterOperatorKind.RemoveSuffixLongest;
-        if (parsed.Kind == BracedParameterOperatorKind.Transform && !inspection && !"QEUuL"u8.Contains(transform))
+        if (transform == (byte)'P')
         {
             await ReportSubstitutionFailureAsync("unsupported parameter operator", ExpansionFailureKind.Parameter)
                 .ConfigureAwait(false);
@@ -378,7 +378,7 @@ internal static partial class WordExpansion
             ReadOnlySpan<ShellValue> name = parsed.Modifier == ParameterModifier.Indirect
                 ? [ShellValue.FromText("!"), parsed.Name.ToValue()] : [parsed.Name.ToValue()];
             return quoteContext == ExpansionQuoteContext.HereDocument
-                ? scope.Effects.ReportHereDocumentParameterFailureAsync(name, [message], scope, required: true)
+                ? scope.Effects.ReportHereDocumentParameterFailureAsync(name, [message], scope, ExpansionFailureKind.RequiredParameter)
                 : scope.Effects.ReportFatalExpansionAsync(name, [message], ExpansionFailureKind.RequiredParameter);
         }
 
@@ -463,9 +463,6 @@ internal static partial class WordExpansion
                 _ => BracedParameterOperatorKind.Invalid,
             };
             if (kind == BracedParameterOperatorKind.Invalid)
-                return Invalid();
-            if (kind == BracedParameterOperatorKind.Transform
-                    && (content.Length - wordStart != 1 || !"QEPAaKkUuL"u8.Contains(content[wordStart])))
                 return Invalid();
             if (wordStart < content.Length && content[wordStart] == operation)
             {
@@ -945,6 +942,11 @@ internal static partial class WordExpansion
             var cancellationToken = scope.Effects.CancellationToken;
             if (parsed.Kind == BracedParameterOperatorKind.Transform)
             {
+                if (!"QEUuL"u8.Contains(transform))
+                {
+                    await ReportInvalidTransformAsync().ConfigureAwait(false);
+                    return;
+                }
                 EmitTransformedFields((value, scratch) => transform switch
                 {
                     (byte)'E' => ShellEscapeDecoder.DecodeAnsiCValue(value, scratch),
@@ -1179,6 +1181,27 @@ internal static partial class WordExpansion
                 var (value, mask) = ExpandedWord.JoinPatternWithSpaces(fields, budget);
                 return new ParameterOperand(value, mask);
             }
+        }
+
+        async Task ReportInvalidTransformAsync()
+        {
+            var hereDocument = quoteContext == ExpansionQuoteContext.HereDocument;
+            var wholeWord = quoteContext == ExpansionQuoteContext.Unquoted && originalWord?.Parts.Count > 1 ? originalWord : null;
+            if (hereDocument || wholeWord == null && segment.AsSpan().IndexOf("$("u8) < 0)
+            {
+                await scope.Effects.ReportInvalidParameterTransformAsync(segment.ToValue(), scope, hereDocument).ConfigureAwait(false);
+                return;
+            }
+            var budget = scope.Effects.Memory.Budget;
+            using var spelling = new ByteMemoryBuilder(0, budget);
+            var cancellationToken = scope.Effects.CancellationToken;
+            var written = wholeWord == null
+                ? FunctionDefinitionFormatter.TryAppendSourceWithCaptures(segment, scanContext, spelling, budget, cancellationToken)
+                : FunctionDefinitionFormatter.TryAppendWordSource(wholeWord, spelling, budget, cancellationToken, scanContext);
+            if (!written)
+                throw new ByteMemoryBuilder.LimitExceededException();
+            await scope.Effects.ReportInvalidParameterTransformAsync(ShellValue.FromBytes(spelling.ToMemory()), scope, hereDocument: false)
+                .ConfigureAwait(false);
         }
 
         static ReadOnlyMemory<byte> ApplyPatternRemoval(ShellValue value, ShellPattern pattern,
