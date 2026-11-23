@@ -1392,7 +1392,7 @@ public static class Parser
         var firstElementEndLine = 0;
         var trackWrapperOperand = false;
         var wrapperOperandEndLine = 0;
-        var redirectionOperandEndLine = 0;
+        var redirectionOperandLine = 0;
 
         while (true)
         {
@@ -1445,16 +1445,16 @@ public static class Parser
             }
 
             var token = tokenizer.NextTokenCore();
+            var trackRedirectionOperand = trackWrapperOperand;
             switch (token.Kind)
             {
                 case TokenKind.Redirection:
                     sawAny = true;
-                    var trackRedirectionOperand = trackWrapperOperand;
                     if (trackRedirectionOperand)
                         RecordWrapperOperand();
                     ReadRedirection(tokenizer, token, null, string.Empty, ref redirections);
                     if (trackRedirectionOperand)
-                        redirectionOperandEndLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
+                        redirectionOperandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
                     continue;
                 case TokenKind.Word:
                 case TokenKind.OpenBrace:
@@ -1476,7 +1476,10 @@ public static class Parser
 
                     if (TryGetAllocationVariable(tokenizer, wordToken, out var variableName, out var allocationToken))
                     {
-                        ReadRedirection(tokenizer, allocationToken, null, variableName, ref redirections);
+                        var operandOffset = ReadRedirection(tokenizer, allocationToken, null, variableName, ref redirections);
+                        if (trackRedirectionOperand && operandOffset is { } offset
+                            && allocationToken.RedirectionKind is RedirectionKind.Input or RedirectionKind.Output)
+                            redirectionOperandLine = tokenizer.GetLine(offset);
                         continue;
                     }
 
@@ -1564,7 +1567,7 @@ public static class Parser
                 words is null ? Array.Empty<Word>() : words,
                 redirections is null ? Array.Empty<Redirection>() : redirections,
                 declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
-            tokenizer.RecordLocation(command, startLine, firstElementEndLine, wrapperOperandEndLine, redirectionOperandEndLine);
+            tokenizer.RecordLocation(command, startLine, firstElementEndLine, wrapperOperandEndLine, redirectionOperandLine);
             return command;
         }
 
@@ -1648,7 +1651,8 @@ public static class Parser
         return true;
     }
 
-    private static void ReadRedirection(
+    /// <summary>Reads a redirection and returns the source offset of its operand on success.</summary>
+    private static int? ReadRedirection(
         Tokenizer tokenizer,
         Token token,
         int? fileDescriptor,
@@ -1658,7 +1662,7 @@ public static class Parser
         if (token.RedirectionKind == null)
         {
             tokenizer.RecordError("Redirection token missing kind.", tokenizer.Position);
-            return;
+            return null;
         }
 
         var kind = token.RedirectionKind.Value;
@@ -1673,7 +1677,7 @@ public static class Parser
         if (!tokenizer.TryReadRedirectionWord(hereDocument, out var target, out var targetWord, out var delimiter))
         {
             tokenizer.RecordMissingRedirectionOperand(target);
-            return;
+            return null;
         }
         redirections ??= [];
         if (hereDocument)
@@ -1684,7 +1688,7 @@ public static class Parser
             };
             redirections.Add(redirection);
             (tokenizer.HereDocuments ??= new HereDocumentReader()).Enqueue(redirection);
-            return;
+            return target.Source.Start.Value;
         }
 
         if (kind is RedirectionKind.DuplicateOutput or RedirectionKind.DuplicateInput
@@ -1710,11 +1714,12 @@ public static class Parser
                 : RedirectionKind.CloseInput;
             redirections.Add(new Redirection(kind, fileDescriptor,
                 new Word([WordPart.FromText(WordPartKind.Unquoted, "-")]), variableName, hereDocumentDelimiter: null));
-            return;
+            return target.Source.Start.Value;
         }
 
         redirections.Add(new Redirection(kind, fileDescriptor, targetWord.Word, variableName,
             hereDocumentDelimiter: null, tokenizer.ScanContext.SyntaxMemory));
+        return target.Source.Start.Value;
     }
 
     private static List<Redirection>? ReadTrailingRedirections(Tokenizer tokenizer)

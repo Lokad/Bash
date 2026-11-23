@@ -19,7 +19,7 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
         }),
         EndLine = Offset + location.EndLine,
         WrapperOperandLine = location.WrapperOperandEndLine == 0 ? 0 : Offset + location.WrapperOperandEndLine,
-        RedirectionOperandLine = location.RedirectionOperandEndLine == 0 ? 0 : Offset + location.RedirectionOperandEndLine
+        RedirectionOperandLine = location.RedirectionOperandLine == 0 ? 0 : Offset + location.RedirectionOperandLine
     };
 }
 

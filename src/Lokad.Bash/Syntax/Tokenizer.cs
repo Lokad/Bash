@@ -71,7 +71,7 @@ internal sealed class Tokenizer
         RecordLocation(command, startLine, firstElementEndLine, 0, 0);
 
     internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine, int wrapperOperandEndLine,
-        int redirectionOperandEndLine)
+        int redirectionOperandLine)
     {
         if (!TrackCommandLocations)
             return;
@@ -79,7 +79,7 @@ internal sealed class Tokenizer
             new CommandLocation(startLine, firstElementEndLine, GetLine(ConsumedPosition))
             {
                 WrapperOperandEndLine = wrapperOperandEndLine,
-                RedirectionOperandEndLine = redirectionOperandEndLine
+                RedirectionOperandLine = redirectionOperandLine
             }, _scanContext.SyntaxMemory);
     }
 

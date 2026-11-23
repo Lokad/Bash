@@ -353,16 +353,22 @@ internal sealed class RedirectionEvaluation
         bool persistAllocations)
     {
         var value = ShellValue.FromBytes(NumberFormatting.FormatNumber(number.Number));
+        var name = ShellValue.FromText(variableName);
         var assignment = await scope.Effects.AssignBuiltinAsync(VariableReference.ForName(variableName), value,
             scope, scope.SelectorBindings,
-            Evaluation.BuiltinAssignmentKind.Descriptor, ShellValue.FromText(variableName),
+            Evaluation.BuiltinAssignmentKind.Descriptor, name,
             scope.ExpansionWriteTarget).ConfigureAwait(false);
         if (assignment == Evaluation.BuiltinAssignmentResult.NoWrite)
             return; // An unbound allocation remains temporary and is closed by the existing restore path.
         if (assignment != Evaluation.BuiltinAssignmentResult.Assigned)
         {
             if (!scope.Effects.HasPendingExpansionError)
-                await ReportFailureAsync(scope, new OperationError($"{variableName}: cannot assign fd to variable\n")).ConfigureAwait(false);
+            {
+                var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
+                if (!standardError.IsClosed)
+                    await scope.Effects.WriteDescriptorAssignmentErrorAsync(standardError, name, scope.Context).ConfigureAwait(false);
+                scope.Effects.SetExpansionError(1);
+            }
             return;
         }
         if (!persistAllocations) return;

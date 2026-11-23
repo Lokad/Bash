@@ -516,6 +516,9 @@ positions when they fit the incoming status list. Empty loops and function
 definitions preserve the previous array.
 For `|&`, the left stage applies an implicit `2>&1` after its explicit
 redirections. Setup diagnostics use the stderr mapping reached so far.
+Readonly descriptor allocation reports the selected binding first and the
+written allocation variable second, using the same source location for both
+errors. A logically closed stderr stays closed during allocation.
 After an ambiguous redirection, the evaluator expands the operand again to name
 it in the diagnostic. Direct command substitutions remain text in that pass.
 Arithmetic and braced parameter operands keep their own expansion behavior. If

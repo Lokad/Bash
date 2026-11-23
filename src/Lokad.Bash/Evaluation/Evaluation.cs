@@ -3123,9 +3123,17 @@ public sealed partial class Evaluation : IFileTester
         WriteOperationDiagnosticAsync(GetStdErrDescriptor(), "shell: ", path: null, error);
 
     /// <summary>Writes LF-framed host detail through the supplied descriptor, with an optional path.</summary>
-    internal async Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, string prefix, string? path, OperationError error)
+    internal Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, string prefix, string? path, OperationError error) =>
+        WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, prefix, path, error, default);
+
+    internal Task WriteDescriptorAssignmentErrorAsync(FileDescriptor descriptor, ShellValue variable, EvaluationContext context) =>
+        WriteOperationDiagnosticAsync(descriptor, variable, string.Empty, path: null,
+            new OperationError("cannot assign fd to variable\n"), GetBuiltinDiagnosticPrefix(context));
+
+    private async Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, ShellValue name, string prefix, string? path,
+        OperationError error, SyntaxDiagnosticPrefix sourcePrefix)
     {
-        if (await TryWriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, prefix, path, error, default).ConfigureAwait(false) == null)
+        if (await TryWriteOperationDiagnosticAsync(descriptor, name, prefix, path, error, sourcePrefix).ConfigureAwait(false) == null)
         {
             // The operation already failed. Keep the bounded message on its status and cleanup path.
             await ExecuteWriteAsync(descriptor, ShellMemoryRefusalDiagnostic).ConfigureAwait(false);

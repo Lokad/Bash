@@ -181,7 +181,7 @@ public sealed class HereInputLifetimeTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("1:old", host.StandardOutput.TextContent);
-        Assert.Equal("fd: readonly variable\nfd: cannot assign fd to variable\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: fd: readonly variable\nline 1: fd: cannot assign fd to variable\n", host.StandardError.TextContent);
         Assert.Equal(0, governor.ReservedBytes);
     }
 

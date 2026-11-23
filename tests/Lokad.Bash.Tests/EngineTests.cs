@@ -815,8 +815,8 @@ public class EngineTests
         Assert.Equal("old", state.Variables["fd"].ToUtf8String());
         Assert.Equal(2, visitor.Appends.Count);
         Assert.All(visitor.Appends, diagnostic => Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor));
-        Assert.Equal("fd: readonly variable\n"u8.ToArray(), visitor.Appends[0].Content);
-        Assert.Equal("fd: cannot assign fd to variable\n"u8.ToArray(), visitor.Appends[1].Content);
+        Assert.Equal("line 1: fd: readonly variable\n"u8.ToArray(), visitor.Appends[0].Content);
+        Assert.Equal("line 1: fd: cannot assign fd to variable\n"u8.ToArray(), visitor.Appends[1].Content);
         Assert.Equal([new FileDescriptor(900)], visitor.ClosedDescriptors);
         Assert.Empty(state.GetDescriptorsForCleanup());
     }

@@ -210,9 +210,31 @@ public sealed class DescriptorAllocationTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("1:sentinel", host.StandardOutput.TextContent);
-        Assert.Equal("fd: readonly variable\nfd: cannot assign fd to variable\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: fd: readonly variable\nline 1: fd: cannot assign fd to variable\n", host.StandardError.TextContent);
         Assert.Empty(host.ReadFileBytes("/out"));
         Assert.False(await EndToEndHarness.FileExistsAsync(host, "/later"));
+    }
+
+    [Theory]
+    [InlineData(": {fd}>\\\nopened", 3)]
+    [InlineData(": {fd}>\"op\\\nened\"", 2)]
+    [InlineData(": {fd}>>\\\nopened", 2)]
+    [InlineData("{fd}>\"op\\\nened\" :", 3)]
+    public async Task ReadonlyAllocationReportsBothNamesAtTheReachedSourceLine(string command, int line)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", ":\n" + command + " >later\n");
+        var result = await host.RunAsync("readonly value=seed; declare -n fd=value\n"
+            + "source /body 2>errors; printf '%s:%s' \"$?\" \"$fd\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:seed", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal($"/body: line {line}: value: readonly variable\n"
+            + $"/body: line {line}: fd: cannot assign fd to variable\n", host.ReadFile("/errors"));
+        Assert.Empty(host.ReadFileBytes("/opened"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/later"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
