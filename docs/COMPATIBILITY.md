@@ -748,6 +748,10 @@ Newlines between commands and in literal data remain part of the spelling.
 Trailing comments and blank lines are omitted, and a here-document keeps the
 newlines needed to delimit its body. Reloading the listing with `eval` locates
 commands using the printed lines.
+When a command substitution starts with an authored adjacent parenthesis,
+its spelling keeps internal whitespace, comments and any final separator.
+Lexical quote preparation and nested substitutions still apply. The final
+separator can distinguish a capture from an arithmetic expansion.
 Definition listings use Bash's spelling for default descriptors in file and
 here-input redirections. Descriptor duplications distinguish literal numbers
 from quoted or expanded target words.

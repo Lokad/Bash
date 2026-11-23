@@ -213,6 +213,204 @@ internal sealed class ShellSourceCursor
         return RemoveLineContinuations(context, expanded);
     }
 
+    /// <summary>Preserves the matched-pair spelling of an adjacent capture, including its final connector.</summary>
+    internal static SourceSpelling ReadAdjacentCaptureSpelling(ShellScanContext context, ShellSource input,
+        int start, int end, MemoryCapacity? workspace, bool prepareReplay, out ShellSource projectedInput,
+        out IReadOnlyList<SourceLineAdjustment>? lineAdjustments, out int renderedLines)
+    {
+        var source = input.Slice(start, end - start);
+        var cursor = new ShellSourceCursor(source, 0, context);
+        ByteMemoryBuilder? output = null;
+        List<SpellingCapture>? captures = null;
+        List<SourceLineAdjustment>? changes = null;
+        var written = 0;
+        var delta = 0;
+        var previousFailure = context.SubstitutionFailure;
+        try
+        {
+            while (!cursor.IsAtEnd)
+            {
+                var first = cursor.Position;
+                if (cursor.TrySkipLineContinuations())
+                {
+                    AppendBefore(first);
+                    RecordLineChange(first, cursor.Position, replacementLines: 0);
+                    written = cursor.Position;
+                    continue;
+                }
+
+                if (!cursor.IsQuoted && cursor.Current == (byte)'$')
+                {
+                    if (TryMatchLogicalText(source.AsSpan(), first, "$'", out _))
+                    {
+                        if (!cursor.TryReadQuotedLiteralSource(out var value, out _))
+                            break;
+                        var decoded = ShellEscapeDecoder.DecodeAnsiCValue(value.AsSpan(), workspace);
+                        if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(AppendBefore(first), decoded.Bytes.Span))
+                            throw new ByteMemoryBuilder.LimitExceededException();
+                        RecordLineChange(first, cursor.Position, decoded.Bytes.Span.Count((byte)'\n'));
+                        written = cursor.Position;
+                        continue;
+                    }
+                    if (TryMatchLogicalText(source.AsSpan(), first, "$\"", out var afterQuote))
+                    {
+                        AppendBefore(first);
+                        // Retain the quote and let the cursor apply the ordinary double-quote rules.
+                        cursor.Position = afterQuote - 1;
+                        RecordLineChange(first, cursor.Position, replacementLines: 0);
+                        written = cursor.Position;
+                        continue;
+                    }
+                }
+
+                if (cursor.TryConsumeQuoteOrEscape())
+                    continue;
+                if (!cursor.IsQuoted || cursor.IsDoubleQuoted)
+                {
+                    if (TryMatchLogicalText(source.AsSpan(), first, "${", out var payloadStart)
+                        && BracedParameterScanner.ScanWithPayload(context, source, first, out var close, out _,
+                            out var payload, out _, out _, out _, trackRenderedLines: false,
+                            cursor.IsDoubleQuoted ? BracedParameterScanner.LexicalQuotes.DoubleQuoted
+                                : BracedParameterScanner.LexicalQuotes.Unquoted,
+                            out _, out _) == BracedParameterScanStatus.Found)
+                    {
+                        cursor.Position = close + 1;
+                        ProjectNested(first, payloadStart, close, cursor.Position, "${"u8, "}"u8, payload, CountLines(payload));
+                        continue;
+                    }
+
+                    if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete expansion)
+                    {
+                        if (expansion.Kind == ShellNestedExpansionKind.Command
+                            && context.TryGetCommandSubstitution(source, first, out var cached))
+                        {
+                            if (cached.Substitution is CommandSubstitutionSyntax.Parsed { CanRenderBody: true } capture)
+                            {
+                                if (captures == null)
+                                {
+                                    context.SyntaxMemory?.Grow(32);
+                                    captures = [];
+                                }
+                                context.SyntaxMemory?.PrepareListCapacity(captures, 1);
+                                captures.Add(new SpellingCapture(ProjectOffset(first), cursor.Position - first, capture));
+                                if (capture.Script.RenderedLineBreaks is { } lines)
+                                    RecordLineChange(first, cursor.Position, lines);
+                            }
+                            else if (cached.Substitution is CommandSubstitutionSyntax.Legacy { RemovedLineContinuations: > 0 })
+                            {
+                                var body = RemoveLineContinuations(context, source.Slice(first + 1, cursor.Position - first - 2));
+                                ProjectNested(first, first + 1, cursor.Position - 1, cursor.Position, "`"u8, "`"u8,
+                                    new SourceSpelling(body, null), body.AsSpan().Count((byte)'\n'));
+                            }
+                        }
+                        else if (expansion.Kind == ShellNestedExpansionKind.Arithmetic)
+                        {
+                            var bracketed = TryMatchLogicalText(source.AsSpan(), first, "$[", out var operandStart);
+                            var operandEnd = cursor.Position - 1;
+                            if (!bracketed)
+                            {
+                                _ = TryMatchLogicalText(source.AsSpan(), first, "$((", out operandStart);
+                                // An expansion's final double closer can cross a line continuation.
+                                while (operandEnd >= operandStart + 2
+                                    && source[operandEnd - 2] == (byte)'\\' && source[operandEnd - 1] == (byte)'\n')
+                                    operandEnd -= 2;
+                                operandEnd--;
+                            }
+                            var body = source.Slice(operandStart, operandEnd - operandStart);
+                            var bytes = body.AsSpan();
+                            SourceSpelling operand;
+                            int lines;
+                            if (expansion.ContainsCommandSubstitution || bytes.IndexOf("\\\n"u8) >= 0
+                                || bytes.IndexOf("$'"u8) >= 0 || bytes.IndexOf("$\""u8) >= 0)
+                                operand = ReadAdjacentCaptureSpelling(context, source, operandStart, operandEnd, workspace,
+                                    prepareReplay: false, out _, out _, out lines);
+                            else
+                            {
+                                operand = new SourceSpelling(body, null);
+                                lines = bytes.Count((byte)'\n');
+                            }
+                            ProjectNested(first, operandStart, operandEnd, cursor.Position,
+                                bracketed ? "$["u8 : "$(("u8, bracketed ? "]"u8 : "))"u8, operand, lines);
+                        }
+                        continue;
+                    }
+                }
+                cursor.Advance();
+            }
+
+            lineAdjustments = changes;
+            renderedLines = source.AsSpan().Count((byte)'\n') + delta;
+            projectedInput = ShellSource.Empty;
+            if (output == null)
+                return new SourceSpelling(source, captures);
+            output.Append(source.AsSpan()[written..]);
+            var length = output.Length;
+            if (prepareReplay)
+                output.Append((byte)')');
+            var normalized = ShellSource.FromBytes(output.ToCompactMemory(context.SyntaxMemory));
+            if (prepareReplay)
+                projectedInput = normalized;
+            return new SourceSpelling(normalized.Slice(0, length), captures);
+        }
+        finally
+        {
+            output?.Dispose();
+            context.SubstitutionFailure = previousFailure;
+        }
+
+        ByteMemoryBuilder AppendBefore(int position)
+        {
+            output ??= workspace == null ? ByteMemoryBuilder.CreateUnaccounted(0) : new ByteMemoryBuilder(0, workspace);
+            output.Append(source.AsSpan(written, position - written));
+            return output;
+        }
+
+        int ProjectOffset(int position) => output == null ? position : output.Length + position - written;
+
+        void ProjectNested(int first, int bodyStart, int bodyEnd, int after, ReadOnlySpan<byte> opening,
+            ReadOnlySpan<byte> closing, SourceSpelling spelling, int lines)
+        {
+            if (bodyStart == first + opening.Length && after == bodyEnd + closing.Length
+                && source.Slice(bodyStart, bodyEnd - bodyStart).Bytes.Equals(spelling.Source.Bytes))
+                spelling.CopyCaptures(ProjectOffset(bodyStart), ref captures, context.SyntaxMemory);
+            else
+            {
+                var target = AppendBefore(first).Append(opening);
+                spelling.CopyCaptures(target.Length, ref captures, context.SyntaxMemory);
+                target.Append(spelling.Source.AsSpan()).Append(closing);
+                written = after;
+            }
+            RecordLineChange(first, after, lines);
+        }
+
+        static int CountLines(SourceSpelling spelling)
+        {
+            var lines = spelling.Source.AsSpan().Count((byte)'\n');
+            if (spelling.Captures is { } nested)
+                foreach (var capture in nested)
+                    if (capture.Syntax is CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } rendered })
+                        lines += rendered - spelling.Source.AsSpan(capture.Offset, capture.Length).Count((byte)'\n');
+            return lines;
+        }
+
+        void RecordLineChange(int first, int after, int replacementLines)
+        {
+            var difference = replacementLines - source.AsSpan(first, after - first).Count((byte)'\n');
+            if (difference == 0)
+                return;
+            delta += difference;
+            if (!prepareReplay)
+                return;
+            if (changes == null)
+            {
+                workspace?.Grow(32);
+                changes = [];
+            }
+            workspace?.PrepareListCapacity(changes, 1);
+            changes.Add(new SourceLineAdjustment(start + after, delta));
+        }
+    }
+
     /// <summary>Finds separators while normalizing a loop header on its original source backing.</summary>
     internal static ShellSource ReadArithmeticForHeader(ShellScanContext context, ShellSource source,
         out ArithmeticForSeparators separators) =>

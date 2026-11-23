@@ -265,11 +265,13 @@ public static class Parser
         out ParsedScript? parsed,
         out SubstitutionSyntaxFailure failure,
         out bool preserveAdjacentOpening,
+        out SourceSpelling? adjacentSpelling,
         out ParserFailure? syntaxError)
     {
         parsed = null;
         failure = SubstitutionSyntaxFailure.None;
         preserveAdjacentOpening = false;
+        adjacentSpelling = null;
         syntaxError = null;
         closingParenthesisIndex = payloadStart;
         if (payloadStart < 0 || payloadStart > input.Length)
@@ -288,7 +290,7 @@ public static class Parser
                 AllowEofHereDocuments = context.LegacyOrigin != LegacySubstitutionOrigin.Temporary,
                 IsCommandSubstitution = true
             };
-            var status = ReadBody(tokenizer, out var command, out closingParenthesisIndex, out syntaxError);
+            var status = ReadBody(tokenizer, input, payloadStart, out var command, out closingParenthesisIndex, out syntaxError);
             if (status != ShellScanStatus.Complete)
                 return status;
 
@@ -310,7 +312,8 @@ public static class Parser
                 if (context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
                 {
                     tokenizer.ReadHereDocumentExpansionCaptureBodies(pending);
-                    syntaxError = MissingCloser(pending.Warnings, GetWarningOffset(pending.Warnings));
+                    syntaxError = MissingCloser(pending.Warnings, GetWarningOffset(pending.Warnings, input, payloadStart),
+                        input.Length);
                     return ShellScanStatus.Invalid;
                 }
                 if (!context.CanReadAhead(input))
@@ -324,6 +327,56 @@ public static class Parser
             if (failure != SubstitutionSyntaxFailure.None || preserveAdjacentOpening || rawHereDocument)
                 return ShellScanStatus.Complete;
 
+            if (adjacentParenthesis && !parsed.HasReadAheadHereDocuments)
+            {
+                using var workspace = context.SyntaxMemory is { } syntax ? new MemoryCapacity(syntax.Budget, 0) : null;
+                adjacentSpelling = ShellSourceCursor.ReadAdjacentCaptureSpelling(context, input, payloadStart,
+                    closingParenthesisIndex, workspace, prepareReplay: true, out var projectedInput, out var lineAdjustments,
+                    out var renderedLines);
+                var projected = adjacentSpelling.GetValueOrDefault();
+                var changedBytes = !projectedInput.IsEmpty;
+                if (changedBytes || lineAdjustments != null)
+                {
+                    // Byte edits can also change a comment or here-document body. Share the nested
+                    // syntax in the edited source. For line-only edits reuse the original backing.
+                    var locatedSource = input;
+                    var locatedStart = payloadStart;
+                    var expectedEnd = closingParenthesisIndex;
+                    if (changedBytes)
+                    {
+                        locatedSource = projectedInput;
+                        locatedStart = 0;
+                        expectedEnd = projected.Source.Length;
+                        lineAdjustments = InstallProjectedCaptures(locatedSource, projected.Captures, workspace);
+                    }
+                    var located = new Tokenizer(locatedSource, locatedStart, context)
+                    {
+                        TrackCommandLocations = true,
+                        AllowEofHereDocuments = tokenizer.AllowEofHereDocuments,
+                        IsCommandSubstitution = true,
+                        LineAdjustments = lineAdjustments
+                    };
+                    var locationStatus = ReadBody(located, locatedSource, locatedStart,
+                        out var locatedCommand, out var locatedEnd, out var locationError);
+                    if (locationStatus == ShellScanStatus.Complete && locatedEnd == expectedEnd
+                        && located.HereDocuments is not { HasPending: true })
+                    {
+                        parsed = CompleteScript(located, locatedCommand);
+                        if (context.SubstitutionFailure != SubstitutionSyntaxFailure.None)
+                            failure = ClassifyNestedFailure(context.SubstitutionFailure, adjacent: true);
+                    }
+                    else if (locationError is { Kind: ParserFailureKind.Limit })
+                    {
+                        syntaxError = locationError;
+                        return ShellScanStatus.Invalid;
+                    }
+                    else if (changedBytes)
+                        failure = SubstitutionSyntaxFailure.NestedSyntax;
+                }
+                parsed.RenderedLineBreaks = renderedLines;
+                return ShellScanStatus.Complete;
+            }
+
             var edits = FunctionDefinitionFormatter.ProjectCaptureLocations(parsed, context.SyntaxMemory,
                 collectOmittedSeparators: !adjacentParenthesis && !collectedAhead);
             if (edits == null)
@@ -331,7 +384,7 @@ public static class Parser
 
             // Keep positions on the original backing so delimiter lookahead can reuse nested parses.
             var replay = new Tokenizer(input, payloadStart, context) { TrackCommandLocations = true, OmittedSeparators = edits };
-            status = ReadBody(replay, out var corrected, out var replayEnd, out var replayFailure);
+            status = ReadBody(replay, input, payloadStart, out var corrected, out var replayEnd, out var replayFailure);
             if (status == ShellScanStatus.Complete && replayEnd == closingParenthesisIndex
                 && replay.HereDocuments is not { HasPending: true })
             {
@@ -352,27 +405,55 @@ public static class Parser
         }
         finally { context.RetainCaptureLookahead = retainLookahead; }
 
-        ShellScanStatus ReadBody(Tokenizer tokenizer, out ICommand? command, out int end, out ParserFailure? error)
+        IReadOnlyList<SourceLineAdjustment>? InstallProjectedCaptures(ShellSource source,
+            IReadOnlyList<SpellingCapture>? captures, MemoryCapacity? workspace)
         {
-            end = payloadStart;
+            if (captures == null)
+                return null;
+            List<SourceLineAdjustment>? lines = null;
+            var adjustment = 0;
+            foreach (var capture in captures)
+            {
+                context.StoreCommandSubstitution(source, capture.Offset, capture.Length, capture.Syntax);
+                if (capture.Syntax is not CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } rendered })
+                    continue;
+                var delta = rendered - source.AsSpan(capture.Offset, capture.Length).Count((byte)'\n');
+                if (delta == 0)
+                    continue;
+                if (lines == null)
+                {
+                    workspace?.Grow(32);
+                    lines = [];
+                }
+                workspace?.PrepareListCapacity(lines, 1);
+                adjustment += delta;
+                lines.Add(new SourceLineAdjustment(capture.Offset + capture.Length, adjustment));
+            }
+            return lines;
+        }
+
+        ShellScanStatus ReadBody(Tokenizer tokenizer, ShellSource source, int start, out ICommand? command,
+            out int end, out ParserFailure? error)
+        {
+            end = start;
             error = null;
             (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
             SkipNewlines(tokenizer);
             var closing = tokenizer.PeekTokenCore();
             var bodyFailure = tokenizer.Failure;
             if (tokenizer is { AllowEofHereDocuments: true, HereDocuments: { } documents }
-                && tokenizer.Position == input.Length && closing.Kind == TokenKind.EndOfInput
+                && tokenizer.Position == source.Length && closing.Kind == TokenKind.EndOfInput
                 && (bodyFailure == null || documents.Warnings != null) && !tokenizer.HasPendingClosingParenthesis
                 && !context.ParsingLimitExceeded)
             {
                 var warnings = documents.Warnings;
-                error = MissingCloser(warnings, GetWarningOffset(warnings));
+                error = MissingCloser(warnings, GetWarningOffset(warnings, source, start), source.Length);
                 return ShellScanStatus.Invalid;
             }
             if (bodyFailure != null)
             {
                 if (context.ParsingLimitExceeded || bodyFailure.HereDocumentEndOfInput != null
-                    || bodyFailure.Error.Offset < input.Length || tokenizer.HasPendingClosingParenthesis)
+                    || bodyFailure.Error.Offset < source.Length || tokenizer.HasPendingClosingParenthesis)
                 {
                     error = bodyFailure.InSubstitution();
                     return ShellScanStatus.Invalid;
@@ -387,14 +468,14 @@ public static class Parser
             return ShellScanStatus.Complete;
         }
 
-        ParserFailure MissingCloser(IReadOnlyList<HereDocumentWarning>? warnings, int lineOffset) =>
-            new(new SyntaxError("unexpected EOF while looking for matching `)'", input.Length), ParserFailureKind.Delimiter)
+        static ParserFailure MissingCloser(IReadOnlyList<HereDocumentWarning>? warnings, int lineOffset, int eofOffset) =>
+            new(new SyntaxError("unexpected EOF while looking for matching `)'", eofOffset), ParserFailureKind.Delimiter)
             {
                 HereDocumentEndOfInput = new CapturedHereDocumentEndOfInput(warnings, lineOffset)
             };
 
-        int GetWarningOffset(IReadOnlyList<HereDocumentWarning>? warnings) =>
-            warnings == null ? 0 : input.AsSpan(0, payloadStart).Count((byte)'\n');
+        static int GetWarningOffset(IReadOnlyList<HereDocumentWarning>? warnings, ShellSource source, int start) =>
+            warnings == null ? 0 : source.AsSpan(0, start).Count((byte)'\n');
 
         static SubstitutionSyntaxFailure ClassifyNestedFailure(SubstitutionSyntaxFailure nested, bool adjacent) =>
             IsHereDocumentSeparatorFailure(nested)

@@ -290,6 +290,14 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ printf '<%s>' \"$(cat <<END && printf two\none\nEND\n)\"; }",
         "f () \n{ \n    printf '<%s>' \"$(cat <<END && \none\nEND\n printf two)\"\n}\n")]
     [InlineData("f(){ ((x+=1));\n}", "f () \n{ \n    ((x+=1))\n}\n")]
+    [InlineData("f(){ n=1; printf \"<%s>\" \"$(((n+=2));)\"; printf \"[%s]\" \"$n\"; }",
+        "f () \n{ \n    n=1;\n    printf \"<%s>\" \"$(((n+=2));)\";\n    printf \"[%s]\" \"$n\"\n}\n")]
+    [InlineData("f(){ n=1; printf \"<%s>\" \"$(((n+=2))\n)\"; printf \"[%s]\" \"$n\"; }",
+        "f () \n{ \n    n=1;\n    printf \"<%s>\" \"$(((n+=2))\n)\";\n    printf \"[%s]\" \"$n\"\n}\n")]
+    [InlineData("f(){ printf '%s' \"$(((1))  ;  printf %s $'a\\tb'    )\"; }",
+        "f () \n{ \n    printf '%s' \"$(((1))  ;  printf %s 'a\tb'    )\"\n}\n")]
+    [InlineData("f(){ printf '%s' \"$(\\\n((1)); printf %s \"$(printf one # comment\n)\")\"; }",
+        "f () \n{ \n    printf '%s' \"$(((1)); printf %s \"$(printf one)\")\"\n}\n")]
     [InlineData("f(){ g(){ printf '%s\\n' \"$1\"; }; g x;\n}", "f () \n{ \n    function g () \n    { \n        printf '%s\\n' \"$1\"\n    };\n    g x\n}\n")]
     [InlineData("f(){ echo x 2>err >out; cat <in; echo y >&2; true 3>&-;\n}", "f () \n{ \n    echo x 2> err > out;\n    cat < in;\n    echo y 1>&2;\n    true 3>&-\n}\n")]
     [InlineData("f(){ >out 2>err; }", "f () \n{ \n    > out 2> err\n}\n")]
@@ -355,5 +363,30 @@ public sealed class FunctionDefinitionOutputTests
                         await EndToEndHarness.ReadFileAsync(after.Host, path));
             }
         }
+    }
+
+    [Fact]
+    public async Task DefinitionReloadPreservesAdjacentCaptureLineLayout()
+    {
+        const string script = "f(){ n=1; printf \"[%s]\" \"$(((n+=2))\n\n\nprintf \"<%s:%s>\" \"$n\" \"$LINENO\"\n)\"; "
+            + "printf \"/%s:%s/\" \"$n\" \"$LINENO\"; }\ndeclare -f f\nf\nsaved=$(declare -f f)\nunset -f f\neval \"$saved\"\nf\n";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.EndsWith("[<3:4>]/1:5/[<3:16>]/1:18/", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("((1)); # comment\\\nprintf wrong\nprintf kept", "[kept][kept]")]
+    [InlineData("((1)); cat <<'END'\n$'a\\nb' literal\\\ncontinued\nEND\n", "['a\nb' literalcontinued]['a\nb' literalcontinued]")]
+    public async Task AdjacentCaptureExecutesTheMatchedSpellingBeforeAndAfterReload(string body, string stdout)
+    {
+        var script = "f(){ printf '[%s]' \"$(" + body + ")\"; }\nf\nsaved=$(declare -f f)\nunset -f f\neval \"$saved\"\nf\n";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(stdout, result.StdOut);
+        Assert.Empty(result.StdErr);
     }
 }

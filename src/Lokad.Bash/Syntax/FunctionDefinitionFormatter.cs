@@ -52,6 +52,9 @@ internal static class FunctionDefinitionFormatter
     {
         if (substitution is CommandSubstitutionSyntax.Legacy legacy)
             return output.TryAppend(legacy.Spelling.AsSpan());
+        if (substitution is CommandSubstitutionSyntax.Parsed { AdjacentSpelling: { } spelling })
+            return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken)
+                && output.TryAppend((byte)')');
         if (substitution is CommandSubstitutionSyntax.Parsed { CanRenderBody: true } parsed)
             return output.TryAppend(StartsWithParenthesis(parsed.Script) ? "$( "u8 : "$("u8)
                 && TryAppend(new Step.Script(parsed.Script), output, budget, Format.SubstitutionSource, cancellationToken)
@@ -76,6 +79,25 @@ internal static class FunctionDefinitionFormatter
                 }
             }
         }
+    }
+
+    private static bool AppendSpelling(SourceSpelling spelling, int sourceOffset, IByteMemoryWriter output,
+        IMemoryBudget? budget, CancellationToken cancellationToken)
+    {
+        var source = spelling.Source.AsSpan();
+        var written = 0;
+        if (spelling.Captures is { } nested)
+            foreach (var substitution in nested)
+            {
+                var offset = substitution.Offset - sourceOffset;
+                if (offset < 0 || offset + substitution.Length > source.Length)
+                    continue;
+                if (!output.TryAppend(source[written..offset])
+                    || !TryAppendSubstitutionSource(substitution.Syntax, output, budget, cancellationToken))
+                    return false;
+                written = offset + substitution.Length;
+            }
+        return output.TryAppend(source[written..]);
     }
 
     private static bool TryAppend(Step initial, IByteMemoryWriter output, IMemoryBudget? budget, Format format,
@@ -480,7 +502,8 @@ internal static class FunctionDefinitionFormatter
                             break;
                         case ConditionalCommand conditional:
                             if (capture) PushStep(new Step.Condition(conditional.Condition));
-                            else if (!Append("[[ ") || !AppendSpelling(conditional.Spelling, 0) || !Append(" ]]"))
+                            else if (!Append("[[ ") || !AppendSpelling(conditional.Spelling, 0, output, budget, cancellationToken)
+                                || !Append(" ]]"))
                                 return false;
                             break;
                         case CaseCommand selection:
@@ -527,24 +550,6 @@ internal static class FunctionDefinitionFormatter
         if (capture) return FlushCaptureDocuments();
         return !inlineSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
 
-        bool AppendSpelling(SourceSpelling spelling, int sourceOffset)
-        {
-            var source = spelling.Source.AsSpan();
-            var written = 0;
-            if (spelling.Captures is { } nested)
-                foreach (var substitution in nested)
-                {
-                    var offset = substitution.Offset - sourceOffset;
-                    if (offset < 0 || offset + substitution.Length > source.Length)
-                        continue;
-                    if (!output.TryAppend(source[written..offset])
-                        || !TryAppendSubstitutionSource(substitution.Syntax, output, budget, cancellationToken))
-                        return false;
-                    written = offset + substitution.Length;
-                }
-            return output.TryAppend(source[written..]);
-        }
-
         bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart)
         {
             var doubleQuoted = false;
@@ -562,7 +567,8 @@ internal static class FunctionDefinitionFormatter
                 {
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when !capture && part is SourceWordPart
                         { SpellingCaptures: { } nested } projected =>
-                        AppendSpelling(new SourceSpelling(projected.Source, nested), projected.SourceOffset),
+                        AppendSpelling(new SourceSpelling(projected.Source, nested), projected.SourceOffset,
+                            output, budget, cancellationToken),
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when captures != null && part is SourceWordPart source =>
                         TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
                     WordPartKind.Unquoted => output.TryAppend(content),
@@ -579,6 +585,7 @@ internal static class FunctionDefinitionFormatter
                             && (inlineSource || command.Substitution is CommandSubstitutionSyntax.Legacy
                                 or CommandSubstitutionSyntax.AdjacentSubshell
                                 or CommandSubstitutionSyntax.Parsed { CanRenderBody: true }
+                                or CommandSubstitutionSyntax.Parsed { AdjacentSpelling: not null }
                                 or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }
                                 or CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }) =>
                         TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),

@@ -28,6 +28,7 @@ internal sealed class Tokenizer
     internal bool AllowEofHereDocuments { get; init; }
     internal bool IsCommandSubstitution { get; init; }
     internal IReadOnlyList<Range>? OmittedSeparators { get; init; }
+    internal IReadOnlyList<SourceLineAdjustment>? LineAdjustments { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
 
@@ -49,7 +50,23 @@ internal sealed class Tokenizer
             ? source[_lineOffset..offset].Count((byte)'\n')
             : -source[offset.._lineOffset].Count((byte)'\n');
         _lineOffset = offset;
-        return _line + (_scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, offset) ?? 0);
+        var adjustment = 0;
+        if (LineAdjustments is { } changes)
+        {
+            var lower = 0;
+            var upper = changes.Count;
+            while (lower < upper)
+            {
+                var middle = lower + (upper - lower) / 2;
+                if (changes[middle].End <= offset)
+                    lower = middle + 1;
+                else
+                    upper = middle;
+            }
+            if (lower != 0)
+                adjustment = changes[lower - 1].Delta;
+        }
+        return _line + adjustment + (_scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, offset) ?? 0);
     }
 
     internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine) =>

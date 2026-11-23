@@ -10,6 +10,9 @@ internal readonly record struct CommandLocation(int StartLine, int FirstElementE
     internal int WrapperOperandEndLine { get; init; }
 }
 
+/// <summary>Cumulative line change after a spelling edit at a physical source position.</summary>
+internal readonly record struct SourceLineAdjustment(int End, int Delta);
+
 /// <summary>Parser-owned locations that use node identity and leave public AST equality intact.</summary>
 internal sealed class CommandLocations
 {

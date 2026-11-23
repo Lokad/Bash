@@ -9,6 +9,7 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
         : CommandSubstitutionSyntax(SourceText)
     {
         internal bool CanRenderBody => Failure == SubstitutionSyntaxFailure.None && !PreserveAdjacentOpening;
+        internal SourceSpelling? AdjacentSpelling { get; init; }
     }
 
     /// <summary>Legacy executable bytes and their original delimiters/escapes, validated only when reached.</summary>
