@@ -262,7 +262,8 @@ Subjects stay borrowed during matching; retained removal slices and changed
 replacement output own their result bytes. Matching creates no reversed subject
 copy or global pattern cache. Literal edge and replacement comparisons use byte
 spans directly. Case conversion classifies the expanded pattern's encoding once
-and matches it against decoded scalars.
+and matches it against decoded scalars. A fixed inline cache reuses recent
+scalar match results across the fields of that expansion.
 
 Bracket terminal lookahead is stack-only state for the current match or atom
 preparation pass. Small and unrevisited valid brackets use stack-only membership.

@@ -428,11 +428,38 @@ public sealed class ParameterTransformTests
     [InlineData("a=(abc def); p='\\'; printf '<%s>' \"${a[@]/$p/${a[9]:=X}}\" \"${a[@]}\"", "<abc><def><X><abc><def><X>")]
     [InlineData("x=$'a\\377b'; p=$'\\\\\\377'; printf '<%s>' \"${x/$p/X}\"; x='aλb'; p='\\λ'; printf '<%s>' \"${x/$p/X}\"", "<aXb><aXb>")]
     [InlineData("x='a/b'; p='/'; printf '<%s>' \"${x/$p/Z}\" \"${x/${p}a/Z}\"; x='a#b'; p=''; printf '<%s>' \"${x/$p\\#/Z}\"", "<aZb><a/b><aZb>")]
+    [InlineData("x=ababab; p='[a]'; printf '<%s>' \"${x^^$p}\"; p='[b]'; printf '<%s>' \"${x^^$p}\"", "<AbAbAb><aBaBaB>")]
     public async Task ValueOperatorsRetainFieldsAndQuoting(string script, string expectedOutput)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("x=aBc; p=''; printf '<%s>' \"${x^^$p}\" \"${x^$p}\" \"${x^^\"$p\"}\"", "<ABC><ABc><aBc>")]
+    [InlineData("unset p; x=AbC; printf '<%s>' \"${x,,$p}\" \"${x,$p}\"", "<abc><abC>")]
+    [InlineData("a=(''); x=abc; printf '<%s>' \"${x^^${a[@]}}\" \"${x^^${a[0]}}\"; a=(); printf '<%s>' \"${x^^${a[*]}}\"", "<abc><ABC><ABC>")]
+    [InlineData("set --; x=abc; printf '<%s>' \"${x^^\"$@\"}\" \"${x^^$*}\" \"${x^^\"$*\"}\"", "<ABC><ABC><abc>")]
+    [InlineData("set -- ''; unset p; x=abc; printf '<%s>' \"${x^^${p:-$p}}\" \"${x^^${p:-$@}}\" \"${x^^${p:-''}}\"", "<ABC><abc><abc>")]
+    [InlineData("a=(abc Def ''); IFS=:; p=''; printf '<%s>' \"${a[@]^^$p}\" \"${a[*]^^$p}\"", "<ABC><DEF><><ABC:DEF:>")]
+    public async Task CasePatternsDistinguishMissingAndEmptyFields(string script, string expectedOutput)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task EmptyCasePatternCaptureRunsOnceBeforeConversion()
+    {
+        const string script = "x=abc; printf '<%s>' \"${x^^$(printf first >>seen)}\" \"${x^^\"$(printf second >>seen)\"}\"";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<ABC><abc>", result.StdOut);
+        Assert.Equal("firstsecond", await EndToEndHarness.ReadFileAsync(result.Host, "/seen"));
         Assert.Empty(result.StdErr);
     }
 
@@ -460,6 +487,9 @@ public sealed class ParameterTransformTests
     [InlineData("x='\\0tail'; printf '%s' \"${x@E}\"", "")]
     [InlineData("x='\\U80000000'; printf '%s' \"${x@E}\"", "")]
     [InlineData("x=$'\\377λ\\n'; q=${x@Q}; eval \"y=$q\"; printf '%s' \"$y\"", "FFCEBB0A")]
+    [InlineData("x='eλeλeλ'; printf '%s' \"${x^^[e]}\"", "45CEBB45CEBB45CEBB")]
+    [InlineData("a=('éaéa' 'ééa'); p=$'[\\303][\\251]'; printf '<%s>' \"${a[@]^^$p}\"", "3CC38961C389613E3CC389C389613E")]
+    [InlineData("x=$'a\\377λ\\377a'; p='[aλ]'; printf '%s' \"${x^^$p}\"", "41FFCE9BFF41")]
     public async Task ValueOperatorsPreserveRawBytes(string script, string expectedHex)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));

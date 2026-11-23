@@ -184,6 +184,11 @@ original key spelling. Integer attributes take precedence when evaluating an
 assigned value. Case conversion uses the invariant UTF-8 character profile
 and copies malformed bytes verbatim.
 
+In parameter case conversion, an omitted pattern or a pattern expansion
+that produces no fields selects every character the operator considers.
+An explicitly quoted empty pattern or an empty aggregate field supplied
+as the pattern matches no characters.
+
 Function display/export preserves legacy backticks and their original escapes.
 Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches

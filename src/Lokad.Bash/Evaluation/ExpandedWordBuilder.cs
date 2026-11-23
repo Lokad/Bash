@@ -58,6 +58,7 @@ internal enum ExpansionPurpose
 internal enum ImplicitEmptyPolicy
 {
     Preserve,
+    PreserveAggregate,
     Remove,
 }
 
@@ -83,7 +84,6 @@ internal sealed class ExpandedWordBuilder
     private readonly EvaluationMemory _memory;
     private readonly MemoryCapacity _storage;
     private readonly CancellationToken _cancellationToken;
-    private readonly ImplicitEmptyPolicy _implicitEmptyPolicy;
     private readonly bool _casePatternStartsWithEmptyIfs;
     private readonly List<InputWord> _words = [];
     private List<FieldSeparators.ByteMembership>? _sourceSeparators;
@@ -139,7 +139,7 @@ internal sealed class ExpandedWordBuilder
         _variables = variables;
         _memory = memory;
         _storage = storage;
-        _implicitEmptyPolicy = implicitEmptyPolicy;
+        EmptyPolicy = implicitEmptyPolicy;
         _casePatternStartsWithEmptyIfs = purpose == ExpansionPurpose.CasePattern
             && FieldSeparators.FromVariables(variables).IsEmpty;
         memory.Charge(storage, 256);
@@ -148,6 +148,7 @@ internal sealed class ExpandedWordBuilder
     }
 
     public ExpansionPurpose Purpose { get; }
+    internal ImplicitEmptyPolicy EmptyPolicy { get; }
     internal bool AssigningHereDocumentOperand { get; init; }
     internal CasePatternOperand CaseOperand { get; init; }
     internal bool InheritsCaseDoubleQuotes { get; init; }
@@ -305,7 +306,7 @@ internal sealed class ExpandedWordBuilder
             else
                 GetPart(origin, globQuoted).AppendValue(value);
         }
-        else if (!allowWordSplitting && (globQuoted || _implicitEmptyPolicy == ImplicitEmptyPolicy.Preserve))
+        else if (!allowWordSplitting && (globQuoted || EmptyPolicy == ImplicitEmptyPolicy.Preserve))
             AppendEmptyExpansion(globQuoted);
     }
 
@@ -434,7 +435,7 @@ internal sealed class ExpandedWordBuilder
             }
             else
             {
-                AppendExpansion(value, allowWordSplitting, globQuoted);
+                AppendAggregateValue(value, allowWordSplitting, globQuoted);
             }
         }
         if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted && _doubleQuote != DoubleQuoteState.Outside)
@@ -705,11 +706,19 @@ internal sealed class ExpandedWordBuilder
             if (!first)
                 AppendExpansion(separator, allowWordSplitting, globQuoted);
             first = false;
-            AppendExpansion(value, allowWordSplitting, globQuoted);
+            AppendAggregateValue(value, allowWordSplitting, globQuoted);
         }
-        if (first && !allowWordSplitting)
+        if (first && !allowWordSplitting && (globQuoted || EmptyPolicy != ImplicitEmptyPolicy.PreserveAggregate))
             AppendEmptyExpansion(globQuoted: true);
         return !first;
+    }
+
+    private void AppendAggregateValue(ShellValue value, bool allowWordSplitting, bool globQuoted)
+    {
+        if (EmptyPolicy == ImplicitEmptyPolicy.PreserveAggregate && value.IsEmpty)
+            AppendEmptyAggregateField();
+        else
+            AppendExpansion(value, allowWordSplitting, globQuoted);
     }
 
     internal bool TryAppendSelectedFields(ParameterFieldJoin join, IEnumerable<ShellValue> fields,
