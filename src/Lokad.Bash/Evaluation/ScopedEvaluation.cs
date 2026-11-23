@@ -6,20 +6,18 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Relates the active syntax tree's lines to the current script invocation.</summary>
 internal readonly record struct CommandCoordinates(CommandLocations? Locations, int Offset, int Line, int EndLine)
 {
-    internal int WrapperOperandLine { get; init; }
-    internal int RedirectionOperandLine { get; init; }
+    internal int RedirectionDiagnosticLine { get; init; }
 
     internal CommandCoordinates At(ICommand command, CommandLocation location) => this with
     {
         Line = Offset + (command switch
         {
-            SimpleCommand or ForCommand => location.FirstElementEndLine,
+            SimpleCommand or ForCommand => location.CommandLine,
             ArithmeticCommand or ConditionalCommand => location.EndLine,
             _ => location.StartLine
         }),
         EndLine = Offset + location.EndLine,
-        WrapperOperandLine = location.WrapperOperandEndLine == 0 ? 0 : Offset + location.WrapperOperandEndLine,
-        RedirectionOperandLine = location.RedirectionOperandLine == 0 ? 0 : Offset + location.RedirectionOperandLine
+        RedirectionDiagnosticLine = location.RedirectionDiagnosticLine == 0 ? 0 : Offset + location.RedirectionDiagnosticLine
     };
 }
 

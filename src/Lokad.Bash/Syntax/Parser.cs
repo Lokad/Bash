@@ -727,7 +727,7 @@ public static class Parser
             if (token.Kind is TokenKind.EndOfInput or TokenKind.CloseParen or TokenKind.CloseBrace)
                 return null;
             var startLine = tokenizer.GetLine(token.Source.Start.Value);
-            var firstElementEndLine = startLine;
+            var commandLine = startLine;
             ICommand? command;
             switch (token.Kind)
             {
@@ -783,7 +783,7 @@ public static class Parser
                     {
                         command = ParseFor(tokenizer, out var bindingLine);
                         if (bindingLine != 0)
-                            firstElementEndLine = bindingLine;
+                            commandLine = bindingLine;
                         break;
                     }
 
@@ -810,7 +810,7 @@ public static class Parser
                 return null;
             }
 
-            tokenizer.RecordLocation(command, startLine, firstElementEndLine);
+            tokenizer.RecordLocation(command, startLine, commandLine);
 
             var redirections = ReadTrailingRedirections(tokenizer);
             if (tokenizer.Error != null)
@@ -1402,17 +1402,16 @@ public static class Parser
         var allowAssignments = true;
         var allowDeclarationAssignments = false;
         var sawAny = false;
-        var firstElementEndLine = 0;
-        var trackWrapperOperand = false;
-        var wrapperOperandEndLine = 0;
-        var redirectionOperandLine = 0;
+        var commandLine = 0;
+        var trackNextTokenLine = false;
+        var redirectionDiagnosticLine = 0;
 
         while (true)
         {
             if (tokenizer.Error != null)
                 return null;
-            if (sawAny && firstElementEndLine == 0 && tokenizer.TrackCommandLocations)
-                firstElementEndLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
+            if (sawAny && commandLine == 0 && tokenizer.TrackCommandLocations)
+                commandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
             var peek = tokenizer.PeekTokenCore();
             if (tokenizer.Error != null)
                 return null;
@@ -1420,13 +1419,13 @@ public static class Parser
             {
                 case TokenKind.EndOfInput:
                     return sawAny
-                        ? CreateCommand()
+                        ? CreateCommand(peek)
                         : null;
                 case TokenKind.Newline:
                 case TokenKind.Semicolon:
                     if (sawAny)
                     {
-                        return CreateCommand();
+                        return CreateCommand(peek);
                     }
 
                     if (peek.Kind == TokenKind.Semicolon)
@@ -1439,41 +1438,39 @@ public static class Parser
                     continue;
                 case TokenKind.ListOperator:
                     if (sawAny)
-                        return CreateCommand();
+                        return CreateCommand(peek);
                     tokenizer.RecordUnexpectedToken("Unexpected list operator.", peek, tokenizer.Position);
                     return null;
                 case TokenKind.PipelineOperator:
                     if (sawAny)
-                        return CreateCommand();
+                        return CreateCommand(peek);
                     tokenizer.RecordUnexpectedToken("Unexpected pipeline operator.", peek, tokenizer.Position);
                     return null;
                 case TokenKind.CloseParen:
                     return sawAny
-                        ? CreateCommand()
+                        ? CreateCommand(peek)
                         : null;
                 case TokenKind.CaseTerminator:
                     return sawAny
-                        ? CreateCommand()
+                        ? CreateCommand(peek)
                         : null;
             }
 
             var token = tokenizer.NextTokenCore();
-            var trackRedirectionOperand = trackWrapperOperand;
+            var trackRedirectionLine = trackNextTokenLine;
             switch (token.Kind)
             {
                 case TokenKind.Redirection:
                     sawAny = true;
-                    if (trackRedirectionOperand)
-                        RecordWrapperOperand();
+                    if (trackRedirectionLine)
+                        RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(token));
                     ReadRedirection(tokenizer, token, null, string.Empty, ref redirections);
-                    if (trackRedirectionOperand)
-                        redirectionOperandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
+                    if (trackRedirectionLine)
+                        redirectionDiagnosticLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
                     continue;
                 case TokenKind.Word:
                 case TokenKind.OpenBrace:
                 case TokenKind.CloseBrace:
-                    if (trackWrapperOperand)
-                        RecordWrapperOperand();
                     sawAny = true;
                     if (!tokenizer.TryGetOperandWord(token, out var wordToken))
                     {
@@ -1483,16 +1480,26 @@ public static class Parser
 
                     if (TryGetFileDescriptor(tokenizer, wordToken, out var fileDescriptor, out var redirectionToken))
                     {
+                        if (trackRedirectionLine)
+                        {
+                            redirectionDiagnosticLine = tokenizer.GetLine(token.Source.End.Value);
+                            RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(redirectionToken));
+                        }
                         ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, ref redirections);
                         continue;
                     }
 
                     if (TryGetAllocationVariable(tokenizer, wordToken, out var variableName, out var allocationToken))
                     {
+                        if (trackRedirectionLine)
+                        {
+                            redirectionDiagnosticLine = tokenizer.GetLine(token.Source.End.Value);
+                            RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(allocationToken));
+                        }
                         var operandOffset = ReadRedirection(tokenizer, allocationToken, null, variableName, ref redirections);
-                        if (trackRedirectionOperand && operandOffset is { } offset
+                        if (trackRedirectionLine && operandOffset is { } offset
                             && allocationToken.RedirectionKind is RedirectionKind.Input or RedirectionKind.Output)
-                            redirectionOperandLine = tokenizer.GetLine(offset);
+                            redirectionDiagnosticLine = tokenizer.GetLine(offset);
                         continue;
                     }
 
@@ -1549,9 +1556,12 @@ public static class Parser
                         continue;
                     }
 
+                    if (trackNextTokenLine)
+                        RecordNextTokenLine(tokenizer.GetLine(tokenizer.ConsumedPosition));
                     if (words == null)
                     {
-                        trackWrapperOperand = tokenizer.TrackCommandLocations && assignments == null && redirections == null;
+                        // An initial word has a grammar lookahead for a possible function definition.
+                        trackNextTokenLine = tokenizer.TrackCommandLocations && assignments == null && redirections == null;
                         if (TryGetPlainUnquotedSource(wordToken.Word, out var commandName))
                             allowDeclarationAssignments = BuiltinClassification.TryResolve(commandName.AsSpan(), out var kind)
                                 && kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local;
@@ -1565,27 +1575,33 @@ public static class Parser
             }
         }
 
-        void RecordWrapperOperand()
+        void RecordNextTokenLine(int line)
         {
-            var operandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
-            if (operandLine != firstElementEndLine)
-                wrapperOperandEndLine = operandLine;
-            trackWrapperOperand = false;
+            commandLine = line;
+            trackNextTokenLine = false;
         }
 
-        SimpleCommand CreateCommand()
+        SimpleCommand CreateCommand(Token trailing)
         {
+            if (trackNextTokenLine)
+            {
+                var position = trailing.Kind == TokenKind.Newline ? trailing.Source.Start.Value : trailing.Source.End.Value;
+                if (position >= tokenizer.ConsumedPosition)
+                    RecordNextTokenLine(tokenizer.GetLine(position));
+            }
             var command = new SimpleCommand(
                 assignments is null ? Array.Empty<AssignmentWord>() : assignments,
                 words is null ? Array.Empty<Word>() : words,
                 redirections is null ? Array.Empty<Redirection>() : redirections,
                 declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
-            tokenizer.RecordLocation(command, startLine, firstElementEndLine, wrapperOperandEndLine, redirectionOperandLine);
+            tokenizer.RecordLocation(command, startLine, commandLine, redirectionDiagnosticLine);
             return command;
         }
 
         void AddAssignment(AssignmentWord assignment, Word word)
         {
+            if (trackNextTokenLine)
+                RecordNextTokenLine(tokenizer.GetLine(tokenizer.ConsumedPosition));
             if (allowAssignments)
             {
                 (assignments ??= []).Add(assignment);

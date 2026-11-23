@@ -136,6 +136,9 @@ public sealed class CommandSubstitutionSyntaxTests
     [InlineData("value=x$[ ", " + 1 ]tail", " } printf extra) + 1 ", 9)]
     [InlineData("value=\"x$[ ", " + 1 ]tail\"", " } printf extra) + 1 ]tail\"", 9)]
     [InlineData("value=\"${map[1+", "+2]:-fallback}tail\"", " } printf extra)+2", 9)]
+    [InlineData("declare \\\n value=\"", "tail\"", " } printf extra)tail\"", 10)]
+    [InlineData("declare earlier='one\ntwo' value=\"", "tail\"", " } printf extra)tail\"", 7)]
+    [InlineData("printf \"", "tail\"", " } printf extra)tail\"", 9)]
     public async Task RejectedCaptureReportsTheReachedWordSpelling(string prefix, string suffix, string lineText, int line)
     {
         var source = "value=initial\n" + prefix + "$({ cat <<DATA\nbody\nDATA\n}; printf extra)" + suffix

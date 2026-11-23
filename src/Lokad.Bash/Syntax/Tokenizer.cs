@@ -67,19 +67,17 @@ internal sealed class Tokenizer
         return line + adjustment + (_scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, offset) ?? 0);
     }
 
-    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine) =>
-        RecordLocation(command, startLine, firstElementEndLine, 0, 0);
+    internal void RecordLocation(ICommand command, int startLine, int commandLine) =>
+        RecordLocation(command, startLine, commandLine, 0);
 
-    internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine, int wrapperOperandEndLine,
-        int redirectionOperandLine)
+    internal void RecordLocation(ICommand command, int startLine, int commandLine, int redirectionDiagnosticLine)
     {
         if (!TrackCommandLocations)
             return;
         (Locations ??= new CommandLocations()).Add(command,
-            new CommandLocation(startLine, firstElementEndLine, GetLine(ConsumedPosition))
+            new CommandLocation(startLine, commandLine, GetLine(ConsumedPosition))
             {
-                WrapperOperandEndLine = wrapperOperandEndLine,
-                RedirectionOperandLine = redirectionOperandLine
+                RedirectionDiagnosticLine = redirectionDiagnosticLine
             }, _scanContext.SyntaxMemory);
     }
 
@@ -87,6 +85,16 @@ internal sealed class Tokenizer
         (Locations ??= new CommandLocations()).SetReadDiagnostics(command, diagnostics, _scanContext.SyntaxMemory);
 
     internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
+
+    internal int GetRedirectionLookaheadLine(Token token)
+    {
+        var end = token.Source.End.Value;
+        // Bash peeks one logical character past these operators to distinguish longer spellings.
+        if (token.RedirectionKind is RedirectionKind.Input or RedirectionKind.Output
+            or RedirectionKind.HereDocument or RedirectionKind.OutputAndError)
+            end = ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), end);
+        return GetLine(end);
+    }
 
     /// <summary>Whether reaching EOF also completes a final logical line without a terminating LF.</summary>
     internal int EndOfInputLineAdvance

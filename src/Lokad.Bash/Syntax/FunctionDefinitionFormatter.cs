@@ -175,10 +175,10 @@ internal static class FunctionDefinitionFormatter
                     else if (terminate && !Append(";")) return false;
                     if (!Append(closer)) return false;
                     break;
-                case Step.Location(var command, var firstElement):
+                case Step.Location(var command, var commandLine):
                     if (locations!.TryGet(command, out var location))
-                        locations.Update(command, firstElement
-                            ? location with { FirstElementEndLine = lines!.Line }
+                        locations.Update(command, commandLine
+                            ? location with { CommandLine = lines!.Line }
                             : location with { EndLine = lines!.Line });
                     break;
                 case Step.Word(var word):
@@ -307,7 +307,7 @@ internal static class FunctionDefinitionFormatter
                     for (var index = redirections.Count - 1; index >= 0; index--)
                     {
                         if (index == 0 && firstElement != null)
-                            work.Push(new Step.Location(firstElement, FirstElement: true));
+                            work.Push(new Step.Location(firstElement, CommandLine: true));
                         work.Push(new Step.Redirection(redirections[index], leadingSpace || index != 0));
                     }
                     break;
@@ -416,9 +416,8 @@ internal static class FunctionDefinitionFormatter
                 case Step.Command(var command, var indent):
                     if (locations?.TryGet(command, out _) == true)
                     {
-                        // Capture callbacks use the projected first element, including through wrappers.
                         locations.Update(command, new CommandLocation(lines!.Line, lines.Line, lines.Line));
-                        PushStep(new Step.Location(command, FirstElement: false));
+                        PushStep(new Step.Location(command, CommandLine: false));
                     }
                     switch (command)
                     {
@@ -427,10 +426,11 @@ internal static class FunctionDefinitionFormatter
                             var hasCommandElements = simple.Words.Count != 0 || simple.Assignments.Count != 0;
                             work.Push(new Step.Redirections(simple.Redirections, !displayRedirections || hasCommandElements,
                                 capture && !hasCommandElements ? simple : null));
+                            var commandLineWordIndex = Math.Min(simple.Words.Count - 1, 1);
                             for (var index = simple.Words.Count - 1; index >= 0; index--)
                             {
-                                if (capture && index == 0 && simple.Assignments.Count == 0)
-                                    work.Push(new Step.Location(simple, FirstElement: true));
+                                if (capture && index == commandLineWordIndex && simple.Assignments.Count == 0)
+                                    work.Push(new Step.Location(simple, CommandLine: true));
                                 work.Push(simple.DeclarationAssignments.TryGetValue(simple.Words[index], out var assignment)
                                     ? new Step.Assignment(assignment) : new Step.Word(simple.Words[index]));
                                 if (index != 0 || simple.Assignments.Count != 0) work.Push(new Step.Text(" "));
@@ -438,7 +438,7 @@ internal static class FunctionDefinitionFormatter
                             for (var index = simple.Assignments.Count - 1; index >= 0; index--)
                             {
                                 if (capture && index == 0)
-                                    work.Push(new Step.Location(simple, FirstElement: true));
+                                    work.Push(new Step.Location(simple, CommandLine: true));
                                 work.Push(new Step.Assignment(simple.Assignments[index]));
                                 if (index != 0) work.Push(new Step.Text(" "));
                             }
@@ -870,7 +870,7 @@ internal static class FunctionDefinitionFormatter
         public sealed record CompactEnd(string Closer, bool Terminate) : Step;
         public sealed record EnterFunction : Step;
         public sealed record LeaveFunction(bool ResetHereDocuments) : Step;
-        public sealed record Location(ICommand Node, bool FirstElement) : Step;
+        public sealed record Location(ICommand Node, bool CommandLine) : Step;
         public sealed record Script(ParsedScript Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;
         public sealed record Word(Syntax.Word Value) : Step;

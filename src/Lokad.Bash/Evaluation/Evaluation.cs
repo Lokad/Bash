@@ -1463,7 +1463,7 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Read => await AwaitWordExpansionAsync(EvaluateBuiltinReadAsync(
                         byteOperands, new ScopedEvaluation(this, commandVars, builtinScope.Context), bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Mapfile => await AwaitWordExpansionAsync(EvaluateBuiltinMapfileAsync(
-                        byteOperands, builtinScope with { Variables = commandVars }, executable.UsesCommandWrapper, false))
+                        byteOperands, builtinScope with { Variables = commandVars }, false))
                         .ConfigureAwait(false),
                     BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local =>
                         await AwaitWordExpansionAsync(declaration is { } prepared
@@ -3781,9 +3781,7 @@ public sealed partial class Evaluation : IFileTester
     private static SyntaxDiagnosticPrefix GetBuiltinDiagnosticPrefix(EvaluationContext context)
     {
         var coordinates = context.Coordinates;
-        // With an initial command word, the next token can move the builtin's diagnostic line.
-        var line = coordinates.RedirectionOperandLine is not 0 ? coordinates.RedirectionOperandLine
-            : coordinates.WrapperOperandLine is not 0 ? coordinates.WrapperOperandLine : coordinates.Line;
+        var line = coordinates.RedirectionDiagnosticLine is not 0 ? coordinates.RedirectionDiagnosticLine : coordinates.Line;
         return GetCommandDiagnosticPrefix(context, line);
     }
 
@@ -4747,7 +4745,6 @@ public sealed partial class Evaluation : IFileTester
             string CommandName,
             CommandResolution Resolution,
             ExecOptions? ExecutionOptions,
-            bool UsesCommandWrapper,
             CommandCompletion Completion,
             RedirectionLifetime RedirectionLifetime)
             : PreparedCommand(Completion, RedirectionLifetime);

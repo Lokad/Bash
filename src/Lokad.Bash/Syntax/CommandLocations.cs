@@ -4,13 +4,10 @@ using Lokad.Bash.Memory;
 namespace Lokad.Bash.Syntax;
 
 /// <summary>LF coordinates in the source from which a command runs.</summary>
-internal readonly record struct CommandLocation(int StartLine, int FirstElementEndLine, int EndLine)
+internal readonly record struct CommandLocation(int StartLine, int CommandLine, int EndLine)
 {
-    /// <summary>End of the next token after an initial word, when it changes the callback anchor.</summary>
-    internal int WrapperOperandEndLine { get; init; }
-
-    /// <summary>Line selected from a redirection operand immediately after an initial word.</summary>
-    internal int RedirectionOperandLine { get; init; }
+    /// <summary>Diagnostic line for a redirection immediately after an initial word.</summary>
+    internal int RedirectionDiagnosticLine { get; init; }
 }
 
 /// <summary>Cumulative line change after a spelling edit at a physical source position.</summary>

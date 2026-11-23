@@ -957,13 +957,14 @@ once. The indexed selector's brackets, apostrophes, and tildes remain escaped
 for its numeric evaluation. An expansion elsewhere in the same arithmetic word
 can select this path. Associative array keys retain their literal bytes.
 
-`LINENO` follows the active parsed command. Functions defined in a script retain
-their defining source coordinates. Sourced files and EXIT action source start
-at line 1, and `eval` bases its coordinates on the calling command's end line.
-Array-reader callbacks start at the first complete element of the invocation.
-When `command` or `builtin` wraps a simple command starting with a word, the
-callback starts at the end of the next token. Parenthesized captures use the
-rendered body layout, where callbacks use the projected first-element line.
+`LINENO` follows the active parsed command. A simple command beginning with a
+word uses the line reached while reading the next token for function-definition
+lookahead. An initial assignment or redirection uses the line where that first
+element ends. Rendered word-capture diagnostics and array-reader callbacks use
+the same command coordinate. Functions defined in a script retain their defining
+source coordinates. Sourced files and EXIT action source start at line 1, and
+`eval` bases its coordinates on the calling command's end line.
+Parenthesized captures project the command coordinate into the rendered body layout.
 Backtick captures use the decoded body. Local and temporary bindings can shadow
 `LINENO`. Unsetting the dynamic binding allows later assignments to create an
 ordinary variable.

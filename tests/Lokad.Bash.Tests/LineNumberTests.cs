@@ -13,6 +13,10 @@ public sealed class LineNumberTests
     [InlineData("unset LINENO\nLINENO=42\nprintf '<%s>' \"$LINENO\"", "<42>")]
     [InlineData("f(){\nlocal LINENO=84\nprintf '<%s>' \"$LINENO\"\n}\nf\nprintf '<%s>' \"$LINENO\"", "<84><6>")]
     [InlineData("declare -n location=LINENO\n\nprintf '<%s>' \"$location\"", "<3>")]
+    [InlineData(":\nprintf \\\n \"$LINENO\"", "3")]
+    [InlineData(":\nprintf '%s' \\\n \"$LINENO\"", "2")]
+    [InlineData("declare arr=(\n \"$LINENO\"\n); printf '%s' \"${arr[0]}\"", "3")]
+    [InlineData("show2(){ printf 2; }; show3(){ printf 3; }\n\"show$LINENO\" \\\n; :", "3")]
     [InlineData("f(){\nprintf '<%s>' \"$LINENO\"\n}\nLINENO=42 f\nprintf '<%s>' \"$LINENO\"", "<42><5>")]
     [InlineData("\n[[ $LINENO = 2 &&\n $LINENO = 2 ]] && printf opening || printf later", "later")]
     [InlineData("\n(( LINENO == 2 \n )) && printf opening || printf later", "later")]
@@ -44,6 +48,18 @@ public sealed class LineNumberTests
     public Task FirstCompleteRedirectionSetsTheSimpleCommandLine() =>
         CheckBothEntryPointsAsync(">\\\n out printf '<%s>' \"$LINENO\"", "",
             check: host => Assert.Equal("<2>", host.ReadFile("/out")));
+
+    [Theory]
+    [InlineData(">", "3")]
+    [InlineData("> ", "2")]
+    [InlineData("1>", "3")]
+    public Task RedirectionLookaheadUsesTheNextLogicalCharacter(string redirection, string expected) =>
+        CheckBothEntryPointsAsync(":\nprintf " + redirection + "\\\n out \"$LINENO\"", "",
+            check: host => Assert.Equal(expected, host.ReadFile("/out")));
+
+    [Fact]
+    public Task RenderedCaptureUsesTheEndOfItsFirstOperand() =>
+        CheckBothEntryPointsAsync(":\nx=$(printf \"one\n%s\" \"$LINENO\"); printf '%s' \"$x\"", "one\n4");
 
     [Fact]
     public Task MultilineArrayReaderCallbackStartsAtTheInvocationLine() =>

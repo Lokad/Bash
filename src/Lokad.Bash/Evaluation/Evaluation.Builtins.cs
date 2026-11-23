@@ -276,7 +276,6 @@ public sealed partial class Evaluation
             commandName,
             selected,
             executionOptions,
-            UsesCommandWrapper: lookupMode != CommandLookupMode.Normal && executionOptions == null,
             completion,
             RedirectionLifetime.Command);
 
