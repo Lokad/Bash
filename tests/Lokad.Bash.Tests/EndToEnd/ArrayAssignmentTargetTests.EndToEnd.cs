@@ -55,6 +55,31 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         }
     }
 
+    [Theory]
+    [InlineData("arr[\n0]=value", "<0:value>", "")]
+    [InlineData("declare arr[ 0 ]=value", "<1:>", "declare: `arr[': not a valid identifier\ndeclare: `0': not a valid identifier\ndeclare: `]=value': not a valid identifier\n")]
+    [InlineData("declare -a arr[\n0]=value", "<127:>", "declare: `arr[': not a valid identifier\n0]=value: command not found\n")]
+    [InlineData("typeset arr[\nprintf '<next>'; ]=value", "<next><127:>", "typeset: `arr[': not a valid identifier\n]=value: command not found\n")]
+    [InlineData("declare arr[\\\n0]=value", "<0:value>", "")]
+    [InlineData("declare arr[\"\n0\"]=value", "<0:value>", "")]
+    [InlineData("declare arr[$(cat <<EOF\n0\nEOF\n)]=value", "<0:value>", "")]
+    [InlineData("declare -a arr=([\n0]=value)", "<0:value>", "")]
+    public async Task DeclarationSelectorsRespectTheLexicalWord(string body, string output, string error)
+    {
+        var script = body + "\nprintf '<%s:%s>' \"$?\" \"${arr[0]}\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Fact]
     public async Task Evaluation_AssociativeSubscript_JoinsAggregateExpansionFields()
     {

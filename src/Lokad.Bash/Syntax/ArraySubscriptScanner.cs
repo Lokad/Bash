@@ -15,7 +15,7 @@ internal static class ArraySubscriptScanner
 
         internal ShellScanStatus Scan(int openingBracketIndex, out int closingBracketIndex,
             out SubstitutionSyntaxFailure quotedCapture) =>
-            ArraySubscriptScanner.Scan(context, source, openingBracketIndex, _results, recognizeAnsiC: true,
+            ArraySubscriptScanner.Scan(context, source, openingBracketIndex, source.Length, _results, recognizeAnsiC: true,
                 out closingBracketIndex, out quotedCapture);
     }
 
@@ -38,19 +38,28 @@ internal static class ArraySubscriptScanner
 
     internal static bool TryScan(ShellScanContext context, ShellSource text, int openingBracketIndex,
         bool recognizeAnsiC, out int closingBracketIndex) =>
-        Scan(context, text, openingBracketIndex, null, recognizeAnsiC, out closingBracketIndex, out _) == ShellScanStatus.Complete;
+        Scan(context, text, openingBracketIndex, text.Length, null, recognizeAnsiC, out closingBracketIndex, out _)
+            == ShellScanStatus.Complete;
+
+    /// <summary>Matches brackets within an already read word, retaining the source for nested reads.</summary>
+    internal static bool TryScanWord(ShellScanContext context, ShellSource text, int openingBracketIndex, int wordEnd,
+        out int closingBracketIndex) =>
+        Scan(context, text, openingBracketIndex, wordEnd, null, recognizeAnsiC: true, out closingBracketIndex, out _)
+            == ShellScanStatus.Complete;
 
     /// <summary>Distinguishes an absent bracket, complete subscript, incomplete input, and malformed syntax.</summary>
     public static ShellScanStatus Scan(
         ShellSource text,
         int openingBracketIndex,
         out int closingBracketIndex) =>
-        Scan(new ShellScanContext(), text, openingBracketIndex, null, recognizeAnsiC: true, out closingBracketIndex, out _);
+        Scan(new ShellScanContext(), text, openingBracketIndex, text.Length, null, recognizeAnsiC: true,
+            out closingBracketIndex, out _);
 
     private static ShellScanStatus Scan(
         ShellScanContext context,
         ShellSource text,
         int openingBracketIndex,
+        int end,
         Dictionary<int, ScanResult>? results,
         bool recognizeAnsiC,
         out int closingBracketIndex,
@@ -59,7 +68,7 @@ internal static class ArraySubscriptScanner
         closingBracketIndex = openingBracketIndex;
         quotedCapture = SubstitutionSyntaxFailure.None;
         if (openingBracketIndex < 0
-            || openingBracketIndex >= text.Length
+            || openingBracketIndex >= end
             || text[openingBracketIndex] != (byte)'[')
         {
             return ShellScanStatus.NotFound;
@@ -87,7 +96,7 @@ internal static class ArraySubscriptScanner
             var lastRejectedQuote = -1;
             var lastQuotedFailure = SubstitutionSyntaxFailure.None;
             var trackQuotedCaptures = results != null && context.CanReadAhead(text);
-            while (!cursor.IsAtEnd)
+            while (cursor.Position < end)
             {
                 if (cursor.TrySkipReadAheadBodies())
                     continue;

@@ -165,6 +165,13 @@ an empty list, reports an assignment error before expanding either the selector
 or the list. Without errexit, a later command unit can proceed. Immediate
 trailing text can form a scalar element value, as in `items[2]=()tail`.
 
+A plain assignment can group spaces and line feeds inside an array subscript.
+A declaration operand reads an array subscript within its lexical word.
+Bare spaces and tabs separate its operands, and an unescaped, unquoted line
+feed can end the command. Quoting, line continuations and nested expansions
+can keep the subscript in one word. Compound initializer items use their own
+bracket grouping.
+
 `declare`, `typeset`, `local`, `export`, and `readonly` report usage after an
 unrecognized leading option. A reached `--help` writes the command's synopsis
 and Lokad.Bash's builtin documentation to stdout with status 2. At script

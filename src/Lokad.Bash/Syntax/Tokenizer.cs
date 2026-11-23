@@ -408,10 +408,10 @@ internal sealed class Tokenizer
     }
 
     /// <summary>
-    /// Reads an array assignment in assignment position, where subscript whitespace
-    /// belongs to the target rather than separating ordinary command arguments.
+    /// Reads an array assignment. Plain assignments can group delimiters inside
+    /// the subscript. Declaration operands are limited to the word already read.
     /// </summary>
-    internal bool TryReadArrayAssignment(WordToken token, out AssignmentWord assignment)
+    internal bool TryReadArrayAssignment(WordToken token, bool groupSubscript, out AssignmentWord assignment)
     {
         assignment = default;
         if (token.Word.Parts is not [SourceWordPart { Kind: WordPartKind.Unquoted } first, ..]
@@ -431,9 +431,17 @@ internal sealed class Tokenizer
 
         if (position >= source.Length || source[position] != (byte)'[')
             return false;
-        _arraySubscripts ??= new ArraySubscriptScanner.Lookahead(_input, _scanContext);
-        if (_arraySubscripts.Scan(position, out var closing) != ShellScanStatus.Complete
-            || !TryReadSubscriptAssignment(token, position, closing, out var element, out _))
+        int closing;
+        if (groupSubscript)
+        {
+            _arraySubscripts ??= new ArraySubscriptScanner.Lookahead(_input, _scanContext);
+            if (_arraySubscripts.Scan(position, out closing) != ShellScanStatus.Complete)
+                return false;
+        }
+        else if (!ArraySubscriptScanner.TryScanWord(_scanContext, _input, position, token.Token.Source.End.Value, out closing))
+            return false;
+
+        if (!TryReadSubscriptAssignment(token, position, closing, out var element, out _))
             return false;
 
         // The leading word part already has the logical name. Selector spelling still needs its
