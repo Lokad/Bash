@@ -353,6 +353,11 @@ numeric reads, and refunds once the parser settles.
 Retained command lookahead includes the depth required by its tree. A nested
 subshell can use an already prepared tree within the same syntax owner when the
 receiving command and expansion depths have enough headroom.
+Here-documents collected after a capture closes share the enclosing source's
+syntax owner. The reader admits its physical body ranges, buffered line positions
+and warnings before growing their backing lists. Streamed parsing releases the
+range index with each command unit. Prepared evaluation keeps the completed
+capture and warnings with their owning syntax.
 Literal payloads, assignment-name slices and completed expansion segments avoid
 pinning disproportionately large builder buffers after their parsing/command
 owner ends. An unchanged ANSI-C literal takes one exact copy of its payload.

@@ -163,7 +163,8 @@ public static class Parser
             return false;
         }
         context.LegacyOrigin = LegacySubstitutionOrigin.Script;
-        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, context)
+        context.ScriptInput = ShellSource.FromBytes(input);
+        var tokenizer = new Tokenizer(context.ScriptInput, 0, context)
         {
             TrackCommandLocations = true,
             AllowEofHereDocuments = true
@@ -201,7 +202,8 @@ public static class Parser
         }
 
         scanContext.LegacyOrigin = LegacySubstitutionOrigin.Script;
-        var tokenizer = new Tokenizer(ShellSource.FromBytes(input), 0, scanContext)
+        scanContext.ScriptInput = ShellSource.FromBytes(input);
+        var tokenizer = new Tokenizer(scanContext.ScriptInput, 0, scanContext)
         {
             TrackCommandLocations = true,
             AllowEofHereDocuments = true,
@@ -215,7 +217,7 @@ public static class Parser
             var trailing = tokenizer.PeekTokenCore();
             if (trailing.Kind is not TokenKind.Newline and not TokenKind.EndOfInput)
                 tokenizer.RecordError("Unexpected token after command list.", trailing.Source.Start.Value);
-            var warnings = tokenizer.HereDocuments?.Warnings;
+            var warnings = scanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.Warnings);
 
             if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
             {
@@ -274,10 +276,11 @@ public static class Parser
         {
             // The delimiter parse can replay a changed list while borrowing its original words and captures.
             context.RetainCaptureLookahead = true;
+            var readAheadBefore = context.HereDocumentReadAhead?.CaptureCount ?? 0;
             var tokenizer = new Tokenizer(input, payloadStart, context)
             {
                 TrackCommandLocations = true,
-                AllowEofHereDocuments = context.LegacyOrigin == LegacySubstitutionOrigin.Script,
+                AllowEofHereDocuments = context.LegacyOrigin != LegacySubstitutionOrigin.Temporary,
                 IsCommandSubstitution = true
             };
             var status = ReadBody(tokenizer, out var command, out closingParenthesisIndex, out syntaxError);
@@ -296,16 +299,28 @@ public static class Parser
             else if (!adjacentParenthesis && bareTime)
                 failure = SubstitutionSyntaxFailure.MissingTimedCommand;
 
-            // Pending bodies after a closing parenthesis use the deferred capture path.
-            if (tokenizer.HereDocuments is { HasPending: true })
-                return ShellScanStatus.Complete;
+            var collectedAhead = false;
+            if (tokenizer.HereDocuments is { HasPending: true } pending)
+            {
+                if (context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
+                {
+                    tokenizer.ReadHereDocumentExpansionCaptureBodies(pending);
+                    syntaxError = MissingCloser(pending.Warnings, GetWarningOffset(pending.Warnings));
+                    return ShellScanStatus.Invalid;
+                }
+                if (!context.CanReadAhead(input))
+                    return ShellScanStatus.Complete;
+                tokenizer.ReadCaptureHereDocuments(pending);
+                collectedAhead = true;
+            }
 
             parsed = CompleteScript(tokenizer, command);
+            parsed.HasReadAheadHereDocuments = (context.HereDocumentReadAhead?.CaptureCount ?? 0) != readAheadBefore;
             if (failure != SubstitutionSyntaxFailure.None || preserveAdjacentOpening || rawHereDocument)
                 return ShellScanStatus.Complete;
 
             var edits = FunctionDefinitionFormatter.ProjectCaptureLocations(parsed, context.SyntaxMemory,
-                collectOmittedSeparators: !adjacentParenthesis);
+                collectOmittedSeparators: !adjacentParenthesis && !collectedAhead);
             if (edits == null)
                 return ShellScanStatus.Complete;
 
@@ -316,6 +331,7 @@ public static class Parser
                 && replay.HereDocuments is not { HasPending: true })
             {
                 parsed = CompleteScript(replay, corrected);
+                parsed.HasReadAheadHereDocuments = (context.HereDocumentReadAhead?.CaptureCount ?? 0) != readAheadBefore;
                 if (context.SubstitutionFailure != SubstitutionSyntaxFailure.None)
                     failure = ClassifyNestedFailure(context.SubstitutionFailure, adjacentParenthesis);
                 FunctionDefinitionFormatter.ProjectCaptureLocations(parsed, context.SyntaxMemory, collectOmittedSeparators: false);
@@ -345,12 +361,7 @@ public static class Parser
                 && !context.ParsingLimitExceeded)
             {
                 var warnings = documents.Warnings;
-                error = new ParserFailure(new SyntaxError("unexpected EOF while looking for matching `)'", input.Length),
-                    ParserFailureKind.Delimiter)
-                {
-                    HereDocumentEndOfInput = new CapturedHereDocumentEndOfInput(warnings,
-                        warnings == null ? 0 : input.AsSpan(0, payloadStart).Count((byte)'\n'))
-                };
+                error = MissingCloser(warnings, GetWarningOffset(warnings));
                 return ShellScanStatus.Invalid;
             }
             if (bodyFailure != null)
@@ -370,6 +381,15 @@ public static class Parser
             end = closing.Source.Start.Value;
             return ShellScanStatus.Complete;
         }
+
+        ParserFailure MissingCloser(IReadOnlyList<HereDocumentWarning>? warnings, int lineOffset) =>
+            new(new SyntaxError("unexpected EOF while looking for matching `)'", input.Length), ParserFailureKind.Delimiter)
+            {
+                HereDocumentEndOfInput = new CapturedHereDocumentEndOfInput(warnings, lineOffset)
+            };
+
+        int GetWarningOffset(IReadOnlyList<HereDocumentWarning>? warnings) =>
+            warnings == null ? 0 : input.AsSpan(0, payloadStart).Count((byte)'\n');
 
         static SubstitutionSyntaxFailure ClassifyNestedFailure(SubstitutionSyntaxFailure nested, bool adjacent) =>
             IsHereDocumentSeparatorFailure(nested)
@@ -1730,6 +1750,8 @@ public static class Parser
             tokenizer.NextTokenCore();
             var startsCommandUnit = retainUnitBoundaries
                 && (token.Kind == TokenKind.Newline || tokenizer.PeekTokenCore().Kind == TokenKind.Newline);
+            if (startsCommandUnit)
+                SetUnitWarnings(unitStart);
             if (!IsEndTokenKind(tokenizer, endTokenKind))
                 SkipNewlines(tokenizer);
             trailingTerminator = true;
@@ -1758,16 +1780,21 @@ public static class Parser
             trailingTerminator = false;
         }
 
-        if (retainUnitBoundaries && tokenizer.HereDocuments?.Warnings is { } warnings)
-        {
-            // The warning belongs to the whole unit, including commands before a semicolon.
-            while (unitStart is ListCommand list)
-                unitStart = list.Left;
-            while (unitStart is NegatedCommand negated)
-                unitStart = negated.Inner;
-            tokenizer.RecordHereDocumentWarnings(unitStart, warnings);
-        }
+        if (retainUnitBoundaries)
+            SetUnitWarnings(unitStart);
         return (current, trailingTerminator);
+
+        void SetUnitWarnings(ICommand anchor)
+        {
+            if (tokenizer.ScanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.TakeWarnings()) is not { } warnings)
+                return;
+            // The warning belongs to the whole unit, including commands before a semicolon.
+            while (anchor is ListCommand list)
+                anchor = list.Left;
+            while (anchor is NegatedCommand negated)
+                anchor = negated.Inner;
+            tokenizer.RecordHereDocumentWarnings(anchor, warnings);
+        }
     }
 
     /// <summary>

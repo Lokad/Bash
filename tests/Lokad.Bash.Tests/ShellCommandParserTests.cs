@@ -313,6 +313,17 @@ public class ShellCommandParserTests
     public void TryParseChain_IncompleteSharedRegionRejectsTheWholeChain(string source) =>
         Assert.Null(ShellCommandParser.TryParseChain("ls before; " + source));
 
+    [Fact]
+    public void TryParseChain_KeepsReadAheadCaptureBodiesWithTheHeader()
+    {
+        const string region = "printf '%s' \"$(cat <<END)\"; printf after\nbody\nEND";
+        var chain = ShellCommandParser.TryParseChain("printf before\n" + region + "\nprintf tail");
+
+        Assert.NotNull(chain);
+        Assert.Equal(["printf before", region, "printf tail"], chain.Select(segment => segment.Text));
+        Assert.Null(chain[1].Stages);
+    }
+
     [Theory]
     [InlineData("cat \"$((1 + $(echo nope)))\"")]
     [InlineData("cat \"${value:-$((1 + $(echo nope)))}\"")]

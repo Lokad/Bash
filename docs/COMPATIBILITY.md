@@ -367,6 +367,13 @@ matching `)`, the script reader reports any pending here-document warnings
 before the missing-parenthesis diagnostic. Earlier complete command units can
 already have executed. Prepared parsing reports the syntax error before any
 evaluation.
+When `)` closes a capture with documents still pending, the script reader
+warns and collects their bodies from the next unread line. The remainder of
+the header still parses, and body expansion waits for the capture to execute.
+The warning belongs to the enclosing command unit, including short-circuited
+commands. Reading a function definition collects the bodies once for later calls.
+An unquoted here-document expanding such a capture reports the missing closing
+parenthesis and stops that redirection.
 Legacy `$[expression]` uses the same arithmetic evaluation as `$((expression))`,
 with a single closing bracket outside nested brackets. Within a double-quoted
 word, an unescaped inner double quote at that level causes a substitution failure

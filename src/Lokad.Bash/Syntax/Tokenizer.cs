@@ -21,6 +21,7 @@ internal sealed class Tokenizer
     private int _lineOffset;
     private int _line = 1;
     private int _nextOmittedSeparator;
+    private HereDocumentReadAhead? _readingAhead;
 
     internal bool TrackCommandLocations { get; init; }
     internal bool AllowEofHereDocuments { get; init; }
@@ -47,7 +48,7 @@ internal sealed class Tokenizer
             ? source[_lineOffset..offset].Count((byte)'\n')
             : -source[offset.._lineOffset].Count((byte)'\n');
         _lineOffset = offset;
-        return _line;
+        return _line + (_scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, offset) ?? 0);
     }
 
     internal void RecordLocation(ICommand command, int startLine, int firstElementEndLine) =>
@@ -66,6 +67,45 @@ internal sealed class Tokenizer
 
     internal void RecordHereDocumentWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings) =>
         (Locations ??= new CommandLocations()).SetHereDocumentWarnings(command, warnings, _scanContext.SyntaxMemory);
+
+    internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
+
+    private bool SkipCollectedHereDocuments()
+    {
+        var next = _scanContext.HereDocumentReadAhead?.SkipBodies(_input, Position) ?? Position;
+        if (next == Position)
+            return false;
+        Position = next;
+        return true;
+    }
+
+    internal void ReadCaptureHereDocuments(HereDocumentReader pending)
+    {
+        var readAhead = _scanContext.BeginHereDocumentReadAhead();
+        var afterCloser = Position;
+        var start = readAhead.FindBodyStart(afterCloser);
+        _scanContext.WarnPendingCaptureDocuments(pending.PendingCount);
+        _readingAhead = readAhead;
+        Position = start;
+        try
+        {
+            pending.TryReadBodies(this);
+            readAhead.Add(afterCloser, start, Position, _scanContext.SyntaxMemory);
+            if (pending.Warnings is { } warnings)
+                _scanContext.AppendCaptureWarnings(warnings);
+        }
+        finally
+        {
+            Position = afterCloser;
+            _readingAhead = null;
+        }
+    }
+
+    internal void ReadHereDocumentExpansionCaptureBodies(HereDocumentReader pending)
+    {
+        Position = HereDocumentReadAhead.FindNextLineStart(_input, Position);
+        pending.TryReadBodies(this);
+    }
 
     private ParserFailure? _failure;
 
@@ -120,6 +160,9 @@ internal sealed class Tokenizer
 
     /// <summary>One lexical queue spans pipelines, lists and compound-command redirections.</summary>
     internal HereDocumentReader? HereDocuments { get; set; }
+
+    internal bool HasPendingHereDocumentRegion(Token boundary) => HereDocuments is { HasPending: true }
+        || _scanContext.HereDocumentReadAhead?.GetBufferedLineAdvance(_input, boundary.Source.Start.Value) > 0;
 
     /// <summary>A parsed subshell whose final bare timer needs a separator before its closer.</summary>
     internal bool HasSubshellEndingInBareTime { get; set; }
@@ -458,6 +501,8 @@ internal sealed class Tokenizer
         while (true)
         {
             Position = ShellSourceCursor.SkipTokenSpacing(span, Position);
+            if (SkipCollectedHereDocuments())
+                continue;
             if (OmittedSeparators is { } edits && _nextOmittedSeparator < edits.Count
                 && Position == edits[_nextOmittedSeparator].Start.Value)
             {
@@ -495,6 +540,7 @@ internal sealed class Tokenizer
             if (current == (byte)'\n')
             {
                 Position++;
+                var skippedBodies = SkipCollectedHereDocuments();
                 if (HereDocuments is { HasPending: true })
                 {
                     if (!HereDocuments.TryReadBodies(this))
@@ -502,16 +548,18 @@ internal sealed class Tokenizer
                     // Keep bodies in the preceding source segment for command-chain display.
                     return Token.Newline() with { Source = Position..Position };
                 }
+                if (skippedBodies)
+                    return Token.Newline() with { Source = Position..Position };
                 return Located(Token.Newline());
             }
 
             if (current == (byte)';')
             {
-                if (TryConsumeLogicalText(span, ";;&"))
+                if (TryConsumeLogicalText(";;&"))
                     return Located(Token.CaseTerminator(CaseContinuation.Retest));
-                if (TryConsumeLogicalText(span, ";&"))
+                if (TryConsumeLogicalText(";&"))
                     return Located(Token.CaseTerminator(CaseContinuation.FallThrough));
-                if (TryConsumeLogicalText(span, ";;"))
+                if (TryConsumeLogicalText(";;"))
                     return Located(Token.CaseTerminator(CaseContinuation.Stop));
                 Position++;
                 return Located(Token.Semicolon());
@@ -805,52 +853,52 @@ internal sealed class Tokenizer
             return Token.None();
         }
 
-        if (TryConsumeLogicalText(span, "&>>"))
+        if (TryConsumeLogicalText("&>>"))
         {
             return Token.Redirection(RedirectionKind.OutputAndErrorAppend);
         }
 
-        if (TryConsumeLogicalText(span, "&>"))
+        if (TryConsumeLogicalText("&>"))
         {
             return Token.Redirection(RedirectionKind.OutputAndError);
         }
 
-        if (TryConsumeLogicalText(span, ">|"))
+        if (TryConsumeLogicalText(">|"))
         {
             return Token.Redirection(RedirectionKind.ForceOutput);
         }
 
-        if (TryConsumeLogicalText(span, ">&"))
+        if (TryConsumeLogicalText(">&"))
         {
             return Token.Redirection(RedirectionKind.DuplicateOutput);
         }
 
-        if (TryConsumeLogicalText(span, "<&"))
+        if (TryConsumeLogicalText("<&"))
         {
             return Token.Redirection(RedirectionKind.DuplicateInput);
         }
 
-        if (TryConsumeLogicalText(span, "<<-"))
+        if (TryConsumeLogicalText("<<-"))
         {
             return Token.Redirection(RedirectionKind.HereDocumentStripTabs);
         }
 
-        if (TryConsumeLogicalText(span, "<<<"))
+        if (TryConsumeLogicalText("<<<"))
         {
             return Token.Redirection(RedirectionKind.HereString);
         }
 
-        if (TryConsumeLogicalText(span, "<<"))
+        if (TryConsumeLogicalText("<<"))
         {
             return Token.Redirection(RedirectionKind.HereDocument);
         }
 
-        if (TryConsumeLogicalText(span, ">>"))
+        if (TryConsumeLogicalText(">>"))
         {
             return Token.Redirection(RedirectionKind.OutputAppend);
         }
 
-        if (TryConsumeLogicalText(span, "<>"))
+        if (TryConsumeLogicalText("<>"))
         {
             return Token.Redirection(RedirectionKind.InputOutput);
         }
@@ -875,12 +923,12 @@ internal sealed class Tokenizer
     /// </summary>
     private Token TryReadListOperator(ReadOnlySpan<byte> span)
     {
-        if (TryConsumeLogicalText(span, "&&"))
+        if (TryConsumeLogicalText("&&"))
         {
             return Token.FromListOperator(ListOperator.And);
         }
 
-        if (TryConsumeLogicalText(span, "||"))
+        if (TryConsumeLogicalText("||"))
         {
             return Token.FromListOperator(ListOperator.Or);
         }
@@ -893,7 +941,7 @@ internal sealed class Tokenizer
     /// </summary>
     private Token TryReadPipelineOperator(ReadOnlySpan<byte> span)
     {
-        if (TryConsumeLogicalText(span, "|&"))
+        if (TryConsumeLogicalText("|&"))
         {
             return Token.FromPipelineOperator(PipelineOperator.PipeAndError);
         }
@@ -927,9 +975,9 @@ internal sealed class Tokenizer
     /// <summary>
     /// Consumes a matching logical token and retains its physical ending position.
     /// </summary>
-    private bool TryConsumeLogicalText(ReadOnlySpan<byte> span, string text)
+    private bool TryConsumeLogicalText(string text)
     {
-        if (!ShellSourceCursor.TryMatchLogicalText(span, Position, text, out var end))
+        if (!ShellSourceCursor.TryMatchLogicalText(_input, _scanContext, Position, text, out var end))
             return false;
         Position = end;
         return true;
@@ -1056,6 +1104,8 @@ internal sealed class Tokenizer
 
         while (Position < span.Length && Error == null)
         {
+            if (SkipCollectedHereDocuments())
+                continue;
             var current = span[Position];
             if (TryReadArithmeticSubscript(out var subscript))
             {
@@ -1374,6 +1424,8 @@ internal sealed class Tokenizer
 
         while (Position < span.Length && Error == null)
         {
+            if (SkipCollectedHereDocuments())
+                continue;
             var current = span[Position];
             if (TryReadArithmeticSubscript(out var subscript))
             {

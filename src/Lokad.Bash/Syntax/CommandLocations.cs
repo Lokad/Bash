@@ -17,14 +17,25 @@ internal sealed class CommandLocations
     private CommandLocation _firstLocation;
     private Dictionary<ICommand, CommandLocation>? _entries;
     private EndOfInputWarnings? _hereDocumentWarnings;
+    private Dictionary<ICommand, IReadOnlyList<HereDocumentWarning>>? _otherWarnings;
 
     internal IReadOnlyList<HereDocumentWarning>? GetHereDocumentWarnings(ICommand command) =>
-        _hereDocumentWarnings is { } warnings && ReferenceEquals(command, warnings.Command) ? warnings.Warnings : null;
+        _hereDocumentWarnings is { } warnings && ReferenceEquals(command, warnings.Command) ? warnings.Warnings
+            : _otherWarnings != null && _otherWarnings.TryGetValue(command, out var later) ? later : null;
 
     internal void SetHereDocumentWarnings(ICommand command, IReadOnlyList<HereDocumentWarning> warnings, MemoryCapacity? memory)
     {
-        memory?.Grow(40);
-        _hereDocumentWarnings = new EndOfInputWarnings(command, warnings);
+        if (_hereDocumentWarnings == null)
+        {
+            memory?.Grow(40);
+            _hereDocumentWarnings = new EndOfInputWarnings(command, warnings);
+        }
+        else
+        {
+            memory?.Grow(128);
+            (_otherWarnings ??= new Dictionary<ICommand, IReadOnlyList<HereDocumentWarning>>(ReferenceEqualityComparer.Instance))
+                .Add(command, warnings);
+        }
     }
 
     internal bool TryGet(ICommand command, out CommandLocation location)
@@ -56,6 +67,8 @@ internal sealed class CommandLocations
     {
         if (_hereDocumentWarnings is { } warnings && ReferenceEquals(original, warnings.Command))
             warnings.Command = replacement;
+        else if (_otherWarnings != null && _otherWarnings.Remove(original, out var later))
+            _otherWarnings.Add(replacement, later);
         if (ReferenceEquals(original, _first))
             _first = replacement;
         else if (_entries != null && _entries.Remove(original, out var location))

@@ -207,6 +207,12 @@ independently.
 Line-continuation normalization reuses the structural scan's nested syntax while
 retaining physical source positions. Reusing lookahead through a source slice
 does not cross its end or reset the structural nesting guards.
+Captures that close with pending here-documents collect their bodies while the
+remainder of the header is still available. The script reader owns the consumed
+physical ranges and skips those bytes on later lexical reads, including across a
+continued token. The retained capture owns its completed syntax and the enclosing
+command unit owns the warnings. Expansion, including execution of the capture's
+body, still occurs only when reached.
 
 The first top-level closer in a `$((` candidate selects arithmetic when it starts
 a pair of logical closing parentheses. A single closer with following input

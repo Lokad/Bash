@@ -11,6 +11,7 @@ internal sealed record HereDocumentDelimiterSyntax(ShellSource Spelling, ShellSo
         // Ordinary delimiters already have all their spelling and quoting in the word parts.
         if (!ContainsStructuredSpelling(source.AsSpan()))
             return null;
+        source = FunctionDefinitionFormatter.RenderReadAheadCaptures(source, context);
 
         var allowsExpansion = true;
         foreach (var part in word.Parts)

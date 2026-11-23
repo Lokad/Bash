@@ -3734,10 +3734,13 @@ public sealed partial class Evaluation : IFileTester
     private static readonly ShellValue HereDocumentWarningPrefix = ShellValue.FromText("here-document at line ");
     private static readonly ShellValue HereDocumentWarningDelimiter = ShellValue.FromText(" delimited by end-of-file (wanted `");
     private static readonly ShellValue HereDocumentWarningClose = ShellValue.FromText("')");
+    private static readonly ShellValue PendingCaptureWarningPrefix = ShellValue.FromText("command substitution: ");
+    private static readonly ShellValue PendingCaptureWarningSingular = ShellValue.FromText(" unterminated here-document");
+    private static readonly ShellValue PendingCaptureWarningPlural = ShellValue.FromText(" unterminated here-documents");
     private static readonly byte[] UnreadConditionalToken =
         [.. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
 
-    private async Task ReportCapturedHereDocumentEndOfInputAsync(SyntaxError error,
+    internal async Task ReportCapturedHereDocumentEndOfInputAsync(SyntaxError error,
         CapturedHereDocumentEndOfInput endOfInput, int offset)
     {
         var descriptor = GetStdErrDescriptor();
@@ -3759,6 +3762,14 @@ public sealed partial class Evaluation : IFileTester
         foreach (var warning in warnings)
         {
             CheckCancellation();
+            if (warning.PendingCaptureDocuments != 0)
+            {
+                await WriteDiagnosticAsync(descriptor, [HereDocumentWarningName],
+                    [PendingCaptureWarningPrefix, ShellValue.FromInteger(warning.PendingCaptureDocuments),
+                        warning.PendingCaptureDocuments == 1 ? PendingCaptureWarningSingular : PendingCaptureWarningPlural],
+                    scope: null).ConfigureAwait(false);
+                continue;
+            }
             await WriteDiagnosticAsync(descriptor, [HereDocumentWarningName],
                 [HereDocumentWarningPrefix, ShellValue.FromInteger(warning.Line + offset), HereDocumentWarningDelimiter,
                     warning.Delimiter.ToValue(), HereDocumentWarningClose], scope: null).ConfigureAwait(false);

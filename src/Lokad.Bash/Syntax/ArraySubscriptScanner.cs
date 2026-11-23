@@ -72,6 +72,8 @@ internal static class ArraySubscriptScanner
             var bracketDepth = 1;
             while (!cursor.IsAtEnd)
             {
+                if (cursor.TrySkipReadAheadBodies())
+                    continue;
                 if (cursor.TryConsumeQuoteOrEscape())
                     continue;
 

@@ -5,7 +5,10 @@ using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
-internal readonly record struct HereDocumentWarning(int Line, ShellSource Delimiter);
+internal readonly record struct HereDocumentWarning(int Line, ShellSource Delimiter)
+{
+    internal int PendingCaptureDocuments { get; init; }
+}
 
 /// <summary>
 /// Collects bodies in lexical order at a physical newline, independently of command boundaries.
@@ -18,7 +21,14 @@ internal sealed class HereDocumentReader
     private List<HereDocumentWarning>? _warnings;
 
     internal bool HasPending => _pending.Count != 0;
+    internal int PendingCount => _pending.Count;
     internal IReadOnlyList<HereDocumentWarning>? Warnings => _warnings;
+    internal IReadOnlyList<HereDocumentWarning>? TakeWarnings()
+    {
+        var warnings = _warnings;
+        _warnings = null;
+        return warnings;
+    }
 
     internal void Enqueue(Redirection redirection) => _pending.Enqueue(redirection);
 
@@ -49,7 +59,7 @@ internal sealed class HereDocumentReader
                 }
                 memory?.PrepareListCapacity(_warnings, 1);
                 // The reader starts after the header LF or the previous delimiter line.
-                _warnings.Add(new HereDocumentWarning(tokenizer.GetLine(Math.Max(0, bodyStart - 1)), delimiter));
+                _warnings.Add(new HereDocumentWarning(tokenizer.GetHereDocumentWarningLine(Math.Max(0, bodyStart - 1)), delimiter));
             }
             var kind = allowExpansion ? WordPartKind.HereDocument : WordPartKind.SingleQuoted;
             _completed.Add(redirection, new Redirection(redirection.Kind, redirection.FileDescriptor,

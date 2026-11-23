@@ -161,6 +161,8 @@ internal static class ArithmeticExpansionScanner
             var depth = adjacentSubshell ? 1 : 0;
             while (!cursor.IsAtEnd)
             {
+                if (cursor.TrySkipReadAheadBodies())
+                    continue;
                 if (cursor.TryConsumeQuoteOrEscape())
                     continue;
 
@@ -219,7 +221,7 @@ internal static class ArithmeticExpansionScanner
                 var closingEnd = cursor.Position + (bracketed ? 1 : 2);
                 var closed = bracketed || (isCommand
                     ? span[cursor.Position..].StartsWith("))"u8)
-                    : ShellSourceCursor.TryMatchLogicalText(span, cursor.Position, "))", out closingEnd));
+                    : ShellSourceCursor.TryMatchLogicalText(text, context, cursor.Position, "))", out closingEnd));
                 if (!closed)
                 {
                     if (isCommand)
@@ -242,8 +244,9 @@ internal static class ArithmeticExpansionScanner
                 {
                     var source = text.Slice(expressionStart, cursor.Position - expressionStart);
                     expression = form == ArithmeticForm.ForHeader
-                        ? ShellSourceCursor.ReadArithmeticForHeader(context, source, out separators)
-                        : ShellSourceCursor.RemoveLineContinuations(context, source);
+                        ? ShellSourceCursor.ReadArithmeticForHeader(context,
+                            FunctionDefinitionFormatter.RenderReadAheadCaptures(source, context), out separators)
+                        : ShellSourceCursor.PrepareExpansionSource(context, source, ref renderedLineAdjustment);
                 }
                 return ShellScanStatus.Complete;
             }

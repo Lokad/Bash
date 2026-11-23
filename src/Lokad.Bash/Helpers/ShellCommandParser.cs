@@ -77,7 +77,8 @@ public static class ShellCommandParser
         // grammar's quote, expansion, comment, group, and heredoc handling instead of
         // maintaining a second character walker or reparsing each sliced pipeline.
         var source = ShellSource.FromMeasuredText(commandLine, byteCount);
-        var tokenizer = new Tokenizer(source);
+        var scanContext = new ShellScanContext { ScriptInput = source, LegacyOrigin = LegacySubstitutionOrigin.Script };
+        var tokenizer = new Tokenizer(source, 0, scanContext);
         var result = new List<ShellCommandChainSegment>();
         var start = 0;
         var requiresCommand = false;
@@ -115,7 +116,7 @@ public static class ShellCommandParser
 
             // Keep the whole source region until its pending bodies have been consumed.
             // Splitting earlier would attach those bodies to an unrelated later command.
-            if (tokenizer.HereDocuments is not { HasPending: true })
+            if (!tokenizer.HasPendingHereDocumentRegion(boundary))
                 AddSegment(boundary.Source.Start.Value);
 
             if (boundary.Kind == TokenKind.EndOfInput)

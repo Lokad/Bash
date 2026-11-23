@@ -179,11 +179,19 @@ internal static class CommandSubstitutionScanner
             var removedLineContinuations = 0;
             while (position < source.Length)
             {
+                var nextPosition = context.HereDocumentReadAhead?.SkipBodies(source, position) ?? position;
+                if (nextPosition != position)
+                {
+                    position = nextPosition;
+                    continue;
+                }
                 var current = source[position];
                 if (current == (byte)'`')
                 {
-                    legacyPayload = new CommandSubstitutionSyntax.Legacy(ShellSource.FromBytes(builder.ToMemory()),
-                        source.Slice(substitutionStart, position - substitutionStart + 1), context.LegacyOrigin)
+                    var spelling = source.Slice(substitutionStart, position - substitutionStart + 1);
+                    spelling = context.HereDocumentReadAhead?.CopyWithoutBodies(spelling, context) ?? spelling;
+                    legacyPayload = new CommandSubstitutionSyntax.Legacy(ShellSource.FromBytes(builder.ToMemory()), spelling,
+                        context.LegacyOrigin)
                     {
                         RemovedLineContinuations = removedLineContinuations
                     };

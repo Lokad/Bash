@@ -572,6 +572,64 @@ public sealed class CommandSubstitutionSyntaxTests
     private const string MatchingParenthesisEof = "unexpected EOF while looking for matching `)'\n";
     private const string MissingCaptureBodyOnLineTwo =
         "warning: here-document at line 2 delimited by end-of-file (wanted `END')\n";
+    private const string ReadAheadWarning = "warning: command substitution: 1 unterminated here-document\n";
+
+    [Theory]
+    [InlineData("v=$(cat <<END); printf '<%s:%s>' \"$v\" \"$LINENO\"\nbody\nEND\nprintf '<%s>' \"$LINENO\"", "<body:3><4>", ReadAheadWarning, 0)]
+    [InlineData("false && v=$(cat <<END)\nprintf tail\n", "", ReadAheadWarning
+        + "warning: here-document at line 1 delimited by end-of-file (wanted `END')\n", 1)]
+    [InlineData("false && v=$(cat <<END)\n$(printf forbidden >&2)\nEND\nprintf tail", "tail", ReadAheadWarning, 0)]
+    [InlineData("exit 7\nv=$(cat <<END)\nbody\nEND", "", "", 7)]
+    [InlineData("exit 7; v=$(cat <<END)\nbody\nEND", "", ReadAheadWarning, 7)]
+    [InlineData("a=$(cat <<A) b=$(cat <<B); printf '<%s:%s>' \"$a\" \"$b\"\none\nA\ntwo\nB\nprintf tail", "<one:two>tail",
+        ReadAheadWarning + ReadAheadWarning, 0)]
+    [InlineData("v=$(cat <<FIRST <<SECOND); printf '<%s>' \"$v\"\none\nFIRST\ntwo\nSECOND", "<two>",
+        "warning: command substitution: 2 unterminated here-documents\n", 0)]
+    [InlineData("cat <<OUTER; v=$(cat <<INNER); printf '<%s>' \"$v\"\nin\nINNER\nout\nOUTER\nprintf tail", "out\n<in>tail",
+        ReadAheadWarning, 0)]
+    [InlineData("printf '<%s>' \"$(cat <<A)\"\none\nA\nprintf '<%s>' \"$(cat <<B)\"\ntwo\nB", "<one><two>",
+        ReadAheadWarning + ReadAheadWarning, 0)]
+    [InlineData("f() { printf '<%s>' \"$(cat <<END)\"; }\nbody\nEND\nf; f", "<body><body>", ReadAheadWarning, 0)]
+    [InlineData("f() { printf '<%s>' \"$(cat <<END)\"; }; declare -f f\nbody\nEND",
+        "f () \n{ \n    printf '<%s>' \"$(cat <<END\nbody\nEND\n)\"\n}\n", ReadAheadWarning, 0)]
+    [InlineData("printf '<%s>' \"${missing:-$(cat <<END)\nbody\nEND\nsuffix}\"", "<body\nsuffix>", ReadAheadWarning, 0)]
+    [InlineData("v=$((1 + $(cat <<END)\n4\nEND\n)); printf '<%s>' \"$v\"", "<5>", ReadAheadWarning, 0)]
+    [InlineData("v=$(cat <<END) &\\\nbody\nEND\n& printf '<%s>' \"$v\"", "<body>", ReadAheadWarning, 0)]
+    [InlineData("v=$((1 + $(cat <<END) )\\\n4\nEND\n); printf '<%s>' \"$v\"", "<5>", ReadAheadWarning, 0)]
+    [InlineData("v=$(cat <<END); printf '<%s:%s>' \"$v\" 'head\nbody\nEND\nsuffix'", "<body:head\nsuffix>", ReadAheadWarning, 0)]
+    [InlineData("cat <<OUTER\n<$(cat <<INNER)>\nbody\nINNER\nOUTER\nprintf tail", "tail", MatchingParenthesisEof, 0)]
+    public async Task PendingCaptureBodiesAreCollectedWhileReadingTheHeader(
+        string source, string output, string diagnostics, int exitCode)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, owner, CancellationToken.None)
+                : await host.RunAsync(source, CancellationToken.None);
+
+            Assert.Equal(exitCode, result.ExitCode);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(diagnostics, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task CaptureReadAheadPreservesRawBodyBytes()
+    {
+        byte[] source = [.. "printf '<%s>' \"$(cat <<END)\"\n"u8, 0xff, 0x0d, .. "\nEND"u8];
+        await using var host = new TestHost();
+        var result = await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new byte[] { (byte)'<', 0xff, 0x0d, (byte)'>' }, host.StandardOutput.Content.ToArray());
+        Assert.Equal(ReadAheadWarning, host.StandardError.TextContent);
+    }
 
     [Theory]
     [InlineData("printf prior\nv=$(cat <<END\nbody\n)\nprintf tail", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]

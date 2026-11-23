@@ -995,9 +995,15 @@ internal static partial class WordExpansion
 
         static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, ParserFailure? error)
         {
-            await failedScope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("here-document"),
-                ShellValue.FromText(error?.Error.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
-                    ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
+            if (error is { HereDocumentEndOfInput: { } missingCloser })
+                await failedScope.Effects.ReportCapturedHereDocumentEndOfInputAsync(error.Error, missingCloser, offset: 0)
+                    .ConfigureAwait(false);
+            else
+            {
+                await failedScope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("here-document"),
+                    ShellValue.FromText(error?.Error.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
+                        ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
+            }
             failedScope.Effects.SetExpansionError(1);
         }
     }

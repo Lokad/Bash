@@ -62,6 +62,15 @@ internal sealed class ShellSourceCursor
             Position++;
     }
 
+    internal bool TrySkipReadAheadBodies()
+    {
+        var next = _context.HereDocumentReadAhead?.SkipBodies(_text, Position) ?? Position;
+        if (next == Position)
+            return false;
+        Position = next;
+        return true;
+    }
+
     /// <summary>Skips consecutive backslash-LF pairs, retaining physical source offsets.</summary>
     public static int SkipLineContinuations(ReadOnlySpan<byte> source, int position)
     {
@@ -132,11 +141,13 @@ internal sealed class ShellSourceCursor
         _ = TryConsumeQuoteOrEscape();
         var start = Position;
         while (!IsAtEnd && IsQuoted)
-            _ = TryConsumeQuoteOrEscape();
+            if (!TrySkipReadAheadBodies())
+                _ = TryConsumeQuoteOrEscape();
         if (IsQuoted && !allowUnterminated)
             return false;
 
         payload = _text.Slice(start, Position - start - (IsQuoted ? 0 : 1));
+        payload = _context.HereDocumentReadAhead?.CopyWithoutBodies(payload, _context) ?? payload;
         return true;
     }
 
@@ -148,13 +159,27 @@ internal sealed class ShellSourceCursor
         ReadOnlySpan<byte> source,
         int startIndex,
         ReadOnlySpan<char> expected,
-        out int endIndex)
+        out int endIndex) => TryMatchLogicalText(source, default, null, startIndex, expected, out endIndex);
+
+    internal static bool TryMatchLogicalText(ShellSource source, ShellScanContext context, int startIndex,
+        ReadOnlySpan<char> expected, out int endIndex) =>
+        TryMatchLogicalText(source.AsSpan(), source, context.HereDocumentReadAhead, startIndex, expected, out endIndex);
+
+    private static bool TryMatchLogicalText(ReadOnlySpan<byte> bytes, ShellSource source, HereDocumentReadAhead? readAhead,
+        int startIndex, ReadOnlySpan<char> expected, out int endIndex)
     {
         var position = startIndex;
         foreach (var character in expected)
         {
-            position = SkipLineContinuations(source, position);
-            if (position >= source.Length || source[position] != character)
+            while (true)
+            {
+                position = SkipLineContinuations(bytes, position);
+                var next = readAhead?.SkipBodies(source, position) ?? position;
+                if (next == position)
+                    break;
+                position = next;
+            }
+            if (position >= bytes.Length || bytes[position] != character)
             {
                 endIndex = startIndex;
                 return false;
@@ -179,6 +204,14 @@ internal sealed class ShellSourceCursor
     /// <summary>Normalizes a scanned payload without rebuilding its nested lookahead syntax.</summary>
     internal static ShellSource RemoveLineContinuations(ShellScanContext context, ShellSource source) =>
         ScanLexicalLayer(context, source, normalize: true, SeparatorScan.None, out _);
+
+    internal static ShellSource PrepareExpansionSource(ShellScanContext context, ShellSource source, ref int renderedLineAdjustment)
+    {
+        var expanded = FunctionDefinitionFormatter.RenderReadAheadCaptures(source, context);
+        if (!expanded.Bytes.Equals(source.Bytes))
+            renderedLineAdjustment += source.AsSpan().Count((byte)'\n') - expanded.AsSpan().Count((byte)'\n');
+        return RemoveLineContinuations(context, expanded);
+    }
 
     /// <summary>Finds separators while normalizing a loop header on its original source backing.</summary>
     internal static ShellSource ReadArithmeticForHeader(ShellScanContext context, ShellSource source,
@@ -457,6 +490,9 @@ internal sealed class ShellScanContext
     internal bool PreserveDelimiterLookahead { get; set; }
     internal bool RetainCaptureLookahead { get; set; }
     internal SubstitutionSyntaxFailure SubstitutionFailure { get; set; }
+    internal ShellSource ScriptInput { get; set; }
+    internal HereDocumentReadAhead? HereDocumentReadAhead { get; private set; }
+    private List<HereDocumentWarning>? _captureWarnings;
 
     internal ByteMemoryBuilder CreateByteBuilder(int capacity) => SyntaxMemory is { } memory
         ? new ByteMemoryBuilder(capacity, memory) : ByteMemoryBuilder.CreateUnaccounted(capacity);
@@ -466,7 +502,52 @@ internal sealed class ShellScanContext
         : BoundedByteMemoryBuilder.CreateUnaccounted(capacity, maximumLength);
 
     // No completed unit can need a later lookup of its consumed source positions.
-    internal void ClearCommandUnitLookahead() => _commandSubstitutions = null;
+    internal void ClearCommandUnitLookahead()
+    {
+        _commandSubstitutions = null;
+        HereDocumentReadAhead = null;
+    }
+
+    internal bool CanReadAhead(ShellSource source) => !ScriptInput.IsEmpty && source.Bytes.Equals(ScriptInput.Bytes);
+
+    internal HereDocumentReadAhead BeginHereDocumentReadAhead()
+    {
+        if (HereDocumentReadAhead == null)
+        {
+            SyntaxMemory?.Grow(128);
+            HereDocumentReadAhead = new HereDocumentReadAhead(ScriptInput);
+        }
+        return HereDocumentReadAhead;
+    }
+
+    internal void WarnPendingCaptureDocuments(int count)
+    {
+        if (_captureWarnings == null)
+        {
+            SyntaxMemory?.Grow(32);
+            _captureWarnings = [];
+        }
+        SyntaxMemory?.PrepareListCapacity(_captureWarnings, 1);
+        _captureWarnings.Add(new HereDocumentWarning { PendingCaptureDocuments = count });
+    }
+
+    internal IReadOnlyList<HereDocumentWarning>? TakeHereDocumentWarnings(IReadOnlyList<HereDocumentWarning>? trailing)
+    {
+        if (_captureWarnings == null)
+            return trailing;
+        if (trailing != null)
+            AppendCaptureWarnings(trailing);
+        var warnings = _captureWarnings;
+        _captureWarnings = null;
+        return warnings;
+    }
+
+    internal void AppendCaptureWarnings(IReadOnlyList<HereDocumentWarning> warnings)
+    {
+        var pending = _captureWarnings ?? throw new InvalidOperationException("A capture warning must precede body warnings.");
+        SyntaxMemory?.PrepareListCapacity(pending, warnings.Count);
+        pending.AddRange(warnings);
+    }
 
     internal bool HasCommandSubstitutionLookahead => _commandSubstitutions is { Count: > 0 };
 
@@ -505,7 +586,9 @@ internal sealed class ShellScanContext
                 && _commandDepth + parsed.RequiredDepth.Command <= MaximumCommandDepth)
             {
                 RecordLookaheadDepth(_nestedExpansionDepth + parsed.RequiredDepth.Expansion, _commandDepth + parsed.RequiredDepth.Command);
-                if (take) _commandSubstitutions.Remove(key);
+                // The source spelling may be published after its operand has consumed the parse.
+                if (take && parsed.Substitution is not CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true })
+                    _commandSubstitutions.Remove(key);
                 return true;
             }
         }

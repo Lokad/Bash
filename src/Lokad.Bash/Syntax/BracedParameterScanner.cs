@@ -168,6 +168,8 @@ internal static class BracedParameterScanner
             var resolveLateSubscripts = phase != ScanPhase.Lexical;
             while (!cursor.IsAtEnd)
             {
+                if (cursor.TrySkipReadAheadBodies())
+                    continue;
                 if (cursor.TryConsumeQuoteOrEscape())
                     continue;
 
@@ -217,8 +219,8 @@ internal static class BracedParameterScanner
                     if (selectorDepth != 0)
                         subscriptFailure = lengthForm ? ParameterSubscriptFailure.Length : ParameterSubscriptFailure.Direct;
                     if (capturePayload)
-                        payload = ShellSourceCursor.RemoveLineContinuations(
-                            context, text.Slice(payloadStart, cursor.Position - payloadStart));
+                        payload = ShellSourceCursor.PrepareExpansionSource(
+                            context, text.Slice(payloadStart, cursor.Position - payloadStart), ref renderedLineAdjustment);
                     return BracedParameterScanStatus.Found;
                 }
 
@@ -242,7 +244,8 @@ internal static class BracedParameterScanner
                 if (capturePayload)
                 {
                     var payloadEnd = completeName ? endIndex + 1 : endIndex;
-                    payload = ShellSourceCursor.RemoveLineContinuations(context, text.Slice(payloadStart, payloadEnd - payloadStart));
+                    payload = ShellSourceCursor.PrepareExpansionSource(context,
+                        text.Slice(payloadStart, payloadEnd - payloadStart), ref renderedLineAdjustment);
                 }
                 return completeName ? BracedParameterScanStatus.MissingBraceAfterSelector : BracedParameterScanStatus.Found;
             }

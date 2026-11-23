@@ -211,6 +211,8 @@ internal sealed class ConditionalParser
         var cursor = new ShellSourceCursor(source, 0, _context);
         while (!cursor.IsAtEnd)
         {
+            if (cursor.TrySkipReadAheadBodies())
+                continue;
             if (!cursor.IsQuoted && cursor.Current == (byte)'[')
                 break;
             if (cursor.TryConsumeQuoteOrEscape())
@@ -269,6 +271,12 @@ internal sealed class ConditionalParser
         var span = _source.AsSpan();
         while (_position < span.Length)
         {
+            var afterBodies = _context.HereDocumentReadAhead?.SkipBodies(_source, _position) ?? _position;
+            if (afterBodies != _position)
+            {
+                _position = afterBodies;
+                continue;
+            }
             var next = ShellSourceCursor.SkipLineContinuations(span, _position);
             if (next != _position)
             {
@@ -300,7 +308,7 @@ internal sealed class ConditionalParser
             _context.RecordLimitError(_failure?.Error ?? throw new InvalidOperationException("A refused token requires an error."));
             return new(TokenKind.Invalid, default, start);
         }
-        if (_command && ShellSourceCursor.TryMatchLogicalText(span, start, "]]", out var closing))
+        if (_command && ShellSourceCursor.TryMatchLogicalText(_source, _context, start, "]]", out var closing))
         {
             var after = ShellSourceCursor.SkipLineContinuations(span, closing);
             if (after == span.Length || span[after] is (byte)' ' or (byte)'\t' or (byte)'\n'
@@ -318,8 +326,8 @@ internal sealed class ConditionalParser
                 (byte)'(' => TokenKind.Open,
                 (byte)')' => TokenKind.Close,
                 (byte)'<' or (byte)'>' => TokenKind.Order,
-                (byte)'&' when ShellSourceCursor.TryMatchLogicalText(span, start, "&&", out logicalEnd) => TokenKind.And,
-                (byte)'|' when ShellSourceCursor.TryMatchLogicalText(span, start, "||", out logicalEnd) => TokenKind.Or,
+                (byte)'&' when ShellSourceCursor.TryMatchLogicalText(_source, _context, start, "&&", out logicalEnd) => TokenKind.And,
+                (byte)'|' when ShellSourceCursor.TryMatchLogicalText(_source, _context, start, "||", out logicalEnd) => TokenKind.Or,
                 (byte)'&' or (byte)'|' or (byte)';' => TokenKind.Invalid,
                 _ => TokenKind.End
             };
@@ -334,6 +342,8 @@ internal sealed class ConditionalParser
         var parentheses = 0;
         while (!cursor.IsAtEnd)
         {
+            if (cursor.TrySkipReadAheadBodies())
+                continue;
             if (!cursor.IsQuoted)
             {
                 var ch = cursor.Current;
@@ -436,18 +446,21 @@ internal sealed class ConditionalParser
     private ShellSource GetSpelling(int start, int end)
     {
         if (_ignoredRanges == null)
-            return _source.Slice(start, end - start);
+            return FunctionDefinitionFormatter.RenderReadAheadCaptures(_source.Slice(start, end - start), _context);
         var length = end - start;
         foreach (var range in _ignoredRanges)
             length -= range.End - range.Start;
         using var output = _context.CreateByteBuilder(length);
         foreach (var range in _ignoredRanges)
         {
-            output.Append(_source.AsSpan(start, range.Start - start));
+            AppendRange(start, range.Start);
             start = range.End;
         }
-        output.Append(_source.AsSpan(start, end - start));
+        AppendRange(start, end);
         return ShellSource.FromBytes(output.ToMemory());
+
+        void AppendRange(int beginning, int finish) => output.Append(FunctionDefinitionFormatter.RenderReadAheadCaptures(
+            _source.Slice(beginning, finish - beginning), _context).AsSpan());
     }
 
     private enum TokenKind { End, Word, And, Or, Open, Close, Order, DescriptorNumber, EndCommand, Newline, Invalid }

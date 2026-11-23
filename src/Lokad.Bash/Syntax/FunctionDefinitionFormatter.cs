@@ -496,7 +496,8 @@ internal static class FunctionDefinitionFormatter
                         when part is CommandSubstitutionWordPart command
                             && (braceSource || command.Substitution is CommandSubstitutionSyntax.Legacy
                                 or CommandSubstitutionSyntax.AdjacentSubshell
-                                or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }) =>
+                                or CommandSubstitutionSyntax.Parsed { PreserveAdjacentOpening: true }
+                                or CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }) =>
                         TryAppendSubstitutionSource(command.Substitution, output, budget, cancellationToken),
                     WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted =>
                         AppendCommandSubstitution(content),
@@ -635,18 +636,60 @@ internal static class FunctionDefinitionFormatter
     {
         var bytes = source.AsSpan();
         var written = 0;
-        for (var index = 0; index < bytes.Length; index++)
+        while (true)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (bytes[index] != (byte)'$' || !captures.TryGetCommandSubstitution(source, index, out var parsed))
-                continue;
+            var index = FindNextCapture(source, captures, written, readAheadOnly: false, cancellationToken, out var parsed);
+            if (index < 0)
+                return output.TryAppend(bytes[written..]);
             if (!output.TryAppend(bytes[written..index])
                 || !TryAppendSubstitutionSource(parsed.Substitution, output, budget, cancellationToken))
                 return false;
             written = index + parsed.Length;
-            index = written - 1;
         }
-        return output.TryAppend(bytes[written..]);
+    }
+
+    /// <summary>Completes captures whose bodies were read outside their original operand spelling.</summary>
+    internal static ShellSource RenderReadAheadCaptures(ShellSource source, ShellScanContext context)
+    {
+        if (context.HereDocumentReadAhead is not { } readAhead)
+            return source;
+
+        var index = FindNextCapture(source, context, 0, readAheadOnly: true, CancellationToken.None, out var cached);
+        if (index < 0)
+            return readAhead.CopyWithoutBodies(source, context);
+
+        using var buffer = context.CreateByteBuilder(0);
+        var written = 0;
+        do
+        {
+            readAhead.AppendWithoutBodies(buffer, source.Slice(written, index - written));
+            if (!TryAppendSubstitutionSource(cached.Substitution, buffer, context.SyntaxMemory?.Budget, CancellationToken.None))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            written = index + cached.Length;
+            index = FindNextCapture(source, context, written, readAheadOnly: true, CancellationToken.None, out cached);
+        }
+        while (index >= 0);
+        readAhead.AppendWithoutBodies(buffer, source.Slice(written));
+        return ShellSource.FromBytes(buffer.ToCompactMemory(context.SyntaxMemory));
+    }
+
+    private static int FindNextCapture(ShellSource source, ShellScanContext context, int start, bool readAheadOnly,
+        CancellationToken cancellationToken, out ShellScanContext.CachedParse parsed)
+    {
+        var bytes = source.AsSpan();
+        for (var position = start; position < bytes.Length; position++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relative = bytes[position..].IndexOf((byte)'$');
+            if (relative < 0)
+                break;
+            position += relative;
+            if (context.TryGetCommandSubstitution(source, position, out parsed)
+                && (!readAheadOnly || parsed.Substitution is CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }))
+                return position;
+        }
+        parsed = default;
+        return -1;
     }
 
     private sealed class LineCounter(bool collectOmittedSeparators, MemoryCapacity? memory) : IByteMemoryWriter
