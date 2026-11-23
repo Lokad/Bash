@@ -117,14 +117,15 @@ public sealed class TestEvaluationTests
     [Fact]
     public void TestEvaluation_ConstantChainKeepsBoundedReductionStorage()
     {
+        const int Repetitions = 16;
         var memory = new EvaluationMemory(new MemoryGovernor(long.MaxValue));
         var shortChain = Arguments(8);
         var longChain = Arguments(1_024);
         var shortBytes = Measure(shortChain);
         var longBytes = Measure(longChain);
 
-        Assert.True(longBytes - shortBytes < 512,
-            $"Short chain allocated {shortBytes} bytes and long chain allocated {longBytes} bytes.");
+        Assert.True(longBytes - shortBytes < Repetitions * 512,
+            $"Over {Repetitions} runs, the short chain median was {shortBytes} bytes and the long chain median was {longBytes} bytes.");
 
         static ShellValue[] Arguments(int count) => string.Join(" -a ", Enumerable.Repeat("-n yes", count))
             .Split(' ').Select(ShellValue.FromText).ToArray();
@@ -132,9 +133,8 @@ public sealed class TestEvaluationTests
         long Measure(ShellValue[] arguments)
         {
             Assert.True(ParseAndComplete());
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var matched = ParseAndComplete();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            var matched = true;
+            var bytes = AllocationAssert.MeasureAllocatedBytes(() => matched &= ParseAndComplete(), Repetitions).Median;
             Assert.True(matched);
             return bytes;
 
