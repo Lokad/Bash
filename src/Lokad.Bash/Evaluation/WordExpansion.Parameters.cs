@@ -515,36 +515,40 @@ internal static partial class WordExpansion
             if (parsed.Kind is BracedParameterOperatorKind.NamesAt or BracedParameterOperatorKind.NamesStar)
             {
                 var prefix = BindingNameExpansion.FromValue(parsed.Name.ToValue(), budget);
-                var names = new List<ShellValue>();
-                using var selectionMemory = new MemoryCapacity(budget.Budget, 0);
+                List<ShellValue>? names = null;
+                HashSet<BindingName>? selected = null;
                 var function = scope.Context.FunctionContext;
-                // The active store has unique names. Saved function scopes can repeat them.
-                var selected = function == null ? null : new HashSet<BindingName>();
+                while (function != null && function.Locals.NonEmptySavedBindings == null)
+                    function = function.Enclosing;
+
+                // The active store has unique names. Only saved bindings can repeat them.
+                using var selectionMemory = function == null ? null : new MemoryCapacity(budget.Budget, 0);
                 AddNames(scope.Variables.AssignedNames);
                 for (; function != null; function = function.Enclosing)
-                    if (function.Locals.SavedBindings is { } saved)
+                    if (function.Locals.NonEmptySavedBindings is { } saved)
                         AddNames(saved.AssignedNames);
 
-                names.Sort(ShellValue.ByteOrder);
+                names?.Sort(ShellValue.ByteOrder);
                 return new ParameterValue(parsed.Kind == BracedParameterOperatorKind.NamesAt
-                    ? VariableReferenceKind.At : VariableReferenceKind.Star, names, names.Count != 0, null, null);
+                    ? VariableReferenceKind.At : VariableReferenceKind.Star, names is null ? [] : names, names != null, null, null);
 
                 void AddNames(IEnumerable<BindingName> assigned)
                 {
                     foreach (var name in assigned)
                     {
                         scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                        if (selected?.Contains(name) == true || !name.StartsWith(prefix, budget))
+                        if (!name.StartsWith(prefix, budget) || selected?.Contains(name) == true)
                             continue;
-                        if (selected != null)
+                        if (selectionMemory != null)
                         {
                             budget.Charge(selectionMemory, Variables.BindingNameSelectionBytes);
-                            selected.Add(name);
+                            (selected ??= []).Add(name);
                         }
-                        budget.PrepareListCapacity(names, 1);
+                        var matches = names ??= [];
+                        budget.PrepareListCapacity(matches, 1);
                         if (name.NeedsValueEncoding)
                             budget.Charge(MemoryCapacity.ArrayBackingBytes<byte>(name.ByteLength));
-                        names.Add(name.ToValue());
+                        matches.Add(name.ToValue());
                     }
                 }
             }

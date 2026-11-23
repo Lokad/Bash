@@ -115,6 +115,30 @@ public sealed class ByteParameterReaderTests
     }
 
     [Fact]
+    public async Task NamePrefixFindsSavedNamesAboveEmptyFunctionFrames()
+    {
+        const string script = """
+            probe_z=outer; probe_b=visible
+            inner(){ local probe_a=a; printf '<%s>' "${!probe_@}" "${probe_z-unset}"; }
+            middle(){ inner; }
+            outer(){ local probe_z; middle; }
+            outer
+            """;
+
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<probe_a><probe_b><probe_z><unset>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
     public async Task NamePrefixPreservesTheRawBytesOfASavedLiteralBinding()
     {
         const string script = """

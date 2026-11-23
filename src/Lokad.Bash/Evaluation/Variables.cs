@@ -143,8 +143,15 @@ public sealed partial class Variables
         NamerefTargets.ToDictionary(entry => entry.Key, entry => entry.Value.Value);
     internal IEnumerable<BindingName> BindingNames =>
         EnumerateBindings().Where(entry => entry.Value is not AttributeSlot).Select(entry => entry.Key);
-    internal IEnumerable<BindingName> AssignedNames =>
-        EnumerateBindings().Where(entry => IsAssigned(entry.Value)).Select(entry => entry.Key);
+    internal IEnumerable<BindingName> AssignedNames
+    {
+        get
+        {
+            foreach (var (name, slot) in EnumerateBindings())
+                if (IsAssigned(slot))
+                    yield return name;
+        }
+    }
 
     internal bool HasBinding(BindingName name) =>
         TryGetBinding(name, detachBorrowed: false, out var slot) && slot is not AttributeSlot;
@@ -534,6 +541,7 @@ public sealed partial class Variables
         }
 
         internal Variables? SavedBindings => _parent == null ? _saved : null;
+        internal Variables? NonEmptySavedBindings => _saved._bindings.Count != 0 ? SavedBindings : null;
         internal bool IsTemporaryPrefixScope => _parent != null;
         internal IReadOnlySet<BindingName> SavedNames => _names;
         internal IReadOnlySet<BindingName> PromotedPrefixes => _promotedPrefixes;
