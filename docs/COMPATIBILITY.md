@@ -13,6 +13,11 @@ The runtime supports deterministic, non-interactive shell workflows:
   command allocations and selector effects do not change caller bindings.
   A subshell expands its trailing redirections in its own scope, including
   binding changes made by the operands and allocated descriptor variables.
+  If expansion leaves no command name, leading assignments still apply in
+  the caller. A named descriptor redirection or a `<`, `<>`, close, or
+  word-based descriptor duplication on stdin isolates the whole list.
+  Its bindings are visible to later redirections in that list. The list
+  reports its own status, and the caller's descriptor mappings are restored.
 - Control, directory, variable, input and formatting builtins, including `read`,
   `mapfile`, `printf -v`, `source`, `eval`, `command`, `type`, `getopts` and `help`.
 - `time`, host-mediated filesystem predicates, per-shell trap registration and EXIT

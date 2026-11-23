@@ -10,6 +10,7 @@ using Lokad.Bash.Syntax;
 namespace Lokad.Bash.Evaluation;
 
 internal enum RedirectionPersistence { None, Allocations, AllocationsAndMoves }
+internal enum RedirectionOrigin { Command, IsolatedCommandless, InputSubstitution }
 
 /// <summary>
 /// Evaluates redirections and resolves descriptor mappings in order.
@@ -20,7 +21,7 @@ internal sealed class RedirectionEvaluation
     private readonly IReadOnlyList<Redirection> _redirections;
     /// <summary> Stores the descriptor mappings produced while evaluating redirections. </summary>
     private readonly DescriptorTable _descriptorTable;
-    private readonly bool _inputSubstitution;
+    private readonly RedirectionOrigin _origin;
     /// <summary> Stores descriptors opened during redirection evaluation, in open order. </summary>
     private readonly DescriptorHandleOwner _openedDescriptors = new();
     /// <summary>Stores replaced handles in encounter order when the scope will be preserved.</summary>
@@ -35,12 +36,12 @@ internal sealed class RedirectionEvaluation
     public RedirectionEvaluation(
         IReadOnlyList<Redirection> redirections,
         DescriptorTable descriptorTable,
-        bool inputSubstitution,
+        RedirectionOrigin origin,
         bool preserveBindings)
     {
         _redirections = redirections;
         _descriptorTable = descriptorTable;
-        _inputSubstitution = inputSubstitution;
+        _origin = origin;
         _replacedHandles = preserveBindings ? new OrderedDescriptorSet() : null;
     }
 
@@ -159,7 +160,7 @@ internal sealed class RedirectionEvaluation
         {
             return;
         }
-        if (_inputSubstitution && path.Length == 0)
+        if (_origin == RedirectionOrigin.InputSubstitution && path.Length == 0)
         {
             await ReportOpenFailureAsync(scope, path, mode, null).ConfigureAwait(false);
             return;
@@ -241,8 +242,15 @@ internal sealed class RedirectionEvaluation
         {
             if (sourceWord.AsSpan().IndexOfAnyExceptInRange('0', '9') < 0)
             {
-                var name = sourceWord.Length == 0 ? targetDescriptor.ToString() : sourceWord;
-                await ReportFailureAsync(scope, new OperationError($"{name}: Bad file descriptor\n")).ConfigureAwait(false);
+                if (!allocate && !move && targetDescriptor.Number == redirection.DefaultFileDescriptor)
+                {
+                    var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
+                    if (!standardError.IsClosed)
+                        await WriteTargetSpellingDiagnosticAsync(scope, standardError, target,
+                            ShellValue.FromText("Bad file descriptor")).ConfigureAwait(false);
+                    scope.Effects.SetExpansionError(1);
+                }
+                else await ReportFailureAsync(scope, new OperationError($"{targetDescriptor}: Bad file descriptor\n")).ConfigureAwait(false);
                 return RedirectionOutcome.Failure;
             }
             if (move || redirection.Kind != RedirectionKind.DuplicateOutput || targetDescriptor != LogicalDescriptor.StdOut)
@@ -392,11 +400,11 @@ internal sealed class RedirectionEvaluation
 
     private Task ReportOpenFailureAsync(ScopedEvaluation scope, string path, FileOpenMode mode, OperationError? error)
     {
-        InputOpenFailed = _inputSubstitution;
-        return mode == FileOpenMode.Read && !_inputSubstitution
+        InputOpenFailed = _origin == RedirectionOrigin.InputSubstitution;
+        var detail = error is { Message: not null } failure ? failure : new OperationError("No such file or directory\n");
+        return mode == FileOpenMode.Read && _origin == RedirectionOrigin.Command
             ? ReportFailureAsync(scope, error)
-            : ReportFailureAsync(scope, path, error is { Message: not null } failure
-                ? failure : new OperationError("No such file or directory\n"));
+            : ReportFailureAsync(scope, path, detail);
     }
 
     private Task ReportFailureAsync(ScopedEvaluation scope, OperationError? error) =>
@@ -424,18 +432,22 @@ internal sealed class RedirectionEvaluation
             if (field is { } value)
                 await scope.Effects.WriteRedirectionDiagnosticAsync(standardError, value,
                     ShellValue.FromText("ambiguous redirect")).ConfigureAwait(false);
-            else
-            {
-                using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-                if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.Memory.Budget,
-                        scope.Effects.CancellationToken))
-                    throw new ByteMemoryBuilder.LimitExceededException();
-
-                await scope.Effects.ExecuteWriteAsync(standardError, diagnostic.Append(": ambiguous redirect\n"u8).ToMemory())
-                    .ConfigureAwait(false);
-            }
+            else await WriteTargetSpellingDiagnosticAsync(scope, standardError, target,
+                ShellValue.FromText("ambiguous redirect")).ConfigureAwait(false);
         }
         scope.Effects.SetExpansionError(1);
+    }
+
+    private static async Task WriteTargetSpellingDiagnosticAsync(ScopedEvaluation scope,
+        FileDescriptor standardError, Word target, ShellValue detail)
+    {
+        using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
+        if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.Memory.Budget,
+                scope.Effects.CancellationToken))
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        diagnostic.Append(": "u8).Append(detail.Bytes).Append((byte)'\n');
+        await scope.Effects.ExecuteWriteAsync(standardError, diagnostic.ToMemory()).ConfigureAwait(false);
     }
 
     private void SetDescriptor(ScopedEvaluation scope, LogicalDescriptor logicalDescriptor, DescriptorBinding binding)

@@ -93,15 +93,17 @@ public sealed class DescriptorOperandTests
     }
 
     [Theory]
-    [InlineData("\"$x\"")]
-    [InlineData("\"$x\"-")]
-    public async Task EmptyQuotedDescriptorFieldFails(string operand)
+    [InlineData("3>&\"$x\"", "3")]
+    [InlineData("3>&\"$x\"-", "3")]
+    [InlineData("1>&\"$x\"", "\"$x\"")]
+    [InlineData("0<&\"\"", "\"\"")]
+    public async Task EmptyQuotedDescriptorFieldFails(string redirection, string diagnosticOperand)
     {
         await using var host = new TestHost();
-        var result = await host.RunAsync("x=; : 3>&" + operand, CancellationToken.None);
+        var result = await host.RunAsync("x=; : " + redirection, CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal("3: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal(diagnosticOperand + ": Bad file descriptor\n", host.StandardError.TextContent);
     }
 
     [Fact]

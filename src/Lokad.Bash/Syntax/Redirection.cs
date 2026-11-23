@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
@@ -94,4 +95,16 @@ public sealed class Redirection
     /// <summary>Source-final move syntax is prepared once; expanded digits followed by '-' remain ordinary words.</summary>
     internal bool MovesDescriptor { get; }
     internal Word DescriptorOperand { get; }
+
+    /// <summary>Reads the numeric source of a duplication or move written as an unquoted literal.</summary>
+    internal bool TryGetLiteralDescriptor(out int descriptor)
+    {
+        descriptor = 0;
+        if (!Parser.TryGetPlainUnquotedSource(Target, out var source))
+            return false;
+        var bytes = source.AsSpan();
+        if (MovesDescriptor)
+            bytes = bytes[..^1];
+        return !bytes.StartsWith("-"u8) && Integers.TryParseExitStatus(bytes, out descriptor);
+    }
 }

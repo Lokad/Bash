@@ -6,6 +6,83 @@ namespace Lokad.Bash.Tests;
 
 public sealed class DescriptorAllocationTests
 {
+    // Both Bash 5.2 pins retain the leading assignment and discard the redirection's writes.
+    [Theory]
+    [InlineData("fd=seed {fd}>out", "seed")]
+    [InlineData("fd=seed; $missing {fd}>out", "seed")]
+    [InlineData("{fd}>out 1>&\"$fd\"", "unset")]
+    [InlineData("f(){ local -n fd=target; local target=seed; {fd}>out; printf '%s:' \"$target\"; }; f", "seed:unset")]
+    public async Task CommandlessAllocationsStayVisibleOnlyDuringRedirectionSetup(string command, string expected)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(command + "; printf '%s' \"${fd-unset}\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Empty(host.ReadFileBytes("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("< input", "unset")]
+    [InlineData("0<&\"0\"", "unset")]
+    [InlineData("0>&-", "unset")]
+    [InlineData("0<&0", "out")]
+    [InlineData("3< input", "out")]
+    [InlineData("<<< line", "out")]
+    public async Task CommandlessStdinOperatorsSelectWhereTargetAssignmentsAreVisible(string redirection, string expected)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "data");
+        var result = await host.RunAsync(redirection + " > \"${target:=out}\"; printf '%s' \"$?\":\"${target-unset}\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0:" + expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Empty(host.ReadFileBytes("/out"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("x=$(false) {fd}>out", 0, "0:unset", "")]
+    [InlineData("x=$(false) >out", 0, "1:unset", "")]
+    [InlineData("{fd}> \"${missing:?absent}\" || printf caught;", 0, "caught0:unset", "missing: absent\n")]
+    [InlineData("set -e; {fd}> \"${missing:?absent}\"", 1, "", "missing: absent\n")]
+    public async Task IsolatedCommandlessRedirectionsPublishTheirOwnStatus(
+        string command, int expectedStatus, string expectedOutput, string expectedDiagnostic)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(command + "\nprintf '%s:%s' \"$?\" \"${fd-unset}\"", CancellationToken.None);
+
+        Assert.Equal(expectedStatus, result.ExitCode);
+        Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+        Assert.Equal(expectedDiagnostic, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task NamedAllocationRestoresAnEarlierNumericMoveInTheSameCommand()
+    {
+        const string script = """
+            exec 7>original
+            fd=7
+            8>&7- {fd}>temporary
+            printf kept >&"$fd"
+            printf '%s' "$fd"
+            """;
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("7", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("kept", host.ReadFile("/original"));
+        Assert.Empty(host.ReadFileBytes("/temporary"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     // GNU Bash 5.2.37: allocation persists for builtins/functions; closing is temporary unless exec preserves it.
     [Theory]
     [InlineData("printf seed >out; : {fd}>>out; printf plus >&$fd; exec {fd}>&-", "", "seedplus")]

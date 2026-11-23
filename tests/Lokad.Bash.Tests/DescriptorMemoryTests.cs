@@ -424,6 +424,46 @@ public sealed class DescriptorMemoryTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public async Task RefusalInAnIsolatedCommandlessRedirectionRestoresBindingsAndSettlesHandles()
+    {
+        const string script = """
+            exec 3>one
+            2>error 4>&3- {fd}>temporary 3500>two 5<<<text
+            printf '|%s:%s|' "$?" "${fd-unset}"
+            printf kept >&3
+            printf ':%s:' "$?"
+            """;
+        var governor = new MemoryGovernor(8 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        var evaluation = new Eval(Parser.Parse(script),
+            new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(Bindings(4096).Capture()), []),
+            null, null, EvaluationOptions.Default, owner, null);
+        await using var host = new RefusingOpenHost(governor, evaluation.Memory) { MemoryBudget = owner };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var running = new Engine().RunAsync(evaluation, host, owner, deadline.Token);
+        try
+        {
+            await host.Closing.Task.WaitAsync(deadline.Token);
+            Assert.False(running.IsCompleted);
+        }
+        finally
+        {
+            host.Release.TrySetResult();
+        }
+
+        Assert.Equal(0, (await running.WaitAsync(deadline.Token)).ExitCode);
+        Assert.Equal("|1:unset|:0:", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("kept", host.ReadFile("/one"));
+        Assert.Empty(host.ReadFile("/temporary"));
+        Assert.Empty(host.ReadFile("/two"));
+        Assert.Contains("shared memory budget exhausted", host.ReadFile("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     private sealed class RefusingOpenHost : TestHost
     {
         private IMemoryReservation? _blocking;

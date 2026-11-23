@@ -638,7 +638,7 @@ public sealed partial class Evaluation : IFileTester
         if (redirectedCommand.Body is SubshellCommand subshell)
             return await EvaluateSubshellAsync(subshell, scope, negated, redirectedCommand.Redirections).ConfigureAwait(false);
         var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, scope,
-            RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, inputSubstitution: false)
+            RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, RedirectionOrigin.Command)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var result = EvaluationResult.FromExitCode(0);
@@ -717,7 +717,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 // The child owns this frame through EXIT and descriptor cleanup below.
                 _ = await OpenRedirectionScopeAsync(redirections, childScope,
-                    RedirectionPersistence.Allocations, RedirectionLifetime.Command, inputSubstitution: false)
+                    RedirectionPersistence.Allocations, RedirectionLifetime.Command, RedirectionOrigin.Command)
                     .ConfigureAwait(false);
                 if (_state.TryConsumeExpansionError(out var redirectionExitCode))
                     result = EvaluationResult.FromExitCode(redirectionExitCode);
@@ -1022,17 +1022,24 @@ public sealed partial class Evaluation : IFileTester
                     exitCode = 1;
             }
 
-            var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, scope,
-                RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, inputSubstitution: false)
+            var isolateRedirections = simpleCommand.Redirections.Any(RequiresCommandlessRedirectionIsolation);
+            var assignmentRedirections = isolateRedirections ? IsolateRedirectionBindings() : scope;
+            var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, assignmentRedirections,
+                isolateRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,
+                RedirectionLifetime.Command,
+                isolateRedirections ? RedirectionOrigin.IsolatedCommandless : RedirectionOrigin.Command)
                 .ConfigureAwait(false);
             Exception? assignmentFailure = null;
             var assignmentResult = EvaluationResult.FromExitCode(exitCode);
             OperationError? assignmentCloseError = null;
             try
             {
+                // An isolated redirection produces its own status, including a local expansion failure.
+                if (isolateRedirections)
+                    _state.FatalExpansion = null;
                 if (_state.TryConsumeExpansionError(out var assignmentRedirectionExitCode))
                     exitCode = assignmentRedirectionExitCode;
-                else if (exitCode == 0)
+                else if (!isolateRedirections && exitCode == 0)
                     exitCode = _state.LastCommandSubstitutionExitCode ?? 0;
                 assignmentResult = await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated: false).ConfigureAwait(false);
             }
@@ -1151,35 +1158,7 @@ public sealed partial class Evaluation : IFileTester
                 { Resolution: CommandResolution.Host, Completion: CommandCompletion.Continue };
         if (externalRedirections)
         {
-            // Literal targets without allocation cannot write bindings. Isolate potential writes from the caller
-            // without copying its entire variable store for ordinary file/descriptor redirections.
-            if (MayWriteBindings(simpleCommand.Redirections))
-            {
-                redirectionExpansionScope = scope with
-                {
-                    Variables = global::Lokad.Bash.Evaluation.Variables.CreateCommandScope(scope.Variables, Memory, _cancellationToken),
-                    ExpansionWriteTarget = null
-                };
-            }
-
-            static bool MayWriteBindings(IReadOnlyList<Redirection> redirections)
-            {
-                foreach (var redirection in redirections)
-                {
-                    if (redirection.VariableName.Length != 0) return true;
-                    foreach (var part in redirection.Target.Parts)
-                    {
-                        // Brace ranges can generate expansion syntax. Conservatively include them and
-                        // read-only expansions; literal byte parts never expand.
-                        if (part is CommandSubstitutionWordPart
-                            || part is SourceWordPart source
-                            && (source.Kind == WordPartKind.Unquoted && source.Source.AsSpan().Contains((byte)'{')
-                                || source.Source.AsSpan().IndexOfAny((byte)'$', (byte)'`') >= 0))
-                            return true;
-                    }
-                }
-                return false;
-            }
+            redirectionExpansionScope = IsolateRedirectionBindings();
         }
         else if (simpleCommand.Redirections.Count > 0 && prefixNames != null)
         {
@@ -1191,7 +1170,7 @@ public sealed partial class Evaluation : IFileTester
         var commandRedirections = await OpenRedirectionScopeAsync(
                 simpleCommand.Redirections, redirectionExpansionScope,
                 externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,
-                preparation.RedirectionLifetime, inputSubstitution: false)
+                preparation.RedirectionLifetime, RedirectionOrigin.Command)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         FunctionBinding[]? exportOwners = null;
@@ -1228,6 +1207,31 @@ public sealed partial class Evaluation : IFileTester
             }
         }
         return await CompleteSimpleCommandAsync(preparedResult, commandCloseError, lastArgument).ConfigureAwait(false);
+
+        static bool RequiresCommandlessRedirectionIsolation(Redirection redirection) =>
+            redirection.VariableName.Length != 0
+            || (redirection.FileDescriptor ?? redirection.DefaultFileDescriptor) == 0
+                && (redirection.Kind is RedirectionKind.Input or RedirectionKind.InputOutput
+                        or RedirectionKind.CloseInput or RedirectionKind.CloseOutput
+                    || redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput
+                        && !redirection.TryGetLiteralDescriptor(out _));
+
+        ScopedEvaluation IsolateRedirectionBindings()
+        {
+            foreach (var redirection in simpleCommand.Redirections)
+            {
+                // Include generated and apparently read-only syntax. Literal targets need no variable owner.
+                if (redirection.VariableName.Length != 0 || redirection.Target.Parts.Any(static part =>
+                    part is CommandSubstitutionWordPart || part is SourceWordPart source
+                    && (source.Kind == WordPartKind.Unquoted && source.Source.AsSpan().Contains((byte)'{')
+                        || source.Source.AsSpan().IndexOfAny((byte)'$', (byte)'`') >= 0)))
+                {
+                    var (variables, context) = scope.Context.ForkForRedirections(scope.Variables, Memory, _cancellationToken);
+                    return scope with { Variables = variables, Context = context, ExpansionWriteTarget = null, SelectorBindings = null };
+                }
+            }
+            return scope;
+        }
 
         async Task<EvaluationResult> CompleteSimpleCommandAsync(EvaluationResult result, OperationError? closeError, ShellValue last)
         {
@@ -2946,14 +2950,14 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope,
         RedirectionPersistence persistence,
         RedirectionLifetime lifetime,
-        bool inputSubstitution)
+        RedirectionOrigin origin)
     {
         if (redirections.Count == 0)
             return new RedirectionScope(this, active: false, [], []);
 
         if (_state.CurrentRedirectionTable == null)
             throw new InvalidOperationException("Redirection setup requires an enclosing descriptor table.");
-        var evaluation = new RedirectionEvaluation(redirections, CaptureDescriptorBindings().Fork(), inputSubstitution,
+        var evaluation = new RedirectionEvaluation(redirections, CaptureDescriptorBindings().Fork(), origin,
             preserveBindings: lifetime == RedirectionLifetime.Evaluation);
         // Expose the table as setup advances, so later target expansions and their substitutions
         // inherit earlier redirections. Descriptor ownership is finalized after setup succeeds.
@@ -4323,7 +4327,7 @@ public sealed partial class Evaluation : IFileTester
     {
         using var outputMemory = Memory.Budget.CreateScope();
         var redirectionScope = await OpenRedirectionScopeAsync(redirections, scope,
-            RedirectionPersistence.None, RedirectionLifetime.Command, inputSubstitution: true)
+            RedirectionPersistence.None, RedirectionLifetime.Command, RedirectionOrigin.InputSubstitution)
             .ConfigureAwait(false);
         var result = new CommandSubstitutionResult(ShellValue.Empty, 1, IgnoredNuls: false);
         OperationError? closeError;
@@ -4797,9 +4801,19 @@ public sealed partial class Evaluation : IFileTester
         internal EvaluationContext WithCoordinates(CommandCoordinates coordinates) => this with { Coordinates = coordinates };
 
         /// <summary>Preserves local declaration identity while isolating child bindings and restoration.</summary>
-        internal (Variables, EvaluationContext) Fork(Variables source, EvaluationMemory memory, CancellationToken cancellationToken)
+        internal (Variables, EvaluationContext) Fork(Variables source, EvaluationMemory memory,
+            CancellationToken cancellationToken) =>
+            Fork(source, memory, cancellationToken, borrowVisible: false);
+
+        /// <summary>Isolates redirection writes while borrowing visible bindings until selected.</summary>
+        internal (Variables, EvaluationContext) ForkForRedirections(Variables source, EvaluationMemory memory,
+            CancellationToken cancellationToken) =>
+            Fork(source, memory, cancellationToken, borrowVisible: true);
+
+        private (Variables, EvaluationContext) Fork(Variables source, EvaluationMemory memory,
+            CancellationToken cancellationToken, bool borrowVisible)
         {
-            var bytes = source.EstimatedMemoryBytes;
+            var bytes = borrowVisible ? 0 : source.EstimatedMemoryBytes;
             var functionDepth = FunctionContext?.Depth ?? 0;
             var prefixCount = 0;
             for (var prefix = GlobalPrefixes; prefix != null; prefix = prefix.Enclosing)
@@ -4817,7 +4831,9 @@ public sealed partial class Evaluation : IFileTester
             memory.Charge(checked(bytes + (functionDepth == 0 ? 0 : 32L + 8L * functionDepth)
                 + (prefixCount == 0 ? 0 : 32L + 8L * prefixCount)));
             cancellationToken.ThrowIfCancellationRequested();
-            var variables = source.Clone();
+            var variables = borrowVisible
+                ? global::Lokad.Bash.Evaluation.Variables.CreateCommandScope(source, memory, cancellationToken)
+                : source.Clone();
             if (functionDepth == 0 && prefixCount == 0)
                 return (variables, this);
 

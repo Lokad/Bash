@@ -277,7 +277,7 @@ internal static class FunctionDefinitionFormatter
                     var literalDescriptor = 0;
                     var printLiteral = displayRedirections
                         && redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput
-                        && TryGetLiteralDescriptor(redirection, out literalDescriptor);
+                        && redirection.TryGetLiteralDescriptor(out literalDescriptor);
                     if (redirection.VariableName.Length != 0)
                     {
                         if (!Append("{") || !Append(redirection.VariableName) || !Append("}")) return false;
@@ -536,17 +536,6 @@ internal static class FunctionDefinitionFormatter
                     written = offset + substitution.Length;
                 }
             return output.TryAppend(source[written..]);
-        }
-
-        static bool TryGetLiteralDescriptor(Redirection redirection, out int descriptor)
-        {
-            descriptor = 0;
-            if (!Parser.TryGetPlainUnquotedSource(redirection.Target, out var source))
-                return false;
-            var bytes = source.AsSpan();
-            if (redirection.MovesDescriptor)
-                bytes = bytes[..^1];
-            return !bytes.StartsWith("-"u8) && Integers.TryParseExitStatus(bytes, out descriptor);
         }
 
         bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart)

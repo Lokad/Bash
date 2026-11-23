@@ -389,6 +389,14 @@ Trailing subshell redirections expand within the child bindings. The child
 keeps their descriptor frame through its EXIT handler and closes its own
 handles before returning to the parent.
 
+Commandless isolated redirections reuse command-scoped bindings and the
+ordinary restorable descriptor frame. They borrow visible variables and
+detach selected values as needed. The copied function and prefix frames
+keep writes through hidden bindings inside the same redirection scope.
+Leading assignments run before setup in the caller. Expansion failures
+settle as the redirection's status, with cleanup awaiting every acquired
+handle.
+
 An explicit attribute promotion of a temporary prefix can survive local
 restoration, including through nested functions. Direct unset in the owning local
 scope cancels promotion; redeclaring a local after a helper unset starts a new local
