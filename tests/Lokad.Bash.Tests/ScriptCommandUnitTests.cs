@@ -332,7 +332,7 @@ public sealed class ScriptCommandUnitTests
 
     [Theory]
     [InlineData("x ==", "", "")]
-    [InlineData("$(cat <<ONE) ==", "first\nONE\n", "warning: command substitution: 1 unterminated here-document\n")]
+    [InlineData("$(cat <<ONE) ==", "first\nONE\n", "line 2: warning: command substitution: 1 unterminated here-document\n")]
     public async Task ConditionalFailureLeavesLaterCaptureUnread(string before, string body, string warnings)
     {
         await using var host = new TestHost();

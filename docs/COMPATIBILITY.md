@@ -434,6 +434,9 @@ prompts the script reader to warn and collect their bodies from the next unread 
 the header still parses, and body expansion waits for the capture to execute.
 The warning belongs to the enclosing command unit, including short-circuited
 commands. Reading a function definition collects the bodies once for later calls.
+The warning prefix includes the source line reached when the reader emits it.
+An EOF warning also reports the line where its document started. A subsequent
+capture on the same header includes the lines already read for earlier captures.
 An assignment selector retains those bodies when its source is used for
 expansion or included in a function listing.
 An unquoted here-document expanding such a capture reports the missing closing

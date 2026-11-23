@@ -4118,15 +4118,13 @@ public sealed partial class Evaluation : IFileTester
         await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
     }
 
-    private Task ReportHereDocumentWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, int offset) =>
-        ReportHereDocumentWarningsAsync(warnings, offset, default, positionWarnings: false, path: null);
-
     private Task ReportCaptureHereDocumentWarningsAsync(CaptureHereDocumentWarnings captured, string? path, int offset, int line) =>
-        ReportHereDocumentWarningsAsync(captured.Warnings, offset + captured.LineOffset,
-            new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, Math.Max(1, line)), positionWarnings: false, path: null);
+        ReportHereDocumentWarningsAsync(captured.Warnings, offset + captured.LineOffset, path, useDocumentLine: false,
+            fixedPrefix: new SyntaxDiagnosticPrefix(path,
+                line > 0 ? SyntaxDiagnosticOrigin.ScriptLine : SyntaxDiagnosticOrigin.Script, Math.Max(1, line)));
 
     private async Task ReportHereDocumentWarningsAsync(
-        IReadOnlyList<HereDocumentWarning> warnings, int offset, SyntaxDiagnosticPrefix prefix, bool positionWarnings, string? path)
+        IReadOnlyList<HereDocumentWarning> warnings, int offset, string? path, bool useDocumentLine, SyntaxDiagnosticPrefix? fixedPrefix)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
@@ -4136,9 +4134,9 @@ public sealed partial class Evaluation : IFileTester
         {
             CheckCancellation();
             var warningLine = warning.Line + offset;
-            var reachedPrefix = positionWarnings
-                ? new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, warningLine)
-                : prefix;
+            var readerLine = useDocumentLine && warning.PendingCaptureDocuments == 0 ? warning.Line : warning.ReaderLine;
+            var reachedPrefix = fixedPrefix ?? (readerLine == 0 ? default
+                : new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, readerLine + offset));
             if (warning.PendingCaptureDocuments != 0)
             {
                 await WriteDiagnosticAsync(descriptor, [HereDocumentWarningName],

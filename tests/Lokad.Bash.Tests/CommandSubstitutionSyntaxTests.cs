@@ -664,23 +664,24 @@ public sealed class CommandSubstitutionSyntaxTests
     private const string MatchingParenthesisEof = "unexpected EOF while looking for matching `)'\n";
     private const string MissingCaptureBodyOnLineTwo =
         "warning: here-document at line 2 delimited by end-of-file (wanted `END')\n";
-    private const string ReadAheadWarning = "warning: command substitution: 1 unterminated here-document\n";
+    private const string PendingDocumentWarning = "warning: command substitution: 1 unterminated here-document\n";
+    private const string ReadAheadWarning = "line 1: " + PendingDocumentWarning;
 
     [Theory]
     [InlineData("v=$(cat <<END); printf '<%s:%s>' \"$v\" \"$LINENO\"\nbody\nEND\nprintf '<%s>' \"$LINENO\"", "<body:3><4>", ReadAheadWarning, 0)]
     [InlineData("false && v=$(cat <<END)\nprintf tail\n", "", ReadAheadWarning
-        + "warning: here-document at line 1 delimited by end-of-file (wanted `END')\n", 1)]
+        + "line 2: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n", 1)]
     [InlineData("false && v=$(cat <<END)\n$(printf forbidden >&2)\nEND\nprintf tail", "tail", ReadAheadWarning, 0)]
     [InlineData("exit 7\nv=$(cat <<END)\nbody\nEND", "", "", 7)]
     [InlineData("exit 7; v=$(cat <<END)\nbody\nEND", "", ReadAheadWarning, 7)]
     [InlineData("a=$(cat <<A) b=$(cat <<B); printf '<%s:%s>' \"$a\" \"$b\"\none\nA\ntwo\nB\nprintf tail", "<one:two>tail",
-        ReadAheadWarning + ReadAheadWarning, 0)]
+        ReadAheadWarning + "line 3: " + PendingDocumentWarning, 0)]
     [InlineData("v=$(cat <<FIRST <<SECOND); printf '<%s>' \"$v\"\none\nFIRST\ntwo\nSECOND", "<two>",
-        "warning: command substitution: 2 unterminated here-documents\n", 0)]
+        "line 1: warning: command substitution: 2 unterminated here-documents\n", 0)]
     [InlineData("cat <<OUTER; v=$(cat <<INNER); printf '<%s>' \"$v\"\nin\nINNER\nout\nOUTER\nprintf tail", "out\n<in>tail",
         ReadAheadWarning, 0)]
     [InlineData("printf '<%s>' \"$(cat <<A)\"\none\nA\nprintf '<%s>' \"$(cat <<B)\"\ntwo\nB", "<one><two>",
-        ReadAheadWarning + ReadAheadWarning, 0)]
+        ReadAheadWarning + "line 4: " + PendingDocumentWarning, 0)]
     [InlineData("f() { printf '<%s>' \"$(cat <<END)\"; }\nbody\nEND\nf; f", "<body><body>", ReadAheadWarning, 0)]
     [InlineData("f() { printf '<%s>' \"$(cat <<END)\"; }; declare -f f\nbody\nEND",
         "f () \n{ \n    printf '<%s>' \"$(cat <<END\nbody\nEND\n)\"\n}\n", ReadAheadWarning, 0)]
@@ -696,11 +697,11 @@ public sealed class CommandSubstitutionSyntaxTests
     [InlineData("false && declare arr[$(cat <<END)]=unused\n$(printf skipped >&2)\nEND\nprintf '<%s:%s>' \"$?\" \"${arr[0]}\"",
         "<1:>", ReadAheadWarning, 0)]
     [InlineData("declare arr[$(cat <<A)]=first arr[$(cat <<B)]=second\n0\nA\n1\nB\nprintf '<%s:%s>' \"${arr[0]}\" \"${arr[1]}\"",
-        "<first:second>", ReadAheadWarning + ReadAheadWarning, 0)]
+        "<first:second>", ReadAheadWarning + "line 3: " + PendingDocumentWarning, 0)]
     [InlineData("f() { arr[$(cat <<END)]=item\n0\nEND\nprintf '<%s>' \"${arr[0]}\"; }\ntext=$(declare -f f); unset -f f; eval \"$text\"; f",
         "<item>", ReadAheadWarning, 0)]
     [InlineData("arr[$(printf selector >&2; cat <<A)]=$(printf value; printf rhs >&2; cat <<B)\n0\nA\n!\nB\nprintf '<%s>' \"${arr[0]}\"",
-        "<value!>", ReadAheadWarning + ReadAheadWarning + "rhsselector", 0)]
+        "<value!>", ReadAheadWarning + "line 3: " + PendingDocumentWarning + "rhsselector", 0)]
     [InlineData("cat <<OUTER\n<$(cat <<INNER)>\nbody\nINNER\nOUTER\nprintf tail", "tail", MatchingParenthesisEof, 0)]
     public async Task PendingCaptureBodiesAreCollectedWhileReadingTheHeader(
         string source, string output, string diagnostics, int exitCode)
@@ -756,20 +757,20 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Theory]
-    [InlineData("printf prior\nv=$(cat <<END\nbody\n)\nprintf tail", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<END\nbody\n)\nprintf tail", "prior", "line 5: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
     [InlineData("printf prior; printf '%s' \"$(cat <<END\nbody\n)\"", "",
-        "warning: here-document at line 1 delimited by end-of-file (wanted `END')\n" + MatchingParenthesisEof, 2)]
+        "line 3: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n" + MatchingParenthesisEof, 2)]
     [InlineData("exit 7\nv=$(cat <<END\nbody\n)", "", "", 7)]
-    [InlineData("printf prior\nv=$(cat <<END", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<END", "prior", "line 2: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
     [InlineData("printf prior\nv=$(cat <<END\\\n", "prior", MatchingParenthesisEof, 2)]
     [InlineData("printf prior\nv=$(cat <<END\nbody\nEND\n", "prior", MatchingParenthesisEof, 2)]
     [InlineData("printf prior\nv=$(cat <<FIRST <<SECOND\nbody\nFIRST\nbody\n)", "prior",
-        "warning: here-document at line 4 delimited by end-of-file (wanted `SECOND')\n" + MatchingParenthesisEof, 2)]
+        "line 6: warning: here-document at line 4 delimited by end-of-file (wanted `SECOND')\n" + MatchingParenthesisEof, 2)]
     [InlineData("printf prior\nv=${x:-$(printf '%s' \"$(cat <<END\nbody\n)\")}\n", "prior",
-        MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
-    [InlineData("printf prior\na=(\"$(cat <<END\nbody\n)\")", "prior", MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 1)]
+        "line 4: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\na=(\"$(cat <<END\nbody\n)\")", "prior", "line 4: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 1)]
     [InlineData("printf prior\neval 'v=$(cat <<END\nbody\n)' && printf unexpected; printf tail", "priortail",
-        "warning: here-document at line 4 delimited by end-of-file (wanted `END')\n" + "eval: line 7: " + MatchingParenthesisEof, 0)]
+        "line 6: warning: here-document at line 4 delimited by end-of-file (wanted `END')\n" + "eval: line 7: " + MatchingParenthesisEof, 0)]
     public async Task EndOfInputInHereDocumentCaptureReportsAtTheReachedReadBoundary(
         string source, string output, string diagnostics, int exitCode)
     {
@@ -793,7 +794,7 @@ public sealed class CommandSubstitutionSyntaxTests
         await using var host = new TestHost();
         var result = await host.RunAsync(source, CancellationToken.None);
 
-        byte[] diagnostic = [.. Utf8Text.Encode(MissingCaptureBodyOnLineTwo + MatchingParenthesisEof).Span,
+        byte[] diagnostic = [.. Utf8Text.Encode("line 4: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof).Span,
             .. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("prior", host.StandardOutput.TextContent);

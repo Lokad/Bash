@@ -9,18 +9,24 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteHereDocumentTests
 {
-    private const string EofWarning = "warning: here-document at line 1 delimited by end-of-file (wanted `END')\n";
+    private const string EofWarning = "line 2: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n";
 
     [Theory]
     [InlineData("cat <<END\nbody", "body\n", EofWarning, 0)]
     [InlineData("cat <<END\n\\\n", "", EofWarning, 0)]
+    [InlineData("cat <<END\none\ntwo\n", "one\ntwo\n",
+        "line 3: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n", 0)]
+    [InlineData("cat <<END\nbody\\\n", "body\n",
+        "line 3: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n", 0)]
+    [InlineData("cat <<END \\\n", "",
+        "line 2: warning: here-document at line 2 delimited by end-of-file (wanted `END')\n", 0)]
     [InlineData("cat <<FIRST <<SECOND\nbody", "",
-        "warning: here-document at line 1 delimited by end-of-file (wanted `FIRST')\n"
-        + "warning: here-document at line 2 delimited by end-of-file (wanted `SECOND')\n", 0)]
+        "line 2: warning: here-document at line 1 delimited by end-of-file (wanted `FIRST')\n"
+        + "line 2: warning: here-document at line 2 delimited by end-of-file (wanted `SECOND')\n", 0)]
     [InlineData("exit 9\ncat <<END\nbody", "", "", 9)]
     [InlineData("exit 9; cat <<END\nbody", "", EofWarning, 9)]
     [InlineData("printf 'prior\\n' >&2\nprintf 'same\\n' >&2; cat <<END\nbody", "body\n",
-        "prior\nwarning: here-document at line 2 delimited by end-of-file (wanted `END')\nsame\n", 0)]
+        "prior\nline 3: warning: here-document at line 2 delimited by end-of-file (wanted `END')\nsame\n", 0)]
     [InlineData("false && cat <<END\n$(printf forbidden >&2)\n", "", EofWarning, 1)]
     public async Task EofWarningsBelongToTheReachedCommandUnit(string source, string output, string error, int exitCode)
     {
@@ -46,7 +52,7 @@ public sealed class ByteHereDocumentTests
     public async Task EofWarningPreservesLiteralDelimiterBytes()
     {
         byte[] source = [.. "cat <<'"u8, 0xff, .. "'\nbody"u8];
-        byte[] warning = [.. "warning: here-document at line 1 delimited by end-of-file (wanted `"u8, 0xff, .. "')\n"u8];
+        byte[] warning = [.. "line 2: warning: here-document at line 1 delimited by end-of-file (wanted `"u8, 0xff, .. "')\n"u8];
         await using var host = new TestHost();
         var result = await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, CancellationToken.None);
 

@@ -86,6 +86,9 @@ internal sealed class Tokenizer
 
     internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
 
+    internal bool HereDocumentHeaderAtContinuedEnd => _readingAhead == null && Position == _input.Length
+        && (_continuedAtEndOfInput || _spacingContinuedAtEndOfInput);
+
     internal int GetRedirectionLookaheadLine(Token token)
     {
         var end = token.Source.End.Value;
@@ -120,7 +123,7 @@ internal sealed class Tokenizer
         var readAhead = _scanContext.BeginHereDocumentReadAhead();
         var afterCloser = Position;
         var start = readAhead.FindBodyStart(afterCloser);
-        _scanContext.WarnPendingCaptureDocuments(pending.PendingCount);
+        _scanContext.WarnPendingCaptureDocuments(pending.PendingCount, _scanContext.GetScriptDiagnosticLine(afterCloser));
         _readingAhead = readAhead;
         Position = start;
         try
@@ -882,14 +885,17 @@ internal sealed class Tokenizer
     /// <param name="stripTabs">Whether to strip leading tabs from lines and delimiter.</param>
     /// <param name="joinContinuations">Whether the unquoted delimiter permits removing escaped LF before comparison.</param>
     /// <param name="body">The collected body with continuation/tab normalization, without value expansion.</param>
+    /// <param name="continuedFinalLine">Whether EOF completed a nonempty line ending in a continuation.</param>
     /// <returns>Whether the delimiter was found. A script reader can use the collected EOF body.</returns>
     internal bool TryReadHereDocument(
         ShellSource delimiter,
         bool stripTabs,
         bool joinContinuations,
-        out ShellSource body)
+        out ShellSource body,
+        out bool continuedFinalLine)
     {
         body = default;
+        continuedFinalLine = false;
         ByteMemoryBuilder? content = null;
         var bodyStart = Position;
         var span = _input.AsSpan();
@@ -937,6 +943,7 @@ internal sealed class Tokenizer
 
             var newlineLength = Position < span.Length ? 1 : 0;
             Position += newlineLength;
+            continuedFinalLine = newlineLength == 0 && run.IsEmpty && runStart != physicalLineStart;
             if (line.SequenceEqual(delimiter.AsSpan()))
             {
                 if (content != null)

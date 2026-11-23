@@ -7,6 +7,7 @@ namespace Lokad.Bash.Syntax;
 
 internal readonly record struct HereDocumentWarning(int Line, ShellSource Delimiter)
 {
+    internal int ReaderLine { get; init; }
     internal int PendingCaptureDocuments { get; init; }
 }
 
@@ -34,6 +35,7 @@ internal sealed class HereDocumentReader
 
     internal bool TryReadBodies(Tokenizer tokenizer)
     {
+        var eofLineAdvance = tokenizer.HereDocumentHeaderAtContinuedEnd ? 1 : 0;
         while (_pending.TryDequeue(out var redirection))
         {
             bool allowExpansion;
@@ -45,8 +47,12 @@ internal sealed class HereDocumentReader
             }
             else delimiter = GetHereDocumentDelimiter(redirection.Target, tokenizer.ScanContext.SyntaxMemory, out allowExpansion);
             var bodyStart = tokenizer.Position;
-            if (!tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
-                    joinContinuations: allowExpansion, out var content))
+            var documentLineAdvance = eofLineAdvance;
+            var complete = tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
+                joinContinuations: allowExpansion, out var content, out var continuedFinalLine);
+            if (continuedFinalLine)
+                eofLineAdvance = 1;
+            if (!complete)
             {
                 if (!tokenizer.AllowEofHereDocuments)
                     return false;
@@ -59,7 +65,9 @@ internal sealed class HereDocumentReader
                 }
                 memory?.PrepareListCapacity(_warnings, 1);
                 // The reader starts after the header LF or the previous delimiter line.
-                _warnings.Add(new HereDocumentWarning(tokenizer.GetHereDocumentWarningLine(Math.Max(0, bodyStart - 1)), delimiter));
+                var documentLine = tokenizer.GetHereDocumentWarningLine(Math.Max(0, bodyStart - 1)) + documentLineAdvance;
+                var readerLine = tokenizer.GetHereDocumentWarningLine(Math.Max(0, tokenizer.Position - 1)) + eofLineAdvance;
+                _warnings.Add(new HereDocumentWarning(documentLine, delimiter) { ReaderLine = readerLine });
             }
             var kind = allowExpansion ? WordPartKind.HereDocument : WordPartKind.SingleQuoted;
             _completed.Add(redirection, new Redirection(redirection.Kind, redirection.FileDescriptor,

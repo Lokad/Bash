@@ -1,5 +1,6 @@
 using Lokad.Bash.Files;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
@@ -192,12 +193,33 @@ public sealed class SourceCommandUnitTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("2", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.TextContent);
-        byte[] expected = [.. "warning: command substitution: 1 unterminated here-document\n"u8,
+        byte[] expected = [.. "./fixture: line 1: warning: command substitution: 1 unterminated here-document\n"u8,
             .. "./fixture: line 3: syntax error near unexpected token `)'\n./fixture: line 3: `v=$(cat <<END); ) # "u8,
             0xff, (byte)'\r', .. "'\n"u8];
         Assert.Equal(expected, host.ReadFileBytes("/err"));
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("\nv=$(cat <<END)\ntext\nEND\nprintf '<%s>' \"$v\"\n", 2)]
+    [InlineData("eval 'v=$(cat <<END)\ntext\nEND\nprintf \"<%s>\" \"$v\"'\n", 4)]
+    public async Task CaptureReadAheadWarningUsesTheLoadedReaderPosition(string content, int line)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/fixture", content);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync("source ./fixture 2>err", host)).ExitCode
+                : (await host.RunAsync("source ./fixture 2>err", CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<text>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal($"./fixture: line {line}: warning: command substitution: 1 unterminated here-document\n",
+                Utf8Text.Decode(host.ReadFileBytes("/err")));
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Theory]
