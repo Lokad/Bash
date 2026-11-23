@@ -271,6 +271,32 @@ public sealed class PatternTraversalTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void MalformedBytesSelectByteTraversalForActiveGlob(bool activeWildcard)
+    {
+        var governor = new MemoryGovernor(16 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            byte[] spelling = [0xff, (byte)'?'];
+            byte[] activity = [0, activeWildcard ? GlobMask.Active : (byte)0];
+            byte[] subject = [0xff, (byte)'?', (byte)'x', 0xff, (byte)'?'];
+            var pattern = ShellPattern.FromUnescaped(ShellValue.FromBytes(spelling), new GlobMask(activity),
+                memory, CancellationToken.None);
+
+            Assert.Equal(activeWildcard, pattern.RequiresByteCharacters);
+            Assert.Equal(activeWildcard, pattern.UsesByteCharacters(subject));
+            Assert.True(pattern.TryMatchPrefix(subject, shortest: true, CancellationToken.None, out var length));
+            Assert.Equal(2, length);
+            Assert.True(pattern.TryMatchSuffix(subject, shortest: false, CancellationToken.None, out var start));
+            Assert.Equal(3, start);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void RetriedBracketScratchRefundsOnRefusalOrCancellation(bool cancel)
     {
         using var cancellation = new CancellationTokenSource();

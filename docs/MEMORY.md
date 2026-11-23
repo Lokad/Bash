@@ -254,7 +254,9 @@ Suffix pattern traversal retains admitted atom offsets on the command-local
 prepared pattern, with separate byte/scalar profiles when both are reached.
 Subjects stay borrowed during matching; retained removal slices and changed
 replacement output own their result bytes. Matching creates no reversed subject
-copy or global pattern cache.
+copy or global pattern cache. Literal edge and replacement comparisons use byte
+spans directly. Case conversion classifies the expanded pattern's encoding once
+and matches it against decoded scalars.
 
 Bracket terminal lookahead is stack-only state for the current match or atom
 preparation pass. Small and unrevisited valid brackets use stack-only membership.

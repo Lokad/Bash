@@ -8,7 +8,6 @@ internal sealed class ShellPattern
     private readonly ShellValue _value;
     private readonly GlobMask _mask;
     private readonly bool _literal;
-    private readonly bool _validUtf8;
     private readonly EvaluationMemory _memory;
     private ReadOnlyMemory<int>? _scalarAtoms;
     private ReadOnlyMemory<int>? _byteAtoms;
@@ -18,12 +17,12 @@ internal sealed class ShellPattern
         _value = value;
         _mask = mask;
         _literal = literal;
-        _validUtf8 = System.Text.Unicode.Utf8.IsValid(value.Bytes.Span);
+        RequiresByteCharacters = !literal && !System.Text.Unicode.Utf8.IsValid(value.Bytes.Span);
         _memory = memory;
     }
 
     public bool IsEmpty => _value.IsEmpty;
-    public bool RequiresByteCharacters => !_validUtf8;
+    public bool RequiresByteCharacters { get; }
 
     public static ShellPattern FromWords(
         IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
@@ -75,8 +74,9 @@ internal sealed class ShellPattern
         return true;
     }
 
-    /// <summary>Selects byte or Unicode-scalar matching for the supplied operand.</summary>
-    public bool UsesByteCharacters(ReadOnlySpan<byte> text) => !_validUtf8 || !System.Text.Unicode.Utf8.IsValid(text);
+    /// <summary>Selects byte traversal for a glob with malformed pattern or subject bytes.</summary>
+    public bool UsesByteCharacters(ReadOnlySpan<byte> text) =>
+        !_literal && (RequiresByteCharacters || !System.Text.Unicode.Utf8.IsValid(text));
 
     public bool TryMatchPrefix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int length) =>
         TryMatchPrefix(text, shortest, UsesByteCharacters(text), cancellationToken, out length);

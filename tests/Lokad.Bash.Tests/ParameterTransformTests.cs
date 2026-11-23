@@ -439,10 +439,16 @@ public sealed class ParameterTransformTests
     [Theory]
     [InlineData("x=$'\\377aλ'; printf '%s' \"${x@U}\"", "FF41CE9B")]
     [InlineData("x=$'\\377aλ'; printf '%s|%s' \"${x^}\" \"${x^^}\"", "FF61CEBB7CFF41CE9B")]
+    [InlineData("x='aé'; p=$'[\\303][\\251]'; printf '%s' \"${x^^$p}\"", "61C389")]
+    [InlineData("x=$'a\\377é'; p='?'; printf '%s' \"${x^^$p}\"", "41FFC389")]
     [InlineData("x='𐐨é'; printf '%s|%s' \"${x^}\" \"${x^^}\"", "F0909080C3A97CF0909080C389")]
     [InlineData("x='AK𐐀'; printf '%s' \"${x,,}\"", "616BF09090A8")]
     [InlineData("x=$'\\377aλ'; printf '%s' \"${x//?/X}\"", "585858")]
     [InlineData("x=$'a\\377b'; printf '%s' \"${x/$'\\377'/$'\\376'}\"", "61FE62")]
+    [InlineData("x=$'\\377abc\\376'; a=$'\\377'; b=$'\\376'; printf '<%s><%s><%s>' \"${x#$a}\" \"${x%$b}\" \"${x/$b/X}\"",
+        "3C616263FE3E3CFF6162633E3CFF616263583E")]
+    [InlineData("x=$'a\\377a\\377a'; printf '<%s><%s>' \"${x//a/X}\" \"${x//$'\\377'/Y}\"",
+        "3C58FF58FF583E3C61596159613E")]
     [InlineData("x=$'a\\377b'; printf '%s' \"${x//a/$'\\376&'}\"", "FE26FF62")]
     [InlineData("x=$'\\377'; printf '%s' \"${x@Q}\"", "24275C33373727")]
     [InlineData("x='\\377'; printf '%s' \"${x@E}\"", "FF")]

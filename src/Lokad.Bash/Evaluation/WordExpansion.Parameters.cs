@@ -904,7 +904,7 @@ internal static partial class WordExpansion
                 {
                     (byte)'E' => ShellEscapeDecoder.DecodeAnsiCValue(value, scratch),
                     (byte)'Q' => QuoteParameterField(value, scratch),
-                    _ => ChangeCase(value, transform != (byte)'L', transform == (byte)'u', null, scratch)
+                    _ => ChangeCase(value, transform != (byte)'L', transform == (byte)'u', null, bytePattern: false, scratch)
                 });
                 return;
             }
@@ -1089,10 +1089,13 @@ internal static partial class WordExpansion
             if (!scope.CanExpand)
                 return;
             var canMatchCase = casePattern == null || TryUnescapePattern(casePattern, out casePattern);
+            // The loop supplies one decoded scalar at a time. Only the pattern's encoding needs classification.
+            var byteCasePattern = canMatchCase && casePattern != null
+                && !System.Text.Unicode.Utf8.IsValid(casePattern.Value.Bytes.Span);
             var upper = parsed.Kind is BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.UpperAll;
             var firstOnly = parsed.Kind is BracedParameterOperatorKind.UpperFirst or BracedParameterOperatorKind.LowerFirst;
             EmitTransformedFields((value, scratch) =>
-                canMatchCase ? ChangeCase(value, upper, firstOnly, casePattern, scratch) : value);
+                canMatchCase ? ChangeCase(value, upper, firstOnly, casePattern, byteCasePattern, scratch) : value);
 
             bool TryUnescapePattern(ParameterOperand operand, out ParameterOperand pattern)
             {
@@ -1109,9 +1112,10 @@ internal static partial class WordExpansion
                 return new ParameterOperand(value, mask);
             }
 
-            ShellValue ChangeCase(ShellValue value, bool upper, bool firstOnly, ParameterOperand? pattern, MemoryCapacity scratch)
+            ShellValue ChangeCase(ShellValue value, bool upper, bool firstOnly, ParameterOperand? pattern,
+                bool bytePattern, MemoryCapacity scratch)
                 => TransformCase(value, upper ? CaseTransformation.Uppercase : CaseTransformation.Lowercase,
-                    firstOnly, pattern, budget.Workspace, scratch, cancellationToken);
+                    firstOnly, pattern, bytePattern, budget.Workspace, scratch, cancellationToken);
         }
 
         static ReadOnlyMemory<byte> ApplyPatternRemoval(ShellValue value, ShellPattern pattern,
@@ -1461,11 +1465,11 @@ internal static partial class WordExpansion
     private enum ParameterReplacementMode { First, All, Prefix, Suffix }
 
     internal static ShellValue ChangeAssignmentCase(ShellValue value, CaseTransformation conversion, EvaluationMemory? memory) =>
-        TransformCase(value, conversion, firstOnly: false, pattern: null, patternMemory: null, memory?.Workspace,
-            memory?.CancellationToken ?? CancellationToken.None);
+        TransformCase(value, conversion, firstOnly: false, pattern: null, bytePattern: false,
+            patternMemory: null, memory?.Workspace, memory?.CancellationToken ?? CancellationToken.None);
 
     private static ShellValue TransformCase(
-        ShellValue value, CaseTransformation conversion, bool firstOnly, ParameterOperand? pattern,
+        ShellValue value, CaseTransformation conversion, bool firstOnly, ParameterOperand? pattern, bool bytePattern,
         MemoryCapacity? patternMemory, MemoryCapacity? scratch, CancellationToken cancellationToken)
     {
         var bytes = value.Bytes.Span;
@@ -1482,7 +1486,7 @@ internal static partial class WordExpansion
                 if (!valid)
                     length = 1;
                 if (valid && (pattern == null || TextGlobMatcher.MatchUtf8(pattern.Value.Bytes.Span, in mask,
-                        bytes.Slice(position, length), requireEnd: true, patternMemory, cancellationToken, out _) == GlobMatchResult.Match))
+                        bytes.Slice(position, length), requireEnd: true, bytePattern, patternMemory, cancellationToken, out _) == GlobMatchResult.Match))
                 {
                     var upper = conversion == CaseTransformation.Uppercase
                         || conversion == CaseTransformation.Capitalize && position == 0;
