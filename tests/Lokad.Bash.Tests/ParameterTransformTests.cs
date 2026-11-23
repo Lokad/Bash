@@ -267,8 +267,8 @@ public sealed class ParameterTransformTests
         "<1>[a]\n<3>[declare][-a][a]\n<0>\n<3>[declare][-a][a=()]\n<0>\n")]
     [InlineData("""a=([4]='two words' [12]=''); d="${a[*]@A}"; unset a; eval "$d"; show "${a[4]}" "${a[12]+present}" "${!a[@]}" """,
         "<4>[two words][present][4][12]\n")]
-    [InlineData("""a=([9223372036854775807]=last [2]='' [10]=ten); show "${!a[@]}"; IFS=:; show "${!a[*]}"; show "${a[@]@k}" """,
-        "<3>[2][10][9223372036854775807]\n<1>[2:10:9223372036854775807]\n<6>[2][][10][ten][9223372036854775807][last]\n")]
+    [InlineData("""a=([9223372036854775807]=last [2]='' [10]=ten [0]=zero); show "${!a[@]}"; IFS=:; show "${!a[*]}"; show "${a[@]@k}"; show "${a[@]@K}" """,
+        "<4>[0][2][10][9223372036854775807]\n<1>[0:2:10:9223372036854775807]\n<8>[0][zero][2][][10][ten][9223372036854775807][last]\n<1>[0 \"zero\" 2 \"\" 10 \"ten\" 9223372036854775807 \"last\"]\n")]
     [InlineData("""a=([4]='two words' [9]=''); show "${a[@]@K}"; show "pre${a[@]@k}post"; show pre${a[@]@k}post""",
         "<1>[4 \"two words\" 9 \"\"]\n<4>[pre4][two words][9][post]\n<5>[pre4][two][words][9][post]\n")]
     [InlineData("""declare -A m=(['b key']='two words' ['a key']=''); show "${m[@]@K}"; show "${m[@]@k}"; show "${m[*]@A}" """,

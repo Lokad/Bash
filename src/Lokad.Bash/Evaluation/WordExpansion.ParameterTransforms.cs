@@ -71,16 +71,15 @@ internal static partial class WordExpansion
                 Emit(parameter.Fields);
             else if (entireArray)
             {
-                var entries = parameter.RangeSource switch
-                {
-                    ParameterSource.Indexed indexed => indexed.Array.Entries,
-                    ParameterSource.Associative associative => associative.Array.Entries,
-                    _ => throw new InvalidOperationException("Expected an array parameter.")
-                };
-                if (transform == 'k')
-                    EmitValues(PairFields(entries));
+                if (transform == 'K')
+                    EmitSerializedPairs();
                 else
-                    EmitSerializedPairs(entries);
+                    EmitValues(PairFields(parameter.RangeSource switch
+                    {
+                        ParameterSource.Indexed indexed => indexed.Array.Entries,
+                        ParameterSource.Associative associative => associative.Array.Entries,
+                        _ => throw new InvalidOperationException("Expected an array parameter.")
+                    }));
             }
             else
                 EmitValues(QuoteFields(parameter.SelectedFields));
@@ -164,22 +163,41 @@ internal static partial class WordExpansion
         IEnumerable<ShellValue> QuoteFields(IEnumerable<ShellValue> fields) =>
             ProjectParameterFields(fields, QuoteParameterField, scope);
 
-        void EmitSerializedPairs(IEnumerable<KeyValuePair<ShellValue, ShellValue?>> pairs)
+        void EmitSerializedPairs()
         {
             using var rendered = new ByteMemoryBuilder(0, budget);
-            var associative = parameter.RangeSource is ParameterSource.Associative;
-            foreach (var (key, value) in pairs)
+            switch (parameter.RangeSource)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!associative && rendered.Length != 0)
-                    rendered.Append((byte)' ');
-                AppendQuoted(rendered, key, associative ? ShellQuoteStyle.AssociativeKey : ShellQuoteStyle.Backslash);
-                rendered.Append((byte)' ');
-                AppendQuoted(rendered, value.GetValueOrDefault(), ShellQuoteStyle.DoubleQuoted);
-                if (associative)
-                    rendered.Append((byte)' ');
+                case ParameterSource.Indexed indexed:
+                    Span<byte> digits = stackalloc byte[NumberFormatting.MaximumNumberLength];
+                    foreach (var (position, value) in indexed.Array.EntriesByPosition)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (rendered.Length != 0)
+                            rendered.Append((byte)' ');
+                        rendered.Append(NumberFormatting.FormatNumber(position, digits));
+                        AppendValue(value);
+                    }
+                    break;
+                case ParameterSource.Associative associative:
+                    foreach (var (key, value) in associative.Array.Entries)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        AppendQuoted(rendered, key, ShellQuoteStyle.AssociativeKey);
+                        AppendValue(value);
+                        rendered.Append((byte)' ');
+                    }
+                    break;
+                default:
+                    throw new InvalidOperationException("Expected an array parameter.");
             }
             output.AppendExpansion(ShellValue.FromBytes(rendered.ToMemory()), allowWordSplitting, globQuoted);
+
+            void AppendValue(ShellValue? value)
+            {
+                rendered.Append((byte)' ');
+                AppendQuoted(rendered, value.GetValueOrDefault(), ShellQuoteStyle.DoubleQuoted);
+            }
         }
 
         void EmitAssignment(VariableBinding selected, ShellValue flags, bool entireArray)
