@@ -108,8 +108,24 @@ public sealed class CommandSubstitutionSyntaxTests
 
         Assert.Equal(0, status);
         Assert.Equal("<1:before>", host.StandardOutput.TextContent);
-        Assert.Contains("here-document in command substitution", host.StandardError.TextContent);
+        Assert.Equal("command substitution: line 12: syntax error near unexpected token `printf'\n"
+            + "command substitution: line 12: ` } printf tail)'\n", host.StandardError.TextContent);
         Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RejectedHereDocumentCaptureUnderErrexitReportsOnlyTheToken(bool prepared)
+    {
+        const string source = "set -e\nvalue=$({ cat <<DATA\nbody\nDATA\n}; printf extra)\nprintf unreached\n";
+        await using var host = new TestHost();
+        var status = await RunAsync(source, host, prepared);
+
+        Assert.Equal(2, status);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal("command substitution: line 9: syntax error near unexpected token `printf'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 

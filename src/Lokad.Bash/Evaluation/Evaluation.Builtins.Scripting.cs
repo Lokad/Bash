@@ -342,7 +342,8 @@ public sealed partial class Evaluation
                     }
                     else if (failedUnit.Failure.UnexpectedToken is { } token)
                         await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path,
-                            kind == ScriptExecutionKind.Eval, lineOffset + failedUnit.DiagnosticLine).ConfigureAwait(false);
+                            kind == ScriptExecutionKind.Eval ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.Script,
+                            lineOffset + failedUnit.DiagnosticLine, includeLine: true).ConfigureAwait(false);
                     else if (failedUnit.Failure.ConditionalQuoteEnd is { } quoteEnd)
                         await ReportUnclosedConditionalQuoteAsync(quoteEnd).ConfigureAwait(false);
                     else

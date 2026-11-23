@@ -287,6 +287,7 @@ public static class Parser
             var tokenizer = new Tokenizer(input, payloadStart, context)
             {
                 TrackCommandLocations = true,
+                TrackUnexpectedTokens = true,
                 AllowEofHereDocuments = context.LegacyOrigin != LegacySubstitutionOrigin.Temporary,
                 IsCommandSubstitution = true
             };

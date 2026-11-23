@@ -51,6 +51,10 @@ internal static class FunctionDefinitionFormatter
         CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget,
         CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, display: false);
 
+    internal static bool TryAppendSubstitutionDisplay(
+        CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget,
+        CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, display: true);
+
     private static bool TryAppendSubstitution(CommandSubstitutionSyntax substitution, IByteMemoryWriter output,
         IMemoryBudget? budget, CancellationToken cancellationToken, bool display)
     {

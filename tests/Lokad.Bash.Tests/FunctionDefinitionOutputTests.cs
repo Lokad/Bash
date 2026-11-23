@@ -246,6 +246,21 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Fact]
+    public async Task ReloadReportsTheReachedTokenInsideANestedCaptureGroup()
+    {
+        const string script = "f(){ value=$( { { cat <<DATA\nbody\nDATA\n}; :; }; printf extra); printf tail; }\n"
+            + "saved=$(declare -f f)\nunset -f f\neval \"$saved\"\nprintf unreached\n";
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("eval: line 12: syntax error near unexpected token `:'\n"
+            + "eval: line 12: ` } :; }; printf extra);'\n", result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("$(printf \"%s\" \"", "\")")]
     [InlineData("$((printf \"%s\" \"", "\");)")]

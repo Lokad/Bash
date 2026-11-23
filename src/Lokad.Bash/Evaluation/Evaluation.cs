@@ -3594,19 +3594,42 @@ public sealed partial class Evaluation : IFileTester
     private bool PipelineInheritsLoadedUnitStatus => _state.ForkKind == ShellForkKind.PipelineSimpleCommand
         && _pipelineUsesLoadedUnitStatus;
 
-    internal Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure)
+    internal async Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure,
+        CommandSubstitutionSyntax.Parsed? capture, ScopedEvaluation scope, bool quoted)
     {
         if (_state.FatalExpansion.HasValue)
-            return Task.CompletedTask;
+            return;
 
         var exitCode = _state.ErrexitEnabled || failure is SubstitutionSyntaxFailure.NestedSyntax
             or SubstitutionSyntaxFailure.NestedHereDocumentSeparator ? 2 : 1;
         SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode));
         _state.LastExitCode = exitCode;
-        var message = failure is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator
+        var separatorFailure = failure is SubstitutionSyntaxFailure.HereDocumentSeparator or SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
+        if (separatorFailure && capture != null && !GetStdErrDescriptor().IsClosed)
+        {
+            // Render on reach so a skipped capture never allocates a diagnostic source or replays its grammar.
+            using var spelling = new ByteMemoryBuilder(0, Memory.Budget);
+            if (!FunctionDefinitionFormatter.TryAppendSubstitutionDisplay(capture, spelling, Memory.Budget, _cancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            if (quoted)
+                spelling.Append((byte)'"');
+            var source = ShellSource.FromBytes(spelling.ToMemory());
+            ParserFailure? report;
+            using (var workspace = new MemoryCapacity(Memory.Budget, 0))
+                Parser.ScanCommandSubstitutionEnd(new ShellScanContext { SyntaxMemory = workspace }, source, 2,
+                    out _, out _, out _, out _, out _, out report);
+            if (report?.UnexpectedToken is { } token)
+            {
+                var line = Math.Max(1, scope.Context.Coordinates.Line) + source.AsSpan(0, token.ReadPosition).Count((byte)'\n') + 1;
+                await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
+                    line, includeLine: !_state.ErrexitEnabled).ConfigureAwait(false);
+                return;
+            }
+        }
+        var message = separatorFailure
             ? "Unexpected token after a here-document in command substitution."
             : "Unexpected ')' after a pipeline prefix in command substitution.";
-        return ReportSyntaxErrorAsync(new SyntaxError(message, 0));
+        await ReportSyntaxErrorAsync(new SyntaxError(message, 0)).ConfigureAwait(false);
     }
 
     private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
@@ -3734,7 +3757,10 @@ public sealed partial class Evaluation : IFileTester
             .ConfigureAwait(false);
     }
 
-    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, bool eval, int line)
+    private enum SyntaxDiagnosticOrigin { Script, Eval, CommandSubstitution }
+
+    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, SyntaxDiagnosticOrigin origin,
+        int line, bool includeLine)
     {
         var descriptor = GetStdErrDescriptor();
         CheckCancellation();
@@ -3755,12 +3781,15 @@ public sealed partial class Evaluation : IFileTester
         var groupMessage = "expected `)'\n"u8;
         var encoding = Utf8Text.StrictUtf8;
         var pathLength = path == null ? 0 : encoding.GetByteCount(path);
-        var hasPrefix = path != null || eval;
+        var originPrefixLength = GetOriginPrefix(origin).Length;
+        var hasPrefix = path != null || originPrefixLength != 0;
         var lineNumber = hasPrefix ? NumberFormatting.FormatNumber(line) : ReadOnlyMemory<byte>.Empty;
-        var prefixLength = hasPrefix ? (path == null ? 0 : pathLength + 2) + (eval ? "eval: "u8.Length : 0)
+        var prefixLength = hasPrefix ? (path == null ? 0 : pathLength + 2) + originPrefixLength
             + "line "u8.Length + lineNumber.Length + ": "u8.Length : 0;
-        var length = 2L * prefixLength + tokenPrefix.Length + syntax.Token.Length + 2 + syntax.Line.Length + 3
+        var length = prefixLength + tokenPrefix.Length + (long)syntax.Token.Length + 2
             + syntax.UnclosedGroups * (long)(prefixLength + groupMessage.Length);
+        if (includeLine)
+            length += prefixLength + (long)syntax.Line.Length + 3;
         if (conditional)
             length += prefixLength + argumentPrefix.Length + syntax.Argument.Length + reason.Length;
         if (!TryReserveDiagnostic(length, out var reservation))
@@ -3784,8 +3813,11 @@ public sealed partial class Evaluation : IFileTester
         diagnostic.Append(tokenPrefix);
         AppendToken(syntax.Token.AsSpan());
         diagnostic.Append("'\n"u8);
-        AppendPrefix();
-        diagnostic.Append((byte)'`').Append(syntax.Line.AsSpan()).Append("'\n"u8);
+        if (includeLine)
+        {
+            AppendPrefix();
+            diagnostic.Append((byte)'`').Append(syntax.Line.AsSpan()).Append("'\n"u8);
+        }
         await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
 
         void AppendPrefix()
@@ -3797,10 +3829,16 @@ public sealed partial class Evaluation : IFileTester
                 encoding.GetBytes(path, diagnostic.AppendSpan(pathLength));
                 diagnostic.Append(": "u8);
             }
-            if (eval)
-                diagnostic.Append("eval: "u8);
+            diagnostic.Append(GetOriginPrefix(origin));
             diagnostic.Append("line "u8).Append(lineNumber.Span).Append(": "u8);
         }
+
+        static ReadOnlySpan<byte> GetOriginPrefix(SyntaxDiagnosticOrigin origin) => origin switch
+        {
+            SyntaxDiagnosticOrigin.Eval => "eval: "u8,
+            SyntaxDiagnosticOrigin.CommandSubstitution => "command substitution: "u8,
+            _ => []
+        };
 
         void AppendToken(ReadOnlySpan<byte> token)
         {
