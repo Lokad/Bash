@@ -95,6 +95,73 @@ public sealed class PrintfFormattingTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData('b', false)]
+    [InlineData('q', false)]
+    [InlineData('Q', false)]
+    [InlineData('b', true)]
+    [InlineData('q', true)]
+    [InlineData('Q', true)]
+    public async Task StringConversionWorkspaceIsRefundedBeforeCountCallbacks(char conversion, bool assignOutput)
+    {
+        var value = new string('a', 512);
+        Assert.Equal(await MeasureAsync('s'), await MeasureAsync(conversion));
+
+        async Task<long[]> MeasureAsync(char field)
+        {
+            var governor = new MemoryGovernor(64 * 1024);
+            using var owner = governor.CreateScope();
+            var checkpoints = new List<(PrintfVariableAssignment Assignment, long Reserved)>();
+            var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText($"%{field}%n%{field}%n"),
+                [ShellValue.FromText(value), ShellValue.FromText("first"),
+                    ShellValue.FromText(value), ShellValue.FromText("second")],
+                DateTimeOffset.UnixEpoch, assignOutput, owner, async assignment =>
+                {
+                    await Task.Yield();
+                    checkpoints.Add((assignment, governor.ReservedBytes));
+                    return true;
+                }, reportDiagnostic: null, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(value + value, Text(result.Output));
+            Assert.Equal([new PrintfVariableAssignment("first", 512), new PrintfVariableAssignment("second", 1024)],
+                checkpoints.Select(item => item.Assignment));
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return checkpoints.Select(item => item.Reserved).ToArray();
+        }
+    }
+
+    [Fact]
+    public async Task EscapedStringWorkspaceIsRefundedBeforeItsWarningCallback()
+    {
+        var literalWarning = await MeasureAsync("sample\\x", []);
+        var escapedWarning = await MeasureAsync("%b", [ShellValue.FromText("sample\\x")]);
+        Assert.Equal(literalWarning, escapedWarning);
+
+        static async Task<long> MeasureAsync(string format, ShellValue[] arguments)
+        {
+            var governor = new MemoryGovernor(64 * 1024);
+            using var owner = governor.CreateScope();
+            var checkpoints = new List<long>();
+            var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText(format), arguments,
+                DateTimeOffset.UnixEpoch, assignOutput: false, owner,
+                static _ => throw new InvalidOperationException("Unreached count write."), async diagnostic =>
+                {
+                    Assert.Equal(PrintfFormatting.Diagnostic.FromText("missing hex digit for \\x"), diagnostic);
+                    await Task.Yield();
+                    checkpoints.Add(governor.ReservedBytes);
+                    return true;
+                }, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("sample\\x", Text(result.Output));
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return Assert.Single(checkpoints);
+        }
+    }
+
     [Fact]
     public async Task EvaluateAsync_InterleavesSuspendingCountWritesAndDiagnostics()
     {

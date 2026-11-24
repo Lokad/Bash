@@ -40,6 +40,7 @@ public static partial class PrintfFormatting
             }
             catch (MemoryBudgetExceededException)
             {
+                ReleaseTemporaryOutput();
                 try { await ReportPendingDiagnosticsAsync().ConfigureAwait(false); }
                 catch (MemoryBudgetExceededException) { } // Report the refusal without retrying a queued record.
                 if (reportDiagnostic != null && !diagnosticOutputClosed)
@@ -52,8 +53,14 @@ public static partial class PrintfFormatting
                 numericMemory?.Dispose();
                 _pendingDiagnostics?.Clear();
                 _diagnosticMemory?.Dispose();
-                _temporaryOutput?.Dispose();
+                ReleaseTemporaryOutput();
                 _output.Dispose();
+            }
+
+            void ReleaseTemporaryOutput()
+            {
+                _temporaryOutput?.Dispose();
+                _temporaryOutput = null;
             }
 
             static void ReleaseConversionScratch(MemoryCapacity capacity)
@@ -342,7 +349,11 @@ public static partial class PrintfFormatting
                             }
 
                             await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
-                            if (!_stop && !await assignCount(new PrintfVariableAssignment(
+                            if (_stop)
+                                return;
+
+                            ReleaseTemporaryOutput();
+                            if (!await assignCount(new PrintfVariableAssignment(
                                     variable.ToUtf8String(), _output.Length - _cycleOutputStart + _cycleCountAdjustment)).ConfigureAwait(false))
                                 _stop = true;
                             return;
@@ -762,6 +773,7 @@ public static partial class PrintfFormatting
                 if (reportDiagnostic == null || diagnosticOutputClosed || _pendingDiagnostics is not { Count: > 0 } pending)
                     return;
 
+                ReleaseTemporaryOutput();
                 try
                 {
                     foreach (var diagnostic in pending)

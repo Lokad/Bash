@@ -110,8 +110,9 @@ conversions carry their logical lengths into field padding and precision.
 Their output scratch retains a prefix while those bytes can reach the
 assignment. `%b` and `%q` cap that scratch prefix at output field precision
 for both stdout and assignment. Decoding and quoting still count the full
-conversion. Assignment compacts a truncated value before the formatting
-buffer is released.
+conversion. The buffer is reused between conversions and discarded before
+reached count assignments and diagnostic writes. Assignment compacts a
+truncated value before the formatting buffer is released.
 Long literal format and `%b` runs append bounded spans to the same output
 buffers. Cancellation checks separate spans, and escape decoding resumes
 at each reached backslash.
