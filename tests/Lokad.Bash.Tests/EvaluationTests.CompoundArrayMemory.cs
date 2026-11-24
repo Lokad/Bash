@@ -14,13 +14,16 @@ public partial class EvaluationTests
     [InlineData("declared", 8, false)]
     [InlineData("declared", 2048, true)]
     [InlineData("pair", 8, false)]
+    [InlineData("pair", 2048, false)]
     [InlineData("pair", 2048, true)]
     public async Task CompoundArrayMemory_AdmitsRhsItemsBeforeReplacement(string form, int count, bool refused)
     {
         var pair = form == "pair";
         var setup = pair ? "declare -A a=([old]=kept); a=(" : form == "declared" ? "a=(kept); declare -a a=(" : "a=(kept); a=(";
         var early = pair ? "'key' \"${early:=first}\"" : "\"${early:=first}\"";
-        var operands = string.Join(' ', Enumerable.Repeat(pair ? "'key' 'value'" : "'value'", count));
+        var operands = string.Join(' ', pair && refused
+            ? Enumerable.Range(0, count).Select(index => $"'key{index}' 'value'")
+            : Enumerable.Repeat(pair ? "'key' 'value'" : "'value'", count));
         var late = pair ? "'tail' \"${late:=last}\"" : "\"${late:=last}\"";
         var state = new Eval(Parser.Parse($"{setup}{early} {operands} {late})"));
         var budget = new MemoryGovernor(32 * 1024);

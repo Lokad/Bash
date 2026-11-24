@@ -1243,6 +1243,22 @@ public sealed partial class Variables
         return true;
     }
 
+    /// <summary>Admits the binding and empty storage for an associative replacement before staging items.</summary>
+    internal AssociativeArray CreateAssociativeReplacement(BindingName name, EvaluationMemory memory)
+    {
+        memory.Charge(checked(BindingOverheadBytes + (long)ValueCapacityMultiplier * name.ByteLength));
+        return new AssociativeArray(isInitialized: true);
+    }
+
+    /// <summary>Publishes an admitted associative replacement without copying its entries.</summary>
+    internal bool TryAssignResolvedAssociativeArray(BindingName resolved, AssociativeArray array, bool initializeReadonly)
+    {
+        if (resolved.IsEmpty || !initializeReadonly && IsReadonly(resolved))
+            return false;
+        ReplaceValue(resolved, new AssociativeSlot(array));
+        return true;
+    }
+
     /// <summary>Applies admitted records to the selected sparse array after input has settled.</summary>
     internal bool TryUpdateResolvedIndexedArray(
         BindingName resolved, uint origin, IReadOnlyList<ShellValue> values,

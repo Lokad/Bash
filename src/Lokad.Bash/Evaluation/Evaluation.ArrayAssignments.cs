@@ -15,6 +15,11 @@ public sealed partial class Evaluation
         AssignmentContext context, ScopedEvaluation scope, BindingName sourceName, ShellValue command,
         bool initializeReadonly)
     {
+        if (kind == ArrayKind.Associative)
+            return await ApplyAssociativeInitializerAsync(target, operation, scope, sourceName, command,
+                initializeReadonly, accept => VisitAssociativeInitializerAsync(target.Name, items, context, scope,
+                    prepareDeclaration: false, accept)).ConfigureAwait(false);
+
         using var itemMemory = items.Count == 0 ? null : new MemoryCapacity(Memory.Budget, 0);
         IReadOnlyList<ExpandedArrayItem>? expanded = itemMemory is null ? []
             : await ExpandCompoundArrayItemsAsync(target.Name, items, kind, operation, context, scope, itemMemory)
@@ -28,41 +33,18 @@ public sealed partial class Evaluation
         BindingName name, IReadOnlyList<CompoundArrayItem> items, ArrayKind kind, AssignmentOperator operation,
         AssignmentContext context, ScopedEvaluation scope, MemoryCapacity itemMemory)
     {
-        var associative = kind == ArrayKind.Associative;
         var retainQuotes = context == AssignmentContext.QuotedIndexedDeclaration;
         var expanded = new List<ExpandedArrayItem>();
-        // Direct assignments classify malformed bracket words before expansion; declaration operands retain parser classification.
-        var bracketForm = items.Count > 0
-            && (context == AssignmentContext.Declaration ? items[0].Element != null : items[0].Word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted } first, ..]
-            && first.Source.AsSpan().StartsWith("["u8));
-        if (associative && !bracketForm)
+        if (kind == ArrayKind.Associative)
         {
-            for (var index = 0; index < items.Count; index += 2)
-            {
-                var key = await ExpandValueAsync(items[index].Word).ConfigureAwait(false);
-                if (_state.HasPendingExpansionError)
-                    return null;
-                var value = index + 1 < items.Count
-                    ? await ExpandValueAsync(items[index + 1].Word).ConfigureAwait(false)
-                    : ShellValue.Empty;
-                if (_state.HasPendingExpansionError)
-                    return null;
-                AddItem(new ExpandedArrayItem(ShellSource.FromBytes(key.Bytes), key, value,
-                    AssignmentOperator.Replace, PrefixWithElementZero: false));
-            }
+            if (!await VisitAssociativeInitializerAsync(name, items, context, scope, prepareDeclaration: true, StageItem)
+                    .ConfigureAwait(false))
+                return null;
         }
         else
         {
             foreach (var item in items)
             {
-                if (associative && item.Element == null)
-                {
-                    // Invalid words in explicit associative form are diagnosed without expanding them.
-                    await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("must use subscript when assigning associative array"))
-                        .ConfigureAwait(false);
-                    continue;
-                }
-
                 if (!retainQuotes && item.Element == null && scope.CanExpand && GetLiteralWithoutGlob(item.Word) is { } literal)
                 {
                     CheckCancellation();
@@ -72,14 +54,14 @@ public sealed partial class Evaluation
                 }
 
                 // Bash 5.2 brace-generated words lose their indexed-assignment classification.
-                var words = associative || retainQuotes ? [item.Word] : WordExpansion.ExpandBraceWords(item.Word, scope);
+                var words = retainQuotes ? [item.Word] : WordExpansion.ExpandBraceWords(item.Word, scope);
                 if (item.Element is { } element && words.Count == 1 && ReferenceEquals(words[0], item.Word))
                 {
                     // Compound selectors remove quotes before arithmetic; direct selectors retain them.
                     var selector = element.Subscript.Length == 0
                         ? ShellValue.Empty
                         : await WordExpansion.ExpandSubscriptAsync(element.Subscript, scope,
-                            associative || retainQuotes ? ExpansionPurpose.Scalar : ExpansionPurpose.IndexedCompound,
+                            retainQuotes ? ExpansionPurpose.Scalar : ExpansionPurpose.IndexedCompound,
                             allowLeadingTilde: false).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return null;
@@ -91,7 +73,7 @@ public sealed partial class Evaluation
                         selector = QuoteLiteral(selector);
                         value = QuoteLiteral(value);
                     }
-                    AddItem(associative || retainQuotes
+                    AddItem(retainQuotes
                         ? new ExpandedArrayItem(element.Subscript, selector, value,
                             element.Operator, PrefixWithElementZero: false)
                         : ClassifyIndexedItem(element, selector, value));
@@ -131,6 +113,12 @@ public sealed partial class Evaluation
         {
             Memory.PrepareListCapacity(itemMemory, expanded, 1);
             expanded.Add(item);
+        }
+
+        ValueTask<bool> StageItem(ExpandedArrayItem item)
+        {
+            AddItem(item);
+            return ValueTask.FromResult(true);
         }
 
         Task<ShellValue> ExpandValueAsync(Word word) => WordExpansion.ExpandCompoundValueAsync(
@@ -178,6 +166,64 @@ public sealed partial class Evaluation
             }
             return new ExpandedArrayItem(null, ShellValue.Empty, flattened, AssignmentOperator.Replace,
                 PrefixWithElementZero: operation == AssignmentOperator.Append);
+        }
+    }
+
+    /// <summary>Expands one associative key and its value in initializer order.</summary>
+    private async Task<bool> VisitAssociativeInitializerAsync(
+        BindingName name, IReadOnlyList<CompoundArrayItem> items, AssignmentContext context, ScopedEvaluation scope,
+        bool prepareDeclaration, Func<ExpandedArrayItem, ValueTask<bool>> accept)
+    {
+        // Direct assignments also classify malformed bracket words as explicit items.
+        var explicitItems = items.Count != 0 && (context == AssignmentContext.Declaration
+            ? items[0].Element != null
+            : items[0].Word.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted } first, ..]
+                && first.Source.AsSpan().StartsWith("["u8));
+        for (var index = 0; index < items.Count; index += explicitItems ? 1 : 2)
+        {
+            CheckCancellation();
+            var item = items[index];
+            var element = explicitItems ? item.Element : null;
+            if (explicitItems && element == null)
+            {
+                await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText("must use subscript when assigning associative array"))
+                    .ConfigureAwait(false);
+                continue;
+            }
+            var key = element is { } explicitElement
+                ? explicitElement.Subscript.IsEmpty ? ShellValue.Empty
+                    : await WordExpansion.ExpandSubscriptAsync(explicitElement.Subscript, scope, ExpansionPurpose.Scalar,
+                        allowLeadingTilde: false).ConfigureAwait(false)
+                : await ExpandValueAsync(item.Word).ConfigureAwait(false);
+            if (_state.HasPendingExpansionError)
+                return false;
+            if (key.IsEmpty && !prepareDeclaration)
+            {
+                await ReportEmptyAssociativeKeyAsync(item.Word, scope).ConfigureAwait(false);
+                if (_state.HasPendingExpansionError)
+                    return false;
+                continue;
+            }
+
+            var valueWord = element?.Value ?? (index + 1 < items.Count ? items[index + 1].Word : null);
+            var value = valueWord == null ? ShellValue.Empty : await ExpandValueAsync(valueWord).ConfigureAwait(false);
+            if (_state.HasPendingExpansionError || !await accept(new ExpandedArrayItem(
+                    element?.Subscript ?? ShellSource.FromBytes(key.Bytes), key, value,
+                    element?.Operator ?? AssignmentOperator.Replace, PrefixWithElementZero: false)
+                { IsAssociativePair = !explicitItems }).ConfigureAwait(false))
+                return false;
+        }
+        return true;
+
+        Task<ShellValue> ExpandValueAsync(Word word) => WordExpansion.ExpandCompoundValueAsync(word, scope, ArrayKind.Associative);
+
+        async Task ReportEmptyAssociativeKeyAsync(Word word, ScopedEvaluation active)
+        {
+            using var spelling = new ByteMemoryBuilder(0, Memory.Budget);
+            if (!FunctionDefinitionFormatter.TryAppendWordDisplay(word, spelling, Memory.Budget, _cancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            await ReportCompoundIndexFailureAsync([ShellValue.FromBytes(spelling.ToMemory())], aggregate: false, active)
+                .ConfigureAwait(false);
         }
     }
 
@@ -292,11 +338,17 @@ public sealed partial class Evaluation
         ScopedEvaluation scope, Variables targetVariables, BindingName sourceName, ShellValue command,
         bool initializeReadonly)
     {
-        var associative = kind == ArrayKind.Associative;
+        if (kind == ArrayKind.Associative)
+        {
+            var target = new VariableBinding(VariableReference.ForName(name), targetVariables);
+            return await ApplyAssociativeInitializerAsync(target, operation, scope, sourceName, command,
+                initializeReadonly, VisitPreparedItemsAsync).ConfigureAwait(false);
+        }
+
         // Word expansion sees the previous binding. Arithmetic selection and writes see
         // the replacement as it is built; a later arithmetic failure does not roll it back.
         var append = operation == AssignmentOperator.Append;
-        if (!append || !associative && !targetVariables.IndexedArrays.ContainsKey(name))
+        if (!append || !targetVariables.IndexedArrays.ContainsKey(name))
         {
             IReadOnlyList<ShellValue> initial = append && targetVariables.Scalars.TryGetValue(name, out var scalar)
                 ? [scalar]
@@ -305,11 +357,7 @@ public sealed partial class Evaluation
                 return false;
         }
 
-        if (append && associative && !targetVariables.TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.RetainValue))
-            return false;
-
-        if (associative) targetVariables.AssociativeArrays[name].MarkInitialized();
-        else targetVariables.IndexedArrays[name].MarkInitialized();
+        targetVariables.IndexedArrays[name].MarkInitialized();
 
         var lastIndex = append && targetVariables.IndexedArrays.TryGetValue(name, out var indexed)
             ? indexed.MaxIndex ?? -1
@@ -351,6 +399,80 @@ public sealed partial class Evaluation
         }
         return true;
 
+        async Task<bool> VisitPreparedItemsAsync(Func<ExpandedArrayItem, ValueTask<bool>> accept)
+        {
+            foreach (var item in expanded)
+            {
+                CheckCancellation();
+                if (!await accept(item).ConfigureAwait(false))
+                    return false;
+            }
+            return true;
+        }
+    }
+
+    /// <summary>Applies each associative element to the live append target or to a private replacement.</summary>
+    private async Task<bool> ApplyAssociativeInitializerAsync(
+        VariableBinding target, AssignmentOperator operation, ScopedEvaluation scope, BindingName sourceName,
+        ShellValue command, bool initializeReadonly, Func<Func<ExpandedArrayItem, ValueTask<bool>>, Task<bool>> visit)
+    {
+        var name = target.Name;
+        var owner = target.Owner;
+        var write = initializeReadonly ? WordExpansion.DeclarationWrite.ReadonlyInitializer : WordExpansion.DeclarationWrite.Ordinary;
+        AssociativeArray? replacement = null;
+        if (operation == AssignmentOperator.Append)
+        {
+            if (!owner.TryDeclareResolvedArray(name, ArrayKind.Associative, ScalarArrayPromotion.RetainValue))
+                return false;
+            owner.AssociativeArrays[name].MarkInitialized();
+        }
+        else
+            replacement = owner.CreateAssociativeReplacement(name, Memory);
+
+        return await visit(AcceptAsync).ConfigureAwait(false)
+            && (replacement == null || owner.TryAssignResolvedAssociativeArray(name, replacement, initializeReadonly));
+
+        async ValueTask<bool> AcceptAsync(ExpandedArrayItem item)
+        {
+            if (!AssociativeArrayKey.TryCreate(item.ExpandedSubscript, out var key))
+            {
+                await ReportPreparedEmptyKeyAsync(item).ConfigureAwait(false);
+                return !_state.HasPendingExpansionError;
+            }
+
+            if (replacement == null)
+            {
+                var location = new WordExpansion.ResolvedVariableReference.Associative(name, key);
+                return await location.AssignValueAsync(scope, owner, sourceName, item.Value, item.Operator, command, write)
+                    .ConfigureAwait(false) != null;
+            }
+
+            // An explicit += inside a replacement reads the live binding, even after a staged write to the same key.
+            ShellValue? previous = item.Operator == AssignmentOperator.Append && owner.TryReadArrayElement(name, key, out var stored)
+                ? stored : null;
+            var attributes = owner.GetAssignmentAttributes(name);
+            if (await WordExpansion.PrepareAssignmentValueAsync(item.Value, previous, attributes, scope, command)
+                    .ConfigureAwait(false) is not { } prepared)
+                return false;
+            replacement.Set(key, global::Lokad.Bash.Evaluation.Variables.ConvertAssignmentCase(attributes, prepared, Memory), Memory);
+            return true;
+        }
+
+        async Task ReportPreparedEmptyKeyAsync(ExpandedArrayItem item)
+        {
+            // Declaration preparation quotes the expanded operands before the binding phase.
+            using var spelling = new ByteMemoryBuilder(0, Memory.Budget);
+            if (item.IsAssociativePair)
+                spelling.Append("''"u8);
+            else
+            {
+                spelling.Append(item.Operator == AssignmentOperator.Append ? "['']+="u8 : "['']="u8);
+                if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(spelling, item.Value.Bytes.Span))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+            }
+            await ReportCompoundIndexFailureAsync([ShellValue.FromBytes(spelling.ToMemory())], aggregate: false, scope)
+                .ConfigureAwait(false);
+        }
     }
 
     /// <summary>Reports the rejected expanded item before later array writes can run.</summary>
@@ -380,5 +502,8 @@ public sealed partial class Evaluation
         ShellValue ExpandedSubscript,
         ShellValue Value,
         AssignmentOperator Operator,
-        bool PrefixWithElementZero);
+        bool PrefixWithElementZero)
+    {
+        internal bool IsAssociativePair { get; init; }
+    }
 }

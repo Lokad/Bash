@@ -192,6 +192,15 @@ Without errexit, an assignment-only command uses that status if it has
 already run a command substitution. A later substitution can supply its
 own status. With errexit active the invalid selector exits with 1.
 
+An associative replacement builds its new entries while expansions read
+the live binding. An explicit `[key]+=value` reads its append base from
+that binding. Direct assignments and expanded declarations append each
+entry before expanding the next key and value. An empty associative key
+reports the reached item and skips its value expansion in those forms.
+Parser-recognized declarations expand their operands before applying
+items or diagnosing an empty key. An errexit failure abandons a staged
+replacement and keeps earlier writes to an append target.
+
 `declare`, `typeset`, `local`, `export`, and `readonly` report usage after an
 unrecognized leading option. A reached `--help` writes the command's synopsis
 and Lokad.Bash's builtin documentation to stdout with status 2. At script

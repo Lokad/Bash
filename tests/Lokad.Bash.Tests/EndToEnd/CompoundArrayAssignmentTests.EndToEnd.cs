@@ -8,6 +8,60 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class CompoundArrayAssignmentTestsEndToEnd
 {
     [Theory]
+    [InlineData("a=", "old", "")]
+    [InlineData("a+=", "first", "")]
+    [InlineData("declare -A a=", "old", "skiplate")]
+    [InlineData("declare -A a+=", "first", "skiplate")]
+    public Task EmptyAssociativeKeysPreserveTheReachedInitializerPhase(string command, string first, string laterEffects)
+    {
+        const string items = """([one]=first ['']=$(printf skip >&2; printf rejected) [later]=$(printf late >&2; printf last))""";
+        var script = """
+            declare -A a; a=([one]=old)
+            trap 'printf "<%s|%s|%s>" "$?" "${a[one]-}" "${a[later]-}"' EXIT
+            set -e
+            """ + "\n" + command + items + "\nprintf skipped\n";
+        var item = laterEffects.Length == 0 ? "['']=$(printf skip 1>&2; printf rejected)" : "['']='rejected'";
+        return AssertBothEntryPointsAsync(script, 1, $"<1|{first}|>", laterEffects + $"line 4: {item}: bad array subscript\n");
+    }
+
+    [Fact]
+    public Task AssociativeEmptyPairSkipsItsValueAndExpandsTheNextPair()
+    {
+        const string script = """
+            declare -A a; empty=
+            a=("$empty" "$(printf forbidden >&2)" later "$(printf next >&2; printf value)")
+            printf "<%s|%s>" "$?" "${a[later]-}"
+            """;
+        return AssertBothEntryPointsAsync(script, 0, "<0|value>", "line 2: \"$empty\": bad array subscript\nnext");
+    }
+
+    [Theory]
+    [InlineData("a=", "oldtwo", "old")]
+    [InlineData("a+=", "oldonetwo", "oldonetwo")]
+    [InlineData("declare -A a+=", "oldonetwo", "old")]
+    public Task AssociativeInitializerExpansionsAndElementAppendsSelectTheirReachedBinding(
+        string command, string first, string later)
+    {
+        var script = "declare -A a; a=([one]=old)\n" + command + """
+            ([one]+=one [one]+=two [later]="${a[one]-}")
+            printf "<%s|%s>" "${a[one]-}" "${a[later]-}"
+            """;
+        return AssertBothEntryPointsAsync(script, 0, $"<{first}|{later}>", "");
+    }
+
+    [Theory]
+    [InlineData("a", "5")]
+    [InlineData("declare -Ai a", "4")]
+    public Task AssociativeIntegerAssignmentsRunAtTheirInitializerPhase(string command, string later)
+    {
+        var script = "declare -Ai a; i=4\n" + command + """
+            =([one]=i++ [later]="$i")
+            printf "<%s|%s|%s>" "${a[one]-}" "${a[later]-}" "$i"
+            """;
+        return AssertBothEntryPointsAsync(script, 0, $"<4|{later}|5>", "");
+    }
+
+    [Theory]
     [InlineData("sel=-3; value='one two'\na=([1]=keep [$sel]+=\"$value\" next)",
         "next", "line 2: [-3]+=one two: bad array subscript\n")]
     [InlineData("a=(\n[-3]=$(printf 'rhs\\n' >&2; printf once)\n ok\n)",
@@ -427,7 +481,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("arr=(old); arr=(new [-2]=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "line 1: [-2]=bad: bad array subscript\n", 0)]
     [InlineData("arr[5]=old; arr=([-1]=new tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<tail>\n<0>\n", "line 1: [-1]=new: bad array subscript\n", 0)]
     [InlineData("arr=(old); arr=(new []=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "line 1: []=bad: bad array subscript\n", 0)]
-    [InlineData("declare -A map; map[old]=old; map=([a]=new [\"\"]=bad [b]=tail); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<new>:<tail>\n", "map[\"\"]: bad array subscript\n", 0)]
+    [InlineData("declare -A map; map[old]=old; map=([a]=new [\"\"]=bad [b]=tail); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<new>:<tail>\n", "line 1: [\"\"]=bad: bad array subscript\n", 0)]
     [InlineData("declare -A map; map=([a]=one plain [b]=two); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<one>:<two>\n", "map: must use subscript when assigning associative array\n", 0)]
     [InlineData("declare -A map; map=(foo bar [x]=y); printf '<%s>:<%s>:<%s>\\n' \"${map[foo]}\" \"${map['[x]=y']-missing}\" \"${#map[@]}\"", "<bar>:<>:<2>\n", "", 0)]
     [InlineData("i=0; declare -A map; map=($((i++)) $((i+=10)) $((i++)) $((i+=100))); printf '<%s>:<%s>:<%s>\\n' \"$i\" \"${map[0]}\" \"${map[11]}\"", "<112>:<11>:<112>\n", "", 0)]
@@ -458,7 +512,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("arr=(new [-2]=$(printf bad; printf rhs >&2) $(printf tail; printf later >&2)); printf '<%s>\\n' \"${arr[@]}\"", "<new>\n<tail>\n", "rhslaterline 1: [-2]=bad: bad array subscript\n", 0)]
     [InlineData("declare -A map; map=([a]=one $(printf plain; printf rhs >&2) [b]=two); printf '<%s>:<%s>\\n' \"${map[a]}\" \"${map[b]}\"", "<one>:<two>\n", "map: must use subscript when assigning associative array\n", 0)]
     [InlineData("v='a b'; declare -A map; map=($v value next); printf '<%s>:<%s>:<%s>\\n' \"${map['a b']-x}\" \"${map[a]-x}\" \"${map[next]-x}\"", "<value>:<x>:<>\n", "", 0)]
-    [InlineData("declare -A map; map=(a one '' bad b two); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<one>:<two>\n", "map[]: bad array subscript\n", 0)]
+    [InlineData("declare -A map; map=(a one '' bad b two); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<one>:<two>\n", "line 1: '': bad array subscript\n", 0)]
     [InlineData("x='a b'; declare -A map; map=(foo bar [\"$x\"]=y value); printf '<%s>:<%s>\\n' \"${map['[a b]=y']-x}\" \"${map[foo]}\"", "<value>:<bar>\n", "", 0)]
     [InlineData("declare -A map; map=([a]={x,y}); printf '<%s>\\n' \"${map[a]}\"", "<{x,y}>\n", "", 0)]
     [InlineData("v=old; v+=new; arr=(zero one); arr[1]+=tail; declare -A map; map[a]=old; map[a]+=new; printf '<%s>:<%s>:<%s>\\n' \"$v\" \"${arr[1]}\" \"${map[a]}\"", "<oldnew>:<onetail>:<oldnew>\n", "", 0)]
@@ -467,7 +521,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("x={a,b}; printf '<%s>\\n' \"$x\"", "<{a,b}>\n", "", 0)]
     [InlineData("arr=(old); arr+=(); printf '<%s>\\n' \"${arr[@]}\"", "<old>\n", "", 0)]
     [InlineData("arr=([3]={2..2}); printf '<%s>\\n' \"${!arr[@]}\" \"${arr[@]}\"", "<0>\n<[3]=2>\n", "", 0)]
-    [InlineData("declare -A map; empty=(); map=(\"${empty[@]}\" value [a]=tail); printf '<%s>:<%s>\\n' \"$?\" \"${map[value]-missing}\"", "<0>:<missing>\n", "map[]: bad array subscript\n", 0)]
+    [InlineData("declare -A map; empty=(); map=(\"${empty[@]}\" value [a]=tail); printf '<%s>:<%s>\\n' \"$?\" \"${map[value]-missing}\"", "<0>:<missing>\n", "line 1: \"${empty[@]}\": bad array subscript\n", 0)]
     [InlineData("v=old; f() { printf '<%s>\\n' \"$v\"; }; v+=new f; printf '<%s>\\n' \"$v\"", "<oldnew>\n<old>\n", "", 0)]
     [InlineData("arr=(old tail); f() { printf '<%s>\\n' \"${arr[@]}\"; }; arr+=(new) f; printf '<%s>\\n' \"${arr[@]}\"", "<old(new)>\n<old>\n<tail>\n", "", 0)]
     [InlineData("i=1; f() { printf '<%s>\\n' \"$i\"; }; i+=$((i+=2)) f; printf '<%s>\\n' \"$i\"", "<33>\n<3>\n", "", 0)]

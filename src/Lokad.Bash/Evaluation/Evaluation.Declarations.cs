@@ -227,7 +227,7 @@ public sealed partial class Evaluation
                                 var key = Flatten(expandedItems[itemIndex]);
                                 var value = itemIndex + 1 < expandedItems.Count ? Flatten(expandedItems[itemIndex + 1]) : ShellValue.Empty;
                                 expandedItems[retained++] = new ExpandedArrayItem(ShellSource.FromBytes(key.Bytes),
-                                    key, value, AssignmentOperator.Replace, PrefixWithElementZero: false);
+                                    key, value, AssignmentOperator.Replace, PrefixWithElementZero: false) { IsAssociativePair = true };
                             }
                         }
                         expandedItems.RemoveRange(retained, expandedItems.Count - retained);

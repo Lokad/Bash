@@ -72,17 +72,12 @@ internal static partial class WordExpansion
             ShellValue? previous = operation == AssignmentOperator.Append && TryRead(destination, out var stored)
                 ? stored : null;
             var attributes = destination.GetAssignmentAttributes(Name);
-            if ((attributes & Variables.BindingAttributes.Integer) != 0)
-            {
-                if (declarationWrite == DeclarationWrite.Ordinary && destination.IsReadonly(Name))
-                    return null;
-                var evaluated = await EvaluateIntegerAssignmentAsync(value, previous, scope, command).ConfigureAwait(false);
-                if (!evaluated.HasValue || !scope.CanExpand)
-                    return null;
-                value = evaluated.Value;
-            }
-            else if (previous is { } prefix)
-                value = AppendAssignmentValue(prefix, value, scope);
+            if ((attributes & Variables.BindingAttributes.Integer) != 0
+                && declarationWrite == DeclarationWrite.Ordinary && destination.IsReadonly(Name))
+                return null;
+            if (await PrepareAssignmentValueAsync(value, previous, attributes, scope, command).ConfigureAwait(false) is not { } prepared)
+                return null;
+            value = prepared;
             if (!TryPublishValue(scope with { Variables = destination }, sourceName, value, declarationWrite))
                 return null;
             return (attributes & Variables.BindingAttributes.Case) != 0 && TryRead(destination, out var assigned)
@@ -140,6 +135,16 @@ internal static partial class WordExpansion
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
         }
+    }
+
+    /// <summary>Prepares an element or scalar value using its selected binding's arithmetic and append rules.</summary>
+    internal static async ValueTask<ShellValue?> PrepareAssignmentValueAsync(
+        ShellValue value, ShellValue? previous, Variables.BindingAttributes attributes, ScopedEvaluation scope, ShellValue command)
+    {
+        if ((attributes & Variables.BindingAttributes.Integer) == 0)
+            return previous is { } prefix ? AppendAssignmentValue(prefix, value, scope) : value;
+        var evaluated = await EvaluateIntegerAssignmentAsync(value, previous, scope, command).ConfigureAwait(false);
+        return scope.CanExpand ? evaluated : null;
     }
 
     internal enum UnsetReferenceKind { Direct, Nameref }
