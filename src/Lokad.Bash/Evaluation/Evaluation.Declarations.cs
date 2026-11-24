@@ -141,7 +141,7 @@ public sealed partial class Evaluation
                             : compoundArrayKind;
                         if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
                                 new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
-                                declarationKind, isNameref: false, inherit, caseChange: default, Memory))
+                                declarationKind, isNameref: false, inherit, caseChange: default, Memory, function.Enclosing))
                         {
                             if (targetVariables.IsReadonly(name))
                                 await ReportCommandDiagnosticAsync([function.FunctionName],
@@ -152,6 +152,12 @@ public sealed partial class Evaluation
                             // Dispatch still visits this name and later operands; a shadowing function can also run.
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;
+                        }
+                        if (inherit && !targetLocal && targetVariables.IsReadonlyBinding(name))
+                        {
+                            await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "readonly variable", scope)
+                                .ConfigureAwait(false);
+                            break;
                         }
                     }
                     else if (unsetReference)

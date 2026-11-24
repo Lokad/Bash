@@ -2487,7 +2487,12 @@ public sealed partial class Evaluation : IFileTester
                         await ApplyAttributesAsync(name, targetVars, global, local, assignmentExport).ConfigureAwait(false);
                     }
                     else
+                    {
+                        if (local && element && operand.Value != null && declarationScope.Context.FunctionContext is { } function)
+                            function.Locals.PrepareReadonlyElementDeclaration(targetVars, name,
+                                arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                         await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
+                    }
                     continue;
                 }
                 var keepLocalNameref = false;
@@ -2557,8 +2562,13 @@ public sealed partial class Evaluation : IFileTester
                     var localOperand = new VariableOperand(
                         hasReferenceValue ? VariableOperandKind.Assignment : VariableOperandKind.Name,
                         reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
+                    var checkInheritedReadonly = !existingLocal && options.Inherit
+                        && (operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear);
+                    var localCaseChange = checkInheritedReadonly && targetVars.IsReadonlyBinding(name)
+                        ? default : options.CaseChange;
                     if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
-                            localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, options.CaseChange, Memory))
+                            localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, localCaseChange,
+                            Memory, localFunction.Enclosing))
                     {
                         if (targetVars.IsReadonly(name))
                             await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
@@ -2568,6 +2578,11 @@ public sealed partial class Evaluation : IFileTester
                                 : ArrayConversionMessage(arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                             await DiagnoseAsync(declarationName, message).ConfigureAwait(false);
                         }
+                        continue;
+                    }
+                    if (checkInheritedReadonly && targetVars.IsReadonlyBinding(name))
+                    {
+                        await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                         continue;
                     }
                     localReferenceAssigned = options.Nameref || initializingReference;
@@ -2875,7 +2890,8 @@ public sealed partial class Evaluation : IFileTester
                     var declaration = new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty);
                     if ((!existing || !indexed && !associative && !hasReference)
                         && !function.Locals.TryDeclare(declarationScope.Variables, variables, declaration,
-                            prefixNames, options.ArrayKind, isNameref: false, options.Inherit, caseChange: default, Memory))
+                            prefixNames, options.ArrayKind, isNameref: false, options.Inherit, caseChange: default,
+                            Memory, function.Enclosing))
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         return;
@@ -5635,7 +5651,13 @@ public sealed partial class Evaluation : IFileTester
             return false;
         }
 
-        public bool IsLocal(BindingName name) => Locals.Declares(name) || Enclosing?.IsLocal(name) == true;
+        public bool IsLocal(BindingName name)
+        {
+            for (FunctionContext? frame = this; frame != null; frame = frame.Enclosing)
+                if (frame.Locals.Declares(name))
+                    return true;
+            return false;
+        }
 
         internal long ForkMemoryBytes => checked(128 + Locals.ForkMemoryBytes + (PrefixBindings?.ForkMemoryBytes ?? 0));
 

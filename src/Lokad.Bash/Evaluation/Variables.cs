@@ -557,6 +557,15 @@ public sealed partial class Variables
                 _owner.CopyBindingFrom(command, name);
         }
 
+        /// <summary>Publishes the array declaration reached before a readonly element write fails.</summary>
+        internal void PrepareReadonlyElementDeclaration(Variables command, BindingName name, ArrayKind kind)
+        {
+            if (command.TryGetBinding(name, detachBorrowed: false, out var slot)
+                && slot is ScalarSlot or UnassignedSlot
+                && command.TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.DiscardValue))
+                Publish(name, command);
+        }
+
         public bool Declares(BindingName name)
         {
             var owner = DeclarationOwner(name);
@@ -615,7 +624,8 @@ public sealed partial class Variables
             bool isNameref,
             bool inherit,
             CaseAttributeChange caseChange,
-            EvaluationMemory memory)
+            EvaluationMemory memory,
+            Evaluation.FunctionContext? enclosingFunction)
         {
             var hasAssignment = operand.Kind == VariableOperandKind.Assignment;
             var reference = operand.Reference;
@@ -696,8 +706,9 @@ public sealed partial class Variables
             }
             else
             {
-                // Shadow the binding itself, not the target of an outer nameref.
-                if (command.IsReadonlyBinding(name) || unsetPrefixes != null && savedBinding.IsReadonlyBinding(name))
+                // A new function local may shadow a readonly local in an enclosing invocation.
+                if ((command.IsReadonlyBinding(name) || unsetPrefixes != null && savedBinding.IsReadonlyBinding(name))
+                    && enclosingFunction?.IsLocal(name) != true)
                     return false;
 
                 var local = new Variables();

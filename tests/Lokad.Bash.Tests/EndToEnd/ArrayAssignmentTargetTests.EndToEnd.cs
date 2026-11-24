@@ -201,6 +201,46 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         AssertDeclarationAsync(body + "\n", output, error);
 
     [Theory]
+    [InlineData("arr=outer; f(){ local -r arr=old; local 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -ar arr=()\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=outer; f(){ local -r arr; local -A 'arr[key]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -Ar arr\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=outer; f(){ local -r arr=''; local +a 'arr[2]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -ar arr=()\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=outer; f(){ local -rxiu arr=11; local 'arr[2]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -airxu arr=()\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=outer; f(){ local -r arr=old i=4; prefix=temp local 'arr[i++]=new'; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr; }; f; declare -p arr",
+        "<1:4>\ndeclare -ar arr=()\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=outer; f(){ local -r arr=old; i=4; local \"arr[$((i++))]=$((i++))\"; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr; }; f; declare -p arr",
+        "<1:6>\ndeclare -ar arr=()\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=outer; f(){ local -ar arr=([2]=old); local -A 'arr[key]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -ar arr=([2]=\"old\")\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: readonly variable\n")]
+    public Task ReadonlyLocalsPublishTheirArrayTypeBeforeRejectingAnElement(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
+    [Theory]
+    [InlineData("arr=global; g(){ local arr; printf '<%s>\\n' \"$?\"; declare -p arr; }; f(){ local -r arr=outer; g; declare -p arr; }; f; declare -p arr",
+        "<0>\ndeclare -- arr\ndeclare -r arr=\"outer\"\ndeclare -- arr=\"global\"\n", "")]
+    [InlineData("arr=global; g(){ local 'arr[2]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f(){ local -r arr=outer; mid; declare -p arr; }; mid(){ g; }; f; declare -p arr",
+        "<0>\ndeclare -a arr=([2]=\"new\")\ndeclare -r arr=\"outer\"\ndeclare -- arr=\"global\"\n", "")]
+    [InlineData("arr=global; g(){ local arr=(inner); printf '<%s>\\n' \"$?\"; declare -p arr; }; f(){ local -r arr=outer; g; declare -p arr; }; f; declare -p arr",
+        "<0>\ndeclare -a arr=([0]=\"inner\")\ndeclare -r arr=\"outer\"\ndeclare -- arr=\"global\"\n", "")]
+    [InlineData("readonly arr=global; f(){ local 'arr[2]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -r arr=\"global\"\ndeclare -r arr=\"global\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=global; g(){ local -I arr; printf '<%s>\\n' \"$?\"; declare -p arr; }; f(){ local -r arr=outer; g; declare -p arr; }; f; declare -p arr",
+        "<0>\ndeclare -r arr=\"outer\"\ndeclare -r arr=\"outer\"\ndeclare -- arr=\"global\"\n", "")]
+    [InlineData("arr=global; g(){ local -Iu 'arr[2]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f(){ local -r arr=outer; g; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -ar arr=()\ndeclare -r arr=\"outer\"\ndeclare -- arr=\"global\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=global; g(){ local -I +r arr; printf '<%s>\\n' \"$?\"; declare -p arr; }; f(){ local -r arr=outer; g; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -r arr=\"outer\"\ndeclare -r arr=\"outer\"\ndeclare -- arr=\"global\"\n", "line 1: local: arr: readonly variable\n")]
+    [InlineData("arr=global; g(){ local -I arr=(inner); printf '<inside>'; }; f(){ local -r arr=outer; g; printf '<parent>'; }; f\ndeclare -p arr",
+        "declare -- arr=\"global\"\n", "line 1: arr: readonly variable\n")]
+    [InlineData("arr=global; g(){ prefix=temp eval \"local 'arr[2]=new'\"; printf '<%s>\\n' \"$?\"; declare -p arr; }; f(){ local -r arr=outer; g; declare -p arr; }; f; declare -p arr",
+        "<0>\ndeclare -a arr=([2]=\"new\")\ndeclare -r arr=\"outer\"\ndeclare -- arr=\"global\"\n", "")]
+    public Task NestedLocalDeclarationsSelectTheirOwnReadonlyState(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
+    [Theory]
     [InlineData("arr=old; declare -n arr[2]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
         "<1>\ndeclare -- arr=\"old\"\n", "line 1: declare: arr[2]: reference variable cannot be an array\n")]
     [InlineData("i=0; typeset -n 'arr[i++]=target'; printf '<%s:%s>' \"$?\" \"$i\"",
