@@ -74,6 +74,13 @@ internal static class CommandSubstitutionScanner
         out ParserFailure? error) =>
         ScanParsed(context, text, startIndex, keepLookahead: true, out endIndex, out substitution, out error);
 
+    /// <summary>Uses the arithmetic opener only when its adjacent-subshell fallback runs out of input.</summary>
+    internal static ParserFailure? KeepArithmeticOpeningAtEof(
+        ShellScanStatus status, ParserFailure? failure, UnclosedDelimiter? arithmeticOpening) =>
+        status == ShellScanStatus.Incomplete && arithmeticOpening != null
+            && failure?.UnclosedDelimiter is { Delimiter: ')', AtOpeningDelimiter: false }
+            ? failure with { UnclosedDelimiter = arithmeticOpening } : failure;
+
     private static ShellScanStatus ScanParsed(ShellScanContext context, ShellSource text, int startIndex,
         bool keepLookahead, out int endIndex, out CommandSubstitutionSyntax? substitution, out ParserFailure? error)
     {

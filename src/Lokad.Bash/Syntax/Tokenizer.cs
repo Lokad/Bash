@@ -455,6 +455,14 @@ internal sealed class Tokenizer
         RecordFailure(failure?.InDoubleQuotes(quoted)
             ?? new ParserFailure(new SyntaxError(missingDelimiter, start), ParserFailureKind.Delimiter));
 
+    // Keep the public parser's diagnostic stable while the script reader retains the matching delimiter.
+    private void RecordUnterminatedExpansion(ParserFailure? failure, string message, int offset)
+    {
+        var error = new SyntaxError(message, offset);
+        RecordFailure(TracksScriptDiagnostics && failure != null
+            ? failure with { Error = error } : new ParserFailure(error, ParserFailureKind.Delimiter));
+    }
+
     private bool TracksScriptDiagnostics => !IsCommandSubstitution && TrackCommandLocations && TrackUnexpectedTokens;
 
     private void RecordUnclosedDelimiter(char delimiter, int start, string message, int offset)
@@ -1502,8 +1510,9 @@ internal sealed class Tokenizer
                 continue;
             }
 
+            UnclosedDelimiter? arithmeticOpening = null;
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(ref unquoted, quotedOperand, ref renderedLineAdjustment))
+                && TryReadArithmeticExpansion(ref unquoted, quotedOperand, ref renderedLineAdjustment, out arithmeticOpening))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
@@ -1512,7 +1521,7 @@ internal sealed class Tokenizer
                 FlushUnquoted();
                 if (ReadCommandSubstitutionPart(
                         quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution,
-                        syntax, spelling) is not { } substitution)
+                        syntax, spelling, arithmeticOpening) is not { } substitution)
                     return new Word([]);
                 AddPart(substitution);
                 continue;
@@ -1684,19 +1693,27 @@ internal sealed class Tokenizer
     /// <summary>
     /// Captures canonical arithmetic-expansion syntax while retaining physical cursor offsets.
     /// </summary>
-    private bool TryReadArithmeticExpansion(ref WordPartBuffer content, bool quoted, ref int renderedLineAdjustment)
+    private bool TryReadArithmeticExpansion(ref WordPartBuffer content, bool quoted, ref int renderedLineAdjustment,
+        out UnclosedDelimiter? arithmeticOpening)
     {
+        arithmeticOpening = null;
         var start = Position;
         if (_scanContext.TryGetCommandSubstitution(_input, start, out _))
             return false;
         var status = ArithmeticExpansionScanner.Scan(
             _scanContext, _input, start, out var endIndex, out var expression, out _, out var bracketed,
-            out var adjustment, out var error, trackRenderedLines: true);
+            out var adjustment, out var error, trackRenderedLines: true, trackIncompleteDelimiter: TracksScriptDiagnostics);
         if (status == ShellScanStatus.NotFound)
+        {
+            arithmeticOpening = error?.UnclosedDelimiter;
             return false;
+        }
         if (status != ShellScanStatus.Complete)
         {
-            RecordExpansionFailure(error, quoted, "Unterminated arithmetic expansion.", start);
+            if (status == ShellScanStatus.Incomplete)
+                RecordUnterminatedExpansion(error, "Unterminated arithmetic expansion.", start);
+            else
+                RecordExpansionFailure(error, quoted, "Unterminated arithmetic expansion.", start);
             return true;
         }
 
@@ -1710,7 +1727,7 @@ internal sealed class Tokenizer
     /// Reads a substitution, retaining the tree built by parenthesized delimiter parsing.
     /// </summary>
     private WordPart? ReadCommandSubstitutionPart(WordPartKind kind, ExpansionWordSyntax syntax,
-        ConditionalParser.OperandSpelling spelling)
+        ConditionalParser.OperandSpelling spelling, UnclosedDelimiter? arithmeticOpening)
     {
         if (!TryReserveSyntax())
             return null;
@@ -1736,7 +1753,8 @@ internal sealed class Tokenizer
                 && (IsCommandSubstitution || TracksScriptDiagnostics))
                 RecordUnclosedDelimiter('`', start, "Unterminated command substitution.", Position);
             else
-                RecordExpansionFailure(error, kind == WordPartKind.CommandSubstitutionQuoted,
+                RecordExpansionFailure(CommandSubstitutionScanner.KeepArithmeticOpeningAtEof(status, error, arithmeticOpening),
+                    kind == WordPartKind.CommandSubstitutionQuoted,
                     "Unterminated command substitution.", start);
             return null;
         }
@@ -1820,16 +1838,12 @@ internal sealed class Tokenizer
             return true;
         }
 
-        if (error != null)
-            RecordFailure(error.InDoubleQuotes(quoted));
-        else if (status == BracedParameterScanStatus.UnterminatedCommandSubstitution)
-        {
-            RecordExpansionFailure(null, quoted, "Unterminated command substitution.", errorIndex);
-        }
+        if (status == BracedParameterScanStatus.UnterminatedCommandSubstitution)
+            RecordUnterminatedExpansion(error, "Unterminated command substitution.", errorIndex);
         else if (status == BracedParameterScanStatus.Unterminated && !_isExpansionOperand)
-        {
-            RecordExpansionFailure(null, quoted, quoted ? "Unterminated double-quoted string." : "Unterminated parameter expansion.", errorIndex);
-        }
+            RecordUnterminatedExpansion(error, quoted ? "Unterminated double-quoted string." : "Unterminated parameter expansion.", errorIndex);
+        else if (status != BracedParameterScanStatus.Unterminated && error != null)
+            RecordFailure(error.InDoubleQuotes(quoted));
 
         return false;
     }
@@ -1944,15 +1958,16 @@ internal sealed class Tokenizer
                 continue;
             }
 
+            UnclosedDelimiter? arithmeticOpening = null;
             if (current == (byte)'$' && ArithmeticExpansionScanner.HasPrefix(_input, Position)
-                && TryReadArithmeticExpansion(ref content, quoted: true, ref renderedLineAdjustment))
+                && TryReadArithmeticExpansion(ref content, quoted: true, ref renderedLineAdjustment, out arithmeticOpening))
                 continue;
 
             if (current == (byte)'$' && CommandSubstitutionScanner.HasPrefix(_input, Position)
                 || current == (byte)'`' && (!braceExpanded || Position + 1 < span.Length))
             {
                 Flush(allowEmpty: false);
-                if (ReadCommandSubstitutionPart(WordPartKind.CommandSubstitutionQuoted, syntax, spelling) is not { } substitution)
+                if (ReadCommandSubstitutionPart(WordPartKind.CommandSubstitutionQuoted, syntax, spelling, arithmeticOpening) is not { } substitution)
                     return parts;
                 AddPart(substitution);
                 continue;

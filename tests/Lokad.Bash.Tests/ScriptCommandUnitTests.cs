@@ -105,6 +105,13 @@ public sealed class ScriptCommandUnitTests
     [InlineData("probe\\\n[0\n", 3, ']')]
     [InlineData("probe[0\n: 'text\n", 3, '\'')]
     [InlineData("value=$(printf inside\nprobe[0\n)\n", 3, ']')]
+    [InlineData("probe[0\n: $\\\n{unset\n", 4, '}')]
+    [InlineData("probe[0\n: ${unset:-\n 'text\n", 4, '\'')]
+    [InlineData("probe[0\n: `printf text\n", 3, '`')]
+    [InlineData("probe[0\n: $((1+\n ${unset\n", 3, ')')]
+    [InlineData("probe[0\n: $\\\n[1+\n", 4, ']')]
+    [InlineData("probe[${unset\n", 2, '}')]
+    [InlineData("probe[0\n: $((1+2)\n", 3, ')')]
     public async Task IncompleteAssignmentSelectorStopsTheCommandUnit(string ending, int line, char delimiter)
     {
         var memory = new MemoryGovernor(256 * 1024);
@@ -118,6 +125,35 @@ public sealed class ScriptCommandUnitTests
         Assert.Empty(host.CaptureEntries());
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ACompleteAdjacentSubshellInASelectorKeepsItsArithmeticFallback()
+    {
+        const string script = "probe[0 + $((printf 0)\n)]=ok\nprintf '%s' \"${probe[0]}\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+            Assert.Equal(0, status);
+            Assert.Equal("ok", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData(": \"\n${unset\n", 3, '}')]
+    [InlineData(": $((1+2)\n", 2, ')')]
+    public async Task IncompleteExpansionsInAnOrdinaryWordReportTheOpenedDelimiter(string ending, int line, char delimiter)
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("printf before\n" + ending, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal($"line {line}: unexpected EOF while looking for matching `{delimiter}'\n", host.StandardError.TextContent);
     }
 
     [Fact]

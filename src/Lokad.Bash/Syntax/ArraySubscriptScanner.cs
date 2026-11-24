@@ -112,7 +112,6 @@ internal static class ArraySubscriptScanner
                 return new ScanResult(ShellScanStatus.Invalid, openingBracketIndex, SubstitutionSyntaxFailure.None);
             var cursor = new ShellSourceCursor(text, openingBracketIndex + 1, context);
             var bracketDepth = 1;
-            var quoteStart = -1;
             var lastRejectedQuote = -1;
             var lastQuotedFailure = SubstitutionSyntaxFailure.None;
             var trackQuotedCaptures = results != null && context.CanReadAhead(text);
@@ -122,13 +121,7 @@ internal static class ArraySubscriptScanner
                     continue;
                 var start = cursor.Position;
                 if (cursor.TryConsumeQuoteOrEscape(recognizeAnsiC))
-                {
-                    if (!cursor.IsQuoted)
-                        quoteStart = -1;
-                    else if (quoteStart < 0)
-                        quoteStart = start;
                     continue;
-                }
 
                 var inspectQuotedExpansion = trackQuotedCaptures && cursor.IsDoubleQuoted && cursor.Current == (byte)'$';
                 var reads = inspectQuotedExpansion ? context.RejectedCaptureReads : 0;
@@ -142,8 +135,8 @@ internal static class ArraySubscriptScanner
                     }
                     continue;
                 }
-                if (nestedResult is ShellNestedExpansionScan.Incomplete)
-                    return FinishIncomplete(ShellScanStatus.Incomplete, null);
+                if (nestedResult is ShellNestedExpansionScan.Incomplete incomplete)
+                    return FinishIncomplete(ShellScanStatus.Incomplete, incomplete.Failure);
                 if (nestedResult is ShellNestedExpansionScan.Invalid invalid)
                     return FinishIncomplete(ShellScanStatus.Invalid, invalid.Failure);
 
@@ -182,13 +175,12 @@ internal static class ArraySubscriptScanner
             }
 
             ParserFailure? quoteFailure = null;
-            if (results != null && quoteStart >= 0)
+            if (results != null && cursor.UnclosedQuote is { } unclosedQuote)
             {
-                var delimiter = cursor.IsDoubleQuoted ? '"' : '\'';
                 var message = cursor.IsDoubleQuoted ? "Unterminated double-quoted string." : "Unterminated single-quoted string.";
                 quoteFailure = new ParserFailure(new SyntaxError(message, cursor.Position), ParserFailureKind.Delimiter)
                 {
-                    UnclosedDelimiter = new UnclosedDelimiter(delimiter, quoteStart) { AtOpeningDelimiter = true }
+                    UnclosedDelimiter = unclosedQuote
                 };
             }
             return FinishIncomplete(ShellScanStatus.Incomplete, quoteFailure);

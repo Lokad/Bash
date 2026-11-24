@@ -20,6 +20,7 @@ internal sealed class ShellSourceCursor
 
     /// <summary>The currently open shell quote, if any.</summary>
     private ShellQuoteKind _quote;
+    private int _quoteStart;
 
     /// <summary>Creates a cursor at one validated source position with no open quote.</summary>
     public ShellSourceCursor(ShellSource text, int position)
@@ -54,6 +55,10 @@ internal sealed class ShellSourceCursor
 
     /// <summary>Gets whether scanning is specifically inside double quotes.</summary>
     public bool IsDoubleQuoted => _quote == ShellQuoteKind.Double;
+
+    /// <summary>Returns the open quote's closing character and physical opening position.</summary>
+    internal UnclosedDelimiter? UnclosedQuote => !IsQuoted ? null
+        : new UnclosedDelimiter(IsDoubleQuoted ? '"' : '\'', _quoteStart) { AtOpeningDelimiter = true };
 
     /// <summary>Advances one byte, never moving beyond the end position.</summary>
     public void Advance()
@@ -503,6 +508,7 @@ internal sealed class ShellSourceCursor
             && TryMatchLogicalText(_text.AsSpan(), Position, "$'", out var literalStart))
         {
             _quote = ShellQuoteKind.AnsiC;
+            _quoteStart = literalStart - 1;
             Position = literalStart;
             return true;
         }
@@ -527,6 +533,7 @@ internal sealed class ShellSourceCursor
 
         if (current == (byte)'"')
         {
+            _quoteStart = Position;
             _quote = _quote == ShellQuoteKind.Double
                 ? ShellQuoteKind.None
                 : ShellQuoteKind.Double;
@@ -537,6 +544,7 @@ internal sealed class ShellSourceCursor
         if (_quote == ShellQuoteKind.None && current == (byte)'\'')
         {
             _quote = ShellQuoteKind.Single;
+            _quoteStart = Position;
             Position++;
             return true;
         }
@@ -550,7 +558,8 @@ internal sealed class ShellSourceCursor
     /// <summary>Bounds late selector lookahead within adjacent double-quoted segments of one word.</summary>
     internal static int FindDoubleQuoteEnd(ShellScanContext context, ShellSource source, int position)
     {
-        var cursor = new ShellSourceCursor(source, position, context) { _quote = ShellQuoteKind.Double };
+        var cursor = new ShellSourceCursor(source, position, context)
+            { _quote = ShellQuoteKind.Double, _quoteStart = position - 1 };
         var failure = context.SubstitutionFailure;
         try
         {
@@ -609,6 +618,7 @@ internal sealed class ShellSourceCursor
             return ShellNestedExpansionScan.NotFound.Instance;
 
         var start = Position;
+        UnclosedDelimiter? arithmeticOpening = null;
         if (ArithmeticExpansionScanner.HasPrefix(_text, start) && !_context.TryGetCommandSubstitution(_text, start, out _))
         {
             var status = ArithmeticExpansionScanner.ScanShape(
@@ -630,6 +640,7 @@ internal sealed class ShellSourceCursor
             }
             if (status != ShellScanStatus.NotFound)
                 return ToFailure(status, ShellNestedExpansionKind.Arithmetic, error);
+            arithmeticOpening = error?.UnclosedDelimiter;
         }
 
         if ((parameters == BracedParameterRecognition.All || IsDoubleQuoted)
@@ -655,7 +666,7 @@ internal sealed class ShellSourceCursor
                     or BracedParameterScanStatus.UnterminatedCommandSubstitution
                     or BracedParameterScanStatus.MissingBraceAfterSelector
                     ? new ShellNestedExpansionScan.Incomplete(ShellNestedExpansionKind.Parameter)
-                        { ParameterSubscriptFailure = subscriptFailure }
+                        { ParameterSubscriptFailure = subscriptFailure, Failure = error }
                     : new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Parameter, error?.InDoubleQuotes(IsDoubleQuoted));
             }
 
@@ -676,7 +687,8 @@ internal sealed class ShellSourceCursor
                 out var substitution,
                 out var error);
             if (status != ShellScanStatus.Complete)
-                return ToFailure(status, ShellNestedExpansionKind.Command, error);
+                return ToFailure(status, ShellNestedExpansionKind.Command,
+                    CommandSubstitutionScanner.KeepArithmeticOpeningAtEof(status, error, arithmeticOpening));
 
             Position = endIndex + 1;
             var renderedLineAdjustment = trackRenderedLines ? substitution switch
@@ -698,8 +710,16 @@ internal sealed class ShellSourceCursor
             ShellScanStatus status,
             ShellNestedExpansionKind kind,
             ParserFailure? failure) =>
-            status == ShellScanStatus.Incomplete && failure?.UnclosedDelimiter == null
+            status == ShellScanStatus.Incomplete && (kind != ShellNestedExpansionKind.Command || failure?.UnclosedDelimiter == null)
                 ? new ShellNestedExpansionScan.Incomplete(kind)
+                {
+                    Failure = failure ?? (_text[start] == (byte)'`'
+                        ? new ParserFailure(new SyntaxError("Unterminated command substitution.", _text.Length), ParserFailureKind.Delimiter)
+                        {
+                            UnclosedDelimiter = new UnclosedDelimiter('`', start) { AtOpeningDelimiter = true }
+                        }
+                        : null)
+                }
                 : new ShellNestedExpansionScan.Invalid(kind, failure?.InDoubleQuotes(IsDoubleQuoted));
     }
 
@@ -1025,6 +1045,7 @@ internal abstract record ShellNestedExpansionScan
     internal sealed record Incomplete(ShellNestedExpansionKind Kind) : ShellNestedExpansionScan
     {
         internal ParameterSubscriptFailure ParameterSubscriptFailure { get; init; }
+        internal ParserFailure? Failure { get; init; }
     }
 
     /// <summary>A nested prefix was present but contained malformed nested syntax.</summary>

@@ -54,7 +54,22 @@ internal static class ArithmeticExpansionScanner
         out bool bracketed,
         out int renderedLineAdjustment,
         out ParserFailure? error,
-        bool trackRenderedLines = false) =>
+        bool trackRenderedLines = false) => Scan(context, text, startIndex, out endIndex, out expression,
+            out containsCommandSubstitution, out bracketed, out renderedLineAdjustment, out error, trackRenderedLines,
+            trackIncompleteDelimiter: false);
+
+    internal static ShellScanStatus Scan(
+        ShellScanContext context,
+        ShellSource text,
+        int startIndex,
+        out int endIndex,
+        out SourceSpelling expression,
+        out bool containsCommandSubstitution,
+        out bool bracketed,
+        out int renderedLineAdjustment,
+        out ParserFailure? error,
+        bool trackRenderedLines,
+        bool trackIncompleteDelimiter) =>
         ScanCore(
             context,
             text,
@@ -68,7 +83,7 @@ internal static class ArithmeticExpansionScanner
             out error,
             captureExpression: true,
             form: ArithmeticForm.Expansion,
-            trackRenderedLines);
+            trackRenderedLines, trackIncompleteDelimiter);
 
     internal static ShellScanStatus ScanShape(
         ShellScanContext context,
@@ -92,7 +107,7 @@ internal static class ArithmeticExpansionScanner
             out error,
             captureExpression: false,
             form: ArithmeticForm.Expansion,
-            trackRenderedLines);
+            trackRenderedLines, trackIncompleteDelimiter: true);
 
     /// <summary>
     /// Scans a command with adjacent closers, sharing the tokenizer's nesting budget.
@@ -108,7 +123,7 @@ internal static class ArithmeticExpansionScanner
         out ParserFailure? error)
     {
         var status = ScanCore(context, text, startIndex, out endIndex, out var spelling, out _, out _, out _, out _, out error,
-            captureExpression: true, form: ArithmeticForm.Command);
+            captureExpression: true, form: ArithmeticForm.Command, trackRenderedLines: false, trackIncompleteDelimiter: false);
         expression = spelling.Source;
         return status;
     }
@@ -118,7 +133,7 @@ internal static class ArithmeticExpansionScanner
         out int endIndex, out ShellSource expression, out ArithmeticForSeparators separators, out ParserFailure? error)
     {
         var status = ScanCore(context, text, startIndex, out endIndex, out var spelling, out _, out _, out separators, out _, out error,
-            captureExpression: true, form: ArithmeticForm.ForHeader);
+            captureExpression: true, form: ArithmeticForm.ForHeader, trackRenderedLines: false, trackIncompleteDelimiter: false);
         expression = spelling.Source;
         return status;
     }
@@ -127,7 +142,8 @@ internal static class ArithmeticExpansionScanner
     internal static bool TryScanAdjacentSubshell(ShellScanContext context, ShellSource text, int startIndex,
         out int endIndex) =>
         ScanCore(context, text, startIndex, out endIndex, out _, out _, out _, out _, out _, out _,
-            captureExpression: false, form: ArithmeticForm.AdjacentSubshell) == ShellScanStatus.Complete;
+            captureExpression: false, form: ArithmeticForm.AdjacentSubshell, trackRenderedLines: false,
+            trackIncompleteDelimiter: false) == ShellScanStatus.Complete;
 
     private static ParserFailure? ReadPartialCommandCloser(ShellScanContext context, ShellSource text,
         int expressionStart, int closer, bool forHeader, ref int endIndex)
@@ -189,7 +205,8 @@ internal static class ArithmeticExpansionScanner
         out ParserFailure? error,
         bool captureExpression,
         ArithmeticForm form,
-        bool trackRenderedLines = false)
+        bool trackRenderedLines,
+        bool trackIncompleteDelimiter)
     {
         endIndex = startIndex;
         expression = default;
@@ -219,23 +236,12 @@ internal static class ArithmeticExpansionScanner
             var opening = bracketed ? (byte)'[' : (byte)'(';
             var closing = bracketed ? (byte)']' : (byte)')';
             var depth = adjacentSubshell ? 1 : 0;
-            var quoteStart = -1;
             while (!cursor.IsAtEnd)
             {
                 if (cursor.TrySkipReadAheadBodies())
                     continue;
-                var position = cursor.Position;
                 if (cursor.TryConsumeQuoteOrEscape())
-                {
-                    if (isCommand)
-                    {
-                        if (!cursor.IsQuoted)
-                            quoteStart = -1;
-                        else if (quoteStart < 0)
-                            quoteStart = position;
-                    }
                     continue;
-                }
 
                 var nestedResult = cursor.SkipNestedExpansion(isCommand
                     ? BracedParameterRecognition.DoubleQuotedOnly
@@ -247,8 +253,17 @@ internal static class ArithmeticExpansionScanner
                     continue;
                 }
 
-                if (nestedResult is ShellNestedExpansionScan.Incomplete)
+                if (nestedResult is ShellNestedExpansionScan.Incomplete incomplete)
+                {
+                    if (trackIncompleteDelimiter)
+                    {
+                        // The unquoted arithmetic reader matches its own pair before expanding parameter operands.
+                        var failure = incomplete.Failure;
+                        error = !cursor.IsQuoted && failure?.UnclosedDelimiter?.Delimiter == '}'
+                            ? ReadIncomplete() : failure ?? ReadIncomplete();
+                    }
                     return ShellScanStatus.Incomplete;
+                }
                 if (nestedResult is ShellNestedExpansionScan.Invalid invalid)
                 {
                     error = invalid.Failure;
@@ -304,6 +319,8 @@ internal static class ArithmeticExpansionScanner
 
                     // This closes the subshell opener in a command substitution.
                     // A later pair belongs to another lexical boundary.
+                    if (trackIncompleteDelimiter)
+                        error = ReadIncomplete();
                     return ShellSourceCursor.SkipLineContinuations(span, cursor.Position + 1) == text.Length
                         ? ShellScanStatus.Incomplete
                         : ShellScanStatus.NotFound;
@@ -338,17 +355,17 @@ internal static class ArithmeticExpansionScanner
                 return ShellScanStatus.Complete;
             }
 
-            if (isCommand)
-            {
-                var delimiter = quoteStart < 0 ? ')' : cursor.IsDoubleQuoted ? '"' : '\'';
-                error = new ParserFailure(new SyntaxError("Unterminated arithmetic command.", startIndex),
-                    ParserFailureKind.IncompleteArithmeticCommand)
-                {
-                    UnclosedDelimiter = new UnclosedDelimiter(delimiter, quoteStart < 0 ? expressionStart - 1 : quoteStart)
-                    { AtOpeningDelimiter = true }
-                };
-            }
+            if (isCommand || trackIncompleteDelimiter)
+                error = ReadIncomplete();
             return ShellScanStatus.Incomplete;
+
+            ParserFailure ReadIncomplete() => new(
+                new SyntaxError(isCommand ? "Unterminated arithmetic command." : "Unterminated arithmetic expansion.", startIndex),
+                isCommand ? ParserFailureKind.IncompleteArithmeticCommand : ParserFailureKind.Delimiter)
+            {
+                UnclosedDelimiter = cursor.UnclosedQuote
+                    ?? new UnclosedDelimiter((char)closing, expressionStart - 1) { AtOpeningDelimiter = true }
+            };
         }
         finally
         {

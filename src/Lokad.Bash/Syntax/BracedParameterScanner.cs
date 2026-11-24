@@ -224,6 +224,7 @@ internal static class BracedParameterScanner
             var rejectedSelectorStart = -1;
             var rejectedSelectorDepth = 0;
             var resolveLateSubscripts = phase != ScanPhase.Lexical;
+            ParserFailure? incompleteFailure = null;
             while (!cursor.IsAtEnd)
             {
                 if (cursor.TrySkipReadAheadBodies())
@@ -292,8 +293,13 @@ internal static class BracedParameterScanner
                 if (nestedResult is ShellNestedExpansionScan.Incomplete incomplete)
                 {
                     errorIndex = cursor.Position;
+                    if (phase != ScanPhase.Expansion)
+                        incompleteFailure = incomplete.Failure;
                     if (incomplete.Kind == ShellNestedExpansionKind.Command && lateSelectorEnd < 0)
+                    {
+                        error = incompleteFailure;
                         return BracedParameterScanStatus.UnterminatedCommandSubstitution;
+                    }
                     if (resolveLateSubscripts && incomplete.ParameterSubscriptFailure != ParameterSubscriptFailure.None)
                         subscriptFailure = ParameterSubscriptFailure.Nested;
                     break;
@@ -394,6 +400,13 @@ internal static class BracedParameterScanner
                 if (operandStart > start && operandStart < text.Length && ParameterNameTerminators.Contains(text[operandStart]))
                     return BracedParameterScanStatus.UnterminatedOperand;
             }
+            if (phase != ScanPhase.Expansion)
+                error = incompleteFailure ?? new ParserFailure(
+                    new SyntaxError("Unterminated parameter expansion.", errorIndex), ParserFailureKind.Delimiter)
+                {
+                    UnclosedDelimiter = cursor.UnclosedQuote
+                        ?? new UnclosedDelimiter('}', payloadStart - 1) { AtOpeningDelimiter = true }
+                };
             return BracedParameterScanStatus.Unterminated;
         }
         finally
