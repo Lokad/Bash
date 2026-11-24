@@ -30,7 +30,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(1, state.LastExitCode);
         var diagnostic = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
-        Assert.Equal("missing: bad array subscript\n", Encoding.UTF8.GetString(diagnostic.Content));
+        Assert.Equal("line 1: missing: bad array subscript\n", Encoding.UTF8.GetString(diagnostic.Content));
         Assert.False(state.Variables.ContainsKey("changed"));
         Assert.Equal((BindingName)"PIPESTATUS", Assert.Single(state.IndexedArrays).Key);
     }

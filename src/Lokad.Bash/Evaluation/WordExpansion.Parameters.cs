@@ -85,7 +85,7 @@ internal static partial class WordExpansion
             if (parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript && quoteContext == ExpansionQuoteContext.Unquoted)
                 await ReportParameterWordSyntaxAsync(originalWord, segment, missingBrace: false, scope).ConfigureAwait(false);
             else
-                await ReportBadSubstitutionAsync().ConfigureAwait(false);
+                await ReportBadSubstitutionAsync(emptyArraySubscript: false).ConfigureAwait(false);
             return;
         }
         var transform = parsed.Kind == BracedParameterOperatorKind.Transform && parsed.Word.Length == 1 ? parsed.Word[0] : (byte)0;
@@ -731,7 +731,7 @@ internal static partial class WordExpansion
 
                 if (reference.Kind == VariableReferenceKind.Element && reference.Subscript.Length == 0)
                 {
-                    await ReportBadSubstitutionAsync().ConfigureAwait(false);
+                    await ReportBadSubstitutionAsync(emptyArraySubscript: true).ConfigureAwait(false);
                     return new ParameterValue(reference.Kind, [], false, reference, null);
                 }
 
@@ -863,13 +863,15 @@ internal static partial class WordExpansion
                 [ShellValue.FromText("${"), ShellValue.FromBytes(content.Bytes), ShellValue.FromText("}")],
                 [ShellValue.FromText(message)], kind);
 
-        Task ReportBadSubstitutionAsync()
+        Task ReportBadSubstitutionAsync(bool emptyArraySubscript)
         {
             if (quoteContext == ExpansionQuoteContext.HereDocument)
                 return ReportParameterSyntaxAsync(segment.ToValue(), missingBrace: false, scope, hereDocument: true);
-            return scope.Effects.ReportUnitExpansionFailureAsync(
-                [ShellValue.FromText("${"), content.ToValue(), ShellValue.FromText("}")], [ShellValue.FromText("bad substitution")],
-                scope, ExpansionFailureKind.WordSyntax);
+            ReadOnlySpan<ShellValue> subject = [ShellValue.FromText("${"), content.ToValue(), ShellValue.FromText("}")];
+            ReadOnlySpan<ShellValue> message = [ShellValue.FromText("bad substitution")];
+            return emptyArraySubscript
+                ? scope.Effects.ReportEmptyArraySubscriptAsync(subject, message, scope)
+                : scope.Effects.ReportUnitExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
         }
 
         Task ReportIndirectFailureAsync(ReadOnlySpan<ShellValue> subject, string message) =>

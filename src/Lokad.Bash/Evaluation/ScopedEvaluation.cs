@@ -96,6 +96,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Records whether a loaded reader was invoked as a tested command.</summary>
     internal bool LoadedReaderIgnoresErrexit { get; init; }
 
+    /// <summary>Redirections and builtin execution run after a pipeline stage resets its EXIT action.</summary>
+    internal bool AfterPipelineExitReset { get; init; }
+
     /// <summary>A builtin's closed diagnostic output stops its expansion without making later commands fatal.</summary>
     internal bool CanExpand => !Effects.HasPendingExpansionError && Effects.BuiltinDiagnosticsOpen;
 

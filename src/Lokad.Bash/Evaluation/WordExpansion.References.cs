@@ -619,8 +619,7 @@ internal static partial class WordExpansion
             }
         }
 
-        if (use != ReferenceUse.Length || !associative)
-            await ReportBadSubscriptAsync().ConfigureAwait(false);
+        await ReportBadSubscriptAsync().ConfigureAwait(false);
         return null;
 
         Task ReportRejectedCompoundElementAsync(CompoundElement item, bool aggregate)
@@ -642,11 +641,15 @@ internal static partial class WordExpansion
 
         Task ReportBadSubscriptAsync()
         {
-            var message = ShellValue.FromText("bad array subscript");
             var referenceName = reference.Name.ToValue();
-            if (use is ReferenceUse.Read or ReferenceUse.Presence)
-                return scope.Effects.ReportExpansionDiagnosticAsync(referenceName, message);
-            if (use == ReferenceUse.DefaultRead || use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
+            if (use is ReferenceUse.Read or ReferenceUse.Presence or ReferenceUse.DefaultRead)
+                return scope.Effects.ReportArrayReadFailureAsync([referenceName], scope, length: false);
+            if (use == ReferenceUse.Length)
+                return scope.Effects.ReportArrayReadFailureAsync([reference.Subscript.ToValue(), ShellValue.FromText("]")],
+                    scope, length: true);
+
+            var message = ShellValue.FromText("bad array subscript");
+            if (use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
                 return scope.Effects.ReportBuiltinDiagnosticAsync([referenceName], [message], scope.Context);
 
             var subscript = preparedSubscript is { } prepared
@@ -654,12 +657,8 @@ internal static partial class WordExpansion
                 : use == ReferenceUse.DirectAssign
                     ? scope.Effects.GetAssignmentDiagnosticSpelling(reference.Subscript, scope.ExpansionOrigin)
                     : reference.Subscript.ToValue();
-            var closingBracket = ShellValue.FromText("]");
-            if (use == ReferenceUse.Length)
-                return scope.Effects.ReportFatalExpansionAsync([subscript, closingBracket], [message], ExpansionFailureKind.Arithmetic);
-
             var prefix = use == ReferenceUse.Unset ? ShellValue.FromText("unset: ") : ShellValue.Empty;
-            ReadOnlySpan<ShellValue> subject = [prefix, referenceName, ShellValue.FromText("["), subscript, closingBracket];
+            ReadOnlySpan<ShellValue> subject = [prefix, referenceName, ShellValue.FromText("["), subscript, ShellValue.FromText("]")];
             return use switch
             {
                 ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead

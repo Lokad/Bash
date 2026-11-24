@@ -1041,6 +1041,13 @@ during word expansion, including expansion inside a subscript, publish status an
 `PIPESTATUS` in the reached scope and use the enclosing word expansion's recovery
 boundary.
 
+A read that rejects a subscript after numeric evaluation reports the reached
+source line. With errexit active, it stops before the command runs, preserves
+`PIPESTATUS`, and exits with the previous nonzero status or 1. Testing the
+command itself leaves this expansion rule in effect. A tested `eval` or `source`
+suppresses it in the loaded reader. With errexit disabled, an ordinary read
+treats the element as unset, while a length expansion discards its command unit.
+
 When an arithmetic word takes its expansion pass, its array selectors expand
 once. The indexed selector's brackets, apostrophes, and tildes remain escaped
 for its numeric evaluation. An expansion elsewhere in the same arithmetic word

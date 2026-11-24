@@ -35,6 +35,8 @@ internal enum ExpansionFailureKind
     IntegerAssignment,
     /// <summary>Arithmetic selection of an indexed array element failed.</summary>
     ArrayIndex,
+    /// <summary>A read rejected an array subscript while the reader had errexit active.</summary>
+    ArrayRead,
     /// <summary>A compound initializer rejected an array selector with errexit active.</summary>
     CompoundArrayIndex,
     /// <summary>A reached parameter-default write failed after its operand expanded.</summary>

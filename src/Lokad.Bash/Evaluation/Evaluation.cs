@@ -75,6 +75,7 @@ public sealed partial class Evaluation : IFileTester
     // Simple stages can inherit the status rules of the reader that started the pipeline.
     private bool _pipelineUsesLoadedUnitStatus;
     private int? _loadedSyntaxFunctionDepth;
+    private bool _loadedReaderIgnoresErrexit;
     // A |& stage may replace its root command to append a redirection while borrowing the original locations.
     private ICommand? _pipelineStageSource;
     private SimpleCommand? _finalCaptureInput;
@@ -465,7 +466,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 var scope = new ScopedEvaluation(this, _vars, _initialContext)
                 {
-                    LoadedSyntaxFunctionDepth = _loadedSyntaxFunctionDepth
+                    LoadedSyntaxFunctionDepth = _loadedSyntaxFunctionDepth,
+                    LoadedReaderIgnoresErrexit = _loadedReaderIgnoresErrexit
                 };
                 if (!await TryImportInheritedFunctionsAsync(scope).ConfigureAwait(false))
                     result = EvaluationResult.FromExitCode(2);
@@ -678,7 +680,7 @@ public sealed partial class Evaluation : IFileTester
                         : EvaluationResult.DiscardCompoundRedirectionUnit();
                 }
                 else
-                    result = await FinalizeResultAsync(EvaluationResult.FromExitCode(redirectionExitCode), negated: false).ConfigureAwait(false);
+                    result = await CompleteRedirectionFailureAsync(redirectionExitCode, errorKind, scope).ConfigureAwait(false);
             }
             else
                 result = await EvaluateCommandAsync(redirectedCommand.Body, scope, negated: false).ConfigureAwait(false);
@@ -723,10 +725,14 @@ public sealed partial class Evaluation : IFileTester
         return ValueTask.FromResult(result);
     }
 
-    private ValueTask<EvaluationResult> CompleteSimpleRedirectionFailureAsync(int status, ExpansionErrorKind kind, ScopedEvaluation scope) =>
-        kind == ExpansionErrorKind.HereDocumentParameter && _state.FatalExpansion.HasValue
-            ? CompleteHereDocumentParameterFailureAsync(status, scope)
-            : new ValueTask<EvaluationResult>(FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false));
+    private ValueTask<EvaluationResult> CompleteRedirectionFailureAsync(int status, ExpansionErrorKind kind, ScopedEvaluation scope)
+    {
+        if (kind == ExpansionErrorKind.HereDocumentParameter && _state.FatalExpansion.HasValue)
+            return CompleteHereDocumentParameterFailureAsync(status, scope);
+        if (_state.FatalExpansion is { Kind: ExpansionFailureKind.ArrayRead } failure)
+            return RunExitTrapAsync(scope, EvaluationResult.Exit(failure.ExitCode), ExitTrapKind.Expansion);
+        return new ValueTask<EvaluationResult>(FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false));
+    }
 
     /// <summary>
     /// Evaluates a subshell command and returns its exit code to the caller.
@@ -776,8 +782,7 @@ public sealed partial class Evaluation : IFileTester
                 Context = childContext.WithLoopDepth(0),
                 ErrexitRedirections = null,
                 Timing = null,
-                InNestedCommandUnits = false,
-                LoadedReaderIgnoresErrexit = false
+                InNestedCommandUnits = false
             };
             if (redirections != null)
             {
@@ -945,6 +950,7 @@ public sealed partial class Evaluation : IFileTester
                 if (!ReferenceEquals(sourceCommand, command))
                     stage._pipelineStageSource = sourceCommand;
                 stage._loadedSyntaxFunctionDepth = scope.LoadedSyntaxFunctionDepth;
+                stage._loadedReaderIgnoresErrexit = scope.LoadedReaderIgnoresErrexit;
                 stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
                     && (scope.InNestedCommandUnits || _state.ForkKind == ShellForkKind.CommandSubstitution
                         || PipelineInheritsLoadedUnitStatus);
@@ -1107,7 +1113,7 @@ public sealed partial class Evaluation : IFileTester
                 if (isolateRedirections)
                     _state.FatalExpansion = null;
                 if (_state.TryConsumeExpansionError(out var assignmentRedirectionExitCode, out var errorKind))
-                    assignmentResult = await CompleteSimpleRedirectionFailureAsync(assignmentRedirectionExitCode, errorKind, scope)
+                    assignmentResult = await CompleteRedirectionFailureAsync(assignmentRedirectionExitCode, errorKind, scope)
                         .ConfigureAwait(false);
                 else
                 {
@@ -1365,7 +1371,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 // A failed redirection never enters exec, so it neither replaces the shell
                 // nor suppresses timing. Fatal expansion errors still terminate the evaluator.
-                return await CompleteSimpleRedirectionFailureAsync(redirectionError, errorKind, scope).ConfigureAwait(false);
+                return await CompleteRedirectionFailureAsync(redirectionError, errorKind, scope).ConfigureAwait(false);
             }
 
             if (preparation.RedirectionLifetime == RedirectionLifetime.Evaluation
@@ -1516,7 +1522,8 @@ public sealed partial class Evaluation : IFileTester
                         evaluatorBuiltin.Kind, byteOperands, builtinScope, false).ConfigureAwait(false),
                     BuiltinKind.Exit => await EvaluateBuiltinExitAsync(byteOperands, builtinScope, executable.Completion).ConfigureAwait(false),
                     BuiltinKind.Test => await EvaluateBuiltinTestAsync(commandName, byteOperands,
-                        builtinScope with { Variables = commandVars, SelectorBindings = bindings }, false).ConfigureAwait(false),
+                        builtinScope with { Variables = commandVars, SelectorBindings = bindings, AfterPipelineExitReset = true },
+                        false).ConfigureAwait(false),
                     BuiltinKind.Echo => await EvaluateBuiltinEchoAsync(echoContent, false).ConfigureAwait(false),
                     BuiltinKind.Type => await EvaluateBuiltinTypeAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Help => await AwaitWordExpansionAsync(EvaluateBuiltinHelpAsync(byteOperands, false)).ConfigureAwait(false),
@@ -3050,7 +3057,7 @@ public sealed partial class Evaluation : IFileTester
         _state.PushRedirectionTable(evaluation.DescriptorTable, evaluation.OpenedDescriptors, evaluation.TouchedDescriptors, Memory);
         try
         {
-            await evaluation.EvaluateAsync(scope, persistence).ConfigureAwait(false);
+            await evaluation.EvaluateAsync(scope with { AfterPipelineExitReset = true }, persistence).ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -3661,6 +3668,27 @@ public sealed partial class Evaluation : IFileTester
         ReportFatalExpansionAsync(name, message, ExpansionFailureKind.AssignmentTarget,
             GetCommandDiagnosticPrefix(scope));
 
+    internal Task ReportArrayReadFailureAsync(ReadOnlySpan<ShellValue> subject, ScopedEvaluation scope, bool length)
+    {
+        if (_state.FatalExpansion.HasValue)
+            return Task.CompletedTask;
+
+        ReadOnlySpan<ShellValue> message = [ShellValue.FromText("bad array subscript")];
+        if (ReaderErrexitEnabled(scope))
+        {
+            // Selection precedes command execution and leaves the previous PIPESTATUS visible.
+            var status = _state.LastExitCode is { } previous && previous != 0 ? previous : 1;
+            SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.ArrayRead, status)
+                { UseInheritedPipelineExitAction = !scope.AfterPipelineExitReset && UsesInheritedPipelineExitAction(scope) });
+        }
+        else if (length)
+            SetFatalExpansionError(ExpansionFailureKind.Arithmetic);
+        var prefix = scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument
+            ? GetHereDocumentWarningPrefix(scope) ?? GetCommandDiagnosticPrefix(scope.Context, HereDocumentExpansionLine(scope))
+            : GetCommandDiagnosticPrefix(scope);
+        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
+    }
+
     /// <summary>Uses the assignment's lexical spelling while retaining its original source location.</summary>
     internal ShellValue GetAssignmentDiagnosticSpelling(ShellSource spelling, LegacySubstitutionOrigin origin) =>
         spelling.AsSpan().IndexOf("\\\n"u8) < 0 ? spelling.ToValue()
@@ -3722,7 +3750,15 @@ public sealed partial class Evaluation : IFileTester
     }
 
     internal Task ReportUnitExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
-        ExpansionFailureKind kind)
+        ExpansionFailureKind kind) =>
+        ReportUnitExpansionFailureAsync(subject, message, scope, kind,
+            kind is ExpansionFailureKind.Arithmetic or ExpansionFailureKind.ArrayIndex ? GetBuiltinDiagnosticPrefix(scope.Context) : default);
+
+    internal Task ReportEmptyArraySubscriptAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope) =>
+        ReportUnitExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax, GetCommandDiagnosticPrefix(scope));
+
+    private Task ReportUnitExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
+        ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)
     {
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
@@ -3731,9 +3767,7 @@ public sealed partial class Evaluation : IFileTester
         SetFatalExpansionError(kind);
         _state.LastExitCode = 1;
         PublishExpansionPipelineStatus(1, scope);
-        return kind is ExpansionFailureKind.Arithmetic or ExpansionFailureKind.ArrayIndex
-            ? ReportBuiltinDiagnosticAsync(subject, message, scope.Context)
-            : ReportExpansionDiagnosticAsync(subject, message);
+        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
     }
 
     private void PublishAssignmentTargetFailure(ScopedEvaluation scope)

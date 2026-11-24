@@ -55,6 +55,24 @@ public sealed class ParameterOperatorTests
     [InlineData("set -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" >&2' EXIT\n"
         + ": 2>errors <<DOC\n${value:?stop}\nDOC\nprintf next",
         1, "", "", "line 3: value: stop\n<exit:1:1>", null)]
+    [InlineData(":\nprintf '<%s>' \"${a[-3]}\" \\\n2>errors\nprintf '<after:%s>' \"$?\"",
+        0, "<><after:0>", "line 2: a: bad array subscript\n", "", null)]
+    [InlineData("set -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"' EXIT\n"
+        + "(exit 7) && :\n! printf '<%s>' \"${a[-3]}\"\nprintf skipped",
+        7, "<exit:7:7>", "line 4: a: bad array subscript\n", null, null)]
+    [InlineData("set -e\nsource ./fixture || printf failed\nprintf after",
+        0, "<read:>after", "./fixture: line 1: a: bad array subscript\n", null, "printf '<read:%s>' \"${a[-3]}\" | cat")]
+    [InlineData("set -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"' EXIT\n"
+        + "printf '<%s>' \"${a[-3]}\" | cat\nprintf skipped",
+        1, "<exit:1:0><exit:1:1 0>", "line 3: a: bad array subscript\n", null, null)]
+    [InlineData("set -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" >&2' EXIT\n"
+        + "{ printf inside; } 2>errors <<DOC\n${a[-3]}\nDOC\nprintf skipped",
+        1, "", "", "line 5: a: bad array subscript\n<exit:1:0>", null)]
+    [InlineData("declare -A a=([one]=value); key=\nprintf '<%s>' \"${#a[$key]}\"\nprintf after",
+        0, "after", "line 2: $key]: bad array subscript\n", null, null)]
+    [InlineData("value=outer\nset -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"$value\" >&2' EXIT\n"
+        + "f(){ local value=inner; printf '<%s>' \"${a[-3]}\"; }\nf 2>errors",
+        1, "", "", "line 4: a: bad array subscript\n<exit:1:inner>", null)]
     public async Task ParameterDiagnosticsFollowSelectionAndTheReachedReader(
         string source, int status, string output, string diagnostic, string? redirectedDiagnostic, string? sourcedInput)
     {
@@ -200,7 +218,7 @@ public sealed class ParameterOperatorTests
     }
 
     [Theory]
-    [InlineData("printf '%s' \"${a[]}\"", "${a[]}: bad substitution\n")]
+    [InlineData("printf '%s' \"${a[]}\"", "line 3: ${a[]}: bad substitution\n")]
     [InlineData("printf '%s' \"${a[1}\"", "bad substitution: no closing `}' in \"${a[1}\"\n")]
     [InlineData("printf '%s' ${a[1}", "${a[1}: bad substitution\n")]
     [InlineData("printf '%s' \"${a.dot}\"", "${a.dot}: bad substitution\n")]
