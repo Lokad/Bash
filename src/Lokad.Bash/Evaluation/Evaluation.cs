@@ -2186,6 +2186,7 @@ public sealed partial class Evaluation : IFileTester
 
             var setsNamedAttribute = options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly;
             var globalBindings = options.Global ? bindings : null;
+            const string NamerefArrayError = "reference variable cannot be an array";
             var exitCode = 0;
             List<Variables.CommandBindings>? exposedPrefixes = null;
             foreach (var operand in operands)
@@ -2206,13 +2207,21 @@ public sealed partial class Evaluation : IFileTester
                     await DiagnoseQuotedAsync(operand.Name, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
-                var nameOnlyElement = operand.Value == null && reference.Kind != VariableReferenceKind.Name;
-                if (nameOnlyElement && options.NamerefChange == DeclarationAttributeChange.Set)
+                var element = reference.Kind != VariableReferenceKind.Name;
+                var setsNameref = options.NamerefChange == DeclarationAttributeChange.Set;
+                if (element && !reference.Subscript.IsEmpty && setsNameref)
                 {
                     exitCode = 1;
-                    await ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
-                        [operand.Name, ShellValue.FromText(": reference variable cannot be an array")], declarationScope)
-                        .ConfigureAwait(false);
+                    await ReportDeclarationOperandAsync(operand.Name, NamerefArrayError).ConfigureAwait(false);
+                    continue;
+                }
+                var local = options.IsLocal(declarationScope, options.Global);
+                if (element && reference.Subscript.IsEmpty && (setsNameref || !local)
+                    && options.NamerefChange != DeclarationAttributeChange.Clear
+                    && options.IndexedChange != DeclarationAttributeChange.Clear
+                    && options.AssociativeChange != DeclarationAttributeChange.Clear)
+                {
+                    await RejectEmptyElementInitializerAsync(reference, operand.Name, setsNameref, local).ConfigureAwait(false);
                     continue;
                 }
                 if (skipReadonlyAttribute && !operand.CompoundApplied && operand.Value == null)
@@ -2236,8 +2245,7 @@ public sealed partial class Evaluation : IFileTester
                     && (options.ExportChange == DeclarationAttributeChange.Set || options.Readonly)
                     && bindings?.Contains(sourceName) == true && commandVars.Scalars.TryGetValue(sourceName, out var prefixValue)
                     ? prefixValue : null;
-                var local = options.IsLocal(declarationScope, options.Global);
-                var inferElementArray = nameOnlyElement && !local && arrayKind == ArrayAssignmentKind.Auto
+                var inferElementArray = element && operand.Value == null && !local && arrayKind == ArrayAssignmentKind.Auto
                     && options.IndexedChange != DeclarationAttributeChange.Clear;
                 var global = (options.Global || arrayAttributeAssignment)
                     && (reference.Kind == VariableReferenceKind.Name || inferElementArray);
@@ -2489,7 +2497,7 @@ public sealed partial class Evaluation : IFileTester
                 if (options.Nameref && (!local || existingLocal)
                     && (targetVars.IndexedArrays.ContainsKey(name) || targetVars.AssociativeArrays.ContainsKey(name)))
                 {
-                    await DiagnoseAsync(name, "reference variable cannot be an array").ConfigureAwait(false);
+                    await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
                     continue;
                 }
                 if (options.NamerefChange == DeclarationAttributeChange.Set && arrayKind != ArrayAssignmentKind.Auto
@@ -2552,7 +2560,7 @@ public sealed partial class Evaluation : IFileTester
                 if ((options.Nameref || (operand.CompoundApplied || local) && options.NamerefChange == DeclarationAttributeChange.Set)
                     && (targetVars.IndexedArrays.ContainsKey(name) || targetVars.AssociativeArrays.ContainsKey(name)))
                 {
-                    await DiagnoseAsync(name, "reference variable cannot be an array").ConfigureAwait(false);
+                    await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
                     continue;
                 }
                 var resolvedName = targetVars.ResolveNamerefName(name);
@@ -2827,6 +2835,74 @@ public sealed partial class Evaluation : IFileTester
             }
 
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
+
+            async Task RejectEmptyElementInitializerAsync(VariableReference reference, ShellValue spelling, bool setsNameref, bool local)
+            {
+                var name = reference.Name;
+                var variables = options.Global ? SelectGlobalOwner(name) : commandVars;
+                var indexed = variables.IndexedArrays.ContainsKey(name);
+                var associative = variables.AssociativeArrays.ContainsKey(name);
+                var hasReference = variables.TryGetNameref(name, out var referenceValue);
+                if (local && declarationScope.Context.FunctionContext is { } function)
+                {
+                    // Local creation can publish an array before rejecting the nameref attribute.
+                    // An existing local reference stays a reference on rejection.
+                    var existing = function.Locals.Declares(name);
+                    var declaration = new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty);
+                    if ((!existing || !indexed && !associative && !hasReference)
+                        && !function.Locals.TryDeclare(declarationScope.Variables, variables, declaration,
+                            prefixNames, options.ArrayKind, isNameref: false, options.Inherit, caseChange: default, Memory))
+                    {
+                        await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                        return;
+                    }
+                    await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
+                    return;
+                }
+                if (variables.IsReadonlyBinding(name))
+                {
+                    await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                    return;
+                }
+                if (setsNameref && (indexed || associative))
+                {
+                    await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
+                    return;
+                }
+                var kind = options.ArrayKind == ArrayAssignmentKind.Associative
+                    || options.ArrayKind == ArrayAssignmentKind.Auto && associative
+                    ? ArrayKind.Associative : ArrayKind.Indexed;
+                // An absent binding starts initialized. A declared-but-unset binding retains its state.
+                if (!variables.HasBinding(name) || hasReference && !referenceValue.IsEmpty)
+                {
+                    IReadOnlyList<ShellValue> initial = !setsNameref || referenceValue.IsEmpty ? []
+                        : kind == ArrayKind.Indexed ? [referenceValue] : [ShellValue.FromText("0"), referenceValue];
+                    _ = variables.TryAssignResolvedArray(name, initial, kind, initializeReadonly: true);
+                }
+                else if (!variables.TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.RetainValue))
+                {
+                    await DiagnoseAsync(name, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                    return;
+                }
+                if (hasReference && !setsNameref)
+                    await ReportBuiltinDiagnosticAsync([ShellValue.FromText("warning")],
+                        [GetDiagnosticName(name), ShellValue.FromText(": removing nameref attribute")], declarationScope.Context)
+                        .ConfigureAwait(false);
+                if (options.IndexedChange == DeclarationAttributeChange.Set && options.AssociativeChange == DeclarationAttributeChange.Set)
+                {
+                    await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
+                    return;
+                }
+                if (setsNameref)
+                {
+                    variables.SetIntegerBinding(name, false);
+                    variables.SetCaseAttributes(name, new(BindingAttributes.None, BindingAttributes.Case));
+                }
+                await ApplyAttributesAsync(name, variables, options.Global, local: false, options.ExportChange).ConfigureAwait(false);
+                exitCode = 1;
+                await ReportBuiltinDiagnosticAsync([spelling], [ShellValue.FromText("bad array subscript")], declarationScope.Context)
+                    .ConfigureAwait(false);
+            }
 
             Variables SelectGlobalOwner(BindingName name) =>
                 declarationScope.Context.GetGlobalBindingOwner(name, declarationScope.Variables, globalBindings);

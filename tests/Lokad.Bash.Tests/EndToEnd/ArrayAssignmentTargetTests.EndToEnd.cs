@@ -130,6 +130,42 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     public Task NameOnlyDeclarationSelectorsPublishTheSelectedArray(string body, string output, string error) =>
         AssertDeclarationAsync(body + "\n", output, error);
 
+    [Theory]
+    [InlineData("arr=old; declare -n arr[2]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -- arr=\"old\"\n", "line 1: declare: arr[2]: reference variable cannot be an array\n")]
+    [InlineData("i=0; typeset -n 'arr[i++]=target'; printf '<%s:%s>' \"$?\" \"$i\"",
+        "<1:0>", "line 1: typeset: arr[i++]: reference variable cannot be an array\n")]
+    [InlineData("i=0; declare -an arr[$((i++))]=target; printf '<%s:%s>' \"$?\" \"$i\"",
+        "<1:1>", "line 1: declare: arr[0]: reference variable cannot be an array\n")]
+    [InlineData("f() { local arr=old; local -n arr[0]+=target; printf '<%s>\\n' \"$?\"; declare -p arr; }; f",
+        "<1>\ndeclare -- arr=\"old\"\n", "line 1: local: arr[0]: reference variable cannot be an array\n")]
+    public Task NamerefElementInitializersRejectTheSelectedName(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
+    [Theory]
+    [InlineData("declare -n arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -a arr=()\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("declare arr; declare -n arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -a arr\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("declare -i arr=3; declare -nx arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -ax arr=([0]=\"3\")\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("dest=old; declare -n arr=dest; declare -nA arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -A arr=([0]=\"dest\" )\ndeclare -- dest=\"old\"\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("arr=(old); declare -nA arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -a arr=([0]=\"old\")\n", "line 1: declare: arr: reference variable cannot be an array\n")]
+    [InlineData("arr=outer; f() { local arr=old; local -nr arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -a arr=()\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: reference variable cannot be an array\n")]
+    [InlineData("arr=outer; f() { local arr=inner; declare -gn arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -- arr=\"inner\"\ndeclare -a arr=([0]=\"outer\")\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("arr=old; arr=prefix declare -n arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -- arr=\"old\"\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("declare -Ai arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -Ai arr=()\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("dest=old; declare -n arr=dest; declare arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -a arr=()\ndeclare -- dest=\"old\"\n", "line 1: warning: arr: removing nameref attribute\nline 1: arr[]: bad array subscript\n")]
+    public Task EmptyDeclarationAssignmentsPublishBeforeRejectingTheSelector(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
     private static async Task AssertDeclarationAsync(string script, string output, string error)
     {
         foreach (var prepared in new[] { false, true })

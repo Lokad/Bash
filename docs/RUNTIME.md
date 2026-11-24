@@ -79,6 +79,9 @@ push and pop operations report a failed listing write through active stderr
 while keeping the completed stack change and its status.
 
 Nameref declaration validation precedes replacement of values and attributes.
+An empty element initializer can publish the array kind before reporting failure.
+Nonlocal preparation retains a scalar at index zero. Local preparation uses the
+function's ordinary declaration and restoration rules.
 Circular local references reuse scope ownership to select a global fallback;
 selected reads retain that store through value consumption. Declaration metadata
 does not follow aliases. Builtin outputs share selection and publication, with
