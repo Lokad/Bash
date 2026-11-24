@@ -1561,7 +1561,8 @@ public static class Parser
                             var opening = tokenizer.NextTokenCore();
                             if (!tokenizer.AreAdjacent(token, opening))
                             {
-                                tokenizer.RecordError("An array assignment requires an adjacent parenthesis.", opening.Source.Start.Value);
+                                tokenizer.RecordUnexpectedToken("An array assignment requires an adjacent parenthesis.",
+                                    opening, opening.Source.Start.Value);
                                 return null;
                             }
 
@@ -1616,7 +1617,17 @@ public static class Parser
                     (words ??= []).Add(wordToken.Word);
                     continue;
                 default:
-                    tokenizer.RecordError("Unexpected token while parsing a simple command.", tokenizer.Position);
+                    const string message = "Unexpected token while parsing a simple command.";
+                    if (token.Kind == TokenKind.OpenParen)
+                    {
+                        // A lone command word can start a function header. Read the token expected to close it.
+                        if (tokenizer.TrackUnexpectedTokens && words?.Count == 1 && assignments == null && redirections == null)
+                            tokenizer.RecordUnexpectedTokenBeforeNewline(message, tokenizer.NextTokenCore());
+                        else
+                            tokenizer.RecordUnexpectedToken(message, token, tokenizer.Position);
+                    }
+                    else
+                        tokenizer.RecordError(message, tokenizer.Position);
                     return null;
             }
         }

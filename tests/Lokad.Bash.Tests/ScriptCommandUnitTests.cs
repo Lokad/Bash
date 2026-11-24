@@ -228,6 +228,11 @@ public sealed class ScriptCommandUnitTests
     [InlineData("f() printf hidden\n", "printf", "f() printf hidden")]
     [InlineData("do\n", "do", "do")]
     [InlineData(": | ]]\n", "]]", ": | ]]")]
+    [InlineData("f (word)\n", "word", "f (word)")]
+    [InlineData("f (\n)\n", "newline", "f (")]
+    [InlineData("f (", "newline", "f (")]
+    [InlineData("x=y f (word)\n", "(", "x=y f (word)")]
+    [InlineData("n= ()\n", "(", "n= ()")]
     public async Task InvalidCompoundOrCommandReportsTheReachedTokenAndLine(string unit, string token, string line)
     {
         await using var host = new TestHost();
