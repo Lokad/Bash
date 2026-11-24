@@ -332,6 +332,59 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData("-4", "<0:4><0:a:3>")]
+    [InlineData("-4a", "<0:4><0:a:2>")]
+    public async Task Getopts_WritingOptindAsTheResultKeepsTheSavedCursor(string firstOperand, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            set -- {{firstOperand}} -a -b -c
+            getopts 4a OPTIND
+            printf '<%s:%s>' "$?" "$OPTIND"
+            getopts abc pick
+            printf '<%s:%s:%s>' "$?" "$pick" "$OPTIND"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("OPTIND", "<0:4><0:c:5>")]
+    [InlineData("index_ref", "<0:2><0:a:3>")]
+    public async Task Getopts_PrefixedIndexResultDependsOnTheSelectedBinding(string destination, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -n index_ref=OPTIND
+            set -- -4 -a -b -c
+            OPTIND=1 getopts 4a {{destination}}
+            printf '<%s:%s>' "$?" "$OPTIND"
+            getopts abc pick
+            printf '<%s:%s:%s>' "$?" "$pick" "$OPTIND"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("a:", "-avalue", "<0:a:2>")]
+    [InlineData(":a", "-z", "<0:z:2>")]
+    public async Task Getopts_ResultAndOptionArgumentShareTheSelectedBinding(string specification, string operand, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            OPTARG=old
+            getopts {{specification}} OPTARG {{operand}}
+            printf '<%s:%s:%s>' "$?" "${OPTARG-unset}" "$OPTIND"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task Getopts_PublishesEveryDigitWhenTheArgumentIndexWidens()
     {
