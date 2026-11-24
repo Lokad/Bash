@@ -1691,6 +1691,9 @@ public sealed partial class Variables
     internal bool TryRemoveNamerefAttribute(BindingName name) =>
         !HasAttribute(name, BindingAttributes.Readonly) && RemoveValue<NamerefSlot>(name);
 
+    /// <summary>Leaves a readonly declaration after rejecting an element write on its nameref.</summary>
+    internal void DetachReadonlyElementNameref(BindingName name) => ReplaceValue(name, new UnassignedSlot());
+
     internal void SetReadonlyBinding(BindingName name) => SetAttribute(name, BindingAttributes.Readonly, true);
 
     internal bool TryResolveBinding(BindingName name, Func<BindingName, Variables>? selectOwner, out VariableBinding binding)
@@ -1806,10 +1809,16 @@ public sealed partial class Variables
     }
 
     /// <summary>Replaces a reference and its attributes when a declaration explicitly creates an array.</summary>
-    internal void RecreateDeclarationArray(BindingName name, ArrayKind kind)
+    internal void RecreateDeclarationArray(BindingName name, ArrayKind kind) =>
+        RecreateDeclarationArray(name, kind, initialize: false);
+
+    internal void RecreateDeclarationArray(BindingName name, ArrayKind kind, bool initialize)
     {
         ClearBinding(name);
-        _ = TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.DiscardValue);
+        if (initialize)
+            _ = TryAssignResolvedArray(name, [], kind, initializeReadonly: false);
+        else
+            _ = TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.DiscardValue);
     }
 
     /// <summary>Prepares the selected binding for a nonlocal +a declaration with an element operand.</summary>

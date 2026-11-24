@@ -159,6 +159,48 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         AssertDeclarationAsync(body + "\n", output, error);
 
     [Theory]
+    [InlineData("declare +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -a arr=()\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("declare -n middle; declare -nr arr=middle; declare +n -i 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr middle",
+        "<1>\ndeclare -ai arr=()\ndeclare -n middle\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("dest=seed; declare -n arr=dest; declare +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -n arr=\"dest\"\ndeclare -a dest=([0]=\"seed\")\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("declare -nx arr=dest; declare +n -Ai 'arr[]+=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -x arr=\"dest\"\ndeclare -Ai dest=()\n", "line 1: dest[]: bad array subscript\n")]
+    [InlineData("declare -n middle=dest arr=middle; declare +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr middle dest",
+        "<1>\ndeclare -n arr=\"middle\"\ndeclare -- middle=\"dest\"\ndeclare -a dest=()\n", "line 1: dest[]: bad array subscript\n")]
+    [InlineData("dest=([2]=seed); declare -n arr='dest[2]'; declare +n 'arr[]+=a b'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -n arr=\"dest[2]\"\ndeclare -a dest=([2]=\"seed\")\n",
+        "line 1: declare: `dest[2][]+=a b': not a valid identifier\n")]
+    [InlineData("dest=seed; declare -n arr=dest; f(){ local arr=near dest=inner; declare -g +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest; }; f; declare -p arr dest",
+        "<1>\ndeclare -- arr=\"near\"\ndeclare -- dest=\"inner\"\ndeclare -n arr=\"dest\"\ndeclare -a dest=([0]=\"seed\")\n",
+        "line 1: arr[]: bad array subscript\n")]
+    [InlineData("dest=seed; declare -nr arr=dest; declare +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -nr arr=\"dest\"\ndeclare -- dest=\"seed\"\n", "line 1: declare: arr: readonly variable\n")]
+    [InlineData("declare -A dest=([key]=seed); declare -n arr=dest; declare +n -a 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -n arr=\"dest\"\ndeclare -A dest=([key]=\"seed\" )\n",
+        "line 1: declare: arr: cannot convert associative to indexed array\n")]
+    [InlineData("dest=seed; declare -n arr=dest; declare +A +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -n arr=\"dest\"\ndeclare -a dest=([0]=\"seed\")\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("dest=seed; declare -n arr=dest; dest=near declare +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -n arr=\"dest\"\ndeclare -- dest=\"seed\"\n", "line 1: arr[]: bad array subscript\n")]
+    public Task EmptyElementAssignmentsWithNamerefClearPrepareTheReachedBinding(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
+    [Theory]
+    [InlineData("dest=seed; declare -rn arr=dest; i=3; declare 'arr[i++]=new'; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr dest",
+        "<1:3>\ndeclare -r arr\ndeclare -- dest=\"seed\"\n",
+        "line 1: warning: arr: removing nameref attribute\nline 1: declare: arr: readonly variable\n")]
+    [InlineData("dest=seed; declare -rn arr=dest; i=3; declare \"arr[$((i++))]=new\"; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr dest",
+        "<1:4>\ndeclare -r arr\ndeclare -- dest=\"seed\"\n",
+        "line 1: warning: arr: removing nameref attribute\nline 1: declare: arr: readonly variable\n")]
+    [InlineData("dest=seed; declare -rn arr=dest; declare -A 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr dest",
+        "<1>\ndeclare -r arr\ndeclare -- dest=\"seed\"\n",
+        "line 1: warning: arr: removing nameref attribute\nline 1: declare: arr: readonly variable\n")]
+    public Task ReadonlyElementAssignmentDropsTheNamerefBeforeReportingFailure(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
+    [Theory]
     [InlineData("arr=old; declare -n arr[2]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
         "<1>\ndeclare -- arr=\"old\"\n", "line 1: declare: arr[2]: reference variable cannot be an array\n")]
     [InlineData("i=0; typeset -n 'arr[i++]=target'; printf '<%s:%s>' \"$?\" \"$i\"",

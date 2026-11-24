@@ -2217,12 +2217,18 @@ public sealed partial class Evaluation : IFileTester
                 }
                 var local = options.IsLocal(declarationScope, options.Global);
                 if (element && reference.Subscript.IsEmpty && (setsNameref || !local)
-                    && options.NamerefChange != DeclarationAttributeChange.Clear
-                    && options.IndexedChange != DeclarationAttributeChange.Clear
-                    && options.AssociativeChange != DeclarationAttributeChange.Clear)
+                    && options.IndexedChange != DeclarationAttributeChange.Clear)
                 {
-                    await RejectEmptyElementInitializerAsync(reference, operand.Name, setsNameref, local).ConfigureAwait(false);
-                    continue;
+                    if (options.NamerefChange == DeclarationAttributeChange.Clear)
+                    {
+                        if (await TryRejectEmptyElementAfterNamerefClearAsync(reference.Name, operand).ConfigureAwait(false))
+                            continue;
+                    }
+                    else if (options.AssociativeChange != DeclarationAttributeChange.Clear)
+                    {
+                        await RejectEmptyElementInitializerAsync(reference, operand.Name, setsNameref, local).ConfigureAwait(false);
+                        continue;
+                    }
                 }
                 if (skipReadonlyAttribute && !operand.CompoundApplied && operand.Value == null)
                 {
@@ -2445,12 +2451,17 @@ public sealed partial class Evaluation : IFileTester
                     && targetVars.TryGetNameref(name, out _);
                 if (removeElementNameref)
                 {
+                    if (targetVars.IsReadonlyBinding(name))
+                    {
+                        await RejectReadonlyElementNamerefAsync(name, targetVars).ConfigureAwait(false);
+                        continue;
+                    }
                     if (!targetVars.TryRemoveNamerefAttribute(name))
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         continue;
                     }
-                    await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
+                    await ReportElementNamerefRemovalAsync(name).ConfigureAwait(false);
                 }
                 var readonlyBinding = options.NamerefChange != DeclarationAttributeChange.Unchanged
                     && reference.Kind == VariableReferenceKind.Name
@@ -2874,7 +2885,10 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (variables.IsReadonlyBinding(name))
                 {
-                    await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                    if (hasReference && !setsNameref)
+                        await RejectReadonlyElementNamerefAsync(name, variables).ConfigureAwait(false);
+                    else
+                        await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                     return;
                 }
                 if (setsNameref && (indexed || associative))
@@ -2898,9 +2912,7 @@ public sealed partial class Evaluation : IFileTester
                     return;
                 }
                 if (hasReference && !setsNameref)
-                    await ReportBuiltinDiagnosticAsync([ShellValue.FromText("warning")],
-                        [GetDiagnosticName(name), ShellValue.FromText(": removing nameref attribute")], declarationScope.Context)
-                        .ConfigureAwait(false);
+                    await ReportElementNamerefRemovalAsync(name).ConfigureAwait(false);
                 if (options.IndexedChange == DeclarationAttributeChange.Set && options.AssociativeChange == DeclarationAttributeChange.Set)
                 {
                     await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
@@ -2916,6 +2928,95 @@ public sealed partial class Evaluation : IFileTester
                 await ReportBuiltinDiagnosticAsync([spelling], [ShellValue.FromText("bad array subscript")], declarationScope.Context)
                     .ConfigureAwait(false);
             }
+
+            async Task<bool> TryRejectEmptyElementAfterNamerefClearAsync(BindingName source, PreparedDeclarationOperand operand)
+            {
+                if (!TryResolve(BindingResolution.Referent, out var target))
+                    return false;
+
+                var kind = options.ArrayKind == ArrayAssignmentKind.Associative
+                    || options.ArrayKind == ArrayAssignmentKind.Auto && target.Owner.AssociativeArrays.ContainsKey(target.Name)
+                    ? ArrayKind.Associative : ArrayKind.Indexed;
+                var missingReferent = false;
+                if (target.IsUnsetNameref)
+                {
+                    // An unset chain recreates the operand's binding rather than the terminal alias.
+                    var owner = options.Global ? SelectGlobalOwner(source) : commandVars;
+                    owner.RecreateDeclarationArray(source, kind, initialize: true);
+                    target = new VariableBinding(VariableReference.ForName(source), owner);
+                }
+                else
+                {
+                    if (!TryResolve(BindingResolution.LastNameref, out var holder))
+                        return false;
+                    if (holder.Owner.IsReadonlyBinding(holder.Name)
+                        || target.Reference.Kind == VariableReferenceKind.Name && target.Owner.IsReadonlyBinding(target.Name))
+                    {
+                        await DiagnoseReadonlyAsync(source).ConfigureAwait(false);
+                        return true;
+                    }
+                    if (target.Reference.Kind != VariableReferenceKind.Name)
+                    {
+                        var suffix = ShellValue.FromBytes(operand.Name.Bytes[source.ByteLength..]);
+                        exitCode = 1;
+                        await ReportDeclarationDiagnosticAsync([ShellValue.FromText("`"), target.Reference.ToValue(Memory), suffix,
+                            ShellValue.FromText(operand.Operator == AssignmentOperator.Append ? "+=" : "="),
+                            operand.Value.GetValueOrDefault(), ShellValue.FromText("': not a valid identifier")]).ConfigureAwait(false);
+                        return true;
+                    }
+                    if (options.AssociativeChange == DeclarationAttributeChange.Clear && target.Owner.AssociativeArrays.ContainsKey(target.Name))
+                    {
+                        await DiagnoseAsync(source, "cannot destroy array variables in this way").ConfigureAwait(false);
+                        return true;
+                    }
+                    if (!target.Owner.HasBinding(target.Name))
+                    {
+                        if (holder.Owner.TryGetNameref(holder.Name, out var formerTarget))
+                        {
+                            if (!holder.Owner.TryRemoveNamerefAttribute(holder.Name))
+                            {
+                                await DiagnoseReadonlyAsync(source).ConfigureAwait(false);
+                                return true;
+                            }
+                            holder.Owner.TrySetScalar(holder.Name, formerTarget);
+                            missingReferent = true;
+                        }
+                        _ = target.Owner.TryAssignResolvedArray(target.Name, [], kind, initializeReadonly: false);
+                    }
+                    else if (!target.Owner.TryDeclareResolvedArray(target.Name, kind, ScalarArrayPromotion.RetainValue))
+                    {
+                        await DiagnoseAsync(source, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                        return true;
+                    }
+                }
+
+                await ApplyAttributesAsync(target.Name, target.Owner, options.Global, local: false, options.ExportChange)
+                    .ConfigureAwait(false);
+                exitCode = 1;
+                var message = ShellValue.FromText("bad array subscript");
+                if (missingReferent)
+                    await ReportBuiltinDiagnosticAsync([GetDiagnosticName(target.Name),
+                        ShellValue.FromBytes(operand.Name.Bytes[source.ByteLength..])], [message],
+                        declarationScope.Context).ConfigureAwait(false);
+                else
+                    await ReportBuiltinDiagnosticAsync([operand.Name], [message], declarationScope.Context).ConfigureAwait(false);
+                return true;
+
+                bool TryResolve(BindingResolution resolution, out VariableBinding binding) => options.Global
+                    ? declarationScope.Context.TryResolveGlobalBinding(source, declarationScope.Variables,
+                        commandVars, prefixNames, globalBindings, resolution, out binding)
+                    : commandVars.TryResolveBinding(source, selectOwner: null, resolution, out binding);
+            }
+
+            async Task RejectReadonlyElementNamerefAsync(BindingName name, Variables variables)
+            {
+                variables.DetachReadonlyElementNameref(name);
+                await ReportElementNamerefRemovalAsync(name).ConfigureAwait(false);
+                await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+            }
+
+            Task ReportElementNamerefRemovalAsync(BindingName name) => ReportBuiltinDiagnosticAsync([ShellValue.FromText("warning")],
+                [GetDiagnosticName(name), ShellValue.FromText(": removing nameref attribute")], declarationScope.Context);
 
             Variables SelectGlobalOwner(BindingName name) =>
                 declarationScope.Context.GetGlobalBindingOwner(name, declarationScope.Variables, globalBindings);
