@@ -1062,6 +1062,9 @@ source line. With errexit active, it stops before the command runs, preserves
 command itself leaves this expansion rule in effect. A tested `eval` or `source`
 suppresses it in the loaded reader. With errexit disabled, an ordinary read
 treats the element as unset, while a length expansion discards its command unit.
+An element length that starts from a scalar returns zero if the selector turns
+that binding into an array. The selector's effects and invalid-subscript
+diagnostics still apply.
 
 When an arithmetic word takes its expansion pass, its array selectors expand
 once. The indexed selector's brackets, apostrophes, and tildes remain escaped

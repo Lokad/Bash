@@ -4,6 +4,23 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteArrayReferenceTests
 {
+    [Theory]
+    [InlineData("a=123; printf '<%s><%s>' \"${#a[(a[1]=7,-1)]}\" \"${a[1]}\"", "<0><7>", "")]
+    [InlineData("a=123; printf '<%s><%s>' \"${#a[(a[0]=7,0)]}\" \"${a[0]}\"", "<0><7>", "")]
+    [InlineData("a=123; declare -n r=a; printf '<%s><%s>' \"${#r[(a[1]=7,1)]}\" \"${a[1]}\"", "<0><7>", "")]
+    [InlineData("a=123; printf '<%s><%s>' \"${#a[(a=7,0)]}\" \"$a\"", "<1><7>", "")]
+    [InlineData("a=(123); printf '<%s><%s>' \"${#a[(a[1]=7,-1)]}\" \"${a[1]}\"", "<1><7>", "")]
+    [InlineData("a=123\nprintf '<%s>' \"${#a[(a[1]=7,-3)]}\"\nprintf '[%s:%s]' \"$?\" \"${a[1]}\"",
+        "[1:7]", "line 2: (a[1]=7,-3)]: bad array subscript\n")]
+    public async Task ElementLengthKeepsTheScalarReadRoleThroughSelectorEffects(string script, string output, string error)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
     // Linux Bash 5.2.21, C.UTF-8: raw streams match except for Bash's executable/line diagnostic prefix.
     [Theory]
     [InlineData("a[3]=$'\\377'; printf '<%s>' \"${a[3]-missing}\" \"${a[2]-missing}\"\n", "3CFF3E3C6D697373696E673E", 0, "")]

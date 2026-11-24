@@ -608,7 +608,8 @@ internal static partial class WordExpansion
         }
 
         // A declaration alone does not enable length-selector effects; even an empty assignment does.
-        if (use == ReferenceUse.Length && !targetVariables.Scalars.ContainsKey(name)
+        var scalarLength = use == ReferenceUse.Length && targetVariables.Scalars.ContainsKey(name);
+        if (use == ReferenceUse.Length && !scalarLength
             && targetVariables.GetArrayMetadata(name) is not { IsInitialized: true })
             return null;
 
@@ -655,7 +656,12 @@ internal static partial class WordExpansion
                     index = last + index + 1;
             }
             if (IndexedArrayIndex.TryCreate(index, out var position))
+            {
+                // A reached scalar length still reads as scalar after selector effects.
+                if (scalarLength && !targetVariables.Scalars.ContainsKey(name))
+                    return null;
                 return new ResolvedVariableReference.Indexed(name, position) { ReadOwner = targetVariables };
+            }
             if (compound is { } item)
             {
                 await ReportRejectedCompoundElementAsync(item, aggregate: false).ConfigureAwait(false);
