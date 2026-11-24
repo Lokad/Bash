@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -17,7 +18,10 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 {
     public virtual async ValueTask DisposeAsync()
     {
-        foreach (var descriptor in _openFiles.Keys.ToArray())
+        FileDescriptor[] descriptors;
+        lock (_descriptorLock)
+            descriptors = _openFiles.Keys.ToArray();
+        foreach (var descriptor in descriptors)
             await CloseDescriptorAsync(descriptor).ConfigureAwait(false);
     }
     public Lokad.Bash.Memory.IMemoryBudget MemoryBudget { get; set; } = new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes);
@@ -29,11 +33,12 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
     private readonly DirectoryNode _root = new(DateTimeOffset.UtcNow, FileTreePermission.ReadWrite);
     /// <summary> Tracks open file descriptors and their associated read state. </summary>
     private readonly Dictionary<FileDescriptor, OpenFileState> _openFiles = new();
+    private readonly Lock _descriptorLock = new();
     /// <summary> Stores output buffers for descriptors written via WriteAsync. </summary>
     private readonly Dictionary<FileDescriptor, ByteMemoryBuilder> _outputs = new();
     private readonly Lock _outputLock = new();
     /// <summary> Stores read-open failures keyed by absolute path. </summary>
-    private readonly Dictionary<string, OperationError> _readOpenErrors = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, OperationError> _readOpenErrors = new(StringComparer.Ordinal);
     /// <summary> Stores the stdin read state when configured. </summary>
     private OpenFileState? _stdinState;
     /// <summary> Tracks the next file descriptor to allocate for opened files. </summary>
@@ -43,7 +48,10 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public int CommandExitCode { get; set; }
 
-    public int OpenFileCount => _openFiles.Count;
+    public int OpenFileCount
+    {
+        get { lock (_descriptorLock) return _openFiles.Count; }
+    }
 
     public void ResetOutput()
     {
@@ -57,9 +65,8 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public bool FailOpenFileAppends { get; set; }
 
-    public int MaximumOpenFileAppendLength { get; private set; }
-
-    public int AppendCallCount { get; private set; }
+    private int _appendCallCount;
+    public int AppendCallCount => Volatile.Read(ref _appendCallCount);
 
     public bool AppendRemainsOpen { get; set; } = true;
 
@@ -98,11 +105,12 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public Func<FilePathLookup, DirectoryCreationResult?>? CreateDirectoryOverride { get; set; }
 
-    public HashSet<FileDescriptor> ReadDescriptors { get; } = [];
     public int MaximumReadWindowBytes { get; init; } = int.MaxValue;
-    public int ReadCallCount { get; private set; }
-    public long ReadBytesConsumed { get; private set; }
-    private void RecordConsumption(int count) => ReadBytesConsumed += count;
+    private int _readCallCount;
+    private long _readBytesConsumed;
+    public int ReadCallCount => Volatile.Read(ref _readCallCount);
+    public long ReadBytesConsumed => Volatile.Read(ref _readBytesConsumed);
+    private void RecordConsumption(int count) => Interlocked.Add(ref _readBytesConsumed, count);
 
     public void AddDirectory(string path, DateTimeOffset? modifiedAt = null, FileTreePermission permission = FileTreePermission.ReadWrite)
     {
@@ -180,14 +188,12 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         return entries;
     }
 
-    public void SetStandardInput(string content)
-    {
-        _stdinState = OpenFileState.ForRead(Encoding.UTF8.GetBytes(content), RecordConsumption);
-    }
+    public void SetStandardInput(string content) => SetStandardInputBytes(Encoding.UTF8.GetBytes(content));
 
     public void SetStandardInputBytes(byte[] content)
     {
-        _stdinState = OpenFileState.ForRead(content, RecordConsumption);
+        lock (_descriptorLock)
+            _stdinState = OpenFileState.ForRead(content, RecordConsumption);
     }
 
     public string GetOutput(FileDescriptor descriptor)
@@ -235,7 +241,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         if (AppendError is { } error)
             return ValueTask.FromResult(DescriptorWriteResult.Failure(error));
 
-        AppendCallCount++;
+        Interlocked.Increment(ref _appendCallCount);
         var success = AppendRemainsOpen ? DescriptorWriteResult.Open : DescriptorWriteResult.Closed;
         if (fileDescriptor.IsDevNull)
         {
@@ -243,9 +249,8 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
                 ? DescriptorWriteResult.WriteFailure : success);
         }
 
-        if (_openFiles.TryGetValue(fileDescriptor, out var openFile))
+        if (FindOpenFile(fileDescriptor) is { } openFile)
         {
-            MaximumOpenFileAppendLength = Math.Max(MaximumOpenFileAppendLength, content.Length);
             if (FailOpenFileAppends)
             {
                 return ValueTask.FromResult(DescriptorWriteResult.Failure(new OperationError("Write failed\n")));
@@ -309,7 +314,6 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         if (target == null && creationMode == FileCreationMode.OpenExisting)
             return FileOpenResult.Failed(new OperationError("No such file or directory\n") { Kind = OperationErrorKind.NotFound });
 
-        var descriptor = new FileDescriptor(_nextDescriptor++);
         var modifiedAt = DateTimeOffset.UtcNow;
         var file = target as FileNode ?? new FileNode([], modifiedAt, FileTreePermission.ReadWrite);
         if (mode == WritableFileOpenMode.WriteTruncate)
@@ -318,7 +322,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             file.StatusChangedAt = file.ModifiedAt = modifiedAt;
         }
         parent.Children[name] = file;
-        _openFiles[descriptor] = OpenFileState.ForWrite(file, mode, RecordConsumption);
+        var descriptor = AddOpenFile(OpenFileState.ForWrite(file, mode, RecordConsumption));
         return FileOpenResult.Opened(descriptor, readSize: null);
     }
 
@@ -353,11 +357,19 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             return FileOpenResult.Opened(FileDescriptor.ForDevNull(FileOpenMode.Read), readSize: 0);
         if (_readOpenErrors.TryGetValue(read.Path.Path, out var error))
             return FileOpenResult.Failed(error);
-        var descriptor = new FileDescriptor(_nextDescriptor++);
-        _openFiles[descriptor] = OpenFileState.ForRead(read.Content, RecordConsumption);
-        if (AfterReadOpen is { } afterReadOpen)
-            await afterReadOpen(read.Path);
-        return FileOpenResult.Opened(descriptor, readSize: read.Size);
+        var descriptor = AddOpenFile(OpenFileState.ForRead(read.Content, RecordConsumption));
+        try
+        {
+            if (AfterReadOpen is { } afterReadOpen)
+                await afterReadOpen(read.Path).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return FileOpenResult.Opened(descriptor, readSize: read.Size);
+        }
+        catch
+        {
+            CloseOpenFile(descriptor);
+            throw;
+        }
     }
 
     private sealed class PreparedRead(MockFileSystem owner, ShellPath path, byte[] content)
@@ -371,17 +383,8 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public virtual Task<OperationError?> CloseDescriptorAsync(FileDescriptor descriptor)
     {
-        if (descriptor.IsDevNull)
-        {
-            return Task.FromResult<OperationError?>(null);
-        }
-
-        if (_openFiles.Remove(descriptor, out var state))
-        {
-            state.Close();
-            return Task.FromResult<OperationError?>(null);
-        }
-
+        if (!descriptor.IsDevNull)
+            CloseOpenFile(descriptor);
         return Task.FromResult<OperationError?>(null);
     }
 
@@ -437,8 +440,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
     public virtual ValueTask<DescriptorReadBuffer> ReadAsync(
         FileDescriptor descriptor, DescriptorReadRequest request, CancellationToken cancellationToken)
     {
-        ReadCallCount++;
-        ReadDescriptors.Add(descriptor);
+        Interlocked.Increment(ref _readCallCount);
         cancellationToken.ThrowIfCancellationRequested();
         BeforeRead?.Invoke();
         BeforeDescriptorRead?.Invoke(descriptor);
@@ -803,15 +805,37 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
     /// <summary>
     /// Returns the open-file state for a descriptor, creating stdin state on demand.
     /// </summary>
-    private OpenFileState? GetStateForDescriptor(int descriptor)
+    private OpenFileState? GetStateForDescriptor(FileDescriptor descriptor)
     {
-        if (descriptor == FileDescriptor.StdIn)
-        {
-            return _stdinState ??= OpenFileState.ForRead([], RecordConsumption);
-        }
+        if (descriptor != FileDescriptor.StdIn)
+            return FindOpenFile(descriptor);
 
-        _openFiles.TryGetValue(descriptor, out var state);
-        return state;
+        lock (_descriptorLock)
+            return _stdinState ??= OpenFileState.ForRead([], RecordConsumption);
+    }
+
+    private FileDescriptor AddOpenFile(OpenFileState state)
+    {
+        lock (_descriptorLock)
+        {
+            var descriptor = new FileDescriptor(_nextDescriptor++);
+            _openFiles.Add(descriptor, state);
+            return descriptor;
+        }
+    }
+
+    private OpenFileState? FindOpenFile(FileDescriptor descriptor)
+    {
+        lock (_descriptorLock)
+            return _openFiles.GetValueOrDefault(descriptor);
+    }
+
+    private void CloseOpenFile(FileDescriptor descriptor)
+    {
+        // A duplicate close observes completed synchronous cleanup.
+        lock (_descriptorLock)
+            if (_openFiles.Remove(descriptor, out var state))
+                state.Close();
     }
 
     /// <summary>

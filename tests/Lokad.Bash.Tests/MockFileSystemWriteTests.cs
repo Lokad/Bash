@@ -65,10 +65,7 @@ public sealed class MockFileSystemWriteTests
         await using var host = new MockFileSystem();
         host.AddFile("/file", "seed");
         var path = new FilePathLookup(new ShellPath("/file"), FileLinkFollowing.Follow);
-        var initial = Assert.Single(await host.ResolvePathsAsync([path], FilePathInfoRequest.KindOnly, FileSnapshotRequest.Capture, CancellationToken.None)).File;
-        Assert.NotNull(initial);
-        var snapshot = initial.Snapshot;
-        Assert.NotNull(snapshot);
+        var snapshot = await ResolveSnapshotAsync(host, "/file");
         var opened = await host.OpenWritableFileAsync(path, WritableFileOpenMode.WriteAppend,
             FileCreationMode.OpenExisting, FileWriteRetention.AllowInMemory, CancellationToken.None);
         var writer = Assert.IsType<FileDescriptor>(opened.FileDescriptor);
@@ -181,5 +178,127 @@ public sealed class MockFileSystemWriteTests
             Assert.Equal(writesPerProducer, firstCount);
             Assert.Equal(writesPerProducer, secondCount);
         }
+    }
+
+    [Fact]
+    public async Task ConcurrentPreparedOpensPublishIndependentDescriptors()
+    {
+        await using var host = new MockFileSystem();
+        byte[] content = [0xFF, 0x00, 0x80];
+        var expectedTail = content[1..];
+        host.AddFile("/input", content);
+        var snapshot = await ResolveSnapshotAsync(host, "/input");
+        const int producers = 8;
+        const int opensPerProducer = 128;
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opening = Task.WhenAll(Enumerable.Range(0, producers).Select(_ => OpenBatchAsync()));
+        start.SetResult();
+
+        var batches = await opening.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(producers * opensPerProducer, batches.SelectMany(batch => batch).Distinct().Count());
+        Assert.Equal(producers * opensPerProducer, host.OpenFileCount);
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settling = Task.WhenAll(batches.Select(ReadAndCloseAsync));
+        read.SetResult();
+        await settling.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(2 * producers * opensPerProducer, host.ReadCallCount);
+        Assert.Equal((long)content.Length * producers * opensPerProducer, host.ReadBytesConsumed);
+        Assert.Equal(0, host.OpenFileCount);
+
+        async Task<FileDescriptor[]> OpenBatchAsync()
+        {
+            await start.Task.ConfigureAwait(false);
+            var batch = new FileDescriptor[opensPerProducer];
+            for (var index = 0; index < batch.Length; index++)
+            {
+                var opened = await host.OpenReadAsync(snapshot, FileReadOpenMode.Immediate, CancellationToken.None);
+                batch[index] = Assert.IsType<FileDescriptor>(opened.FileDescriptor);
+            }
+            return batch;
+        }
+
+        async Task ReadAndCloseAsync(FileDescriptor[] batch)
+        {
+            await read.Task.ConfigureAwait(false);
+            foreach (var descriptor in batch)
+            {
+                using (var head = await host.ReadAsync(descriptor, DescriptorReadRequest.UpTo(1), CancellationToken.None))
+                {
+                    Assert.Equal(content[0], Assert.Single(head.Content.ToArray()));
+                    head.Consume(1);
+                }
+                using (var tail = await host.ReadAsync(descriptor, DescriptorReadRequest.UpTo(8), CancellationToken.None))
+                {
+                    Assert.Equal(expectedTail, tail.Content.ToArray());
+                    tail.Consume(tail.Content.Length);
+                }
+                Assert.Null(await host.CloseDescriptorAsync(descriptor));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PendingPreparedOpenAllowsOtherFileOperationsAndRetiresOnFailure(bool cancel)
+    {
+        await using var host = new MockFileSystem();
+        using var cancellation = new CancellationTokenSource();
+        host.AddFile("/input", "value");
+        host.AddFile("/output", "seed");
+        var snapshot = await ResolveSnapshotAsync(host, "/input");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new InvalidOperationException("Test completion hook failed");
+        host.AfterReadOpen = async _ =>
+        {
+            entered.SetResult();
+            await release.Task.ConfigureAwait(false);
+            if (!cancel) throw failure;
+        };
+        var pending = host.OpenReadAsync(snapshot, FileReadOpenMode.Immediate, cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, host.OpenFileCount);
+            var target = new FilePathLookup(new ShellPath("/output"), FileLinkFollowing.Follow);
+            var opened = await host.OpenWritableFileAsync(target, WritableFileOpenMode.WriteAppend,
+                FileCreationMode.OpenExisting, FileWriteRetention.AllowInMemory, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            var writer = Assert.IsType<FileDescriptor>(opened.FileDescriptor);
+            Assert.Equal(2, host.OpenFileCount);
+            Assert.True((await host.WriteAsync(writer, "plus"u8.ToArray(), CancellationToken.None)).CanAcceptMore);
+            Assert.Null(await host.CloseDescriptorAsync(writer).WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal("seedplus", host.ReadFile("/output"));
+            Assert.Equal(1, host.OpenFileCount);
+            if (cancel) cancellation.Cancel();
+            Assert.False(pending.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        if (cancel)
+        {
+            var aborted = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => pending.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(cancellation.Token, aborted.CancellationToken);
+        }
+        else
+            Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(
+                () => pending.WaitAsync(TimeSpan.FromSeconds(5))));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    private static async Task<FileSnapshot> ResolveSnapshotAsync(MockFileSystem host, string path)
+    {
+        var lookup = new FilePathLookup(new ShellPath(path), FileLinkFollowing.Follow);
+        var resolved = Assert.Single(await host.ResolvePathsAsync([lookup], FilePathInfoRequest.KindOnly,
+            FileSnapshotRequest.Capture, CancellationToken.None));
+        var snapshot = resolved.File?.Snapshot;
+        Assert.NotNull(snapshot);
+        return snapshot;
     }
 }
