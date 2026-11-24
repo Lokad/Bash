@@ -266,7 +266,14 @@ internal static partial class WordExpansion
                                 assigned = TrySetVariable(named.Name, value, scope);
                         }
                         else if (target != null && parameter.Source is { } source)
+                        {
                             assigned = await target.AssignValueAsync(scope, source.Name, expanded, AssignmentOperator.Replace).ConfigureAwait(false);
+                            if (elementNameref && assigned.HasValue)
+                            {
+                                scope.Variables.TryGetExpansionValue(target.Name, out var arrayScalar);
+                                assigned = arrayScalar;
+                            }
+                        }
                         else
                             assigned = null;
                     }

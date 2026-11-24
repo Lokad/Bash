@@ -993,6 +993,10 @@ errexit disabled, the next unit sees status 1, including inside `eval` and `sour
 A tested `eval` or `source` can recover in the same way under errexit.
 A forked shell stops at the indirect error, including inside a loaded reader.
 
+A successful default assignment through an array-element nameref writes to
+the selected element and emits the array's scalar value after the write.
+That value comes from index zero or associative key `0`.
+
 A brace inside an array selector can belong to the selector when the same word
 contains its closing bracket. A complete expansion then reads the selector with
 that brace included. A selector can span a command substitution or adjacent

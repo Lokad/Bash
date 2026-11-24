@@ -109,4 +109,39 @@ public sealed class ElementNamerefTestsEndToEnd
         Assert.Equal(expectedOutput, result.StdOut);
         Assert.Equal("line 1: unset: a: cannot unset: readonly variable\n", result.StdErr);
     }
+
+    [Theory]
+    [InlineData("""a=([0]=zero); declare -n r='a[4]'; printf '<%s>/' "${r=new}"; printf '<%s:%s>' "${a[0]}" "${a[4]}" """,
+        "<zero>/<zero:new>")]
+    [InlineData("""a=([0]=zero [2]=other); i=0; declare -n r='a[++i]'; printf '<%s>/' "${r:=new}"; printf '<%s:%s:%s>' "${a[1]-unset}" "${a[2]}" "$i" """,
+        "<zero>/<unset:new:2>")]
+    [InlineData("""declare -Au a=([0]=base); declare -n r='a[key]'; printf '<%s>/' "${r:=mixed}"; printf '<%s:%s>' "${a[0]}" "${a[key]}" """,
+        "<BASE>/<BASE:MIXED>")]
+    [InlineData("""declare -ai a=(1); declare -n r='a[3]'; T="${r:=a[0]=5,7}" eval 'printf "<%s>/" "$T"'; printf '<%s:%s>' "${a[0]}" "${a[3]}" """,
+        "<5>/<5:7>")]
+    public async Task ArrayElementNamerefDefaultsEmitTheArrayScalarValue(string script, string expectedOutput)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ArrayElementNamerefDefaultPreservesTheRawScalarValue()
+    {
+        var result = await EndToEndHarness.RunScriptAsync(
+            """
+            a=([0]=$'\377\r')
+            declare -n r='a[3]'
+            printf '%s' "${r:=new}"
+            printf '/%s' "${a[3]}"
+            """, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(new byte[] { 0xff, 0x0d, (byte)'/', (byte)'n', (byte)'e', (byte)'w' },
+            result.Host.StandardOutput.Content.ToArray());
+        Assert.True(result.Host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, result.ExitCode);
+    }
 }
