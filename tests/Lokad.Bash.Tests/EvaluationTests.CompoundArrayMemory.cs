@@ -118,7 +118,7 @@ public partial class EvaluationTests
             listing.SetResult(DirectoryListingResult.Success([]));
             var diagnostic = await NextWriteAsync(state);
             Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-            Assert.Equal("missing: stop\n", Text(diagnostic.Content));
+            Assert.Equal("line 1: missing: stop\n", Text(diagnostic.Content));
             diagnostic.SetResult(DescriptorWriteResult.Open);
 
             Assert.Null(await NextStepAsync(state));

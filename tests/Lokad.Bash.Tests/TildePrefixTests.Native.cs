@@ -333,12 +333,12 @@ public sealed partial class TildePrefixTests
             yield return new object?[] { "extra-23", "HOME=home; unset x; printf \"<%s>\" \"${x:-~\"\"}\"", "3C7E3E", "", 0, null, "{}", prepared };
             yield return new object?[] { "extra-24", "HOME=home; x=set; printf \"<%s>\" \"${x:+~\"\"}\"", "3C7E3E", "", 0, null, "{}", prepared };
             yield return new object?[] { "extra-25", "HOME=home; unset x; printf \"<%s>\" \"${x:=~\"\"}\"", "3C7E3E", "", 0, null, "{}", prepared };
-            yield return new object?[] { "extra-26", "HOME=home; unset x; printf \"%s\" \"${x:?~\"\"}\"", "", "x: ~\n", 1, null, "{}", prepared };
+            yield return new object?[] { "extra-26", "HOME=home; unset x; printf \"%s\" \"${x:?~\"\"}\"", "", "line 1: x: ~\n", 1, null, "{}", prepared };
             yield return new object?[] { "phase-0", "HOME=home; x=~$(false); printf \"<%s>|%s\" \"$x\" \"$?\"", "3C7E3E7C31", "", 0, null, "{}", prepared };
             yield return new object?[] { "phase-1", "HOME=home; x=~/$(false); printf \"<%s>|%s\" \"$x\" \"$?\"", "3C686F6D652F3E7C31", "", 0, null, "{}", prepared };
             yield return new object?[] { "phase-2", "trap 'printf \"|%s\" \"$n\"' EXIT; { HOME=home; n=0; printf before; : > ~/$((n+=1,1/0)); printf after; } 2>&-", "6265666F72657C31", "", 1, null, "{}", prepared };
             yield return new object?[] { "phase-3", "trap 'printf \"|%s\" \"$n\"' EXIT; { HOME=home; n=0; printf before; : > ~/$((n+=1,08)); printf after; } 2>&-", "6265666F72657C31", "", 1, null, "{}", prepared };
-            yield return new object?[] { "phase-4", "HOME=home; printf before; : > ~\"${missing:?synthetic}\"$(printf x >late); printf after", "6265666F7265", "missing: synthetic\n", 1, null, "{}", prepared };
+            yield return new object?[] { "phase-4", "HOME=home; printf before; : > ~\"${missing:?synthetic}\"$(printf x >late); printf after", "6265666F7265", "line 1: missing: synthetic\n", 1, null, "{}", prepared };
             yield return new object?[] { "phase-5", "HOME=home; x=set; printf \"%s\" \"${x:-~$(printf x >effect)}\"; printf tail", "7365747461696C", "", 0, null, "{}", prepared };
             yield return new object?[] { "phase-6", "HOME=home; false && : > ~$(printf x >effect); printf tail", "7461696C", "", 0, null, "{}", prepared };
         }

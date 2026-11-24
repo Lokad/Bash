@@ -48,8 +48,8 @@ public sealed class DescriptorAllocationTests
     [Theory]
     [InlineData("x=$(false) {fd}>out", 0, "0:unset", "")]
     [InlineData("x=$(false) >out", 0, "1:unset", "")]
-    [InlineData("{fd}> \"${missing:?absent}\" || printf caught;", 0, "caught0:unset", "missing: absent\n")]
-    [InlineData("set -e; {fd}> \"${missing:?absent}\"", 1, "", "missing: absent\n")]
+    [InlineData("{fd}> \"${missing:?absent}\" || printf caught;", 0, "caught0:unset", "line 1: missing: absent\n")]
+    [InlineData("set -e; {fd}> \"${missing:?absent}\"", 1, "", "line 1: missing: absent\n")]
     public async Task IsolatedCommandlessRedirectionsPublishTheirOwnStatus(
         string command, int expectedStatus, string expectedOutput, string expectedDiagnostic)
     {

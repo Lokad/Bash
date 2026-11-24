@@ -98,7 +98,7 @@ public partial class EvaluationTests
         var state = new Eval(Parser.Parse("x=0; " + query + " ${unset:?missing} \"$((x++))\""));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("unset: missing\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: unset: missing\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

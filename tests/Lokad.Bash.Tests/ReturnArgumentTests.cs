@@ -86,9 +86,9 @@ public sealed class ReturnArgumentTests
         1, "", "Ereturn: too many arguments\n")]
     // Keep the platform's current fatal-expansion status (1); Bash -c reports 127 here.
     [InlineData("f(){ value=${missing?bad} return word; printf wrong; }; f; printf wrong",
-        1, "", "missing: bad\n")]
+        1, "", "line 1: missing: bad\n")]
     [InlineData("f(){ return word ${missing?bad}; printf wrong; }; f; printf wrong",
-        1, "", "missing: bad\n")]
+        1, "", "line 1: missing: bad\n")]
     [InlineData("f(){ return word 2>/dev/null; printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[2]", "")]
     [InlineData("(return 1 2; printf wrong); printf '[%s]' \"$?\"",

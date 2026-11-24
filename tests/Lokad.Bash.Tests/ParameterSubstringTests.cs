@@ -243,7 +243,7 @@ public sealed class ParameterSubstringTests
     [InlineData("set -- $'\\377' $'\\u03bb' z; IFS=$'\\377'; printf '%s' \"${*:1:2}\"\n", "FFFFCEBB", "", 0)]
     [InlineData("x=$'\\377'; printf '%s' \"${x:9:$(printf bad >&2; printf 1)}\"; printf after\n", "6166746572", "", 0)]
     [InlineData("x=$'\\377'; printf '%s' \"${x:1:$(printf effect >&2; printf 0)}\"; printf after\n", "6166746572", "656666656374", 0)]
-    [InlineData("x=$'\\377'; message=$'\\377'; printf '%s' \"${x:0:${missing:?$message}}$(printf bad >&2)\"; printf after\n", "", "6D697373696E673A20FF0A", 1)]
+    [InlineData("x=$'\\377'; message=$'\\377'; printf '%s' \"${x:0:${missing:?$message}}$(printf bad >&2)\"; printf after\n", "", "6C696E6520313A206D697373696E673A20FF0A", 1)]
     [InlineData("x=$'a\\360\\237z\\316\\273b'; printf '%s|%s|%s' \"${x:2:2}\" \"${x:3:-1}\" \"${x: -4:-2}\"", "9F7A7C7ACEBB7C9F7A", "", 0)]
     public async Task SubstringsPreserveValueBytes(string script, string expectedHex, string errorHex, int status)
     {

@@ -7,17 +7,17 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArrayAssignmentTargetTestsEndToEnd
 {
     [Theory]
-    [InlineData("arr[-1]=x", "line 1: arr[-1]: bad array subscript\n", true, true)]
-    [InlineData("arr[1/0]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", false, true)]
-    [InlineData("arr[$((1/0))]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", true, true)]
-    [InlineData("arr[0]=$((1/0))", "line 1: 1/0: division by 0 (error token is \"0\")\n", true, true)]
-    [InlineData("readonly arr; arr[0]=x", "line 1: arr: readonly variable\n", true, true)]
-    [InlineData("readonly arr; arr=x", "line 1: arr: readonly variable\n", true, true)]
-    [InlineData("declare -A arr; key=; arr[$key]=x", "line 1: arr[$key]: bad array subscript\n", true, true)]
-    [InlineData("arr[${missing:?bad}]=x", "missing: bad\n", false, false)]
-    [InlineData("readonly arr; : ${arr:=x}", "line 1: arr: readonly variable\n", true, true)]
+    [InlineData("arr[-1]=x", "line 1: arr[-1]: bad array subscript\n", true)]
+    [InlineData("arr[1/0]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", false)]
+    [InlineData("arr[$((1/0))]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", true)]
+    [InlineData("arr[0]=$((1/0))", "line 1: 1/0: division by 0 (error token is \"0\")\n", true)]
+    [InlineData("readonly arr; arr[0]=x", "line 1: arr: readonly variable\n", true)]
+    [InlineData("readonly arr; arr=x", "line 1: arr: readonly variable\n", true)]
+    [InlineData("declare -A arr; key=; arr[$key]=x", "line 1: arr[$key]: bad array subscript\n", true)]
+    [InlineData("arr[${missing:?bad}]=x", "line 1: missing: bad\n", false)]
+    [InlineData("readonly arr; : ${arr:=x}", "line 1: arr: readonly variable\n", true)]
     public async Task Evaluation_AssignmentFailures_RespectEvalAndSourceBoundaries(
-        string assignment, string expectedError, bool recoverable, bool reportsSourcePath)
+        string assignment, string expectedError, bool recoverable)
     {
         var content = assignment + "; printf inside";
         var tree = EndToEndHarness.BuildTree([("/assignment", content)]);
@@ -27,7 +27,7 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
                 invocation + "; printf 'after:%s' \"$?\"", tree, ReadOnlyMemory<byte>.Empty);
 
             Assert.Equal(recoverable ? "after:1" : string.Empty, result.StdOut);
-            Assert.Equal(reportsSourcePath ? path + expectedError : expectedError, result.StdErr);
+            Assert.Equal(path + expectedError, result.StdErr);
             Assert.Equal(recoverable ? 0 : 1, result.ExitCode);
         }
     }

@@ -499,8 +499,8 @@ public sealed class ParameterTransformTests
     }
 
     [Theory]
-    [InlineData("x=abc; printf '%s' \"${x/${bad:?pattern}/$(printf late >&2)}\"; printf after", "bad: pattern\n")]
-    [InlineData("x=abc; printf '%s' \"${x/$(printf first >&2; printf a)/${bad:?replacement}}\"; printf after", "firstbad: replacement\n")]
+    [InlineData("x=abc; printf '%s' \"${x/${bad:?pattern}/$(printf late >&2)}\"; printf after", "line 1: bad: pattern\n")]
+    [InlineData("x=abc; printf '%s' \"${x/$(printf first >&2; printf a)/${bad:?replacement}}\"; printf after", "firstline 1: bad: replacement\n")]
     public async Task FailedOperandsStopLaterEffects(string script, string expectedError)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));

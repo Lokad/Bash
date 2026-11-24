@@ -983,10 +983,16 @@ data.
 
 A missing positional argument in `${!1}` or `${!12}` supplies an unset value.
 Its usage as a field and the ordinary default and alternate operators follow
-the same rules as for other unset positional arguments. An assigning default
-for a missing positional argument reports `invalid indirect expansion` before
-expanding its operand and discards the current command unit. When the argument
-is present, its value supplies the indirect name.
+the same rules as for other unset positional arguments. An indirect assigning
+default expands its operand before reporting `invalid indirect expansion`
+for the missing argument. When the argument is present, its value supplies
+the indirect name.
+When a direct assigning default selects an unavailable special parameter,
+it reports `cannot assign in this way` before expanding its operand.
+These failures discard the current command unit. With errexit disabled,
+the next unit of the root, eval or source reader sees status 1 and
+`PIPESTATUS=(1)`. A required-parameter failure reports its expanded
+message with the reached reader location and terminates that reader.
 An indirect read of a missing element is also unset when its base variable
 exists, including a declaration without a value. A missing base variable,
 an uninitialized nameref or an invalid indirect name reports an expansion

@@ -300,7 +300,7 @@ public sealed class CommandSubstitutionCaptureTests
     }
 
     [Theory]
-    [InlineData("unset path; printf '<%s>' \"$(<\"${path:?required}\")\"; printf after", 1, "", "path: required\n")]
+    [InlineData("unset path; printf '<%s>' \"$(<\"${path:?required}\")\"; printf after", 1, "", "line 1: path: required\n")]
     [InlineData("set -e; path=; printf '<%s>' \"$(<$path)\"; printf after", 0, "<>after", "$path: ambiguous redirect\n")]
     public async Task FileTargetExpansionRetainsTheErrorOrigin(string script, int status, string stdout, string stderr)
     {

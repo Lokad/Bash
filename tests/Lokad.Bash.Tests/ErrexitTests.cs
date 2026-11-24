@@ -470,7 +470,7 @@ public sealed class ErrexitTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
-        Assert.Equal("missing: required\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: missing: required\n", host.StandardError.TextContent);
     }
 
     [Theory]

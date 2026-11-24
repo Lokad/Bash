@@ -20,7 +20,7 @@ public sealed class ByteSourceEvalTests
     [InlineData("x=wrong; value=$'\\377'; eval \"printf '%s' '\\$x' '\"\"$value\"\"'\"", 0, "2478FF", "")]
     [InlineData("x=outer; x=inner eval \"value='\"$'\\377'\"'; printf '%s' \\\"\\$x\\\"\"; printf '%s:%s' \"$x\" \"$value\"", 0, "696E6E65726F757465723AFF", "")]
     [InlineData("f(){ eval \"printf '%s' '\"$'\\377'\"'; return 7\"; printf wrong; }; f; printf ':%s' \"$?\"", 0, "FF3A37", "")]
-    [InlineData("eval \"printf wrong\" \"${MISSING:?missing}\" \"$(printf later >&2)\"; printf after", 1, "", "4D495353494E473A206D697373696E670A")]
+    [InlineData("eval \"printf wrong\" \"${MISSING:?missing}\" \"$(printf later >&2)\"; printf after", 1, "", "6C696E6520313A204D495353494E473A206D697373696E670A")]
     [InlineData("value=$'\\377\\r'; eval \"printf '%s' '\"\"$value\"\"'\"", 0, "FF0D", "")]
     [InlineData("false && eval \"printf '%s' '\"$'\\377'\"'\"; printf '%s' \"$?\"", 0, "31", "")]
     [InlineData("set --; eval \"$@\"; printf '%s' \"$?\"", 0, "30", "")]

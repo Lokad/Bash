@@ -442,7 +442,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("missing: boom\n", result.StdErr);
+        Assert.Equal("line 1: missing: boom\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -519,7 +519,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("empty=(); arr=(a \"${empty[@]}\" b \"\" c); printf '<%s>\\n' \"${arr[@]}\"", "<a>\n<b>\n<>\n<c>\n", "", 0)]
     [InlineData("arr=(old); arr=(\"${arr[0]:=fallback}\" \"${arr[2]:=effect}\"); printf '<%s>\\n' \"${!arr[@]}\" \"${arr[@]}\"", "<0>\n<1>\n<old>\n<effect>\n", "", 0)]
     [InlineData("arr=([1/0]=$(printf a; printf first >&2) [$(printf 2; printf selector >&2)]=$(printf b; printf second >&2)); printf after", "", "firstselectorsecondline 1: 1/0: division by 0 (error token is \"0\")\n", 1)]
-    [InlineData("arr=([$(printf 2; printf selector >&2)]=$(printf a; printf first >&2) \"${missing:?boom}\" $(printf b; printf second >&2)); printf after", "", "selectorfirstmissing: boom\n", 1)]
+    [InlineData("arr=([$(printf 2; printf selector >&2)]=$(printf a; printf first >&2) \"${missing:?boom}\" $(printf b; printf second >&2)); printf after", "", "selectorfirstline 1: missing: boom\n", 1)]
     [InlineData("arr=(new [-2]=$(printf bad; printf rhs >&2) $(printf tail; printf later >&2)); printf '<%s>\\n' \"${arr[@]}\"", "<new>\n<tail>\n", "rhslaterline 1: [-2]=bad: bad array subscript\n", 0)]
     [InlineData("declare -A map; map=([a]=one $(printf plain; printf rhs >&2) [b]=two); printf '<%s>:<%s>\\n' \"${map[a]}\" \"${map[b]}\"", "<one>:<two>\n", "map: must use subscript when assigning associative array\n", 0)]
     [InlineData("v='a b'; declare -A map; map=($v value next); printf '<%s>:<%s>:<%s>\\n' \"${map['a b']-x}\" \"${map[a]-x}\" \"${map[next]-x}\"", "<value>:<x>:<>\n", "", 0)]
@@ -562,7 +562,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
 
     [Theory]
     [InlineData("arr=(old); arr=(first [1/0]=bad)", new[] { "first" }, "line 1: 1/0: division by 0 (error token is \"0\")\n")]
-    [InlineData("arr=(old); arr=(first \"${arr[2]:=effect}\" \"${missing:?boom}\")", new[] { "old", "", "effect" }, "missing: boom\n")]
+    [InlineData("arr=(old); arr=(first \"${arr[2]:=effect}\" \"${missing:?boom}\")", new[] { "old", "", "effect" }, "line 1: missing: boom\n")]
     public async Task Evaluation_CompoundArrayFailure_RetainsEffectsOfItsCompletedStage(
         string script, string[] expectedArray, string expectedError)
     {

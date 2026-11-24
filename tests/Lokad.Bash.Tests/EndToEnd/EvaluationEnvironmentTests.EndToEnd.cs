@@ -184,7 +184,7 @@ sh -c 'printf ""unexported-child=<%s>\n"" ""${LK_EXPORT_PROBE-unset}""';".Replac
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("MISSING: redirection-failed\n", result.StdErr);
+        Assert.Equal("line 1: MISSING: redirection-failed\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -206,7 +206,7 @@ sh -c 'printf ""unexported-child=<%s>\n"" ""${LK_EXPORT_PROBE-unset}""';".Replac
     public async Task FatalExpansionUsesOnlyActiveRedirections(string script, int exitCode, string destination)
     {
         var result = await EvaluationTestHelper.RunAsync(script);
-        const string error = "MISSING: word-failed\n";
+        const string error = "line 1: MISSING: word-failed\n";
 
         Assert.Equal(exitCode, result.ExitCode);
         Assert.Equal(destination == "stdout" ? error : string.Empty, result.StdOut);
@@ -224,7 +224,7 @@ sh -c 'printf ""unexported-child=<%s>\n"" ""${LK_EXPORT_PROBE-unset}""';".Replac
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("MISSING: assignment-failed\n", result.StdErr);
+        Assert.Equal("line 1: MISSING: assignment-failed\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

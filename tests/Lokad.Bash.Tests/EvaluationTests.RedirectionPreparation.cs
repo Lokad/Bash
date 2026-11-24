@@ -20,7 +20,7 @@ public partial class EvaluationTests
     [InlineData("unset HPM_MISSING; hpm_fn(){ printf wrong; }\n{ :; } <<HPM_END 2>/dev/null\n${HPM_MISSING:?stop}\nHPM_END\nprintf 'after:%s' \"$?\"", "", "line 4: HPM_MISSING: stop\n", 1)]
     [InlineData("unset HPM_MISSING; cat 2>/dev/null <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\" >&2", "", "after:1", 0)]
     [InlineData("unset HPM_MISSING; cat 2>&- <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\"", "after:1", "", 0)]
-    [InlineData("unset HPM_MISSING; cat 2>&1 >/dev/null <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\"", "HPM_MISSING: stop\nafter:1", "", 0)]
+    [InlineData("unset HPM_MISSING; cat 2>&1 >/dev/null <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\"", "line 1: HPM_MISSING: stop\nafter:1", "", 0)]
     [InlineData("unset HPM_MISSING; cat >/dev/null 2>&1 <<< \"${HPM_MISSING:?stop}\"; printf 'after:%s' \"$?\"", "after:1", "", 0)]
     [InlineData("cat 2>/dev/null <<< \"$(printf seen >&2; printf payload)\"; printf after >&2", "payload\n", "after", 0)]
     [InlineData("cat <<< \"$(printf seen >&2; printf payload)\" 2>/dev/null; printf after >&2", "payload\n", "seenafter", 0)]
@@ -100,7 +100,7 @@ public partial class EvaluationTests
 
         var error = await NextWriteAsync(state);
         Assert.Equal(10, error.FileDescriptor.Id);
-        Assert.Equal("missing: stop\n", Text(error.Content));
+        Assert.Equal("line 1: missing: stop\n", Text(error.Content));
         error.SetResult(DescriptorWriteResult.Open);
 
         var close = await NextCloseDescriptorAsync(state);

@@ -150,7 +150,7 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script, tree: tree);
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("MISSING: missing\n", result.StdErr);
+        Assert.Equal("line 1: MISSING: missing\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

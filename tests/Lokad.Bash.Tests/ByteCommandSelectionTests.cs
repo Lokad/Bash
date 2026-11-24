@@ -33,7 +33,7 @@ public sealed class ByteCommandSelectionTests
     [InlineData("v=$'\\377['; printf '%s' $v\n", "FF5B", "", 0)]
     [InlineData("empty=(); v=old; v=$'\\377' \"${empty[@]}\"; printf '%s' \"$v\"\n", "FF", "", 0)]
     [InlineData("x=0; args=(printf '%s' $'\\377'); command \"$(printf -- --)\" \"${args[@]}\" \"$((x++))\"; printf ':%s' \"$x\"\n", "FF303A31", "", 0)]
-    [InlineData("command ${missing:?$'\\377'} \"$(printf forbidden >&2)\"; printf after\n", "", "6D697373696E673A20FF0A", 1)]
+    [InlineData("command ${missing:?$'\\377'} \"$(printf forbidden >&2)\"; printf after\n", "", "6C696E6520313A206D697373696E673A20FF0A", 1)]
     [InlineData("args=(printf '%s' $'\\303' $'\\251'); builtin \"${args[@]}\"\n", "C3A9", "", 0)]
     [InlineData("args=(command builtin -- printf '%s' $'\\377'); \"${args[@]}\"\n", "FF", "", 0)]
     public async Task Evaluation_SelectedFieldsPreserveBytesAndEffects(

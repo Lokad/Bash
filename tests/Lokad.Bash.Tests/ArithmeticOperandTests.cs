@@ -111,7 +111,7 @@ public sealed class ArithmeticOperandTests
     [InlineData("i=0; ((0 && $(printf 'effect\\n' >&2; printf 2))); printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=1 i=0\n", "effect\n", 0)]
     [InlineData("false && ((i=$(printf 'bad\\n' >&2; printf 2))); printf 's=%s i=%s\\n' \"$?\" \"${i-unset}\"\n\n", "s=1 i=unset\n", "", 0)]
     [InlineData("((0)); printf 's=%s\\n' \"$?\"\n\n", "s=1\n", "", 0)]
-    [InlineData("unset missing; ((i=${missing:?stop})); printf continued\n\n", "", "missing: stop\n", 1)]
+    [InlineData("unset missing; ((i=${missing:?stop})); printf continued\n\n", "", "line 1: missing: stop\n", 1)]
     [InlineData("x=9; f(){ local x=2; ((x=$x+1)); printf 'inner=%s\\n' \"$x\"; }; f; printf 'outer=%s\\n' \"$x\"\n\n", "inner=3\nouter=9\n", "", 0)]
     [InlineData("x=1; ( ((x=$x+1)); printf 'inner=%s\\n' \"$x\" ); printf 'outer=%s\\n' \"$x\"\n\n", "inner=2\nouter=1\n", "", 0)]
     [InlineData("unset x; (($x)); printf 's=%s\\n' \"$?\"\n\n", "s=1\n", "", 0)]
@@ -120,8 +120,8 @@ public sealed class ArithmeticOperandTests
     [InlineData("for ((i=0;i<2;i+=$(printf 'update\\n' >&2; printf 1))); do continue; done; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=0 i=2\n", "update\nupdate\n", 0)]
     [InlineData("for ((i=$(printf 'init\\n' >&2; printf 0);1;i+=$(printf 'bad\\n' >&2; printf 1))); do break; done; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=0 i=0\n", "init\n", 0)]
     [InlineData("i=0; for ((;;i++)); do ((i==2)) && break; done; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=0 i=2\n", "", 0)]
-    [InlineData("unset missing; for ((i=0;i<${missing:?stop};i++)); do printf bad; done; printf continued\n\n", "", "missing: stop\n", 1)]
-    [InlineData("unset missing; for ((i=0;i<1;i+=${missing:?stop})); do printf body; done; printf continued\n\n", "body", "missing: stop\n", 1)]
+    [InlineData("unset missing; for ((i=0;i<${missing:?stop};i++)); do printf bad; done; printf continued\n\n", "", "line 1: missing: stop\n", 1)]
+    [InlineData("unset missing; for ((i=0;i<1;i+=${missing:?stop})); do printf body; done; printf continued\n\n", "body", "line 1: missing: stop\n", 1)]
     [InlineData("false && for ((i=${missing:?stop};i<1;i++)); do printf bad; done; printf 's=%s\\n' \"$?\"\n\n", "s=1\n", "", 0)]
     [InlineData("x=2; let \"i=$x\"; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=0 i=2\n", "", 0)]
     [InlineData("let \"i=$(printf 'effect\\n' >&2; printf 2)\"; printf 's=%s i=%s\\n' \"$?\" \"$i\"\n\n", "s=0 i=2\n", "effect\n", 0)]
@@ -149,7 +149,7 @@ public sealed class ArithmeticOperandTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Equal("missing: stop\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: missing: stop\n", host.StandardError.TextContent);
         Assert.Equal("reached", host.ReadFile("/effect"));
         Assert.False(host.FileExists("/unreached"));
         Assert.Equal(0, host.OpenFileCount);

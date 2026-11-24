@@ -359,7 +359,7 @@ public sealed class EvaluationArrayAndParameterExpansionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("FOO: missing\n", result.StdErr);
+        Assert.Equal("line 1: FOO: missing\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -413,7 +413,7 @@ public sealed class EvaluationArrayAndParameterExpansionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("FOO: missing\n", result.StdErr);
+        Assert.Equal("line 1: FOO: missing\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

@@ -41,7 +41,7 @@ public sealed class EvaluationMapfileOptionTests
     [InlineData("mapfile -tt -t -- arr <<< line; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<0,line>", "")]
     [InlineData("readarray -c ' +2 ' -c4294967295 -tn2 arr <<< $'a\\nb\\nc'; printf '<%s><%s><%s>' \"$?\" \"${arr[0]}\" \"${arr[1]}\"", 0, "<0><a><b>", "")]
     [InlineData("arr=(old); mapfile arr -x </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,empty>", "")]
-    [InlineData("mapfile -x \"${missing:?boom}\"; printf after", 1, "", "missing: boom\n")]
+    [InlineData("mapfile -x \"${missing:?boom}\"; printf after", 1, "", "line 1: missing: boom\n")]
     public async Task OptionsPreserveDiagnosticAndEffectOrder(
         string script, int exitCode, string output, string error)
     {

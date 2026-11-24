@@ -505,16 +505,16 @@ public sealed partial class Evaluation
         }
         if (_state.FatalExpansion is not
             { Kind: ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax
-                or ExpansionFailureKind.IndirectParameter or ExpansionFailureKind.NamerefDefault } failure)
+                or ExpansionFailureKind.ParameterTarget or ExpansionFailureKind.NamerefDefault } failure)
             return null;
 
-        // A fork ends on an indirect-name failure even inside a loaded reader.
-        if (failure.Kind == ExpansionFailureKind.IndirectParameter && _state.ForkKind != null)
+        // A fork ends on a parameter target failure even inside a loaded reader.
+        if (failure.Kind == ExpansionFailureKind.ParameterTarget && _state.ForkKind != null)
             return null;
 
         // Recovery uses the caller's errexit state, including for tested commands within the unit.
         if (_state.ErrexitEnabled && !scope.Context.ErrexitIgnored
-            && failure.Kind is ExpansionFailureKind.WordSyntax or ExpansionFailureKind.IndirectParameter)
+            && failure.Kind is ExpansionFailureKind.WordSyntax or ExpansionFailureKind.ParameterTarget)
             return null;
 
         // Nameref defaults fail with 1 at script boundaries, but with 2 at the root.

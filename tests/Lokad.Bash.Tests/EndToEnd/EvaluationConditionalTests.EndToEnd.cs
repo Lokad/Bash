@@ -211,7 +211,7 @@ public sealed class EvaluationConditionalTestsEndToEnd
     [InlineData("false; case a in a) ;& b) printf '%s' \"$?\";; esac", "1", "", 0)]
     [InlineData("case a in a) printf A; false;& b) ;; esac; printf '/%s/%s' \"$?\" \"${PIPESTATUS[*]}\"", "A/0/1", "", 0)]
     [InlineData("case a in a) printf A; false;;& $(printf '%s' \"$?\" >&2; printf a)) printf B;; esac", "AB", "1", 0)]
-    [InlineData("case a in a) printf A;;& ${missing:?retest}) printf wrong;; esac; printf after", "A", "missing: retest\n", 1)]
+    [InlineData("case a in a) printf A;;& ${missing:?retest}) printf wrong;; esac; printf after", "A", "line 1: missing: retest\n", 1)]
     [InlineData("f(){ case a in a) return 7;& b) printf wrong;; esac; }; f", "", "", 7)]
     [InlineData("for i in a b; do case $i in a) printf A; continue;& b) printf B;; esac; printf C; done", "ABC", "", 0)]
     [InlineData("set -e; case a in a) false;& b) printf wrong;; esac; printf wrong", "", "", 1)]
@@ -491,6 +491,6 @@ public sealed class EvaluationConditionalTestsEndToEnd
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("MISSING: bad\n", result.StdErr);
+        Assert.Equal("line 1: MISSING: bad\n", result.StdErr);
     }
 }

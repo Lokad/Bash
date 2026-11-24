@@ -139,15 +139,15 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("MISSING: " + diagnostic + "\n", result.StdErr);
+        Assert.Equal("line 1: MISSING: " + diagnostic + "\n", result.StdErr);
     }
 
     [Theory]
-    [InlineData("echo ${OUTER:?${INNER:?first}}; printf later", "494E4E45523A2066697273740A")]
-    [InlineData("message=$'\\377'; echo ${MISSING:?$message}; printf later", "4D495353494E473A20FF0A")]
-    [InlineData("echo ${MISSING:?$(printf '\\377')}; printf later", "4D495353494E473A20FF0A")]
-    [InlineData("echo $((1 + ${MISSING:?$(printf '\\377')})); printf later", "4D495353494E473A20FF0A")]
-    [InlineData("set -- first second; echo ${MISSING:?${NESTED:-$(printf '\\377')}$@}", "4D495353494E473A20FF6669727374207365636F6E640A")]
+    [InlineData("echo ${OUTER:?${INNER:?first}}; printf later", "6C696E6520313A20494E4E45523A2066697273740A")]
+    [InlineData("message=$'\\377'; echo ${MISSING:?$message}; printf later", "6C696E6520313A204D495353494E473A20FF0A")]
+    [InlineData("echo ${MISSING:?$(printf '\\377')}; printf later", "6C696E6520313A204D495353494E473A20FF0A")]
+    [InlineData("echo $((1 + ${MISSING:?$(printf '\\377')})); printf later", "6C696E6520313A204D495353494E473A20FF0A")]
+    [InlineData("set -- first second; echo ${MISSING:?${NESTED:-$(printf '\\377')}$@}", "6C696E6520313A204D495353494E473A20FF6669727374207365636F6E640A")]
     public async Task FatalExpansion_PreservesTheFirstDiagnosticBytes(string script, string diagnosticHex)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
@@ -180,17 +180,17 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("MISSING: bad\n", result.StdErr);
+        Assert.Equal("line 1: MISSING: bad\n", result.StdErr);
         Assert.Equal("original", await EndToEndHarness.ReadFileAsync(result.Host, "/victim"));
     }
 
     [Theory]
-    [InlineData("printf '%s' \"${MISSING:?}\"; printf after", "MISSING: parameter null or not set\n")]
-    [InlineData("printf '%s' \"${MISSING?}\"; printf after", "MISSING: parameter not set\n")]
-    [InlineData("printf '%s' \"${MISSING:?$EMPTY}\"; printf after", "MISSING: \n")]
-    [InlineData("printf '%s' \"${MISSING:?$(printf '')}\"; printf after", "MISSING: \n")]
-    [InlineData("printf '%s' \"${OUTER:?${INNER:?}}\"; printf after", "INNER: parameter null or not set\n")]
-    [InlineData("for i in ok ${MISSING:?}; do printf after; done", "MISSING: parameter null or not set\n")]
+    [InlineData("printf '%s' \"${MISSING:?}\"; printf after", "line 1: MISSING: parameter null or not set\n")]
+    [InlineData("printf '%s' \"${MISSING?}\"; printf after", "line 1: MISSING: parameter not set\n")]
+    [InlineData("printf '%s' \"${MISSING:?$EMPTY}\"; printf after", "line 1: MISSING: \n")]
+    [InlineData("printf '%s' \"${MISSING:?$(printf '')}\"; printf after", "line 1: MISSING: \n")]
+    [InlineData("printf '%s' \"${OUTER:?${INNER:?}}\"; printf after", "line 1: INNER: parameter null or not set\n")]
+    [InlineData("for i in ok ${MISSING:?}; do printf after; done", "line 1: MISSING: parameter null or not set\n")]
     public async Task FatalExpansion_DistinguishesOmittedAndEmptyMessages(string script, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(script);
@@ -201,30 +201,30 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("set -- first second; printf '%s' \"${MISSING:?$@}\"", "MISSING: first second\n")]
-    [InlineData("set -- first second; printf '%s' \"${MISSING:?\"$@\"}\"", "MISSING: first second\n")]
-    [InlineData("arr=(one two); printf '%s' \"${MISSING:?${arr[@]}}\"", "MISSING: one two\n")]
-    [InlineData("set -- '' second; printf '%s' \"${MISSING:?$@}\"", "MISSING: second\n")]
-    [InlineData("set -- '' second; printf '%s' \"${MISSING:?\"$@\"}\"", "MISSING:  second\n")]
-    [InlineData("set -- '' second; printf '%s' \"${MISSING:?prefix$@suffix}\"", "MISSING: prefix secondsuffix\n")]
-    [InlineData("set -- first second; IFS=:; printf '%s' \"${MISSING:?$*}\"", "MISSING: first second\n")]
-    [InlineData("set -- first second; IFS=:; printf '%s' \"${MISSING:?\"$*\"}\"", "MISSING: first:second\n")]
-    [InlineData("arr=(one two); IFS=:; printf '%s' \"${MISSING:?${arr[*]}}\"", "MISSING: one two\n")]
-    [InlineData("set -- first second; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "MISSING: first second\n")]
-    [InlineData("set --; printf '%s' \"${MISSING:?$@}\"", "MISSING: \n")]
-    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?$@}\"", "MISSING: a b c\n")]
-    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?\"$@\"}\"", "MISSING: a:b c\n")]
-    [InlineData("set -- '' second; IFS=:; printf '%s' \"${MISSING:?$@}\"", "MISSING:  second\n")]
-    [InlineData("set -- first ''; IFS=:; printf '%s' \"${MISSING:?$@}\"", "MISSING: first\n")]
-    [InlineData("set -- first ''; IFS=:; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "MISSING: first \n")]
-    [InlineData("message='  first   second '; printf '%s' \"${MISSING:?$message}\"", "MISSING: first second\n")]
-    [InlineData("message='  first   second '; printf '%s' \"${MISSING:?\"$message\"}\"", "MISSING:   first   second \n")]
-    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?${NESTED:-\"$@\"}}\"", "MISSING: a:b c\n")]
-    [InlineData("set -- '' second; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "MISSING: second\n")]
-    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "MISSING: a:b c\n")]
-    [InlineData("set -- ' a:b ' ' c:d '; IFS=': '; printf '%s' \"${MISSING:?pre${NESTED:-$@}post}\"", "MISSING: pre a:b   c:d post\n")]
-    [InlineData("set -- ' a:b ' ' c:d '; IFS=' :'; printf '%s' \"${MISSING:?pre${NESTED:-$@}post}\"", "MISSING: pre a b c d post\n")]
-    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?${NESTED:=\"$@\"}}\"", "MISSING: a b c\n")]
+    [InlineData("set -- first second; printf '%s' \"${MISSING:?$@}\"", "line 1: MISSING: first second\n")]
+    [InlineData("set -- first second; printf '%s' \"${MISSING:?\"$@\"}\"", "line 1: MISSING: first second\n")]
+    [InlineData("arr=(one two); printf '%s' \"${MISSING:?${arr[@]}}\"", "line 1: MISSING: one two\n")]
+    [InlineData("set -- '' second; printf '%s' \"${MISSING:?$@}\"", "line 1: MISSING: second\n")]
+    [InlineData("set -- '' second; printf '%s' \"${MISSING:?\"$@\"}\"", "line 1: MISSING:  second\n")]
+    [InlineData("set -- '' second; printf '%s' \"${MISSING:?prefix$@suffix}\"", "line 1: MISSING: prefix secondsuffix\n")]
+    [InlineData("set -- first second; IFS=:; printf '%s' \"${MISSING:?$*}\"", "line 1: MISSING: first second\n")]
+    [InlineData("set -- first second; IFS=:; printf '%s' \"${MISSING:?\"$*\"}\"", "line 1: MISSING: first:second\n")]
+    [InlineData("arr=(one two); IFS=:; printf '%s' \"${MISSING:?${arr[*]}}\"", "line 1: MISSING: one two\n")]
+    [InlineData("set -- first second; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "line 1: MISSING: first second\n")]
+    [InlineData("set --; printf '%s' \"${MISSING:?$@}\"", "line 1: MISSING: \n")]
+    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?$@}\"", "line 1: MISSING: a b c\n")]
+    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?\"$@\"}\"", "line 1: MISSING: a:b c\n")]
+    [InlineData("set -- '' second; IFS=:; printf '%s' \"${MISSING:?$@}\"", "line 1: MISSING:  second\n")]
+    [InlineData("set -- first ''; IFS=:; printf '%s' \"${MISSING:?$@}\"", "line 1: MISSING: first\n")]
+    [InlineData("set -- first ''; IFS=:; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "line 1: MISSING: first \n")]
+    [InlineData("message='  first   second '; printf '%s' \"${MISSING:?$message}\"", "line 1: MISSING: first second\n")]
+    [InlineData("message='  first   second '; printf '%s' \"${MISSING:?\"$message\"}\"", "line 1: MISSING:   first   second \n")]
+    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?${NESTED:-\"$@\"}}\"", "line 1: MISSING: a:b c\n")]
+    [InlineData("set -- '' second; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "line 1: MISSING: second\n")]
+    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?${NESTED:-$@}}\"", "line 1: MISSING: a:b c\n")]
+    [InlineData("set -- ' a:b ' ' c:d '; IFS=': '; printf '%s' \"${MISSING:?pre${NESTED:-$@}post}\"", "line 1: MISSING: pre a:b   c:d post\n")]
+    [InlineData("set -- ' a:b ' ' c:d '; IFS=' :'; printf '%s' \"${MISSING:?pre${NESTED:-$@}post}\"", "line 1: MISSING: pre a b c d post\n")]
+    [InlineData("set -- a:b c; IFS=:; printf '%s' \"${MISSING:?${NESTED:=\"$@\"}}\"", "line 1: MISSING: a b c\n")]
     public async Task FatalExpansion_JoinsEveryDiagnosticField(string script, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(script);
@@ -235,16 +235,16 @@ public sealed class EvaluationAssignmentOrderingTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("unset IFS; message='a:b'; : \"${MISSING:?${IFS:=:}$message}\"", "MISSING:  a b\n")]
-    [InlineData("unset IFS; message='a:b'; : \"${MISSING:?$message${IFS:=:}}\"", "MISSING: a b\n")]
-    [InlineData("unset IFS; message='a:b'; : \"${MISSING:?${IFS:=:}\"$message\"}\"", "MISSING:  a:b\n")]
-    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${IFS:=:}$@}\"", "MISSING:  a b c d\n")]
-    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?$@${IFS:=:}}\"", "MISSING: a b c d\n")]
-    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${IFS:=:}\"$*\"}\"", "MISSING:  a:b:c:d\n")]
-    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?\"$*\"${IFS:=:}}\"", "MISSING: a:b c:d\n")]
-    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${IFS:=:}${NESTED:-$@}}\"", "MISSING:  a:b c:d\n")]
-    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${NESTED:-$@}${IFS:=:}}\"", "MISSING: a b c d\n")]
-    [InlineData("IFS=; set -- a:b c:d; : \"${MISSING:?${IFS:=:}$@}\"", "MISSING:  a b c d\n")]
+    [InlineData("unset IFS; message='a:b'; : \"${MISSING:?${IFS:=:}$message}\"", "line 1: MISSING:  a b\n")]
+    [InlineData("unset IFS; message='a:b'; : \"${MISSING:?$message${IFS:=:}}\"", "line 1: MISSING: a b\n")]
+    [InlineData("unset IFS; message='a:b'; : \"${MISSING:?${IFS:=:}\"$message\"}\"", "line 1: MISSING:  a:b\n")]
+    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${IFS:=:}$@}\"", "line 1: MISSING:  a b c d\n")]
+    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?$@${IFS:=:}}\"", "line 1: MISSING: a b c d\n")]
+    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${IFS:=:}\"$*\"}\"", "line 1: MISSING:  a:b:c:d\n")]
+    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?\"$*\"${IFS:=:}}\"", "line 1: MISSING: a:b c:d\n")]
+    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${IFS:=:}${NESTED:-$@}}\"", "line 1: MISSING:  a:b c:d\n")]
+    [InlineData("unset IFS; set -- a:b c:d; : \"${MISSING:?${NESTED:-$@}${IFS:=:}}\"", "line 1: MISSING: a b c d\n")]
+    [InlineData("IFS=; set -- a:b c:d; : \"${MISSING:?${IFS:=:}$@}\"", "line 1: MISSING:  a b c d\n")]
     public async Task FatalExpansion_UsesUpdatedIfsWithoutLosingQuotedFields(string script, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(script);

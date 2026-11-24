@@ -22,8 +22,8 @@ internal enum ExpansionFailureKind
     /// <summary>Rereading rendered capture or array syntax terminates the current reader.</summary>
     ReaderSyntax,
     Parameter,
-    /// <summary>A failed indirect name read or write discards the current command unit.</summary>
-    IndirectParameter,
+    /// <summary>An invalid parameter target discards the current command unit.</summary>
+    ParameterTarget,
     /// <summary>A reached error-if-unset parameter expansion.</summary>
     RequiredParameter,
     /// <summary>A present value reached an invalid parameter transformation.</summary>

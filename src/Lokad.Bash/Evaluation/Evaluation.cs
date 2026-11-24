@@ -3780,7 +3780,7 @@ public sealed partial class Evaluation : IFileTester
         ReportUnitExpansionFailureAsync(subject, message, scope, kind,
             kind is ExpansionFailureKind.Arithmetic or ExpansionFailureKind.ArrayIndex ? GetBuiltinDiagnosticPrefix(scope.Context) : default);
 
-    internal Task ReportParameterReadFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
+    internal Task ReportParameterExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
         ScopedEvaluation scope, ExpansionFailureKind kind)
     {
         var prefix = scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument
@@ -3852,10 +3852,7 @@ public sealed partial class Evaluation : IFileTester
         if (canResume && (!loadedUnits || _state.ForkKind != null))
         {
             _state.LastExitCode = exitCode;
-            // A prefix RHS writes through to the caller even though its temporary bindings go away.
-            var statusScope = ReferenceEquals(scope.ExpansionWriteTarget?.Variables, _vars)
-                ? scope with { Variables = _vars } : scope;
-            PublishExpansionPipelineStatus(exitCode, statusScope);
+            PublishExpansionPipelineStatus(exitCode, scope);
         }
         return ReportBuiltinDiagnosticAsync(subject, message, scope.Context);
     }
@@ -3863,7 +3860,9 @@ public sealed partial class Evaluation : IFileTester
     private void PublishExpansionPipelineStatus(int exitCode, ScopedEvaluation scope)
     {
         PreparePipelineStatusStorage(1);
-        scope.Variables.SetPipelineStatuses([exitCode], scope.Context, _cancellationToken);
+        // A failed prefix RHS publishes to the caller before its temporary bindings go away.
+        var variables = scope.ExpansionWriteTarget is { PreparingPrefixes: true } prefix ? prefix.Variables : scope.Variables;
+        variables.SetPipelineStatuses([exitCode], scope.Context, _cancellationToken);
     }
 
     private bool PipelineInheritsLoadedUnitStatus => _state.ForkKind == ShellForkKind.PipelineSimpleCommand

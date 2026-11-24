@@ -392,7 +392,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
             "exec cat ${MISSING:?missing}; echo unreachable");
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("MISSING: missing\n", result.StdErr);
+        Assert.Equal("line 1: MISSING: missing\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

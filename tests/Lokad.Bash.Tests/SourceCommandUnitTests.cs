@@ -30,7 +30,7 @@ public sealed class SourceCommandUnitTests
 
     [Theory]
     [InlineData("exit 7\nprintf wrong\n", 7, "")]
-    [InlineData("value=${missing?bad}\nprintf wrong\n", 1, "missing: bad\n")]
+    [InlineData("value=${missing?bad}\nprintf wrong\n", 1, "/source: line 1: missing: bad\n")]
     public async Task UnrecoverableFlowStillStopsTheSource(string body, int expectedStatus, string expectedError)
     {
         var result = await EndToEndHarness.RunScriptAsync(

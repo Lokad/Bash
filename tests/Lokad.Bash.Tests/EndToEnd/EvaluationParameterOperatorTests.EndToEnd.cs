@@ -242,9 +242,9 @@ public sealed class EvaluationParameterOperatorTestsEndToEnd
     [InlineData("unset value; printf '<%s>\\n' \"${value:-$(printf once >&2; printf 'two words')}\"", "<two words>\n", "once", 0)]
     [InlineData("value=set; printf '<%s>\\n' \"${value:-$(printf unused >&2; printf 'two words')}\"", "<set>\n", "", 0)]
     [InlineData("readonly value=; printf '<%s>\\n' \"${value:=assigned}\"; printf continued", "", "line 1: value: readonly variable\n", 2)]
-    [InlineData("unset value inner; printf '%s' \"${value:=${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
-    [InlineData("unset value inner; printf '%s' \"${value:-${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
-    [InlineData("unset inner; printf '%s' \"$((${inner:?missing} + 1))$(printf continued >&2)\"; printf continued", "", "inner: missing\n", 1)]
+    [InlineData("unset value inner; printf '%s' \"${value:=${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "line 1: inner: missing\n", 1)]
+    [InlineData("unset value inner; printf '%s' \"${value:-${inner:?missing}}$(printf continued >&2)\"; printf continued", "", "line 1: inner: missing\n", 1)]
+    [InlineData("unset inner; printf '%s' \"$((${inner:?missing} + 1))$(printf continued >&2)\"; printf continued", "", "line 1: inner: missing\n", 1)]
     [InlineData("cd /; IFS=/; unset value; set -- ${value:-~+}; printf 'count=%s' \"$#\"; for item in \"$@\"; do printf ':<%s>' \"$item\"; done; printf '\\n'", "count=1:</>\n", "", 0)]
     public async Task ParameterOperand_EvaluatesLazilyAndStopsOnFatalErrors(
         string script,
@@ -316,7 +316,7 @@ public sealed class EvaluationParameterOperatorTestsEndToEnd
         if (expectedOperationStatus != 0)
         {
             Assert.Empty(result.StdOut);
-            Assert.Equal("value: word\n", result.StdErr);
+            Assert.Equal("line 1: value: word\n", result.StdErr);
             return;
         }
 

@@ -418,7 +418,7 @@ public sealed class ReadTargetBindingTests
     [InlineData("a=old; declare -rn ref=a; read ref <<< new; printf '<%s><%s>' \"$?\" \"$a\"", 0, "3C303E3C6E65773E", "")]
     [InlineData("i=0; readonly -a a=(old); read 'a[i++]' <<< value; printf '<%s><%s><%s>' \"$?\" \"$i\" \"${a[0]}\"", 0, "3C313E3C313E3C6F6C643E", "6C696E6520313A20613A20726561646F6E6C79207661726961626C650A")]
     [InlineData("i=outer; i=0 read 'a[i++]' <<< value; printf '<%s><%s>' \"$i\" \"${a[0]}\"", 0, "3C6F757465723E3C76616C75653E", "")]
-    [InlineData("read first 'a[${missing:?bad}]' <<< 'one two'; printf next", 1, "", "6D697373696E673A206261640A")]
+    [InlineData("read first 'a[${missing:?bad}]' <<< 'one two'; printf next", 1, "", "6C696E6520313A206D697373696E673A206261640A")]
     [InlineData("read first 'a[1/0]' <<< 'one two'; printf next", 1, "", "6C696E6520313A20312F303A206469766973696F6E206279203020286572726F7220746F6B656E20697320223022290A")]
     [InlineData("a=(old keep); read a </dev/null; printf '<%s><%s><%s>' \"$?\" \"${a[0]}\" \"${a[1]}\"", 0, "3C313E3C3E3C6B6565703E", "")]
     [InlineData("a=(old keep); read a <<< new; printf '<%s><%s>' \"${a[0]}\" \"${a[1]}\"", 0, "3C6E65773E3C6B6565703E", "")]

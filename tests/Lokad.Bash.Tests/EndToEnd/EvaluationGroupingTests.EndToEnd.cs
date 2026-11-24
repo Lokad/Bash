@@ -214,7 +214,7 @@ public sealed class EvaluationGroupingTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1>after", result.StdOut);
-        Assert.Equal("name: missing\n", result.StdErr);
+        Assert.Equal("line 1: name: missing\n", result.StdErr);
         Assert.Equal(0, result.Host.OpenFileCount);
     }
 

@@ -21,7 +21,7 @@ public sealed class ByteArrayReferenceTests
     [InlineData("x=$'\\360\\237\\231'; printf '<%s>' \"${#x}\"\n", "3C333E", 0, "")]
     [InlineData("x=$'\\300\\257'; printf '<%s>' \"${#x}\"\n", "3C323E", 0, "")]
     [InlineData("a[3]=$'\\u03b1\\U0001f642\\377'; printf '<%s>' \"${#a[3]}\" \"${#a[@]}\" \"${#a[0]}\"\n", "3C333E3C313E3C303E", 0, "")]
-    [InlineData("message=$'\\377'; printf '%s' \"${a[3]:?$message}\"; printf after\n", "", 1, "615B335D3A20FF0A")]
+    [InlineData("message=$'\\377'; printf '%s' \"${a[3]:?$message}\"; printf after\n", "", 1, "6C696E6520313A20615B335D3A20FF0A")]
     public async Task Evaluation_ReferencesRetainBytesAndSelectorEffects(
         string script, string outputHex, int exitCode, string errorHex)
     {

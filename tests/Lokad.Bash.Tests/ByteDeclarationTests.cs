@@ -34,7 +34,7 @@ public sealed class ByteDeclarationTests
     [InlineData("i=0; declare x=$((i+=1))$'\\377'; printf '%s:%s' \"$i\" \"$x\"", 0, "313A31FF", "")]
     [InlineData("f(){ local i=0; local x=$((i+=1))$'\\377'; printf '%s:%s' \"$i\" \"$x\"; }; f", 0, "313A31FF", "")]
     [InlineData("x=$'\\377'; x=$'\\376' printf '%s' \"$x\"; printf '%s' \"$x\"", 0, "FFFF", "")]
-    [InlineData("message=$'\\377'; : ${missing:?$message}; printf unexpected", 1, "", "6D697373696E673A20FF0A")]
+    [InlineData("message=$'\\377'; : ${missing:?$message}; printf unexpected", 1, "", "6C696E6520313A206D697373696E673A20FF0A")]
     [InlineData("v=$'\\377'; f(){ local v=$'\\376'; printf '%s' \"$(local v=$'\\375'; printf '%s' \"$v\")\"; printf '%s' \"$v\"; }; f; printf '%s' \"$v\"", 0, "FDFEFF", "")]
     [InlineData("A=outer; A=$'\\377' export A; printf '%s' \"$A\"", 0, "FF", "")]
     [InlineData("A=outer; A=$'\\377' printf -v A '%s' $'\\376'; printf '%s' \"$A\"", 0, "FE", "")]

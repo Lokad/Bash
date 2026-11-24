@@ -19,7 +19,7 @@ public sealed class ByteParameterReaderTests
     [InlineData("value=$'\\377\\u03bb\\U0001f642'; printf '%s' \"${#value}\"\n", "33", "", 0)]
     [InlineData("p=(target); target=$'x\\377z'; printf '%s' \"${!p[@]:1:1}\"", "FF", "", 0)]
     [InlineData("set -- target; target=$'x\\377z'; printf '%s' \"${!@:1:1}\"", "FF", "", 0)]
-    [InlineData("p=absent; printf '%s' \"${!p:?$'\\377'}\"; printf after", "", "21703A20FF0A", 1)]
+    [InlineData("p=absent; printf '%s' \"${!p:?$'\\377'}\"; printf after", "", "6C696E6520313A2021703A20FF0A", 1)]
     [InlineData("value=$'\\377'; declare -a value; printf '%s|%s' \"${value[0]}\" \"${#value[0]}\"", "FF7C31", "", 0)]
     [InlineData("value=$'\\377'; declare -A value; printf '%s|%s' \"${value[0]}\" \"${#value[0]}\"", "FF7C31", "", 0)]
     public async Task Evaluation_ParameterValuesRemainBytes(

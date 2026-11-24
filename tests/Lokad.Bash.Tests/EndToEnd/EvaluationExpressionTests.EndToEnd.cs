@@ -47,8 +47,8 @@ public sealed class EvaluationExpressionTestsEndToEnd
 
     [Theory]
     [InlineData("reference=new", "line 1: target: readonly variable\n")]
-    [InlineData("value=${MISSING:?first}", "MISSING: first\n")]
-    [InlineData("values=(first ${MISSING:?first})", "MISSING: first\n")]
+    [InlineData("value=${MISSING:?first}", "line 1: MISSING: first\n")]
+    [InlineData("values=(first ${MISSING:?first})", "line 1: MISSING: first\n")]
     public async Task FatalAssignment_UsesEnclosingStderrAndSkipsItsRedirections(string assignment, string diagnostic)
     {
         var tree = EndToEndHarness.BuildTree([("/victim", "original")]);
