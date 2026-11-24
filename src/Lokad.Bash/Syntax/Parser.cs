@@ -170,7 +170,7 @@ public static class Parser
             AllowEofHereDocuments = true
         };
         SkipNewlines(tokenizer);
-        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All);
+        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All, out var lastCommandEnd);
         SkipNewlines(tokenizer);
         var trailing = tokenizer.PeekTokenCore();
         if (trailing.Kind != TokenKind.EndOfInput)
@@ -180,6 +180,7 @@ public static class Parser
         if (failure != null)
             return false;
         script = CompleteScript(tokenizer, command);
+        script.LastCommandEnd = lastCommandEnd;
         return true;
     }
 
@@ -1938,8 +1939,18 @@ public static class Parser
         TokenKind? closingKind,
         string[] endKeywords,
         TokenKind? endTokenKind,
-        CommandUnitMetadata unitMetadata)
+        CommandUnitMetadata unitMetadata) =>
+        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, unitMetadata, out _);
+
+    private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
+        Tokenizer tokenizer,
+        TokenKind? closingKind,
+        string[] endKeywords,
+        TokenKind? endTokenKind,
+        CommandUnitMetadata unitMetadata,
+        out int lastCommandEnd)
     {
+        lastCommandEnd = 0;
         SkipNewlines(tokenizer);
         if (IsEndKeyword(tokenizer, endKeywords) || IsEndTokenKind(tokenizer, endTokenKind))
             return (null, false);
@@ -1948,6 +1959,7 @@ public static class Parser
         if (left == null)
             return (null, false);
 
+        lastCommandEnd = tokenizer.ConsumedPosition;
         ICommand current = left;
         var unitStart = left;
         var trailingTerminator = false;
@@ -1986,6 +1998,7 @@ public static class Parser
             {
                 break;
             }
+            lastCommandEnd = tokenizer.ConsumedPosition;
 
             if (startsCommandUnit)
                 unitStart = right;

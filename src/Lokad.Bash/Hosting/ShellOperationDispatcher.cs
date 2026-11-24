@@ -59,6 +59,8 @@ internal static class ShellOperationDispatcher
             ReadSubstitutionInputOperation input => input.UseResult(state, static (request, state) =>
                 state.Host.TryReadAllBytesAsync(request.Descriptor, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1,
                     static _ => { }, request.DestinationBudget, state.CancellationToken)),
+            CopySubstitutionInputOperation input => input.UseResult(state, static (request, state) =>
+                CopySubstitutionInputAsync(request, state.Host, state.CancellationToken)),
             ResolveCommandsOperation resolve => resolve.UseResult(state, static (request, state) =>
                 state.Host.ResolveCommandsAsync(
                     request.CommandNames, request.CurrentDirectory, request.Environment, state.CancellationToken)),
@@ -72,6 +74,31 @@ internal static class ShellOperationDispatcher
                 new ValueTask<ShellTimingSnapshot>(host.Timing.Read())),
             _ => throw new InvalidOperationException($"Unsupported evaluation operation: {operation.GetType().Name}.")
         };
+
+        static async ValueTask<DescriptorWriteResult> CopySubstitutionInputAsync(
+            CopySubstitutionInputOperation request, IBashHost host, CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using var buffer = await host.ReadAsync(request.Input, DescriptorReadRequest.UpTo(8192), cancellationToken)
+                    .ConfigureAwait(false);
+                var content = buffer.Content;
+                if (!content.IsEmpty)
+                {
+                    if (request.Output.IsClosed)
+                        return DescriptorWriteResult.Closed;
+                    var write = await host.WriteAsync(request.Output, content, cancellationToken).ConfigureAwait(false);
+                    buffer.Consume(content.Length);
+                    if (!write.CanAcceptMore)
+                        return write;
+                }
+                if (buffer.Result.Error is { } error)
+                    return DescriptorWriteResult.Failure(error);
+                if (buffer.Result.ReachedEoF)
+                    return DescriptorWriteResult.Open;
+            }
+        }
 
         static async Task CloseAsync(CloseDescriptorOperation operation, IBashHost host)
         {

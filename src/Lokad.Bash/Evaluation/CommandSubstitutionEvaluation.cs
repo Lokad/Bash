@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
@@ -68,20 +69,9 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                 return new CommandSubstitutionResult(ShellValue.Empty, 2, IgnoredNuls: false);
             }
 
-            if (parsed.Commands is [var command])
-            {
-                // Bash recognizes the one-redirection form even with a leading negation.
-                while (command is NegatedCommand negated)
-                    command = negated.Inner;
-
-                if (command is SimpleCommand
-                    {
-                        Assignments.Count: 0,
-                        Words.Count: 0,
-                        Redirections: [{ Kind: RedirectionKind.Input, FileDescriptor: null or 0, VariableName.Length: 0 }]
-                    } input)
-                    return await outer.ReadInputSubstitutionAsync(input.Redirections, scope).ConfigureAwait(false);
-            }
+            var finalInput = SelectFinalInput(parsed, outer.CancellationToken, out var readInCaller);
+            if (finalInput != null && readInCaller)
+                return await outer.ReadInputSubstitutionAsync(finalInput.Redirections, scope, writeToCapture: false).ConfigureAwait(false);
 
             outer.PrepareOwnedDescriptors(2);
             var creation = await outer.ExecuteCreatePipeAsync().ConfigureAwait(false);
@@ -96,7 +86,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             using var outputMemory = outer.Memory.Budget.CreateScope();
             var warningLine = script is CommandSubstitutionSyntax.Deferred { ReadWarnings: not null }
                 ? scope.Context.Coordinates.HereDocumentWarningLine : 0;
-            var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write, warningLine);
+            var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write, warningLine, finalInput);
             CapturedEvaluationResult result;
             Exception? captureFailure = null;
             try
@@ -149,6 +139,74 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             var parent = scope.Context.SourceMemory;
             return new SourceMemory((parent?.Budget ?? outer.Memory.Budget).CreateScope(), parent);
         }
+    }
+
+    private SimpleCommand? SelectFinalInput(ParsedScript parsed, CancellationToken cancellationToken, out bool readInCaller)
+    {
+        readInCaller = false;
+        if (parsed.Commands is not [var first])
+            return null;
+
+        var rendered = script is CommandSubstitutionSyntax.Parsed;
+        var last = first;
+        if (first is ListCommand list)
+        {
+            // The redirection must be the only command in the final reader unit.
+            if (list.Operator != ListOperator.Sequence || (!list.HasNewlineConnector && (rendered || !list.StartsCommandUnit)))
+                return null;
+            last = list.Right;
+        }
+
+        while (last is NegatedCommand negated)
+            last = negated.Inner;
+        if (last is not SimpleCommand
+            {
+                Assignments.Count: 0, Words.Count: 0,
+                Redirections: [{ Kind: RedirectionKind.Input, FileDescriptor: null or 0, VariableName.Length: 0 }]
+            } input)
+            return null;
+
+        if (rendered)
+        {
+            // The renderer prints a simple command's words and assignments before its redirects.
+            for (;;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (first is ListCommand connected)
+                    first = connected.Left;
+                else if (first is PipelineCommand { Negated: false } pipeline)
+                    first = pipeline.Left;
+                else
+                    break;
+            }
+            readInCaller = first is SimpleCommand
+            {
+                Assignments.Count: 0, Words.Count: 0,
+                Redirections: [{ Kind: RedirectionKind.Input, FileDescriptor: null or 0, VariableName.Length: 0 }, ..]
+            };
+            return input;
+        }
+
+        var bytes = script.Source.AsSpan();
+        var prefix = bytes.TrimStart(" \t\n"u8);
+        while (prefix.StartsWith("\\\n"u8))
+            prefix = prefix[2..].TrimStart(" \t\n"u8);
+        var startsWithInput = prefix is [(byte)'<', var next, ..] && next is not ((byte)'<' or (byte)'>' or (byte)'&');
+
+        var suffix = bytes[parsed.LastCommandEnd..].TrimStart(" \t"u8);
+        if (suffix.StartsWith(";"u8))
+            suffix = suffix[1..].TrimStart(" \t"u8);
+        // The reader consumes an inline comment with its unit. A separate comment or blank line
+        // leaves more input after the redirection and prevents the terminal read.
+        if (suffix.StartsWith("#"u8))
+        {
+            var newline = suffix.IndexOf((byte)'\n');
+            suffix = newline < 0 ? [] : suffix[newline..];
+        }
+        if (suffix is not ([] or [(byte)'\n']))
+            return null;
+        readInCaller = startsWithInput;
+        return input;
     }
 }
 

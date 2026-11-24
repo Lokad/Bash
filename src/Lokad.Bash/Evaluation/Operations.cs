@@ -297,6 +297,16 @@ internal sealed class ReadSubstitutionInputOperation(
     public IMemoryBudget DestinationBudget { get; } = destinationBudget;
 }
 
+/// <summary>Streams a reached file substitution through the child shell's output descriptor.</summary>
+internal sealed class CopySubstitutionInputOperation(
+    TaskCompletionSource<DescriptorWriteResult> completion,
+    FileDescriptor input,
+    FileDescriptor output) : EvaluationOperation<DescriptorWriteResult>(completion)
+{
+    public FileDescriptor Input { get; } = input;
+    public FileDescriptor Output { get; } = output;
+}
+
 /// <summary>Captured output and the producer's command status.</summary>
 public sealed record CapturedEvaluationResult(BoundedReadResult Output, int ExitCode);
 

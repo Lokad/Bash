@@ -172,6 +172,72 @@ public sealed class CommandSubstitutionCaptureTests
     }
 
     [Theory]
+    [InlineData("$(<missing\nprintf skip\n<\"$((i+=1))\")", "<0:input:1>", "")]
+    [InlineData("$(0<missing\n<\"$((i+=1))\")", "<0:input:1>", "")]
+    [InlineData("$(printf prefix\n<\"$((i+=1))\")", "<0:prefixinput:0>", "")]
+    [InlineData("$(printf prefix; <1)", "<0:prefix:0>", "")]
+    [InlineData("$(printf prefix\n! <missing)", "<1:prefix:0>", "line 4: missing: No such file or directory\n")]
+    [InlineData("$(! <\"$((i+=1))\")", "<0:input:0>", "")]
+    [InlineData("`0<\"$((i+=1))\"`", "<0:input:0>", "")]
+    [InlineData("`printf prefix\n<1 # inline\n`", "<0:prefixinput:0>", "")]
+    [InlineData("`printf prefix\n<1\n# after\n`", "<0:prefix:0>", "")]
+    [InlineData("$(exec >&-\n<1)", "<1::0>", "")]
+    [InlineData("$(exec >&-\n</dev/null)", "<0::0>", "")]
+    public async Task FinalInputFileUsesTheReachedReaderAndBindings(string substitution, string stdout, string stderr)
+    {
+        var script = $"i=0\nv={substitution}\nprintf '<%s:%s:%s>' \"$?\" \"$v\" \"$i\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = EndToEndHarness.BuildTree([("/1", "input\n")]);
+            var exitCode = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(stdout, host.StandardOutput.TextContent);
+            Assert.Equal(stderr, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task FinalInputFileStreamsRawBytesBeforeTheChildExitAction()
+    {
+        const string script = "v=$(trap 'printf end' EXIT; printf prefix\n<input)\nprintf '%s' \"$v\"";
+        byte[] payload = [.. Enumerable.Repeat((byte)'x', 20000), 0xFF, 13, 10, 10];
+        await using var host = new TestHost();
+        host.AddFile("/input", payload);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal<byte>([.. "prefix"u8, .. payload, .. "end"u8], host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task CancelingAReachedFileCopySettlesBothDescriptors()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/input", new string('x', 20000));
+        var writes = 0;
+        host.BeforeAppend = (_, _, _) =>
+        {
+            writes++;
+            cancellation.Cancel();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            host.RunAsync("v=$(exec >selected\n<input)", cancellation.Token));
+
+        Assert.Equal(1, writes);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task FileTargetExpansionRunsOnceInItsCallerAndPreservesBorrowedInput(bool prepared)

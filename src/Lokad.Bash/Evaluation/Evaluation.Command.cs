@@ -178,6 +178,10 @@ public sealed partial class Evaluation
                     return await EvaluateConditionalCommandAsync(conditionalCommand, scope, negated).ConfigureAwait(false);
                 case CaseCommand caseCommand:
                     return await EvaluateCaseAsync(caseCommand, scope, negated).ConfigureAwait(false);
+                case SimpleCommand captureInput when ReferenceEquals(captureInput, _finalCaptureInput):
+                    var captureResult = await ReadInputSubstitutionAsync(captureInput.Redirections, scope, writeToCapture: true)
+                        .ConfigureAwait(false);
+                    return EvaluationResult.FromExitCode(captureResult.ExitCode);
                 case SimpleCommand simpleCommand:
                     var simpleResult = await EvaluateSimpleCommandAsync(simpleCommand, scope).ConfigureAwait(false);
                     return ApplyNegation(simpleResult, negated);

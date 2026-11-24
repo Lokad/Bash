@@ -139,11 +139,14 @@ The spelling borrows the existing syntax/source owner. Parsing begins when
 execution first reaches the substitution. Successful parses from stable
 source can be reused by later executions under the same owner. Ordinary command
 substitutions use the shared execution and capture path with fresh shell state.
-The single input-file form expands its target in the caller, reads bounded bytes
-through the host and closes the temporary redirection before value expansion
-resumes. The capture owner stays live until the host read and cleanup settle.
+The caller-side input-file form expands its target, reads bounded bytes through
+the host and closes the temporary redirection before value expansion resumes.
 An open failure under errexit ends the caller's expansion. Ambiguous targets
 return a substitution failure status through the ordinary expansion path.
+When earlier commands run in a capture, a reached terminal input-file unit
+borrows bounded input windows and writes their raw bytes to the child's current
+stdout. Capture normalization happens after the child and its EXIT action
+finish. Both forms use the ordinary redirection setup and cleanup scope.
 The delimiter scanner records syntax failures that would arise from rereading a
 parenthesized substitution's rendered spelling. Reached expansion reports the
 failure before setting up capture descriptors. Prepared top-level lists retain

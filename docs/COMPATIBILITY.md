@@ -96,9 +96,14 @@ the next field. Reads use the same descriptor and assignment rules, with no
 line editing, prompt output or terminal echo changes.
 
 `$(<file)` and its backtick form read a single input-file redirection on
-descriptor zero. Filename expansion runs in the caller. The result removes
-NUL bytes with a diagnostic and strips trailing LF bytes. CR is preserved.
-Input failures reported by the host retain their failure status.
+descriptor zero. If the capture begins with input-redirection syntax and its
+final command unit consists of one such redirection, it expands and reads the
+final target in the caller. Otherwise a reached terminal input redirection
+in its own unit writes file contents after the preceding commands in the
+capture's child context. A same-line list stays an ordinary command unit.
+Backticks retain trailing input that can prevent the terminal read. The result
+removes NUL bytes with a diagnostic and strips trailing LF bytes. CR is
+preserved. Input failures reported by the host retain their failure status.
 
 Leading `~`, `~+` and `~-` use HOME, PWD and OLDPWD. The prefix must be unquoted.
 An empty quote or escape inside it makes it ineligible. Quoting after a delimiting

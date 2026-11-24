@@ -29,6 +29,8 @@ public sealed class ParsedScript
     internal CommandLocations? Locations { get; init; }
     internal int? RenderedLineBreaks { get; set; }
     internal bool HasReadAheadHereDocuments { get; set; }
+    /// <summary>End of the final command before its delimiter and trailing trivia in a whole-source parse.</summary>
+    internal int LastCommandEnd { get; set; }
 
     /// <summary>Preserves the printer's input when an omitted separator changed the executable tree.</summary>
     internal IReadOnlyList<ICommand>? AuthoredCaptureCommands { get; set; }

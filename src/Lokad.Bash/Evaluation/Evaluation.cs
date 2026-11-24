@@ -77,6 +77,7 @@ public sealed partial class Evaluation : IFileTester
     private int? _loadedSyntaxFunctionDepth;
     // A |& stage may replace its root command to append a redirection while borrowing the original locations.
     private ICommand? _pipelineStageSource;
+    private SimpleCommand? _finalCaptureInput;
     /// <summary>
     /// Tracks descriptors inherited by a nested evaluator and therefore not owned by it.
     /// </summary>
@@ -167,7 +168,8 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope,
         ParsedScript script,
         FileDescriptor output,
-        int hereDocumentWarningLine)
+        int hereDocumentWarningLine,
+        SimpleCommand? finalInput)
     {
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
@@ -189,7 +191,10 @@ public sealed partial class Evaluation : IFileTester
             publishNextStep: null,
             onComplete: null,
             outer.Memory.Budget,
-            outer._preparedSyntaxRoot);
+            outer._preparedSyntaxRoot)
+        {
+            _finalCaptureInput = finalInput
+        };
     }
 
     private Evaluation(
@@ -4711,11 +4716,10 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    /// <summary>Reads the single input redirection of a file substitution in the caller's context.</summary>
+    /// <summary>Reads a file substitution's redirection in the selected shell context.</summary>
     internal async Task<CommandSubstitutionResult> ReadInputSubstitutionAsync(
-        IReadOnlyList<Redirection> redirections, ScopedEvaluation scope)
+        IReadOnlyList<Redirection> redirections, ScopedEvaluation scope, bool writeToCapture)
     {
-        using var outputMemory = Memory.Budget.CreateScope();
         var redirectionScope = await OpenRedirectionScopeAsync(redirections, scope,
             RedirectionPersistence.None, RedirectionLifetime.Command, RedirectionOrigin.InputSubstitution)
             .ConfigureAwait(false);
@@ -4728,11 +4732,24 @@ public sealed partial class Evaluation : IFileTester
             else if (_state.TryConsumeExpansionError(out var redirectionStatus))
             {
                 result = result with { ExitCode = redirectionStatus };
-                if (redirectionScope.InputOpenFailed && _state.ErrexitEnabled)
+                if (!writeToCapture && redirectionScope.InputOpenFailed && _state.ErrexitEnabled)
                     SetFatalExpansionError(ExpansionFailureKind.InputSubstitution);
+            }
+            else if (writeToCapture)
+            {
+                CheckCancellation();
+                var completion = new TaskCompletionSource<DescriptorWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                PublishOperation(new CopySubstitutionInputOperation(completion, GetStdInDescriptor(), GetStdOutDescriptor()));
+                var copy = await completion.Task.ConfigureAwait(false);
+                CheckCancellation();
+                if (copy.Error is { } copyError)
+                    await ReportOperationErrorAsync(copyError).ConfigureAwait(false);
+                if (copy.CanAcceptMore)
+                    result = result with { ExitCode = 0 };
             }
             else
             {
+                using var outputMemory = Memory.Budget.CreateScope();
                 CheckCancellation();
                 var completion = new TaskCompletionSource<BoundedReadResult>(TaskCreationOptions.RunContinuationsAsynchronously);
                 PublishOperation(new ReadSubstitutionInputOperation(completion, GetStdInDescriptor(), outputMemory));
