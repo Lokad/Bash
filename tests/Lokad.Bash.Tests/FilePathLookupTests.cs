@@ -43,6 +43,65 @@ public sealed class FilePathLookupTests
         Assert.NotEqual(follow, new FilePathLookup(RawShellPath.Parse("./link"), ShellPath.Root, FileLinkFollowing.Follow));
     }
 
+    [Theory]
+    [InlineData("a/./b//./leaf", "/a/b/leaf")]
+    [InlineData("a/.", "/a", "/a")]
+    [InlineData("a/./", "/a", "/a")]
+    [InlineData("../../leaf", "/leaf")]
+    [InlineData("a/x/./../b/y/../leaf", "/a/b/leaf", "/a/x", "/a/b/y")]
+    [InlineData("a/x/../../leaf", "/leaf", "/a/x", "/a")]
+    [InlineData("a/b/../b/leaf", "/a/b/leaf")]
+    [InlineData("a/b/../b", "/a/b", "/a/b")]
+    [InlineData("a/b/.././b/leaf", "/a/b/leaf", "/a/b")]
+    [InlineData("a/b/.././b/..", "/a", "/a/b", "/a/b")]
+    [InlineData("a/b/.././b/", "/a/b", "/a/b", "/a/b")]
+    public void LexicalResolutionRetainsRequiredDirectoriesInTraversalOrder(
+        string operand, string expectedPath, params string[] expectedDirectories)
+    {
+        var entry = new FileEntryPath(RawShellPath.Parse(operand), ShellPath.Root);
+        var (path, directories) = entry.ResolveWithoutSymbolicLinks();
+
+        Assert.Equal(expectedPath, path.Path);
+        Assert.Equal(expectedDirectories, directories.Select(directory => directory.Path));
+    }
+
+    [Theory]
+    [InlineData("a/./b/", "/a/b")]
+    [InlineData("a/b/./", "/a/b", "/a/b")]
+    [InlineData("a/x/../b//", "/a/b", "/a/x")]
+    public void DirectoryCreationAllowsTheFinalSlashWithoutLosingOtherChecks(
+        string operand, string expectedPath, params string[] expectedDirectories)
+    {
+        var entry = new FileEntryPath(RawShellPath.Parse(operand), ShellPath.Root);
+        var (path, directories) = entry.ResolveDirectoryCreationWithoutSymbolicLinks();
+
+        Assert.Equal(expectedPath, path.Path);
+        Assert.Equal(expectedDirectories, directories.Select(directory => directory.Path));
+    }
+
+    [Fact]
+    public void CoveredDotCheckpointsDoNotCopyEveryAncestorPrefix()
+    {
+        const int components = 128;
+        const int iterations = 32;
+        const int maximumBytesPerResolution = 32 * 1024;
+        var prefix = string.Concat(Enumerable.Repeat("/unit", components));
+        var expectedPath = prefix + "/leaf";
+        var grouped = prefix + string.Concat(Enumerable.Repeat("/.", components)) + "/leaf";
+        var distributed = string.Concat(Enumerable.Repeat("/unit/.", components)) + "/leaf";
+        Assert.Equal(grouped.Length, distributed.Length);
+
+        foreach (var raw in new[] { grouped, distributed })
+        {
+            var entry = new FileEntryPath(RawShellPath.Parse(raw), ShellPath.Root);
+            var (path, directories) = entry.ResolveWithoutSymbolicLinks();
+            Assert.Equal(expectedPath, path.Path);
+            Assert.Empty(directories);
+            AllocationAssert.SustainedReuse(() => entry.ResolveWithoutSymbolicLinks(), iterations,
+                iterations * maximumBytesPerResolution);
+        }
+    }
+
     [Fact]
     public void RejectsUnsupportedFollowingPolicy()
     {

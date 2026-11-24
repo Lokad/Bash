@@ -82,7 +82,7 @@ public sealed class RawShellPath : IParsable<RawShellPath>
     /// escapes <paramref name="current"/>.
     /// </exception>
     public ShellPath ToAbsolute(ShellPath current, bool jail) =>
-        ToAbsoluteCore(current, jail, null, clampAtRoot: false);
+        ToAbsoluteCore(current, jail, null, clampAtRoot: false, omitCoveredCheckpoints: false);
 
     /// <summary>
     /// Resolves this path and records every directory that must exist while processing dot and dot-dot
@@ -97,19 +97,24 @@ public sealed class RawShellPath : IParsable<RawShellPath>
         ShellPath current,
         bool jail,
         HashSet<ShellPath> requiredDirectories) =>
-        ToAbsoluteCore(current, jail, requiredDirectories, clampAtRoot: false);
+        ToAbsoluteCore(current, jail, requiredDirectories, clampAtRoot: false, omitCoveredCheckpoints: false);
 
     /// <summary>Normalizes with '..' at the root staying at the root; does not resolve symbolic links.</summary>
     public ShellPath ToAbsoluteClamped(ShellPath current, ICollection<ShellPath>? requiredDirectories) =>
-        ToAbsoluteCore(current, jail: false, requiredDirectories, clampAtRoot: true);
+        ToAbsoluteCore(current, jail: false, requiredDirectories, clampAtRoot: true, omitCoveredCheckpoints: false);
+
+    // Entry lookup checks ordinary ancestors and handles the remaining checkpoints in order.
+    internal ShellPath ToAbsoluteForEntryLookup(List<ShellPath> requiredDirectories) =>
+        ToAbsoluteCore(ShellPath.Root, jail: false, requiredDirectories, clampAtRoot: true, omitCoveredCheckpoints: true);
 
     private ShellPath ToAbsoluteCore(
         ShellPath current,
         bool jail,
         ICollection<ShellPath>? requiredDirectories,
-        bool clampAtRoot)
+        bool clampAtRoot,
+        bool omitCoveredCheckpoints)
     {
-        if (TryToAbsoluteCore(current, jail, requiredDirectories, clampAtRoot, out var result))
+        if (TryToAbsoluteCore(current, jail, requiredDirectories, clampAtRoot, omitCoveredCheckpoints, out var result))
             return result;
 
         throw result is null
@@ -135,7 +140,7 @@ public sealed class RawShellPath : IParsable<RawShellPath>
         HashSet<ShellPath>? requiredDirectories,
         [NotNullWhen(true)] out ShellPath? result)
     {
-        if (TryToAbsoluteCore(current, jail, requiredDirectories, clampAtRoot: false, out result))
+        if (TryToAbsoluteCore(current, jail, requiredDirectories, clampAtRoot: false, omitCoveredCheckpoints: false, out result))
             return true;
 
         result = null;
@@ -148,6 +153,7 @@ public sealed class RawShellPath : IParsable<RawShellPath>
         bool jail,
         ICollection<ShellPath>? requiredDirectories,
         bool clampAtRoot,
+        bool omitCoveredCheckpoints,
         [NotNullWhen(true)] out ShellPath? result)
     {
         var combined = Raw.StartsWith('/')
@@ -159,6 +165,7 @@ public sealed class RawShellPath : IParsable<RawShellPath>
         var span = combined.AsSpan(1);   // skip leading '/'
         List<(int start, int len)>? segments = null;
         var checkpointChanged = true;
+        var checkAfterPop = false;
 
         foreach (var range in span.Split('/'))
         {
@@ -192,10 +199,15 @@ public sealed class RawShellPath : IParsable<RawShellPath>
 
             // Repeated separators and dots leave the same directory in place. Avoid
             // rebuilding and validating its full path just to discard a duplicate.
-            if (requiredDirectories != null && checkpointChanged)
+            // Entry lookup can defer increasing prefixes until the next pop or final lookup.
+            // Keep the first checkpoint after a pop so the previous directory is compared
+            // with its immediate successor, even if that successor is later pruned.
+            if (requiredDirectories != null
+                && (omitCoveredCheckpoints ? checkAfterPop || (isDotDot && segments.Count > 0) : checkpointChanged))
             {
                 requiredDirectories.Add(new ShellPath(BuildNormalizedPath(combined, segments)));
                 checkpointChanged = false;
+                checkAfterPop = false;
             }
 
             if (len == 0)
@@ -214,6 +226,7 @@ public sealed class RawShellPath : IParsable<RawShellPath>
             }
             segments.RemoveAt(segments.Count - 1);
             checkpointChanged = true;
+            checkAfterPop = true;
         }
 
         // Fast path: no special segments found, combined is already canonical.
@@ -224,10 +237,20 @@ public sealed class RawShellPath : IParsable<RawShellPath>
         result = new ShellPath(resultPath);
         if (requiredDirectories != null)
         {
-            var lastSlash = combined.EndsWith('/') ? resultPath.Length : resultPath.LastIndexOf('/');
-            requiredDirectories.Add(lastSlash <= 0
-                ? ShellPath.Root
-                : new ShellPath(resultPath[..lastSlash]));
+            if (omitCoveredCheckpoints)
+            {
+                // Traversal to the result checks its parent. A final dot or slash
+                // also requires the result itself to be a directory.
+                if (result.IsRoot || combined.EndsWith('/') || combined.EndsWith("/.", StringComparison.Ordinal))
+                    requiredDirectories.Add(result);
+            }
+            else
+            {
+                var lastSlash = combined.EndsWith('/') ? resultPath.Length : resultPath.LastIndexOf('/');
+                requiredDirectories.Add(lastSlash <= 0
+                    ? ShellPath.Root
+                    : new ShellPath(resultPath[..lastSlash]));
+            }
         }
 
         return !jail || current.IsEqualToOrParentOf(result);

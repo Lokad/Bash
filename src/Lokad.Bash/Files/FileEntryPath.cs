@@ -48,7 +48,7 @@ public readonly record struct FileEntryPath
         if (ShellPath.IsValid(Path))
             return (new ShellPath(Path), Array.Empty<ShellPath>());
         var directories = new List<ShellPath>();
-        var path = RawShellPath.Parse(Path).ToAbsoluteClamped(ShellPath.Root, directories);
+        var path = RawShellPath.Parse(Path).ToAbsoluteForEntryLookup(directories);
         // Defer a check only to the next lookup, without skipping unrelated checkpoints.
         // An equal checkpoint still requires a directory; the final target need not be one.
         var retained = 0;
