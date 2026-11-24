@@ -192,6 +192,60 @@ public sealed class PrefixScopeOwnershipTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public void BindingSizeEstimateLeavesTheArrayBorrowed()
+    {
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromText("original");
+        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(value, 32).ToArray(), ArrayKind.Indexed));
+        var expected = caller.EstimateBindingBytes("x");
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var source = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
+            var workspace = memory.Workspace.Bytes;
+
+            Assert.Equal(expected, source.EstimateBindingBytes("x"));
+            Assert.Equal(workspace, memory.Workspace.Bytes);
+            Assert.True(source.IsBorrowedBinding("x"));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void BindingCopyOwnsAnIndependentArrayWhileLeavingTheSourceBorrowed()
+    {
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromBytes(new byte[] { 0xff, 0x20 });
+        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(value, 32).ToArray(), ArrayKind.Indexed));
+        caller.SetExported("x", true);
+        var destination = Variables.CreateEmpty();
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var source = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
+            var workspace = memory.Workspace.Bytes;
+
+            destination.CopyBindingFrom(source, "x");
+
+            Assert.True(source.IsBorrowedBinding("x"));
+            Assert.Equal(workspace + caller.EstimateBindingBytes("x"), memory.Workspace.Bytes);
+            Assert.Contains((BindingName)"x", destination.ExportedNames);
+            Assert.Equal(32, destination.GetArrayMetadata("x")?.Count);
+            Assert.True(destination.TryGetExpansionValue("x", out var copied));
+            Assert.Equal(value, copied);
+            var changed = ShellValue.FromText("changed");
+            Assert.True(destination.TrySetArrayElement("x", default(IndexedArrayIndex), changed));
+            Assert.True(source.TryGetExpansionValue("x", out var retained));
+            Assert.Equal(value, retained);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]
@@ -539,31 +593,44 @@ public sealed class PrefixScopeOwnershipTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    [Fact]
-    public void PrefixInstallationMovesTheOriginalAndPreparedArrays()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrefixInstallationMovesTheOriginalAndPreparedArrays(bool borrowed)
     {
-        var caller = Variables.CreateEmpty();
+        var ancestor = Variables.CreateEmpty();
         var value = ShellValue.FromText("original");
-        Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(value, 512).ToArray(), ArrayKind.Indexed));
-        var original = caller.IndexedArrays["x"];
+        Assert.True(ancestor.TryAssignArray("x", Enumerable.Repeat(value, 512).ToArray(), ArrayKind.Indexed));
+        var original = ancestor.IndexedArrays["x"];
         var governor = new MemoryGovernor(1024 * 1024);
         var memory = new EvaluationMemory(governor);
         try
         {
+            var caller = borrowed ? Variables.CreateCommandScope(ancestor, memory, CancellationToken.None) : ancestor;
             var prepared = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
-            Assert.True(prepared.TrySetArrayElement("x", default(IndexedArrayIndex), ShellValue.FromText("temporary")));
+            Assert.True(prepared.TryAssignArray("x", [ShellValue.FromText("temporary")], ArrayKind.Indexed));
             var temporary = prepared.IndexedArrays["x"];
             Assert.NotSame(original, temporary);
+            Assert.Equal(borrowed, caller.IsBorrowedBinding("x"));
             var baseBytes = memory.Workspace.Bytes;
+            IndexedArray saved;
             using (var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None))
             {
-                Assert.Same(original, bindings.SavedVariables.IndexedArrays["x"]);
+                saved = bindings.SavedVariables.IndexedArrays["x"];
+                if (borrowed)
+                {
+                    Assert.NotSame(original, saved);
+                    Assert.Same(original, ancestor.IndexedArrays["x"]);
+                }
+                else
+                    Assert.Same(original, saved);
                 Assert.Same(temporary, caller.IndexedArrays["x"]);
                 Assert.False(prepared.HasBinding("x"));
                 Assert.True(caller.IsTemporaryBinding("x"));
                 Assert.True(memory.Workspace.Bytes - baseBytes >= bindings.SavedVariables.EstimatedMemoryBytes);
             }
-            Assert.Same(original, caller.IndexedArrays["x"]);
+            Assert.Same(saved, caller.IndexedArrays["x"]);
+            Assert.Equal(512, caller.GetArrayMetadata("x")?.Count);
             Assert.False(caller.IsTemporaryBinding("x"));
         }
         finally { memory.Finish(retainVariables: false); }

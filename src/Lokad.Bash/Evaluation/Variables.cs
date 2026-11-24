@@ -83,7 +83,7 @@ public sealed partial class Variables
 
     internal long EstimateBindingBytes(BindingName name)
     {
-        return TryGetBinding(name, out var slot) ? EstimateSlotBytes(name, slot) : 0;
+        return TryGetBinding(name, detachBorrowed: false, out var slot) ? EstimateSlotBytes(name, slot) : 0;
     }
 
     private long EstimateOwnedBindingBytes(BindingName name) =>
@@ -270,7 +270,9 @@ public sealed partial class Variables
             foreach (var name in prefixes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                bytes = checked(bytes + owner.EstimateBindingBytes(name));
+                // The saved store receives owned slots. Detach before any prefix is installed.
+                if (owner.TryGetBinding(name, out var slot))
+                    bytes = checked(bytes + EstimateSlotBytes(name, slot));
             }
             memory.Charge(bytes);
             cancellationToken.ThrowIfCancellationRequested();
@@ -455,7 +457,7 @@ public sealed partial class Variables
                 _retainedCopyCapacity = required;
             }
             cancellationToken.ThrowIfCancellationRequested();
-            _retained.CopyBindingFrom(source, name);
+            _retained.CopyBindingFrom(source, name, borrowedCopyAdmitted: true);
         }
 
         public void Dispose()
@@ -704,7 +706,7 @@ public sealed partial class Variables
                 if (inherited != null)
                 {
                     memory.Charge(inherited.EstimateBindingBytes(name));
-                    local.CopyBindingFrom(inherited, name);
+                    local.CopyBindingFrom(inherited, name, borrowedCopyAdmitted: true);
                     if (inherit)
                         local.ResetGetoptsPosition(name);
                     if ((inherit || command.IsTemporaryBinding(name))
@@ -824,7 +826,7 @@ public sealed partial class Variables
             if (_names.Contains(name))
                 return;
             memory.Charge(active.EstimateBindingBytes(name));
-            _saved.CopyBindingFrom(active, name);
+            _saved.CopyBindingFrom(active, name, borrowedCopyAdmitted: true);
             _names.Add(name);
         }
 
@@ -1584,11 +1586,24 @@ public sealed partial class Variables
                 || ShellArgumentEscaping.TryAppendQuoted(output, assigned.Bytes.Span, ShellQuoteStyle.DoubleQuoted));
     }
 
-    /// <summary>Copies one complete binding, including its value kind and attributes.</summary>
-    internal void CopyBindingFrom(Variables source, BindingName name)
+    /// <summary>Copies a complete binding without detaching the source, admitting a borrowed copy when needed.</summary>
+    internal void CopyBindingFrom(Variables source, BindingName name) =>
+        CopyBindingFrom(source, name, borrowedCopyAdmitted: false);
+
+    private void CopyBindingFrom(Variables source, BindingName name, bool borrowedCopyAdmitted)
     {
-        if (source.TryGetBinding(name, out var slot))
-            StoreBinding(name, slot.Clone());
+        if (source.TryGetBinding(name, detachBorrowed: false, out var slot))
+        {
+            var borrow = source.IsBorrowedBinding(name) ? source._commandSource : null;
+            if (borrow != null && !borrowedCopyAdmitted)
+            {
+                borrow.Memory.Charge(EstimateSlotBytes(name, slot));
+                borrow.CancellationToken.ThrowIfCancellationRequested();
+            }
+            var copy = slot.Clone();
+            borrow?.CancellationToken.ThrowIfCancellationRequested();
+            StoreBinding(name, copy);
+        }
         else
             ClearBinding(name);
         if (name.CachedText == "OPTIND")
