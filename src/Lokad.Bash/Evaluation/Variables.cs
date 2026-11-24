@@ -1718,41 +1718,89 @@ public sealed partial class Variables
             return false;
         if (!NamerefTargets.TryGetValue(name, out var target) || target.Reference is not { } reference)
             return true;
-        return TryFollowReferences(this, name, target, reference, selectOwner, resolution, ref binding);
+        return TryFollowReferences(target, reference, selectOwner, resolution, ref binding);
 
-        static bool TryFollowReferences(Variables start, BindingName name, NamerefTarget target, VariableReference reference,
+        static bool TryFollowReferences(NamerefTarget target, VariableReference reference,
             Func<BindingName, Variables>? selectOwner, BindingResolution resolution, ref VariableBinding binding)
         {
-            HashSet<(Variables Owner, BindingName Name)>? visited = null;
+            var origin = binding;
+            var initialTarget = target;
+            var checkpoint = origin;
+            long blockLength = 1;
+            long distance = 0;
             while (true)
             {
-                var owner = selectOwner?.Invoke(reference.Name) ?? start;
-                if (target.LiteralName is { } literalName)
-                {
-                    var literalOwner = selectOwner?.Invoke(literalName) ?? start;
-                    if (literalOwner.HasBinding(literalName))
-                    {
-                        reference = VariableReference.ForName(literalName);
-                        owner = literalOwner;
-                    }
-                }
-
-                var isNameref = reference.Kind == VariableReferenceKind.Name
-                    && owner.NamerefTargets.TryGetValue(reference.Name, out target);
+                var selected = SelectReference(reference, target.LiteralName);
+                var isNameref = selected.Reference.Kind == VariableReferenceKind.Name
+                    && selected.Owner.NamerefTargets.TryGetValue(selected.Name, out target);
                 if (resolution == BindingResolution.LastNameref && !isNameref)
                     return true;
 
-                binding = new VariableBinding(reference, owner);
+                binding = selected;
                 if (!isNameref || target.Reference is not { } following)
                     return true;
 
-                // Only whole names can continue the walk. Keep the starting owner and name inline.
-                if (ReferenceEquals(owner, start) && reference.Name == name
-                    || !(visited ??= []).Add((owner, reference.Name)))
+                if (SameBinding(binding, origin))
                     return false;
-
+                // Brent's cycle detection compares against checkpoints at doubling distances.
+                // Acyclic paths visit each reference once and retain no path collection.
+                distance++;
+                if (SameBinding(binding, checkpoint))
+                {
+                    // At the first checkpoint, only the already checked origin precedes it.
+                    if (blockLength > 2)
+                        binding = FirstRepeatedBinding(distance);
+                    return false;
+                }
+                if (distance == blockLength)
+                {
+                    checkpoint = binding;
+                    blockLength *= 2;
+                    distance = 0;
+                }
                 reference = following;
             }
+
+            VariableBinding SelectReference(VariableReference next, BindingName? literal)
+            {
+                var owner = selectOwner?.Invoke(next.Name) ?? origin.Owner;
+                if (literal is { } name)
+                {
+                    var literalOwner = selectOwner?.Invoke(name) ?? origin.Owner;
+                    if (literalOwner.HasBinding(name))
+                        return new VariableBinding(VariableReference.ForName(name), literalOwner);
+                }
+                return new VariableBinding(next, owner);
+            }
+
+            VariableBinding FirstRepeatedBinding(long period)
+            {
+                // Both cursors first meet at the cycle entry when one starts a period ahead.
+                var leading = origin;
+                var leadTarget = initialTarget;
+                for (long step = 0; step < period; step++)
+                    leading = Advance(ref leadTarget);
+                var trailing = origin;
+                var trailTarget = initialTarget;
+                while (!SameBinding(leading, trailing))
+                {
+                    leading = Advance(ref leadTarget);
+                    trailing = Advance(ref trailTarget);
+                }
+                return trailing;
+            }
+
+            VariableBinding Advance(ref NamerefTarget edge)
+            {
+                // The serialized binding lookup and its owner selector are stable during the walk.
+                var next = edge.Reference ?? throw new InvalidOperationException("Nameref changed during cycle lookup.");
+                var selected = SelectReference(next, edge.LiteralName);
+                edge = selected.Owner.NamerefTargets[selected.Name];
+                return selected;
+            }
+
+            static bool SameBinding(VariableBinding left, VariableBinding right) =>
+                ReferenceEquals(left.Owner, right.Owner) && left.Name == right.Name;
         }
     }
 

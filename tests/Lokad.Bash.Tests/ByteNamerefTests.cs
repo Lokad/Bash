@@ -23,6 +23,28 @@ public sealed class ByteNamerefTests
     }
 
     [Fact]
+    public void MultiHopLookupStaysWithinAllocationBudget()
+    {
+        var variables = Variables.CreateEmpty();
+        var value = ShellValue.FromText("value");
+        var target = "terminal";
+        Assert.True(variables.TrySetScalar(target, value));
+        for (var index = 0; index < 32; index++)
+        {
+            var alias = "alias" + index;
+            Assert.True(variables.TrySetNameref(alias, ShellValue.FromText(target)));
+            target = alias;
+        }
+        BindingName first = target;
+
+        AllocationAssert.SustainedReuse(() =>
+        {
+            if (!variables.TryGetScalar(first, out var reached) || reached != value)
+                throw new InvalidOperationException("Expected the last scalar in the chain.");
+        }, iterations: 1024, maximumBytes: 1024);
+    }
+
+    [Fact]
     public void SameNamedBindingsInDifferentOwnersDoNotFormACycle()
     {
         var local = Variables.CreateEmpty();
@@ -49,6 +71,40 @@ public sealed class ByteNamerefTests
         Assert.False(variables.TryResolveBinding("first", selectOwner: null, out var binding));
         Assert.Same(variables, binding.Owner);
         Assert.Equal((BindingName)target, binding.Name);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CycleReachedThroughAChainKeepsItsEntryBinding(bool selectLastNameref)
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetNameref("origin", ShellValue.FromText("first")));
+        Assert.True(variables.TrySetNameref("first", ShellValue.FromText("second")));
+        Assert.True(variables.TrySetNameref("second", ShellValue.FromText("third")));
+        Assert.True(variables.TrySetNameref("third", ShellValue.FromText("entry")));
+        Assert.True(variables.TrySetNameref("entry", ShellValue.FromText("next")));
+        Assert.True(variables.TrySetNameref("next", ShellValue.FromText("last")));
+        Assert.True(variables.TrySetNameref("last", ShellValue.FromText("entry")));
+        var mode = selectLastNameref ? BindingResolution.LastNameref : BindingResolution.Referent;
+
+        Assert.False(variables.TryResolveBinding("origin", selectOwner: null, mode, out var binding));
+        Assert.Same(variables, binding.Owner);
+        Assert.Equal("entry", binding.Name);
+    }
+
+    [Fact]
+    public void RepeatedBindingKeepsTheOwnerReachedByTheChain()
+    {
+        var local = Variables.CreateEmpty();
+        var outer = Variables.CreateEmpty();
+        Assert.True(local.TrySetNameref("alias", ShellValue.FromText("alias")));
+        Assert.True(outer.TrySetNameref("alias", ShellValue.FromText("middle")));
+        Assert.True(local.TrySetNameref("middle", ShellValue.FromText("alias")));
+
+        Assert.False(local.TryResolveBinding("alias", name => name == "middle" ? local : outer, out var binding));
+        Assert.Same(outer, binding.Owner);
+        Assert.Equal("alias", binding.Name);
     }
 
     // Recorded byte contracts; target inspection never evaluates its stored selector.
