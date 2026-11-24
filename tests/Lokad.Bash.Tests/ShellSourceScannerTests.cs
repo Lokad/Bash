@@ -106,6 +106,19 @@ public sealed class ShellSourceScannerTests
     }
 
     [Fact]
+    public void CarriageReturnBetweenBackslashAndLineFeedPreservesSourceBacking()
+    {
+        var source = ShellSource.FromText("a\\\r\nb");
+        using var memory = new MemoryCapacity(new MemoryGovernor(0), 0);
+        var context = new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Script };
+
+        var fresh = ShellSourceCursor.RemoveLineContinuations(source, memory, context.LegacyOrigin);
+        var reused = ShellSourceCursor.RemoveLineContinuations(context, source);
+        Assert.True(source.Bytes.Equals(fresh.Bytes));
+        Assert.True(source.Bytes.Equals(reused.Bytes));
+    }
+
+    [Fact]
     public void TokenSourceRangesSurviveLookaheadAndPushback()
     {
         const string Source = "  cat 'a;b' && ls /";

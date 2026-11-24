@@ -3983,9 +3983,7 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Uses the assignment's lexical spelling while retaining its original source location.</summary>
     internal ShellValue GetAssignmentDiagnosticSpelling(ShellSource spelling, LegacySubstitutionOrigin origin) =>
-        spelling.AsSpan().IndexOf("\\\n"u8) < 0 ? spelling.ToValue()
-            : ShellSourceCursor.RemoveLineContinuations(
-                new ShellScanContext { SyntaxMemory = Memory.Workspace, LegacyOrigin = origin }, spelling).ToValue();
+        ShellSourceCursor.RemoveLineContinuations(spelling, Memory.Workspace, origin).ToValue();
 
     private async Task ReportInvalidElementPrefixAsync(ShellSource target, ScopedEvaluation scope)
     {

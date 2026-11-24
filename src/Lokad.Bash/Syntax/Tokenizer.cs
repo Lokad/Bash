@@ -1345,9 +1345,8 @@ internal sealed class Tokenizer
             if (wordReader.Failure is { } wordFailure)
                 return wordFailure;
             readPosition = wordReader.Position;
-            token = _input.Slice(wordStart, readPosition - wordStart);
-            if (token.AsSpan().IndexOf("\\\n"u8) >= 0)
-                token = ShellSourceCursor.RemoveLineContinuations(_scanContext, token);
+            token = ShellSourceCursor.RemoveLineContinuations(_scanContext,
+                _input.Slice(wordStart, readPosition - wordStart));
         }
 
         var captureContinuation = IsCommandSubstitution && wordStart > start;

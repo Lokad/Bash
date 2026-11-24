@@ -199,16 +199,21 @@ internal sealed class ShellSourceCursor
     /// Removes this lexical layer's continuations using the cursor's quote/escape rules.
     /// Nested expansions retain their source for their own parser, including heredoc data.
     /// </summary>
-    public static ShellSource RemoveLineContinuations(ShellSource source)
+    public static ShellSource RemoveLineContinuations(ShellSource source) =>
+        RemoveLineContinuations(source, syntaxMemory: null, LegacySubstitutionOrigin.Temporary);
+
+    internal static ShellSource RemoveLineContinuations(
+        ShellSource source, MemoryCapacity? syntaxMemory, LegacySubstitutionOrigin origin)
     {
-        if (source.AsSpan().IndexOf("\\\n"u8) < 0)
+        if (!HasLineContinuationPair(source))
             return source;
-        return RemoveLineContinuations(new ShellScanContext(), source);
+        var context = new ShellScanContext { SyntaxMemory = syntaxMemory, LegacyOrigin = origin };
+        return ScanLexicalLayer(context, source, normalize: true, SeparatorScan.None, out _);
     }
 
     /// <summary>Normalizes a scanned payload without rebuilding its nested lookahead syntax.</summary>
     internal static ShellSource RemoveLineContinuations(ShellScanContext context, ShellSource source) =>
-        ScanLexicalLayer(context, source, normalize: true, SeparatorScan.None, out _);
+        ScanLexicalLayer(context, source, normalize: HasLineContinuationPair(source), SeparatorScan.None, out _);
 
     internal static ShellSource PrepareExpansionSource(ShellScanContext context, ShellSource source, ref int renderedLineAdjustment)
     {
@@ -420,7 +425,7 @@ internal sealed class ShellSourceCursor
     /// <summary>Finds separators while normalizing a loop header on its original source backing.</summary>
     internal static ShellSource ReadArithmeticForHeader(ShellScanContext context, ShellSource source,
         out ArithmeticForSeparators separators) =>
-        ScanLexicalLayer(context, source, normalize: true, SeparatorScan.Validate, out separators);
+        ScanLexicalLayer(context, source, normalize: HasLineContinuationPair(source), SeparatorScan.Validate, out separators);
 
     /// <summary>Finds clause boundaries in the spelling supplied to a caller-created AST.</summary>
     internal static ArithmeticForSeparators FindArithmeticForSeparators(ShellSource source)
@@ -429,11 +434,12 @@ internal sealed class ShellSourceCursor
         return separators;
     }
 
+    private static bool HasLineContinuationPair(ShellSource source) => source.AsSpan().IndexOf("\\\n"u8) >= 0;
+
     private static ShellSource ScanLexicalLayer(ShellScanContext context, ShellSource source,
         bool normalize, SeparatorScan separatorScan, out ArithmeticForSeparators separators)
     {
         separators = default;
-        normalize = normalize && source.AsSpan().IndexOf("\\\n"u8) >= 0;
         var findSeparators = separatorScan != SeparatorScan.None && source.AsSpan().Contains((byte)';');
         if (!normalize && !findSeparators)
             return source;
