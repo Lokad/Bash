@@ -3976,7 +3976,7 @@ public sealed partial class Evaluation : IFileTester
                 { UseInheritedPipelineExitAction = !scope.AfterPipelineExitReset && UsesInheritedPipelineExitAction(scope) });
         }
         else if (length)
-            SetFatalExpansionError(ExpansionFailureKind.Arithmetic);
+            return ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.Arithmetic);
         return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
             GetParameterExpansionDiagnosticPrefix(scope));
     }

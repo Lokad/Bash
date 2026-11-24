@@ -1061,7 +1061,8 @@ source line. With errexit active, it stops before the command runs, preserves
 `PIPESTATUS`, and exits with the previous nonzero status or 1. Testing the
 command itself leaves this expansion rule in effect. A tested `eval` or `source`
 suppresses it in the loaded reader. With errexit disabled, an ordinary read
-treats the element as unset, while a length expansion discards its command unit.
+treats the element as unset. A rejected length selector publishes status 1 and
+`PIPESTATUS=(1)` in the reached scope before discarding its command unit.
 An element length that starts from a scalar returns zero if the selector turns
 that binding into an array. The selector's effects and invalid-subscript
 diagnostics still apply.

@@ -21,6 +21,24 @@ public sealed class ByteArrayReferenceTests
         Assert.Equal(error, result.StdErr);
     }
 
+    [Theory]
+    [InlineData("a=(7)\n(exit 7) | (exit 4)\nprintf '%s' \"${#a[-3]}\"\nprintf '[after:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"",
+        0, "[after:1:1]", "line 3: -3]: bad array subscript\n")]
+    [InlineData("a=(7)\ntrap 'printf \"[exit:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\"' EXIT\nprintf '%s' \"${#a[-3]}\"",
+        1, "[exit:1:1]", "line 3: -3]: bad array subscript\n")]
+    [InlineData("a=(7)\nset -e\ntrap 'printf \"[exit:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\"' EXIT\ntrue | true\nprintf '%s' \"${#a[-3]}\"",
+        1, "[exit:1:0 0]", "line 5: -3]: bad array subscript\n")]
+    [InlineData("a=(7)\nset -e\neval 'printf \"%s\" \"${#a[-3]}\"\nprintf \"[loaded:%s:%s]\" \"$?\" \"${PIPESTATUS[*]}\"' || printf fallback",
+        0, "[loaded:1:1]", "line 4: -3]: bad array subscript\n")]
+    public async Task InvalidElementLengthPublishesTheReachedPipelineStatus(string script, int exitCode, string output, string error)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(exitCode, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
     // Linux Bash 5.2.21, C.UTF-8: raw streams match except for Bash's executable/line diagnostic prefix.
     [Theory]
     [InlineData("a[3]=$'\\377'; printf '<%s>' \"${a[3]-missing}\" \"${a[2]-missing}\"\n", "3CFF3E3C6D697373696E673E", 0, "")]
