@@ -2192,7 +2192,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (operand.Value == null && TrySaveLocalOptions(operand.Name))
                     continue;
-                if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference))
+                if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference)
+                    || operand.Value == null && reference is { Kind: VariableReferenceKind.Element, Subscript.IsEmpty: true })
                 {
                     var invalidOperand = await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
                     if (HasPendingExpansionError)

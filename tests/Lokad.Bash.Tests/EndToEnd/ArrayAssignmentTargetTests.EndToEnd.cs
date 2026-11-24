@@ -88,9 +88,25 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [InlineData("declare arr[\"\n0\"]=value", "<0:value>", "")]
     [InlineData("declare arr[$(cat <<EOF\n0\nEOF\n)]=value", "<0:value>", "")]
     [InlineData("declare -a arr=([\n0]=value)", "<0:value>", "")]
-    public async Task DeclarationSelectorsRespectTheLexicalWord(string body, string output, string error)
+    public Task DeclarationSelectorsRespectTheLexicalWord(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\nprintf '<%s:%s>' \"$?\" \"${arr[0]}\"\n", output, error);
+
+    [Theory]
+    [InlineData("declare arr[]; printf '<%s>' \"$?\"; declare -p arr 2>/dev/null || :",
+        "<1>", "line 1: declare: `arr[]': not a valid identifier\n")]
+    [InlineData("declare -a arr=(seed); command declare arr[\"\"]; printf '<%s:%s>' \"$?\" \"${arr[0]}\"",
+        "<1:seed>", "line 1: declare: `arr[]': not a valid identifier\n")]
+    [InlineData("f() { local arr[$empty]; printf '<%s>' \"$?\"; }; f",
+        "<1>", "line 1: local: `arr[]': not a valid identifier\n")]
+    [InlineData("declare -A arr; declare arr[\"]\"\n]=item; printf '<%s>' \"${arr[\"]\"]}\"",
+        "<>", "line 1: declare: `arr[]': not a valid identifier\nline 2: ]=item: command not found\n")]
+    [InlineData("declare -a arr=(seed); declare arr[]=new; printf '<%s:%s>' \"$?\" \"${arr[0]}\"",
+        "<1:seed>", "line 1: arr[]: bad array subscript\n")]
+    public Task DeclarationWithEmptySelectorUsesTheReachedOperandKind(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
+    private static async Task AssertDeclarationAsync(string script, string output, string error)
     {
-        var script = body + "\nprintf '<%s:%s>' \"$?\" \"${arr[0]}\"\n";
         foreach (var prepared in new[] { false, true })
         {
             await using var host = new TestHost();
