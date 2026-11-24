@@ -30,6 +30,7 @@ internal static class GateChecks
                 new ContentDigest(0, "changed"), new Dictionary<string, ContentDigest>(), new HostCounts(0, 0, 0, 0, 0, 0), 0), WorkloadCatalog.Json)
         };
         Rejected(report with { Results = malformed });
+        CheckCaseSelection();
         var processPath = Path.Combine(directory, $"process-net{Environment.Version.Major}-verification.json");
         if (File.Exists(processPath))
         {
@@ -85,6 +86,36 @@ internal static class GateChecks
             EvidenceFiles.WriteJson(Path.Combine(root, "result.json"), result);
             if (invocation.ObserveResult(output).Mode != ProbeMode.Public)
                 throw new InvalidOperationException("A completed nonzero probe lost its result.");
+        }
+
+        void CheckCaseSelection()
+        {
+            var workload = catalog.Cases.First(row => row.SkipReason.Length == 0);
+            var first = workload with { Id = "first", Domain = WorkloadDomain.Language };
+            var second = first with { Id = "second" };
+            var excluded = workload with { Id = "excluded", SkipReason = "Synthetic exclusion", Expected = null };
+            var processExcluded = workload with { Id = "input", Family = "input", Domain = WorkloadDomain.ByteIo };
+            Workload[] cases = [first, excluded, second, processExcluded];
+            var context = new MeasurementContext(directory, directory, MeasurementLane.Public, [second.Id, first.Id], null, null, null);
+            if (!context.SelectedCases(cases).SequenceEqual([first, second]))
+                throw new InvalidOperationException("Measurement selection lost the catalog order.");
+
+            if ((context with { CaseIds = [processExcluded.Id] }).SelectedCases(cases).Single() != processExcluded)
+                throw new InvalidOperationException("An in-process workload was excluded from public measurement.");
+
+            RejectSelection(context with { CaseIds = [] });
+            RejectSelection(context with { CaseIds = [first.Id, first.Id] });
+            RejectSelection(context with { CaseIds = [first.Id, "FIRST"] });
+            RejectSelection(context with { CaseIds = [excluded.Id] });
+            RejectSelection(context with { CaseIds = [processExcluded.Id], Lane = MeasurementLane.ManagedProcess });
+            RejectSelection(context with { CaseIds = [processExcluded.Id], Lane = MeasurementLane.NativeProcess });
+
+            void RejectSelection(MeasurementContext invalid)
+            {
+                try { invalid.SelectedCases(cases); }
+                catch (InvalidDataException error) when (error.Message == "Measurement selection contains missing, repeated or excluded cases.") { return; }
+                throw new InvalidOperationException("Invalid measurement selection was accepted.");
+            }
         }
 
         void CheckExclusiveEvidence()

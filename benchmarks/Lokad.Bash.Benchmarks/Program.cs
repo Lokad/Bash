@@ -105,8 +105,9 @@ if (args[0] == "smoke")
     else
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        var script = args[3] == "prepared" ? Parser.Parse(System.Text.Encoding.UTF8.GetString(workload.Script.Bytes)) : null;
-        await using var invocation = new ManagedInvocation(workload, script);
+        var source = workload.DecodeScript();
+        var script = args[3] == "prepared" ? Parser.Parse(source) : null;
+        await using var invocation = new ManagedInvocation(workload, source, script);
         var gen0 = GC.CollectionCount(0); var gen1 = GC.CollectionCount(1); var gen2 = GC.CollectionCount(2);
         var before = GC.GetTotalAllocatedBytes(precise: true);
         var observed = await invocation.RunAsync(deadline.Token);
@@ -205,13 +206,14 @@ if (args[0] == "verify-managed")
                 results.Add(new(workload.Id, VerificationLane.ManagedExclusion, VerificationStatus.Skipped, workload.SkipReason, null));
                 continue;
             }
-            var script = Parser.Parse(System.Text.Encoding.UTF8.GetString(workload.Script.Bytes));
+            var source = workload.DecodeScript();
+            var script = Parser.Parse(source);
             foreach (var syntax in new[] { null, script })
             {
                 using var deadline = new CancellationTokenSource(workload.Variant == WorkloadVariant.StartupAmortized
                     ? TimeSpan.FromMinutes(3) : TimeSpan.FromMinutes(1));
                 var lane = syntax == null ? VerificationLane.ManagedPublic : VerificationLane.ManagedPrepared;
-                await using var invocation = new ManagedInvocation(workload, syntax);
+                await using var invocation = new ManagedInvocation(workload, source, syntax);
                 ObservedResult? observed = null;
                 try
                 {

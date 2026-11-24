@@ -81,11 +81,12 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
         return selected;
     }
 
-    private IReadOnlyList<Workload> SelectedCases(IReadOnlyList<Workload> cases)
+    internal IReadOnlyList<Workload> SelectedCases(IReadOnlyList<Workload> cases)
     {
         if (Environment.Version.Major is not (10 or 11) || !Enum.IsDefined(Lane)) throw new InvalidDataException("Unsupported benchmark runtime or lane.");
-        var selected = cases.Where(workload => CaseIds.Contains(workload.Id)).ToArray();
-        if (selected.Length != CaseIds.Count || selected.Length == 0 || CaseIds.Distinct(StringComparer.Ordinal).Count() != CaseIds.Count
+        var ids = CaseIds.ToHashSet(StringComparer.Ordinal);
+        var selected = cases.Where(workload => ids.Contains(workload.Id)).ToArray();
+        if (selected.Length != ids.Count || ids.Count == 0 || ids.Count != CaseIds.Count
             || selected.Any(workload => workload.SkipReason.Length > 0
                 || Lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess && workload.ProcessComparisonExclusion.Length > 0))
             throw new InvalidDataException("Measurement selection contains missing, repeated or excluded cases.");

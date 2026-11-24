@@ -14,8 +14,7 @@ public class ParseBenchmarks
     {
         Prepare(MeasurementContext.LoadCase(CaseId).Workload);
     }
-    internal void Prepare(Workload workload) =>
-        _source = new System.Text.UTF8Encoding(false, true).GetString(workload.Script.Bytes);
+    internal void Prepare(Workload workload) => _source = workload.DecodeScript();
     [Benchmark] public ParsedScript Parse() => Parser.Parse(_source);
 }
 
@@ -23,6 +22,7 @@ public class ParseBenchmarks
 public abstract class ScriptBenchmarks
 {
     private Workload? _workload;
+    private string _source = "";
     private ParsedScript? _prepared;
     private ManagedInvocation? _invocation;
     private ObservedResult? _observed;
@@ -33,16 +33,18 @@ public abstract class ScriptBenchmarks
     [GlobalSetup] public Task Setup() => PrepareAsync(MeasurementContext.LoadCase(CaseId).Workload);
     internal async Task PrepareAsync(Workload workload)
     {
+        var source = workload.DecodeScript();
         _workload = workload;
-        if (Prepared) _prepared = Parser.Parse(new System.Text.UTF8Encoding(false, true).GetString(_workload.Script.Bytes));
+        _prepared = Prepared ? Parser.Parse(source) : null;
+        _source = _prepared == null ? source : "";
         // Populate source-owned metadata outside measurement, and validate this exact setup.
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        await using var warm = new ManagedInvocation(_workload, _prepared);
+        await using var warm = new ManagedInvocation(workload, _source, _prepared);
         ManagedInvocation.Verify(_workload, await warm.RunAsync(deadline.Token));
     }
     [IterationSetup] public void BeforeInvocation()
     {
-        _invocation = new ManagedInvocation(_workload ?? throw new InvalidOperationException("Setup did not run."), _prepared);
+        _invocation = new ManagedInvocation(_workload ?? throw new InvalidOperationException("Setup did not run."), _source, _prepared);
         _observed = null;
         _deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
     }

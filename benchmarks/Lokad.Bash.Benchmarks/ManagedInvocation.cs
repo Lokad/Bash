@@ -1,4 +1,3 @@
-using System.Text;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
@@ -16,16 +15,16 @@ internal sealed class ManagedInvocation : IAsyncDisposable
     private readonly IMemoryScope _inputMemory;
     private readonly BenchmarkHost _host;
     private readonly Evaluation.Evaluation? _evaluation;
-    private readonly string _source;
-    public ManagedInvocation(Workload workload, ParsedScript? prepared)
+    private readonly string _source = "";
+    public ManagedInvocation(Workload workload, string source, ParsedScript? prepared)
     {
-        _source = new UTF8Encoding(false, true).GetString(workload.Script.Bytes);
         _evaluationMemory = _memory.CreateScope();
         _inputMemory = _memory.CreateScope();
         _inputMemory.Reserve(checked(workload.Input.Length + workload.FixtureBytes));
         _host = new BenchmarkHost(_memory, workload.Input.Bytes,
             workload.Files.ToDictionary(pair => pair.Key, pair => (ReadOnlyMemory<byte>)pair.Value.Bytes, StringComparer.Ordinal), null, null);
         if (prepared != null) _evaluation = new Evaluation.Evaluation(prepared);
+        else _source = source;
     }
     public async Task<ObservedResult> RunAsync(CancellationToken token)
     {

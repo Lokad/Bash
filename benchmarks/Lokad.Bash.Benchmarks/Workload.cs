@@ -28,6 +28,10 @@ internal sealed record Workload(
     IReadOnlyDictionary<string, Blob> Files, ExpectedResult? Expected,
     string AmortizationExclusion, string SkipReason)
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    public string DecodeScript() => StrictUtf8.GetString(Script.Bytes);
+
     public WorkloadVariant Variant { get; init; } = WorkloadVariant.WholeInvocation;
     public int Rounds { get; init; } = 1;
     public long FixtureBytes => Files.Values.Sum(file => file.Length);
