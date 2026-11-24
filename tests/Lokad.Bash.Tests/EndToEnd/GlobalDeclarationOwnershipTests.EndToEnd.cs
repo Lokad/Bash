@@ -230,6 +230,89 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("""
+        dest=target; ref=caller; i=0
+        f(){ local -n ref=dest; declare -gi 'ref[i++]'='2+3'; printf '<%s:%s>' "$?" "$i"; declare -p ref dest; }
+        f; declare -p ref dest
+        """, "<0:1>declare -n ref=\"dest\"\ndeclare -a dest=([0]=\"2+3\")\ndeclare -ai ref=([0]=\"caller\")\ndeclare -a dest=([0]=\"2+3\")\n", "")]
+    [InlineData("""
+        dest=target; f(){ local -n ref=dest; declare -g 'ref[0]'=new; }; f; declare -p ref dest
+        """, "declare -a ref=()\ndeclare -a dest=([0]=\"new\")\n", "")]
+    [InlineData("""
+        dest=target; declare ref; f(){ local -n ref=dest; declare -gA 'ref[key]'=new; }; f; declare -p ref dest
+        """, "declare -A ref\ndeclare -a dest=([0]=\"new\")\n", "")]
+    [InlineData("""
+        dest=target; ref=caller; i=0
+        f(){ local -A dest=([k]=old); local -n ref=dest; declare -g 'ref[i++]'=new;
+          printf '<%s:%s:%s:%s>' "$?" "$i" "${dest[k]}" "${dest[i++]}"; }
+        f; declare -p ref dest
+        """, "<0:0:old:new>declare -a ref=([0]=\"caller\")\ndeclare -- dest=\"target\"\n", "")]
+    [InlineData("""
+        dest=target; ref=caller
+        f(){ local -a dest=([2]=left [7]=right); local -n ref=dest; declare -g 'ref[-1]'+=new; declare -p dest; }
+        f; declare -p ref dest
+        """, "declare -a dest=([2]=\"left\" [7]=\"rightnew\")\ndeclare -a ref=([0]=\"caller\")\ndeclare -- dest=\"target\"\n", "")]
+    [InlineData("""
+        dest=target; ref=caller; i=0
+        f(){ local -n ref=dest; dest=temporary declare -g 'ref[i++]'+=new; printf '<%s:%s>' "$?" "$i"; declare -p ref; }
+        f; declare -p ref dest
+        """, "<0:1>declare -n ref=\"dest\"\ndeclare -a ref=([0]=\"caller\")\ndeclare -- dest=\"target\"\n", "")]
+    [InlineData("""
+        dest=active; other=saved; declare -n ref=other; i=0
+        f(){ local -n ref=dest; declare -g +n 'ref[i++]'=new; printf '<%s:%s>' "$?" "$i"; declare -p ref; }
+        f; declare -p ref dest other
+        """, "<0:1>declare -n ref=\"dest\"\ndeclare -- ref=\"other\"\ndeclare -a dest=([0]=\"new\")\ndeclare -a other=([0]=\"saved\")\n", "")]
+    [InlineData("""
+        dest=active; other=saved; declare -n ref='other[2]'; i=0
+        f(){ local -n ref=dest; declare -g +n 'ref[i++]'=new; printf '<%s:%s>' "$?" "$i"; }
+        f; declare -p ref dest other
+        """, "<1:0>declare -n ref=\"other[2]\"\ndeclare -- dest=\"active\"\ndeclare -- other=\"saved\"\n",
+        "line 2: declare: `other[2][i++]=new': not a valid identifier\n")]
+    [InlineData("""
+        dest=active; ref=caller; i=0
+        f(){ local -n ref='dest[2]'; declare -g 'ref[i++]'=new; printf '<%s:%s>' "$?" "$i"; }
+        f; declare -p ref dest
+        """, "<1:1>declare -a ref=([0]=\"caller\")\ndeclare -- dest=\"active\"\n",
+        "line 2: declare: `dest[2]': not a valid identifier\n")]
+    [InlineData("""
+        ref=caller; i=0
+        f(){ local -n ref; declare -g 'ref[i++]'=new; printf '<%s:%s>' "$?" "$i"; declare -p ref; }
+        f; declare -p ref
+        """, "<1:1>declare -n ref\ndeclare -a ref=([0]=\"caller\")\n", "line 2: declare: `': not a valid identifier\n")]
+    [InlineData("""
+        dest=target; ref=caller; i=0; literal='(alpha beta)'
+        f(){ local -n ref=dest; declare -gA 'ref[i++]'="$literal"; printf '<%s:%s>' "$?" "$i"; }
+        f; declare -p ref dest
+        """, "<0:0>declare -A ref=([alpha]=\"beta\" )\ndeclare -- dest=\"target\"\n", "")]
+    [InlineData("""
+        dest=target; ref=caller; i=0; literal='(alpha beta)'
+        f(){ local -n ref=dest; declare -g 'ref[i++]'="$literal"; printf '<%s:%s>' "$?" "$i"; }
+        f; declare -p ref dest
+        """, "<0:1>declare -a ref=([0]=\"caller\")\ndeclare -a dest=([0]=\"(alpha beta)\")\n",
+        "line 2: warning: ref[i++]=(alpha beta): quoted compound array assignment deprecated\n")]
+    [InlineData("""
+        dest=target; declare -A ref=([old]=caller); i=0; j=0
+        f(){ local -n ref=dest; declare -ga 'ref[i++]'=$((j++)) 'other[0]'=kept; printf '<%s:%s:%s>' "$?" "$i" "$j"; }
+        f; declare -p ref dest other
+        """, "<1:0:1>declare -A ref=([old]=\"caller\" )\ndeclare -- dest=\"target\"\ndeclare -a other=([0]=\"kept\")\n",
+        "line 2: declare: ref: cannot convert associative to indexed array\n")]
+    [InlineData("""
+        dest=target; ref=caller; i=0
+        f(){ local -r dest=local; local -n ref=dest; declare -gr 'ref[i++]'=new; printf '<%s:%s>' "$?" "$i"; declare -p dest; }
+        f; declare -p ref dest
+        """, "<0:1>declare -r dest=\"local\"\ndeclare -ar ref=([0]=\"caller\")\ndeclare -- dest=\"target\"\n",
+        "line 2: ref: readonly variable\n")]
+    public async Task ExplicitGlobalElementDeclarationsKeepSeparateDeclarationAndWriteOwners(
+        string script, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("local a=(local)", "-gr +n", "new", "$r", "")]
     [InlineData("local -r a=(local)", "-g +n", "local", "$r", "line 1: a: readonly variable\n")]
     [InlineData("local a=(local)", "-gr", "new", "${!r}", "")]

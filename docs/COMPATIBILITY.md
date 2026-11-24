@@ -947,6 +947,14 @@ still use the existing source preparation phase. When a global indexed write
 converts a shadowing associative binding, it keeps the binding's attributes.
 Append uses the old value at key `0` as the previous element.
 
+An explicit element assignment through `declare -g` prepares the global
+array and applies the declaration attributes there. The write uses the
+active binding, including its array kind, readonly state and nameref target.
+An incompatible global array kind rejects the declaration before selector
+evaluation. A quoted list with an explicit array kind initializes the
+global array. With inferred typing, the quoted list is element text and
+produces a warning.
+
 The public script runner, `source`, `eval` and reached EXIT actions execute complete command units as
 they are parsed. Earlier units retain their effects before later syntax failure.
 A malformed arithmetic `for` header in a direct double-quoted command substitution

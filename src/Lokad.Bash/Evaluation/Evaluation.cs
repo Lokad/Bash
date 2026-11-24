@@ -2223,6 +2223,8 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var setsNamedAttribute = options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly;
+            var conflictingArrayKinds = options.IndexedChange == DeclarationAttributeChange.Set
+                && options.AssociativeChange == DeclarationAttributeChange.Set;
             var globalBindings = options.Global ? bindings : null;
             const string NamerefArrayError = "reference variable cannot be an array";
             var exitCode = 0;
@@ -2293,9 +2295,11 @@ public sealed partial class Evaluation : IFileTester
                     && options.IndexedChange != DeclarationAttributeChange.Clear;
                 var clearIndexedElement = element && !local && !operand.CompoundApplied
                     && arrayKind == ArrayAssignmentKind.Auto && options.IndexedChange == DeclarationAttributeChange.Clear;
+                var assignsGlobalElement = options.Global && element && operand.Value != null && !clearIndexedElement
+                    && options.NamerefChange != DeclarationAttributeChange.Set && !conflictingArrayKinds;
                 var selectElementBinding = inferElementArray || clearIndexedElement && (operand.Value == null || options.Global);
                 var global = (options.Global || arrayAttributeAssignment)
-                    && (reference.Kind == VariableReferenceKind.Name || selectElementBinding);
+                    && (reference.Kind == VariableReferenceKind.Name || selectElementBinding || assignsGlobalElement);
                 if (!global && !local && !operand.CompoundApplied && operand.Value == null)
                 {
                     var visibleName = options.Nameref ? sourceName : StripArraySubscript(commandVars.ResolveNamerefName(sourceName));
@@ -2322,7 +2326,8 @@ public sealed partial class Evaluation : IFileTester
                 var detachElementNameref = false;
                 if (global || selectElementBinding)
                 {
-                    if (options.NamerefChange == DeclarationAttributeChange.Set)
+                    if (assignsGlobalElement && resolution != BindingResolution.LastNameref
+                        || options.NamerefChange == DeclarationAttributeChange.Set)
                         targetVars = SelectGlobalOwner(reference.Name);
                     else
                     {
@@ -2360,7 +2365,7 @@ public sealed partial class Evaluation : IFileTester
                                 detachElementNameref = !circular && resolution == BindingResolution.LastNameref
                                     && binding.Owner.TryGetNameref(binding.Name, out _);
                         }
-                        else if (!circular && arrayKind != ArrayAssignmentKind.Auto
+                        else if (!assignsGlobalElement && !circular && arrayKind != ArrayAssignmentKind.Auto
                             && (resolution == BindingResolution.Referent
                                 || binding.Owner.TryGetNameref(binding.Name, out var lastTarget) && lastTarget.IsEmpty))
                         {
@@ -2368,10 +2373,10 @@ public sealed partial class Evaluation : IFileTester
                             binding = declaredOwner.SelectArrayDeclarationBinding(reference.Name, binding);
                             recreateArrayReference = binding.Owner.TryGetNameref(binding.Name, out _);
                         }
-                        reference = selectElementBinding
+                        reference = selectElementBinding || assignsGlobalElement
                             ? VariableReference.ForElement(binding.Name, reference.Subscript) : binding.Reference;
                         targetVars = binding.Owner;
-                        if (global && reference.Kind != VariableReferenceKind.Name && bindings?.Contains(reference.Name) == true)
+                        if (global && !assignsGlobalElement && reference.Kind != VariableReferenceKind.Name && bindings?.Contains(reference.Name) == true)
                             targetVars = bindings.SavedVariables;
                     }
                 }
@@ -2396,7 +2401,7 @@ public sealed partial class Evaluation : IFileTester
                     && arrayKind == ArrayAssignmentKind.Auto && !operand.CompoundApplied
                     && targetVars.TryGetNameref(name, out var unsetTarget) && unsetTarget.IsEmpty)
                     continue; // +n cannot detach an indirectly reached unset reference or apply attributes to it.
-                if (!operand.CompoundApplied && !local && options.NamerefChange != DeclarationAttributeChange.Set
+                if (!assignsGlobalElement && !operand.CompoundApplied && !local && options.NamerefChange != DeclarationAttributeChange.Set
                     && arrayKind != ArrayAssignmentKind.Auto
                     && (recreateArrayReference || targetVars.TryResolveBinding(name, selectOwner: null, out var arrayBinding)
                         && arrayBinding.Owner.TryGetNameref(arrayBinding.Name, out var arrayTarget) && arrayTarget.IsEmpty))
@@ -2487,9 +2492,12 @@ public sealed partial class Evaluation : IFileTester
                         }
                     }
                 }
+                var elementNameref = ShellValue.Empty;
                 var removeElementNameref = operand.Value != null && reference.Kind != VariableReferenceKind.Name
                     && !local && options.NamerefChange != DeclarationAttributeChange.Clear
-                    && targetVars.TryGetNameref(name, out _);
+                    && targetVars.TryGetNameref(name, out elementNameref);
+                var initializeGlobalArray = assignsGlobalElement && (removeElementNameref
+                    ? !elementNameref.IsEmpty : !targetVars.HasBinding(name));
                 if (removeElementNameref)
                 {
                     if (targetVars.IsReadonlyBinding(name))
@@ -2710,18 +2718,48 @@ public sealed partial class Evaluation : IFileTester
                 VariableBinding? referentAttributes = global && reference.Kind != VariableReferenceKind.Name
                     ? new VariableBinding(VariableReference.ForName(name), targetVars) : null;
                 VariableReference? referentElement = !operand.CompoundApplied && operand.Value != null
-                    && referentAttributes != null ? reference : null;
+                    && referentAttributes != null
+                    ? assignsGlobalElement ? VariableReference.ForElement(sourceName, reference.Subscript) : reference
+                    : null;
                 if (!local && options.NamerefChange == DeclarationAttributeChange.Clear
                     && targetVars.TryGetNameref(name, out var finalTarget) && !finalTarget.IsEmpty && (global
                         ? TryResolveGlobalReferent(name, out var referent)
                         : targetVars.TryResolveBinding(name, selectOwner: null, out referent)))
                 {
+                    if (assignsGlobalElement && referent.Reference.Kind != VariableReferenceKind.Name)
+                    {
+                        await DiagnoseComposedElementAsync(referent.Reference, sourceName, operand).ConfigureAwait(false);
+                        continue;
+                    }
                     referentAttributes = referent with { Reference = VariableReference.ForName(referent.Name) };
                     if (!operand.CompoundApplied && operand.Value != null && reference.Kind == VariableReferenceKind.Name
                         && referent.Reference.Kind != VariableReferenceKind.Name)
                         referentElement = referent.Reference;
                 }
-                if ((!operand.CompoundApplied || convertedReference) && !local && arrayKind != ArrayAssignmentKind.Auto)
+                if (assignsGlobalElement && referentAttributes is { } globalAttributes)
+                {
+                    var owner = globalAttributes.Owner;
+                    var globalName = globalAttributes.Name;
+                    var kind = arrayKind == ArrayAssignmentKind.Associative
+                        || arrayKind == ArrayAssignmentKind.Auto && owner.AssociativeArrays.ContainsKey(globalName)
+                        ? ArrayKind.Associative : ArrayKind.Indexed;
+                    if ((globalName != name || !ReferenceEquals(owner, targetVars)) && owner.IsReadonly(globalName))
+                    {
+                        await DiagnoseReadonlyAsync(sourceName).ConfigureAwait(false);
+                        continue;
+                    }
+                    var initialize = initializeGlobalArray || options.NamerefChange == DeclarationAttributeChange.Clear
+                        && (!owner.HasBinding(globalName) || globalAttributes.IsUnsetNameref);
+                    var declared = initialize
+                        ? owner.TryAssignResolvedArray(globalName, [], kind, initializeReadonly: false)
+                        : owner.TryDeclareResolvedArray(globalName, kind, ScalarArrayPromotion.RetainValue);
+                    if (!declared)
+                    {
+                        await DiagnoseAsync(sourceName, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+                else if ((!operand.CompoundApplied || convertedReference) && !local && arrayKind != ArrayAssignmentKind.Auto)
                 {
                     var kind = arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
                     var arrayDeclarationBinding = referentAttributes ?? new VariableBinding(VariableReference.ForName(name), targetVars);
@@ -2733,8 +2771,7 @@ public sealed partial class Evaluation : IFileTester
                         continue;
                     }
                 }
-                if (!setsNamedAttribute && options.IndexedChange == DeclarationAttributeChange.Set
-                    && options.AssociativeChange == DeclarationAttributeChange.Set)
+                if (!setsNamedAttribute && conflictingArrayKinds)
                 {
                     await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
                     continue;
@@ -2746,7 +2783,8 @@ public sealed partial class Evaluation : IFileTester
                 var wroteUnmarkedPrefix = false;
                 if (!operand.CompoundApplied && !localReferenceAssigned && !options.Nameref
                     && operand.Value is { } expandedInitializer && expandedInitializer.Bytes.Span is [(byte)'(', .., (byte)')']
-                    && TrySelectExpandedInitializer(name, reference, targetVars, arrayKind, out var initializerTarget, out var initializerKind))
+                    && TrySelectExpandedInitializer(name, reference, targetVars, arrayKind,
+                        assignsGlobalElement ? referentAttributes : null, out var initializerTarget, out var initializerKind))
                 {
                     // The declared attributes are visible to reads during item expansion.
                     var initializeReadonly = options.Readonly && !initializerTarget.Owner.IsReadonlyBinding(initializerTarget.Name);
@@ -2780,8 +2818,16 @@ public sealed partial class Evaluation : IFileTester
                 else if (referentElement is { } elementReference && referentAttributes is { } elementAttributes
                     && operand.Value is { } elementValue)
                 {
+                    if (assignsGlobalElement && arrayKind == ArrayAssignmentKind.Auto
+                        && elementValue.Bytes.Span is [(byte)'(', .., (byte)')'])
+                        await ReportBuiltinDiagnosticAsync([ShellValue.FromText("warning")],
+                            [operand.Name, operand.AssignmentSeparator, elementValue,
+                                ShellValue.FromText(": quoted compound array assignment deprecated")], declarationScope.Context)
+                            .ConfigureAwait(false);
+                    if (global && !assignsGlobalElement && bindings?.Contains(elementAttributes.Name) == true)
+                        elementAttributes = elementAttributes with { Owner = bindings.SavedVariables };
                     if (!await AwaitWordExpansionAsync(AssignReferencedElementAsync(
-                            elementReference, elementAttributes, elementValue, operand.Operator, global, assignmentExport)).ConfigureAwait(false))
+                            elementReference, elementAttributes, elementValue, operand.Operator, assignsGlobalElement, assignmentExport)).ConfigureAwait(false))
                         break;
                 }
                 else if (!operand.CompoundApplied)
@@ -2899,7 +2945,8 @@ public sealed partial class Evaluation : IFileTester
                         if (HasPendingExpansionError || writeTarget == null
                             || !await TryAssignDeclarationValueAsync(writeTarget, writeReference,
                                 writeScope, writeVariables, value, operand.Operator,
-                                declarationWrite, local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName).ConfigureAwait(false))
+                                declarationWrite, local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName,
+                                applyAssignmentAttributes: true).ConfigureAwait(false))
                         {
                             exitCode = 1;
                             if (HasPendingExpansionError) break;
@@ -3026,7 +3073,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (hasReference && !setsNameref)
                     await ReportElementNamerefRemovalAsync(name).ConfigureAwait(false);
-                if (options.IndexedChange == DeclarationAttributeChange.Set && options.AssociativeChange == DeclarationAttributeChange.Set)
+                if (conflictingArrayKinds)
                 {
                     await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
                     return;
@@ -3070,11 +3117,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (target.Reference.Kind != VariableReferenceKind.Name)
                     {
-                        var suffix = ShellValue.FromBytes(operand.Name.Bytes[source.ByteLength..]);
-                        exitCode = 1;
-                        await ReportDeclarationDiagnosticAsync([ShellValue.FromText("`"), target.Reference.ToValue(Memory), suffix,
-                            operand.AssignmentSeparator,
-                            operand.Value.GetValueOrDefault(), ShellValue.FromText("': not a valid identifier")]).ConfigureAwait(false);
+                        await DiagnoseComposedElementAsync(target.Reference, source, operand).ConfigureAwait(false);
                         return true;
                     }
                     if (options.AssociativeChange == DeclarationAttributeChange.Clear && target.Owner.AssociativeArrays.ContainsKey(target.Name))
@@ -3139,14 +3182,16 @@ public sealed partial class Evaluation : IFileTester
                     declarationScope.Variables, prefixes: null, globalBindings, BindingResolution.Referent, out binding);
 
             bool TrySelectExpandedInitializer(BindingName name, VariableReference reference, Variables variables, ArrayAssignmentKind arrayKind,
-                out VariableBinding binding, out ArrayKind kind)
+                VariableBinding? declaredArray, out VariableBinding binding, out ArrayKind kind)
             {
                 kind = default;
                 binding = default;
                 if (arrayKind == ArrayAssignmentKind.Auto
                     && (reference.Kind != VariableReferenceKind.Name || options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly))
                     return false;
-                if (!variables.TryResolveBinding(name, selectOwner: null, out binding)
+                if (declaredArray is { } selected)
+                    binding = selected;
+                else if (!variables.TryResolveBinding(name, selectOwner: null, out binding)
                     || arrayKind == ArrayAssignmentKind.Auto && binding.Reference.Kind != VariableReferenceKind.Name)
                     return false;
                 if (binding.Owner.AssociativeArrays.ContainsKey(binding.Name))
@@ -3168,12 +3213,10 @@ public sealed partial class Evaluation : IFileTester
 
             async Task<bool> AssignReferencedElementAsync(
                 VariableReference reference, VariableBinding attributes, ShellValue value, AssignmentOperator operation,
-                bool global, DeclarationAttributeChange exportChange)
+                bool assignsGlobalElement, DeclarationAttributeChange exportChange)
             {
                 // Attributes select the declaration binding; element writes use the active caller array.
-                if (global && bindings?.Contains(attributes.Name) == true)
-                    attributes = attributes with { Owner = bindings.SavedVariables };
-                if (attributes.Owner.IsReadonly(attributes.Name))
+                if (!assignsGlobalElement && attributes.Owner.IsReadonly(attributes.Name))
                 {
                     await DiagnoseReadonlyAsync(attributes.Name).ConfigureAwait(false);
                     return true; // Visit later operands, and still detach +n, without evaluating the selector.
@@ -3188,22 +3231,34 @@ public sealed partial class Evaluation : IFileTester
                 if (prefixNames != null && variables.TryGetNameref(reference.Name, out _)
                     && (prefixNames.Contains(reference.Name) || selectionScope.GetExpansionWriteTarget(reference.Name) == null))
                     variables = commandVars; // Indirect writes stay inside a prefix, including one hiding the nameref itself.
+                VariableBinding? activeBinding = assignsGlobalElement
+                    && variables.TryResolveBinding(reference.Name, selectOwner: null, out var selected) ? selected : null;
+                var activeUnsetNameref = activeBinding is { IsUnsetNameref: true };
                 // Prefixes affect selector arithmetic and negative-index bounds, not the stored value used by +=.
                 var target = await WordExpansion.ResolveDeclarationReferenceAsync(
                     reference, selectionScope, variables, commandVars).ConfigureAwait(false);
                 if (HasPendingExpansionError)
                     return false;
+                if (target is { Name.IsEmpty: true }
+                    && (activeUnsetNameref || activeBinding is { Reference.Kind: not VariableReferenceKind.Name }))
+                {
+                    var invalidName = activeUnsetNameref ? ShellValue.Empty : activeBinding.GetValueOrDefault().Reference.ToValue(Memory);
+                    await DiagnoseQuotedAsync(invalidName, "not a valid identifier").ConfigureAwait(false);
+                    return true;
+                }
                 if (target == null)
                     exitCode = 1;
                 else if (!await TryAssignDeclarationValueAsync(target, reference, declarationScope, variables,
-                    value, operation, WordExpansion.DeclarationWrite.Ordinary, reference.Name).ConfigureAwait(false))
+                    value, operation, WordExpansion.DeclarationWrite.Ordinary, reference.Name,
+                    applyAssignmentAttributes: !assignsGlobalElement).ConfigureAwait(false))
                     exitCode = 1;
                 return true;
             }
 
             async Task<bool> TryAssignDeclarationValueAsync(
                 WordExpansion.ResolvedVariableReference target, VariableReference reference, ScopedEvaluation writeScope, Variables destination,
-                ShellValue value, AssignmentOperator operation, WordExpansion.DeclarationWrite declarationWrite, BindingName diagnosticName)
+                ShellValue value, AssignmentOperator operation, WordExpansion.DeclarationWrite declarationWrite, BindingName diagnosticName,
+                bool applyAssignmentAttributes)
             {
                 if (declarationWrite != WordExpansion.DeclarationWrite.ActiveGlobalIndexed && destination.IsReadonly(target.Name))
                 {
@@ -3217,9 +3272,12 @@ public sealed partial class Evaluation : IFileTester
                     await DiagnoseReadonlyAsync(diagnosticName).ConfigureAwait(false);
                     return false;
                 }
-                if (!target.Name.IsEmpty && options.IntegerChange != DeclarationAttributeChange.Unchanged)
-                    destination.SetIntegerBinding(target.Name, options.IntegerChange == DeclarationAttributeChange.Set);
-                destination.SetCaseAttributes(target.Name, options.CaseChange);
+                if (applyAssignmentAttributes)
+                {
+                    if (!target.Name.IsEmpty && options.IntegerChange != DeclarationAttributeChange.Unchanged)
+                        destination.SetIntegerBinding(target.Name, options.IntegerChange == DeclarationAttributeChange.Set);
+                    destination.SetCaseAttributes(target.Name, options.CaseChange);
+                }
                 return await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
                     ShellValue.FromText(commandName), declarationWrite).ConfigureAwait(false) is not null;
             }
@@ -3333,6 +3391,14 @@ public sealed partial class Evaluation : IFileTester
                 exitCode = 1;
                 return WriteQuotedOperandDiagnosticAsync(ShellValue.FromText(commandName), subject, message,
                     _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(declarationScope.Context));
+            }
+
+            Task DiagnoseComposedElementAsync(VariableReference target, BindingName source, PreparedDeclarationOperand operand)
+            {
+                exitCode = 1;
+                return ReportDeclarationDiagnosticAsync([ShellValue.FromText("`"), target.ToValue(Memory),
+                    ShellValue.FromBytes(operand.Name.Bytes[source.ByteLength..]), operand.AssignmentSeparator,
+                    operand.Value.GetValueOrDefault(), ShellValue.FromText("': not a valid identifier")]);
             }
         }
         async Task<bool> ApplyAssignmentAsync(AssignmentWord assignment)
