@@ -72,13 +72,12 @@ public sealed class DeclarationInspectionTestsEndToEnd
     [Fact]
     public async Task Evaluation_FailedCompoundElement_RetainsAssignedEmptyArray()
     {
-        // Native prints the same binding; its bad-subscript subject is "[-1]=value" instead of "x[-1]".
         var result = await EndToEndHarness.RunScriptAsync("declare -a x; x=([-1]=value); declare -p x",
             EndToEndHarness.BuildTree(Array.Empty<(string Path, string Content)>()));
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("declare -a x=()\n", result.StdOut);
-        Assert.Equal("x[-1]: bad array subscript\n", result.StdErr);
+        Assert.Equal("line 1: [-1]=value: bad array subscript\n", result.StdErr);
     }
 
     [Theory]

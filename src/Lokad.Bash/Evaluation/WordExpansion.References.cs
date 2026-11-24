@@ -344,9 +344,12 @@ internal static partial class WordExpansion
     }
 
     internal static Task<ResolvedVariableReference?> ResolveCompoundElementAsync(
-        VariableReference reference, ShellValue expandedSubscript, ScopedEvaluation scope, Variables targetVariables) =>
-        ResolveReferenceAsync(reference, ReferenceUse.CompoundAssign, scope, ExpansionPurpose.ArithmeticSource, expandedSubscript,
-            targetVariables, targetVariables);
+        VariableReference reference, ShellValue expandedSubscript, ShellValue value, AssignmentOperator operation,
+        ScopedEvaluation scope, Variables targetVariables) =>
+        ResolveReferenceAsync(reference, ReferenceUse.CompoundAssign, scope, ExpansionPurpose.ArithmeticSource,
+            new CompoundElement(expandedSubscript, value, operation), targetVariables, targetVariables);
+
+    private readonly record struct CompoundElement(ShellValue Subscript, ShellValue Value, AssignmentOperator Operator);
 
     /// <summary>Reads a selected binding through ordinary nameref/array expansion rules.</summary>
     internal static Task<ResolvedVariableReference?> ResolveReadReferenceAsync(VariableReference reference, ScopedEvaluation scope) =>
@@ -431,10 +434,10 @@ internal static partial class WordExpansion
         ReferenceUse use,
         ScopedEvaluation scope,
         ExpansionPurpose arithmeticPurpose,
-        ShellValue? stagedSubscript,
+        CompoundElement? compound,
         Variables targetVariables,
         Variables indexVariables) =>
-        ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, stagedSubscript, targetVariables, indexVariables,
+        ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, compound, targetVariables, indexVariables,
             null, ShellValue.Empty);
 
     private static async Task<ResolvedVariableReference?> ResolveReferenceAsync(
@@ -442,7 +445,7 @@ internal static partial class WordExpansion
         ReferenceUse use,
         ScopedEvaluation scope,
         ExpansionPurpose arithmeticPurpose,
-        ShellValue? stagedSubscript,
+        CompoundElement? compound,
         Variables targetVariables,
         Variables indexVariables,
         ExpandedArraySubscript? preparedSubscript,
@@ -531,8 +534,8 @@ internal static partial class WordExpansion
         // Prepared selectors validate expanded bytes; compound diagnostics retain source spelling.
         var selector = preparedSubscript is { } preparedSelector
             ? VariableReference.ForElement(reference.Name, ShellSource.FromBytes(preparedSelector.Value.Bytes))
-            : stagedSubscript is { } staged
-            ? VariableReference.ForElement(reference.Name, ShellSource.FromBytes(staged.Bytes))
+            : compound is { } staged
+            ? VariableReference.ForElement(reference.Name, ShellSource.FromBytes(staged.Subscript.Bytes))
             : reference;
         if (selector.Subscript.IsEmpty || selector.IsAggregate && !associative)
         {
@@ -562,8 +565,8 @@ internal static partial class WordExpansion
         // Indexed compound items have a word-expansion pass before replacement, then an
         // arithmetic-source pass against the array being built. Associative keys are already final.
         var expanded = preparedSubscript is { } prepared ? prepared.Value
-            : associative && stagedSubscript is { } keyValue
-            ? keyValue
+            : associative && compound is { } stagedKey
+            ? stagedKey.Subscript
             : await ExpandSubscriptAsync(selector.Subscript, scope, purpose,
                 allowLeadingTilde: associative && use == ReferenceUse.DirectAssign, syntax).ConfigureAwait(false);
         if (!scope.CanExpand)
@@ -599,6 +602,14 @@ internal static partial class WordExpansion
             }
             if (IndexedArrayIndex.TryCreate(index, out var position))
                 return new ResolvedVariableReference.Indexed(name, position) { ReadOwner = targetVariables };
+            if (compound is { } item)
+            {
+                var separator = item.Operator == AssignmentOperator.Append ? "]+=" : "]=";
+                await scope.Effects.ReportCompoundIndexFailureAsync(
+                    [ShellValue.FromText("["), item.Subscript, ShellValue.FromText(separator), item.Value],
+                    scope).ConfigureAwait(false);
+                return null;
+            }
         }
 
         if (use != ReferenceUse.Length || !associative)

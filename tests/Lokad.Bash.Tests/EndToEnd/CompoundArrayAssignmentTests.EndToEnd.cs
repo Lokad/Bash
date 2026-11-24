@@ -7,6 +7,34 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class CompoundArrayAssignmentTestsEndToEnd
 {
+    [Theory]
+    [InlineData("sel=-3; value='one two'\na=([1]=keep [$sel]+=\"$value\" next)",
+        "next", "line 2: [-3]+=one two: bad array subscript\n")]
+    [InlineData("a=(\n[-3]=$(printf 'rhs\\n' >&2; printf once)\n ok\n)",
+        "ok", "rhs\nline 4: [-3]=once: bad array subscript\n")]
+    [InlineData("declare -a a=(\n[-3]=plain\n ok\n)",
+        "ok", "line 1: [-3]=plain: bad array subscript\n")]
+    [InlineData("a=(\n[-3]=plain ok\n) \\\n2>log",
+        "ok", "line 3: [-3]=plain: bad array subscript\n")]
+    [InlineData("a=([4]=old)\na+=([-1]=new ok)", "ok", "")]
+    public Task NegativeInitializerIndicesUseTheExpandedItemAndReachedLine(
+        string body, string expectedLastValue, string expectedError)
+    {
+        var script = body + "\nprintf '<%s><%s>' \"$?\" \"${a[-1]}\"\n";
+        return AssertBothEntryPointsAsync(script, 0, "<0><" + expectedLastValue + ">", expectedError);
+    }
+
+    [Theory]
+    [InlineData("items=([0]=first [-3]=rejected later) && printf unused", 1)]
+    [InlineData("f() { local -a items=([0]=first [-3]=rejected later); }; f && printf unused", 1)]
+    [InlineData("(exit 7) || items=([0]=first [-3]=rejected later)", 7)]
+    public Task NegativeInitializerIndicesUnderErrexitPreserveOnlyEarlierWrites(string body, int status)
+    {
+        var script = "trap 'printf \"<%s>[%s]\" \"$?\" \"${items[@]}\"' EXIT\nset -e\n"
+            + body + "\nprintf skipped\n";
+        return AssertBothEntryPointsAsync(script, status, $"<{status}>[first]", "line 3: [-3]=rejected: bad array subscript\n");
+    }
+
     private const string RejectedQuotedKey = "[\"lead$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\"]";
 
     [Theory]
@@ -57,9 +85,12 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
         $"command substitution: line {line}: syntax error near unexpected token `printf'\n"
         + $"command substitution: line {line}: ` }} printf extra)tail\"]{suffix}'\n";
 
-    private static async Task AssertReadDiagnosticAsync(string body, int expectedStatus, string output, string error)
+    private static Task AssertReadDiagnosticAsync(string body, int expectedStatus, string output, string error) =>
+        AssertBothEntryPointsAsync("printf 'before\\n'\n" + body + "\nprintf 'after:%s\\n' \"$?\"\n",
+            expectedStatus, "before\n" + output, error);
+
+    private static async Task AssertBothEntryPointsAsync(string script, int expectedStatus, string output, string error)
     {
-        var script = "printf 'before\\n'\n" + body + "\nprintf 'after:%s\\n' \"$?\"\n";
         foreach (var prepared in new[] { false, true })
         {
             await using var host = new TestHost();
@@ -67,7 +98,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
                 : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
 
             Assert.Equal(expectedStatus, status);
-            Assert.Equal("before\n" + output, host.StandardOutput.TextContent);
+            Assert.Equal(output, host.StandardOutput.TextContent);
             Assert.Equal(error, host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
         }
@@ -92,17 +123,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
         if (displayedLine.Length != 0)
             error += diagnostic + "`" + displayedLine + "'\n";
 
-        foreach (var prepared in new[] { false, true })
-        {
-            await using var host = new TestHost();
-            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
-                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
-
-            Assert.Equal(exitCode, status);
-            Assert.Equal(output, host.StandardOutput.TextContent);
-            Assert.Equal(error, host.StandardError.TextContent);
-            Assert.Equal(0, host.OpenFileCount);
-        }
+        await AssertBothEntryPointsAsync(script, exitCode, output, error);
     }
 
     [Fact]
@@ -381,8 +402,8 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("declare -A map; map=([$(printf a; printf s1 >&2)]=$(printf v1; printf r1 >&2) [$(printf b; printf s2 >&2)]=$(printf v2; printf r2 >&2)); printf '<%s>:<%s>\\n' \"${map[a]}\" \"${map[b]}\"", "<v1>:<v2>\n", "s1r1s2r2", 0)]
     [InlineData("arr=(old); readonly arr; arr=([$(printf 2; printf selector >&2)]=$(printf new; printf rhs >&2)); printf after", "", "line 1: arr: readonly variable\n", 1)]
     [InlineData("declare -A map; readonly map; map=([$(printf a; printf selector >&2)]=$(printf new; printf rhs >&2)); printf after", "", "line 1: map: readonly variable\n", 1)]
-    [InlineData("arr=(old); arr=(new [-2]=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "arr[-2]: bad array subscript\n", 0)]
-    [InlineData("arr[5]=old; arr=([-1]=new tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<tail>\n<0>\n", "arr[-1]: bad array subscript\n", 0)]
+    [InlineData("arr=(old); arr=(new [-2]=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "line 1: [-2]=bad: bad array subscript\n", 0)]
+    [InlineData("arr[5]=old; arr=([-1]=new tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<tail>\n<0>\n", "line 1: [-1]=new: bad array subscript\n", 0)]
     [InlineData("arr=(old); arr=(new []=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "arr[]: bad array subscript\n", 0)]
     [InlineData("declare -A map; map[old]=old; map=([a]=new [\"\"]=bad [b]=tail); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<new>:<tail>\n", "map[\"\"]: bad array subscript\n", 0)]
     [InlineData("declare -A map; map=([a]=one plain [b]=two); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<one>:<two>\n", "map: must use subscript when assigning associative array\n", 0)]
@@ -412,7 +433,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("arr=(old); arr=(\"${arr[0]:=fallback}\" \"${arr[2]:=effect}\"); printf '<%s>\\n' \"${!arr[@]}\" \"${arr[@]}\"", "<0>\n<1>\n<old>\n<effect>\n", "", 0)]
     [InlineData("arr=([1/0]=$(printf a; printf first >&2) [$(printf 2; printf selector >&2)]=$(printf b; printf second >&2)); printf after", "", "firstselectorsecondline 1: 1/0: division by 0 (error token is \"0\")\n", 1)]
     [InlineData("arr=([$(printf 2; printf selector >&2)]=$(printf a; printf first >&2) \"${missing:?boom}\" $(printf b; printf second >&2)); printf after", "", "selectorfirstmissing: boom\n", 1)]
-    [InlineData("arr=(new [-2]=$(printf bad; printf rhs >&2) $(printf tail; printf later >&2)); printf '<%s>\\n' \"${arr[@]}\"", "<new>\n<tail>\n", "rhslaterarr[-2]: bad array subscript\n", 0)]
+    [InlineData("arr=(new [-2]=$(printf bad; printf rhs >&2) $(printf tail; printf later >&2)); printf '<%s>\\n' \"${arr[@]}\"", "<new>\n<tail>\n", "rhslaterline 1: [-2]=bad: bad array subscript\n", 0)]
     [InlineData("declare -A map; map=([a]=one $(printf plain; printf rhs >&2) [b]=two); printf '<%s>:<%s>\\n' \"${map[a]}\" \"${map[b]}\"", "<one>:<two>\n", "map: must use subscript when assigning associative array\n", 0)]
     [InlineData("v='a b'; declare -A map; map=($v value next); printf '<%s>:<%s>:<%s>\\n' \"${map['a b']-x}\" \"${map[a]-x}\" \"${map[next]-x}\"", "<value>:<x>:<>\n", "", 0)]
     [InlineData("declare -A map; map=(a one '' bad b two); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<one>:<two>\n", "map[]: bad array subscript\n", 0)]

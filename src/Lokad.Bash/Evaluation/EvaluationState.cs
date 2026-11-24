@@ -35,6 +35,8 @@ internal enum ExpansionFailureKind
     IntegerAssignment,
     /// <summary>Arithmetic selection of an indexed array element failed.</summary>
     ArrayIndex,
+    /// <summary>A negative compound array index was out of range with errexit active.</summary>
+    CompoundArrayIndex,
     /// <summary>A reached parameter-default write failed after its operand expanded.</summary>
     ParameterDefaultAssignment,
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>

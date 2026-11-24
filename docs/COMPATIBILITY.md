@@ -177,6 +177,14 @@ feed can end the command. Quoting, line continuations and nested expansions
 can keep the subscript in one word. Compound initializer items use their own
 bracket grouping.
 
+A negative index in an indexed compound initializer counts backward from the
+highest index already present as the initializer is applied. An out-of-range
+negative index reports the expanded item, including its operator and value.
+An ordinary initializer skips that item and applies later items. With errexit
+active, it exits before applying later items and keeps the earlier writes
+visible to EXIT. The exit status is the current nonzero status or 1.
+A tested `source` or `eval` reader retains its errexit suppression.
+
 `declare`, `typeset`, `local`, `export`, and `readonly` report usage after an
 unrecognized leading option. A reached `--help` writes the command's synopsis
 and Lokad.Bash's builtin documentation to stdout with status 2. At script

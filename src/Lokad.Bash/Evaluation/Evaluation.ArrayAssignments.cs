@@ -321,7 +321,8 @@ public sealed partial class Evaluation
             if (item.Subscript is { } subscript)
             {
                 target = await WordExpansion.ResolveCompoundElementAsync(
-                    VariableReference.ForElement(name, subscript), item.ExpandedSubscript, scope, targetVariables).ConfigureAwait(false);
+                    VariableReference.ForElement(name, subscript), item.ExpandedSubscript, item.Value, item.Operator,
+                    scope, targetVariables).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     return false;
                 if (target == null)
@@ -350,6 +351,19 @@ public sealed partial class Evaluation
         }
         return true;
 
+    }
+
+    /// <summary>Reports the rejected expanded item before later array writes can run.</summary>
+    internal Task ReportCompoundIndexFailureAsync(ReadOnlySpan<ShellValue> item, ScopedEvaluation scope)
+    {
+        if (ReaderErrexitEnabled(scope))
+        {
+            var status = _state.LastExitCode is { } previous && previous != 0 ? previous : 1;
+            SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CompoundArrayIndex, status));
+            _state.LastExitCode = status;
+            PublishExpansionPipelineStatus(status, scope);
+        }
+        return ReportCommandDiagnosticAsync(item, [ShellValue.FromText("bad array subscript")], scope);
     }
 
     private readonly record struct ExpandedArrayItem(
