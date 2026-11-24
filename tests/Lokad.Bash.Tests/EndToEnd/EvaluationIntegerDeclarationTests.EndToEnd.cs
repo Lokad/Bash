@@ -54,6 +54,43 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData("""declare -ni r; printf '<%s>' "$?"; declare -p r""",
+        "<0>declare -in r\n", "", 0)]
+    [InlineData("""r=dest; declare -ni r; printf '<%s>' "$?"; declare -p r""",
+        "<0>declare -in r=\"dest\"\n", "", 0)]
+    [InlineData("""dest=10; r=outer; f(){ local -nix r=dest; printf '<%s>' "$?"; declare -p r; }; f; declare -p r""",
+        "<1>declare -ix r\ndeclare -- r=\"outer\"\n", "", 0)]
+    [InlineData("""i=0; dest='i++'; declare -ni r=dest; printf '<%s:%s:%s>' "$?" "$i" "${r+set}" """,
+        "<1:1:>", "", 0)]
+    [InlineData("""i=0; j=0; a='i++'; declare -n r=a; declare -ni r+='j++'; printf '<%s:%s:%s>' "$?" "$i" "$j"; declare -p r a""",
+        "<1:1:1>declare -in r=\"a\"\ndeclare -- a=\"i++\"\n", "line 1: declare: `j++': not a valid identifier\n", 0)]
+    [InlineData("""readonly r=old; declare -ni r=; printf '<%s>' "$?"; declare -p r""",
+        "<1>declare -r r=\"old\"\n", "line 1: declare: r: readonly variable\n", 0)]
+    [InlineData("""readonly r=old; declare -ni r='not a name'; printf '<%s>' "$?"; declare -p r""",
+        "<1>declare -r r=\"old\"\n", "line 1: declare: `not a name': invalid variable name for name reference\n", 0)]
+    [InlineData("""declare -a r=([2]=held); declare -ni r=dest; printf '<%s>' "$?"; declare -p r""",
+        "<1>declare -a r=([2]=\"held\")\n", "line 1: declare: r: reference variable cannot be an array\n", 0)]
+    [InlineData("""d=10; r=caller; f(){ local -n r=d; declare -i +n r=2; printf '<%s>' "$?"; declare -p r d; }; f; declare -p r""",
+        "<1>declare -in r=\"d\"\ndeclare -- d=\"10\"\ndeclare -- r=\"caller\"\n", "line 1: declare: `2': not a valid identifier\n", 0)]
+    [InlineData("""declare -nx r; declare -i +n r=dest; status=$?; r='2+3'; printf '<%s>' "$status"; declare -p r""",
+        "<1>declare -- r=\"2+3\"\n", "", 0)]
+    [InlineData("""r=caller; f(){ local -r r=old; local -ni r=r; printf '<%s>' "$?"; declare -p r; }; f""",
+        "<1>declare -r r=\"old\"\n", "line 1: local: warning: r: circular name reference\nline 1: local: r: readonly variable\n", 0)]
+    [InlineData("""r=old; declare -ni r+='not a name'; printf unreachable""",
+        "", "line 1: declare: not a name: syntax error in expression (error token is \"a name\")\n", 1)]
+    [InlineData("""dest=7; declare -ni first bad=dest last; printf '<%s:%s>' "$?" "${bad+set}"; declare -p first last""",
+        "<1:>declare -in first\ndeclare -in last\n", "", 0)]
+    public async Task IntegerAndNamerefOptionsKeepTheReachedDeclaration(
+        string script, string expected, string diagnostics, int status)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Equal(diagnostics, result.StdErr);
+    }
+
     [Fact]
     public async Task MapfileIntegerOriginWrapsWhilePreservingUnrelatedSparsePositions()
     {

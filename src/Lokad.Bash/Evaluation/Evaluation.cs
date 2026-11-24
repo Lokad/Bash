@@ -2385,16 +2385,13 @@ public sealed partial class Evaluation : IFileTester
                         : VariableReference.ForElement(lastTarget.Name, reference.Subscript);
                 }
                 var name = reference.Name;
-                if (options.Nameref && options.IntegerChange == DeclarationAttributeChange.Set)
-                {
-                    // The incompatible nameref request fails without binding its initializer.
-                    if ((!local || declarationScope.Context.FunctionContext?.Locals.Declares(name) == true)
-                        && targetVars.HasBinding(name))
-                        targetVars.SetIntegerBinding(name, true);
-                    exitCode = 1;
-                    continue;
-                }
                 var existingLocal = declarationScope.Context.FunctionContext?.Locals.Declares(name) == true;
+                var hasIntegerInitializer = options.IntegerChange == DeclarationAttributeChange.Set && operand.Value != null;
+                var rejectsIntegerNamerefInitializer = hasIntegerInitializer && options.Nameref;
+                var rejectsIntegerNamerefRemoval = hasIntegerInitializer && options.NamerefChange == DeclarationAttributeChange.Clear
+                    && arrayKind == ArrayAssignmentKind.Auto && !element
+                    && targetVars.TryGetNameref(name, out var removedTarget)
+                    && (local ? existingLocal : name == sourceName && removedTarget.IsEmpty);
                 if (resolution == BindingResolution.LastNameref && name != sourceName
                     && arrayKind == ArrayAssignmentKind.Auto && !operand.CompoundApplied
                     && targetVars.TryGetNameref(name, out var unsetTarget) && unsetTarget.IsEmpty)
@@ -2456,31 +2453,37 @@ public sealed partial class Evaluation : IFileTester
                             await DiagnoseAsync(name, "nameref variable self references not allowed").ConfigureAwait(false);
                             continue;
                         }
-                        await ReportExpansionDiagnosticAsync([ShellValue.FromText(commandName)],
-                            [ShellValue.FromText("warning: "), GetDiagnosticName(name), ShellValue.FromText(": circular name reference")])
+                        await WriteDiagnosticAsync([ShellValue.FromText(commandName)],
+                            [ShellValue.FromText("warning: "), GetDiagnosticName(name), ShellValue.FromText(": circular name reference")],
+                            _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+                            rejectsIntegerNamerefInitializer ? GetBuiltinDiagnosticPrefix(declarationScope.Context) : default)
                             .ConfigureAwait(false);
                         selfNameref = true;
                     }
-                    ShellValue? previous = null;
-                    if (!local || existingLocal || prefixNames?.Contains(name) == true || targetVars.IsTemporaryBinding(name))
-                        previous = targetVars.TryGetNameref(name, out var referenced)
-                            ? referenced.IsEmpty ? null : referenced
-                            : targetVars.Scalars.TryGetValue(name, out var scalar) ? scalar : null;
-                    // Validate before creating a local: invalid targets leave the outer binding visible.
-                    namerefTarget = operand.Value ?? previous;
-                    if (operand.Operator == AssignmentOperator.Append && operand.Value != null)
-                        namerefTarget = WordExpansion.AppendAssignmentValue(previous ?? ShellValue.Empty, operand.Value.Value, declarationScope);
-                    if (namerefTarget is { } targetValue)
+                    // Integer append and empty initializers validate their original spelling after arithmetic.
+                    if (!rejectsIntegerNamerefInitializer || operand.Operator == AssignmentOperator.Replace && operand.Value is { IsEmpty: false })
                     {
-                        if (operand.Value == null || operand.Operator == AssignmentOperator.Append)
-                            namerefReference = TryParseDeclarationReference(ShellSource.FromBytes(targetValue.Bytes), out var targetReference)
-                                ? targetReference : null;
-                        if (namerefReference == null)
+                        ShellValue? previous = null;
+                        if (!local || existingLocal || prefixNames?.Contains(name) == true || targetVars.IsTemporaryBinding(name))
+                            previous = targetVars.TryGetNameref(name, out var referenced)
+                                ? referenced.IsEmpty ? null : referenced
+                                : targetVars.Scalars.TryGetValue(name, out var scalar) ? scalar : null;
+                        // Validate before creating a local: invalid targets leave the outer binding visible.
+                        namerefTarget = operand.Value ?? previous;
+                        if (operand.Operator == AssignmentOperator.Append && operand.Value != null)
+                            namerefTarget = WordExpansion.AppendAssignmentValue(previous ?? ShellValue.Empty, operand.Value.Value, declarationScope);
+                        if (namerefTarget is { } targetValue)
                         {
-                            await DiagnoseQuotedAsync(targetValue, operand.Value is { IsEmpty: true }
-                                    ? "not a valid identifier" : "invalid variable name for name reference")
-                                .ConfigureAwait(false);
-                            continue;
+                            if (operand.Value == null || operand.Operator == AssignmentOperator.Append)
+                                namerefReference = TryParseDeclarationReference(ShellSource.FromBytes(targetValue.Bytes), out var targetReference)
+                                    ? targetReference : null;
+                            if (namerefReference == null)
+                            {
+                                await DiagnoseQuotedAsync(targetValue, operand.Value is { IsEmpty: true }
+                                        ? "not a valid identifier" : "invalid variable name for name reference")
+                                    .ConfigureAwait(false);
+                                continue;
+                            }
                         }
                     }
                 }
@@ -2541,6 +2544,52 @@ public sealed partial class Evaluation : IFileTester
                                 arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                         await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                     }
+                    continue;
+                }
+                if (rejectsIntegerNamerefInitializer || rejectsIntegerNamerefRemoval)
+                {
+                    if (rejectsIntegerNamerefInitializer && (!local || existingLocal)
+                        && (targetVars.IndexedArrays.ContainsKey(name) || targetVars.AssociativeArrays.ContainsKey(name)))
+                    {
+                        await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (local && !existingLocal && functionContext is { } function
+                        && !function.Locals.TryDeclare(declarationScope.Variables, targetVars,
+                            new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty), prefixNames,
+                            ArrayAssignmentKind.Auto, isNameref: false, options.Inherit, options.CaseChange, Memory, function.Enclosing))
+                    {
+                        await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    // Clearing a nonlocal unset reference deletes the slot and its old attributes.
+                    // Otherwise the integer flag applies to the declaration before binding fails.
+                    if (rejectsIntegerNamerefRemoval && !local)
+                        _ = targetVars.TryUnsetSelected(new VariableUnsetTarget(name, RequiresSelector: false, BindingName.Empty), UnsetFlags.None);
+                    else if (targetVars.HasBinding(name))
+                        await ApplyAttributesAsync(name, targetVars, global, local, assignmentExport).ConfigureAwait(false);
+                    exitCode = 1;
+                    var initializer = operand.Value.GetValueOrDefault();
+                    var integerScope = executionScope with { Variables = targetVars };
+                    ShellValue? previous = null;
+                    if (operand.Operator == AssignmentOperator.Append)
+                    {
+                        var selected = await AwaitWordExpansionAsync(WordExpansion.ResolveReadReferenceAsync(reference, integerScope))
+                            .ConfigureAwait(false);
+                        if (HasPendingExpansionError)
+                            break;
+                        if (selected != null && selected.TryRead(targetVars, out var stored))
+                            previous = stored;
+                    }
+                    await AwaitWordExpansionAsync(WordExpansion.EvaluateIntegerAssignmentAsync(initializer, previous,
+                        integerScope, ShellValue.FromText(commandName)).AsTask()).ConfigureAwait(false);
+                    if (HasPendingExpansionError)
+                        break;
+                    if (rejectsIntegerNamerefRemoval)
+                        namerefReference = TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out var target) ? target : null;
+                    if (namerefReference == null)
+                        await DiagnoseQuotedAsync(initializer, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
                 var keepLocalNameref = false;

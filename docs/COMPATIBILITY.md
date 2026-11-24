@@ -929,6 +929,14 @@ integer attribute when computing the append. `local -I` and function-local
 `declare -I` inherit the outer value and
 declaration attributes. A nameref contributes its target spelling as scalar
 data unless the new declaration gives the local its own nameref attribute.
+With combined `-i` and `-n`, a name-only declaration can retain both
+attributes. An explicit initializer can fail after creating an unassigned
+integer local or applying attributes to an existing binding. A missing
+script-scope binding remains absent. Reached arithmetic still evaluates,
+including the previous value followed by the new operand for append.
+An integer initializer while clearing a local nameref can fail with the
+reference and integer attribute in place. Clearing a nonlocal unset
+nameref with such an initializer removes its binding.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding
