@@ -58,7 +58,7 @@ public static class ShellTimeFormatting
                 if (current == 'P')
                 {
                     var percent = duration.Real.Ticks == 0 ? 0
-                        : 100m * (duration.User.Ticks + duration.System.Ticks) / duration.Real.Ticks;
+                        : 100m * ((decimal)duration.User.Ticks + duration.System.Ticks) / duration.Real.Ticks;
                     var truncated = decimal.Truncate(percent * 100) / 100;
                     if (!Utf8Formatter.TryFormat(truncated, number, out var written, new StandardFormat('F', 2)))
                         throw new InvalidOperationException("A CPU percentage must fit its format buffer.");

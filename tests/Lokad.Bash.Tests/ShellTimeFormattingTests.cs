@@ -10,14 +10,18 @@ namespace Lokad.Bash.Tests;
 public sealed class ShellTimeFormattingTests
 {
     [Theory]
-    [InlineData("%0lR|%1R|%2R|%3R|%9R|%P", 1_230_000L, 24_600L, "0m0s|0.1|0.12|0.123|0.123|2.00\n")]
-    [InlineData("%lR|%1lR|%2lR|%0lR", 599_995_000L, 0L, "1m0.000s|1m0.0s|1m0.00s|1m0s\n")]
-    [InlineData("%P", 3_000_000L, -100_000L, "-3.33\n")]
-    [InlineData("%P", 3_000_000L, -1L, "0.00\n")]
-    [InlineData("%P", 1L, long.MaxValue, "922337203685477580700.00\n")]
-    public void NumericFragmentsPreservePrecisionAndSigns(string format, long realTicks, long userTicks, string expected)
+    [InlineData("%0lR|%1R|%2R|%3R|%9R|%P", 1_230_000L, 24_600L, 0L, "0m0s|0.1|0.12|0.123|0.123|2.00\n")]
+    [InlineData("%lR|%1lR|%2lR|%0lR", 599_995_000L, 0L, 0L, "1m0.000s|1m0.0s|1m0.00s|1m0s\n")]
+    [InlineData("%P", 3_000_000L, -100_000L, 0L, "-3.33\n")]
+    [InlineData("%P", 3_000_000L, -1L, 0L, "0.00\n")]
+    [InlineData("%P", 1L, long.MaxValue, 0L, "922337203685477580700.00\n")]
+    [InlineData("%P", long.MaxValue, long.MaxValue - 1, 1L, "100.00\n")]
+    [InlineData("%P", long.MaxValue, long.MaxValue, 1L, "100.00\n")]
+    [InlineData("%P", long.MaxValue, long.MaxValue, long.MaxValue, "200.00\n")]
+    public void NumericFragmentsPreservePrecisionAndSigns(string format, long realTicks, long userTicks, long systemTicks,
+        string expected)
     {
-        var timing = new ShellTimingSnapshot(TimeSpan.FromTicks(realTicks), TimeSpan.FromTicks(userTicks), TimeSpan.Zero);
+        var timing = new ShellTimingSnapshot(TimeSpan.FromTicks(realTicks), TimeSpan.FromTicks(userTicks), TimeSpan.FromTicks(systemTicks));
         var memory = new MemoryGovernor(1024);
         using var owner = memory.CreateScope();
 
