@@ -222,41 +222,57 @@ internal sealed class Tokenizer
 
     internal void RecordError(SyntaxError error) => RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar));
 
-    internal void RecordMissingCommand(string message)
+    internal void RecordUnexpectedToken(string message)
     {
         if (Error != null)
             return;
-        var reached = PeekTokenCore();
-        if (reached.Kind == TokenKind.EndOfInput && Position == _input.Length && QuotedEndOfInputFailure == null)
-        {
-            RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.Grammar)
-            {
-                MissingCommandAtEndOfInput = true
-            });
-        }
-        else
-            RecordUnexpectedToken(message, reached, Position);
+        var token = PeekTokenCore();
+        RecordUnexpectedToken(message, token, Position);
     }
 
     internal void RecordUnexpectedToken(string message, Token token, int errorOffset)
+        => RecordUnexpectedToken(message, token, errorOffset, allowsImplicitNewline: false);
+
+    /// <summary>Records a failure where the grammar has not skipped the final line break.</summary>
+    internal void RecordUnexpectedTokenBeforeNewline(string message, Token token) =>
+        RecordUnexpectedToken(message, token, Position, allowsImplicitNewline: true);
+
+    private void RecordUnexpectedToken(string message, Token token, int errorOffset, bool allowsImplicitNewline)
     {
-        var error = new SyntaxError(message, errorOffset);
-        if (!TrackUnexpectedTokens || token.Kind == TokenKind.EndOfInput)
-        {
-            RecordError(error);
+        if (Error != null)
             return;
-        }
-        RecordFailure(new ParserFailure(error, ParserFailureKind.Grammar)
+        var atEnd = token.Kind == TokenKind.EndOfInput;
+        var reachedEnd = atEnd && Position == _input.Length && QuotedEndOfInputFailure == null;
+        var implicitNewline = allowsImplicitNewline && reachedEnd && !_input.IsEmpty && _input[Position - 1] != (byte)'\n';
+        UnexpectedSyntax? unexpected = null;
+        if (TrackUnexpectedTokens)
         {
-            UnexpectedToken = GetUnexpectedSyntax(token)
+            if (!atEnd)
+                unexpected = GetUnexpectedSyntax(token);
+            else if (implicitNewline)
+                unexpected = GetSyntheticNewlineSyntax();
+        }
+        RecordFailure(new ParserFailure(new SyntaxError(message, errorOffset), ParserFailureKind.Grammar)
+        {
+            UnexpectedEndOfInput = reachedEnd && !implicitNewline,
+            UnexpectedToken = unexpected
         });
     }
 
     internal UnexpectedSyntax GetUnexpectedSyntax(Token token)
     {
+        if (token.Kind == TokenKind.Newline)
+        {
+            // Here-document collection can move the reader past the token's physical line.
+            var read = Position > _lastPhysicalNewline && _input[Position - 1] == (byte)'\n' ? Position - 1 : Position;
+            return new UnexpectedSyntax(UnexpectedSyntax.NewlineToken, _input.GetPhysicalLine(_lastPhysicalNewline, out _), read);
+        }
         var (start, end) = (token.Source.Start.Value, token.Source.End.Value);
         return new UnexpectedSyntax(_input.Slice(start, end - start), _input.GetPhysicalLine(end, out _), end);
     }
+
+    private UnexpectedSyntax GetSyntheticNewlineSyntax() =>
+        new(UnexpectedSyntax.NewlineToken, _input.GetPhysicalLine(Position, out _), Position);
 
     internal void RecordMissingRedirectionOperand(Token token)
     {
@@ -265,16 +281,10 @@ internal sealed class Tokenizer
         UnexpectedSyntax? unexpected = null;
         if (TrackUnexpectedTokens)
         {
-            if (token.Kind == TokenKind.Newline)
-            {
-                // Here-document collection can move the reader past the token's physical line.
-                var read = Position > _lastPhysicalNewline && _input[Position - 1] == (byte)'\n' ? Position - 1 : Position;
-                unexpected = new UnexpectedSyntax(UnexpectedSyntax.NewlineToken, _input.GetPhysicalLine(_lastPhysicalNewline, out _), read);
-            }
-            else if (token.Kind != TokenKind.EndOfInput)
+            if (token.Kind != TokenKind.EndOfInput)
                 unexpected = GetUnexpectedSyntax(token);
             else if (!_spacingContinuedAtEndOfInput)
-                unexpected = new UnexpectedSyntax(UnexpectedSyntax.NewlineToken, _input.GetPhysicalLine(Position, out _), Position);
+                unexpected = GetSyntheticNewlineSyntax();
         }
         RecordFailure(new ParserFailure(new SyntaxError("Expected a word after redirection operator.", Position),
             ParserFailureKind.RedirectionOperand) { UnexpectedToken = unexpected });

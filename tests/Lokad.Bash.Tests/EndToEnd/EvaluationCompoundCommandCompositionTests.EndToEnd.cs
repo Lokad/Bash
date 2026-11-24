@@ -101,7 +101,8 @@ public sealed class EvaluationCompoundCommandCompositionTestsEndToEnd
         else
         {
             Assert.False(createdFile);
-            Assert.StartsWith("syntax error:", host.StandardError.TextContent);
+            Assert.Equal("syntax error near unexpected token `esac'\n`case x in x) (printf hit) >out esac; cat out'\n",
+                host.StandardError.TextContent);
         }
     }
 

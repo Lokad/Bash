@@ -373,11 +373,11 @@ public sealed partial class Evaluation
                             .ConfigureAwait(false);
                     else if (failedUnit.Failure.ConditionalEndOfInput is { } conditionalEnd)
                         await ReportConditionalEndOfInputAsync(conditionalEnd, path, diagnosticOrigin, lineOffset).ConfigureAwait(false);
-                    else if (failedUnit.DiagnosticLine != 0 && (failedUnit.Failure.MissingCommandAtEndOfInput
+                    else if (failedUnit.DiagnosticLine != 0 && (failedUnit.Failure.UnexpectedEndOfInput
                         || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
                         || failedUnit.Failure.Kind == ParserFailureKind.RedirectionOperand))
                     {
-                        var eofOrigin = failedUnit.Failure.MissingCommandAtEndOfInput && diagnosticOrigin == SyntaxDiagnosticOrigin.Script
+                        var eofOrigin = failedUnit.Failure.UnexpectedEndOfInput && diagnosticOrigin == SyntaxDiagnosticOrigin.Script
                             ? SyntaxDiagnosticOrigin.ScriptLine : diagnosticOrigin;
                         await ReportReaderGrammarEndOfInputAsync(path, eofOrigin, diagnosticLine).ConfigureAwait(false);
                     }

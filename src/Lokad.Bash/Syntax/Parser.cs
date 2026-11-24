@@ -607,7 +607,7 @@ public static class Parser
             var right = ParsePipelineCore(tokenizer);
             if (right == null)
             {
-                tokenizer.RecordMissingCommand("Expected command after list operator.");
+                tokenizer.RecordUnexpectedToken("Expected command after list operator.");
                 return null;
             }
 
@@ -675,7 +675,7 @@ public static class Parser
         if (first == null)
         {
             if (prefixed)
-                tokenizer.RecordMissingCommand(negated ? "Expected command after !." : "Expected command after pipeline prefix.");
+                tokenizer.RecordUnexpectedToken(negated ? "Expected command after !." : "Expected command after pipeline prefix.");
             return null;
         }
 
@@ -692,7 +692,7 @@ public static class Parser
             var right = ParseCommandAtom(tokenizer, afterPipe: true);
             if (right == null)
             {
-                tokenizer.RecordMissingCommand("Expected command after pipeline operator.");
+                tokenizer.RecordUnexpectedToken("Expected command after pipeline operator.");
                 return null;
             }
 
@@ -863,14 +863,14 @@ public static class Parser
         var result = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen);
         if (result.Command == null)
         {
-            tokenizer.RecordError("Subshell requires a list body.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken("Subshell requires a list body.");
             return null;
         }
 
         var close = tokenizer.PeekTokenCore();
         if (close.Kind != TokenKind.CloseParen)
         {
-            tokenizer.RecordError("Expected ) to close a subshell.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken("Expected ) to close a subshell.", close, tokenizer.Position);
             return null;
         }
 
@@ -894,7 +894,7 @@ public static class Parser
         var result = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseBrace);
         if (result.Command == null)
         {
-            tokenizer.RecordError("Group requires a list body.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken("Group requires a list body.");
             return null;
         }
 
@@ -1042,7 +1042,7 @@ public static class Parser
 
         if (!tokenizer.TryGetOperandWord(nameToken, out var nameTokenWord))
         {
-            tokenizer.RecordError("Expected name after for.", tokenizer.Position);
+            tokenizer.RecordUnexpectedTokenBeforeNewline("Expected name after for.", nameToken);
             return null;
         }
 
@@ -1079,7 +1079,7 @@ public static class Parser
                     continue;
                 }
 
-                tokenizer.RecordError("Expected word list or terminator after in.", tokenizer.Position);
+                tokenizer.RecordUnexpectedToken("Expected word list or terminator after in.", token, tokenizer.Position);
                 return null;
             }
             items = explicitItems is null ? Array.Empty<Word>() : explicitItems;
@@ -1126,7 +1126,7 @@ public static class Parser
         var nameToken = tokenizer.NextTokenCore();
         if (!tokenizer.TryGetOperandWord(nameToken, out var nameTokenWord))
         {
-            tokenizer.RecordError("Expected function name.", tokenizer.Position);
+            tokenizer.RecordUnexpectedTokenBeforeNewline("Expected function name.", nameToken);
             return null;
         }
 
@@ -1139,7 +1139,7 @@ public static class Parser
             var close = tokenizer.NextTokenCore();
             if (close.Kind != TokenKind.CloseParen)
             {
-                tokenizer.RecordError("Expected ) after function name.", tokenizer.Position);
+                tokenizer.RecordUnexpectedTokenBeforeNewline("Expected ) after function name.", close);
                 return null;
             }
         }
@@ -1159,7 +1159,7 @@ public static class Parser
         var subjectToken = tokenizer.NextTokenCore();
         if (!tokenizer.TryGetOperandWord(subjectToken, out var subjectWord))
         {
-            tokenizer.RecordError("Expected case subject word.", tokenizer.Position);
+            tokenizer.RecordUnexpectedTokenBeforeNewline("Expected case subject word.", subjectToken);
             return null;
         }
 
@@ -1175,7 +1175,8 @@ public static class Parser
             if (IsKeyword(tokenizer.PeekTokenCore(), KeywordEsac))
                 break;
 
-            if (tokenizer.PeekTokenCore().Kind == TokenKind.OpenParen)
+            var hasOpeningParenthesis = tokenizer.PeekTokenCore().Kind == TokenKind.OpenParen;
+            if (hasOpeningParenthesis)
                 tokenizer.NextTokenCore();
 
             var patterns = new List<Word>();
@@ -1184,7 +1185,10 @@ public static class Parser
                 var patternToken = tokenizer.NextTokenCore();
                 if (!tokenizer.TryGetOperandWord(patternToken, out var patternWord))
                 {
-                    tokenizer.RecordError("Expected case pattern.", tokenizer.Position);
+                    if (hasOpeningParenthesis || patterns.Count != 0)
+                        tokenizer.RecordUnexpectedTokenBeforeNewline("Expected case pattern.", patternToken);
+                    else
+                        tokenizer.RecordUnexpectedToken("Expected case pattern.", patternToken, tokenizer.Position);
                     return null;
                 }
 
@@ -1202,7 +1206,7 @@ public static class Parser
                     break;
                 }
 
-                tokenizer.RecordError("Expected | or ) after case pattern.", tokenizer.Position);
+                tokenizer.RecordUnexpectedTokenBeforeNewline("Expected | or ) after case pattern.", separator);
                 return null;
             }
 
@@ -1213,7 +1217,7 @@ public static class Parser
             else if (!IsKeyword(endToken, KeywordEsac)
                 || (body != null && !trailingTerminator && !EndsInCompoundCommand(body)))
             {
-                tokenizer.RecordError("Expected case item terminator.", tokenizer.Position);
+                tokenizer.RecordUnexpectedToken("Expected case item terminator.", endToken, tokenizer.Position);
                 return null;
             }
 
@@ -1289,7 +1293,7 @@ public static class Parser
         if (IsCompoundCommand(compound))
             return body;
 
-        tokenizer.RecordError("Expected compound command as function body.", tokenizer.Position);
+        tokenizer.RecordUnexpectedToken("Expected compound command as function body.", opening, tokenizer.Position);
         return null;
     }
 
@@ -1872,14 +1876,14 @@ public static class Parser
         var result = ParseListWithTerminatorInfo(tokenizer, null, keywords, null);
         if (result.Command == null)
         {
-            tokenizer.RecordError("Expected list before reserved word.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken("Expected list before reserved word.");
             return null;
         }
 
         if (!result.TrailingTerminator
             && (!IsEndKeyword(tokenizer, keywords) || !EndsInCompoundCommand(result.Command)))
         {
-            tokenizer.RecordError("Expected terminator before reserved word.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken("Expected terminator before reserved word.");
             return null;
         }
 
@@ -1894,7 +1898,7 @@ public static class Parser
         var token = tokenizer.PeekTokenCore();
         if (!IsKeyword(token, keyword))
         {
-            tokenizer.RecordError($"Expected {name} keyword.", tokenizer.Position);
+            tokenizer.RecordUnexpectedToken($"Expected {name} keyword.", token, tokenizer.Position);
             return false;
         }
 

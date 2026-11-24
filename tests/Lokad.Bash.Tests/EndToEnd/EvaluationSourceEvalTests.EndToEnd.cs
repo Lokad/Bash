@@ -372,7 +372,7 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.StartsWith("syntax error:", result.StdErr);
+        Assert.Equal("eval: line 2: syntax error: unexpected end of file\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 
@@ -389,7 +389,7 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script, tree: tree);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.StartsWith("syntax error:", result.StdErr);
+        Assert.Equal("/script: line 2: syntax error: unexpected end of file\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 }

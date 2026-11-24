@@ -20,7 +20,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
     internal CaptureHereDocumentWarnings? CaptureWarnings { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
     internal ConditionalEndOfInput? ConditionalEndOfInput { get; init; }
-    internal bool MissingCommandAtEndOfInput { get; init; }
+    internal bool UnexpectedEndOfInput { get; init; }
     internal bool IsNestedSubstitution { get; init; }
 
     internal bool ExitsSubstitution => Kind is ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader;

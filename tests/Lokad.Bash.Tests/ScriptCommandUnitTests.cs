@@ -46,13 +46,21 @@ public sealed class ScriptCommandUnitTests
         AssertUnitsAsync("eval '" + source.Replace("'", "'\\''", StringComparison.Ordinal) + "'", output, status, syntaxError);
 
     [Theory]
-    [InlineData("|&\\\n", "Expected command after pipeline operator.")]
-    [InlineData("&&", "Expected command after list operator.")]
-    public async Task MissingCommandAtEndOfInputReportsTheReachedReaderLine(string ending, string parserMessage)
+    [InlineData("printf discarded |&\\\n", "Expected command after pipeline operator.")]
+    [InlineData("printf discarded &&", "Expected command after list operator.")]
+    [InlineData("if true; then :\n", "Expected fi keyword.")]
+    [InlineData("if true; then :", "Expected terminator before reserved word.")]
+    [InlineData("while false; do :\n", "Expected done keyword.")]
+    [InlineData("case a in a) :;;\n", "Expected case pattern.")]
+    [InlineData("{ :;\n", "Expected } to close a group.")]
+    [InlineData("( :\n", "Expected ) to close a subshell.")]
+    [InlineData("f()\n", "Expected compound command as function body.")]
+    public async Task IncompleteGrammarReportsTheReachedReaderLine(string ending, string parserMessage)
     {
-        var source = "printf before\nprintf discarded " + ending;
+        var source = "printf before\n" + ending;
         Assert.False(Parser.TryParse(source, out _, out var error));
         Assert.Equal(parserMessage, error?.Message);
+        Assert.Equal(source.Length, error?.Offset);
 
         await using var host = new TestHost();
         var result = await host.RunAsync(source, CancellationToken.None);
@@ -74,6 +82,61 @@ public sealed class ScriptCommandUnitTests
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal("./fixture: line 3: syntax error: unexpected end of file\n", host.ReadFile("/report"));
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("for", "newline", "for")]
+    [InlineData("case\n", "newline", "case")]
+    [InlineData("function", "newline", "function")]
+    [InlineData("case a in (a", "newline", "case a in (a")]
+    [InlineData("if true; then )\n", ")", "if true; then )")]
+    [InlineData("case a in (a ;;\n", ";;", "case a in (a ;;")]
+    [InlineData("f() printf hidden\n", "printf", "f() printf hidden")]
+    public async Task IncompleteCompoundReportsTheReachedTokenAndLine(string unit, string token, string line)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\n" + unit);
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal($"input: line 2: syntax error near unexpected token `{token}'\ninput: line 2: `{line}'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task IncompleteSourcedCompoundReportsHereDocumentWarningBeforeEndOfInput()
+    {
+        var memory = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        host.AddFile("/input", "printf before\nif true; then read -r word <<NOTE\nsample\n");
+
+        var result = await host.RunAsync("source input 2>report\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("input: line 3: warning: here-document at line 2 delimited by end-of-file (wanted `NOTE')\n"
+            + "input: line 4: syntax error: unexpected end of file\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("", 4)]
+    [InlineData("\n", 5)]
+    public async Task IncompleteEvalCompoundAddsItsReaderLineToTheCallSite(string terminator, int line)
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("eval 'printf before\nif true; then :" + terminator
+            + "'\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal($"eval: line {line}: syntax error: unexpected end of file\n", host.StandardError.TextContent);
     }
 
     [Theory]

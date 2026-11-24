@@ -44,7 +44,7 @@ public sealed class ChildShellLaunchTests
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal("earlier", host.ReadFile("/sub/effect"));
-        Assert.Equal("syntax error: Expected list before reserved word.\n", host.ReadFile("/sub/errors"));
+        Assert.Equal("line 3: syntax error: unexpected end of file\n", host.ReadFile("/sub/errors"));
         Assert.Equal(0, host.OpenFileCount);
     }
 
