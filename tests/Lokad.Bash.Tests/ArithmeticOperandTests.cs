@@ -79,6 +79,57 @@ public sealed class ArithmeticOperandTests
         Assert.Equal(expected, operand.Value.Bytes.ToArray());
     }
 
+    [Fact]
+    public async Task PreparingASelectorFollowsTheCurrentNamerefAndArrayKind()
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        var evaluation = new Eval(Parser.Parse(":"));
+        evaluation.Memory.Budget = governor;
+        var variables = Variables.CreateEmpty();
+        var alias = "_" + new string('a', 128) + "7";
+        var source = ShellSource.FromText("1 + " + alias + "['b[0]']");
+        Assert.True(variables.TryDeclareResolvedArray("map", ArrayKind.Associative, ScalarArrayPromotion.DiscardValue));
+        Assert.True(variables.TryDeclareResolvedArray("array", ArrayKind.Indexed, ScalarArrayPromotion.DiscardValue));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+
+        try
+        {
+            await CheckAsync("map", "b[0]");
+            await CheckAsync("array", "'b[0]'");
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        async Task CheckAsync(string target, string expected)
+        {
+            Assert.True(variables.TrySetNameref(alias, ShellValue.FromText(target)));
+            using var command = evaluation.Memory.BeginCommand(scope);
+            var operand = Assert.IsType<ArithmeticOperand>(await WordExpansion.PrepareArithmeticAsync(
+                source, scope, ExpansionPurpose.ArithmeticSource));
+            var selector = Assert.Single(operand.Subscripts);
+            Assert.Equal("1 + ".Length + alias.Length, selector.Key);
+            Assert.Equal(ShellValue.FromText(expected), selector.Value.Expansion.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("7alias")]
+    public async Task PreparingASelectorWithoutAnIdentifierKeepsArithmeticSpelling(string prefix)
+    {
+        var evaluation = new Eval(Parser.Parse(":"));
+        var variables = Variables.CreateEmpty();
+        if (prefix.Length != 0)
+            Assert.True(variables.TryDeclareResolvedArray(prefix, ArrayKind.Associative, ScalarArrayPromotion.DiscardValue));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        using var command = evaluation.Memory.BeginCommand(scope);
+
+        var operand = Assert.IsType<ArithmeticOperand>(await WordExpansion.PrepareArithmeticAsync(
+            ShellSource.FromText(prefix + "['key']"), scope, ExpansionPurpose.ArithmeticSource));
+
+        Assert.Equal(ShellValue.FromText("'key'"), Assert.Single(operand.Subscripts).Value.Expansion.Value);
+    }
+
     // Bash 5.2.21: unquoted source arithmetic retains ANSI-C quotes, including nested indices/bounds.
     [Theory]
     [InlineData("let x=$'2'; printf '%s/%s' \"$?\" \"$x\"", "0/2", "", 0)]

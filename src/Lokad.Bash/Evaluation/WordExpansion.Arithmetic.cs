@@ -106,11 +106,19 @@ internal static partial class WordExpansion
         bool IsAssociativeTarget()
         {
             var prefix = bytes.ToMemory();
-            var start = prefix.Length;
-            while (start > 0 && VariableNames.IsNamePart((char)prefix.Span[start - 1]))
+            var spelling = prefix.Span;
+            var start = spelling.Length;
+            while (start > 0 && VariableNames.IsNamePart((char)spelling[start - 1]))
                 start--;
-            return VariableReference.TryParse(ShellSource.FromBytes(prefix[start..]), budget, out var reference)
-                && scope.Variables.AssociativeArrays.ContainsKey(scope.Variables.ResolveNamerefName(reference.Name));
+
+            var name = prefix[start..];
+            // The scan established the name parts. Keep admission before the first-byte check.
+            budget.Workspace.Grow(checked(4L * name.Length));
+            if (name.IsEmpty || !VariableNames.IsNameStart((char)spelling[start]))
+                return false;
+
+            var target = scope.Variables.ResolveNamerefName(Utf8Text.Decode(name));
+            return scope.Variables.AssociativeArrays.ContainsKey(target);
         }
     }
 
