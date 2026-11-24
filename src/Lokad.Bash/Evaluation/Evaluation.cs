@@ -2101,7 +2101,7 @@ public sealed partial class Evaluation : IFileTester
                             .ConfigureAwait(false);
                         return 1;
                     }
-                    if (!_state.Functions.TryGetValue(name, out var function))
+                    if (!_state.TryGetFunction(name, out var function))
                     {
                         functionStatus = 1;
                         if (options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly)
@@ -2168,16 +2168,15 @@ public sealed partial class Evaluation : IFileTester
 
                 IEnumerable<ShellValue> GetListedFunctionNames(MemoryCapacity listingMemory)
                 {
-                    var functions = _state.Functions;
-                    var count = functions.Count;
-                    if (count == 0 || filterNames && !functions.Values.Any(MatchesFilter))
+                    var count = _state.FunctionCount;
+                    if (count == 0 || filterNames && !_state.EnumerateFunctions().Any(entry => MatchesFilter(entry.Value)))
                         return [];
 
                     // A host write can replace attributes on any name already in the listing.
                     Memory.Charge(listingMemory, MemoryCapacity.ArrayBackingBytes<ShellValue>(count));
                     var sorted = new ShellValue[count];
                     var index = 0;
-                    foreach (var (name, function) in functions)
+                    foreach (var (name, function) in _state.EnumerateFunctions())
                     {
                         CheckCancellation();
                         // A replacement can retire evaluator-owned source during a write.
@@ -3466,7 +3465,7 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private FunctionBinding? FindCommandFunction(ShellValue name, CommandLookupMode lookupMode) =>
-        lookupMode == CommandLookupMode.Normal && _state.Functions.TryGetValue(name, out var function)
+        lookupMode == CommandLookupMode.Normal && _state.TryGetFunction(name, out var function)
             ? function : null;
 
     private static (string Name, BuiltinKind Kind)? FindCommandBuiltin(ShellValue name, CommandLookupMode lookupMode) =>

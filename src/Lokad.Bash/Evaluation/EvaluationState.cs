@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Text;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Unicode;
 using System.Threading;
 using Lokad.Bash.Commands;
@@ -249,11 +250,14 @@ internal sealed class EvaluationState
     }
 
     /// <summary>One function namespace for invocation, attributes and inspection; independent of variables.</summary>
-    private readonly Dictionary<ShellValue, FunctionBinding> _functions = [];
+    private readonly Dictionary<ShellValue, FunctionEntry> _functions = [];
     private int _functionCapacity;
     private int _exportedFunctionCount;
     private FunctionBinding[]? _exportedFunctions;
     private IMemoryReservation? _exportedFunctionsMemory;
+
+    // The export index is meaningful only while this namespace's selection is live.
+    private readonly record struct FunctionEntry(FunctionBinding Binding, int ExportIndex);
 
     // Capacity covers dictionary growth/overlap; live entries cover binding/cache-cell metadata.
     internal long EstimatedFunctionMemoryBytes => 128L * _functionCapacity + 128L * _functions.Count;
@@ -308,7 +312,20 @@ internal sealed class EvaluationState
     private static long EstimateDirectoryStackBytes(int capacity) => 32L + 16L * capacity;
     private int DirectoryStackSlot(int index) => _directoryStack.Count - 1 - index;
 
-    public IReadOnlyDictionary<ShellValue, FunctionBinding> Functions => _functions;
+    internal int FunctionCount => _functions.Count;
+
+    internal bool TryGetFunction(ShellValue name, [NotNullWhen(true)] out FunctionBinding? binding)
+    {
+        var found = _functions.TryGetValue(name, out var entry);
+        binding = found ? entry.Binding : null;
+        return found;
+    }
+
+    internal IEnumerable<KeyValuePair<ShellValue, FunctionBinding>> EnumerateFunctions()
+    {
+        foreach (var (name, entry) in _functions)
+            yield return new KeyValuePair<ShellValue, FunctionBinding>(name, entry.Binding);
+    }
 
     /// <summary>Borrows the current export selection in function namespace order.</summary>
     internal ReadOnlySpan<FunctionBinding> GetExportedFunctions(EvaluationMemory memory)
@@ -325,6 +342,11 @@ internal sealed class EvaluationState
             var index = 0;
             foreach (var binding in EnumerateExportedFunctions(CancellationToken.None))
                 selected[index++] = binding;
+            for (index = 0; index < selected.Length; index++)
+            {
+                var binding = selected[index];
+                _functions[binding.Definition.Name.Value] = new FunctionEntry(binding, index);
+            }
             _exportedFunctionsMemory = reservation;
             _exportedFunctions = selected;
             return selected;
@@ -338,11 +360,11 @@ internal sealed class EvaluationState
 
     private IEnumerable<FunctionBinding> EnumerateExportedFunctions(CancellationToken cancellationToken)
     {
-        foreach (var binding in _functions.Values)
+        foreach (var entry in _functions.Values)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (binding.Attributes.HasFlag(FunctionAttributes.Exported))
-                yield return binding;
+            if (entry.Binding.Attributes.HasFlag(FunctionAttributes.Exported))
+                yield return entry.Binding;
         }
     }
 
@@ -414,7 +436,7 @@ internal sealed class EvaluationState
                     {
                         // Earlier commands in an eval can publish edits before a later refusal.
                         var name = original.Definition.Name.Value;
-                        if (!_committed && owner._functions.TryGetValue(name, out var current) && ReferenceEquals(current, cleared))
+                        if (!_committed && owner.TryGetFunction(name, out var current) && ReferenceEquals(current, cleared))
                             owner.SetFunctionBinding(original);
                     }
                     finally { original.Release(); }
@@ -498,8 +520,8 @@ internal sealed class EvaluationState
             Traps = Traps?.Fork(kind)
         };
 
-        foreach (var function in _functions)
-            clone.SetFunctionBinding(function.Value);
+        foreach (var entry in _functions.Values)
+            clone.SetFunctionBinding(entry.Binding);
 
         return clone;
     }
@@ -568,7 +590,7 @@ internal sealed class EvaluationState
     /// <summary>Redefinition retains attributes and fails without changing a readonly function.</summary>
     public bool TryRegisterFunction(FunctionDefinition functionDefinition, Evaluation.EvaluationContext context, EvaluationMemory memory)
     {
-        var attributes = _functions.TryGetValue(functionDefinition.Name.Value, out var previous)
+        var attributes = TryGetFunction(functionDefinition.Name.Value, out var previous)
             ? previous.Attributes : FunctionAttributes.None;
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
@@ -585,29 +607,32 @@ internal sealed class EvaluationState
 
     public void SetFunctionBinding(FunctionBinding function)
     {
-        _functions.TryGetValue(function.Definition.Name.Value, out var previous);
+        var name = function.Definition.Name.Value;
+        var previous = _functions.TryGetValue(name, out var entry) ? entry.Binding : null;
         // Replacing a dictionary value preserves its original key. Keep source-backed
         // name storage with the new definition's owner, rather than the retired source.
-        if (previous != null && !previous.Definition.Name.Value.Bytes.Equals(function.Definition.Name.Value.Bytes))
-            _functions.Remove(function.Definition.Name.Value);
-        _functions[function.Definition.Name.Value] = function;
+        if (previous != null && !previous.Definition.Name.Value.Bytes.Equals(name.Bytes))
+            _functions.Remove(name);
+        _functions[name] = new FunctionEntry(function, entry.ExportIndex);
         _functionCapacity = Math.Max(_functionCapacity, _functions.Count);
-        var wasExported = previous?.Attributes.HasFlag(FunctionAttributes.Exported) == true;
-        var isExported = function.Attributes.HasFlag(FunctionAttributes.Exported);
-        if (wasExported || isExported)
-        {
-            ReleaseExportedFunctionSelection();
-            _exportedFunctionCount += (isExported ? 1 : 0) - (wasExported ? 1 : 0);
-        }
         // Acquire before retiring the old binding: attribute copies can share this owner.
         function.Retain();
+        var wasExported = previous?.Attributes.HasFlag(FunctionAttributes.Exported) == true;
+        var isExported = function.Attributes.HasFlag(FunctionAttributes.Exported);
+        if (wasExported != isExported)
+        {
+            ReleaseExportedFunctionSelection();
+            _exportedFunctionCount += isExported ? 1 : -1;
+        }
+        else if (isExported && _exportedFunctions is { } selected)
+            selected[entry.ExportIndex] = function;
         previous?.Release();
     }
 
     /// <summary>Removes the current binding, not a definition already being invoked.</summary>
     public bool TryUnsetFunction(ShellValue name)
     {
-        if (!_functions.TryGetValue(name, out var function))
+        if (!TryGetFunction(name, out var function))
             return true;
         if (function.Attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
@@ -627,8 +652,8 @@ internal sealed class EvaluationState
     {
         ReleaseExportedFunctionSelection();
         _exportedFunctionCount = 0;
-        foreach (var function in _functions.Values)
-            function.Release();
+        foreach (var entry in _functions.Values)
+            entry.Binding.Release();
         _functions.Clear();
     }
 

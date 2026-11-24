@@ -141,6 +141,46 @@ public sealed class HostedFunctionExportTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void ExportReplacementReusesTheSelectedSlot(bool redefine)
+    {
+        var governor = new MemoryGovernor(4096);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var first = NewBinding("first(){ :; }");
+        var removed = NewBinding("removed(){ :; }") with { Attributes = FunctionAttributes.None };
+        var original = NewBinding("target(){ :; }");
+        var last = NewBinding("last(){ :; }");
+        state.SetFunctionBinding(first);
+        state.SetFunctionBinding(removed);
+        state.SetFunctionBinding(original);
+        state.SetFunctionBinding(last);
+        Assert.True(state.TryUnsetFunction(removed.Definition.Name.Value));
+        Assert.Equal(new[] { first, original, last }, state.GetExportedFunctions(memory).ToArray());
+
+        var replacement = redefine ? NewBinding("target(){ printf new; }")
+            : original with { Attributes = FunctionAttributes.Exported | FunctionAttributes.Readonly };
+        var admitted = governor.ReservedBytes;
+        using (governor.Reserve(governor.LimitBytes - admitted))
+        {
+            state.SetFunctionBinding(replacement);
+            Assert.Equal(governor.LimitBytes, governor.ReservedBytes);
+            Assert.Same(replacement, state.GetExportedFunctions(memory)[1]);
+        }
+
+        state.ReleaseExportedFunctionSelection();
+        Assert.Equal(new[] { first, replacement, last }, state.GetExportedFunctions(memory).ToArray());
+        state.ReleaseFunctions();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        FunctionBinding NewBinding(string text) => new(
+            Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(text).Commands)),
+            FunctionAttributes.Exported, sourceMemory: null, memory);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void ClearingFunctionExportsAdmitsReplacementsBeforeChangingTheNamespace(bool warm)
     {
         var governor = new MemoryGovernor(4096);
@@ -158,15 +198,17 @@ public sealed class HostedFunctionExportTests
         using (governor.Reserve(governor.LimitBytes - before))
         {
             Assert.Throws<MemoryBudgetExceededException>(() => state.BeginClearFunctionExports(memory, CancellationToken.None));
-            Assert.Same(binding, state.Functions[definition.Name.Value]);
+            Assert.True(state.TryGetFunction(definition.Name.Value, out var current));
+            Assert.Same(binding, current);
         }
         Assert.Equal(before, governor.ReservedBytes);
 
         using (var clear = Assert.IsType<EvaluationState.FunctionExportClear>(
                    state.BeginClearFunctionExports(memory, CancellationToken.None)))
         {
-            Assert.Same(definition, state.Functions[definition.Name.Value].Definition);
-            Assert.Equal(FunctionAttributes.Readonly, state.Functions[definition.Name.Value].Attributes);
+            Assert.True(state.TryGetFunction(definition.Name.Value, out var current));
+            Assert.Same(definition, current.Definition);
+            Assert.Equal(FunctionAttributes.Readonly, current.Attributes);
             Assert.True(state.GetExportedFunctions(memory).IsEmpty);
             Assert.True(governor.ReservedBytes > before);
             clear.Commit();

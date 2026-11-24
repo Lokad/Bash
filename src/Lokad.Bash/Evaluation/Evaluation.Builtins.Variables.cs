@@ -72,7 +72,7 @@ public sealed partial class Evaluation
                 && !binding.IsUnsetNameref && (binding.Owner.HasBinding(binding.Name)
                     || context.FunctionContext?.IsLocal(binding.Name) == true);
             // -n is a no-op for valid non-nameref names; other spellings can still select a function.
-            if (mayFallBackToFunction && !hidesFunction && _state.Functions.ContainsKey(nameValue))
+            if (mayFallBackToFunction && !hidesFunction && _state.TryGetFunction(nameValue, out _))
             {
                 await UnsetFunctionAsync(nameValue).ConfigureAwait(false);
                 continue;

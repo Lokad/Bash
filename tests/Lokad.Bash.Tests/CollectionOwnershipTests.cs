@@ -173,7 +173,7 @@ public sealed class CollectionOwnershipTests
         Assert.True(state.TryRegisterFunction(first, context: default, memory));
         Assert.True(state.TryRegisterFunction(next, context: default, memory));
 
-        var name = Assert.Single(state.Functions.Keys);
+        var name = Assert.Single(state.EnumerateFunctions()).Key;
         Assert.True(name.Bytes.Equals(next.Name.Value.Bytes));
         Assert.False(name.Bytes.Equals(first.Name.Value.Bytes));
     }
