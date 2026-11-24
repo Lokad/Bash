@@ -320,14 +320,12 @@ public static partial class PrintfFormatting
                 {
                     case 'c':
                         {
-                            var argument = GetValueArgument().Bytes;
-                            ApplyText(specification,
-                                argument.IsEmpty ? new byte[] { 0 } : argument[..1],
-                                ignorePrecision: true);
+                            var argument = GetValueArgument().Bytes.Span;
+                            ApplyText(specification, argument.IsEmpty ? "\0"u8 : argument[..1], ignorePrecision: true);
                             return;
                         }
                     case 's':
-                        ApplyText(specification, GetValueArgument().Bytes, ignorePrecision: false);
+                        ApplyText(specification, GetValueArgument().Bytes.Span, ignorePrecision: false);
                         return;
                     case 'b':
                         AppendEscapedString(specification);
@@ -534,13 +532,13 @@ public static partial class PrintfFormatting
 
                         if (stop)
                         {
-                            ApplyTextWithLength(escapedSpecification, bytes.RetainedBytes, bytes.Length, ignorePrecision: false);
+                            ApplyTextWithLength(escapedSpecification, bytes.RetainedBytes.Span, bytes.Length, ignorePrecision: false);
                             _stop = true;
                             return;
                         }
                     }
 
-                    ApplyTextWithLength(escapedSpecification, bytes.RetainedBytes, bytes.Length, ignorePrecision: false);
+                    ApplyTextWithLength(escapedSpecification, bytes.RetainedBytes.Span, bytes.Length, ignorePrecision: false);
                 }
 
                 void AppendQuotedString(FormatSpecification quotedSpecification)
@@ -548,7 +546,7 @@ public static partial class PrintfFormatting
                     var argument = GetValueArgument().Bytes;
                     if (!quotedSpecification.SignedLiteralPrecision.IsEmpty)
                     {
-                        ApplyText(quotedSpecification, ReadOnlyMemory<byte>.Empty, ignorePrecision: false);
+                        ApplyText(quotedSpecification, ReadOnlySpan<byte>.Empty, ignorePrecision: false);
                         return;
                     }
 
@@ -577,7 +575,7 @@ public static partial class PrintfFormatting
                         FailOutputLimit();
                         return;
                     }
-                    ApplyTextWithLength(adjusted, quoted.RetainedBytes, quoted.Length, ignorePrecision: false);
+                    ApplyTextWithLength(adjusted, quoted.RetainedBytes.Span, quoted.Length, ignorePrecision: false);
                 }
 
                 ShellValue GetValueArgument() =>
@@ -591,7 +589,7 @@ public static partial class PrintfFormatting
                         precision is { } minimum ? Math.Max(0, minimum - digits.Length) : 0, digits);
                 }
 
-                void ApplyText(FormatSpecification textSpecification, ReadOnlyMemory<byte> bytes, bool ignorePrecision) =>
+                void ApplyText(FormatSpecification textSpecification, ReadOnlySpan<byte> bytes, bool ignorePrecision) =>
                     ApplyTextWithLength(textSpecification, bytes, bytes.Length, ignorePrecision);
 
                 void ApplyFloatingPoint(FormatSpecification numberSpecification)
@@ -652,7 +650,7 @@ public static partial class PrintfFormatting
 
                 void ApplyTextWithLength(
                     FormatSpecification textSpecification,
-                    ReadOnlyMemory<byte> prefix,
+                    ReadOnlySpan<byte> prefix,
                     int length,
                     bool ignorePrecision)
                 {
@@ -676,7 +674,7 @@ public static partial class PrintfFormatting
                     var left = textSpecification.Flags.HasFlag(FormatFlags.LeftJustify);
                     if (!left)
                         AppendPadding(padding, (byte)' ');
-                    if (!_failed && !_output.TryAppendConversion(prefix.Span[..Math.Min(prefix.Length, length)], length))
+                    if (!_failed && !_output.TryAppendConversion(prefix[..Math.Min(prefix.Length, length)], length))
                         FailOutputLimit();
                     if (left)
                         AppendPadding(padding, (byte)' ');

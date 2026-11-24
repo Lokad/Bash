@@ -49,6 +49,9 @@ public sealed class PrintfByteValueTests
     [InlineData("printf $'\\377%s\\251' ok\n", "FF6F6BA9")]
     [InlineData("printf '<%4s><%-4.1s>' $'\\377z' $'\\303\\251'\n", "3C2020FF7A3E3CC32020203E")]
     [InlineData("printf '<%c><%c>' $'\\377z' $'\\uD800'\n", "3CFF3E3CED3E")]
+    [InlineData("printf '[%4c]'; printf '[%-4.0c]' ''\n", "5B202020005D5B002020205D")]
+    [InlineData("""printf -v saved 'head%4cafter%n' '' bytes; printf '[%s][%s]' "$saved" "$bytes" """,
+        "5B686561642020205D5B31335D")]
     [InlineData("printf '%b' $'\\377\\\\x41\\\\q\\251'\n", "FF415C71A9")]
     [InlineData("printf 'before%bafter' $'\\377\\\\c\\251' ignored\n", "6265666F7265FF")]
     [InlineData("printf $'\\377\\\\x41\\\\q\\251'\n", "FF415C71A9")]
