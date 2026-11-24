@@ -272,11 +272,30 @@ internal sealed class Tokenizer
     {
         if (TrackUnexpectedTokens)
         {
-            var opener = ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), token.Source.Start.Value + 1);
-            RecordUnexpectedToken(message, Token.OpenParen() with { Source = opener..(opener + 1) }, Position);
+            RecordUnexpectedToken(message, SecondArithmeticOpener(token.Source.Start.Value), Position);
         }
         else
             RecordError(message, Position);
+    }
+
+    /// <summary>Selects the opener diagnostic when the local arithmetic scan occurred outside command position.</summary>
+    internal void RejectIncompleteArithmeticCommand() => RejectIncompleteArithmeticCommand(ParserFailureKind.Grammar);
+
+    private void RejectIncompleteArithmeticCommand(ParserFailureKind kind)
+    {
+        if (TrackUnexpectedTokens && _failure is { Kind: ParserFailureKind.IncompleteArithmeticCommand } failure)
+            _failure = failure with
+            {
+                Kind = kind,
+                UnclosedDelimiter = null,
+                UnexpectedToken = GetUnexpectedSyntax(SecondArithmeticOpener(failure.Error.Offset))
+            };
+    }
+
+    private Token SecondArithmeticOpener(int start)
+    {
+        var opener = ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), start + 1);
+        return Token.OpenParen() with { Source = opener..(opener + 1) };
     }
 
     private void RecordUnexpectedToken(string message, Token token, int errorOffset, bool allowsImplicitNewline)
@@ -319,6 +338,7 @@ internal sealed class Tokenizer
 
     internal void RecordMissingRedirectionOperand(Token redirection, Token operand)
     {
+        RejectIncompleteArithmeticCommand();
         if (Error != null)
             return;
         var continuedToEnd = operand.Kind == TokenKind.EndOfInput && Position == _input.Length && _spacingContinuedAtEndOfInput;
@@ -365,6 +385,7 @@ internal sealed class Tokenizer
 
     internal void MarkCompoundArrayFailure()
     {
+        RejectIncompleteArithmeticCommand(ParserFailureKind.ArrayDelimiter);
         if (_failure is { Kind: ParserFailureKind.Delimiter, UnclosedDelimiter: not null } missingCloser)
             _failure = missingCloser with { Kind = ParserFailureKind.ArrayDelimiter };
         if ((_failure ?? QuotedEndOfInputFailure) is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
@@ -372,6 +393,17 @@ internal sealed class Tokenizer
             _failure = failure with { Kind = ParserFailureKind.ArrayQuotedSubstitutionForHeader };
             QuotedEndOfInputFailure = null;
         }
+    }
+
+    /// <summary>Recognizes an array opener and keeps adjacent incomplete arithmetic in the initializer grammar.</summary>
+    internal bool HasArrayAssignmentOpener(Token assignment)
+    {
+        if (PeekTokenCore().Kind == TokenKind.OpenParen)
+            return true;
+        if (_failure is { Kind: ParserFailureKind.IncompleteArithmeticCommand } failure
+            && ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), assignment.Source.End.Value) == failure.Error.Offset)
+            MarkCompoundArrayFailure();
+        return false;
     }
 
     private void RecordExpansionFailure(ParserFailure? failure, bool quoted, string missingDelimiter, int start) =>
@@ -865,7 +897,12 @@ internal sealed class Tokenizer
                 if (status != ShellScanStatus.NotFound)
                 {
                     if (error != null)
+                    {
+                        if (error is { Kind: ParserFailureKind.IncompleteArithmeticCommand, UnclosedDelimiter: { } delimiter }
+                            && _scanContext.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
+                            error = error with { UnclosedDelimiter = delimiter with { PayloadLine = GetLine(delimiter.ReadPosition) } };
                         RecordFailure(error);
+                    }
                     else
                         RecordError(status == ShellScanStatus.Incomplete
                             ? "Unterminated arithmetic command." : "Invalid arithmetic command.", Position);

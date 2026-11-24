@@ -171,12 +171,23 @@ internal static class ArithmeticExpansionScanner
             var opening = bracketed ? (byte)'[' : (byte)'(';
             var closing = bracketed ? (byte)']' : (byte)')';
             var depth = adjacentSubshell ? 1 : 0;
+            var quoteStart = -1;
             while (!cursor.IsAtEnd)
             {
                 if (cursor.TrySkipReadAheadBodies())
                     continue;
+                var position = cursor.Position;
                 if (cursor.TryConsumeQuoteOrEscape())
+                {
+                    if (isCommand)
+                    {
+                        if (!cursor.IsQuoted)
+                            quoteStart = -1;
+                        else if (quoteStart < 0)
+                            quoteStart = position;
+                    }
                     continue;
+                }
 
                 var nestedResult = cursor.SkipNestedExpansion(isCommand
                     ? BracedParameterRecognition.DoubleQuotedOnly
@@ -280,6 +291,16 @@ internal static class ArithmeticExpansionScanner
                 return ShellScanStatus.Complete;
             }
 
+            if (isCommand)
+            {
+                var delimiter = quoteStart < 0 ? ')' : cursor.IsDoubleQuoted ? '"' : '\'';
+                error = new ParserFailure(new SyntaxError("Unterminated arithmetic command.", startIndex),
+                    ParserFailureKind.IncompleteArithmeticCommand)
+                {
+                    UnclosedDelimiter = new UnclosedDelimiter(delimiter, quoteStart < 0 ? expressionStart - 1 : quoteStart)
+                    { AtOpeningDelimiter = true }
+                };
+            }
             return ShellScanStatus.Incomplete;
         }
         finally

@@ -234,6 +234,7 @@ public sealed class ScriptCommandUnitTests
     [InlineData("x=y f (word)\n", "(", "x=y f (word)")]
     [InlineData("n= ()\n", "(", "n= ()")]
     [InlineData("f (( 1 ))\n", "(", "f (( 1 ))")]
+    [InlineData("f ((\n 1\n", "(", "f ((")]
     public async Task InvalidCompoundOrCommandReportsTheReachedTokenAndLine(string unit, string token, string line)
     {
         await using var host = new TestHost();
@@ -260,6 +261,55 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal("before:2:after", host.StandardOutput.TextContent);
         Assert.Equal("input: line 4: syntax error near unexpected token `('\ninput: line 4: `( 1 ))'\n",
             host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("(\\\n( 1", ')', 3)]
+    [InlineData("((\n 'literal", '\'', 3)]
+    [InlineData("for (( i=0; i<2", ')', 2)]
+    public async Task IncompleteArithmeticCommandReportsTheOpeningDelimiter(string unit, char delimiter, int line)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\n" + unit);
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal($"input: line {line}: unexpected EOF while looking for matching `{delimiter}'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("value=(( 1")]
+    [InlineData("value=( (( 1")]
+    public async Task IncompleteArithmeticTokenInAnArrayInitializerReportsArrayFailure(string unit)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\n" + unit);
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:1:after", host.StandardOutput.TextContent);
+        Assert.Equal($"input: line 2: syntax error near unexpected token `('\ninput: line 2: `{unit}'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task IncompleteArithmeticCommandInASourcedCaptureReturnsToTheCaller()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\nprintf '%s' \"$( (( 1");
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal("input: line 2: unexpected EOF while looking for matching `)'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 

@@ -30,6 +30,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
     internal ParserFailure InSubstitution() => Kind switch
     {
         ParserFailureKind.Grammar or ParserFailureKind.RedirectionOperand => this with { Kind = ParserFailureKind.SubstitutionGrammar },
+        ParserFailureKind.IncompleteArithmeticCommand => this with { Kind = ParserFailureKind.Delimiter },
         ParserFailureKind.ArithmeticForHeader => this with { Kind = ParserFailureKind.SubstitutionForHeader },
         ParserFailureKind.SubstitutionForHeader or ParserFailureKind.QuotedSubstitutionForHeader
             when !IsNestedSubstitution => this with { IsNestedSubstitution = true },
@@ -90,6 +91,7 @@ internal enum ParserFailureKind
     RedirectionOperand,
     Delimiter,
     Limit,
+    IncompleteArithmeticCommand,
     ArithmeticForHeader,
     SubstitutionGrammar,
     SubstitutionForHeader,

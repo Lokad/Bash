@@ -823,7 +823,10 @@ public static class Parser
                         return null;
                     }
 
-                    return ParseSimpleCommand(tokenizer, startLine);
+                    var simple = ParseSimpleCommand(tokenizer, startLine);
+                    if (simple == null)
+                        tokenizer.RejectIncompleteArithmeticCommand();
+                    return simple;
             }
 
             if (command == null)
@@ -1159,6 +1162,7 @@ public static class Parser
         var subjectToken = tokenizer.NextTokenCore();
         if (!tokenizer.TryGetOperandWord(subjectToken, out var subjectWord))
         {
+            tokenizer.RejectIncompleteArithmeticCommand();
             tokenizer.RecordUnexpectedTokenBeforeNewline("Expected case subject word.", subjectToken);
             return null;
         }
@@ -1555,8 +1559,7 @@ public static class Parser
                         token = token with { Source = token.Source.Start..tokenizer.Position };
                     if (assignmentPosition && (arrayAssignment || TrySplitScalarAssignment(wordToken.Word, out assignment)))
                     {
-                        if (assignment.Value.Parts.Count == 0
-                            && tokenizer.PeekTokenCore().Kind == TokenKind.OpenParen)
+                        if (assignment.Value.Parts.Count == 0 && tokenizer.HasArrayAssignmentOpener(token))
                         {
                             var opening = tokenizer.NextTokenCore();
                             if (!tokenizer.AreAdjacent(token, opening))
