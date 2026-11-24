@@ -2501,14 +2501,24 @@ public sealed partial class Evaluation : IFileTester
                     }
                     await ReportElementNamerefRemovalAsync(name).ConfigureAwait(false);
                 }
-                var readonlyBinding = options.NamerefChange != DeclarationAttributeChange.Unchanged
-                    && reference.Kind == VariableReferenceKind.Name
-                    ? targetVars.IsReadonlyBinding(name) : targetVars.IsReadonly(name);
-                var declarationName = resolution == BindingResolution.LastNameref ? sourceName
-                    : local && existingLocal && options.NamerefChange == DeclarationAttributeChange.Unchanged
-                    && targetVars.TryResolveBinding(name, null, out var declaredBinding) ? declaredBinding.Name : name;
-                if (!operand.CompoundApplied && (operand.Value != null || local && arrayKind == ArrayAssignmentKind.Auto || options.Nameref
-                        || options.ReadonlyChange == DeclarationAttributeChange.Clear)
+                VariableBinding? selectedLocalBinding = local && existingLocal && options.NamerefChange == DeclarationAttributeChange.Unchanged
+                    && targetVars.TryResolveBinding(name, selectOwner: null, out var declaredBinding) ? declaredBinding : null;
+                var followsLocalNameref = selectedLocalBinding is { Reference.Kind: VariableReferenceKind.Name } reached
+                    && reached.Name != name && !reached.IsUnsetNameref;
+                var localDeclarationTarget = followsLocalNameref ? selectedLocalBinding.GetValueOrDefault().Name : name;
+                var existingTargetLocal = followsLocalNameref
+                    ? functionContext?.Locals.Declares(localDeclarationTarget) == true : existingLocal;
+                var shadowEnclosingLocal = followsLocalNameref && !existingTargetLocal
+                    && functionContext?.Enclosing?.IsLocal(localDeclarationTarget) == true;
+                // Local redeclarations apply readonly and initialization to the reached binding.
+                var readonlyBinding = followsLocalNameref ? !shadowEnclosingLocal && targetVars.IsReadonlyBinding(localDeclarationTarget)
+                    : options.NamerefChange != DeclarationAttributeChange.Unchanged && reference.Kind == VariableReferenceKind.Name
+                        ? targetVars.IsReadonlyBinding(name) : targetVars.IsReadonly(name);
+                var declarationName = resolution == BindingResolution.LastNameref || followsLocalNameref && existingTargetLocal
+                    ? sourceName : selectedLocalBinding?.Name ?? name;
+                var redeclaresLocalArray = followsLocalNameref && existingTargetLocal && element && operand.Value == null;
+                if (!operand.CompoundApplied && (operand.Value != null || local && arrayKind == ArrayAssignmentKind.Auto && !redeclaresLocalArray
+                        || options.Nameref || options.ReadonlyChange == DeclarationAttributeChange.Clear)
                     && (!local || existingLocal) && readonlyBinding)
                 {
                     if (arrayAttributeAssignment)
@@ -2526,8 +2536,8 @@ public sealed partial class Evaluation : IFileTester
                     }
                     else
                     {
-                        if (local && element && operand.Value != null && declarationScope.Context.FunctionContext is { } function)
-                            function.Locals.PrepareReadonlyElementDeclaration(targetVars, name,
+                        if (local && element && operand.Value != null && existingTargetLocal && functionContext is { } function)
+                            function.Locals.PrepareReadonlyElementDeclaration(targetVars, localDeclarationTarget,
                                 arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                         await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                     }
@@ -2600,15 +2610,15 @@ public sealed partial class Evaluation : IFileTester
                     var localOperand = new VariableOperand(
                         hasReferenceValue ? VariableOperandKind.Assignment : VariableOperandKind.Name,
                         reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
-                    var checkInheritedReadonly = !existingLocal && options.Inherit
+                    var checkInheritedReadonly = !existingTargetLocal && options.Inherit
                         && (operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear);
-                    var localCaseChange = checkInheritedReadonly && targetVars.IsReadonlyBinding(name)
+                    var localCaseChange = checkInheritedReadonly && targetVars.IsReadonlyBinding(localDeclarationTarget)
                         ? default : options.CaseChange;
                     if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
                             localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, localCaseChange,
                             Memory, localFunction.Enclosing))
                     {
-                        if (targetVars.IsReadonly(name))
+                        if (!redeclaresLocalArray && (followsLocalNameref ? readonlyBinding : targetVars.IsReadonly(name)))
                             await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                         else
                         {
@@ -2618,9 +2628,9 @@ public sealed partial class Evaluation : IFileTester
                         }
                         continue;
                     }
-                    if (checkInheritedReadonly && targetVars.IsReadonlyBinding(name))
+                    if (checkInheritedReadonly && targetVars.IsReadonlyBinding(localDeclarationTarget))
                     {
-                        await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
+                        await DiagnoseReadonlyAsync(followsLocalNameref ? sourceName : declarationName).ConfigureAwait(false);
                         continue;
                     }
                     localReferenceAssigned = options.Nameref || initializingReference;

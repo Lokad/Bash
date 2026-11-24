@@ -106,6 +106,57 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
         Assert.Equal(0, run.ExitCode);
     }
 
+    [Theory]
+    [InlineData("local -r dest=old", "local ref[]=new", "declare -ar dest=()", 1, "local: ref: readonly variable")]
+    [InlineData("local -r dest", "local -A ref[key]=new", "declare -Ar dest", 1, "local: ref: readonly variable")]
+    [InlineData("local -r dest=old", "declare -I ref[i++]=new", "declare -ar dest=()", 1, "declare: ref: readonly variable")]
+    [InlineData("local -r dest=old", "local ref[i++]", "declare -ar dest=()", 0, "")]
+    [InlineData("local -ar dest=([2]=old)", "local -A ref[key]", "declare -ar dest=([2]=\"old\")", 1,
+        "local: ref: cannot convert indexed to associative array")]
+    public async Task LocalNamerefElementDeclarationPreparesTheReadonlyReferent(
+        string binding, string declaration, string expectedLocal, int status, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"ref=caller; dest=outer; i=0\nf(){{ {binding}; local -n ref=dest; {declaration}; "
+            + "printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p ref dest; }\nf\ndeclare -p ref dest");
+
+        Assert.Equal($"<{status}:0>\ndeclare -n ref=\"dest\"\n{expectedLocal}\ndeclare -- ref=\"caller\"\ndeclare -- dest=\"outer\"\n", result.StdOut);
+        Assert.Equal(diagnostic.Length == 0 ? "" : "line 2: " + diagnostic + "\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local ref[i++]=new", "declare -a dest=([0]=\"new\")", 0, 1, "")]
+    [InlineData("local -r ref[i++]=new", "declare -ar dest", 0, 1, "line 2: ref: readonly variable\n")]
+    public async Task ReadonlyLocalNamerefCanDeclareItsWritableReferent(
+        string declaration, string expectedLocal, int status, int selector, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"dest=outer; i=0\nf(){{ local -nr ref=dest; {declaration}; "
+            + "printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p ref dest; }\nf\ndeclare -p dest");
+
+        Assert.Equal($"<{status}:{selector}>\ndeclare -nr ref=\"dest\"\n{expectedLocal}\ndeclare -- dest=\"outer\"\n", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local ref[i++]=new", "declare -a dest=([0]=\"new\")", 0, 1, "")]
+    [InlineData("local ref=new", "declare -- dest=\"new\"", 0, 0, "")]
+    [InlineData("declare -I ref[i++]=new", "declare -ar dest=()", 1, 0, "line 2: declare: ref: readonly variable\n")]
+    public async Task LocalNamerefDeclarationCanShadowTheEnclosingReadonlyReferent(
+        string declaration, string expectedLocal, int status, int selector, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"dest=global; i=0\ninner(){{ local -n ref=dest; {declaration}; "
+            + "printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p ref dest; }\n"
+            + "outer(){ local -r dest=parent; inner; declare -p dest; }; outer\ndeclare -p dest");
+
+        Assert.Equal($"<{status}:{selector}>\ndeclare -n ref=\"dest\"\n{expectedLocal}\ndeclare -r dest=\"parent\"\ndeclare -- dest=\"global\"\n", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     // Intentional divergence from Bash 5.2: conversion clears the invalid nameref/array hybrid.
     [Theory]
     [InlineData("local -a r", "r[2]=value", "value")]

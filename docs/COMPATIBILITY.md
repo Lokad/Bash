@@ -151,6 +151,12 @@ replacing the binding. Function declarations warn instead; circular local reads
 and ordinary writes can select the global binding. A self-element target keeps
 its separate selector semantics. Assigning an unset nameref may create a cycle,
 and raw declaration inspection does not resolve that cycle.
+An ordinary local redeclaration through an existing local nameref can create
+a local for its whole-name referent. A readonly reference can select a writable
+referent. A readonly local in an enclosing function can be shadowed, and `-I`
+copies its readonly attribute into the new local. An element initializer that
+reaches a readonly scalar local declares its array kind before rejecting the
+write. The selector remains unevaluated.
 
 With named operands, `readonly -n` processes assignments and preserves
 existing attributes. It skips adding the readonly attribute. Without operands,
