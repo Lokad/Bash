@@ -171,6 +171,72 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
+    [InlineData("=", "\n")]
+    [InlineData("+=", "")]
+    public async Task CollectedHereDocumentBodyDoesNotSupplyTheSelectorOperator(string operatorText, string finalLf)
+    {
+        var script = "arr[$(cat <<END)]\\\n" + operatorText + "item\n0\nEND" + finalLf;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+            Assert.Equal(127, status);
+            Assert.Empty(host.StandardOutput.TextContent);
+            Assert.Equal("line 1: warning: command substitution: 1 unterminated here-document\n"
+                + $"line 6: arr[{operatorText}item: command not found\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task DeclarationRetainsTheWordsFromAContinuedSelector()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("declare arr[$(cat <<END)]\\\n=item\n0\nEND\n", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal("line 1: warning: command substitution: 1 unterminated here-document\n"
+            + "line 5: declare: `arr[=item': not a valid identifier\n"
+            + "line 5: declare: `0]': not a valid identifier\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("", "", "new")]
+    [InlineData("", "+", "oldnew")]
+    [InlineData("declare ", "+", "oldnew")]
+    public async Task SelectorOperatorCanFollowACollectedHereDocumentBody(string declaration, string append, string expected)
+    {
+        var script = "arr[0]=old\n" + declaration + "arr[$(cat <<END)]" + append
+            + "\\\n0\nEND\n=new\nprintf '%s' \"${arr[0]}\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+            Assert.Equal(0, status);
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal("line 2: warning: command substitution: 1 unterminated here-document\n", host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData("\"$LINENO\"$(cat <<END)\nEND", 2, "2")]
+    [InlineData("\"$LINENO\"$(cat <<END)\\\nEND", 4, "4")]
+    [InlineData("missing $(cat <<END)\\\nword\nEND", 4, "missing")]
+    public async Task BufferedHereDocumentPreservesTheCommandWordReaderLine(string script, int line, string command)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(127, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal("line 1: warning: command substitution: 1 unterminated here-document\n"
+            + $"line {line}: {command}: command not found\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData("probe[0")]
     [InlineData("probe\\[0")]
     [InlineData("\"probe[0\"")]

@@ -179,9 +179,25 @@ internal sealed class Tokenizer
         // Looking past that word for a function opener reaches EOF as well.
         if (_wordEndsWithUnframedBackslash)
             return line + (readEndOfInput ? EndOfInputLineAdvance : 1);
+        if (_continuedAtEndOfInput)
+        {
+            // A buffered final line has a terminating LF in the reader even if
+            // its physical bytes ended at the here-document delimiter.
+            var finalLine = _input.AsSpan()[^1] == (byte)'\n' ? 0 : 1;
+            return line + finalLine + (readEndOfInput ? 1 : 0);
+        }
         if (_spacingContinuedAtEndOfInput && _input.AsSpan()[^1] == (byte)'\\')
             return line + 1;
         return line;
+    }
+
+    internal int GetCommandTerminatorLine(Token token)
+    {
+        if (token.Kind != TokenKind.Newline)
+            return GetCommandWordLine(token.Source.End.Value, readEndOfInput: token.Kind == TokenKind.EndOfInput);
+        // The zero-width newline after read-ahead uses the original header's reader line.
+        var offset = token.Source.Start.Equals(token.Source.End) ? _lastPhysicalNewline : token.Source.Start.Value;
+        return GetLine(offset);
     }
 
     /// <summary>Extra diagnostic lines reached past the last physical input line.</summary>
@@ -779,17 +795,14 @@ internal sealed class Tokenizer
         element = null;
         prefixEnd = 0;
         var source = _input.AsSpan();
-        var equals = ShellSourceCursor.SkipLineContinuations(source, closing + 1);
         var operation = AssignmentOperator.Replace;
-        if (equals < source.Length && source[equals] == (byte)'+')
+        if (!ShellSourceCursor.TryMatchLogicalText(_input, _scanContext, closing + 1, "=", out prefixEnd))
         {
+            if (!ShellSourceCursor.TryMatchLogicalText(_input, _scanContext, closing + 1, "+=", out prefixEnd))
+                return false;
             operation = AssignmentOperator.Append;
-            equals = ShellSourceCursor.SkipLineContinuations(source, equals + 1);
         }
-        if (equals >= source.Length || source[equals] != (byte)'=')
-            return false;
 
-        prefixEnd = equals + 1;
         Position = ShellSourceCursor.SkipLineContinuations(source, prefixEnd);
         Word value;
         if (Position >= source.Length || IsWordDelimiter(source[Position]))
@@ -1493,10 +1506,16 @@ internal sealed class Tokenizer
             expandedParameterQuoteSyntax = false;
         }
 
+        var continuationEnd = -1;
         while (Position < span.Length && Error == null)
         {
+            var position = Position;
             if (SkipCollectedHereDocuments())
+            {
+                // A body read can leave the continued command word at physical EOF.
+                _continuedAtEndOfInput |= position == continuationEnd && Position == span.Length;
                 continue;
+            }
             var current = span[Position];
             if (TryReadArithmeticSubscript(out var subscript))
             {
@@ -1632,6 +1651,7 @@ internal sealed class Tokenizer
                 if (escaped == (byte)'\n')
                 {
                     Position++;
+                    continuationEnd = Position;
                     _continuedAtEndOfInput |= Position == span.Length;
                     continue;
                 }

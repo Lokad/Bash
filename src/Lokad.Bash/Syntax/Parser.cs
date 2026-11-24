@@ -1650,7 +1650,7 @@ public static class Parser
             {
                 var position = trailing.Kind == TokenKind.Newline ? trailing.Source.Start.Value : trailing.Source.End.Value;
                 if (position >= tokenizer.ConsumedPosition)
-                    RecordNextTokenLine(tokenizer.GetCommandWordLine(position, readEndOfInput: trailing.Kind == TokenKind.EndOfInput));
+                    RecordNextTokenLine(tokenizer.GetCommandTerminatorLine(trailing));
             }
             var command = new SimpleCommand(
                 assignments is null ? Array.Empty<AssignmentWord>() : assignments,
