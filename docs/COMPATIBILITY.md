@@ -1205,6 +1205,10 @@ fields. `read -a` validates the array destination after reading, while
 When a reached `printf -v` has no destination field, it reports that the
 option requires an argument and follows with usage. A supplied destination
 with no format reports usage alone.
+Option errors, invalid destination names and format diagnostics report
+the reached builtin line and any active `source` filename. Usage lines
+have no source prefix. An unfinished conversion quotes its full spelling
+from the opening percent sign.
 `printf -v` assigns the bytes before the first NUL. Later formatted bytes
 still contribute to `%n` and the output length limit. Later conversions
 retain their normal diagnostic and count-assignment effects.

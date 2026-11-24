@@ -223,9 +223,7 @@ public static partial class PrintfFormatting
                 if (index >= format.Length)
                 {
                     var incomplete = ShellValue.FromBytes(format[specificationStart..]);
-                    AddFatalDiagnostic(literalWidthOverflow || literalPrecisionOverflow || !signedLiteralPrecision.IsEmpty
-                        ? new Diagnostic("`", incomplete, "': missing format character")
-                        : new Diagnostic(string.Empty, incomplete, ": missing format character"));
+                    AddFatalDiagnostic(new Diagnostic("`", incomplete, "': missing format character"));
                     specification = default;
                     return false;
                 }

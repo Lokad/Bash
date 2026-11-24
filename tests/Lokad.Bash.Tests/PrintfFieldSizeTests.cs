@@ -137,36 +137,36 @@ public sealed class PrintfFieldSizeTests
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
         CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
 
-    // GNU Bash 5.2.21 Linux, LC_ALL=C. Diagnostic executable and line prefixes are omitted.
+    // GNU Bash 5.2.21 Linux, LC_ALL=C. The diagnostic executable prefix is omitted.
     private static readonly object[][] PrecisionOverflowSamples =
     [
         ["literal-s-2147483647", "printf 'A%.2147483647s%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", ""],
         ["literal-s-2147483648", "printf 'A%.2147483648s%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C303E3C3E", ""],
         ["literal-s-4294967297", "printf 'A%.4294967297s%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C303E3C3E", ""],
         ["dynamic-s-2147483647", "printf 'A%.*s%nZ\\n'  '2147483647' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", ""],
-        ["dynamic-s-2147483648", "printf 'A%.*s%nZ\\n'  '2147483648' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-s-9223372036854775808", "printf 'A%.*s%nZ\\n'  '9223372036854775808' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20393232333337323033363835343737353830383A204E756D65726963616C20726573756C74206F7574206F662072616E67650A7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-s-2147483648", "printf 'A%.*s%nZ\\n'  '2147483648' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "6C696E6520313A207072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-s-9223372036854775808", "printf 'A%.*s%nZ\\n'  '9223372036854775808' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "6C696E6520313A207072696E74663A207761726E696E673A20393232333337323033363835343737353830383A204E756D65726963616C20726573756C74206F7574206F662072616E67650A6C696E6520313A207072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
         ["dynamic-s--2147483648", "printf 'A%.*s%nZ\\n'  '-2147483648' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", ""],
-        ["dynamic-s--2147483649", "printf 'A%.*s%nZ\\n'  '-2147483649' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-prefix-2147483648junk", "printf 'A%.*s%nZ\\n' '2147483648junk' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C313A3C353E3C3E", "7072696E74663A20323134373438333634386A756E6B3A20696E76616C6964206E756D6265720A7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-prefix-0x80000000", "printf 'A%.*s%nZ\\n' '0x80000000' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "7072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-prefix-invalid", "printf 'A%.*s%nZ\\n' '2junk' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "4174655A0A7C313A3C333E3C3E", "7072696E74663A20326A756E6B3A20696E76616C6964206E756D6265720A"],
+        ["dynamic-s--2147483649", "printf 'A%.*s%nZ\\n'  '-2147483649' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "6C696E6520313A207072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-prefix-2147483648junk", "printf 'A%.*s%nZ\\n' '2147483648junk' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C313A3C353E3C3E", "6C696E6520313A207072696E74663A20323134373438333634386A756E6B3A20696E76616C6964206E756D6265720A6C696E6520313A207072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-prefix-0x80000000", "printf 'A%.*s%nZ\\n' '0x80000000' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41746578745A0A7C303A3C353E3C3E", "6C696E6520313A207072696E74663A207761726E696E673A20746578743A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-prefix-invalid", "printf 'A%.*s%nZ\\n' '2junk' text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "4174655A0A7C313A3C333E3C3E", "6C696E6520313A207072696E74663A20326A756E6B3A20696E76616C6964206E756D6265720A"],
         ["literal-b-2147483648", "printf 'A%.2147483648b%nZ\\n'  'a\\nb' mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41610A625A0A7C303A3C343E3C3E", ""],
         ["literal-q-2147483648", "printf 'A%.2147483648q%nZ\\n'  'a b' mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41615C20625A0A7C303A3C353E3C3E", ""],
         ["literal-Q-4294967297", "printf 'A%.4294967297Q%nZ\\n'  'a b' mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "41615A0A7C303A3C323E3C3E", ""],
         ["literal-c-2147483648", "printf 'A%.2147483648c%nZ\\n'  text mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C303E3C3E", ""],
         ["literal-n-2147483648", "printf 'A%.2147483648n%nZ\\n'  written mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C313E3C313E", ""],
-        ["dynamic-n-2147483648", "printf 'A%.*n%nZ\\n'  '2147483648' written mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["incomplete-overflow", "printf 'A%.999999999999'\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "417C313A3C3E3C3E", "7072696E74663A2060252E393939393939393939393939273A206D697373696E6720666F726D6174206368617261637465720A"],
-        ["invalid-overflow", "printf 'A%.999999999999Z' x\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "417C313A3C3E3C3E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
+        ["dynamic-n-2147483648", "printf 'A%.*n%nZ\\n'  '2147483648' written mark\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "415A0A7C303A3C313E3C313E", "6C696E6520313A207072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["incomplete-overflow", "printf 'A%.999999999999'\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "417C313A3C3E3C3E", "6C696E6520313A207072696E74663A2060252E393939393939393939393939273A206D697373696E6720666F726D6174206368617261637465720A"],
+        ["invalid-overflow", "printf 'A%.999999999999Z' x\nprintf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"\n", 0, "417C313A3C3E3C3E", "6C696E6520313A207072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
         ["dynamic-missing", "printf 'A%.*sZ' 2147483648\nprintf ':%s' \"$?\"\n", 0, "415A3A30", ""],
-        ["dynamic-overflow-empty-text", "printf 'A%.*s%nZ' 2147483648 '' mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A303A31", "7072696E74663A207761726E696E673A203A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-overflow-empty-text", "printf 'A%.*s%nZ' 2147483648 '' mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A303A31", "6C696E6520313A207072696E74663A207761726E696E673A203A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
         ["literal-v", "printf -v saved 'A%.2147483648s%nZ' text mark; printf '%s:<%s>:<%s>' \"$?\" \"$saved\" \"$mark\"\n", 0, "303A3C5A3E3A3C303E", ""],
         ["literal-b-stop", "printf 'A%.2147483648b%nZ' 'a\\cb' mark; printf ':%s:<%s>' \"$?\" \"$mark\"\n", 0, "41613A303A3C3E", ""],
         ["literal-time", "printf 'A%.2147483648(%s)T%nZ' 0 mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "41305A3A303A32", ""],
         ["literal-both-counts", "printf '%.2147483648s%.2147483648c%nZ' x y mark; printf ':%s:<%s>' \"$?\" \"$mark\"\n", 0, "5A3A303A3C2D323E", ""],
         ["literal-cycle", "printf 'A%.2147483648s%nZ' text first text second; printf ':%s:<%s><%s>' \"$?\" \"$first\" \"$second\"\n", 0, "415A415A3A303A3C303E3C303E", ""],
-        ["literal-signed", "printf 'A%.2147483648d%nZ' bad mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A313A30", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["literal-signed", "printf 'A%.2147483648d%nZ' bad mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A313A30", "6C696E6520313A207072696E74663A206261643A20696E76616C6964206E756D6265720A"],
         ["literal-float", "printf 'A%.2147483648g%nZ' 1.5 mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A303A30", ""],
         ["literal-small-width", "printf 'A%5.2147483648s%nZ' text mark; printf ':%s:%s' \"$?\" \"$mark\"\n", 0, "415A3A303A30", ""],
     ];
@@ -184,7 +184,7 @@ public sealed class PrintfFieldSizeTests
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
         CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
 
-    // GNU Bash 5.2.21 Linux, LC_ALL=C. Diagnostic executable and line prefixes are omitted.
+    // GNU Bash 5.2.21 Linux, LC_ALL=C. The diagnostic executable prefix is omitted.
     private static readonly object[][] PrecisionSpellingSamples =
     [
         ["signed-s--1", "printf 'A%.-1s%nZ' 'text' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D31735A7C303A3C373E3C3E", ""],
@@ -202,14 +202,14 @@ public sealed class PrintfFieldSizeTests
         ["form-0", "printf 'A%.-0s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D30735A7C303A3C373E3C3E", ""],
         ["form-2", "printf 'A%.-s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D735A7C303A3C363E3C3E", ""],
         ["form-4", "printf 'A%+-#05.-1s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4125232B2D352E302D31735A7C303A3C31313E3C3E", ""],
-        ["form-8", "printf 'A%*.-1s%nZ' 5bad text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4125352E302D31735A7C313A3C383E3C3E", "7072696E74663A20356261643A20696E76616C6964206E756D6265720A"],
+        ["form-8", "printf 'A%*.-1s%nZ' 5bad text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4125352E302D31735A7C313A3C383E3C3E", "6C696E6520313A207072696E74663A20356261643A20696E76616C6964206E756D6265720A"],
         ["form-9", "printf 'A%0*.-1s%nZ' -5 text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252D30352E302D31735A7C303A3C31303E3C3E", ""],
         ["form-11", "printf 'A%05.-1Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "4120202020205A7C303A3C363E3C3E", ""],
         ["form-14", "printf 'A%.-1lld%nZ' 7 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D316C645A7C303A3C383E3C3E", ""],
-        ["form-16", "printf 'A%.-1d%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D316C645A7C313A3C383E3C3E", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
-        ["form-19", "printf 'A%.-1b%nZ' '\\x\\c tail' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C303A3C3E3C3E", "7072696E74663A206D697373696E672068657820646967697420666F72205C780A"],
-        ["form-20", "printf 'A%.-1Z%nZ' unused mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C313A3C3E3C3E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
-        ["form-21", "printf 'A%.-1' unused; printf '|%s' \"$?\"", 0, "417C31", "7072696E74663A2060252E2D31273A206D697373696E6720666F726D6174206368617261637465720A"],
+        ["form-16", "printf 'A%.-1d%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41252E302D316C645A7C313A3C383E3C3E", "6C696E6520313A207072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["form-19", "printf 'A%.-1b%nZ' '\\x\\c tail' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C303A3C3E3C3E", "6C696E6520313A207072696E74663A206D697373696E672068657820646967697420666F72205C780A"],
+        ["form-20", "printf 'A%.-1Z%nZ' unused mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C313A3C3E3C3E", "6C696E6520313A207072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
+        ["form-21", "printf 'A%.-1' unused; printf '|%s' \"$?\"", 0, "417C31", "6C696E6520313A207072696E74663A2060252E2D31273A206D697373696E6720666F726D6174206368617261637465720A"],
         ["form-23", "printf 'A%.18446744073709551617b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41615A7C303A3C323E3C3E", ""],
         ["form-24", "printf 'A%.18446744073709551618b%nZ' 'a\\nb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "41610A5A7C303A3C333E3C3E", ""],
         ["form-25", "printf 'A%.18446744073709551616q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C3E", ""],
@@ -237,15 +237,15 @@ public sealed class PrintfFieldSizeTests
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
         CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
 
-    // GNU Bash 5.2.21 Linux, LC_ALL=C. Diagnostic executable and line prefixes are omitted.
+    // GNU Bash 5.2.21 Linux, LC_ALL=C. The diagnostic executable prefix is omitted.
     private static readonly object[][] WidthOverflowSamples =
     [
         ["dynamic-count-2147483647", "printf 'A%*n%nZ' '2147483647' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", ""],
-        ["dynamic-count-2147483648", "printf 'A%*n%nZ' '2147483648' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-count--2147483649", "printf 'A%*n%nZ' '-2147483649' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-count-2147483648tail", "printf 'A%*n%nZ' '2147483648tail' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C313E3C313E", "7072696E74663A20323134373438333634387461696C3A20696E76616C6964206E756D6265720A7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-count-9223372036854775808", "printf 'A%*n%nZ' '9223372036854775808' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A20393232333337323033363835343737353830383A204E756D65726963616C20726573756C74206F7574206F662072616E67650A7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
-        ["dynamic-count-0x80000000", "printf 'A%*n%nZ' '0x80000000' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "7072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count-2147483648", "printf 'A%*n%nZ' '2147483648' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "6C696E6520313A207072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count--2147483649", "printf 'A%*n%nZ' '-2147483649' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "6C696E6520313A207072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count-2147483648tail", "printf 'A%*n%nZ' '2147483648tail' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C313E3C313E", "6C696E6520313A207072696E74663A20323134373438333634387461696C3A20696E76616C6964206E756D6265720A6C696E6520313A207072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count-9223372036854775808", "printf 'A%*n%nZ' '9223372036854775808' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "6C696E6520313A207072696E74663A207761726E696E673A20393232333337323033363835343737353830383A204E756D65726963616C20726573756C74206F7574206F662072616E67650A6C696E6520313A207072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["dynamic-count-0x80000000", "printf 'A%*n%nZ' '0x80000000' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", "6C696E6520313A207072696E74663A207761726E696E673A207772697474656E3A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
         ["literal-count-2147483648", "printf 'A%2147483648n%nZ' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", ""],
         ["literal-count-18446744073709551620", "printf 'A%18446744073709551620n%nZ' written mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C313E3C313E", ""],
         ["finite-left-d", "printf 'A%*d%nZ' -6 3 mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "413320202020205A7C303A3C373E3C3E", ""],
@@ -256,12 +256,12 @@ public sealed class PrintfFieldSizeTests
         ["wrapped-q-with-precision", "printf 'A%18446744073709551622.1q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020202020615A7C303A3C373E3C3E", ""],
         ["wrapped-Q-with-precision", "printf 'A%18446744073709551622.1Q%nZ' 'a b' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020202020615A7C303A3C373E3C3E", ""],
         ["wrapped-width-stop-escape", "printf 'A%18446744073709551622b%nZ' 'a\\cb' mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "412020202020617C303A3C3E3C3E", ""],
-        ["overflow-invalid-conversion", "printf 'A%2147483648Z%nZ' unused mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C313A3C3E3C3E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
-        ["incomplete-overflow", "printf 'A%2147483648' unused; printf '|%s' \"$?\"", 0, "417C31", "7072696E74663A20602532313437343833363438273A206D697373696E6720666F726D6174206368617261637465720A"],
+        ["overflow-invalid-conversion", "printf 'A%2147483648Z%nZ' unused mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "417C313A3C3E3C3E", "6C696E6520313A207072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A"],
+        ["incomplete-overflow", "printf 'A%2147483648' unused; printf '|%s' \"$?\"", 0, "417C31", "6C696E6520313A207072696E74663A20602532313437343833363438273A206D697373696E6720666F726D6174206368617261637465720A"],
         ["literal-overflow-s", "printf 'A%2147483648s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
         ["literal-overflow-c", "printf 'A%2147483648c%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
-        ["literal-overflow-d", "printf 'A%2147483648d%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C303E3C3E", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
-        ["literal-overflow-f", "printf 'A%2147483648f%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C303E3C3E", "7072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["literal-overflow-d", "printf 'A%2147483648d%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C303E3C3E", "6C696E6520313A207072696E74663A206261643A20696E76616C6964206E756D6265720A"],
+        ["literal-overflow-f", "printf 'A%2147483648f%nZ' bad mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C313A3C303E3C3E", "6C696E6520313A207072696E74663A206261643A20696E76616C6964206E756D6265720A"],
         ["literal-wrap-s", "printf 'A%18446744073709551622s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
         ["literal-overflow-signed-precision", "printf 'A%2147483648.-1s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
         ["literal-overflow-both-fields", "printf 'A%2147483648.2147483648s%nZ' text mark; printf '|%s:<%s><%s>' \"$?\" \"$mark\" \"$written\"", 0, "415A7C303A3C303E3C3E", ""],
@@ -274,7 +274,7 @@ public sealed class PrintfFieldSizeTests
         ["minimum-10", "printf 'A%*.0d%nZ' -2147483648 0 mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", ""],
         ["minimum-11", "printf 'A%*.-1s%nZ' -2147483648 text mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "41252D31383434363734343037313536323036373936382E302D31735A7C303A3C32383E", ""],
         ["minimum-13", "printf 'A%*.-1q%nZ' -2147483648 'a b' mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", ""],
-        ["field-order-0", "printf 'A%*.*s%nZ' -2147483649 0 text mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", "7072696E74663A207761726E696E673A20303A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
+        ["field-order-0", "printf 'A%*.*s%nZ' -2147483649 0 text mark; printf '|%s:<%s>' \"$?\" \"$mark\"", 0, "415A7C303A3C313E", "6C696E6520313A207072696E74663A207761726E696E673A20303A204E756D65726963616C20726573756C74206F7574206F662072616E67650A"],
         ["field-order-1", "printf 'A%*sZ' 2147483648; printf '|%s' \"$?\"", 0, "415A7C30", ""],
         ["field-order-2", "printf 'A%*sZ' 4294967297; printf '|%s' \"$?\"", 0, "41205A7C30", ""],
     ];

@@ -87,7 +87,7 @@ public sealed class ExecutionLifetimeTests
     public Task CancelledPrintfDiagnosticStaysChargedUntilTheHostSettles()
     {
         var number = new string('x', 4096);
-        return VerifyPendingWriteAsync($"printf '%d' '{number}' 2>out; after=1", $"printf: {number}: invalid number\n");
+        return VerifyPendingWriteAsync($"printf '%d' '{number}' 2>out; after=1", $"line 1: printf: {number}: invalid number\n");
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public sealed class ExecutionLifetimeTests
         {
             var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
             Assert.Equal(descriptor, write.FileDescriptor);
-            byte[] expected = [.. "printf: "u8, .. operand, .. ": invalid number\n"u8];
+            byte[] expected = [.. "line 1: printf: "u8, .. operand, .. ": invalid number\n"u8];
             Assert.Equal(expected, write.Content.ToArray());
             Assert.Equal(ShellValue.FromText("2"), state.Variables["before"]);
             Assert.False(state.Variables.ContainsKey("after"));
@@ -372,7 +372,7 @@ public sealed class ExecutionLifetimeTests
     [InlineData("trap $'trap - EXIT\\necho borrowed >/out\\n' EXIT; exit 7", "borrowed\n")]
     [InlineData("a=borrowed; f(){ local -n a=a; echo \"$a\" >/out; }; f 2>/dev/null", "borrowed\n")]
     [InlineData("declare -n a=a 2>/out", "declare: a: nameref variable self references not allowed\n")]
-    [InlineData("printf '%d' $'\\377' 2>/out", "printf: ÿ: invalid number\n")]
+    [InlineData("printf '%d' $'\\377' 2>/out", "line 1: printf: ÿ: invalid number\n")]
     public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle(string source, string expected)
     {
         using var cancellation = new CancellationTokenSource();

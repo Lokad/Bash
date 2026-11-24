@@ -84,7 +84,7 @@ public sealed class PrintfByteValueTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.Host.StandardOutput.Content.ToArray());
-        Assert.Equal(Convert.FromHexString("7072696E74663A2060FF273A20696E76616C696420666F726D6174206368617261637465720A"),
+        Assert.Equal(Convert.FromHexString("6C696E6520313A207072696E74663A2060FF273A20696E76616C696420666F726D6174206368617261637465720A"),
             result.Host.StandardError.Content.ToArray());
     }
 }

@@ -179,7 +179,7 @@ public sealed class QueryWriteFailureTests
 
         var write = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdErr, write.Descriptor);
-        Assert.Equal("printf: missing hex digit for \\x\n"u8.ToArray(), write.Content);
+        Assert.Equal("line 1: printf: missing hex digit for \\x\n"u8.ToArray(), write.Content);
         Assert.Equal(ShellValue.FromText("2"), state.Variables["before"]);
         Assert.False(state.Variables.ContainsKey("after"));
         Assert.Equal(status, state.LastExitCode);

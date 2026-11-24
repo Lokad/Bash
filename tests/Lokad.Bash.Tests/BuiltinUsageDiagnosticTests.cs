@@ -60,7 +60,7 @@ public sealed class BuiltinUsageDiagnosticTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2><0><old>", result.StdOut);
         Assert.Empty(result.StdErr);
-        Assert.Equal("printf: -v: option requires an argument\nprintf: usage: printf [-v var] format [arguments]\n",
+        Assert.Equal("line 1: printf: -v: option requires an argument\nprintf: usage: printf [-v var] format [arguments]\n",
             await EndToEndHarness.ReadFileAsync(host, "/diagnostic"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -77,6 +77,26 @@ public sealed class BuiltinUsageDiagnosticTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2><old>", result.StdOut);
         Assert.Equal("printf: usage: printf [-v var] format [arguments]\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task PrintfPositionsTheOptionErrorThroughTheSourcedRedirection()
+    {
+        const string source = "source ./loaded\nprintf '<%s>' \"$?\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/loaded", ":\nprintf -q \\\n2>log\n");
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+                : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<2>", host.StandardOutput.TextContent);
+            Assert.Equal(string.Empty, host.StandardError.TextContent);
+            Assert.Equal("./loaded: line 2: printf: -q: invalid option\nprintf: usage: printf [-v var] format [arguments]\n",
+                host.ReadFile("/log"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Theory]

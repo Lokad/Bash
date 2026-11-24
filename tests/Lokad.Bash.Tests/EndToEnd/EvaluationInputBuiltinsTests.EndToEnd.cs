@@ -248,7 +248,7 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("0\nstatus:1\n", result.StdOut);
-        Assert.Contains("printf: nope: invalid number\n", result.StdErr, StringComparison.Ordinal);
+        Assert.Equal("line 1: printf: nope: invalid number\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -280,9 +280,30 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     {
         var result = await EvaluationTestHelper.RunAsync("printf 'before:%d:after\\n' nope 2>&1");
 
-        Assert.Equal("printf: nope: invalid number\nbefore:0:after\n", result.StdOut);
+        Assert.Equal("line 1: printf: nope: invalid number\nbefore:0:after\n", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(1, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("%", "")]
+    [InlineData("%7", "")]
+    [InlineData("%+6.3ll", "")]
+    [InlineData("%*.*", " 2 3")]
+    public async Task PrintfSurroundsTheEntireUnfinishedConversionWithQuotes(string conversion, string operands)
+    {
+        var source = ":\nprintf \\\n 'prefix" + conversion + "'" + operands + "\nprintf '<%s>' \"$?\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(source, host)).ExitCode
+                : (await host.RunAsync(source, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("prefix<1>", host.StandardOutput.TextContent);
+            Assert.Equal($"line 3: printf: `{conversion}': missing format character\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Fact]

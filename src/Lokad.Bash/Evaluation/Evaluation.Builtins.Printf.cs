@@ -43,7 +43,8 @@ public sealed partial class Evaluation
 
             if (optionBytes.Span[1] != (byte)'v')
                 return await FinishInvalidInvocationAsync(WriteInvalidShortOptionUnlessStderrClosedAsync(
-                    ShellValue.FromText("printf"), optionBytes.Slice(1, 1), BuiltinKind.Printf, "printf"))
+                    ShellValue.FromText("printf"), ShellValue.FromText("-"), optionBytes.Slice(1, 1), BuiltinKind.Printf,
+                    "printf", GetBuiltinDiagnosticPrefix(context)))
                     .ConfigureAwait(false);
 
             ShellValue outputVariable;
@@ -61,7 +62,7 @@ public sealed partial class Evaluation
                 || reference.Kind != VariableReferenceKind.Name && reference.Subscript.IsEmpty)
                 return await FinishInvalidInvocationAsync(
                     WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("printf"), outputVariable,
-                        scope: null, ClosedStderrHandling.Discard)).ConfigureAwait(false);
+                        scope: null, ClosedStderrHandling.Discard, GetBuiltinDiagnosticPrefix(context))).ConfigureAwait(false);
 
             outputReference = reference;
             operandIndex++;
@@ -130,15 +131,18 @@ public sealed partial class Evaluation
 
         async ValueTask<bool> ReportDiagnosticAsync(PrintfFormatting.Diagnostic diagnostic)
         {
-            await ReportExpansionDiagnosticAsync([ShellValue.FromText("printf")],
-                [ShellValue.FromText(diagnostic.Prefix), diagnostic.Operand, ShellValue.FromText(diagnostic.Suffix)]).ConfigureAwait(false);
+            var prefix = diagnostic == PrintfFormatting.Diagnostic.MemoryRefusal ? default : GetBuiltinDiagnosticPrefix(context);
+            await WriteDiagnosticAsync([ShellValue.FromText("printf")],
+                [ShellValue.FromText(diagnostic.Prefix), diagnostic.Operand, ShellValue.FromText(diagnostic.Suffix)],
+                diagnostics, ClosedStderrHandling.AttemptWrite, prefix)
+                .ConfigureAwait(false);
             return diagnostics.Result.CanAcceptMore;
         }
 
         Task<EvaluationResult> ReportUsageAsync(bool missingDestination) => FinishInvalidInvocationAsync(
             WriteDiagnosticUnlessStderrClosedAsync([ShellValue.FromText("printf")],
                 [ShellValue.FromText(missingDestination ? "-v: option requires an argument\nprintf: " + Usage() : Usage())],
-                scope: null));
+                scope: null, missingDestination ? GetBuiltinDiagnosticPrefix(context) : default));
 
         async Task<EvaluationResult> FinishInvalidInvocationAsync(Task<DescriptorWriteResult> diagnostic)
         {

@@ -149,7 +149,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(ShellValue.FromText("1"), state.Variables["failed"]);
         Assert.Equal(1, state.LastExitCode);
         Assert.Equal(3, host.Appends.Count);
-        Assert.Equal("printf: bad: invalid number\n", Encoding.UTF8.GetString(host.Appends[1].Content));
+        Assert.Equal("line 1: printf: bad: invalid number\n", Encoding.UTF8.GetString(host.Appends[1].Content));
         Assert.Equal("0", Encoding.UTF8.GetString(host.Appends[2].Content));
     }
 }
