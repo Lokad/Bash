@@ -417,12 +417,12 @@ snapshots admit compact copies. Queries that display function definitions retain
 their selected source owners through host lookup and output completion.
 Name, kind and path queries keep the selected classification.
 Command queries borrow the expanded operands and admit their resolution records
-and output offsets as a batch. Decoded host names and their list remain admitted
-through the lookup. Request scratch retires before formatting, which consumes
-host replies in the order of the marked operands. After rendering, the bytes and
-output offsets stay admitted through writes. The resolution records retire before
-the first output write. The selected function-borrow list stays admitted through
-completion.
+and output offsets as a batch. Decoded host names, their list and the environment
+snapshot remain admitted through the lookup. Request scratch retires before
+formatting, which consumes host replies in the order of the marked operands.
+After rendering, the bytes and output offsets stay admitted through writes.
+The resolution records retire before the first output write. The selected
+function-borrow list stays admitted through completion.
 
 Serialized function exports share one admitted cache owner across namespaces and
 attribute copies. Its scope belongs to the binding's creator, even when a pipeline
@@ -451,8 +451,9 @@ Runtime environment snapshots admit result backing before growth. A merge
 across saved scopes also admits selected-name scratch. Direct snapshots use
 the unique names from the variable export index. Projection reads the visible
 slot in its existing owner, including when an array masks an outer export.
-Scratch retires before host dispatch, and the result stays admitted through
-completion while borrowing the original name and value bytes.
+Selection scratch retires before host dispatch. The result stays admitted
+through the consuming lookup or invocation while borrowing the original name
+and value bytes.
 Preparing a hosted child with `CreateInherited` builds a caller-owned namespace
 and positional frame. The engine installs the evaluation budget when it runs.
 Retained root namespaces keep the caller-owned evaluation budget alive as before.

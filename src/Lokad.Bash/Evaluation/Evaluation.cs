@@ -1579,7 +1579,7 @@ public sealed partial class Evaluation : IFileTester
                 byteOperands,
                 _state.CurrentDirectory,
                 executable.ExecutionOptions is { ClearEnvironment: true }
-                    ? [] : BuildExportedEnvironment(commandVars, scope.Context),
+                    ? [] : BuildExportedEnvironment(commandVars, scope.Context, Memory.Workspace),
                 GetStdInDescriptor(),
                 GetStdOutDescriptor(),
                 GetStdErrDescriptor(),
@@ -3448,16 +3448,15 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
-        Variables variables, EvaluationContext context)
+        Variables variables, EvaluationContext context, MemoryCapacity resultMemory)
     {
-        if (context.FunctionContext == null && context.GlobalPrefixes == null)
-            return variables.BuildExportedEnvironment(Memory, _cancellationToken);
-
-        using var selectionMemory = new MemoryCapacity(Memory.Budget, 0);
+        using var selectionMemory = context.FunctionContext == null && context.GlobalPrefixes == null
+            ? null : new MemoryCapacity(Memory.Budget, 0);
+        var exports = selectionMemory == null ? variables.ExportedBindings : ExportBindings(selectionMemory);
         return global::Lokad.Bash.Evaluation.Variables.BuildExportedEnvironment(
-            ExportBindings(), Memory, selectionMemory, _cancellationToken);
+            exports, (Memory, resultMemory), selectionMemory, _cancellationToken);
 
-        IEnumerable<VariableBinding> ExportBindings()
+        IEnumerable<VariableBinding> ExportBindings(MemoryCapacity selection)
         {
             foreach (var binding in variables.ExportedBindings)
                 yield return binding;
@@ -3470,7 +3469,7 @@ public sealed partial class Evaluation : IFileTester
                     CheckCancellation();
                     if (functionPrefixes.Contains(name))
                         continue;
-                    selectionMemory.Grow(global::Lokad.Bash.Evaluation.Variables.BindingNameSelectionBytes);
+                    selection.Grow(global::Lokad.Bash.Evaluation.Variables.BindingNameSelectionBytes);
                     functionPrefixes.Add(name);
                 }
             }
@@ -3518,7 +3517,7 @@ public sealed partial class Evaluation : IFileTester
                     if (!other.Contains(name))
                         continue;
                     if (!visibleOwners.ContainsKey(name))
-                        selectionMemory.Grow(192); // Dictionary slots also hold a reference to the owner.
+                        selection.Grow(192); // Dictionary slots also hold a reference to the owner.
                     visibleOwners[name] = saved;
                 }
             }

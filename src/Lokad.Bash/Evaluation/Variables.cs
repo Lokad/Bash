@@ -1806,15 +1806,13 @@ public sealed partial class Variables
     /// Builds the exported environment list.
     /// </summary>
     public IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment() =>
-        BuildExportedEnvironment(memory: null, CancellationToken.None);
-
-    internal IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(EvaluationMemory? memory, CancellationToken cancellationToken) =>
-        BuildExportedEnvironment(ExportedBindings, memory, selectionMemory: null, cancellationToken);
+        BuildExportedEnvironment(ExportedBindings, resultOwner: null, selectionMemory: null, CancellationToken.None);
 
     /// <summary>Projects a unique name sequence or selects the first assigned export from overlapping scopes.</summary>
     /// <remarks>Overlapping scopes supply an owner for the name selection backing.</remarks>
     internal static IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
-        IEnumerable<VariableBinding> bindings, EvaluationMemory? memory, MemoryCapacity? selectionMemory,
+        IEnumerable<VariableBinding> bindings, (EvaluationMemory Memory, MemoryCapacity Capacity)? resultOwner,
+        MemoryCapacity? selectionMemory,
         CancellationToken cancellationToken)
     {
         const long EnvironmentEntryBytes = 40;
@@ -1844,14 +1842,14 @@ public sealed partial class Variables
                     continue;
             }
             Select(name);
-            if (memory != null && results.Count == results.Capacity)
+            if (resultOwner is { } owner && results.Count == results.Capacity)
             {
                 var previous = results.Capacity;
                 var capacity = previous == 0 ? 4 : checked(2 * previous);
-                memory.Charge(ArrayHeaderBytes + EnvironmentEntryBytes * capacity);
+                owner.Memory.Charge(owner.Capacity, ArrayHeaderBytes + EnvironmentEntryBytes * capacity);
                 results.Capacity = capacity;
                 if (previous != 0)
-                    memory.Workspace.Resize(memory.Workspace.Bytes - (ArrayHeaderBytes + EnvironmentEntryBytes * previous));
+                    owner.Capacity.Resize(owner.Capacity.Bytes - (ArrayHeaderBytes + EnvironmentEntryBytes * previous));
             }
             results.Add(new EnvironmentVariable(name, value));
         }

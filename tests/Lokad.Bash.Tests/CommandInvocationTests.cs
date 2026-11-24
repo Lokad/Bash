@@ -423,7 +423,8 @@ public sealed class CommandInvocationTests
         var namespaceBytes = variables.EstimatedMemoryBytes;
         using var hold = budget.Reserve(headroomKiB == 0 ? 0 : budget.LimitBytes - namespaceBytes - headroomKiB * 1024L);
         var step = await state.GetNextStep();
-        var workspace = state.Memory.Workspace.Bytes - namespaceBytes;
+        var workspace = query ? budget.ReservedBytes - namespaceBytes - hold.Bytes
+            : state.Memory.Workspace.Bytes - namespaceBytes;
         IReadOnlyList<EnvironmentVariable> environment = [];
         var diagnostic = step as WriteOperation;
         if (diagnostic != null)
@@ -506,7 +507,8 @@ public sealed class CommandInvocationTests
             Assert.Equal(value, Assert.Single(environment, entry => entry.Name == "value").Value);
             Assert.Equal(ShellValue.FromText("temporary"), Assert.Single(environment, entry => entry.Name == "FLAG").Value);
             var snapshot = Assert.IsType<List<EnvironmentVariable>>(environment);
-            Assert.True(state.Memory.Workspace.Bytes - namespaceBytes >= (long)snapshot.Capacity * Unsafe.SizeOf<EnvironmentVariable>());
+            var admitted = query ? governor.ReservedBytes : state.Memory.Workspace.Bytes;
+            Assert.True(admitted - namespaceBytes >= (long)snapshot.Capacity * Unsafe.SizeOf<EnvironmentVariable>());
             Assert.False(state.Completion.IsCompleted);
         }
         finally

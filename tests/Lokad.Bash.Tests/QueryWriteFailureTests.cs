@@ -452,6 +452,77 @@ public sealed class QueryWriteFailureTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueryEnvironmentStaysAdmittedUntilLookupSettles(bool cancel)
+    {
+        const int BindingCount = 128;
+        var state = new Eval(Parser.Parse("type -p inspect >out"));
+        var value = ShellValue.FromBytes(new byte[] { 0xff });
+        for (var index = 0; index < BindingCount; index++)
+            state.SetExportedVariable($"synthetic_{index:D4}", value);
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        using var cancellation = new CancellationTokenSource();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var descriptor = new FileDescriptor(10);
+        var opened = Assert.IsType<OpenFileOperation>(await state.GetNextStep(deadline.Token));
+        opened.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+
+        var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal("inspect", Assert.Single(lookup.CommandNames));
+        var snapshot = Assert.IsType<List<EnvironmentVariable>>(lookup.Environment);
+        Assert.Equal(BindingCount + 1, snapshot.Count);
+        Assert.True(value.Bytes.Equals(Assert.Single(snapshot, item => item.Name == "synthetic_0000").Value.Bytes));
+        var lookupBytes = governor.ReservedBytes;
+        var snapshotBytes = MemoryCapacity.ArrayBackingBytes<EnvironmentVariable>(snapshot.Capacity);
+
+        if (cancel)
+            cancellation.Cancel();
+        var next = state.GetNextStep(deadline.Token);
+        var advancedBeforeReply = cancel && await Task.WhenAny(next, Task.Delay(50, deadline.Token)) == next;
+        var beforeReplyBytes = governor.ReservedBytes;
+        lookup.SetResult([new CommandLookupResult.Found("/bin/inspect")]);
+
+        var writeBytes = 0L;
+        byte[] output = [];
+        FileDescriptor? outputDescriptor = null;
+        if (!cancel)
+        {
+            var write = Assert.IsType<WriteOperation>(await next);
+            writeBytes = governor.ReservedBytes;
+            output = write.Content.ToArray();
+            outputDescriptor = write.FileDescriptor;
+            write.SetResult(DescriptorWriteResult.Open);
+            next = state.GetNextStep(deadline.Token);
+        }
+        var close = Assert.IsType<CloseDescriptorOperation>(await next);
+        Assert.Equal(descriptor, close.Descriptor);
+        close.SetResult(null);
+
+        if (cancel)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+            Assert.False(advancedBeforeReply);
+            Assert.Equal(lookupBytes, beforeReplyBytes);
+        }
+        else
+        {
+            Assert.Null(await state.GetNextStep(deadline.Token));
+            Assert.Equal(0, state.LastExitCode);
+            Assert.Equal(descriptor, outputDescriptor);
+            Assert.Equal("/bin/inspect\n"u8.ToArray(), output);
+            Assert.True(lookupBytes - writeBytes >= snapshotBytes);
+        }
+
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     private sealed class QueryBudget(IMemoryBudget inner, long resolutionBytes) : IMemoryBudget
     {
         public IMemoryReservation? Resolution { get; private set; }

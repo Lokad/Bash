@@ -42,6 +42,8 @@ public interface IBashHost
     /// Exactly one lookup result per requested command name, in the same order.
     /// </returns>
     /// <remarks>
+    /// The command names and environment are borrowed through lookup completion.
+    /// Hosts admit any retained copies under their own budget.
     /// Missing denotes established unavailability. Expected lookup failures return Failed for that operand
     /// and do not prevent resolving other names. Preserve provider detail and known OperationError.Kind values
     /// without command or operand prefixes; callers own diagnostics and exit status. Release probe resources

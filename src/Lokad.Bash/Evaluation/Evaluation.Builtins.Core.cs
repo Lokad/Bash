@@ -506,8 +506,10 @@ public sealed partial class Evaluation
                 if (hostNames == null)
                     return [];
 
+                // Return unused command credit before admitting the lookup-owned environment.
+                Memory.ReleaseUnusedCapacity();
+                var environment = BuildExportedEnvironment(vars, context, lookupMemory);
                 lookupMemory.ReleaseUnusedCapacity();
-                var environment = BuildExportedEnvironment(vars, context);
                 CheckCancellation();
                 var results = await ResolveCommandsOperation.AsTask(PublishOperation, hostNames, _state.CurrentDirectory, environment)
                     .ConfigureAwait(false);
