@@ -577,6 +577,50 @@ public sealed class PrintfFieldSizeTests
         Assert.Equal(0, memory.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("%q", "")]
+    [InlineData("%.512Q", "\n")]
+    public async Task UnpaddedQuotedOutputFitsWithoutASecondBuffer(string field, string operandSuffix)
+    {
+        var memory = new MemoryGovernor(800);
+        using var owner = memory.CreateScope();
+        var value = new string('x', 512);
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText(field + "%n"), [ShellValue.FromText(value + operandSuffix), ShellValue.FromText("count")],
+            DateTimeOffset.UnixEpoch, assignOutput: false, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            reportDiagnostic: null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText(value), ShellValue.FromBytes(result.Output));
+        Assert.Equal(new PrintfVariableAssignment("count", 512), Assert.Single(counts));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task QuotedOutputLimitKeepsThePreviousAssignmentPrefix()
+    {
+        var limit = ByteMemoryBuilder.MaxMemoryBuilderBytes - 1;
+        var memory = new MemoryGovernor(64 * 1024);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var diagnostics = new List<PrintfFormatting.Diagnostic>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText($"A\\0%{limit - 4}s%n%q%n"),
+            [ShellValue.FromText("x"), ShellValue.FromText("before"), ShellValue.FromText("a b"), ShellValue.FromText("after")],
+            DateTimeOffset.UnixEpoch, assignOutput: true, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            diagnostic => { diagnostics.Add(diagnostic); return ValueTask.FromResult(true); }, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("A"u8.ToArray(), result.Output.ToArray());
+        Assert.True(result.DiscardedSuffix);
+        Assert.Equal(new PrintfVariableAssignment("before", limit - 2), Assert.Single(counts));
+        Assert.Equal($"output exceeds {limit} bytes", Assert.Single(diagnostics).Suffix);
+    }
+
     [Fact]
     public async Task EscapedPrecisionStillReportsWarningsAndStopsPastTheRetainedPrefix()
     {

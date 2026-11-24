@@ -202,6 +202,18 @@ public static partial class PrintfFormatting
             return true;
         }
 
+        public bool TryAppendCompleteQuote(ReadOnlySpan<byte> input, ShellQuoteStyle style)
+        {
+            var retained = _bytes.Length;
+            var discarded = _discarded;
+            if (ShellArgumentEscaping.TryAppendQuoted(this, input, style))
+                return true;
+
+            _bytes.Truncate(retained);
+            _discarded = discarded;
+            return false;
+        }
+
         public void RewindByte()
         {
             if (HasDiscardedBytes)

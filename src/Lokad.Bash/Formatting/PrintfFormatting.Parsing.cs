@@ -557,20 +557,26 @@ public static partial class PrintfFormatting
                         ? rawPrecision
                         : int.MaxValue;
                     var bytes = argument[..Math.Min(argument.Length, rawByteLimit)];
-                    var outputPrecision = quotedSpecification.Conversion == 'q' ? quotedSpecification.Precision : null;
+                    var style = quotedSpecification.Flags.HasFlag(FormatFlags.Alternate)
+                        ? ShellQuoteStyle.SingleQuoted : ShellQuoteStyle.Backslash;
+                    var adjusted = quotedSpecification.Conversion == 'Q'
+                        ? quotedSpecification with { Precision = null }
+                        : quotedSpecification;
+                    if (adjusted.Width == 0 && adjusted.Precision == null)
+                    {
+                        if (!_output.TryAppendCompleteQuote(bytes.Span, style))
+                            FailOutputLimit();
+                        return;
+                    }
+
                     // Empty %q syntax can be truncated by precision before consuming the final output budget.
                     var quoted = GetTemporaryOutput(bytes.IsEmpty ? 2 : bytes.Length,
-                        bytes.IsEmpty ? 2 : _output.RemainingLength, outputPrecision);
-                    if (!ShellArgumentEscaping.TryAppendQuoted(quoted, bytes.Span,
-                            quotedSpecification.Flags.HasFlag(FormatFlags.Alternate)
-                                ? ShellQuoteStyle.SingleQuoted : ShellQuoteStyle.Backslash))
+                        bytes.IsEmpty ? 2 : _output.RemainingLength, adjusted.Precision);
+                    if (!ShellArgumentEscaping.TryAppendQuoted(quoted, bytes.Span, style))
                     {
                         FailOutputLimit();
                         return;
                     }
-                    var adjusted = quotedSpecification.Conversion == 'Q'
-                        ? quotedSpecification with { Precision = null }
-                        : quotedSpecification;
                     ApplyTextWithLength(adjusted, quoted.RetainedBytes, quoted.Length, ignorePrecision: false);
                 }
 
