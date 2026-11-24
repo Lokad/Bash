@@ -40,6 +40,18 @@ public sealed class ShellPathTests
         Assert.Equal(new ShellPath(parent), new ShellPath(path).Parent);
     }
 
+    [Fact]
+    public void ParentsOfNestedChildPreserveCanonicalPrefixesThroughRoot()
+    {
+        var leaf = ShellPath.Root.Child(".local/β/leaf");
+        var unicodeParent = Assert.IsType<ShellPath>(leaf.Parent);
+        var hiddenParent = Assert.IsType<ShellPath>(unicodeParent.Parent);
+
+        Assert.Equal("/.local/β", unicodeParent.Path);
+        Assert.Equal("/.local", hiddenParent.Path);
+        Assert.Same(ShellPath.Root, hiddenParent.Parent);
+    }
+
     #endregion
 
     #region Child

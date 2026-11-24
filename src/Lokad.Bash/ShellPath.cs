@@ -33,7 +33,8 @@ public sealed class ShellPath
                 return null;
 
             var slash = Path.LastIndexOf('/');
-            return slash == 0 ? Root : new ShellPath(Path[..slash]);
+            // A prefix ending before a component separator is already canonical.
+            return slash == 0 ? Root : new ShellPath(Path[..slash], validate: false);
         }
     }
 
