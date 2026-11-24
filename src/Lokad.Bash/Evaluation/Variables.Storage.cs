@@ -112,10 +112,10 @@ public sealed partial class Variables
         protected override VariableSlot CloneValue() => new NamerefSlot(Value);
     }
 
-    /// <summary>Changes the value kind without losing declaration attributes.</summary>
+    /// <summary>Replaces the value while borrowing its declaration attributes.</summary>
     private void ReplaceValue(BindingName name, VariableSlot replacement)
     {
-        if (TryGetBinding(name, out var previous))
+        if (TryGetBinding(name, detachBorrowed: false, out var previous))
             replacement.Attributes = previous.Attributes;
         StoreBinding(name, replacement);
         ResetGetoptsPosition(name);

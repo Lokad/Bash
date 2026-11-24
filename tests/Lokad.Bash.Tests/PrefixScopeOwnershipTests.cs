@@ -155,6 +155,46 @@ public sealed class PrefixScopeOwnershipTests
     [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]
+    public void WholeArrayReplacementBorrowsAttributesAcrossOverlays(ArrayKind kind)
+    {
+        var caller = Variables.CreateEmpty();
+        var original = ShellValue.FromBytes(new byte[] { 0xff });
+        var replacement = ShellValue.FromText("changed");
+        var zero = ShellValue.FromText("0");
+        var one = ShellValue.FromText("1");
+        var originalEntries = kind == ArrayKind.Indexed ? new[] { original, original } : new[] { zero, original, one, original };
+        var replacementEntries = kind == ArrayKind.Indexed ? new[] { replacement } : new[] { zero, replacement };
+        Assert.True(caller.TryAssignArray("array", originalEntries, kind));
+        caller.SetExported("array", true);
+        Assert.True(caller.TrySetNameref("reference", ShellValue.FromText("array")));
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var middle = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
+            var inner = Variables.CreateCommandScope(middle, memory, CancellationToken.None);
+            var workspace = memory.Workspace.Bytes;
+
+            Assert.True(inner.TryAssignArray("reference", replacementEntries, kind));
+
+            Assert.Equal(workspace, memory.Workspace.Bytes);
+            Assert.True(middle.IsBorrowedBinding("array"));
+            Assert.False(inner.IsBorrowedBinding("array"));
+            Assert.Contains((BindingName)"array", inner.ExportedNames);
+            Assert.Equal(1, inner.GetArrayMetadata("array")?.Count);
+            Assert.True(inner.TryGetExpansionValue("array", out var changed));
+            Assert.Equal(replacement, changed);
+            Assert.Equal(2, caller.GetArrayMetadata("array")?.Count);
+            Assert.True(caller.TryGetExpansionValue("array", out var retained));
+            Assert.Equal(original, retained);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
     public Task AggregateAlternateUsesBorrowedArrayBeforeExpandingItsWord(ArrayKind kind) =>
         AssertBorrowedAggregateExpansionAsync(kind, "${array[@]:+chosen}", ShellValue.FromText("chosen"));
 

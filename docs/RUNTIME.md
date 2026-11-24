@@ -374,11 +374,13 @@ when the definition is evaluated again.
 Prefix assignment preparation borrows caller state for the surrounding command.
 It admits each detached binding once, retaining independent array containers
 and attributes. Read-only presence, attribute and nameref queries inspect
-the visible binding in its existing owner. The existing expansion write
-target forwards actual RHS effects, including same-value writes, with nameref and
-array-kind rules intact. In-process execution consumes only the prepared prefix
-slots and preserves the original slots in the saved store. An installation
-refusal leaves the caller's bindings at their state after operand expansion.
+the visible binding in its existing owner. Whole-value replacement reads
+the previous attributes from that owner and publishes only the new value.
+The existing expansion write target forwards actual RHS effects, including
+same-value writes, with nameref and array-kind rules intact. In-process
+execution consumes only the prepared prefix slots and preserves the original
+slots in the saved store. An installation refusal leaves the caller's bindings
+at their state after operand expansion.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.
