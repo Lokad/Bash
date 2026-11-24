@@ -170,6 +170,40 @@ public sealed class ErrexitTests
     }
 
     [Theory]
+    [InlineData("set -e -Q", 2, "off", "set: -Q: invalid option\n" + SetUsage)]
+    [InlineData("set -e -o bogus", 2, "on", "set: bogus: invalid option name\n")]
+    [InlineData("set + -e -Q", 1, "on", "set: -Q: invalid option\n" + SetUsage)]
+    [InlineData("set +o >&-", 1, "off", SetClosedOutput)]
+    public async Task SetErrorsIncludeTheSourcedLineAndKeepReachedEffects(
+        string invocation, int status, string mode, string diagnostic)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", $"# Leading line\nif {invocation}; then status=0; else status=$?; fi\n");
+        var result = await host.RunAsync(ReportOption + "set -- keep\nsource ./body\nprintf '<%s><%s>' \"$status\" \"$1\"; flag",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}><keep>{mode}", host.StandardOutput.TextContent);
+        Assert.Equal("./body: line 2: " + diagnostic, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task RedirectedSetErrorUsesTheContinuedFlagLineInRetainedSource()
+    {
+        const string script = "source ./body\nf; printf '<%s>' \"$?\"";
+        await using var host = new TestHost();
+        host.AddFile("/body", "# Leading line\nf(){\nset \\\n-Q \\\n2>diagnostic\n}\n");
+        var result = await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<2>", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal("./body: line 4: set: -Q: invalid option\n" + SetUsage, host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("-e + --help ignored", "--", "on")]
     [InlineData("-e + +ezq ignored", "+z", "off")]
     [InlineData("-oz errexit", "-z", "on")]

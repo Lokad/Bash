@@ -146,15 +146,9 @@ public sealed partial class Evaluation
         return EvaluationResult.DiscardCommandUnit();
     }
 
-    private Task ReportControlDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope)
-    {
-        var context = scope.Context;
-        var path = context.SourceMemory?.DiagnosticPath;
-        var coordinates = context.Coordinates;
-        var prefix = path == null || coordinates.Locations == null ? default
-            : new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, coordinates.Line);
-        return WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
-    }
+    private Task ReportControlDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope) =>
+        WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+            GetNamedSourceDiagnosticPrefix(scope.Context));
 
     private static bool TryParseControlNumber(ShellValue operand, out long status) =>
         Integers.TryParseBuiltinNumber(operand.Bytes.Span, out status);

@@ -253,8 +253,10 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateBuiltinSetAsync(
         IReadOnlyList<ShellValue> words,
         Variables commandVars,
+        EvaluationContext context,
         bool negated)
     {
+        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
         var inspectionClosed = false;
         // Validate the leading groups before publishing option changes. A bare
         // plus ends validation but is skipped when applying the options.
@@ -332,7 +334,7 @@ public sealed partial class Evaluation
                 var inspection = enabled
                     ? (_state.ErrexitEnabled ? "errexit\ton\n" : "errexit\toff\n")
                     : (_state.ErrexitEnabled ? "set -o errexit\n" : "set +o errexit\n");
-                var written = await WriteBuiltinOutputAsync(words[0], Utf8Text.Encode(inspection)).ConfigureAwait(false);
+                var written = await WriteBuiltinOutputAsync(words[0], Utf8Text.Encode(inspection), sourcePrefix).ConfigureAwait(false);
                 if (written.IsError)
                     status = 1;
                 else
@@ -362,14 +364,15 @@ public sealed partial class Evaluation
 
             if (CanWriteOptionDiagnostic())
                 await WriteInvalidShortOptionUnlessStderrClosedAsync(words[0], ShellValue.FromBytes(group.Bytes[..1]),
-                    flag, BuiltinKind.Set, "set").ConfigureAwait(false);
+                    flag, BuiltinKind.Set, "set", sourcePrefix).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
         }
 
         async Task<EvaluationResult> InvalidOptionAsync(ShellValue option, string message, int exitCode)
         {
             if (CanWriteOptionDiagnostic())
-                await ReportExpansionDiagnosticAsync([words[0]], [option, ShellValue.FromText(message)]).ConfigureAwait(false);
+                await WriteDiagnosticAsync([words[0]], [option, ShellValue.FromText(message)],
+                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, sourcePrefix).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
         }
     }

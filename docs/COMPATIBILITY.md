@@ -655,6 +655,8 @@ Downstream closure stops inspection output and diagnostics routed to the
 same handle. Option and positional processing continues.
 With shell-closed stdout, an inspection reports a write failure only when
 it has no following argument.
+In a named source, option errors and inspection write failures include the
+filename and reached line. Functions use the source of their definition.
 Leading short flags are validated before they can change shell state.
 During validation, `--help` describes the supported options and returns
 status 2, including with shell-closed stdout. It leaves shell options and

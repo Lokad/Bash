@@ -598,7 +598,8 @@ public sealed partial class Evaluation
         if (ExitsOnReadonly(pwdResult))
             return await RunExitTrapAsync(scope, EvaluationResult.Exit(1)).ConfigureAwait(false);
         if (announced.IsError)
-            await ReportBuiltinWriteFailureAsync(ShellValue.FromText(DirectoryCommandName(kind)), announced, context).ConfigureAwait(false);
+            await ReportBuiltinWriteFailureAsync(ShellValue.FromText(DirectoryCommandName(kind)), announced,
+                GetBuiltinDiagnosticPrefix(context)).ConfigureAwait(false);
         if (oldResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly
             || pwdResult is BuiltinAssignmentResult.Failed or BuiltinAssignmentResult.Readonly
             || kind == DirectoryChangeKind.PushDirectory && announced.IsError)
@@ -625,7 +626,7 @@ public sealed partial class Evaluation
         string commandName, int? index, DirectoryStackLayout layout, ShellValue home, EvaluationContext context)
     {
         var content = _state.FormatDirectoryStack(index, layout, home, Memory, _cancellationToken);
-        return WriteBuiltinOutputAsync(ShellValue.FromText(commandName), content, context);
+        return WriteBuiltinOutputAsync(ShellValue.FromText(commandName), content, GetBuiltinDiagnosticPrefix(context));
     }
 
     private static string DirectoryCommandName(DirectoryChangeKind kind) => kind switch

@@ -1551,7 +1551,7 @@ public sealed partial class Evaluation : IFileTester
                             : throw new InvalidOperationException("Declaration was not prepared.")).ConfigureAwait(false),
                     BuiltinKind.Set when byteOperands.Count == 1 => await AwaitWordExpansionAsync(EvaluateBuiltinDeclarationAsync(
                         new DeclarationOptions(BuiltinKind.Set), [], commandVars, bindings, builtinScope, false)).ConfigureAwait(false),
-                    BuiltinKind.Set => await EvaluateBuiltinSetAsync(byteOperands, commandVars, false).ConfigureAwait(false),
+                    BuiltinKind.Set => await EvaluateBuiltinSetAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Unset => await AwaitWordExpansionAsync(EvaluateBuiltinUnsetAsync(byteOperands, commandVars, builtinScope, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Eval or BuiltinKind.Source => await EvaluateBuiltinScriptingAsync(evaluatorBuiltin.Kind,
                         commandName, byteOperands, builtinScope with { Variables = commandVars }, false).ConfigureAwait(false),
@@ -2052,7 +2052,7 @@ public sealed partial class Evaluation : IFileTester
                 : WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output);
 
             Task ReportNamedListingOutputFailureAsync(DescriptorWriteResult result) => ReportBuiltinWriteFailureAsync(
-                ShellValue.FromText(commandName), result, declarationScope.Context);
+                ShellValue.FromText(commandName), result, GetBuiltinDiagnosticPrefix(declarationScope.Context));
 
             async Task<int> EvaluateFunctionsAsync()
             {

@@ -30,6 +30,14 @@ public sealed partial class Evaluation
         EvaluationContext context) => WriteDiagnosticAsync(name, message, _builtinDiagnostics,
             ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(context));
 
+    private static SyntaxDiagnosticPrefix GetNamedSourceDiagnosticPrefix(EvaluationContext context)
+    {
+        var path = context.SourceMemory?.DiagnosticPath;
+        var coordinates = context.Coordinates;
+        return path == null || coordinates.Locations == null ? default
+            : new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, coordinates.Line);
+    }
+
     internal Task ReportReadonlyUnsetAsync(ShellValue name, bool function, EvaluationContext context) =>
         ReportBuiltinDiagnosticAsync([ShellValue.FromText("unset")],
             [name, ShellValue.FromText(function ? ": cannot unset: readonly function" : ": cannot unset: readonly variable")], context);
@@ -66,10 +74,10 @@ public sealed partial class Evaluation
         WriteBuiltinOutputAsync(name, content, default);
 
     private async Task<DescriptorWriteResult> WriteBuiltinOutputAsync(ShellValue name, ReadOnlyMemory<byte> content,
-        EvaluationContext diagnosticContext)
+        SyntaxDiagnosticPrefix sourcePrefix)
     {
         var result = await ExecuteWriteAsync(GetStdOutDescriptor(), content).ConfigureAwait(false);
-        await ReportBuiltinWriteFailureAsync(name, result, diagnosticContext).ConfigureAwait(false);
+        await ReportBuiltinWriteFailureAsync(name, result, sourcePrefix).ConfigureAwait(false);
         return result;
     }
 
@@ -122,11 +130,10 @@ public sealed partial class Evaluation
         ReportBuiltinWriteFailureAsync(name, result, default);
 
     private Task ReportBuiltinWriteFailureAsync(ShellValue name, DescriptorWriteResult result,
-        EvaluationContext diagnosticContext) =>
+        SyntaxDiagnosticPrefix sourcePrefix) =>
         result.Error is { } cause && !GetStdErrDescriptor().IsClosed
             && GetStdErrDescriptor() != GetStdOutDescriptor()
-            ? ReportBuiltinOperationErrorAsync(name, "write error: ", path: null, cause,
-                GetBuiltinDiagnosticPrefix(diagnosticContext))
+            ? ReportBuiltinOperationErrorAsync(name, "write error: ", path: null, cause, sourcePrefix)
             : Task.CompletedTask;
 
     private async Task ReportBuiltinOperationErrorAsync(ShellValue name, string prefix, string? path, OperationError error,
