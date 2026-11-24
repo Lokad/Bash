@@ -527,6 +527,8 @@ syntax, continuations, quoting and here-documents are complete. Later syntax err
 retain earlier units' effects. A terminal backslash can advance the command's
 reader line during initial word lookahead. That line supplies `LINENO` and
 launch diagnostics while source offsets continue to refer to physical bytes.
+A missing redirection operand retains the extra EOF line when a word and
+a single angle operator both read the adjacent continuation.
 A direct double-quoted command substitution with
 a malformed arithmetic `for` header can end the input at that word. The evaluator
 reports the diagnostic and sets the parser status to 2 before running any prefix

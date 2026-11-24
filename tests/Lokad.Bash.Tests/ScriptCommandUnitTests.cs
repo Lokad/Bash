@@ -46,18 +46,28 @@ public sealed class ScriptCommandUnitTests
         AssertUnitsAsync("eval '" + source.Replace("'", "'\\''", StringComparison.Ordinal) + "'", output, status, syntaxError);
 
     [Theory]
-    [InlineData("printf discarded |&\\\n", "Expected command after pipeline operator.")]
-    [InlineData("printf discarded &&", "Expected command after list operator.")]
-    [InlineData("printf discarded >\\", "Expected a word after redirection operator.")]
-    [InlineData("read -r word <<\\", "Expected a word after redirection operator.")]
-    [InlineData("if true; then :\n", "Expected fi keyword.")]
-    [InlineData("if true; then :", "Expected terminator before reserved word.")]
-    [InlineData("while false; do :\n", "Expected done keyword.")]
-    [InlineData("case a in a) :;;\n", "Expected case pattern.")]
-    [InlineData("{ :;\n", "Expected } to close a group.")]
-    [InlineData("( :\n", "Expected ) to close a subshell.")]
-    [InlineData("f()\n", "Expected compound command as function body.")]
-    public async Task IncompleteGrammarReportsTheReachedReaderLine(string ending, string parserMessage)
+    [InlineData("printf discarded |&\\\n", "Expected command after pipeline operator.", 3)]
+    [InlineData("printf discarded &&", "Expected command after list operator.", 3)]
+    [InlineData("printf discarded >\\", "Expected a word after redirection operator.", 3)]
+    [InlineData("printf discarded>\\", "Expected a word after redirection operator.", 4)]
+    [InlineData(": \"argument\">\\\n", "Expected a word after redirection operator.", 4)]
+    [InlineData(": 2<\\\n", "Expected a word after redirection operator.", 4)]
+    [InlineData(": 2< \\\n", "Expected a word after redirection operator.", 3)]
+    [InlineData(": 3>&->\\\n", "Expected a word after redirection operator.", 3)]
+    [InlineData("{ :; }>\\\n", "Expected a word after redirection operator.", 4)]
+    [InlineData("( : )>\\\n", "Expected a word after redirection operator.", 3)]
+    [InlineData("[[ x ]]>\\\n", "Expected a word after redirection operator.", 4)]
+    [InlineData("a[1 + 2]=v>\\\n", "Expected a word after redirection operator.", 4)]
+    [InlineData("a=(x)>\\\n", "Expected a word after redirection operator.", 4)]
+    [InlineData("read -r word <<\\", "Expected a word after redirection operator.", 3)]
+    [InlineData("if true; then :\n", "Expected fi keyword.", 3)]
+    [InlineData("if true; then :", "Expected terminator before reserved word.", 3)]
+    [InlineData("while false; do :\n", "Expected done keyword.", 3)]
+    [InlineData("case a in a) :;;\n", "Expected case pattern.", 3)]
+    [InlineData("{ :;\n", "Expected } to close a group.", 3)]
+    [InlineData("( :\n", "Expected ) to close a subshell.", 3)]
+    [InlineData("f()\n", "Expected compound command as function body.", 3)]
+    public async Task IncompleteGrammarReportsTheReachedReaderLine(string ending, string parserMessage, int line)
     {
         var source = "printf before\n" + ending;
         Assert.False(Parser.TryParse(source, out _, out var error));
@@ -69,7 +79,23 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("before", host.StandardOutput.TextContent);
-        Assert.Equal("line 3: syntax error: unexpected end of file\n", host.StandardError.TextContent);
+        Assert.Equal($"line {line}: syntax error: unexpected end of file\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData(": word>\\\n", "line 4: syntax error: unexpected end of file")]
+    [InlineData("value=$(: word>\\\n", "line 4: unexpected EOF while looking for matching `)'")]
+    [InlineData("value=$(: word >\\\n", "line 3: unexpected EOF while looking for matching `)'")]
+    public async Task SourcedContinuationRetainsTheRedirectionLookaheadLine(string ending, string diagnostic)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "printf before\n" + ending);
+
+        var result = await host.RunAsync("source unit\nprintf ':%s' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2", host.StandardOutput.TextContent);
+        Assert.Equal("unit: " + diagnostic + "\n", host.StandardError.TextContent);
     }
 
     [Theory]

@@ -1578,6 +1578,7 @@ public static class Parser
                                 return null;
                             if (tokenizer.IsAtWordBoundary())
                             {
+                                tokenizer.RecordWordLookahead();
                                 AddAssignment(new AssignmentWord(assignment.Target, arrayValues, assignment.Operator), wordToken.Word);
                                 continue;
                             }
@@ -1758,7 +1759,7 @@ public static class Parser
         var hereDocument = kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs;
         if (!tokenizer.TryReadRedirectionWord(hereDocument, out var target, out var targetWord, out var delimiter))
         {
-            tokenizer.RecordMissingRedirectionOperand(target);
+            tokenizer.RecordMissingRedirectionOperand(token, target);
             return null;
         }
         redirections ??= [];
@@ -1791,6 +1792,8 @@ public static class Parser
                     Source = (target.Source.Start.Value + 1)..target.Source.End.Value
                 });
             }
+            else
+                tokenizer.RecordDescriptorCloseOperand();
             kind = kind == RedirectionKind.DuplicateOutput
                 ? RedirectionKind.CloseOutput
                 : RedirectionKind.CloseInput;

@@ -25,6 +25,8 @@ internal sealed class Tokenizer
     private bool _continuedAtEndOfInput;
     private bool _spacingContinuedAtEndOfInput;
     private bool _wordEndsWithUnframedBackslash;
+    private bool _redirectionLookaheadAtEndOfInput;
+    private int _wordLookaheadEnd = -1;
     private int _lastPhysicalNewline;
     private int _functionBraceLine;
 
@@ -190,7 +192,8 @@ internal sealed class Tokenizer
             if (_wordEndsWithUnframedBackslash)
                 return 2;
             var source = _input.AsSpan();
-            return source.IsEmpty || source[^1] != (byte)'\n' || _continuedAtEndOfInput ? 1 : 0;
+            var advance = source.IsEmpty || source[^1] != (byte)'\n' || _continuedAtEndOfInput ? 1 : 0;
+            return _redirectionLookaheadAtEndOfInput ? advance + 1 : advance;
         }
     }
 
@@ -302,15 +305,17 @@ internal sealed class Tokenizer
     private UnexpectedSyntax GetSyntheticNewlineSyntax() =>
         new(UnexpectedSyntax.NewlineToken, _input.GetPhysicalLine(Position, out _), Position);
 
-    internal void RecordMissingRedirectionOperand(Token token)
+    internal void RecordMissingRedirectionOperand(Token redirection, Token operand)
     {
         if (Error != null)
             return;
+        var continuedToEnd = operand.Kind == TokenKind.EndOfInput && Position == _input.Length && _spacingContinuedAtEndOfInput;
+        _redirectionLookaheadAtEndOfInput = continuedToEnd && WordLookaheadReachedEnd();
         UnexpectedSyntax? unexpected = null;
         if (TrackUnexpectedTokens)
         {
-            if (token.Kind != TokenKind.EndOfInput)
-                unexpected = GetUnexpectedSyntax(token);
+            if (operand.Kind != TokenKind.EndOfInput)
+                unexpected = GetUnexpectedSyntax(operand);
             else if (!_spacingContinuedAtEndOfInput)
                 unexpected = GetSyntheticNewlineSyntax();
         }
@@ -318,9 +323,25 @@ internal sealed class Tokenizer
             ParserFailureKind.RedirectionOperand)
         {
             UnexpectedToken = unexpected,
-            UnexpectedEndOfInput = token.Kind == TokenKind.EndOfInput && Position == _input.Length && _spacingContinuedAtEndOfInput
+            UnexpectedEndOfInput = continuedToEnd
         });
+
+        bool WordLookaheadReachedEnd()
+        {
+            if (redirection.RedirectionKind is not (RedirectionKind.Input or RedirectionKind.Output) || _wordLookaheadEnd < 0)
+                return false;
+            var source = _input.AsSpan();
+            if (ShellSourceCursor.SkipLineContinuations(source, _wordLookaheadEnd) != redirection.Source.Start.Value)
+                return false;
+            // Adjacent word and operator lookahead both reach the continued EOF.
+            var end = ShellSourceCursor.SkipLineContinuations(source, redirection.Source.End.Value);
+            return end == source.Length || end == source.Length - 1 && source[end] == (byte)'\\';
+        }
     }
+
+    internal void RecordWordLookahead() => _wordLookaheadEnd = Position;
+
+    internal void RecordDescriptorCloseOperand() => _wordLookaheadEnd = -1;
 
     internal void RecordFailure(ParserFailure failure)
     {
@@ -556,6 +577,7 @@ internal sealed class Tokenizer
 
         if (!TryReadSubscriptAssignment(token, position, closing, out var element, out _))
             return false;
+        RecordWordLookahead();
 
         // The leading word part has the logical name. The selector retains quoting for
         // the eventual array kind, with any read-ahead here-documents included.
@@ -894,6 +916,8 @@ internal sealed class Tokenizer
                     _failure = null;
                 }
             }
+            if (token.Kind is TokenKind.Word or TokenKind.OpenBrace or TokenKind.CloseBrace)
+                RecordWordLookahead();
             return token with { Source = start..Position };
         }
     }
@@ -1147,6 +1171,7 @@ internal sealed class Tokenizer
             return false;
         }
         Position = end;
+        RecordWordLookahead();
         if (TrackCommandLocations)
             ConsumedPosition = end;
         return true;
