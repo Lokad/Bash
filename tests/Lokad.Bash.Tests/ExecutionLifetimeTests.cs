@@ -23,7 +23,7 @@ public sealed class ExecutionLifetimeTests
     public Task CancelledExpansionDiagnosticStaysChargedUntilTheHostSettles()
     {
         var subject = "${" + new string('x', 4096) + " name}";
-        return VerifyPendingWriteAsync("{ : \"" + subject + "\"; } 2>out; after=1", subject + ": bad substitution\n");
+        return VerifyPendingWriteAsync("{ : \"" + subject + "\"; } 2>out; after=1", "line 1: " + subject + ": bad substitution\n");
     }
 
     [Fact]

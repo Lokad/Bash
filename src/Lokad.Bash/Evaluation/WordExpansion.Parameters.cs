@@ -85,7 +85,7 @@ internal static partial class WordExpansion
             if (parsed.Kind == BracedParameterOperatorKind.IncompleteSubscript && quoteContext == ExpansionQuoteContext.Unquoted)
                 await ReportParameterWordSyntaxAsync(originalWord, segment, missingBrace: false, scope).ConfigureAwait(false);
             else
-                await ReportBadSubstitutionAsync(emptyArraySubscript: false).ConfigureAwait(false);
+                await ReportBadSubstitutionAsync().ConfigureAwait(false);
             return;
         }
         var transform = parsed.Kind == BracedParameterOperatorKind.Transform && parsed.Word.Length == 1 ? parsed.Word[0] : (byte)0;
@@ -741,7 +741,7 @@ internal static partial class WordExpansion
 
                 if (reference.Kind == VariableReferenceKind.Element && reference.Subscript.Length == 0)
                 {
-                    await ReportBadSubstitutionAsync(emptyArraySubscript: true).ConfigureAwait(false);
+                    await ReportBadSubstitutionAsync().ConfigureAwait(false);
                     return new ParameterValue(reference.Kind, [], false, reference, null);
                 }
 
@@ -873,19 +873,17 @@ internal static partial class WordExpansion
                 [ShellValue.FromText("${"), ShellValue.FromBytes(content.Bytes), ShellValue.FromText("}")],
                 [ShellValue.FromText(message)], kind);
 
-        Task ReportBadSubstitutionAsync(bool emptyArraySubscript)
+        Task ReportBadSubstitutionAsync()
         {
             if (quoteContext == ExpansionQuoteContext.HereDocument)
                 return ReportParameterSyntaxAsync(segment.ToValue(), missingBrace: false, scope, hereDocument: true);
             ReadOnlySpan<ShellValue> subject = [ShellValue.FromText("${"), content.ToValue(), ShellValue.FromText("}")];
             ReadOnlySpan<ShellValue> message = [ShellValue.FromText("bad substitution")];
-            return emptyArraySubscript
-                ? scope.Effects.ReportEmptyArraySubscriptAsync(subject, message, scope)
-                : scope.Effects.ReportUnitExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
+            return scope.Effects.ReportParameterReadFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
         }
 
         Task ReportIndirectFailureAsync(ReadOnlySpan<ShellValue> subject, string message) =>
-            scope.Effects.ReportUnitExpansionFailureAsync(subject, [ShellValue.FromText(message)], scope, ExpansionFailureKind.IndirectParameter);
+            scope.Effects.ReportParameterReadFailureAsync(subject, [ShellValue.FromText(message)], scope, ExpansionFailureKind.IndirectParameter);
 
         void Emit(IEnumerable<ShellValue> fields) => EmitFields(fields, projected: false);
 

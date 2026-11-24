@@ -73,6 +73,14 @@ public sealed class ParameterOperatorTests
     [InlineData("value=outer\nset -e\ntrap 'printf \"<exit:%s:%s>\" \"$?\" \"$value\" >&2' EXIT\n"
         + "f(){ local value=inner; printf '<%s>' \"${a[-3]}\"; }\nf 2>errors",
         1, "", "", "line 4: a: bad array subscript\n<exit:1:inner>", null)]
+    [InlineData("source ./fixture 2>errors\nprintf '<caller:%s>' \"$?\"",
+        0, "before<next:1><caller:0>", "", "./fixture: line 4: ${value!@Z}: bad substitution\n",
+        "value=set\nprintf before\nprintf \\\n  \"${value!@Z}\"\nprintf '<next:%s>' \"$?\"\n")]
+    [InlineData("source ./fixture 2>errors\nprintf '<caller:%s>' \"$?\"",
+        0, "before<next:1><caller:0>", "", "./fixture: line 3: ref: invalid indirect expansion\n",
+        "unset ref\nprintf before\nprintf '<%s>' \"${!ref@Z}\" \\\n  later\nprintf '<next:%s>' \"$?\"\n")]
+    [InlineData("unset ref\nprintf before\ncat <<DOC\n${!ref@Z}\nDOC\nprintf '<next:%s>' \"$?\"\n",
+        0, "before<next:1>", "line 3: ref: invalid indirect expansion\n", null, null)]
     public async Task ParameterDiagnosticsFollowSelectionAndTheReachedReader(
         string source, int status, string output, string diagnostic, string? redirectedDiagnostic, string? sourcedInput)
     {
@@ -221,7 +229,7 @@ public sealed class ParameterOperatorTests
     [InlineData("printf '%s' \"${a[]}\"", "line 3: ${a[]}: bad substitution\n")]
     [InlineData("printf '%s' \"${a[1}\"", "bad substitution: no closing `}' in \"${a[1}\"\n")]
     [InlineData("printf '%s' ${a[1}", "${a[1}: bad substitution\n")]
-    [InlineData("printf '%s' \"${a.dot}\"", "${a.dot}: bad substitution\n")]
+    [InlineData("printf '%s' \"${a.dot}\"", "line 3: ${a.dot}: bad substitution\n")]
     [InlineData("printf '%s' \"${saved:-${a[1}}\"", "bad substitution: no closing `}' in ${saved:-${a[1}}\n")]
     public async Task MalformedBracedParametersPublishStatusBeforeRecoveringTheNextUnit(string command, string error)
     {
@@ -540,18 +548,18 @@ public sealed class ParameterOperatorTests
 
     // Bash 5.2.21: unbound namerefs fail before operands; invalid assignment targets fail after the RHS.
     [Theory]
-    [InlineData("declare -n p; printf '%s' \"${!p}\"; printf after", "p: invalid indirect expansion\n")]
-    [InlineData("declare -n p; printf '%s' \"${!p:-$(printf effect >&2; printf fallback)}\"; printf after", "p: invalid indirect expansion\n")]
-    [InlineData("declare -n p; printf '%s' \"${!p:=$(printf effect >&2; printf value)}\"; printf after", "p: invalid indirect expansion\n")]
-    [InlineData("p=(); printf '%s' \"${!p[@]:=$(printf effect >&2; printf value)}\"; printf after", "effect!p[@]: invalid indirect expansion\n")]
-    [InlineData("declare -A p; printf '%s' \"${!p[*]:=$(printf effect >&2; printf value)}\"; printf after", "effect!p[*]: invalid indirect expansion\n")]
+    [InlineData("declare -n p; printf '%s' \"${!p}\"; printf after", "line 1: p: invalid indirect expansion\n")]
+    [InlineData("declare -n p; printf '%s' \"${!p:-$(printf effect >&2; printf fallback)}\"; printf after", "line 1: p: invalid indirect expansion\n")]
+    [InlineData("declare -n p; printf '%s' \"${!p:=$(printf effect >&2; printf value)}\"; printf after", "line 1: p: invalid indirect expansion\n")]
+    [InlineData("p=(); printf '%s' \"${!p[@]:=$(printf effect >&2; printf value)}\"; printf after", "effectline 1: !p[@]: invalid indirect expansion\n")]
+    [InlineData("declare -A p; printf '%s' \"${!p[*]:=$(printf effect >&2; printf value)}\"; printf after", "effectline 1: !p[*]: invalid indirect expansion\n")]
     [InlineData("p=(); printf '%s' \"${!p[@]:=${missing:?inner}}\"; printf after", "missing: inner\n")]
-    [InlineData("a=(); p='a[0]'; printf '%s' \"${!p:=new}\"; printf after", "a[0]: invalid variable name\n")]
-    [InlineData("a=(); p='a[0]'; printf '%s' \"${!p=new}\"; printf after", "a[0]: invalid variable name\n")]
-    [InlineData("declare -A a; p='a[key]'; printf '%s' \"${!p:=new}\"; printf after", "a[key]: invalid variable name\n")]
-    [InlineData("declare -A a; p='a[key]'; printf '%s' \"${!p=new}\"; printf after", "a[key]: invalid variable name\n")]
-    [InlineData("a=(); p='a[$(printf selector >&2; printf 0)]'; printf '%s' \"${!p:=$(printf rhs >&2; printf new)}\"; printf after", "selectorrhsa[$(printf selector >&2; printf 0)]: invalid variable name\n")]
-    [InlineData("declare -A a; p='a[$(printf selector >&2; printf key)]'; printf '%s' \"${!p:=$(printf rhs >&2; printf new)}\"; printf after", "selectorrhsa[$(printf selector >&2; printf key)]: invalid variable name\n")]
+    [InlineData("a=(); p='a[0]'; printf '%s' \"${!p:=new}\"; printf after", "line 1: a[0]: invalid variable name\n")]
+    [InlineData("a=(); p='a[0]'; printf '%s' \"${!p=new}\"; printf after", "line 1: a[0]: invalid variable name\n")]
+    [InlineData("declare -A a; p='a[key]'; printf '%s' \"${!p:=new}\"; printf after", "line 1: a[key]: invalid variable name\n")]
+    [InlineData("declare -A a; p='a[key]'; printf '%s' \"${!p=new}\"; printf after", "line 1: a[key]: invalid variable name\n")]
+    [InlineData("a=(); p='a[$(printf selector >&2; printf 0)]'; printf '%s' \"${!p:=$(printf rhs >&2; printf new)}\"; printf after", "selectorrhsline 1: a[$(printf selector >&2; printf 0)]: invalid variable name\n")]
+    [InlineData("declare -A a; p='a[$(printf selector >&2; printf key)]'; printf '%s' \"${!p:=$(printf rhs >&2; printf new)}\"; printf after", "selectorrhsline 1: a[$(printf selector >&2; printf key)]: invalid variable name\n")]
     [InlineData("a=(); p='a[0]'; printf '%s' \"${!p:=${bad:?inner}}\"; printf after", "bad: inner\n")]
     public async Task Evaluation_InvalidIndirectionRetainsOnlyReachedOperandEffects(string script, string expectedError)
     {
@@ -564,21 +572,21 @@ public sealed class ParameterOperatorTests
 
     [Theory]
     [InlineData("unset p early late\nprintf '%s' \"${early:=one}\" \"${!p:-${late:=operand}}\" \"${late:=argument}\"; printf skipped\nprintf '<%s:%s:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\" \"${early-unset}\" \"${late-unset}\"",
-        "<1:1:one:unset>", "p: invalid indirect expansion\n", 0)]
+        "<1:1:one:unset>", "line 2: p: invalid indirect expansion\n", 0)]
     [InlineData("a=(); p='a[0]'\nprintf '%s' \"${!p:=$(printf rhs: >&2; printf value)}\"; printf skipped\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
-        "<1:1>", "rhs:a[0]: invalid variable name\n", 0)]
+        "<1:1>", "rhs:line 2: a[0]: invalid variable name\n", 0)]
     [InlineData("f() { local -n p; printf '%s' \"${!p}\"; printf skipped; }\nf; printf skipped\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
-        "<1:1>", "p: invalid indirect expansion\n", 0)]
+        "<1:1>", "line 1: p: invalid indirect expansion\n", 0)]
     [InlineData("unset p\nset -e\nprintf '%s' \"${!p}\" || printf skipped\nprintf after",
-        "", "p: invalid indirect expansion\n", 1)]
+        "", "line 3: p: invalid indirect expansion\n", 1)]
     [InlineData("unset p\nset -e\neval 'printf \"%s\" \"${!p}\"; printf skipped\nprintf \"<loaded:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"' || printf skipped\nprintf '<caller:%s>' \"$?\"",
-        "<loaded:1:1><caller:0>", "p: invalid indirect expansion\n", 0)]
+        "<loaded:1:1><caller:0>", "line 4: p: invalid indirect expansion\n", 0)]
     [InlineData("unset p\nvalue=$(eval 'printf \"%s\" \"${!p}\"\nprintf skipped')\nprintf '<%s:%s>' \"$?\" \"$value\"",
-        "<1:>", "p: invalid indirect expansion\n", 0)]
+        "<1:>", "line 4: p: invalid indirect expansion\n", 0)]
     [InlineData("a=([2]=present); i=0\nprintf '<%s:%s>' \"${!a[i++]:-fallback}\" \"$i\"",
         "<fallback:1>", "", 0)]
     [InlineData("unset a; i=0\nprintf '%s' \"${!a[i++]:-fallback}\"\nprintf '<%s:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
-        "<1:1:1>", "a[i++]: invalid indirect expansion\n", 0)]
+        "<1:1:1>", "line 2: a[i++]: invalid indirect expansion\n", 0)]
     [InlineData("declare -A a; export b\nprintf '<%s:%s>' \"${!a[missing]:-fallback}\" \"${!b[1]:-unset}\"",
         "<fallback:unset>", "", 0)]
     public async Task IndirectNameFailuresUseTheReachedCommandUnit(string script, string expectedOutput,
@@ -668,7 +676,7 @@ public sealed class ParameterOperatorTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("$" + parameter + ": cannot assign in this way\n", result.StdErr);
+        Assert.Equal("line 1: $" + parameter + ": cannot assign in this way\n", result.StdErr);
     }
 
     [Theory]
@@ -681,7 +689,7 @@ public sealed class ParameterOperatorTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("a b: invalid variable name\n", result.StdErr);
+        Assert.Equal("line 1: a b: invalid variable name\n", result.StdErr);
     }
 
     // Prompt expansion remains unsupported and skips selector effects.
@@ -721,25 +729,25 @@ public sealed class ParameterOperatorTests
         Assert.Empty(result.StdErr);
     }
 
-    // Isolated Git Bash 5.2.37 files; remove only recorded diagnostic location prefixes.
+    // Isolated Bash files; retain the reached reader line on parameter diagnostics.
     [Theory]
-    [InlineData("printf '<%s>\\n' \"${bad!}\"; printf 'after\\n'\n", "", "${bad!}: bad substitution\n", 1)]
-    [InlineData("printf '<%s>\\n' \"${bad.dot}\"; printf 'after\\n'\n", "", "${bad.dot}: bad substitution\n", 1)]
-    [InlineData("printf '<%s>\\n' \"${bad name}\"; printf 'after\\n'\n", "", "${bad name}: bad substitution\n", 1)]
-    [InlineData("printf '<%s>\\n' \"${2bad}\"; printf 'after\\n'\n", "", "${2bad}: bad substitution\n", 1)]
-    [InlineData("printf '<%s>\\n' \"${}\"; printf 'after\\n'\n", "", "${}: bad substitution\n", 1)]
+    [InlineData("printf '<%s>\\n' \"${bad!}\"; printf 'after\\n'\n", "", "line 1: ${bad!}: bad substitution\n", 1)]
+    [InlineData("printf '<%s>\\n' \"${bad.dot}\"; printf 'after\\n'\n", "", "line 1: ${bad.dot}: bad substitution\n", 1)]
+    [InlineData("printf '<%s>\\n' \"${bad name}\"; printf 'after\\n'\n", "", "line 1: ${bad name}: bad substitution\n", 1)]
+    [InlineData("printf '<%s>\\n' \"${2bad}\"; printf 'after\\n'\n", "", "line 1: ${2bad}: bad substitution\n", 1)]
+    [InlineData("printf '<%s>\\n' \"${}\"; printf 'after\\n'\n", "", "line 1: ${}: bad substitution\n", 1)]
     [InlineData("false && printf '<%s>\\n' \"${bad!}\"; printf 'after\\n'\n", "after\n", "", 0)]
     [InlineData("name=ok; printf '<%s>\\n' \"${name:-${bad!}}\"; printf 'after\\n'\n", "<ok>\nafter\n", "", 0)]
-    [InlineData("unset name; printf '<%s>\\n' \"${name:-${bad!}}\"; printf 'after\\n'\n", "", "${bad!}: bad substitution\n", 1)]
+    [InlineData("unset name; printf '<%s>\\n' \"${name:-${bad!}}\"; printf 'after\\n'\n", "", "line 1: ${bad!}: bad substitution\n", 1)]
     [InlineData("probe_aa=1; probe_bb=2; printf '<%s>\\n' \"${!probe_*}\"; printf 'after\\n'\n", "<probe_aa probe_bb>\nafter\n", "", 0)]
     [InlineData("x=abc; printf '<%s>\\n' \"${x:}\" \"${x:1:}\"\n", "", "${x:}: bad substitution\n", 1)]
-    [InlineData("set -- a b c d e; x=abc; printf '<%s>\\n' \"${##abc}\" \"${#x:-d}\"\n", "", "${#x:-d}: bad substitution\n", 1)]
+    [InlineData("set -- a b c d e; x=abc; printf '<%s>\\n' \"${##abc}\" \"${#x:-d}\"\n", "", "line 1: ${#x:-d}: bad substitution\n", 1)]
     [InlineData("p=target; target=VALUE; printf '<%s>\\n' \"${!p}\"; p=absent; printf '<%s>\\n' \"${!p:-fallback}\"\n", "<VALUE>\n<fallback>\n", "", 0)]
-    [InlineData("p='bad!'; printf '<%s>\\n' \"${!p}\"; printf after\n", "", "bad!: invalid variable name\n", 1)]
-    [InlineData("unset p; printf '<%s>\\n' \"${!p}\"; printf after\n", "", "p: invalid indirect expansion\n", 1)]
+    [InlineData("p='bad!'; printf '<%s>\\n' \"${!p}\"; printf after\n", "", "line 1: bad!: invalid variable name\n", 1)]
+    [InlineData("unset p; printf '<%s>\\n' \"${!p}\"; printf after\n", "", "line 1: p: invalid indirect expansion\n", 1)]
     [InlineData("x=VALUE; declare -n p=x; printf '<%s>\\n' \"${!p}\"\n", "<x>\n", "", 0)]
     [InlineData("set -- target; unset target; printf '<%s>\\n' \"${!1:=value}\" \"$target\"\n", "<value>\n<value>\n", "", 0)]
-    [InlineData("p=9; set --; printf '<%s>\\n' \"${!p:=$(printf effect >&2; printf value)}\"; printf after\n", "", "effect9: invalid variable name\n", 1)]
+    [InlineData("p=9; set --; printf '<%s>\\n' \"${!p:=$(printf effect >&2; printf value)}\"; printf after\n", "", "effectline 1: 9: invalid variable name\n", 1)]
     [InlineData("a=(zero one two); p='a[i++]'; i=1; printf '<%s>\\n' \"${!p}\" \"$i\"\n", "<one>\n<2>\n", "", 0)]
     [InlineData("p=('a[q++]' spare); a=(alpha amber); p_index=0; q=0\nprintf '<%s>|%s|%s' \"${!p[p_index++]}\" \"$p_index\" \"$q\"\n",
         "<alpha>|1|1", "", 0)]
@@ -747,7 +755,7 @@ public sealed class ParameterOperatorTests
     [InlineData("probe_a=1; probe_b=2; f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${!probe_@}\"\n", "n=2\n<probe_a>\n<probe_b>\n", "", 0)]
     [InlineData("printf '<%s>\\n' \"${!:-missing}\" \"$!\" \"${#!}\"\n", "<missing>\n<>\n<0>\n", "", 0)]
     [InlineData("printf '<%s>\\n' \"${!:=$(printf bad >&2; printf value)}\"; printf after\n", "", "$!: cannot assign in this way\n", 1)]
-    [InlineData("printf '<%s>\\n' \"${!!}\"; printf after\n", "", "${!!}: bad substitution\n", 1)]
+    [InlineData("printf '<%s>\\n' \"${!!}\"; printf after\n", "", "line 1: ${!!}: bad substitution\n", 1)]
     [InlineData("a=([2]=abcdef [3]=uvwxyz); p='a[i++]'; i=2; printf '<%s>\\n' \"${!p:-fallback}\" \"$i\"\n", "<abcdef>\n<3>\n", "", 0)]
     [InlineData("a=([2]=abc [3]=xyz); p='a[i++]'; i=2; printf '<%s>\\n' \"${!p#x}\" \"$i\"\n", "<yz>\n<4>\n", "", 0)]
     public async Task Evaluation_ParameterGrammarAndOperators(
@@ -782,7 +790,7 @@ public sealed class ParameterOperatorTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.StartsWith("${a[", result.StdErr);
+        Assert.StartsWith("line 1: ${a[", result.StdErr);
         Assert.Contains("bad substitution", result.StdErr);
     }
 }

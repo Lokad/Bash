@@ -137,7 +137,7 @@ public sealed class ParameterSubstringTests
     [InlineData("a=([2]=two); printf '<%s>\\n' \"${a[@]:${a[9]:=-1}:1}\"; printf 'all=<%s>\\n' \"${a[@]}\"\n", "<-1>\nall=<two>\nall=<-1>\n", "", 0)]
     [InlineData("a=([2]=two); printf '<%s>\\n' \"${a[@]: -1:${a[9]:=1}}\"; printf 'all=<%s>\\n' \"${a[@]}\"\n", "<two>\nall=<two>\nall=<1>\n", "", 0)]
     [InlineData("a=([2]=two [5]=five [9]=nine); p='a[@]'; printf '<%s>\\n' \"${!p:3:1}\"\n", "<five>\n", "", 0)]
-    [InlineData("a=([2]=two [5]=five); i=0; printf '<%s>\\n' \"${!a[@]:i++:$(printf bad >&2; printf 2)}\"; printf after\n", "", "two five: invalid variable name\n", 1)]
+    [InlineData("a=([2]=two [5]=five); i=0; printf '<%s>\\n' \"${!a[@]:i++:$(printf bad >&2; printf 2)}\"; printf after\n", "", "line 1: two five: invalid variable name\n", 1)]
     [InlineData("files=([2]=/two [5]='/five words' [9]=/nine); for f in \"${files[@]:3:1}\"; do printf '<%s>\\n' \"$f\"; done", "</five words>\n", "", 0)]
     [InlineData("a=([2]='' [9]=last); for f in \"${a[@]:2:1}\"; do printf '<%s>' \"$f\"; done", "<>", "", 0)]
     [InlineData("x=abc; eval 'printf \"${x:}\"'; printf 'after:%s' \"$?\"", "after:1", "${x:}: bad substitution\n", 0)]

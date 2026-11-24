@@ -3657,8 +3657,8 @@ public sealed partial class Evaluation : IFileTester
         if (fatalKind is { } kind)
             SetFatalExpansionError(kind);
         _state.SetHereDocumentParameterError();
-        var prefix = GetHereDocumentWarningPrefix(scope) ?? GetCommandDiagnosticPrefix(scope.Context, HereDocumentExpansionLine(scope));
-        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
+        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+            GetHereDocumentParameterDiagnosticPrefix(scope));
     }
 
     internal Task ReportInvalidParameterTransformAsync(ShellValue subject, ScopedEvaluation scope, bool hereDocument)
@@ -3710,7 +3710,7 @@ public sealed partial class Evaluation : IFileTester
         else if (length)
             SetFatalExpansionError(ExpansionFailureKind.Arithmetic);
         var prefix = scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument
-            ? GetHereDocumentWarningPrefix(scope) ?? GetCommandDiagnosticPrefix(scope.Context, HereDocumentExpansionLine(scope))
+            ? GetHereDocumentParameterDiagnosticPrefix(scope)
             : GetCommandDiagnosticPrefix(scope);
         return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
     }
@@ -3780,8 +3780,14 @@ public sealed partial class Evaluation : IFileTester
         ReportUnitExpansionFailureAsync(subject, message, scope, kind,
             kind is ExpansionFailureKind.Arithmetic or ExpansionFailureKind.ArrayIndex ? GetBuiltinDiagnosticPrefix(scope.Context) : default);
 
-    internal Task ReportEmptyArraySubscriptAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope) =>
-        ReportUnitExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax, GetCommandDiagnosticPrefix(scope));
+    internal Task ReportParameterReadFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
+        ScopedEvaluation scope, ExpansionFailureKind kind)
+    {
+        var prefix = scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument
+            ? GetHereDocumentParameterDiagnosticPrefix(scope)
+            : GetCommandDiagnosticPrefix(scope);
+        return ReportUnitExpansionFailureAsync(subject, message, scope, kind, prefix);
+    }
 
     private Task ReportUnitExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
         ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)
@@ -4360,6 +4366,9 @@ public sealed partial class Evaluation : IFileTester
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>
         ReportHereDocumentWarningsAsync(warnings, HereDocumentExpansionLine(scope), scope.Context.CallerSource?.Path,
             useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope));
+
+    private static SyntaxDiagnosticPrefix GetHereDocumentParameterDiagnosticPrefix(ScopedEvaluation scope) =>
+        GetHereDocumentWarningPrefix(scope) ?? GetCommandDiagnosticPrefix(scope.Context, HereDocumentExpansionLine(scope));
 
     private static SyntaxDiagnosticPrefix? GetHereDocumentWarningPrefix(ScopedEvaluation scope)
     {
