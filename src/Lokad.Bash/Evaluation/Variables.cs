@@ -549,8 +549,7 @@ public sealed partial class Variables
         internal IReadOnlySet<BindingName> SavedNames => _names;
         internal IReadOnlySet<BindingName> PromotedPrefixes => _promotedPrefixes;
 
-        internal Variables HiddenOwner(BindingName name, Variables visible) => _parent != null
-            ? _parent.HiddenOwner(name, visible) : _names.Contains(name) ? _saved : visible;
+        internal Variables? SavedOwner(BindingName name) => Owns(name) ? _saved : null;
 
         internal void Publish(BindingName name, Variables command)
         {
@@ -606,7 +605,7 @@ public sealed partial class Variables
             owner._promotedPrefixes.Add(name);
         }
 
-        private LocalBindings DeclarationOwner(BindingName name)
+        internal LocalBindings DeclarationOwner(BindingName name)
         {
             var owner = this;
             while (owner._parent is { } parent && !owner.IsScriptPrefix(name))

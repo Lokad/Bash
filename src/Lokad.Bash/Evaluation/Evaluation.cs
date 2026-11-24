@@ -5627,7 +5627,7 @@ public sealed partial class Evaluation : IFileTester
         /// <summary>The supported option state saved by the first local dash operand in this invocation.</summary>
         internal bool? SavedErrexit { get; private set; }
 
-        private FunctionContext OptionOwner
+        internal FunctionContext InvocationOwner
         {
             get
             {
@@ -5639,9 +5639,9 @@ public sealed partial class Evaluation : IFileTester
             }
         }
 
-        internal void SaveErrexit(bool enabled) => OptionOwner.SavedErrexit ??= enabled;
+        internal void SaveErrexit(bool enabled) => InvocationOwner.SavedErrexit ??= enabled;
 
-        internal bool HasOwnOptionSnapshot => OptionOwner.SavedErrexit.HasValue;
+        internal bool HasOwnOptionSnapshot => InvocationOwner.SavedErrexit.HasValue;
 
         internal bool HasVisibleOptionSnapshot()
         {
@@ -5816,42 +5816,64 @@ public sealed partial class Evaluation : IFileTester
             // The reached command's prefixes are the innermost restoration scope.
             var owner = commandBindings?.Contains(bindingName) == true ? commandBindings.SavedVariables : active;
             var prefix = GlobalPrefixes;
+            var visible = lookup == DeclarationBindingScope.Visible;
+            Variables.LocalBindings? localOwner = null;
+            Variables? savedLocal = null;
+            var declares = false;
+            var blocksPromotion = false;
             // Interleave script prefixes with function frames in nesting order:
             // eval may be inside a function or may itself invoke a function.
             for (var function = FunctionContext; function != null && function != outerBoundary; function = function.Enclosing)
             {
-                if (lookup == DeclarationBindingScope.Visible && function.Locals.Declares(bindingName))
+                var locals = function.Locals;
+                // Reuse the selected namespace until the enclosing walk passes it.
+                if (localOwner == null)
                 {
-                    if (function.PrefixNames.Contains(bindingName) && !function.Locals.BlocksPromotion(bindingName))
+                    if (visible)
                     {
-                        var inherited = function.Locals.HiddenOwner(bindingName, owner);
+                        localOwner = locals.DeclarationOwner(bindingName);
+                        declares = localOwner.OwnsDeclaration(bindingName);
+                        blocksPromotion = declares && localOwner.BlocksPromotion(bindingName);
+                    }
+                    else
+                    {
+                        localOwner = function.InvocationOwner.Locals;
+                        savedLocal = localOwner.SavedOwner(bindingName);
+                    }
+                }
+                if (declares)
+                {
+                    if (function.PrefixNames.Contains(bindingName) && !blocksPromotion)
+                    {
+                        var inherited = function.InvocationOwner.Locals.SavedOwner(bindingName) ?? owner;
                         // Unset from a helper cancels this saved prefix export, not the caller local's promotion.
                         if (inherited.IsExported(bindingName))
                             return inherited;
                     }
-                    if (function.Locals.SavedBindings != null || function.Locals.BlocksPromotion(bindingName))
+                    if (!locals.IsTemporaryPrefixScope || blocksPromotion)
                         return owner;
                 }
                 while (prefix != null && prefix.FunctionDepth == function.Depth)
                 {
                     UnhidePrefix(ref exposedPrefixes);
-                    if (lookup == DeclarationBindingScope.Visible && owner.HasBinding(bindingName) && !owner.IsUnassignedScalar(bindingName))
+                    if (visible && owner.HasBinding(bindingName) && !owner.IsUnassignedScalar(bindingName))
                         return owner;
                 }
-                if (lookup == DeclarationBindingScope.Global)
-                    owner = function.Locals.HiddenOwner(bindingName, owner);
+                owner = savedLocal ?? owner;
                 if (function.PrefixBindings is { } bindings && bindings.Contains(bindingName))
                 {
                     owner = bindings.SavedVariables;
                     RecordExposedPrefix(bindings, ref exposedPrefixes);
                 }
-                if (lookup == DeclarationBindingScope.Visible && owner.HasBinding(bindingName) && !owner.IsUnassignedScalar(bindingName))
+                if (visible && owner.HasBinding(bindingName) && !owner.IsUnassignedScalar(bindingName))
                     return owner;
+                if (ReferenceEquals(locals, localOwner))
+                    localOwner = null;
             }
             while (prefix != null && (outerBoundary == null || prefix.FunctionDepth > outerBoundary.Depth))
             {
                 UnhidePrefix(ref exposedPrefixes);
-                if (lookup == DeclarationBindingScope.Visible && owner.HasBinding(bindingName))
+                if (visible && owner.HasBinding(bindingName))
                     return owner;
             }
             return owner;

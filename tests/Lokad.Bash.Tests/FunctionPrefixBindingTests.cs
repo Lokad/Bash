@@ -10,6 +10,71 @@ namespace Lokad.Bash.Tests;
 public sealed partial class FunctionPrefixBindingTests
 {
     [Fact]
+    public void BindingOwnerLookupPreservesPrefixSelectionAndTheCallerBoundary()
+    {
+        var variables = Variables.CreateEmpty();
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        var memory = new EvaluationMemory(governor);
+        var name = ShellValue.FromText("f");
+        try
+        {
+            Assert.True(variables.TrySetScalar("target", ShellValue.FromText("global")));
+            var locals = new Variables.LocalBindings(variables, parent: null, prefixes: null);
+            using var function = new Eval.FunctionContext(name, locals, enclosing: null);
+            Declare("target", "function", isNameref: false);
+            Declare("reference", "target", isNameref: true);
+
+            using var outerPrefix = InstallPrefix("other");
+            using var outerScript = new Eval.FunctionContext(name, locals.WithTemporaryPrefixes(outerPrefix), function);
+            var outerPrefixes = new Eval.GlobalPrefixBindings(outerPrefix, outerScript.Depth, null);
+            using var scriptPrefix = InstallPrefix("target");
+            using var script = new Eval.FunctionContext(name, outerScript.Locals.WithTemporaryPrefixes(scriptPrefix), outerScript);
+            var scriptPrefixes = new Eval.GlobalPrefixBindings(scriptPrefix, script.Depth, outerPrefixes);
+
+            var calleeLocals = new Variables.LocalBindings(variables, parent: null, prefixes: null);
+            using var callee = new Eval.FunctionContext(ShellValue.FromText("callee"), calleeLocals, script);
+            var context = new Eval.EvaluationContext(0, callee, Eval.ReturnTargetKind.Function)
+                { GlobalPrefixes = scriptPrefixes };
+            var saved = Assert.IsType<Variables>(locals.SavedBindings);
+            Assert.Same(saved, context.GetGlobalBindingOwner("target", variables));
+
+            Assert.True(variables.TryUnset("target"));
+            List<Variables.CommandBindings>? selected = null;
+            Assert.Same(scriptPrefix.SavedVariables,
+                context.GetVisibleBindingOwner("target", variables, memory, ref selected));
+            var exposed = Assert.IsType<List<Variables.CommandBindings>>(selected);
+            Assert.Same(scriptPrefix, Assert.Single(exposed));
+            exposed.Clear();
+
+            script.Locals.ShadowNamerefTarget("target", variables, memory);
+            script.Locals.RecordUnset("target");
+            Assert.Same(variables, context.GetVisibleBindingOwner("target", variables, memory, ref selected));
+            Assert.Empty(exposed);
+
+            Assert.True(variables.TrySetNameref("target", ShellValue.Empty));
+            Assert.True(context.TryResolveLocalNamerefAssignment("reference", variables, memory, out var fallback));
+            var write = Assert.IsType<Eval.LocalNamerefAssignment.Write>(fallback);
+            Assert.Same(saved, write.Binding.Owner);
+
+            void Declare(BindingName binding, string value, bool isNameref) =>
+                Assert.True(locals.TryDeclare(variables, variables,
+                    new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName(binding), ShellValue.FromText(value)),
+                    prefixes: null, ArrayAssignmentKind.Auto, isNameref, inherit: false, caseChange: default,
+                    memory, enclosingFunction: null));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        Variables.CommandBindings InstallPrefix(BindingName binding)
+        {
+            var prepared = Variables.CreateEmpty();
+            Assert.True(prepared.TrySetScalar(binding, ShellValue.FromText("temporary")));
+            return new Variables.CommandBindings(variables, prepared, new HashSet<BindingName> { binding },
+                memory, CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public void EnclosingLocalLookupDistinguishesDeclarationsFromTemporaryPrefixes()
     {
         var variables = Variables.CreateEmpty();
