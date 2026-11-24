@@ -178,6 +178,41 @@ public sealed class HostedFunctionExportTests
             FunctionAttributes.Exported, sourceMemory: null, memory);
     }
 
+    [Fact]
+    public void ExportMembershipKeepsSlotOrderAcrossBlockBoundariesAndReuse()
+    {
+        var governor = new MemoryGovernor(4096);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var bindings = Enumerable.Range(0, 193).Select(index => Add("f" + index, index is 0 or 63 or 64 or 192)).ToArray();
+        Assert.Equal(new[] { bindings[0], bindings[63], bindings[64], bindings[192] }, state.GetExportedFunctions(memory).ToArray());
+
+        Assert.True(state.TryUnsetFunction(bindings[64].Definition.Name.Value));
+        Assert.True(state.TryUnsetFunction(bindings[63].Definition.Name.Value));
+        Assert.Equal(new[] { bindings[0], bindings[192] }, state.GetExportedFunctions(memory).ToArray());
+        var earlier = Add("earlier", exported: true);
+        var later = Add("later", exported: true);
+        var promoted = bindings[130] with { Attributes = FunctionAttributes.Exported };
+        state.SetFunctionBinding(promoted);
+        Assert.Equal(new[] { bindings[0], earlier, later, promoted, bindings[192] }, state.GetExportedFunctions(memory).ToArray());
+
+        using (state.BeginClearFunctionExports(memory, CancellationToken.None))
+            Assert.True(state.GetExportedFunctions(memory).IsEmpty);
+        Assert.Equal(new[] { bindings[0], earlier, later, promoted, bindings[192] }, state.GetExportedFunctions(memory).ToArray());
+        state.ReleaseFunctions();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        FunctionBinding Add(string name, bool exported)
+        {
+            var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(name + "(){ :; }").Commands));
+            var binding = new FunctionBinding(definition, exported ? FunctionAttributes.Exported : FunctionAttributes.None,
+                sourceMemory: null, memory);
+            state.SetFunctionBinding(binding);
+            return binding;
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

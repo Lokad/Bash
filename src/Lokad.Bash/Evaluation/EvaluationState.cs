@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Text.Unicode;
 using System.Threading;
 using Lokad.Bash.Commands;
@@ -250,16 +251,22 @@ internal sealed class EvaluationState
     }
 
     /// <summary>One function namespace for invocation, attributes and inspection; independent of variables.</summary>
-    private readonly Dictionary<ShellValue, FunctionEntry> _functions = [];
+    private readonly Dictionary<ShellValue, int> _functions = [];
+    private readonly List<FunctionSlot> _functionSlots = [];
+    private const int FunctionSlotsPerBlock = 64;
+    private readonly List<ulong> _functionExportMasks = [];
+    private readonly SortedSet<int> _exportedFunctionBlocks = [];
+    private int _freeFunctionSlot = -1;
     private int _functionCapacity;
     private int _exportedFunctionCount;
     private FunctionBinding[]? _exportedFunctions;
     private IMemoryReservation? _exportedFunctionsMemory;
 
-    // The export index is meaningful only while this namespace's selection is live.
-    private readonly record struct FunctionEntry(FunctionBinding Binding, int ExportIndex);
+    // Occupied slots keep their cached export index. Empty slots link to the next free slot.
+    private readonly record struct FunctionSlot(FunctionBinding? Binding, int Index);
 
-    // Capacity covers dictionary growth/overlap; live entries cover binding/cache-cell metadata.
+    // Capacity covers the name map, slots, and one mask and optional index node per block.
+    // Live entries cover binding and cache-cell metadata.
     internal long EstimatedFunctionMemoryBytes => 128L * _functionCapacity + 128L * _functions.Count;
 
     public EvaluationState(
@@ -316,36 +323,39 @@ internal sealed class EvaluationState
 
     internal bool TryGetFunction(ShellValue name, [NotNullWhen(true)] out FunctionBinding? binding)
     {
-        var found = _functions.TryGetValue(name, out var entry);
-        binding = found ? entry.Binding : null;
+        var found = _functions.TryGetValue(name, out var slot);
+        binding = found ? GetFunctionBinding(slot) : null;
         return found;
     }
 
     internal IEnumerable<KeyValuePair<ShellValue, FunctionBinding>> EnumerateFunctions()
     {
-        foreach (var (name, entry) in _functions)
-            yield return new KeyValuePair<ShellValue, FunctionBinding>(name, entry.Binding);
+        foreach (var (name, slot) in _functions)
+            yield return new KeyValuePair<ShellValue, FunctionBinding>(name, GetFunctionBinding(slot));
     }
+
+    private FunctionBinding GetFunctionBinding(int slot) => _functionSlots[slot].Binding
+        ?? throw new InvalidOperationException("The function slot is empty.");
 
     /// <summary>Borrows the current export selection in function namespace order.</summary>
     internal ReadOnlySpan<FunctionBinding> GetExportedFunctions(EvaluationMemory memory)
     {
-        if (_exportedFunctionCount == 0)
+        var count = _exportedFunctionCount;
+        if (count == 0)
             return [];
         if (_exportedFunctions is { } cached)
             return cached;
 
-        var reservation = memory.Budget.Reserve(MemoryCapacity.ArrayBackingBytes<FunctionBinding>(_exportedFunctionCount));
+        var reservation = memory.Budget.Reserve(MemoryCapacity.ArrayBackingBytes<FunctionBinding>(count));
         try
         {
-            var selected = new FunctionBinding[_exportedFunctionCount];
+            var selected = new FunctionBinding[count];
             var index = 0;
-            foreach (var binding in EnumerateExportedFunctions(CancellationToken.None))
-                selected[index++] = binding;
-            for (index = 0; index < selected.Length; index++)
+            foreach (var slot in EnumerateExportedFunctionSlots())
             {
-                var binding = selected[index];
-                _functions[binding.Definition.Name.Value] = new FunctionEntry(binding, index);
+                var binding = GetFunctionBinding(slot);
+                _functionSlots[slot] = new FunctionSlot(binding, index);
+                selected[index++] = binding;
             }
             _exportedFunctionsMemory = reservation;
             _exportedFunctions = selected;
@@ -358,42 +368,54 @@ internal sealed class EvaluationState
         }
     }
 
-    private IEnumerable<FunctionBinding> EnumerateExportedFunctions(CancellationToken cancellationToken)
+    private IEnumerable<int> EnumerateExportedFunctionSlots()
     {
-        foreach (var entry in _functions.Values)
+        foreach (var block in _exportedFunctionBlocks)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (entry.Binding.Attributes.HasFlag(FunctionAttributes.Exported))
-                yield return entry.Binding;
+            var first = block * FunctionSlotsPerBlock;
+            for (var mask = _functionExportMasks[block]; mask != 0; mask &= mask - 1)
+                yield return first + BitOperations.TrailingZeroCount(mask);
         }
     }
 
     /// <summary>Clears the exported subset while an in-process replacement is in flight.</summary>
     internal FunctionExportClear? BeginClearFunctionExports(EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        if (_exportedFunctionCount == 0)
+        var count = _exportedFunctionCount;
+        if (count == 0)
             return null;
 
-        // Both versions can still be held after a nested command publishes an edit.
+        // Both versions can still be held after a nested edit.
         const int bindingPairBytes = 96;
         var staging = memory.Budget.Reserve(checked(64L
-            + MemoryCapacity.ArrayBackingBytes<(FunctionBinding, FunctionBinding)>(_exportedFunctionCount)
-            + (long)bindingPairBytes * _exportedFunctionCount));
+            + MemoryCapacity.ArrayBackingBytes<(FunctionBinding, FunctionBinding)>(count)
+            + (long)bindingPairBytes * count));
         FunctionExportClear? clear = null;
         try
         {
-            var changes = new (FunctionBinding Original, FunctionBinding Cleared)[_exportedFunctionCount];
+            var changes = new (FunctionBinding Original, FunctionBinding Cleared)[count];
             var index = 0;
-            foreach (var binding in _exportedFunctions ?? EnumerateExportedFunctions(cancellationToken))
+            if (_exportedFunctions is { } cached)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                changes[index++] = (binding, binding with { Attributes = binding.Attributes & ~FunctionAttributes.Exported });
+                foreach (var binding in cached)
+                    AddClearedBinding(binding);
+            }
+            else
+            {
+                foreach (var slot in EnumerateExportedFunctionSlots())
+                    AddClearedBinding(GetFunctionBinding(slot));
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             clear = new FunctionExportClear(this, changes, staging);
             clear.Apply();
             return clear;
+
+            void AddClearedBinding(FunctionBinding binding)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                changes[index++] = (binding, binding with { Attributes = binding.Attributes & ~FunctionAttributes.Exported });
+            }
         }
         catch
         {
@@ -520,8 +542,9 @@ internal sealed class EvaluationState
             Traps = Traps?.Fork(kind)
         };
 
-        foreach (var entry in _functions.Values)
-            clone.SetFunctionBinding(entry.Binding);
+        foreach (var slot in _functionSlots)
+            if (slot.Binding is { } binding)
+                clone.SetFunctionBinding(binding);
 
         return clone;
     }
@@ -608,41 +631,74 @@ internal sealed class EvaluationState
     public void SetFunctionBinding(FunctionBinding function)
     {
         var name = function.Definition.Name.Value;
-        var previous = _functions.TryGetValue(name, out var entry) ? entry.Binding : null;
+        var previous = _functions.TryGetValue(name, out var position) ? GetFunctionBinding(position) : null;
+        var wasExported = previous?.Attributes.HasFlag(FunctionAttributes.Exported) == true;
+        var isExported = function.Attributes.HasFlag(FunctionAttributes.Exported);
+        if (previous == null)
+            position = AllocateSlot();
         // Replacing a dictionary value preserves its original key. Keep source-backed
         // name storage with the new definition's owner, rather than the retired source.
-        if (previous != null && !previous.Definition.Name.Value.Bytes.Equals(name.Bytes))
+        else if (!previous.Definition.Name.Value.Bytes.Equals(name.Bytes))
             _functions.Remove(name);
-        _functions[name] = new FunctionEntry(function, entry.ExportIndex);
+        _functions[name] = position;
         _functionCapacity = Math.Max(_functionCapacity, _functions.Count);
         // Acquire before retiring the old binding: attribute copies can share this owner.
         function.Retain();
-        var wasExported = previous?.Attributes.HasFlag(FunctionAttributes.Exported) == true;
-        var isExported = function.Attributes.HasFlag(FunctionAttributes.Exported);
+        var exportIndex = _functionSlots[position].Index;
+        _functionSlots[position] = new FunctionSlot(function, exportIndex);
         if (wasExported != isExported)
-        {
-            ReleaseExportedFunctionSelection();
-            _exportedFunctionCount += isExported ? 1 : -1;
-        }
+            SetExportMembership(position, isExported);
         else if (isExported && _exportedFunctions is { } selected)
-            selected[entry.ExportIndex] = function;
+            selected[exportIndex] = function;
         previous?.Release();
+
+        int AllocateSlot()
+        {
+            // Match namespace enumeration: reuse the most recently vacated slot first.
+            if (_freeFunctionSlot >= 0)
+            {
+                var free = _freeFunctionSlot;
+                _freeFunctionSlot = _functionSlots[free].Index;
+                return free;
+            }
+            var next = _functionSlots.Count;
+            if (next % FunctionSlotsPerBlock == 0)
+                _functionExportMasks.Add(0);
+            _functionSlots.Add(default);
+            return next;
+        }
+    }
+
+    /// <summary>Updates the export index for a slot whose membership changed.</summary>
+    private void SetExportMembership(int position, bool exported)
+    {
+        var block = position / FunctionSlotsPerBlock;
+        var bit = 1UL << (position % FunctionSlotsPerBlock);
+        var previous = _functionExportMasks[block];
+        var next = exported ? previous | bit : previous & ~bit;
+        if (previous == 0)
+            _exportedFunctionBlocks.Add(block);
+        else if (next == 0)
+            _exportedFunctionBlocks.Remove(block);
+        _functionExportMasks[block] = next;
+        _exportedFunctionCount += exported ? 1 : -1;
+        ReleaseExportedFunctionSelection();
     }
 
     /// <summary>Removes the current binding, not a definition already being invoked.</summary>
     public bool TryUnsetFunction(ShellValue name)
     {
-        if (!TryGetFunction(name, out var function))
+        if (!_functions.TryGetValue(name, out var position))
             return true;
+        var function = GetFunctionBinding(position);
         if (function.Attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
 
         _functions.Remove(name);
+        _functionSlots[position] = new FunctionSlot(null, _freeFunctionSlot);
+        _freeFunctionSlot = position;
         if (function.Attributes.HasFlag(FunctionAttributes.Exported))
-        {
-            ReleaseExportedFunctionSelection();
-            _exportedFunctionCount--;
-        }
+            SetExportMembership(position, exported: false);
         function.Release();
         return true;
     }
@@ -651,9 +707,13 @@ internal sealed class EvaluationState
     public void ReleaseFunctions()
     {
         ReleaseExportedFunctionSelection();
+        _exportedFunctionBlocks.Clear();
+        _functionExportMasks.Clear();
         _exportedFunctionCount = 0;
-        foreach (var entry in _functions.Values)
-            entry.Binding.Release();
+        _freeFunctionSlot = -1;
+        foreach (var slot in _functionSlots)
+            slot.Binding?.Release();
+        _functionSlots.Clear();
         _functions.Clear();
     }
 
