@@ -407,7 +407,10 @@ source owner leaves the caller's source buffer free to retire. Each command unit
 has a coarse syntax owner
 retaining its input owner. Completed units refund their metadata unless surviving
 definitions or active users retain it; one early definition does not keep every
-later unit's scratch alive. Reached backtick substitutions in stable source
+later unit's scratch alive. Completed command units, deferred captures and imported
+definitions return prepaid capacity above the logical syntax estimate before
+execution or publication when the budget accepts the shrink.
+Reached backtick substitutions in stable source
 reuse successful syntax under that source owner. This includes backticks reached
 directly in a here-document body. The first parse admits retained syntax and the
 cache entry. Concurrent first callers can parse independently and unpublished

@@ -69,6 +69,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                 return new CommandSubstitutionResult(ShellValue.Empty, 2, IgnoredNuls: false);
             }
 
+            parsedMemory?.SyntaxMemory.ReleaseUnusedCapacityOnPublication();
             var finalInput = SelectFinalInput(parsed, outer.CancellationToken, out var readInCaller);
             if (finalInput != null && readInCaller)
                 return await outer.ReadInputSubstitutionAsync(finalInput.Redirections, scope, writeToCapture: false).ConfigureAwait(false);

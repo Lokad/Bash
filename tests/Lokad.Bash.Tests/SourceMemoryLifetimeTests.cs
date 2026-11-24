@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
@@ -13,6 +14,108 @@ namespace Lokad.Bash.Tests;
 public sealed class SourceMemoryLifetimeTests
 {
     private const int PaddingBytes = 32768;
+
+    [Theory]
+    [InlineData("eval")]
+    [InlineData("source")]
+    [InlineData("import")]
+    public async Task PublishedFunctionKeepsTheCompletedSyntaxReservation(string reader)
+    {
+        const string Definition = "probe(){ printf body; }\n";
+        var input = Encoding.UTF8.GetBytes(Definition);
+        var governor = new MemoryGovernor(1024 * 1024);
+        long syntaxBytes;
+        using (var parserOwner = governor.CreateScope())
+        using (var syntax = new MemoryCapacity(parserOwner, 0))
+        {
+            var parser = new ShellScanContext { SyntaxMemory = syntax, ReadsCommandString = reader != "import" };
+            if (reader == "import")
+            {
+                syntax.Grow(32L + input.Length);
+                Assert.True(Parser.TryParseScript(input, parser, out _, out _));
+            }
+            else
+                Assert.IsType<CommandUnitParseResult.Parsed>(Parser.TryParseCommandUnits(input, parser).First());
+            syntaxBytes = syntax.Bytes;
+        }
+
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        using var owner = budget.CreateScope();
+        await using var host = new TestHost { MemoryBudget = budget };
+        if (reader == "source")
+            host.AddFile("/fixture", Definition);
+        var invocation = reader switch
+        {
+            "source" => "source /fixture; ",
+            "eval" => "eval '" + Definition + "'; ",
+            _ => "",
+        };
+        var evaluation = new Eval(Parser.Parse(invocation + "printf loaded; probe; unset -f probe"));
+        if (reader == "import")
+            evaluation.SetInheritedFunctions("bash", [new ExportedFunction(input)]);
+
+        IMemoryReservation? retained = null;
+        host.BeforeAppend = (_, content, _) =>
+        {
+            if (content.Span.SequenceEqual("loaded"u8))
+                retained = Assert.Single(scopes.SelectMany(scope => scope.Reservations), item => item.Bytes == syntaxBytes);
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var result = await new Engine().RunAsync(evaluation, host, owner, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("loadedbody", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.NotNull(retained);
+        Assert.Equal(0, retained.Bytes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task DeferredCaptureKeepsTheCompletedSyntaxThroughExecution()
+    {
+        const string Body = "printf body\n";
+        var governor = new MemoryGovernor(1024 * 1024);
+        long syntaxBytes;
+        using (var parserOwner = governor.CreateScope())
+        using (var syntax = new MemoryCapacity(parserOwner, 0))
+        {
+            var parser = new ShellScanContext { SyntaxMemory = syntax };
+            Assert.True(Parser.TryParseScript(Encoding.UTF8.GetBytes(Body), parser, out _, out _));
+            syntaxBytes = syntax.Bytes;
+        }
+
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        using var owner = budget.CreateScope();
+        await using var host = new TestHost { MemoryBudget = budget };
+        var capture = new Word([WordPart.FromText(WordPartKind.CommandSubstitutionQuoted, Body)]);
+        var command = Assert.IsType<SimpleCommand>(Assert.Single(Parser.Parse("printf '%s'").Commands));
+        var evaluation = new Eval(new ParsedScript([command with { Words = [.. command.Words, capture] }]));
+        evaluation.Memory.Budget = owner;
+
+        IMemoryReservation? retained = null;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (await evaluation.GetNextStep(deadline.Token) is { } operation)
+        {
+            if (operation is RunCapturedEvaluation)
+                retained = Assert.Single(scopes.SelectMany(scope => scope.Reservations), item => item.Bytes == syntaxBytes);
+            await ShellOperationDispatcher.DispatchAsync(operation, host, deadline.Token);
+        }
+        await evaluation.Completion;
+
+        Assert.Equal(0, evaluation.LastExitCode);
+        Assert.Equal("body", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.NotNull(retained);
+        Assert.Equal(0, retained.Bytes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
 
     [Theory]
     [InlineData(4096, false, false)]
@@ -695,6 +798,7 @@ public sealed class SourceMemoryLifetimeTests
     {
         private readonly ConcurrentBag<IMemoryReservation> _reservations = [];
         public int Depth => depth;
+        public IEnumerable<IMemoryReservation> Reservations => _reservations;
         public long OwnBytes => _reservations.Sum(r => r.Bytes);
         public Action<long>? ReservationAdmitted { get; set; }
         public IMemoryScope CreateScope()

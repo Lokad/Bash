@@ -175,6 +175,14 @@ public sealed class MemoryCapacity : IDisposable
             CheckEmptyCapacityLifetime();
     }
 
+    /// <summary>Returns spare credit before publication when the live reservation accepts shrinking.</summary>
+    internal void ReleaseUnusedCapacityOnPublication()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_reservation is { } reservation && reservation.Bytes > Bytes)
+            _ = reservation.TryResize(Bytes);
+    }
+
     /// <summary>Leaves logical usage charged to the enclosing scope and returns unused credit.</summary>
     /// <remarks>This ends the capacity owner's lifetime; retained data must stay within that scope.</remarks>
     public void DetachReservation()

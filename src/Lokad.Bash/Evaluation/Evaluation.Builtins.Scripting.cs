@@ -419,6 +419,8 @@ public sealed partial class Evaluation
                 if (skipExecution)
                     continue;
 
+                // The completed unit can outlive this reader through a function definition.
+                unitMemory.SyntaxMemory.ReleaseUnusedCapacityOnPublication();
                 result = await EvaluateCommandAsync(command,
                     scope with
                     {

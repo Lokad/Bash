@@ -71,6 +71,7 @@ public sealed partial class Evaluation
                             .ConfigureAwait(false);
                         return false;
                     }
+                    owner.SyntaxMemory.ReleaseUnusedCapacityOnPublication();
                     if (parser.RejectedCaptureReads != 0 && !await ValidateImportSpellingAsync(definition).ConfigureAwait(false))
                         return false;
                     if (_state.Functions.ContainsKey(definition.Name.Value))
