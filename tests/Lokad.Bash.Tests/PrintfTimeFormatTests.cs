@@ -312,6 +312,43 @@ public sealed class PrintfTimeFormatTests
             $"Composite directives allocated {compact.Median:N0} bytes and scalar directives allocated {control.Median:N0} bytes.");
     }
 
+    [Theory]
+    [InlineData(0, "+0000|+00:00|+00:00:00|+00|UTC")]
+    [InlineData(300, "+0500|+05:00|+05:00:00|+05|+05:00")]
+    [InlineData(345, "+0545|+05:45|+05:45:00|+05:45|+05:45")]
+    [InlineData(-210, "-0330|-03:30|-03:30:00|-03:30|-03:30")]
+    public void DateOffsetsPreserveTheirColonForms(int offsetMinutes, string expected)
+    {
+        var timestamp = DateTimeOffset.UnixEpoch.ToOffset(TimeSpan.FromMinutes(offsetMinutes));
+        Assert.Equal(expected, GnuDateFormatting.Format(timestamp, "%z|%:z|%::z|%:::z|%Z"));
+    }
+
+    [Theory]
+    [InlineData(GnuDateFormatDialect.Date)]
+    [InlineData(GnuDateFormatDialect.Strftime)]
+    public void DateScalarFieldsAvoidIntermediateStrings(GnuDateFormatDialect dialect)
+    {
+        const int iterations = 64;
+        const string fields = "%H|%I|%k|%l|%A|%a|%z|%p|%P|%Y";
+        const string rendered = "00|12| 0|12|Thursday|Thu|+0000|AM|am|1970";
+        // Case flags on the hour keep the input lengths and initial builder capacities equal.
+        var format = "%" + new string('^', rendered.Length - fields.Length) + fields[1..];
+        var directives = string.Concat(Enumerable.Repeat(format, 16));
+        var literals = string.Concat(Enumerable.Repeat(rendered, 16));
+        string Format(string text) => GnuDateFormatting.Format(DateTimeOffset.UnixEpoch, text, dialect);
+        for (var index = 0; index < 16; index++)
+        {
+            _ = Format(directives);
+            _ = Format(literals);
+        }
+        Assert.Equal(literals, Format(directives));
+
+        var actual = AllocationAssert.MeasureAllocatedBytes(() => Format(directives), iterations);
+        var control = AllocationAssert.MeasureAllocatedBytes(() => Format(literals), iterations);
+        Assert.True(actual.Median <= control.Median + 256,
+            $"Scalar directives allocated {actual.Median:N0} bytes and literal output allocated {control.Median:N0} bytes.");
+    }
+
     [Fact]
     public void TimeFormatProjectionRequiresAdmissionBeforeItsAllocation()
     {

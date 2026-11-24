@@ -122,8 +122,8 @@ public static class GnuDateFormatting
             reserveCharacters(initialCapacity);
         var builder = new StringBuilder(initialCapacity);
         var strftime = dialect == GnuDateFormatDialect.Strftime;
-        // Fixed calendar recipes fit even with a signed 32-bit year or a numeric zone.
-        Span<char> compositeText = stackalloc char[48];
+        // Generated fields fit even with a signed Unix timestamp, a long year, or a numeric zone.
+        Span<char> field = stackalloc char[48];
 
         for (var index = 0; index < format.Length; index++)
         {
@@ -265,9 +265,10 @@ public static class GnuDateFormatting
                 'F' => "%Y-%m-%d",
                 _ => null
             };
-            ReadOnlySpan<char> text = composite == null
-                ? FormatScalarDirective(value, specifier, colonCount, directive, strftime)
-                : compositeText[..FormatComposite(value, composite, strftime, compositeText)];
+            var length = composite == null
+                ? WriteScalarDirective(value, specifier, colonCount, directive, strftime, field)
+                : WriteComposite(value, composite, strftime, field);
+            ReadOnlySpan<char> text = field[..length];
             var defaultPadding = specifier is
                 'C' or 'd' or 'g' or 'G' or 'H' or 'I' or 'j' or 'm' or 'M'
                     or 'S' or 'u' or 'U' or 'V' or 'w' or 'W' or 'y' or 'Y'
@@ -489,7 +490,7 @@ public static class GnuDateFormatting
             return DirectiveCase.Unchanged;
         }
 
-        static int FormatComposite(CalendarTime calendar, string recipe, bool strftime, Span<char> destination)
+        static int WriteComposite(CalendarTime calendar, string recipe, bool strftime, Span<char> destination)
         {
             // Recipes contain literal separators and unmodified scalar directives.
             var length = 0;
@@ -503,64 +504,66 @@ public static class GnuDateFormatting
                 }
 
                 index++;
-                var field = FormatScalarDirective(calendar, recipe[index], 0, recipe.AsSpan(index, 1), strftime);
-                field.AsSpan().CopyTo(destination[length..]);
-                length += field.Length;
+                length += WriteScalarDirective(calendar, recipe[index], 0, recipe.AsSpan(index, 1), strftime,
+                    destination[length..]);
             }
             return length;
         }
 
-        static string FormatScalarDirective(
+        static int WriteScalarDirective(
             CalendarTime calendar,
             char specifier,
             int colonCount,
             ReadOnlySpan<char> directive,
-            bool strftime)
+            bool strftime,
+            Span<char> destination)
         {
             var directiveValue = calendar.Local;
             return specifier switch
             {
-                '%' => "%",
-                'n' => "\n",
-                't' => "\t",
-                'H' => directiveValue.ToString("HH", Culture),
-                'I' => directiveValue.ToString("hh", Culture),
-                'k' => directiveValue.Hour.ToString(Culture).PadLeft(2, ' '),
-                'l' => (directiveValue.Hour % 12 == 0 ? 12 : directiveValue.Hour % 12).ToString(Culture).PadLeft(2, ' '),
-                'M' => directiveValue.ToString("mm", Culture),
-                'N' => FormatNanoseconds(directiveValue),
-                'p' => directiveValue.ToString("tt", Culture),
-                'P' => directiveValue.ToString("tt", Culture).ToLowerInvariant(),
-                's' => calendar.UnixSeconds.ToString(Culture),
-                'S' => directiveValue.ToString("ss", Culture),
-                'z' => FormatOffset(directiveValue.Offset, colonCount),
-                'Z' => directiveValue.Offset == TimeSpan.Zero ? "UTC" : FormatOffset(directiveValue.Offset, 1),
-                'a' => directiveValue.ToString("ddd", Culture),
-                'A' => directiveValue.ToString("dddd", Culture),
-                'b' => directiveValue.ToString("MMM", Culture),
-                'B' => directiveValue.ToString("MMMM", Culture),
-                'C' when strftime => ((calendar.StrftimeYear - (long)LastTwoDigits(calendar.StrftimeYear)) / 100).ToString(Culture),
-                'C' => (directiveValue.Year / 100).ToString(Culture).PadLeft(2, '0'),
-                'd' => directiveValue.ToString("dd", Culture),
-                'e' => directiveValue.Day.ToString(Culture).PadLeft(2, ' '),
-                'g' when strftime => LastTwoDigits(calendar.GetStrftimeIsoWeek().Year).ToString("00", Culture),
-                'g' => (ISOWeek.GetYear(directiveValue.DateTime) % 100).ToString(Culture).PadLeft(2, '0'),
-                'G' when strftime => calendar.GetStrftimeIsoWeek().Year.ToString(Culture),
-                'G' => ISOWeek.GetYear(directiveValue.DateTime).ToString(Culture).PadLeft(4, '0'),
-                'h' => directiveValue.ToString("MMM", Culture),
-                'j' => directiveValue.DayOfYear.ToString(Culture).PadLeft(3, '0'),
-                'm' => directiveValue.ToString("MM", Culture),
-                'q' => (((directiveValue.Month - 1) / 3) + 1).ToString(Culture),
-                'u' => (directiveValue.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)directiveValue.DayOfWeek).ToString(Culture),
-                'U' => GetWeekNumber(directiveValue, mondayFirst: false).ToString(Culture).PadLeft(2, '0'),
-                'V' when strftime => calendar.GetStrftimeIsoWeek().Week.ToString("00", Culture),
-                'V' => ISOWeek.GetWeekOfYear(directiveValue.DateTime).ToString(Culture).PadLeft(2, '0'),
-                'w' => ((int)directiveValue.DayOfWeek).ToString(Culture),
-                'W' => GetWeekNumber(directiveValue, mondayFirst: true).ToString(Culture).PadLeft(2, '0'),
-                'y' when strftime => LastTwoDigits(directiveValue.Year + calendar.YearOffset).ToString("00", Culture),
-                'y' => directiveValue.ToString("yy", Culture),
-                'Y' when strftime => calendar.StrftimeYear.ToString(Culture),
-                'Y' => directiveValue.ToString("yyyy", Culture),
+                '%' => WriteLiteral("%", destination),
+                'n' => WriteLiteral("\n", destination),
+                't' => WriteLiteral("\t", destination),
+                'H' => WriteValue(directiveValue, "HH", destination),
+                'I' => WriteValue(directiveValue, "hh", destination),
+                'k' => WriteSpacePaddedNumber(directiveValue.Hour, destination),
+                'l' => WriteSpacePaddedNumber(1 + (directiveValue.Hour + 11) % 12, destination),
+                'M' => WriteValue(directiveValue, "mm", destination),
+                'N' => WriteValue(directiveValue.Ticks % TimeSpan.TicksPerSecond * 100, "D9", destination),
+                'p' => WriteValue(directiveValue, "tt", destination),
+                'P' => WriteLiteral(directiveValue.Hour < 12 ? "am" : "pm", destination),
+                's' => WriteValue(calendar.UnixSeconds, default, destination),
+                'S' => WriteValue(directiveValue, "ss", destination),
+                'z' => WriteOffset(directiveValue.Offset, colonCount, destination),
+                'Z' => directiveValue.Offset == TimeSpan.Zero ? WriteLiteral("UTC", destination)
+                    : WriteOffset(directiveValue.Offset, 1, destination),
+                'a' => WriteValue(directiveValue, "ddd", destination),
+                'A' => WriteValue(directiveValue, "dddd", destination),
+                'b' or 'h' => WriteValue(directiveValue, "MMM", destination),
+                'B' => WriteValue(directiveValue, "MMMM", destination),
+                'C' when strftime => WriteValue((calendar.StrftimeYear - (long)LastTwoDigits(calendar.StrftimeYear)) / 100,
+                    default, destination),
+                'C' => WriteValue(directiveValue.Year / 100, "D2", destination),
+                'd' => WriteValue(directiveValue, "dd", destination),
+                'e' => WriteSpacePaddedNumber(directiveValue.Day, destination),
+                'g' when strftime => WriteValue(LastTwoDigits(calendar.GetStrftimeIsoWeek().Year), "D2", destination),
+                'g' => WriteValue(ISOWeek.GetYear(directiveValue.DateTime) % 100, "D2", destination),
+                'G' when strftime => WriteValue(calendar.GetStrftimeIsoWeek().Year, default, destination),
+                'G' => WriteValue(ISOWeek.GetYear(directiveValue.DateTime), "D4", destination),
+                'j' => WriteValue(directiveValue.DayOfYear, "D3", destination),
+                'm' => WriteValue(directiveValue, "MM", destination),
+                'q' => WriteValue((directiveValue.Month - 1) / 3 + 1, default, destination),
+                'u' => WriteValue(directiveValue.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)directiveValue.DayOfWeek,
+                    default, destination),
+                'U' => WriteValue(GetWeekNumber(directiveValue, mondayFirst: false), "D2", destination),
+                'V' when strftime => WriteValue(calendar.GetStrftimeIsoWeek().Week, "D2", destination),
+                'V' => WriteValue(ISOWeek.GetWeekOfYear(directiveValue.DateTime), "D2", destination),
+                'w' => WriteValue((int)directiveValue.DayOfWeek, default, destination),
+                'W' => WriteValue(GetWeekNumber(directiveValue, mondayFirst: true), "D2", destination),
+                'y' when strftime => WriteValue(LastTwoDigits(directiveValue.Year + calendar.YearOffset), "D2", destination),
+                'y' => WriteValue(directiveValue, "yy", destination),
+                'Y' when strftime => WriteValue(calendar.StrftimeYear, default, destination),
+                'Y' => WriteValue(directiveValue, "yyyy", destination),
                 _ => throw new GnuDateFormatException(directive.ToString())
             };
 
@@ -590,26 +593,45 @@ public static class GnuDateFormatting
             };
         }
 
-        static string FormatNanoseconds(DateTimeOffset directiveValue)
+        static int WriteValue<T>(T value, ReadOnlySpan<char> format, Span<char> destination) where T : ISpanFormattable
         {
-            var ticksWithinSecond = directiveValue.Ticks % TimeSpan.TicksPerSecond;
-            var nanoseconds = ticksWithinSecond * 100;
-            return nanoseconds.ToString(Culture).PadLeft(9, '0');
+            if (!value.TryFormat(destination, out var length, format, Culture))
+                throw new InvalidOperationException("A generated date field exceeded its buffer.");
+            return length;
         }
 
-        static string FormatOffset(TimeSpan offset, int colonCount)
+        static int WriteLiteral(ReadOnlySpan<char> text, Span<char> destination)
         {
-            var sign = offset < TimeSpan.Zero ? "-" : "+";
+            text.CopyTo(destination);
+            return text.Length;
+        }
+
+        static int WriteSpacePaddedNumber(int value, Span<char> destination)
+        {
+            if (value >= 10)
+                return WriteValue(value, default, destination);
+            destination[0] = ' ';
+            destination[1] = (char)('0' + value);
+            return 2;
+        }
+
+        static int WriteOffset(TimeSpan offset, int colonCount, Span<char> destination)
+        {
+            destination[0] = offset < TimeSpan.Zero ? '-' : '+';
             var absoluteOffset = offset.Duration();
-            return colonCount switch
+            var length = 1 + WriteValue(absoluteOffset.Hours, "D2", destination[1..]);
+            if (colonCount >= 3 && absoluteOffset.Minutes == 0 && absoluteOffset.Seconds == 0)
+                return length;
+
+            if (colonCount != 0)
+                destination[length++] = ':';
+            length += WriteValue(absoluteOffset.Minutes, "D2", destination[length..]);
+            if (colonCount == 2 || colonCount >= 3 && absoluteOffset.Seconds != 0)
             {
-                0 => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}{absoluteOffset.Minutes:00}"),
-                1 => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}:{absoluteOffset.Minutes:00}"),
-                2 => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}:{absoluteOffset.Minutes:00}:{absoluteOffset.Seconds:00}"),
-                _ when absoluteOffset.Seconds != 0 => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}:{absoluteOffset.Minutes:00}:{absoluteOffset.Seconds:00}"),
-                _ when absoluteOffset.Minutes != 0 => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}:{absoluteOffset.Minutes:00}"),
-                _ => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}")
-            };
+                destination[length++] = ':';
+                length += WriteValue(absoluteOffset.Seconds, "D2", destination[length..]);
+            }
+            return length;
         }
     }
 
