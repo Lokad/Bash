@@ -12,6 +12,62 @@ public sealed class RegexCaptureTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void EmptyCapturePublicationReusesOnlyTheSelectedOwnersEmptyArray(bool useCommandScope)
+    {
+        var caller = Variables.CreateEmpty();
+        var name = Variables.RegexCaptureName;
+        if (useCommandScope)
+            caller.SetRegexCaptures([]);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var owner = useCommandScope ? Variables.CreateCommandScope(caller, memory, CancellationToken.None) : caller;
+
+            owner.SetRegexCaptures([]);
+
+            Assert.False(owner.IsBorrowedBinding(name));
+            var first = owner.IndexedArrays[name];
+            Assert.True(first.IsInitialized);
+            Assert.Empty(first.PresentValues);
+            if (useCommandScope)
+                Assert.NotSame(caller.IndexedArrays[name], first);
+            var bytes = owner.EstimatedMemoryBytes;
+
+            owner.SetRegexCaptures([]);
+
+            Assert.Same(first, owner.IndexedArrays[name]);
+            Assert.Equal(bytes, owner.EstimatedMemoryBytes);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void EmptyCapturePublicationReleasesPreviouslyUsedArrayCapacity()
+    {
+        var variables = Variables.CreateEmpty();
+        var name = Variables.RegexCaptureName;
+        variables.SetRegexCaptures([ShellValue.FromText("match")]);
+        var previous = variables.IndexedArrays[name];
+        using (variables.TrackBindingMemory(name))
+            previous.Remove(default);
+        Assert.Empty(previous.PresentValues);
+        Assert.True(previous.EstimatedMemoryBytes > 0);
+        var before = variables.EstimatedMemoryBytes;
+
+        variables.SetRegexCaptures([]);
+
+        var current = variables.IndexedArrays[name];
+        Assert.NotSame(previous, current);
+        Assert.True(current.IsInitialized);
+        Assert.Empty(current.PresentValues);
+        Assert.Equal(before - previous.EstimatedMemoryBytes, variables.EstimatedMemoryBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void CapturePublicationReplacesTheSelectedSlotAndItsAttributes(bool useCommandScope)
     {
         var caller = Variables.CreateEmpty();
