@@ -164,9 +164,29 @@ public static class ShellArgumentEscaping
     {
         if (!target.TryAppend((byte)'\''))
             return false;
-        foreach (var value in literal)
-            if (value == (byte)'\'' ? !target.TryAppend("'\\''"u8) : !target.TryAppend(value))
+
+        while (!literal.IsEmpty)
+        {
+            var quote = literal.IndexOf((byte)'\'');
+            if (quote < 0)
+                return AppendLiteralRun(target, literal) && target.TryAppend((byte)'\'');
+            if (!AppendLiteralRun(target, literal[..quote]) || !target.TryAppend("'\\''"u8))
                 return false;
+            literal = literal[(quote + 1)..];
+        }
+
         return target.TryAppend((byte)'\'');
+
+        static bool AppendLiteralRun(IByteMemoryWriter target, ReadOnlySpan<byte> bytes)
+        {
+            if (bytes.Length > 1 && target.TryAppend(bytes))
+                return true;
+
+            // A rejected span leaves the writer unchanged. Fill the same partial prefix as single-byte appends.
+            foreach (var value in bytes)
+                if (!target.TryAppend(value))
+                    return false;
+            return true;
+        }
     }
 }

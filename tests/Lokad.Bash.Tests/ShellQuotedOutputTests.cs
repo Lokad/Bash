@@ -138,4 +138,57 @@ public sealed class ShellQuotedOutputTests
             Assert.Equal("$'a\\360\\237'", Utf8Text.Decode(output.ToMemory()));
         }
     }
+
+    [Fact]
+    public void LiteralSingleQuotesPreserveTheWrittenPrefixAtEveryLimit()
+    {
+        byte[] input = [0xff, (byte)'x', (byte)'\'', (byte)'\'', 0, (byte)'\n', (byte)'y'];
+        byte[][] atoms =
+        [
+            "'"u8.ToArray(), [0xff], "x"u8.ToArray(), "'\\''"u8.ToArray(), "'\\''"u8.ToArray(),
+            [0], "\n"u8.ToArray(), "y"u8.ToArray(), "'"u8.ToArray(),
+        ];
+        var length = atoms.Sum(atom => atom.Length);
+        for (var limit = 0; limit <= length; limit++)
+        {
+            using var output = BoundedByteMemoryBuilder.CreateUnaccounted(0, limit);
+            var expected = new List<byte>();
+            foreach (var atom in atoms)
+            {
+                if (expected.Count + atom.Length > limit)
+                    break;
+                expected.AddRange(atom);
+            }
+
+            Assert.Equal(limit == length, ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input));
+            Assert.Equal(expected.ToArray(), output.ToMemory().ToArray());
+        }
+    }
+
+    [Fact]
+    public void LiteralSingleQuotesWriteLongRunsAsSpans()
+    {
+        var input = Utf8Text.Encode(new string('a', 1024) + "'" + new string('b', 1024));
+        var output = new CountingWriter();
+
+        Assert.True(ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input.Span));
+        Assert.Equal(input.Length + 5, output.Written);
+        Assert.InRange(output.Appends, 1, 5);
+    }
+
+    private sealed class CountingWriter : IByteMemoryWriter
+    {
+        public int Written { get; private set; }
+        public int Appends { get; private set; }
+
+        public bool TryAppend(ReadOnlySpan<byte> bytes) => TryAppend(bytes.Length, 0);
+        public bool TryAppend(byte value) => TryAppend(1, value);
+
+        public bool TryAppend(int count, byte value)
+        {
+            Written += count;
+            Appends++;
+            return true;
+        }
+    }
 }
