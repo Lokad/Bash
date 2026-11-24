@@ -3203,27 +3203,44 @@ public sealed partial class Evaluation : IFileTester
         WriteOperationDiagnosticAsync(descriptor, variable, string.Empty, path: null,
             new OperationError("cannot assign fd to variable\n"), GetBuiltinDiagnosticPrefix(context));
 
-    private async Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, ShellValue name, string prefix, string? path,
-        OperationError error, SyntaxDiagnosticPrefix sourcePrefix)
+    private Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, ShellValue name, string prefix, string? path,
+        OperationError error, SyntaxDiagnosticPrefix sourcePrefix) =>
+        WriteOperationDiagnosticAsync(descriptor, name, prefix, path, error, sourcePrefix,
+            relativeDirectory: null, detailPrefix: string.Empty);
+
+    private async Task<DescriptorWriteResult?> WriteOperationDiagnosticAsync(FileDescriptor descriptor, ShellValue name,
+        string prefix, string? path, OperationError error, SyntaxDiagnosticPrefix sourcePrefix, ShellPath? relativeDirectory,
+        string detailPrefix)
     {
-        if (await TryWriteOperationDiagnosticAsync(descriptor, name, prefix, path, error, sourcePrefix).ConfigureAwait(false) == null)
+        var result = await TryWriteOperationDiagnosticAsync(descriptor, name, prefix, path, error, sourcePrefix,
+            relativeDirectory, detailPrefix).ConfigureAwait(false);
+        if (result == null)
         {
             // The operation already failed. Keep the bounded message on its status and cleanup path.
             await ExecuteWriteAsync(descriptor, ShellMemoryRefusalDiagnostic).ConfigureAwait(false);
         }
+        return result;
     }
 
     /// <summary>Formats directly into the admitted output buffer. A null result means admission refused.</summary>
     private async Task<DescriptorWriteResult?> TryWriteOperationDiagnosticAsync(
         FileDescriptor descriptor, ShellValue name, string prefix, string? path, OperationError error,
-        SyntaxDiagnosticPrefix sourcePrefix)
+        SyntaxDiagnosticPrefix sourcePrefix, ShellPath? relativeDirectory, string detailPrefix)
     {
         var encoding = Utf8Text.StrictUtf8;
+        var pathText = path.AsSpan();
+        if (relativeDirectory != null && pathText.StartsWith("./", StringComparison.Ordinal))
+            pathText = pathText[2..];
+        var directoryText = (relativeDirectory?.Path).AsSpan();
+        var directoryLength = encoding.GetByteCount(directoryText);
+        var separatorLength = relativeDirectory is { IsRoot: false } ? 1 : 0;
         var prefixLength = encoding.GetByteCount(prefix);
-        var pathLength = path is null ? 0 : encoding.GetByteCount(path);
+        var pathLength = encoding.GetByteCount(pathText);
+        var detailPrefixLength = encoding.GetByteCount(detailPrefix);
         var detailLength = encoding.GetByteCount(error.Message.AsSpan());
         var nameLength = name.IsEmpty ? 0 : (long)name.Bytes.Length + 2;
-        var length = nameLength + prefixLength + pathLength + (path is null ? 0 : 2) + detailLength + sourcePrefix.Length;
+        var length = nameLength + prefixLength + directoryLength + separatorLength + pathLength
+            + (path is null ? 0 : 2) + detailPrefixLength + detailLength + sourcePrefix.Length;
         if (!TryReserveDiagnostic(length, out var reservation))
             return null;
 
@@ -3235,9 +3252,13 @@ public sealed partial class Evaluation : IFileTester
         encoding.GetBytes(prefix.AsSpan(), diagnostic.AppendSpan(prefixLength));
         if (path != null)
         {
-            encoding.GetBytes(path.AsSpan(), diagnostic.AppendSpan(pathLength));
+            encoding.GetBytes(directoryText, diagnostic.AppendSpan(directoryLength));
+            if (separatorLength != 0)
+                diagnostic.Append("/"u8);
+            encoding.GetBytes(pathText, diagnostic.AppendSpan(pathLength));
             diagnostic.Append(": "u8);
         }
+        encoding.GetBytes(detailPrefix.AsSpan(), diagnostic.AppendSpan(detailPrefixLength));
         encoding.GetBytes(error.Message.AsSpan(), diagnostic.AppendSpan(detailLength));
         return await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
     }
@@ -4683,36 +4704,39 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>
-    /// Emits a run-command operation and returns its execution result.
+    /// Emits a run-command operation and renders any negotiated launch diagnostic.
     /// </summary>
     private async Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command, ScopedEvaluation scope, bool exec)
     {
         CheckCancellation();
-        var directPath = command.CommandName.Contains('/');
         // The current redirection frame retains stderr until the command and any launch diagnostic settle.
-        // Direct exec paths retain the host's reporting of the resolved executable.
-        var result = await RunCommand.AsTask(PublishOperation, command, canReportLaunchFailure: !exec || !directPath, out var request)
+        var result = await RunCommand.AsTask(PublishOperation, command, canReportLaunchFailure: true, out var request)
             .ConfigureAwait(false);
         CheckCancellation();
-        if (request.CallerReportsLaunchFailure && !command.StdErr.IsClosed)
+        if (!request.CallerReportsLaunchFailure || command.StdErr.IsClosed || result is CommandExecutionResult.Completed)
+            return result;
+
+        const string cannotExecute = "cannot execute: ";
+        var name = command.CommandName;
+        var directPath = name.Contains('/');
+        var error = result is CommandExecutionResult.NotExecutable notExecutable ? notExecutable.Error
+            : new OperationError(directPath ? "No such file or directory\n" : exec ? "not found\n" : "command not found\n");
+        var directExec = exec && directPath;
+        var directory = directExec && !name.StartsWith('/') ? command.CurrentDirectory : null;
+        var context = scope.Context;
+        var sourcePrefix = context.Coordinates.Locations is null ? default
+            : new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine,
+                context.Coordinates.Line);
+        var namedExec = exec && !directPath;
+        var prefix = namedExec ? "exec: " : string.Empty;
+        var detail = namedExec && error.Kind == OperationErrorKind.IsDirectory ? cannotExecute : string.Empty;
+        var written = await WriteOperationDiagnosticAsync(command.StdErr, ShellValue.Empty, prefix, name, error,
+            sourcePrefix, directory, detail).ConfigureAwait(false);
+        if (written is { CanAcceptMore: true } && directExec
+            && error.Kind is OperationErrorKind.IsDirectory or OperationErrorKind.NotDirectory or OperationErrorKind.PermissionDenied)
         {
-            OperationError? error = result switch
-            {
-                CommandExecutionResult.NotFound when exec => new OperationError("not found\n"),
-                CommandExecutionResult.NotFound when directPath => new OperationError("No such file or directory\n"),
-                CommandExecutionResult.NotFound => new OperationError("command not found\n"),
-                CommandExecutionResult.NotExecutable notExecutable => notExecutable.Error,
-                _ => null
-            };
-            if (error is { } failure)
-            {
-                var context = scope.Context;
-                var prefix = context.Coordinates.Locations is null ? default
-                    : new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath,
-                        SyntaxDiagnosticOrigin.ScriptLine, context.Coordinates.Line);
-                await WriteOperationDiagnosticAsync(command.StdErr, ShellValue.Empty, exec ? "exec: " : string.Empty,
-                    command.CommandName, failure, prefix).ConfigureAwait(false);
-            }
+            await WriteOperationDiagnosticAsync(command.StdErr, ShellValue.Empty, "exec: ", name, error, sourcePrefix,
+                directory, cannotExecute).ConfigureAwait(false);
         }
         return result;
     }

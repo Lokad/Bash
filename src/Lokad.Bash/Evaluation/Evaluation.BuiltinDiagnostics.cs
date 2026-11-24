@@ -131,7 +131,8 @@ public sealed partial class Evaluation
         if (scope is { Result.CanAcceptMore: false })
             return;
 
-        var result = await TryWriteOperationDiagnosticAsync(GetStdErrDescriptor(), name, prefix, path, error, sourcePrefix)
+        var result = await TryWriteOperationDiagnosticAsync(GetStdErrDescriptor(), name, prefix, path, error, sourcePrefix,
+                relativeDirectory: null, detailPrefix: string.Empty)
                 .ConfigureAwait(false)
             ?? throw new MemoryBudgetExceededException();
         if (scope != null)

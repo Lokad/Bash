@@ -23,6 +23,53 @@ public class EngineTests
         Assert.Contains(nameof(UnsupportedCommand), failure.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectExecPreservesTypedFailureAndStopsOnDownstreamClosure(bool stderrClosedAfterFirstRecord)
+    {
+        var state = new Eval(Parser.Parse("exec ./file/child"));
+        var launchFailure = new CommandExecutionResult.NotExecutable(
+            new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
+        var visitor = new TestOperationVisitor([])
+        {
+            RecordAppends = true,
+            RunCommandOverride = () => Task.FromResult<CommandExecutionResult>(launchFailure)
+        };
+        visitor.EnqueueAppendResult(stderrClosedAfterFirstRecord ? DescriptorWriteResult.Closed : DescriptorWriteResult.Open);
+        if (!stderrClosedAfterFirstRecord)
+            visitor.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        var result = await new Engine().RunAsync(state, visitor);
+
+        Assert.Equal(126, result.ExitCode);
+        Assert.Equal(["./file/child"], visitor.CommandNames);
+        Assert.Equal(stderrClosedAfterFirstRecord ? 1 : 2, visitor.Appends.Count);
+        Assert.All(visitor.Appends, append => Assert.Equal(FileDescriptor.StdErr, append.Descriptor));
+        Assert.Equal("line 1: /file/child: Not a directory\n"u8.ToArray(), visitor.Appends[0].Content);
+        if (!stderrClosedAfterFirstRecord)
+            Assert.Equal("line 1: exec: /file/child: cannot execute: Not a directory\n"u8.ToArray(), visitor.Appends[1].Content);
+    }
+
+    [Fact]
+    public async Task NamedExecDirectoryFailureReportsWithoutTurningTheNameIntoAPath()
+    {
+        var state = new Eval(Parser.Parse("exec folder"));
+        var launchFailure = new CommandExecutionResult.NotExecutable(
+            new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
+        var visitor = new TestOperationVisitor([])
+        {
+            RecordAppends = true,
+            RunCommandOverride = () => Task.FromResult<CommandExecutionResult>(launchFailure)
+        };
+        visitor.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        var result = await new Engine().RunAsync(state, visitor);
+
+        Assert.Equal(126, result.ExitCode);
+        Assert.Equal("line 1: exec: folder: cannot execute: Is a directory\n"u8.ToArray(), Assert.Single(visitor.Appends).Content);
+    }
+
     [Fact]
     public async Task PipelineStagesOwnTheirAdjacentEndpointsInSourceOrder()
     {

@@ -162,6 +162,10 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
     [InlineData("./dir", "line 1: ./dir: Is a directory\n", 126)]
     [InlineData("missing 2>&-", "", 127)]
     [InlineData(":\nexec missing\nprintf unreachable", "line 2: exec: missing: not found\n", 127)]
+    [InlineData("exec ./missing", "line 1: /missing: No such file or directory\n", 127)]
+    [InlineData("exec .//missing", "line 1: //missing: No such file or directory\n", 127)]
+    [InlineData("exec ./dir 2>&-", "", 126)]
+    [InlineData("exec ./file", "line 1: /file: Permission denied\nline 1: exec: /file: cannot execute: Permission denied\n", 126)]
     [InlineData("bash -c 'printf tool >&2; exit 127'", "tool", 127)]
     public async Task Evaluation_LaunchDiagnosticsUseTypedOutcomes(string script, string error, int status)
     {
@@ -170,6 +174,27 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         Assert.Equal(string.Empty, result.StdOut);
         Assert.Equal(error, result.StdErr);
         Assert.Equal(status, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Evaluation_DirectExecUsesTheWorkingDirectoryAndRedirectedStderr(bool prepared)
+    {
+        await using var host = EndToEndHarness.BuildTree(["/work", "/work/fixture-dir"],
+            [("/work/input", "printf before\nPWD=/fixture-alias exec ././fixture-dir 2>report\n")]);
+        const string script = "cd work\ntrap 'printf trap' EXIT\nsource input\nprintf unreachable\n";
+
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(126, status);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("input: line 2: /work/./fixture-dir: Is a directory\n"
+            + "input: line 2: exec: /work/./fixture-dir: cannot execute: Is a directory\n", host.ReadFile("/work/report"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
