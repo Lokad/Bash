@@ -94,10 +94,9 @@ public sealed class ShellPath
     public bool IsEqualToOrParentOf(ShellPath other) =>
         Path == other.Path || IsParentOf(other);
 
-    /// <summary>
-    /// Returns the child path formed by appending <paramref name="name"/> to this path,
-    /// or null if <paramref name="name"/> contains characters forbidden by <see cref="ShellPath"/>.
-    /// </summary>
+    /// <summary>Appends a relative path suffix, such as <c>child/leaf</c>, to this path.</summary>
+    /// <param name="name">A canonical relative path, or an empty string when this path is the root.</param>
+    /// <returns>The resulting path, or <see langword="null"/> if the suffix is invalid.</returns>
     public ShellPath? TryChild(string name)
     {
         if (string.IsNullOrEmpty(name))
@@ -109,10 +108,10 @@ public sealed class ShellPath
         return new ShellPath(combined, validate: false);
     }
 
-    /// <summary>
-    /// Returns the child path formed by appending <paramref name="name"/> to this path.
-    /// Throws <see cref="ArgumentException"/> if <paramref name="name"/> is not a valid path segment.
-    /// </summary>
+    /// <summary>Appends a relative path suffix, such as <c>child/leaf</c>, to this path.</summary>
+    /// <param name="name">A canonical relative path, or an empty string when this path is the root.</param>
+    /// <returns>The resulting path.</returns>
+    /// <exception cref="ArgumentException">The suffix is invalid.</exception>
     public ShellPath Child(string name) =>
         TryChild(name) ?? throw new ArgumentException($"'{name}' is not a valid child path segment.", nameof(name));
 
