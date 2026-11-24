@@ -457,12 +457,12 @@ internal sealed class Tokenizer
 
     private bool TracksScriptDiagnostics => !IsCommandSubstitution && TrackCommandLocations && TrackUnexpectedTokens;
 
-    private void RecordUnclosedQuote(char delimiter, int start, string message)
+    private void RecordUnclosedDelimiter(char delimiter, int start, string message, int offset)
     {
         var inCapture = IsCommandSubstitution && AllowEofHereDocuments;
         if (inCapture || TracksScriptDiagnostics)
         {
-            RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.Delimiter)
+            RecordFailure(new ParserFailure(new SyntaxError(message, offset), ParserFailureKind.Delimiter)
             {
                 UnclosedDelimiter = new UnclosedDelimiter(delimiter, start)
                 {
@@ -472,7 +472,7 @@ internal sealed class Tokenizer
             });
         }
         else
-            RecordError(message, Position);
+            RecordError(message, offset);
     }
 
     private bool TryReserveSyntax()
@@ -658,8 +658,20 @@ internal sealed class Tokenizer
         if (groupSubscript)
         {
             _arraySubscripts ??= new ArraySubscriptScanner.Lookahead(_input, _scanContext);
-            if (_arraySubscripts.Scan(position, out closing) != ShellScanStatus.Complete)
+            var status = _arraySubscripts.ScanAssignment(position, out closing, out var failure);
+            if (status != ShellScanStatus.Complete)
+            {
+                if (failure != null)
+                {
+                    // Nested delimiter failures keep their reader location.
+                    if (failure.UnclosedDelimiter is { } delimiter)
+                        failure = failure with { UnclosedDelimiter = delimiter with { IncludeScriptLine = true } };
+                    RecordFailure(failure);
+                }
+                else if (status == ShellScanStatus.Incomplete)
+                    RecordUnclosedDelimiter(']', position, "Unterminated array subscript.", _input.Length);
                 return false;
+            }
         }
         else if (!ArraySubscriptScanner.TryScanWord(_scanContext, _input, position, token.Token.Source.End.Value, out closing))
             return false;
@@ -1663,7 +1675,7 @@ internal sealed class Tokenizer
             if (!complete)
             {
                 var opening = _input[start] == (byte)'$' ? ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), start + 1) : start;
-                RecordUnclosedQuote('\'', opening, "Unterminated single-quoted string.");
+                RecordUnclosedDelimiter('\'', opening, "Unterminated single-quoted string.", Position);
             }
             return value;
         }
@@ -1722,7 +1734,7 @@ internal sealed class Tokenizer
             }
             if (status == ShellScanStatus.Incomplete && _input[start] == (byte)'`'
                 && (IsCommandSubstitution || TracksScriptDiagnostics))
-                RecordUnclosedQuote('`', start, "Unterminated command substitution.");
+                RecordUnclosedDelimiter('`', start, "Unterminated command substitution.", Position);
             else
                 RecordExpansionFailure(error, kind == WordPartKind.CommandSubstitutionQuoted,
                     "Unterminated command substitution.", start);
@@ -1900,7 +1912,7 @@ internal sealed class Tokenizer
                         Position++;
                         break;
                     }
-                    RecordUnclosedQuote('"', quoteStart, "Unexpected end of input after escape.");
+                    RecordUnclosedDelimiter('"', quoteStart, "Unexpected end of input after escape.", Position);
                     return parts;
                 }
 
@@ -1959,7 +1971,7 @@ internal sealed class Tokenizer
             Flush(allowEmpty: true);
             return parts;
         }
-        RecordUnclosedQuote('"', quoteStart, "Unterminated double-quoted string.");
+        RecordUnclosedDelimiter('"', quoteStart, "Unterminated double-quoted string.", Position);
         return parts;
     }
 

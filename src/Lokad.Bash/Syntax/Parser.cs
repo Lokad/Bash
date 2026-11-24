@@ -1554,6 +1554,8 @@ public static class Parser
                     var assignmentPosition = allowAssignments || allowDeclarationAssignments;
                     var arrayAssignment = assignmentPosition
                         && tokenizer.TryReadArrayAssignment(wordToken, groupSubscript: allowAssignments, out assignment);
+                    if (tokenizer.Error != null)
+                        return null;
                     if (arrayAssignment)
                         token = token with { Source = token.Source.Start..tokenizer.Position };
                     if (assignmentPosition && (arrayAssignment || TrySplitScalarAssignment(wordToken.Word, out assignment)))

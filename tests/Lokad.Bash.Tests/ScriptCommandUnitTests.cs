@@ -99,6 +99,57 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
+    [InlineData("probe[0\nprintf discarded\n", 2, ']')]
+    [InlineData(">out probe[0\n", 2, ']')]
+    [InlineData("false && probe[0\n", 2, ']')]
+    [InlineData("probe\\\n[0\n", 3, ']')]
+    [InlineData("probe[0\n: 'text\n", 3, '\'')]
+    [InlineData("value=$(printf inside\nprobe[0\n)\n", 3, ']')]
+    public async Task IncompleteAssignmentSelectorStopsTheCommandUnit(string ending, int line, char delimiter)
+    {
+        var memory = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+
+        var result = await host.RunAsync("printf before\n" + ending, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal($"line {line}: unexpected EOF while looking for matching `{delimiter}'\n", host.StandardError.TextContent);
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task AssignmentSelectorReportsTheBracketAfterAContinuedHereDocumentRead()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("printf before\nprobe[$(cat <<END)\\\n]=item\n0\nEND\nprintf discarded\n",
+            CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal("line 2: warning: command substitution: 1 unterminated here-document\n"
+            + "line 2: unexpected EOF while looking for matching `]'\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("probe[0")]
+    [InlineData("probe\\[0")]
+    [InlineData("\"probe[0\"")]
+    public async Task BracketInAnOrdinaryArgumentRemainsALiteralWord(string argument)
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("printf '<%s>' " + argument + "\nprintf after\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<probe[0>after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData("printf '[%s]' word\\", "[word]")]
     [InlineData("f(){ printf '%s' \"$#\"; }; f \\", "0")]
     [InlineData("printf kept; \\", "kept")]

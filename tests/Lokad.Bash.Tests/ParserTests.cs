@@ -181,9 +181,9 @@ public class ParserTests
     [Theory]
     [InlineData(1024)]
     [InlineData(4096)]
-    public void Parse_UnmatchedBracketWordsDoNotHideALaterAssignment(int count)
+    public void Parse_ClosedBracketWordsWithoutAssignmentsPreserveALaterAssignment(int count)
     {
-        var source = string.Concat(Enumerable.Repeat("x[\n", count)) + "last[0]=value";
+        var source = string.Concat(Enumerable.Repeat("x[]\n", count)) + "last[0]=value";
         var last = AssertListOperator(Assert.Single(Parser.Parse(source).Commands), ListOperator.Sequence);
         var assignment = Assert.Single(Assert.IsType<SimpleCommand>(last.Right).Assignments);
         Assert.Equal("last[0]", assignment.Target.ToUtf8String());
@@ -192,12 +192,21 @@ public class ParserTests
         var ordinaryCount = 1;
         while (current is ListCommand list)
         {
-            Assert.Equal("x[", WordText(Assert.Single(Assert.IsType<SimpleCommand>(list.Right).Words)));
+            Assert.Equal("x[]", WordText(Assert.Single(Assert.IsType<SimpleCommand>(list.Right).Words)));
             current = list.Left;
             ordinaryCount++;
         }
-        Assert.Equal("x[", WordText(Assert.Single(Assert.IsType<SimpleCommand>(current).Words)));
+        Assert.Equal("x[]", WordText(Assert.Single(Assert.IsType<SimpleCommand>(current).Words)));
         Assert.Equal(count, ordinaryCount);
+    }
+
+    [Fact]
+    public void Parse_IncompleteAssignmentSelectorReportsTheEndOfInput()
+    {
+        const string source = "probe[0\nprintf discarded\n";
+
+        Assert.False(Parser.TryParse(source, out _, out var error));
+        Assert.Equal(new SyntaxError("Unterminated array subscript.", source.Length), error);
     }
 
     [Theory]

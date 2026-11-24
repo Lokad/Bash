@@ -14,13 +14,31 @@ internal static class ArraySubscriptScanner
             Scan(openingBracketIndex, out closingBracketIndex, out _);
 
         internal ShellScanStatus Scan(int openingBracketIndex, out int closingBracketIndex,
-            out SubstitutionSyntaxFailure quotedCapture) =>
-            ArraySubscriptScanner.Scan(context, source, openingBracketIndex, source.Length, _results, recognizeAnsiC: true,
-                out closingBracketIndex, out quotedCapture);
+            out SubstitutionSyntaxFailure quotedCapture)
+        {
+            var result = Read(openingBracketIndex);
+            closingBracketIndex = result.ClosingBracketIndex;
+            quotedCapture = result.QuotedCapture;
+            return result.Status;
+        }
+
+        internal ShellScanStatus ScanAssignment(int openingBracketIndex, out int closingBracketIndex, out ParserFailure? failure)
+        {
+            var result = Read(openingBracketIndex);
+            closingBracketIndex = result.ClosingBracketIndex;
+            failure = result.Failure;
+            return result.Status;
+        }
+
+        private ScanResult Read(int openingBracketIndex) =>
+            ArraySubscriptScanner.Read(context, source, openingBracketIndex, source.Length, _results, recognizeAnsiC: true);
     }
 
     private readonly record struct ScanResult(ShellScanStatus Status, int ClosingBracketIndex,
-        SubstitutionSyntaxFailure QuotedCapture);
+        SubstitutionSyntaxFailure QuotedCapture)
+    {
+        internal ParserFailure? Failure { get; init; }
+    }
 
     /// <summary>Scans from an opening bracket through its matching closing bracket.</summary>
     public static bool TryScan(
@@ -37,62 +55,64 @@ internal static class ArraySubscriptScanner
         TryScan(context, text, openingBracketIndex, recognizeAnsiC: true, out closingBracketIndex);
 
     internal static bool TryScan(ShellScanContext context, ShellSource text, int openingBracketIndex,
-        bool recognizeAnsiC, out int closingBracketIndex) =>
-        Scan(context, text, openingBracketIndex, text.Length, null, recognizeAnsiC, out closingBracketIndex, out _)
-            == ShellScanStatus.Complete;
+        bool recognizeAnsiC, out int closingBracketIndex)
+    {
+        var result = Read(context, text, openingBracketIndex, text.Length, null, recognizeAnsiC);
+        closingBracketIndex = result.ClosingBracketIndex;
+        return result.Status == ShellScanStatus.Complete;
+    }
 
     /// <summary>Matches brackets within an already read word, retaining the source for nested reads.</summary>
     internal static bool TryScanWord(ShellScanContext context, ShellSource text, int openingBracketIndex, int wordEnd,
-        out int closingBracketIndex) =>
-        Scan(context, text, openingBracketIndex, wordEnd, null, recognizeAnsiC: true, out closingBracketIndex, out _)
-            == ShellScanStatus.Complete;
+        out int closingBracketIndex)
+    {
+        var result = Read(context, text, openingBracketIndex, wordEnd, null, recognizeAnsiC: true);
+        closingBracketIndex = result.ClosingBracketIndex;
+        return result.Status == ShellScanStatus.Complete;
+    }
 
     /// <summary>Distinguishes an absent bracket, complete subscript, incomplete input, and malformed syntax.</summary>
     public static ShellScanStatus Scan(
         ShellSource text,
         int openingBracketIndex,
-        out int closingBracketIndex) =>
-        Scan(new ShellScanContext(), text, openingBracketIndex, text.Length, null, recognizeAnsiC: true,
-            out closingBracketIndex, out _);
+        out int closingBracketIndex)
+    {
+        var result = Read(new ShellScanContext(), text, openingBracketIndex, text.Length, null, recognizeAnsiC: true);
+        closingBracketIndex = result.ClosingBracketIndex;
+        return result.Status;
+    }
 
-    private static ShellScanStatus Scan(
+    private static ScanResult Read(
         ShellScanContext context,
         ShellSource text,
         int openingBracketIndex,
         int end,
         Dictionary<int, ScanResult>? results,
-        bool recognizeAnsiC,
-        out int closingBracketIndex,
-        out SubstitutionSyntaxFailure quotedCapture)
+        bool recognizeAnsiC)
     {
-        closingBracketIndex = openingBracketIndex;
-        quotedCapture = SubstitutionSyntaxFailure.None;
         if (openingBracketIndex < 0
             || openingBracketIndex >= end
             || text[openingBracketIndex] != (byte)'[')
         {
-            return ShellScanStatus.NotFound;
+            return new ScanResult(ShellScanStatus.NotFound, openingBracketIndex, SubstitutionSyntaxFailure.None);
         }
 
         if (!context.TryEnter())
-            return ShellScanStatus.Invalid;
+            return new ScanResult(ShellScanStatus.Invalid, openingBracketIndex, SubstitutionSyntaxFailure.None);
 
         try
         {
             if (results != null && results.TryGetValue(openingBracketIndex, out var cached))
-            {
-                closingBracketIndex = cached.ClosingBracketIndex;
-                quotedCapture = cached.QuotedCapture;
-                return cached.Status;
-            }
+                return cached;
 
             // Every unquoted opening has the same suffix scan, even if its enclosing
             // word turns out not to be an assignment. Bound cached entries as syntax.
             Stack<int>? openings = results == null ? null : new();
             if (!TryRememberOpening(openingBracketIndex))
-                return ShellScanStatus.Invalid;
+                return new ScanResult(ShellScanStatus.Invalid, openingBracketIndex, SubstitutionSyntaxFailure.None);
             var cursor = new ShellSourceCursor(text, openingBracketIndex + 1, context);
             var bracketDepth = 1;
+            var quoteStart = -1;
             var lastRejectedQuote = -1;
             var lastQuotedFailure = SubstitutionSyntaxFailure.None;
             var trackQuotedCaptures = results != null && context.CanReadAhead(text);
@@ -100,10 +120,16 @@ internal static class ArraySubscriptScanner
             {
                 if (cursor.TrySkipReadAheadBodies())
                     continue;
-                if (cursor.TryConsumeQuoteOrEscape(recognizeAnsiC))
-                    continue;
-
                 var start = cursor.Position;
+                if (cursor.TryConsumeQuoteOrEscape(recognizeAnsiC))
+                {
+                    if (!cursor.IsQuoted)
+                        quoteStart = -1;
+                    else if (quoteStart < 0)
+                        quoteStart = start;
+                    continue;
+                }
+
                 var inspectQuotedExpansion = trackQuotedCaptures && cursor.IsDoubleQuoted && cursor.Current == (byte)'$';
                 var reads = inspectQuotedExpansion ? context.RejectedCaptureReads : 0;
                 var nestedResult = cursor.SkipNestedExpansion(BracedParameterRecognition.All);
@@ -117,9 +143,9 @@ internal static class ArraySubscriptScanner
                     continue;
                 }
                 if (nestedResult is ShellNestedExpansionScan.Incomplete)
-                    return FinishIncomplete(ShellScanStatus.Incomplete);
-                if (nestedResult is ShellNestedExpansionScan.Invalid)
-                    return FinishIncomplete(ShellScanStatus.Invalid);
+                    return FinishIncomplete(ShellScanStatus.Incomplete, null);
+                if (nestedResult is ShellNestedExpansionScan.Invalid invalid)
+                    return FinishIncomplete(ShellScanStatus.Invalid, invalid.Failure);
 
                 if (cursor.IsQuoted)
                 {
@@ -130,7 +156,7 @@ internal static class ArraySubscriptScanner
                 if (cursor.Current == (byte)'[')
                 {
                     if (!TryRememberOpening(cursor.Position))
-                        return ShellScanStatus.Invalid;
+                        return new ScanResult(ShellScanStatus.Invalid, openingBracketIndex, SubstitutionSyntaxFailure.None);
                     bracketDepth++;
                     cursor.Advance();
                     continue;
@@ -150,16 +176,22 @@ internal static class ArraySubscriptScanner
                 }
                 bracketDepth--;
                 if (bracketDepth == 0)
-                {
-                    closingBracketIndex = cursor.Position;
-                    quotedCapture = lastQuotedFailure;
-                    return ShellScanStatus.Complete;
-                }
+                    return new ScanResult(ShellScanStatus.Complete, cursor.Position, lastQuotedFailure);
 
                 cursor.Advance();
             }
 
-            return FinishIncomplete(ShellScanStatus.Incomplete);
+            ParserFailure? quoteFailure = null;
+            if (results != null && quoteStart >= 0)
+            {
+                var delimiter = cursor.IsDoubleQuoted ? '"' : '\'';
+                var message = cursor.IsDoubleQuoted ? "Unterminated double-quoted string." : "Unterminated single-quoted string.";
+                quoteFailure = new ParserFailure(new SyntaxError(message, cursor.Position), ParserFailureKind.Delimiter)
+                {
+                    UnclosedDelimiter = new UnclosedDelimiter(delimiter, quoteStart) { AtOpeningDelimiter = true }
+                };
+            }
+            return FinishIncomplete(ShellScanStatus.Incomplete, quoteFailure);
 
             bool TryRememberOpening(int position)
             {
@@ -174,12 +206,13 @@ internal static class ArraySubscriptScanner
                 return true;
             }
 
-            ShellScanStatus FinishIncomplete(ShellScanStatus status)
+            ScanResult FinishIncomplete(ShellScanStatus status, ParserFailure? failure)
             {
+                var result = new ScanResult(status, openingBracketIndex, SubstitutionSyntaxFailure.None) { Failure = failure };
                 if (results != null && openings != null)
                     foreach (var opening in openings)
-                        results[opening] = new ScanResult(status, opening, SubstitutionSyntaxFailure.None);
-                return status;
+                        results[opening] = result with { ClosingBracketIndex = opening };
+                return result;
             }
         }
         finally

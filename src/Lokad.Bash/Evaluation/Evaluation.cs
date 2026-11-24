@@ -4394,7 +4394,7 @@ public sealed partial class Evaluation : IFileTester
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
-        if (origin == SyntaxDiagnosticOrigin.Script && endOfInput.AtOpeningDelimiter)
+        if (origin == SyntaxDiagnosticOrigin.Script && (endOfInput.AtOpeningDelimiter || endOfInput.IncludeScriptLine))
             origin = SyntaxDiagnosticOrigin.ScriptLine;
         var prefix = new SyntaxDiagnosticPrefix(path, origin, line);
         var message = endOfInput.Delimiter switch
