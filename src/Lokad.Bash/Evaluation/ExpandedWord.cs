@@ -20,7 +20,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
     /// </summary>
     public IReadOnlyList<ExpandedSegment> Segments { get; } = segments;
 
-    /// <summary>An empty element that was present in a quoted aggregate before operand splicing.</summary>
+    /// <summary>An explicit empty field from a quoted aggregate or a selected aggregate operand.</summary>
     internal bool IsEmptyAggregateField { get; } = isEmptyAggregateField;
 
     /// <summary>Joins scalar or pattern operand fields without losing quote metadata.</summary>

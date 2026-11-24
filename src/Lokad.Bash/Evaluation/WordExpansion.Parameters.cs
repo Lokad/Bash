@@ -179,6 +179,9 @@ internal static partial class WordExpansion
                     // An unavailable @ aggregate retains zero versus one empty field.
                     if (parameter.Kind == VariableReferenceKind.At)
                         Emit(parameter.SelectedFields);
+                    else if (parameter.Kind == VariableReferenceKind.Star && parameter.IsSet
+                             && quoteContext == ExpansionQuoteContext.DoubleQuoted)
+                        output.AppendEmptyAggregateField();
                     else if (positionalStar && allowWordSplitting && output.Purpose == ExpansionPurpose.Normal)
                         Emit([]);
                     else

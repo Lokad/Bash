@@ -100,6 +100,7 @@ internal sealed class ExpandedWordBuilder
     private bool _casePatternHasRawQuoteBytes;
     private bool _hasQuotedAggregate;
     private bool _hasNormalQuotedAggregate;
+    private bool _hasQuotedFieldlessAt;
     private bool _hasUnquotedAggregate;
     private bool _splitOnSpaces;
     private bool _hasOperandAt;
@@ -387,7 +388,9 @@ internal sealed class ExpandedWordBuilder
         {
             // Compound @ joins use IFS except in unquoted parameter operands; empty IFS uses a space.
             var compoundSeparator = fieldSeparators.IsEmpty ? Space : fieldSeparators.First;
-            return AppendSeparatedFields(fields, compoundSeparator, allowWordSplitting, globQuoted);
+            var hasFields = AppendSeparatedFields(fields, compoundSeparator, allowWordSplitting, globQuoted);
+            _hasQuotedFieldlessAt |= !hasFields && quoteContext == ExpansionQuoteContext.DoubleQuoted;
+            return hasFields;
         }
         var unquotedAggregate = Purpose == ExpansionPurpose.Normal && allowWordSplitting && !positionalStarWithEmptyIfs;
         _hasUnquotedAggregate |= unquotedAggregate;
@@ -437,8 +440,12 @@ internal sealed class ExpandedWordBuilder
                 AppendAggregateValue(value, allowWordSplitting, globQuoted);
             }
         }
-        if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted && _doubleQuote != DoubleQuoteState.Outside)
-            _doubleQuote = DoubleQuoteState.EmptyAggregate;
+        if (first && quoteContext == ExpansionQuoteContext.DoubleQuoted)
+        {
+            _hasQuotedFieldlessAt = true;
+            if (_doubleQuote != DoubleQuoteState.Outside)
+                _doubleQuote = DoubleQuoteState.EmptyAggregate;
+        }
         return !first;
 
         bool AppendCaseFields()
@@ -524,7 +531,11 @@ internal sealed class ExpandedWordBuilder
         var words = operand == null ? [] : SelectFields(operand);
         if (words.Count == 0)
         {
-            AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
+            // A selected fieldless @ operand contributes a protected empty field inside double quotes.
+            if (quoteContext == ExpansionQuoteContext.DoubleQuoted && operand?._hasQuotedFieldlessAt == true)
+                AppendEmptyAggregateField();
+            else
+                AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
             return;
         }
 
@@ -716,7 +727,7 @@ internal sealed class ExpandedWordBuilder
                 AppendExpansion(separator, allowWordSplitting, globQuoted);
             first = false;
             if (preserveQuotedEmpty && value.IsEmpty && EmptyPolicy != ImplicitEmptyPolicy.PreserveAggregate)
-                MarkCurrentWordForEmission();
+                AppendEmptyAggregateField();
             else
                 AppendAggregateValue(value, allowWordSplitting, globQuoted);
         }
@@ -750,7 +761,7 @@ internal sealed class ExpandedWordBuilder
     public void MarkCurrentWordForEmission() =>
         GetPart(PartOrigin.Protected, globQuoted: true);
 
-    private void AppendEmptyAggregateField()
+    internal void AppendEmptyAggregateField()
     {
         _current.HasEmptyAggregateField = true;
         MarkCurrentWordForEmission();

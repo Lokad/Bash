@@ -212,6 +212,10 @@ beside a fieldless `@` expansion. A plain unset parameter or an out-of-range
 slice contributes implicit empty text. Direct quoted `*` joins preserve a
 field when they join one or more supplied empty fields to an empty result.
 Transforms and slices of actual `*` aggregates keep their own join rules.
+In double quotes, a selected default or alternate with a fieldless `@`
+operand contributes an empty field. A rejected `:+` on a set `*`
+aggregate with an empty join also keeps an empty field. These empty fields
+and those from direct `*` joins persist through nested operands.
 
 Function display/export preserves legacy backticks and their original escapes.
 Invalid child syntax in an unreached legacy substitution remains deferred when

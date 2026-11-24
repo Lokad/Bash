@@ -434,6 +434,16 @@ public sealed class ParameterOperatorTests
         "[1]<>[0]", "", 0)]
     [InlineData("set --; v=; show \"$@${v[*]^^x}\"; show \"${v[*]:0}$@\"",
         "[1]<>[1]<>", "", 0)]
+    [InlineData("""set --; unset v; show "$@${v-$@}" """, "[1]<>", "", 0)]
+    [InlineData("""set --; zero=(); v=x; show "${v:+"${zero[@]}"}$@" """, "[1]<>", "", 0)]
+    [InlineData("""set --; unset v; show "$@${v-${@#x}}" """, "[1]<>", "", 0)]
+    [InlineData("""set --; a=([3]=''); show "$@${a[*]:+$(printf skipped >&2)}" """, "[1]<>", "", 0)]
+    [InlineData("""zero=(); IFS=; set -- '' ''; show "${*:+unused}${zero[@]}" """, "[1]<>", "", 0)]
+    [InlineData("""set --; unset v missing; values=("$@${v-${missing-$@}}"); show "${values[@]}" """, "[1]<>", "", 0)]
+    [InlineData("""zero=(); IFS=; set -- ''; unset v; show "${zero[@]}${v-${*:+unused}}"; show "${zero[@]}${v-$*}" """,
+        "[1]<>[1]<>", "", 0)]
+    [InlineData("""set --; zero=(); unset v; show "$@${v-}"; show ${v-"$@"}; show "${zero[@]}${*:+unused}" """,
+        "[0][0][0]", "", 0)]
     [InlineData("v=; unset missing; show \"${v^^${missing:?required}}\"\nprintf skipped",
         "", "missing: required\n", 1)]
     public async Task QuotedParameterExpansionPreservesAnExplicitEmptyResult(string body, string expectedOutput,
