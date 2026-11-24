@@ -9,6 +9,33 @@ public sealed class ParserHereDocumentTests
     private const string TwoDocuments = "{\ncat <<LEFT\nleft\nLEFT\ncat <<RIGHT\nright\nRIGHT\n}\n";
 
     [Theory]
+    [InlineData(WordPartKind.Unquoted, true)]
+    [InlineData(WordPartKind.SingleQuoted, false)]
+    [InlineData(WordPartKind.DoubleQuoted, false)]
+    public void SinglePartDelimiterRetainsItsBytesAndQuotePolicy(WordPartKind kind, bool expands)
+    {
+        var source = ShellSource.FromBytes(new byte[] { 0xff, (byte)'\r' });
+        var word = new Word([WordPart.FromSource(kind, source)]);
+
+        var delimiter = HereDocumentReader.GetHereDocumentDelimiter(word, out var allowExpansion);
+
+        Assert.True(delimiter.Bytes.Equals(source.Bytes));
+        Assert.Equal(expands, allowExpansion);
+    }
+
+    [Fact]
+    public void MultipartDelimiterCombinesBytesAndKeepsQuoteProtection()
+    {
+        var literal = WordPart.FromValue(WordPartKind.Escaped, ShellValue.FromBytes(new byte[] { 0xff }));
+        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, "E"), literal]);
+
+        var delimiter = HereDocumentReader.GetHereDocumentDelimiter(word, out var allowExpansion);
+
+        Assert.Equal(new byte[] { (byte)'E', 0xff }, delimiter.Bytes.ToArray());
+        Assert.False(allowExpansion);
+    }
+
+    [Theory]
     [InlineData("cat <<END\n", "END\n")]
     [InlineData("cat <<-END\n", "\tEND\n")]
     [InlineData("cat <<'END'\n", "END")]

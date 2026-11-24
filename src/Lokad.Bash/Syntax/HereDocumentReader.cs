@@ -90,6 +90,13 @@ internal sealed class HereDocumentReader
 
     private static ShellSource GetHereDocumentDelimiter(Word word, MemoryCapacity? memory, out bool allowExpansion)
     {
+        if (word.Parts is [var single])
+        {
+            // The delimiter word already owns the bytes used by the reader and formatter.
+            allowExpansion = single.Kind == WordPartKind.Unquoted;
+            return ShellSource.FromBytes(single.GetUnexpandedValue().Bytes);
+        }
+
         allowExpansion = true;
         var builder = memory is null ? ByteMemoryBuilder.CreateUnaccounted(0) : new ByteMemoryBuilder(0, memory);
         foreach (var part in word.Parts)
