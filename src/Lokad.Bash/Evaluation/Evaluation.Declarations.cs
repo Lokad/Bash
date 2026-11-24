@@ -247,7 +247,7 @@ public sealed partial class Evaluation
                     if (HasPendingExpansionError)
                         break;
                     var value = await AwaitWordExpansionAsync(WordExpansion.ExpandAssignmentValueAsync(assignment.Value,
-                        scope with { SelectorParameterDiagnostics = false }))
+                        scope with { SelectorParameterDiagnostics = false, ExpansionWord = word }))
                         .ConfigureAwait(false);
                     if (HasPendingExpansionError)
                         break;

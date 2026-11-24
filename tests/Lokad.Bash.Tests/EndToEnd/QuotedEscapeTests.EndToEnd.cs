@@ -70,7 +70,7 @@ public sealed class QuotedEscapeTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("tail", host.StandardOutput.TextContent);
-        Assert.Equal("bad substitution: no closing `}' in \"${value:-a" + quote + "b}\"\n", host.StandardError.TextContent);
+        Assert.Equal("line 2: bad substitution: no closing `}' in \"${value:-a" + quote + "b}\"\n", host.StandardError.TextContent);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public sealed class QuotedEscapeTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("tail", host.StandardOutput.TextContent);
-        Assert.Equal("bad substitution: no closing `}' in pa\"${missing:-a'b}\"\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: bad substitution: no closing `}' in pa\"${missing:-a'b}\"\n", host.StandardError.TextContent);
     }
 
     [Theory]

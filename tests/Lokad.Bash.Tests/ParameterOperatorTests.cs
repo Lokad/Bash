@@ -239,10 +239,10 @@ public sealed class ParameterOperatorTests
 
     [Theory]
     [InlineData("printf '%s' \"${a[]}\"", "line 3: ${a[]}: bad substitution\n")]
-    [InlineData("printf '%s' \"${a[1}\"", "bad substitution: no closing `}' in \"${a[1}\"\n")]
-    [InlineData("printf '%s' ${a[1}", "${a[1}: bad substitution\n")]
+    [InlineData("printf '%s' \"${a[1}\"", "line 3: bad substitution: no closing `}' in \"${a[1}\"\n")]
+    [InlineData("printf '%s' ${a[1}", "line 3: ${a[1}: bad substitution\n")]
     [InlineData("printf '%s' \"${a.dot}\"", "line 3: ${a.dot}: bad substitution\n")]
-    [InlineData("printf '%s' \"${saved:-${a[1}}\"", "bad substitution: no closing `}' in ${saved:-${a[1}}\n")]
+    [InlineData("printf '%s' \"${saved:-${a[1}}\"", "line 3: bad substitution: no closing `}' in ${saved:-${a[1}}\n")]
     public async Task MalformedBracedParametersPublishStatusBeforeRecoveringTheNextUnit(string command, string error)
     {
         var script = "a=(old); saved=prior\n(exit 7) | true\n" + command
@@ -271,15 +271,69 @@ public sealed class ParameterOperatorTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("1", host.StandardOutput.TextContent);
-        Assert.Equal("earlierbad substitution: no closing `}' in \"$(printf skipped 1>&2)${a[1}\"\n",
+        Assert.Equal("earlierline 1: bad substitution: no closing `}' in \"$(printf skipped 1>&2)${a[1}\"\n",
             host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task MalformedDeclarationRetainsItsAssignmentSpellingInRedirectedSource()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/part", "printf before\ndeclare result+=\"${probe[0}\"\nprintf '<inner:%s>' \"$?\"\n");
+
+        var result = await host.RunAsync(". ./part 2>diagnostics\nprintf '<outer:%s>' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before<inner:1><outer:0>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("./part: line 2: bad substitution: no closing `}' in result+=\"${probe[0}\"\n",
+            host.ReadFile("/diagnostics"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("trap 'printf \"<exit:%s>\" \"$?\"' EXIT\n", "printf '%s' \"${probe[0}\"", "<capture:1:before<exit:1>>",
+        "line 7: bad substitution: no closing `}' in \"${probe[0}\"\n")]
+    [InlineData("", "printf '%s' \"$((1/0))\"", "<capture:1:before>",
+        "line 5: 1/0: division by 0 (error token is \"0\")\n")]
+    public async Task LegacyCaptureStopsAfterTheFailedExpansion(string setup, string command, string output, string diagnostic)
+    {
+        var script = "held=`" + setup + "printf before\n" + command
+            + "\nprintf discarded\n`\nprintf '<capture:%s:%s>' \"$?\" \"$held\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(diagnostic, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task MalformedSelectorInSourcedCaptureEndsTheChildReader()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/part", "printf before\nprintf '<%s>' \"${probe[0}\"\nprintf inner\n");
+
+        var result = await host.RunAsync(
+            "held=$(. ./part\nprintf '<reached:%s>' \"$?\"\n)\nprintf '<%s:%s>' \"$?\" \"$held\"\n",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:before>", host.StandardOutput.TextContent);
+        Assert.Equal("./part: line 2: bad substitution: no closing `}' in \"${probe[0}\"\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
     [InlineData("${a[i++}]", 1, "line 2: i++}: syntax error: invalid arithmetic operator (error token is \"}\")\n")]
-    [InlineData("\"${a[i++}]\"", 0, "bad substitution: no closing `}' in \"${a[i++}]\"\n")]
-    [InlineData("${a[i++}]suffix", 0, "${a[i++}]suffix: bad substitution\n")]
-    [InlineData("${saved:-${a[i++}]}", 0, "bad substitution: no closing `}' in ${saved:-${a[i++}]}\n")]
+    [InlineData("\"${a[i++}]\"", 0, "line 2: bad substitution: no closing `}' in \"${a[i++}]\"\n")]
+    [InlineData("${a[i++}]suffix", 0, "line 2: ${a[i++}]suffix: bad substitution\n")]
+    [InlineData("${saved:-${a[i++}]}", 0, "line 2: bad substitution: no closing `}' in ${saved:-${a[i++}]}\n")]
     public async Task LateSubscriptFailureKeepsOnlyTheReachedSelectorEffects(string word, int index, string error)
     {
         var script = "a=(one two); i=0; saved=prior\n"
@@ -306,9 +360,9 @@ public sealed class ParameterOperatorTests
     [InlineData("printf '%s' \"${saved:-${#m[x}]}}\"", "prior}", "")]
     [InlineData("cat <<EOF\n${m[x}]}\nEOF\n", "known\n", "")]
     [InlineData("printf '%s' ${m[$(printf selector >&2; printf x)}]", "",
-        "selector${m[$(printf selector 1>&2; printf x)}]: bad substitution\n")]
+        "selectorline 2: ${m[$(printf selector 1>&2; printf x)}]: bad substitution\n")]
     [InlineData("printf '%s' ${m[x}]:-$(printf skipped >&2)", "",
-        "bad substitution: no closing `}' in ${m[x}]:-$(printf skipped 1>&2)\n")]
+        "line 2: bad substitution: no closing `}' in ${m[x}]:-$(printf skipped 1>&2)\n")]
     public async Task LateAssociativeBracketPreservesBraceOwnershipAndReadOrder(string command, string output, string error)
     {
         var script = "declare -A m; m['x}']=known; saved=prior\n" + command + "\nprintf keep\n";
@@ -360,7 +414,7 @@ public sealed class ParameterOperatorTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1>", host.StandardOutput.TextContent);
-        Assert.Equal("bad substitution: no closing `}' in \"${map[}$(printf reached 1>&2; printf ok)\"\n",
+        Assert.Equal("line 1: bad substitution: no closing `}' in \"${map[}$(printf reached 1>&2; printf ok)\"\n",
             host.StandardError.TextContent);
     }
 

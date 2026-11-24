@@ -510,8 +510,9 @@ public sealed partial class Evaluation
                 or ExpansionFailureKind.ParameterTarget or ExpansionFailureKind.NamerefDefault } failure)
             return null;
 
-        // A fork ends on a parameter target failure even inside a loaded reader.
-        if (failure.Kind == ExpansionFailureKind.ParameterTarget && _state.ForkKind != null)
+        // These expansion failures terminate the fork's reader, including a capture's source or eval.
+        if (_state.ForkKind != null
+            && failure.Kind is ExpansionFailureKind.Arithmetic or ExpansionFailureKind.WordSyntax or ExpansionFailureKind.ParameterTarget)
             return null;
 
         // Recovery uses the caller's errexit state, including for tested commands within the unit.

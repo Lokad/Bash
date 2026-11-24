@@ -288,9 +288,12 @@ internal static partial class WordExpansion
     private static async Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,
         ScopedEvaluation scope, ShellScanContext? captures, bool quoteSegment)
     {
+        if (word != null)
+            word = scope.ExpansionWord ?? word;
         if (word == null && !quoteSegment || captures == null && word?.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted }])
         {
-            await ReportParameterSyntaxAsync(segment.ToValue(), missingBrace, scope, hereDocument: false).ConfigureAwait(false);
+            var spelling = word?.Parts is [SourceWordPart unquoted] ? unquoted.Source : segment;
+            await ReportParameterSyntaxAsync(spelling.ToValue(), missingBrace, scope, hereDocument: false).ConfigureAwait(false);
             return;
         }
         using var source = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
@@ -310,7 +313,7 @@ internal static partial class WordExpansion
         ReadOnlySpan<ShellValue> message = missingBrace ? [ShellValue.FromText("no closing `}' in "), spelling] : [badSubstitution];
         return hereDocument
             ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
-            : scope.Effects.ReportUnitExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
+            : scope.Effects.ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
     }
 
     // Lexical assignment operands still go through ordinary field processing.
