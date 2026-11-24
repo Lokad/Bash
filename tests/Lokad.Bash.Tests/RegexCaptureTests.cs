@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Lokad.Bash.Evaluation;
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
@@ -8,6 +9,51 @@ namespace Lokad.Bash.Tests;
 
 public sealed class RegexCaptureTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CapturePublicationReplacesTheSelectedSlotAndItsAttributes(bool useCommandScope)
+    {
+        var caller = Variables.CreateEmpty();
+        var name = Variables.RegexCaptureName;
+        var outside = ShellValue.FromText("outside");
+        Assert.True(caller.TrySetScalar("target", outside));
+        Assert.True(caller.TrySetNameref(name, ShellValue.FromText("target")));
+        caller.SetExported(name, true);
+        caller.SetReadonlyBinding(name);
+        var previous = caller.EstimateBindingBytes(name);
+        var before = caller.EstimatedMemoryBytes;
+        var captures = new[] { ShellValue.FromText("ab"), ShellValue.FromText("a"), ShellValue.Empty };
+        var replacement = Variables.CreateEmpty();
+        Assert.True(replacement.TryAssignArray(name, captures, ArrayKind.Indexed));
+        var expected = before + replacement.EstimateBindingBytes(name) - (useCommandScope ? 0 : previous);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var owner = useCommandScope ? Variables.CreateCommandScope(caller, memory, CancellationToken.None) : caller;
+
+            owner.SetRegexCaptures(captures);
+
+            Assert.Equal<ShellValue>(captures, owner.IndexedArrays[name].PresentValues);
+            Assert.DoesNotContain(name, owner.ExportedNames);
+            Assert.False(owner.IsReadonlyBinding(name));
+            Assert.False(owner.TryGetNameref(name, out _));
+            Assert.Equal(expected, owner.EstimatedMemoryBytes);
+            Assert.True(caller.TryGetScalar("target", out var retained));
+            Assert.Equal(outside, retained);
+            if (useCommandScope)
+            {
+                Assert.Contains(name, caller.ExportedNames);
+                Assert.True(caller.IsReadonlyBinding(name));
+                Assert.True(caller.TryGetNameref(name, out var reference));
+                Assert.Equal(ShellValue.FromText("target"), reference);
+            }
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false, 136 * 1024)]
     [InlineData(true, 47 * 1024)]
