@@ -136,6 +136,42 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Equal(bufferSize, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CompoundArrayRenderingKeepsTraversalScratchIndependentOfItemCount(bool export)
+    {
+        const int bufferSize = 2048;
+        var items = string.Join(' ', Enumerable.Repeat("'data'", 128));
+        var singleItem = "'" + new string('d', items.Length - 2) + "'";
+
+        var narrowPeak = Render(singleItem, TestMemoryBudget.FunctionFormattingBytes);
+        Assert.Equal(narrowPeak, Render(items, narrowPeak));
+
+        long Render(string operands, long limit)
+        {
+            var assignment = "a+=(" + operands + ")";
+            var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ " + assignment + "; }").Commands));
+            var governor = new MemoryGovernor(limit);
+            if (export)
+            {
+                using var output = new BoundedByteMemoryBuilder(bufferSize, bufferSize, governor);
+                Assert.True(FunctionDefinitionFormatter.TryAppendExport(definition, output));
+                Assert.Contains(assignment, Utf8Text.Decode(output.ToMemory()), StringComparison.Ordinal);
+                Assert.Equal(bufferSize, governor.ReservedBytes);
+            }
+            else
+            {
+                using var output = new ByteMemoryBuilder(bufferSize, governor);
+                Assert.True(FunctionDefinitionFormatter.TryAppend(definition, output));
+                Assert.Contains(assignment, Utf8Text.Decode(output.ToMemory()), StringComparison.Ordinal);
+                Assert.Equal(bufferSize, governor.ReservedBytes);
+            }
+            Assert.Equal(0, governor.ReservedBytes);
+            return governor.PeakBytes;
+        }
+    }
+
     [Fact]
     public void ExportAdmitsPendingHereDocumentsSeparatelyFromRedirectionWork()
     {

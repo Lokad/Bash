@@ -313,14 +313,15 @@ internal static class FunctionDefinitionFormatter
                     if (!output.TryAppend(assignment.Target.AsSpan()) || !Append(assignment.Operator == AssignmentOperator.Append ? "+=" : "=")) return false;
                     if (assignment.ArrayValues is { } values)
                     {
-                        PrepareWork(Math.Max(1, checked(2 * values.Count)));
-                        work.Push(new Step.Text(")"));
-                        for (var index = values.Count - 1; index >= 0; index--)
-                        {
-                            work.Push(new Step.Word(values[index].Word));
-                            if (index != 0) work.Push(new Step.Text(" "));
-                        }
                         if (!Append("(")) return false;
+                        for (var index = 0; index < values.Count; index++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            if (index != 0 && !Append(" ")) return false;
+                            if (!AppendWordParts(values[index].Word.Parts, 0)) return false;
+                        }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!Append(")")) return false;
                     }
                     else PushStep(new Step.Word(assignment.Value));
                     break;
