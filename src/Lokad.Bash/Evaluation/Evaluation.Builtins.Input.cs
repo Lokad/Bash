@@ -242,7 +242,7 @@ public sealed partial class Evaluation
 
         Task<EvaluationResult> InvalidTargetAsync(ShellValue name) =>
             FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(command, name,
-                diagnostics, ClosedStderrHandling.AttemptWrite), 1);
+                diagnostics, ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(scope.Context)), 1);
 
         async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectInputAsync()
         {

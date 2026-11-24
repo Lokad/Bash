@@ -66,11 +66,11 @@ public sealed class ReadOptionDiagnosticTests
     }
 
     [Theory]
-    [InlineData("read -- -z <<< data; printf '<%s>' \"$?\"", "3C313E", "726561643A20602D7A273A206E6F7420612076616C6964206964656E7469666965720A")]
-    [InlineData("read - <<< data; printf '<%s>' \"$?\"", "3C313E", "726561643A20602D273A206E6F7420612076616C6964206964656E7469666965720A")]
-    [InlineData("read +r <<< data; printf '<%s>' \"$?\"", "3C313E", "726561643A20602B72273A206E6F7420612076616C6964206964656E7469666965720A")]
+    [InlineData("read -- -z <<< data; printf '<%s>' \"$?\"", "3C313E", "6C696E6520313A20726561643A20602D7A273A206E6F7420612076616C6964206964656E7469666965720A")]
+    [InlineData("read - <<< data; printf '<%s>' \"$?\"", "3C313E", "6C696E6520313A20726561643A20602D273A206E6F7420612076616C6964206964656E7469666965720A")]
+    [InlineData("read +r <<< data; printf '<%s>' \"$?\"", "3C313E", "6C696E6520313A20726561643A20602B72273A206E6F7420612076616C6964206964656E7469666965720A")]
     [InlineData("read -rr -- value <<< 'a\\b'; printf '<%s><%s>' \"$?\" \"$value\"", "3C303E3C615C623E", "")]
-    [InlineData("read value -z <<< 'one two'; printf '<%s><%s>' \"$?\" \"$value\"", "3C313E3C6F6E653E", "726561643A20602D7A273A206E6F7420612076616C6964206964656E7469666965720A")]
+    [InlineData("read value -z <<< 'one two'; printf '<%s><%s>' \"$?\" \"$value\"", "3C313E3C6F6E653E", "6C696E6520313A20726561643A20602D7A273A206E6F7420612076616C6964206964656E7469666965720A")]
     public async Task SupportedOptionsAndOperandBoundariesRetainNativeBehavior(
         string script, string outputHex, string diagnosticHex)
     {

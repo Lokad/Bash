@@ -1155,6 +1155,11 @@ Readonly output errors from `read`, `mapfile`, `readarray`, `getopts` and
 `printf` report the reached builtin line and any active `source` filename.
 Whole-array input reports the written destination, while resolved scalar
 and element assignments report the readonly binding's name.
+Invalid destination identifiers and whole-array destinations of the wrong
+kind use those same coordinates. Scalar `read` validates the first
+destination before reading and checks later destinations as it assigns
+fields. `read -a` validates the array destination after reading, while
+`mapfile` and `readarray` validate it before reading.
 
 When a reached `printf -v` has no destination field, it reports that the
 option requires an argument and follows with usage. A supplied destination

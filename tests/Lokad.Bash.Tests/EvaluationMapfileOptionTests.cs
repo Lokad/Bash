@@ -37,7 +37,7 @@ public sealed class EvaluationMapfileOptionTests
     [InlineData("a=([0]=keep [4]=old [8]=last); { mapfile -tn2 -O4 a; IFS= read -r next; } <<< $'first\\nsecond\\nthird'; printf '<%s><%s><%s><%s><%s>' \"${a[0]}\" \"${a[4]}\" \"${a[5]}\" \"${a[8]}\" \"$next\"", 0, "<keep><first><second><last><third>", "")]
     [InlineData("a=([0]=keep [4]=old); { a=temp mapfile -tn1 -O4 a; } <<< changed; printf '<%s><%s>' \"${a[0]}\" \"${a[4]}\"", 0, "<keep><old>", "")]
     [InlineData("arr=(old); mapfile arr extra </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,empty>", "")]
-    [InlineData("mapfile -- -x; printf '<%s>' \"$?\"", 0, "<1>", "mapfile: `-x': not a valid identifier\n")]
+    [InlineData("mapfile -- -x; printf '<%s>' \"$?\"", 0, "<1>", "line 1: mapfile: `-x': not a valid identifier\n")]
     [InlineData("mapfile -tt -t -- arr <<< line; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<0,line>", "")]
     [InlineData("readarray -c ' +2 ' -c4294967295 -tn2 arr <<< $'a\\nb\\nc'; printf '<%s><%s><%s>' \"$?\" \"${arr[0]}\" \"${arr[1]}\"", 0, "<0><a><b>", "")]
     [InlineData("arr=(old); mapfile arr -x </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,empty>", "")]

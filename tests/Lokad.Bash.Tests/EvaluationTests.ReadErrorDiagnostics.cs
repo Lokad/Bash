@@ -9,7 +9,7 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
-    // Bash 5.2.37 (C.UTF-8); diagnostics omit the native process/line prefix.
+    // Bash 5.2.37 (C.UTF-8). Descriptor failures use the bare message.
     [Theory]
     [InlineData("value=old; read value 0>/dev/null; printf '<%s><%s>' \"$?\" \"$value\"", "<1><old>", "read: read error: 0: Bad file descriptor\n")]
     [InlineData("value=old; exec 3>/dev/null; read -u3 value; printf '<%s><%s>' \"$?\" \"$value\"", "<1><old>", "read: read error: 3: Bad file descriptor\n")]
@@ -18,7 +18,7 @@ public partial class EvaluationTests
     [InlineData("value=old; exec 3</dev/null; exec 4>/dev/null; read -u3 -u4 value; printf '<%s><%s>' \"$?\" \"$value\"", "<1><old>", "read: read error: 4: Bad file descriptor\n")]
     [InlineData("value=old; read value 0<&-; printf '<%s><%s>' \"$?\" \"$value\"", "<1><old>", "read: read error: 0: Bad file descriptor\n")]
     [InlineData("value=old; read -u0 value 0<&-; printf '<%s><%s>' \"$?\" \"$value\"", "<1><old>", "read: 0: invalid file descriptor: Bad file descriptor\n")]
-    [InlineData("read 1bad 0>/dev/null; printf '<%s>' \"$?\"", "<1>", "read: `1bad': not a valid identifier\n")]
+    [InlineData("read 1bad 0>/dev/null; printf '<%s>' \"$?\"", "<1>", "line 1: read: `1bad': not a valid identifier\n")]
     [InlineData("value=old; read value 1bad 0>/dev/null; printf '<%s><%s>' \"$?\" \"$value\"", "<1><old>", "read: read error: 0: Bad file descriptor\n")]
     [InlineData("i=0; read 'values[i++]' 0>/dev/null; printf '<%s><%s>' \"$?\" \"$i\"", "<1><0>", "read: read error: 0: Bad file descriptor\n")]
     [InlineData("value=old; readonly value; read value 0>/dev/null; printf '<%s><%s>' \"$?\" \"$value\"", "<1><old>", "read: read error: 0: Bad file descriptor\n")]

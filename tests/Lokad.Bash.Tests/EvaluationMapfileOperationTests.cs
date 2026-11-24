@@ -630,7 +630,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("mapfile: arr: not an indexed array\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: mapfile: arr: not an indexed array\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

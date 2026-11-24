@@ -165,7 +165,7 @@ public sealed class EvaluationMapfileByteTests
     [InlineData("arr=(old); declare -n ref=arr; mapfile -t ref; printf '<%s><%s>' \"${arr[0]}\" \"${ref[1]}\"", "first\nsecond\n", "<first><second>", "")]
     [InlineData("readonly arr; mapfile arr; status=$?; read next; printf '%s:<%s>' \"$status\" \"$next\"", "still-available\n", "1:<still-available>", "line 1: arr: readonly variable\n")]
     [InlineData("arr=(old); mapfile arr <&-; printf '<%s>:%s' \"${arr[0]-unset}\" \"$?\"", "", "<unset>:0", "")]
-    [InlineData("declare -A map=([key]=old); declare -n ref='map[key]'; mapfile ref; status=$?; read next; printf '<%s><%s><%s>' \"$status\" \"${map[key]}\" \"$next\"", "line\n", "<1><old><line>", "mapfile: `map[key]': not a valid identifier\n")]
+    [InlineData("declare -A map=([key]=old); declare -n ref='map[key]'; mapfile ref; status=$?; read next; printf '<%s><%s><%s>' \"$status\" \"${map[key]}\" \"$next\"", "line\n", "<1><old><line>", "line 1: mapfile: `map[key]': not a valid identifier\n")]
     public async Task InputAndTargetKindsRetainTheirContracts(string script, string input, string output, string error)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]), System.Text.Encoding.UTF8.GetBytes(input));

@@ -25,6 +25,34 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("read -u3 1bad", "read: `1bad': not a valid identifier", "unset", "one two")]
+    [InlineData("read -u3 head 1bad", "read: `1bad': not a valid identifier", "one", "next")]
+    [InlineData("read -a arr -u3", "read: arr: not an indexed array", "unset", "next")]
+    [InlineData("mapfile -u3 'arr[0]'", "mapfile: `arr[0]': not a valid identifier", "unset", "one two")]
+    [InlineData("readarray -u3 arr", "readarray: arr: not an indexed array", "unset", "one two")]
+    public async Task InvalidInputDestinationReportsTheReachedSourceAndPreservesReadOrder(
+        string invocation, string message, string head, string tail)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", ":\n" + invocation + "\n");
+        host.AddFile("/input", "one two\nnext\n");
+        var result = await host.RunAsync("""
+            declare -A arr=([key]=old)
+            exec 3<input
+            source /body
+            status=$?
+            IFS= read -r -u3 tail
+            exec 3<&-
+            printf '<%s><%s><%s><%s>' "$status" "${head-unset}" "$tail" "${arr[key]}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<1><{head}><{tail}><old>", host.StandardOutput.TextContent);
+        Assert.Equal($"/body: line 2: {message}\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("read -ra values", "read")]
     [InlineData("mapfile -n1", "mapfile")]
     [InlineData("readarray -t", "readarray")]

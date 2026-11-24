@@ -2954,7 +2954,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 exitCode = 1;
                 return WriteQuotedOperandDiagnosticAsync(ShellValue.FromText(commandName), subject, message,
-                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite);
+                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, default);
             }
         }
         async Task<bool> ApplyAssignmentAsync(AssignmentWord assignment)

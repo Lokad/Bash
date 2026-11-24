@@ -448,8 +448,8 @@ public sealed partial class Evaluation
         }
         if (variables.AssociativeArrays.ContainsKey(resolved))
         {
-            await ReportExpansionDiagnosticAsync([command],
-                [operand, ShellValue.FromText(": not an indexed array")]).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync([command],
+                [operand, ShellValue.FromText(": not an indexed array")], scope.Context).ConfigureAwait(false);
             return (null, 1);
         }
 
@@ -457,8 +457,8 @@ public sealed partial class Evaluation
 
         async Task<(IndexedInputTarget?, int)> InvalidTargetAsync(ShellValue name)
         {
-            await WriteInvalidIdentifierDiagnosticAsync(command, name, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite)
-                .ConfigureAwait(false);
+            await WriteInvalidIdentifierDiagnosticAsync(command, name, _builtinDiagnostics,
+                ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
             return (null, 1);
         }
     }
