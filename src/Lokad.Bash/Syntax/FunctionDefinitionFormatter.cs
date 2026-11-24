@@ -65,6 +65,9 @@ internal static class FunctionDefinitionFormatter
         CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget,
         CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, CaptureSpelling.Diagnostic);
 
+    internal static bool TryAppendDiagnosticSpelling(SourceSpelling spelling, IByteMemoryWriter output, IMemoryBudget? budget) =>
+        AppendSpelling(spelling, 0, output, budget, CancellationToken.None, CaptureSpelling.Diagnostic);
+
     private static bool TryAppendSubstitution(CommandSubstitutionSyntax substitution, IByteMemoryWriter output,
         IMemoryBudget? budget, CancellationToken cancellationToken, CaptureSpelling style)
     {

@@ -1625,12 +1625,12 @@ public static class Parser
                     {
                         // A lone command word can start a function header. Read the token expected to close it.
                         if (tokenizer.TrackUnexpectedTokens && words?.Count == 1 && assignments == null && redirections == null)
-                            tokenizer.RecordUnexpectedTokenBeforeNewline(message, tokenizer.NextTokenCore());
+                            tokenizer.RecordUnexpectedFunctionHeaderToken(message);
                         else
                             tokenizer.RecordUnexpectedToken(message, token, tokenizer.Position);
                     }
                     else if (token.Kind == TokenKind.ArithmeticCommand)
-                        tokenizer.RecordUnexpectedArithmeticCommand(message, token);
+                        tokenizer.RecordUnexpectedToken(message, token, tokenizer.Position);
                     else
                         tokenizer.RecordError(message, tokenizer.Position);
                     return null;

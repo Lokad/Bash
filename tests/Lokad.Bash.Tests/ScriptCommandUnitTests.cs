@@ -235,6 +235,12 @@ public sealed class ScriptCommandUnitTests
     [InlineData("n= ()\n", "(", "n= ()")]
     [InlineData("f (( 1 ))\n", "(", "f (( 1 ))")]
     [InlineData("f ((\n 1\n", "(", "f ((")]
+    [InlineData("f ( (()) )\n", "", "f ( (()) )")]
+    [InlineData("f ( ((\t'lit'\t)) )\n", "$'\\t\\'lit\\'\\t'", "f ( ((\t'lit'\t)) )")]
+    [InlineData("f ( (( $( printf 2 ; printf 3 ) )) )\n", " $(printf 2; printf 3) ",
+        "f ( (( $( printf 2 ; printf 3 ) )) )")]
+    [InlineData("case (( 1 )) in x) :;; esac\n", "(", "case (( 1 )) in x) :;; esac")]
+    [InlineData("{ :; } > (( 1 ))\n", "(", "{ :; } > (( 1 ))")]
     public async Task InvalidCompoundOrCommandReportsTheReachedTokenAndLine(string unit, string token, string line)
     {
         await using var host = new TestHost();
@@ -246,6 +252,22 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal("before:2:after", host.StandardOutput.TextContent);
         Assert.Equal($"input: line 2: syntax error near unexpected token `{token}'\ninput: line 2: `{line}'\n",
             host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task MultilineArithmeticInAFunctionHeaderQuotesTheExpressionAndKeepsTheClosingLine()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\nf ( ((\n value=2\n)) )\nprintf skipped\n");
+
+        var result = await host.RunAsync("source input 2>report\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("input: line 4: syntax error near unexpected token `$'\\n value=2\\n''\ninput: line 4: `)) )'\n",
+            host.ReadFile("/report"));
         Assert.Equal(0, host.OpenFileCount);
     }
 

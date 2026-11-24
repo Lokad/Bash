@@ -38,7 +38,15 @@ public static class ShellArgumentEscaping
     }
 
     /// <summary>Appends shell syntax under the caller's byte budget; false leaves an incomplete suffix.</summary>
-    public static bool TryAppendQuoted(IByteMemoryWriter output, ReadOnlySpan<byte> input, ShellQuoteStyle style)
+    public static bool TryAppendQuoted(IByteMemoryWriter output, ReadOnlySpan<byte> input, ShellQuoteStyle style) =>
+        TryAppendQuoted(output, input, style, cLocaleDiagnostic: false);
+
+    /// <summary>Quotes nonprinting arithmetic source using Bash's C-locale reader profile.</summary>
+    internal static bool TryAppendArithmeticDiagnosticToken(IByteMemoryWriter output, ReadOnlySpan<byte> input) =>
+        TryAppendQuoted(output, input, ShellQuoteStyle.AnsiC, cLocaleDiagnostic: true);
+
+    private static bool TryAppendQuoted(IByteMemoryWriter output, ReadOnlySpan<byte> input, ShellQuoteStyle style,
+        bool cLocaleDiagnostic)
     {
         if (input.IsEmpty)
             return style == ShellQuoteStyle.AssignmentValue
@@ -64,6 +72,9 @@ public static class ShellArgumentEscaping
             for (var index = printablePrefix; index < input.Length; index++)
             {
                 var value = input[index];
+                // Bash protects its internal escape and null markers when reading the operand.
+                if (cLocaleDiagnostic && value is 0x01 or 0x7f && !output.TryAppend("\\001"u8))
+                    return false;
                 ReadOnlySpan<byte> escaped = value switch
                 {
                     0x07 => "\\a"u8,
@@ -84,7 +95,7 @@ public static class ShellArgumentEscaping
                         return false;
                     continue;
                 }
-                var length = PrintableCharacterLength(input[index..]);
+                var length = cLocaleDiagnostic ? (value is >= 0x20 and <= 0x7e ? 1 : 0) : PrintableCharacterLength(input[index..]);
                 if (length == 0)
                 {
                     octalEscape[0] = (byte)'\\';

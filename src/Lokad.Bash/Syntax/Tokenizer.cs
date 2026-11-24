@@ -267,15 +267,50 @@ internal sealed class Tokenizer
     internal void RecordUnexpectedTokenBeforeNewline(string message, Token token) =>
         RecordUnexpectedToken(message, token, Position, allowsImplicitNewline: true);
 
-    /// <summary>Reports the second opener when a simple command rejects an arithmetic token.</summary>
-    internal void RecordUnexpectedArithmeticCommand(string message, Token token)
+    /// <summary>Reports the unexpected token read while checking for a function header's closing parenthesis.</summary>
+    internal void RecordUnexpectedFunctionHeaderToken(string message)
     {
-        if (TrackUnexpectedTokens)
+        // Keep parsed substitutions available for the diagnostic's source spelling.
+        var retainLookahead = _scanContext.RetainCaptureLookahead;
+        _scanContext.RetainCaptureLookahead = true;
+        try
         {
-            RecordUnexpectedToken(message, SecondArithmeticOpener(token.Source.Start.Value), Position);
+            var token = NextTokenCore();
+            if (token.Kind != TokenKind.ArithmeticCommand)
+            {
+                RecordUnexpectedTokenBeforeNewline(message, token);
+                return;
+            }
+
+            var expression = token.CommandExpression;
+            var end = token.Source.End.Value;
+            if (expression.AsSpan().IndexOfAny((byte)'$', (byte)'`') >= 0)
+            {
+                var start = SecondArithmeticOpener(token.Source.Start.Value).Source.End.Value;
+                var spelling = ShellSourceCursor.ReadAdjacentCaptureSpelling(_scanContext, _input, start, end - 2,
+                    _scanContext.SyntaxMemory, prepareReplay: false, out _, out _, out _);
+                expression = spelling.Source;
+                if (spelling.Captures != null)
+                {
+                    using var rendered = _scanContext.CreateByteBuilder(0);
+                    if (!FunctionDefinitionFormatter.TryAppendDiagnosticSpelling(spelling, rendered, _scanContext.SyntaxMemory?.Budget))
+                        throw new ByteMemoryBuilder.LimitExceededException();
+                    expression = ShellSource.FromBytes(rendered.ToMemory());
+                }
+            }
+            if (expression.AsSpan().IndexOfAnyExceptInRange((byte)0x20, (byte)0x7e) >= 0)
+            {
+                using var quoted = _scanContext.CreateByteBuilder(0);
+                if (!ShellArgumentEscaping.TryAppendArithmeticDiagnosticToken(quoted, expression.AsSpan()))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                expression = ShellSource.FromBytes(quoted.ToMemory());
+            }
+            RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.Grammar)
+            {
+                UnexpectedToken = new UnexpectedSyntax(expression, _input.GetPhysicalLine(end, out _), end)
+            });
         }
-        else
-            RecordError(message, Position);
+        finally { _scanContext.RetainCaptureLookahead = retainLookahead; }
     }
 
     /// <summary>Selects the opener diagnostic when the local arithmetic scan occurred outside command position.</summary>
@@ -323,6 +358,8 @@ internal sealed class Tokenizer
 
     internal UnexpectedSyntax GetUnexpectedSyntax(Token token)
     {
+        if (token.Kind == TokenKind.ArithmeticCommand)
+            token = SecondArithmeticOpener(token.Source.Start.Value);
         if (token.Kind == TokenKind.Newline)
         {
             // Here-document collection can move the reader past the token's physical line.
