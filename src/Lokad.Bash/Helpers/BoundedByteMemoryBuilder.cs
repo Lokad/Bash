@@ -63,8 +63,6 @@ public sealed class BoundedByteMemoryBuilder : IDisposable, IByteMemoryWriter
     /// <summary>Returns the written portion of the buffer.</summary>
     public ReadOnlyMemory<byte> ToMemory() => _builder.ToMemory();
 
-    internal void Truncate(int length) => _builder.Truncate(length);
-
     /// <summary>Starts another borrowed output, retaining admitted storage and replacing its length bound.</summary>
     /// <remarks>Consumers must finish reading the previous output before resetting this builder.</remarks>
     public void Reset(int maximumLength)

@@ -1200,10 +1200,6 @@ internal sealed class Tokenizer
         TryReadExpansionWord(content, syntax, outerQuote, context, out var word, out var error) ? word : throw error.ToException();
 
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
-        [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error) =>
-        TryReadExpansionWord(content, syntax, outerQuote, memory: null, out word, out error);
-
-    internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         MemoryCapacity? memory, [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
         => TryReadExpansionWord(content, syntax, outerQuote, new ShellScanContext { SyntaxMemory = memory }, out word, out error);
 

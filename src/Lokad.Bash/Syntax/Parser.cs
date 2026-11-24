@@ -72,14 +72,6 @@ public static class Parser
     }
 
     /// <summary>Returns true when a word is a reserved keyword supported by this parser.</summary>
-    internal static bool IsSupportedKeyword(ReadOnlySpan<char> word)
-    {
-        foreach (var keyword in SupportedKeywords)
-            if (word.SequenceEqual(keyword))
-                return true;
-        return false;
-    }
-
     internal static bool IsSupportedKeyword(ReadOnlySpan<byte> word)
     {
         foreach (var keyword in SupportedKeywords)
