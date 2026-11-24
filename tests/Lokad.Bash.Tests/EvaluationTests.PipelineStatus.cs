@@ -206,6 +206,66 @@ public partial class EvaluationTests
         Assert.Equal(["7", "3"], previous.PresentValues.Select(status => status.ToUtf8String()));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PipelineStatusReplacesABorrowedArrayWithoutCopyingIt(bool indirect)
+    {
+        var caller = Variables.CreateEmpty();
+        BindingName name = indirect ? "target" : "PIPESTATUS";
+        Assert.True(caller.TryAssignArray(name, Enumerable.Repeat(ShellValue.FromText("old"), 64).ToArray(),
+            ArrayKind.Indexed));
+        if (indirect)
+            Assert.True(caller.TrySetNameref("PIPESTATUS", name.ToValue()));
+        caller.SetReadonlyBinding(name);
+        var previous = caller.IndexedArrays[name];
+
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var command = Variables.CreateCommandScope(caller, memory, CancellationToken.None);
+        var before = memory.Workspace.Bytes;
+        Assert.True(command.IsBorrowedBinding(name));
+
+        command.SetPipelineStatuses([7], default, CancellationToken.None);
+
+        Assert.Equal(before, memory.Workspace.Bytes);
+        Assert.False(command.IsBorrowedBinding(name));
+        Assert.Equal(indirect, command.IsBorrowedBinding("PIPESTATUS"));
+        Assert.True(command.IsReadonlyBinding(name));
+        Assert.Equal(ShellValue.FromText("7"), Assert.Single(command.IndexedArrays[name].PresentValues));
+        Assert.Same(previous, caller.IndexedArrays[name]);
+        Assert.Equal(64, previous.Count);
+        Assert.All(previous.PresentValues, value => Assert.Equal(ShellValue.FromText("old"), value));
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void PipelineStatusCancellationLeavesThePriorArrayBorrowed()
+    {
+        var caller = Variables.CreateEmpty();
+        caller.SetPipelineStatuses([7, 3], default, CancellationToken.None);
+        var previous = caller.IndexedArrays["PIPESTATUS"];
+        var governor = new MemoryGovernor(128 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        using var cancellation = new CancellationTokenSource();
+        var command = Variables.CreateCommandScope(caller, memory, cancellation.Token);
+        var before = memory.Workspace.Bytes;
+        var statuses = new CancelOnLastStatus([1], cancellation);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            command.SetPipelineStatuses(statuses, default, cancellation.Token));
+
+        Assert.True(command.IsBorrowedBinding("PIPESTATUS"));
+        Assert.Equal(before, memory.Workspace.Bytes);
+        Assert.Same(previous, caller.IndexedArrays["PIPESTATUS"]);
+        Assert.Equal(["7", "3"], previous.PresentValues.Select(status => status.ToUtf8String()));
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task PipelineStatusRemainsAvailableUntilTheNextCommandCompletes()
     {

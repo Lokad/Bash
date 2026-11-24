@@ -342,8 +342,11 @@ tested position.
 Foreground commands admit space for `PIPESTATUS` before execution. Publication
 uses the command's admitted workspace through descriptor cleanup. It creates
 missing metadata and updates indexed bindings, including reached nameref
-targets. Declaration-only indexed status entries remain hidden until an explicit
-assignment exposes the array. Simple commands and pipelines publish before negation.
+targets. The publisher borrows the previous array while selecting positions
+and attributes, then publishes the replacement to the selected owner after
+checking cancellation. Declaration-only indexed status entries remain hidden
+until an explicit assignment exposes the array. Simple commands and pipelines
+publish before negation.
 Arithmetic and conditional commands publish the final status when they return
 normally, while most other compound forms keep the last command's metadata.
 Ordinary builtins with a temporary `PIPESTATUS` assignment keep the caller's

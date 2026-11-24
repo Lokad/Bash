@@ -13,11 +13,14 @@ public sealed partial class Variables
     {
         var name = PipelineStatusName;
         var owner = this;
-        TryGetBinding(name, out var slot);
+        // Only the replacement is published. Reading the previous shape and attributes
+        // does not require a command-local copy of the old array.
+        TryGetBinding(name, detachBorrowed: false, out var slot);
         if (slot is NamerefSlot)
         {
             if (TryResolveBinding(name, selectOwner: null, out var target)
-                && target.Reference.Kind == VariableReferenceKind.Name && target.Owner.TryGetBinding(target.Name, out var resolved))
+                && target.Reference.Kind == VariableReferenceKind.Name
+                && target.Owner.TryGetBinding(target.Name, detachBorrowed: false, out var resolved))
             {
                 name = target.Name;
                 owner = target.Owner;
