@@ -5653,8 +5653,9 @@ public sealed partial class Evaluation : IFileTester
 
         public bool IsLocal(BindingName name)
         {
+            // Each temporary local scope's parent is already the next function frame.
             for (FunctionContext? frame = this; frame != null; frame = frame.Enclosing)
-                if (frame.Locals.Declares(name))
+                if (frame.Locals.OwnsDeclaration(name))
                     return true;
             return false;
         }

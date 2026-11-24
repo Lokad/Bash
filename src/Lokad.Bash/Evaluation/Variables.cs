@@ -531,7 +531,8 @@ public sealed partial class Variables
 
         public bool Owns(BindingName name) => _parent == null && _names.Contains(name);
 
-        internal bool OwnsDeclaration(BindingName name) => ReferenceEquals(DeclarationOwner(name), this) && Declares(name);
+        internal bool OwnsDeclaration(BindingName name) => _names.Contains(name)
+            && (_parent == null || _declaredPrefixes.Contains(name) && IsScriptPrefix(name));
 
         /// <summary>A local nameref can shadow an unset global reference with an ordinary local value.</summary>
         internal void ShadowNamerefTarget(BindingName name, Variables active, EvaluationMemory memory)
@@ -566,17 +567,12 @@ public sealed partial class Variables
                 Publish(name, command);
         }
 
-        public bool Declares(BindingName name)
-        {
-            var owner = DeclarationOwner(name);
-            return owner._names.Contains(name)
-                && (!owner.IsScriptPrefix(name) || owner._declaredPrefixes.Contains(name));
-        }
+        public bool Declares(BindingName name) => DeclarationOwner(name).OwnsDeclaration(name);
 
         public bool IsDeclaredPrefix(BindingName name)
         {
             var owner = DeclarationOwner(name);
-            return owner._prefixes?.Contains(name) == true && owner.Declares(name);
+            return owner._prefixes?.Contains(name) == true && owner.OwnsDeclaration(name);
         }
 
         /// <summary>Records unset locals and prefixes so redeclaration does not revive their caller promotion.</summary>
@@ -598,7 +594,7 @@ public sealed partial class Variables
         public void RecordAttributePromotion(BindingName name)
         {
             var owner = DeclarationOwner(name);
-            if (!owner.Declares(name))
+            if (!owner.OwnsDeclaration(name))
                 owner._unsetNames.Remove(name);
         }
 
@@ -610,8 +606,13 @@ public sealed partial class Variables
             owner._promotedPrefixes.Add(name);
         }
 
-        private LocalBindings DeclarationOwner(BindingName name) =>
-            _parent != null && !IsScriptPrefix(name) ? _parent.DeclarationOwner(name) : this;
+        private LocalBindings DeclarationOwner(BindingName name)
+        {
+            var owner = this;
+            while (owner._parent is { } parent && !owner.IsScriptPrefix(name))
+                owner = parent;
+            return owner;
+        }
 
         private bool IsScriptPrefix(BindingName name) => _parent != null && _prefixes?.Contains(name) == true;
 
@@ -675,7 +676,7 @@ public sealed partial class Variables
                 }
             }
 
-            var inheritPrefixExport = !command.HasBinding(name) && !declarationOwner.Declares(name)
+            var inheritPrefixExport = !command.HasBinding(name) && !declarationOwner.OwnsDeclaration(name)
                 && declarationOwner._prefixes?.Contains(name) == true;
             var savedBinding = active;
             List<CommandBindings>? unsetPrefixes = null;

@@ -10,6 +10,54 @@ namespace Lokad.Bash.Tests;
 public sealed partial class FunctionPrefixBindingTests
 {
     [Fact]
+    public void EnclosingLocalLookupDistinguishesDeclarationsFromTemporaryPrefixes()
+    {
+        var variables = Variables.CreateEmpty();
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        var memory = new EvaluationMemory(governor);
+        var name = ShellValue.FromText("f");
+        var value = ShellValue.FromText("value");
+        try
+        {
+            var locals = new Variables.LocalBindings(variables, parent: null, prefixes: null);
+            using var function = new Eval.FunctionContext(name, locals, enclosing: null);
+            Declare(locals, "inherited");
+            using var scriptBindings = InstallPrefixes("inherited", "prefix");
+            using var script = new Eval.FunctionContext(name, locals.WithTemporaryPrefixes(scriptBindings), function);
+            using var nestedBindings = InstallPrefixes("nested");
+            using var nested = new Eval.FunctionContext(name, script.Locals.WithTemporaryPrefixes(nestedBindings), script);
+
+            Assert.False(nested.Locals.Declares("inherited"));
+            Assert.True(nested.IsLocal("inherited"));
+            Assert.False(nested.IsLocal("prefix"));
+            Assert.False(nested.IsLocal("nested"));
+            Assert.False(nested.IsLocal("absent"));
+
+            Declare(script.Locals, "prefix");
+            Assert.True(script.Locals.OwnsDeclaration("prefix"));
+            Assert.False(nested.Locals.OwnsDeclaration("prefix"));
+            Assert.True(nested.Locals.Declares("prefix"));
+            Assert.True(nested.IsLocal("prefix"));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        void Declare(Variables.LocalBindings locals, BindingName bindingName) =>
+            Assert.True(locals.TryDeclare(variables, variables,
+                new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName(bindingName), value),
+                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false,
+                caseChange: default, memory, enclosingFunction: null));
+
+        Variables.CommandBindings InstallPrefixes(params BindingName[] names)
+        {
+            var prepared = Variables.CreateEmpty();
+            foreach (var prefix in names)
+                Assert.True(prepared.TrySetScalar(prefix, value));
+            return new Variables.CommandBindings(variables, prepared, names.ToHashSet(), memory, CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public void SavedLocalTotalFollowsHiddenWritesForksAndRestoration()
     {
         var state = new Eval(Parser.Parse(":"));
