@@ -157,8 +157,9 @@ Printf retains byte numeric operands through prefix validation, range classifica
 and diagnostics. Integer accumulation stays bounded after overflow while validity
 scanning continues. Floating-point conversion reuses the existing bounded-significand
 parser, retaining consumed-prefix and range information for printf's diagnostic
-policy. Its coarse numeric workspace is admitted before conversion and reused only
-after the preceding conversion has finished. Conversion diagnostics retain their
+policy. Its coarse numeric workspace is admitted before conversion and refunded
+after the formatted bytes have been copied. The reservation handle is reused by
+subsequent floating-point conversions. Conversion diagnostics retain their
 bytes through borrowed writes; cancellation still drains ordinary descriptor cleanup.
 
 Printf field widths and precision retain integer representation checks while actual

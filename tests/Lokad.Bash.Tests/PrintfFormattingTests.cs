@@ -62,6 +62,39 @@ public sealed class PrintfFormattingTests : IDisposable
         Assert.Equal(0, memory.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FloatingPointWorkspaceIsRefundedBeforeCountCallbacks(bool assignOutput)
+    {
+        var literal = await MeasureAsync("1.25%n1.25%n", ["first", "second"]);
+        var formatted = await MeasureAsync("%g%n%g%n", ["1.25", "first", "1.25", "second"]);
+        Assert.Equal(literal, formatted);
+
+        async Task<long[]> MeasureAsync(string format, string[] arguments)
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            var checkpoints = new List<(PrintfVariableAssignment Assignment, long Reserved)>();
+            var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText(format),
+                arguments.Select(ShellValue.FromText).ToArray(), DateTimeOffset.UnixEpoch, assignOutput, owner,
+                async assignment =>
+                {
+                    checkpoints.Add((assignment, governor.ReservedBytes));
+                    await Task.Yield();
+                    return true;
+                }, null, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("1.251.25", Text(result.Output));
+            Assert.Equal([new PrintfVariableAssignment("first", 4), new PrintfVariableAssignment("second", 8)],
+                checkpoints.Select(item => item.Assignment));
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return checkpoints.Select(item => item.Reserved).ToArray();
+        }
+    }
+
     [Fact]
     public async Task EvaluateAsync_InterleavesSuspendingCountWritesAndDiagnostics()
     {

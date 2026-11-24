@@ -15,7 +15,8 @@ public static partial class PrintfFormatting
         {
             var diagnosticOutputClosed = false;
             (MemoryCapacity Capacity, Action<int> ReserveCharacters)? timeScratch = null;
-            using var numericMemory = new MemoryCapacity(memoryBudget, 0);
+            MemoryCapacity? numericMemory = null;
+            Action<long>? reserveNumericBytes = null;
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -48,10 +49,20 @@ public static partial class PrintfFormatting
             finally
             {
                 timeScratch?.Capacity.Dispose();
+                numericMemory?.Dispose();
                 _pendingDiagnostics?.Clear();
                 _diagnosticMemory?.Dispose();
                 _temporaryOutput?.Dispose();
                 _output.Dispose();
+            }
+
+            static void ReleaseConversionScratch(MemoryCapacity capacity)
+            {
+                if (capacity.Bytes != 0)
+                {
+                    capacity.Resize(0);
+                    capacity.ReleaseUnusedCapacity();
+                }
             }
 
             async ValueTask FormatCycleAsync()
@@ -464,24 +475,8 @@ public static partial class PrintfFormatting
                     case 'F':
                     case 'g':
                     case 'G':
-                        {
-                            var argument = GetValueArgument();
-                            numericMemory.Resize(0);
-                            var result = new FloatingPointFormatResult(
-                                argument,
-                                specification.Conversion,
-                                specification.Precision,
-                                specification.Flags.HasFlag(FormatFlags.Alternate), numericMemory.Grow, cancellationToken);
-                            if (result.Invalid)
-                            {
-                                AddNumericDiagnostic(argument, NumericErrorSuffix(argument), warning: false);
-                            }
-                            if (result.RangeError)
-                                AddNumericDiagnostic(argument, ": Numerical result out of range", warning: true);
-
-                            AppendNumber(specification, result.Number);
-                            return;
-                        }
+                        ApplyFloatingPoint(specification);
+                        return;
                     default:
                         AddFatalDiagnostic(new Diagnostic("`", ShellValue.FromBytes(format.Slice(conversionOffset, 1)),
                             "': invalid format character"));
@@ -582,6 +577,26 @@ public static partial class PrintfFormatting
                 void ApplyText(FormatSpecification textSpecification, ReadOnlyMemory<byte> bytes, bool ignorePrecision) =>
                     ApplyTextWithLength(textSpecification, bytes, bytes.Length, ignorePrecision);
 
+                void ApplyFloatingPoint(FormatSpecification numberSpecification)
+                {
+                    var argument = GetValueArgument();
+                    var capacity = numericMemory ??= new MemoryCapacity(memoryBudget, 0);
+                    try
+                    {
+                        var result = new FloatingPointFormatResult(
+                            argument, numberSpecification.Conversion, numberSpecification.Precision,
+                            numberSpecification.Flags.HasFlag(FormatFlags.Alternate), reserveNumericBytes ??= capacity.Grow,
+                            cancellationToken);
+                        if (result.Invalid)
+                            AddNumericDiagnostic(argument, NumericErrorSuffix(argument), warning: false);
+                        if (result.RangeError)
+                            AddNumericDiagnostic(argument, ": Numerical result out of range", warning: true);
+
+                        AppendNumber(numberSpecification, result.Number);
+                    }
+                    finally { ReleaseConversionScratch(capacity); }
+                }
+
                 void ApplyTime(FormatSpecification timeSpecification, ShellValue configuredFormat, long seconds)
                 {
                     var (capacity, reserveCharacters) = timeScratch ??= CreateTimeScratch();
@@ -605,15 +620,7 @@ public static partial class PrintfFormatting
                         // Invariant directive results are ASCII; projected literals map back exactly.
                         ApplyText(timeSpecification, Encoding.Latin1.GetBytes(text), ignorePrecision: false);
                     }
-                    finally
-                    {
-                        // Keep the handle reusable while returning the entire projected field allowance.
-                        if (capacity.Bytes != 0)
-                        {
-                            capacity.Resize(0);
-                            capacity.ReleaseUnusedCapacity();
-                        }
-                    }
+                    finally { ReleaseConversionScratch(capacity); }
 
                     (MemoryCapacity, Action<int>) CreateTimeScratch()
                     {
