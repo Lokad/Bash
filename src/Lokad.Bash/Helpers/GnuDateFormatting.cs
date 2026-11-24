@@ -23,6 +23,8 @@ public static class GnuDateFormatting
 
     private static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
 
+    private enum DirectiveCase { Unchanged, Upper, Lower, Swap }
+
     private readonly record struct FormattedDirective(string Text, char DefaultPadding);
 
     // Weekdays and leap days repeat in a 400-year Gregorian cycle.
@@ -256,8 +258,8 @@ public static class GnuDateFormatting
 
             if (strftime)
             {
-                var text = ApplyStrftimeCase(formatted.Text, specifier, uppercase, changeCase);
-                if (!TryAppendStrftime(text.AsSpan(), specifier, noPadding, padding, formatted.DefaultPadding, width))
+                if (!TryAppendStrftime(formatted.Text, specifier, noPadding, padding, formatted.DefaultPadding, width,
+                        GetStrftimeCase(specifier, uppercase, changeCase)))
                 {
                     result = string.Empty;
                     return false;
@@ -265,29 +267,8 @@ public static class GnuDateFormatting
                 continue;
             }
 
-            var dateText = uppercase ? formatted.Text.ToUpperInvariant()
-                : changeCase ? SwapCase(formatted.Text) : formatted.Text;
-            var directiveLength = noPadding ? dateText.Length : Math.Max(width, dateText.Length);
-            if (directiveLength > maximumLength - builder.Length)
-            {
-                result = string.Empty;
-                return false;
-            }
-            EnsureCharacters(builder.Length + directiveLength);
-            if (!TryApplyPadding(
-                    ref dateText,
-                    noPadding,
-                    padding,
-                    formatted.DefaultPadding,
-                    width,
-                    maximumLength - builder.Length,
-                    specifier))
-            {
-                result = string.Empty;
-                return false;
-            }
-
-            if (!TryAppendText(dateText.AsSpan()))
+            var dateCase = uppercase ? DirectiveCase.Upper : changeCase ? DirectiveCase.Swap : DirectiveCase.Unchanged;
+            if (!TryAppendDate(formatted.Text, specifier, noPadding, padding, formatted.DefaultPadding, width, dateCase))
             {
                 result = string.Empty;
                 return false;
@@ -318,7 +299,8 @@ public static class GnuDateFormatting
         }
 
         bool TryAppendStrftime(
-            ReadOnlySpan<char> text, char specifier, bool noPadding, char? padding, char defaultPadding, int width)
+            ReadOnlySpan<char> text, char specifier, bool noPadding, char? padding, char defaultPadding, int width,
+            DirectiveCase casing)
         {
             if (specifier == 'z')
                 return TryAppendStrftimeOffset(text, noPadding, padding, width);
@@ -345,8 +327,76 @@ public static class GnuDateFormatting
             }
 
             builder.Append(pad, padCount);
-            builder.Append(text);
+            AppendDirectiveText(text, casing);
             return true;
+        }
+
+        bool TryAppendDate(
+            ReadOnlySpan<char> text, char specifier, bool noPadding, char? padding, char defaultPadding, int width,
+            DirectiveCase casing)
+        {
+            // Admit the generated field width before trimming or taking a fractional prefix.
+            if (!TryBeginField(text.Length, noPadding ? 0 : width, out var padCount))
+                return false;
+
+            if (specifier == 'N')
+            {
+                // Date widths select fractional precision. Padding and trimming apply on the right.
+                var precision = width == 0 ? text.Length : width;
+                text = text[..Math.Min(precision, text.Length)];
+                if (noPadding || padding == ' ')
+                {
+                    text = text.TrimEnd('0');
+                    if (text.IsEmpty)
+                        text = "0";
+                }
+                builder.Append(text);
+                if (!noPadding)
+                    builder.Append(padding ?? '0', precision - text.Length);
+                return true;
+            }
+
+            if (noPadding)
+            {
+                var digits = text.TrimStart("0 ");
+                text = digits.IsEmpty && !text.IsEmpty ? "0" : digits;
+            }
+            else
+            {
+                var pad = padding ?? defaultPadding;
+                if (padding.HasValue)
+                {
+                    var unpadded = text.TrimStart(pad == ' ' ? '0' : ' ');
+                    padCount += text.Length - unpadded.Length;
+                    text = unpadded;
+                }
+                builder.Append(pad, padCount);
+            }
+
+            AppendDirectiveText(text, casing);
+            return true;
+        }
+
+        void AppendDirectiveText(ReadOnlySpan<char> text, DirectiveCase casing)
+        {
+            if (casing == DirectiveCase.Unchanged)
+            {
+                builder.Append(text);
+                return;
+            }
+
+            // Generated directive text uses the invariant, ASCII calendar profile.
+            foreach (var ch in text)
+            {
+                builder.Append(casing switch
+                {
+                    DirectiveCase.Upper => char.ToUpperInvariant(ch),
+                    DirectiveCase.Lower => char.ToLowerInvariant(ch),
+                    _ when char.IsUpper(ch) => char.ToLowerInvariant(ch),
+                    _ when char.IsLower(ch) => char.ToUpperInvariant(ch),
+                    _ => ch
+                });
+            }
         }
 
         bool TryAppendStrftimeLiteral(ReadOnlySpan<char> literal, char padding, int width, bool uppercase)
@@ -411,15 +461,15 @@ public static class GnuDateFormatting
             builder.EnsureCapacity(capacity);
         }
 
-        static string ApplyStrftimeCase(string text, char specifier, bool uppercase, bool changeCase)
+        static DirectiveCase GetStrftimeCase(char specifier, bool uppercase, bool changeCase)
         {
             if (specifier == 'P')
-                return text;
+                return DirectiveCase.Unchanged;
             if (changeCase && specifier is 'p' or 'Z')
-                return text.ToLowerInvariant();
+                return DirectiveCase.Lower;
             if (uppercase || (changeCase && specifier is 'a' or 'A' or 'b' or 'B' or 'h'))
-                return text.ToUpperInvariant();
-            return text;
+                return DirectiveCase.Upper;
+            return DirectiveCase.Unchanged;
         }
 
         static FormattedDirective FormatDirective(
@@ -542,88 +592,6 @@ public static class GnuDateFormatting
                 _ when absoluteOffset.Minutes != 0 => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}:{absoluteOffset.Minutes:00}"),
                 _ => string.Create(Culture, $"{sign}{absoluteOffset.Hours:00}")
             };
-        }
-
-        static bool TryApplyPadding(
-            ref string input,
-            bool noPadding,
-            char? padding,
-            char defaultPadding,
-            int width,
-            int maximumLength,
-            char specifier)
-        {
-            if (specifier == 'N')
-            {
-                // %N widths select fractional precision; padding and trimming apply on the right.
-                width = width == 0 ? input.Length : width;
-                if (width < input.Length)
-                    input = input[..width];
-                if (noPadding || padding == ' ')
-                {
-                    input = input.TrimEnd('0');
-                    if (input.Length == 0)
-                        input = "0";
-                }
-                if (!noPadding)
-                {
-                    if (width > maximumLength)
-                        return false;
-                    input = input.PadRight(width, padding ?? '0');
-                }
-            }
-            else if (noPadding)
-            {
-                var unpadded = input.TrimStart('0', ' ');
-                input = unpadded.Length == 0 && input.Length > 0
-                    ? "0"
-                    : unpadded;
-            }
-            else
-            {
-                if (padding == ' ')
-                    input = ReplaceLeading(input, '0', ' ');
-                else if (padding == '0')
-                    input = ReplaceLeading(input, ' ', '0');
-
-                if (width > input.Length)
-                {
-                    if (width > maximumLength)
-                        return false;
-
-                    var pad = padding ?? defaultPadding;
-                    input = input.PadLeft(width, pad);
-                }
-            }
-
-            return input.Length <= maximumLength;
-        }
-
-        static string ReplaceLeading(string input, char from, char to)
-        {
-            var chars = input.ToCharArray();
-            for (var index = 0; index < chars.Length && chars[index] == from; index++)
-            {
-                chars[index] = to;
-            }
-
-            return new string(chars);
-        }
-
-        static string SwapCase(string input)
-        {
-            var chars = input.ToCharArray();
-            for (var index = 0; index < chars.Length; index++)
-            {
-                var ch = chars[index];
-                chars[index] = char.IsUpper(ch)
-                    ? char.ToLowerInvariant(ch)
-                    : char.IsLower(ch)
-                        ? char.ToUpperInvariant(ch)
-                        : ch;
-            }
-
-            return new string(chars);
         }
     }
 

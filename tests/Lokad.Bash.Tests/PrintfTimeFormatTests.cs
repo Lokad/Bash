@@ -232,6 +232,57 @@ public sealed class PrintfTimeFormatTests
     }
 
     [Fact]
+    public void DateFlagsPreserveLeadingReplacementCaseAndFractionalWidth()
+    {
+        var time = DateTimeOffset.UnixEpoch.AddTicks(1_203_000);
+        const string format = "%_H|%012k|%-8H|%#A|%^A|%#Z|%_12N|%-3N|%09N";
+
+        var result = GnuDateFormatting.Format(time, format);
+
+        Assert.Equal("  |000000000000|0|tHURSDAY|THURSDAY|utc|1203        |12|120300000", result);
+    }
+
+    [Theory]
+    [InlineData(3, false, "")]
+    [InlineData(9, true, "000")]
+    public void DateFractionalPrefixKeepsTheGeneratedFieldAdmission(int limit, bool succeeds, string expected)
+    {
+        var reservations = new List<int>();
+
+        var success = GnuDateFormatting.TryFormat(DateTimeOffset.UnixEpoch, "%3N",
+            GnuDateFormatDialect.Date, limit, out var result, reservations.Add);
+
+        Assert.Equal(succeeds, success);
+        Assert.Equal(expected, result);
+        Assert.Equal(succeeds ? new[] { 3, 6 } : new[] { 3 }, reservations);
+    }
+
+    [Theory]
+    [InlineData(GnuDateFormatDialect.Date, "%_a", "%1a")]
+    [InlineData(GnuDateFormatDialect.Date, "%#H", "%1H")]
+    [InlineData(GnuDateFormatDialect.Date, "%_H", "%1H")]
+    [InlineData(GnuDateFormatDialect.Date, "%#A", "%1A")]
+    [InlineData(GnuDateFormatDialect.Strftime, "%#a", "%1a")]
+    public void DateCaseAndPaddingReuseTheOutputBuilder(GnuDateFormatDialect dialect, string directive, string control)
+    {
+        var flaggedFormat = string.Concat(Enumerable.Repeat(directive, 32));
+        var plainFormat = string.Concat(Enumerable.Repeat(control, 32));
+        string Format(string text) => GnuDateFormatting.Format(DateTimeOffset.UnixEpoch, text, dialect);
+        for (var index = 0; index < 16; index++)
+        {
+            _ = Format(flaggedFormat);
+            _ = Format(plainFormat);
+        }
+        Assert.Equal(Format(plainFormat).Length, Format(flaggedFormat).Length);
+
+        var plain = AllocationAssert.MeasureAllocatedBytes(() => Format(plainFormat), 64);
+        var flagged = AllocationAssert.MeasureAllocatedBytes(() => Format(flaggedFormat), 64);
+
+        Assert.True(flagged.Median <= plain.Median + 256,
+            $"Flagged directives allocated {flagged.Median:N0} bytes and plain directives allocated {plain.Median:N0} bytes.");
+    }
+
+    [Fact]
     public void TimeFormatProjectionRequiresAdmissionBeforeItsAllocation()
     {
         var format = MakeTimeFormat(64 * 1024);
