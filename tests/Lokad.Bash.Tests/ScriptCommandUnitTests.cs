@@ -340,6 +340,7 @@ public sealed class ScriptCommandUnitTests
     [InlineData("((printf skipped)\n)", 2, "near `skipped)'", "((printf skipped)")]
     [InlineData("((printf skipped)\\\n )", 3, "near unexpected token `'", " )")]
     [InlineData("((printf skipped)\\\n\"two words\"; :", 3, "near unexpected token `\"two words\"'", "\"two words\"; :")]
+    [InlineData("for ((i=0;i<1;i++); ); do :; done", 2, "near `;'", "for ((i=0;i<1;i++); ); do :; done")]
     public async Task ArithmeticReaderFailureKeepsTheCallerAndTheReachedPhysicalLine(
         string unit, int line, string diagnostic, string shown)
     {
@@ -393,6 +394,21 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(1, result.ExitCode);
         Assert.Equal("before", host.StandardOutput.TextContent);
         Assert.Equal("input: line 3: syntax error near unexpected token `$'\\\\\\n''\ninput: line 3: ` ) )\"'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PartialArithmeticForHeaderInACaptureEndsTheLoadedReader()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\nprintf '<%s>' \"$( for ((i=0;i<1;i++)\n); do printf skipped; done )\"\n");
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal("input: line 2: syntax error near `;i++)'\ninput: line 2: `printf '<%s>' \"$( for ((i=0;i<1;i++)'\n",
             host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }

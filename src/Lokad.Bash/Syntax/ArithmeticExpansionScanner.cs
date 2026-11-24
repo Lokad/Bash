@@ -134,33 +134,42 @@ internal static class ArithmeticExpansionScanner
     {
         var afterCloser = closer + 1;
         var following = text.AsSpan()[afterCloser..];
-        if (following.StartsWith("\\\n"u8) || following.SequenceEqual("\\"u8))
-            return new ParserFailure(new SyntaxError("Invalid arithmetic command.", afterCloser),
-                ParserFailureKind.ContinuedArithmeticCloser);
-        if (!following.IsEmpty && following[0] != (byte)'\n')
-            return null;
-
-        if (expressionStart == closer)
+        if (!forHeader)
         {
-            // The fallback reader sees an empty subshell in its replayed prefix.
-            return new ParserFailure(new SyntaxError("Invalid arithmetic command.", closer), ParserFailureKind.Grammar)
+            if (following.StartsWith("\\\n"u8) || following.SequenceEqual("\\"u8))
+                return new ParserFailure(new SyntaxError("Invalid arithmetic command.", afterCloser),
+                    ParserFailureKind.ContinuedArithmeticCloser);
+            if (!following.IsEmpty && following[0] != (byte)'\n')
+                return null;
+
+            if (expressionStart == closer)
             {
-                UnexpectedToken = new UnexpectedSyntax(text.Slice(closer, 1), text.Slice(closer - 1, 2), afterCloser)
-            };
-        }
+                // The fallback reader sees an empty subshell in its replayed prefix.
+                return new ParserFailure(new SyntaxError("Invalid arithmetic command.", closer), ParserFailureKind.Grammar)
+                {
+                    UnexpectedToken = new UnexpectedSyntax(text.Slice(closer, 1), text.Slice(closer - 1, 2), afterCloser)
+                };
+            }
 
-        // A file reader can resume nested-subshell parsing after the physical LF.
-        if (!context.ReadsCommandString && !forHeader)
-        {
-            if (following.Length <= 1)
-                endIndex = closer;
-            return null;
+            // A file reader can resume nested-subshell parsing after the physical LF.
+            if (!context.ReadsCommandString)
+            {
+                if (following.Length <= 1)
+                    endIndex = closer;
+                return null;
+            }
         }
 
         var line = text.GetPhysicalLine(afterCloser, out var lineStart);
-        return new ParserFailure(new SyntaxError("Invalid arithmetic command.", closer), ParserFailureKind.Delimiter)
+        // The for header rejects immediately after the raw lookahead byte. Its
+        // diagnostic includes the byte under the reader's resulting cursor.
+        var end = afterCloser - lineStart;
+        if (forHeader)
+            end += Math.Min(2, line.Length - end);
+        var kind = forHeader ? ParserFailureKind.Grammar : ParserFailureKind.Delimiter;
+        return new ParserFailure(new SyntaxError("Invalid arithmetic command.", closer), kind)
         {
-            UnexpectedToken = new UnexpectedSyntax(line.GetNearToken(afterCloser - lineStart), line, afterCloser)
+            UnexpectedToken = new UnexpectedSyntax(line.GetNearToken(end), line, afterCloser)
             {
                 UseNearPrefix = true
             }
