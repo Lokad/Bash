@@ -105,6 +105,31 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     public Task DeclarationWithEmptySelectorUsesTheReachedOperandKind(string body, string output, string error) =>
         AssertDeclarationAsync(body + "\n", output, error);
 
+    [Theory]
+    [InlineData("i=0; declare 'arr[i++]'; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr",
+        "<0:0>\ndeclare -a arr\n", "")]
+    [InlineData("readonly arr=seed; typeset arr[3]; declare -p arr",
+        "declare -ar arr=([0]=\"seed\")\n", "")]
+    [InlineData("declare -A arr=([key]=seed); builtin declare arr[0]; declare -p arr",
+        "declare -A arr=([key]=\"seed\" )\n", "")]
+    [InlineData("arr=seed; declare -n r=arr; command declare -r r[4]; declare -p r arr",
+        "declare -n r=\"arr\"\ndeclare -ar arr=([0]=\"seed\")\n", "")]
+    [InlineData("declare -n r=arr; declare r[0] arr[1]; declare -p r arr",
+        "declare -a r\ndeclare -a arr\n", "")]
+    [InlineData("declare -n r=arr; declare +n r[0]; declare -p r; declare -p arr 2>/dev/null || :",
+        "declare -- r=\"arr\"\n", "")]
+    [InlineData("arr=seed; f() { local arr=inner; declare -g arr[0]; declare -p arr; }; f; declare -p arr",
+        "declare -- arr=\"inner\"\ndeclare -a arr=([0]=\"seed\")\n", "")]
+    [InlineData("arr=seed; declare -n r='arr[0]'; declare -g r[1]; printf '<%s>\\n' \"$?\"; declare -p r arr",
+        "<1>\ndeclare -n r=\"arr[0]\"\ndeclare -- arr=\"seed\"\n",
+        "line 1: declare: `arr[0][1]': not a valid identifier\n")]
+    [InlineData("declare -n r=s s=r; declare r[0]; declare -p r s",
+        "declare -a r\ndeclare -n s=\"r\"\n", "line 1: warning: r: circular name reference\n")]
+    [InlineData("arr=seed; declare -an arr[0]; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -- arr=\"seed\"\n", "line 1: declare: arr[0]: reference variable cannot be an array\n")]
+    public Task NameOnlyDeclarationSelectorsPublishTheSelectedArray(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
     private static async Task AssertDeclarationAsync(string script, string output, string error)
     {
         foreach (var prepared in new[] { false, true })

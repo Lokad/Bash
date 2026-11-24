@@ -2206,6 +2206,15 @@ public sealed partial class Evaluation : IFileTester
                     await DiagnoseQuotedAsync(operand.Name, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
+                var nameOnlyElement = operand.Value == null && reference.Kind != VariableReferenceKind.Name;
+                if (nameOnlyElement && options.NamerefChange == DeclarationAttributeChange.Set)
+                {
+                    exitCode = 1;
+                    await ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
+                        [operand.Name, ShellValue.FromText(": reference variable cannot be an array")], declarationScope)
+                        .ConfigureAwait(false);
+                    continue;
+                }
                 if (skipReadonlyAttribute && !operand.CompoundApplied && operand.Value == null)
                 {
                     // The flag only looks up a named operand, even with an array option.
@@ -2227,8 +2236,11 @@ public sealed partial class Evaluation : IFileTester
                     && (options.ExportChange == DeclarationAttributeChange.Set || options.Readonly)
                     && bindings?.Contains(sourceName) == true && commandVars.Scalars.TryGetValue(sourceName, out var prefixValue)
                     ? prefixValue : null;
-                var global = (options.Global || arrayAttributeAssignment) && reference.Kind == VariableReferenceKind.Name;
                 var local = options.IsLocal(declarationScope, options.Global);
+                var inferElementArray = nameOnlyElement && !local && arrayKind == ArrayAssignmentKind.Auto
+                    && options.IndexedChange != DeclarationAttributeChange.Clear;
+                var global = (options.Global || arrayAttributeAssignment)
+                    && (reference.Kind == VariableReferenceKind.Name || inferElementArray);
                 if (!global && !local && !operand.CompoundApplied && operand.Value == null)
                 {
                     var visibleName = options.Nameref ? sourceName : StripArraySubscript(commandVars.ResolveNamerefName(sourceName));
@@ -2252,19 +2264,48 @@ public sealed partial class Evaluation : IFileTester
                 var targetVars = commandVars;
                 var circular = false;
                 var recreateArrayReference = false;
-                if (global)
+                var detachElementNameref = false;
+                if (global || inferElementArray)
                 {
                     if (options.NamerefChange == DeclarationAttributeChange.Set)
                         targetVars = SelectGlobalOwner(reference.Name);
                     else
                     {
-                        if (!declarationScope.Context.TryResolveGlobalBinding(reference.Name, declarationScope.Variables,
-                                commandVars, prefixNames, globalBindings, resolution, out var binding))
+                        var found = global
+                            ? declarationScope.Context.TryResolveGlobalBinding(sourceName, declarationScope.Variables,
+                                commandVars, prefixNames, globalBindings, resolution, out var binding)
+                            : commandVars.TryResolveBinding(sourceName, selectOwner: null, resolution, out binding);
+                        if (!found)
                         {
                             circular = true;
-                            binding = new VariableBinding(VariableReference.ForName(reference.Name), SelectGlobalOwner(reference.Name));
+                            binding = new VariableBinding(VariableReference.ForName(sourceName),
+                                global ? SelectGlobalOwner(sourceName) : commandVars);
                         }
-                        if (!circular && arrayKind != ArrayAssignmentKind.Auto
+                        if (inferElementArray)
+                        {
+                            if (circular)
+                                await ReportCommandDiagnosticAsync([ShellValue.FromText("warning")],
+                                    [GetDiagnosticName(sourceName), ShellValue.FromText(": circular name reference")], declarationScope)
+                                    .ConfigureAwait(false);
+                            if (global && binding.Reference.Kind != VariableReferenceKind.Name)
+                            {
+                                exitCode = 1;
+                                await ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
+                                    [ShellValue.FromText("`"), binding.Reference.ToValue(Memory),
+                                        ShellValue.FromBytes(operand.Name.Bytes[sourceName.ByteLength..]),
+                                        ShellValue.FromText("': not a valid identifier")], declarationScope).ConfigureAwait(false);
+                                continue;
+                            }
+                            // Ordinary lookup keeps an existing whole referent. Global lookup can declare a missing one.
+                            if (binding.IsUnsetNameref || binding.Reference.Kind != VariableReferenceKind.Name
+                                || !global && binding.Name != sourceName && !binding.Owner.HasBinding(binding.Name))
+                                binding = new VariableBinding(VariableReference.ForName(sourceName),
+                                    global ? SelectGlobalOwner(sourceName) : commandVars);
+                            else
+                                detachElementNameref = !circular && resolution == BindingResolution.LastNameref
+                                    && binding.Owner.TryGetNameref(binding.Name, out _);
+                        }
+                        else if (!circular && arrayKind != ArrayAssignmentKind.Auto
                             && (resolution == BindingResolution.Referent
                                 || binding.Owner.TryGetNameref(binding.Name, out var lastTarget) && lastTarget.IsEmpty))
                         {
@@ -2272,9 +2313,10 @@ public sealed partial class Evaluation : IFileTester
                             binding = declaredOwner.SelectArrayDeclarationBinding(reference.Name, binding);
                             recreateArrayReference = binding.Owner.TryGetNameref(binding.Name, out _);
                         }
-                        reference = binding.Reference;
+                        reference = inferElementArray
+                            ? VariableReference.ForElement(binding.Name, reference.Subscript) : binding.Reference;
                         targetVars = binding.Owner;
-                        if (reference.Kind != VariableReferenceKind.Name && bindings?.Contains(reference.Name) == true)
+                        if (global && reference.Kind != VariableReferenceKind.Name && bindings?.Contains(reference.Name) == true)
                             targetVars = bindings.SavedVariables;
                     }
                 }
@@ -2723,6 +2765,21 @@ public sealed partial class Evaluation : IFileTester
                         }
                         wroteUnmarkedPrefix = retainUnmarkedPrefix && writeTarget.Name == sourceName
                             && ReferenceEquals(writeVariables, commandVars);
+                    }
+                    else if (inferElementArray)
+                    {
+                        // The selector declares the binding's kind and leaves the index unevaluated.
+                        if (!detachElementNameref)
+                        {
+                            if (targetVars.TryGetNameref(name, out _))
+                                targetVars.RecreateDeclarationArray(name, ArrayKind.Indexed);
+                            else if (!targetVars.AssociativeArrays.ContainsKey(name)
+                                && !targetVars.TryDeclareResolvedArray(name, ArrayKind.Indexed, ScalarArrayPromotion.RetainValue))
+                            {
+                                exitCode = 1;
+                                continue;
+                            }
+                        }
                     }
                     else if (!local && !(options.Builtin == BuiltinKind.Export && options.ExportChange == DeclarationAttributeChange.Clear)
                         && !targetVars.TryDeclareName(resolvedName.IsEmpty ? name : resolvedName))
