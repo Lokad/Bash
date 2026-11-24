@@ -47,6 +47,29 @@ public sealed class ArithmeticSyntaxReuseTests
     }
 
     [Theory]
+    [InlineData("value + 1", true, true)]
+    [InlineData("array[0]", true, false)]
+    [InlineData("array[", true, false)]
+    [InlineData("1 + [2]", true, false)]
+    [InlineData("$value + array[0]", false, false)]
+    [InlineData("array[$index]", false, false)]
+    [InlineData("array[0] + '1'", false, false)]
+    [InlineData("array[0] + \\1", false, false)]
+    public void ArithmeticSourceSelectsPreparationFromRawMarkers(string expression, bool lexical, bool direct)
+    {
+        var source = ShellSource.FromText(expression);
+        var prepared = new ArithmeticSource(source);
+
+        Assert.Equal(lexical, prepared.Syntax != null);
+        Assert.Equal(direct, prepared.DirectOperand != null);
+        if (prepared.DirectOperand is { } operand)
+        {
+            Assert.Same(prepared.Syntax, operand.Syntax);
+            Assert.True(source.Bytes.Equals(operand.Value.Bytes));
+        }
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("  64#_ \n")]
     [InlineData(" \t1 + 2\n ")]

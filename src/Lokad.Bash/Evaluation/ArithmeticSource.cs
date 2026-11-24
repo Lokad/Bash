@@ -20,12 +20,15 @@ internal sealed class ArithmeticSource
     {
         Source = source;
         var bytes = source.AsSpan();
-        // Shell expansion can splice fresh arithmetic syntax. Retain lexical structure
-        // only when expansion cannot change these bytes; selectors still prepare at runtime.
-        if (bytes.IndexOfAny("$'\"\\`"u8) >= 0)
+        // A bracket rules out the direct operand. If it is the first marker,
+        // check only its suffix for expansion that may change the arithmetic syntax.
+        var markers = "[$'\"\\`"u8;
+        var markerOffset = bytes.IndexOfAny(markers);
+        if (markerOffset >= 0
+            && (bytes[markerOffset] != (byte)'[' || bytes[(markerOffset + 1)..].ContainsAny(markers[1..])))
             return;
         Syntax = new ArithmeticEvaluation.LexicalSyntax(source, memory);
-        if (!bytes.Contains((byte)'['))
+        if (markerOffset < 0)
             DirectOperand = ArithmeticOperand.FromSyntax(source, Syntax);
     }
 }
