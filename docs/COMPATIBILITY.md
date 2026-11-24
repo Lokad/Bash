@@ -616,6 +616,9 @@ Arithmetic and braced parameter operands keep their own expansion behavior. If
 the pass produces zero or multiple fields, the diagnostic uses the operand's
 spelling. A descriptor move closes the destination when the operand produces
 zero or multiple fields. A single quoted empty field reports a bad descriptor.
+An empty move to an open destination during restorable setup first reports
+the failed duplication. An allocation from an empty field also reports
+the failed duplication and uses an empty destination label.
 Function-body redirections apply on invocation inside the completed stage setup.
 Scripts are limited to 4 MiB, with structural syntax/nesting guards and CLR collection-size
 checks. The source bound limits parser input; nesting guards protect recursive

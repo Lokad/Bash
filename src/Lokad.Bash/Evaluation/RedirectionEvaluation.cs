@@ -22,6 +22,7 @@ internal sealed class RedirectionEvaluation
     /// <summary> Stores the descriptor mappings produced while evaluating redirections. </summary>
     private readonly DescriptorTable _descriptorTable;
     private readonly RedirectionOrigin _origin;
+    private readonly bool _reportMoveRestorationFailure;
     /// <summary> Stores descriptors opened during redirection evaluation, in open order. </summary>
     private readonly DescriptorHandleOwner _openedDescriptors = new();
     /// <summary>Stores replaced handles in encounter order when the scope will be preserved.</summary>
@@ -37,11 +38,13 @@ internal sealed class RedirectionEvaluation
         IReadOnlyList<Redirection> redirections,
         DescriptorTable descriptorTable,
         RedirectionOrigin origin,
-        bool preserveBindings)
+        bool preserveBindings,
+        bool reportMoveRestorationFailure)
     {
         _redirections = redirections;
         _descriptorTable = descriptorTable;
         _origin = origin;
+        _reportMoveRestorationFailure = reportMoveRestorationFailure;
         _replacedHandles = preserveBindings ? new OrderedDescriptorSet() : null;
     }
 
@@ -213,10 +216,7 @@ internal sealed class RedirectionEvaluation
         var move = redirection.MovesDescriptor;
         var target = redirection.DescriptorOperand;
         if (move && target.Parts.Count == 0)
-        {
-            await ReportFailureAsync(scope, new OperationError($"{targetDescriptor}: Bad file descriptor\n")).ConfigureAwait(false);
-            return RedirectionOutcome.Failure;
-        }
+            return await RejectEmptyDescriptorAsync(scope, targetDescriptor, allocate).ConfigureAwait(false);
         var (fieldCount, sourceWord) = await scope.Effects.ExpandRedirectionFieldsAsync(target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
         if (fieldCount != 1 && !move)
@@ -231,6 +231,9 @@ internal sealed class RedirectionEvaluation
             SetDescriptor(scope, targetDescriptor, DescriptorBinding.Closed);
             return RedirectionOutcome.Success;
         }
+
+        if ((move || allocate) && sourceWord.Length == 0)
+            return await RejectEmptyDescriptorAsync(scope, targetDescriptor, allocate).ConfigureAwait(false);
 
         if (allocate && !_descriptorTable.TryFindAvailableDescriptor(out targetDescriptor))
         {
@@ -305,6 +308,22 @@ internal sealed class RedirectionEvaluation
                 targetDescriptor, sourceBinding, previouslyTouched, persistence != RedirectionPersistence.None).ConfigureAwait(false);
         return RedirectionOutcome.Success;
 
+    }
+
+    private async Task<RedirectionOutcome> RejectEmptyDescriptorAsync(
+        ScopedEvaluation scope, LogicalDescriptor targetDescriptor, bool allocate)
+    {
+        var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
+        if (!standardError.IsClosed)
+        {
+            // A named allocation has no destination number until its source is
+            // valid. An ordinary move only saves the source if the target is open.
+            var reportDuplication = allocate || _reportMoveRestorationFailure && !_descriptorTable.Resolve(targetDescriptor).IsClosed;
+            await scope.Effects.WriteEmptyDescriptorDiagnosticAsync(standardError, allocate ? null : targetDescriptor,
+                reportDuplication, scope.Context).ConfigureAwait(false);
+        }
+        scope.Effects.SetExpansionError(1);
+        return RedirectionOutcome.Failure;
     }
 
     /// <summary>Publishes the reader while its independently owned producer can wait for pipe capacity.</summary>

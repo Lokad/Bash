@@ -106,6 +106,56 @@ public sealed class DescriptorOperandTests
         Assert.Equal(diagnosticOperand + ": Bad file descriptor\n", host.StandardError.TextContent);
     }
 
+    [Theory]
+    [InlineData("", "3: Bad file descriptor\n")]
+    [InlineData("3>&1 ", "redirection error: cannot duplicate fd: Bad file descriptor\n3: Bad file descriptor\n")]
+    public async Task EmptyMoveReportsWhetherTheDestinationWasOpen(string earlier, string error)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            $"x=; : 2>report {earlier}3>&\"$x\"- >unreached; printf '%s:after' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(error, host.ReadFile("/report"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/unreached"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(": >&\"$x\"- | cat", "1: Bad file descriptor\n")]
+    [InlineData("{ : >&\"$x\"-; } | cat", "redirection error: cannot duplicate fd: Bad file descriptor\n1: Bad file descriptor\n")]
+    [InlineData("(printf skipped) >&\"$x\"-", "1: Bad file descriptor\n")]
+    [InlineData("exec cat >&\"$x\"-", "redirection error: cannot duplicate fd: Bad file descriptor\n1: Bad file descriptor\n")]
+    public async Task EmptyMoveReportsTheReachedCommandBoundary(string command, string error)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"x=; {command}", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task EmptyAllocationReportsBeforeSelectingOrAssigningANumber()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", "x=\n: 2>report {fd}>&\"$x\"\n");
+
+        var result = await host.RunAsync(
+            "fd=kept; source ./body; printf '%s:%s:after' \"$?\" \"$fd\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:kept:after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./body: redirection error: cannot duplicate fd: Bad file descriptor\n"
+            + "./body: line 2: : Bad file descriptor\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task MoveWithMultipleFieldsClosesAndRestoresTheDestination()
     {

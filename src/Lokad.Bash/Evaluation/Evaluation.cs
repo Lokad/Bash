@@ -662,7 +662,8 @@ public sealed partial class Evaluation : IFileTester
         if (redirectedCommand.Body is SubshellCommand subshell)
             return await EvaluateSubshellAsync(subshell, scope, negated, redirectedCommand.Redirections).ConfigureAwait(false);
         var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, HereDocumentRedirectionScope(scope),
-            RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, RedirectionOrigin.Command)
+            RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, RedirectionOrigin.Command,
+            reportMoveRestorationFailure: !IsPipelineStageCommand(redirectedCommand))
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var result = EvaluationResult.FromExitCode(0);
@@ -788,7 +789,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 // The child owns this frame through EXIT and descriptor cleanup below.
                 _ = await OpenRedirectionScopeAsync(redirections, childScope,
-                    RedirectionPersistence.Allocations, RedirectionLifetime.Command, RedirectionOrigin.Command)
+                    RedirectionPersistence.Allocations, RedirectionLifetime.Command, RedirectionOrigin.Command,
+                    reportMoveRestorationFailure: false)
                     .ConfigureAwait(false);
                 if (_state.TryConsumeExpansionError(out var redirectionExitCode))
                     result = EvaluationResult.FromExitCode(redirectionExitCode);
@@ -858,6 +860,9 @@ public sealed partial class Evaluation : IFileTester
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
+
+    private bool IsPipelineStageCommand(ICommand command) =>
+        _pipelineStageSource != null && _state.Script.Commands is [var stage] && ReferenceEquals(stage, command);
 
     /// <summary>
     /// Evaluates a pipeline by preparing pipe descriptors, running commands, and collecting exit codes.
@@ -947,8 +952,7 @@ public sealed partial class Evaluation : IFileTester
                 };
 
                 stage._retainCompletedMemory = true;
-                if (!ReferenceEquals(sourceCommand, command))
-                    stage._pipelineStageSource = sourceCommand;
+                stage._pipelineStageSource = sourceCommand;
                 stage._loadedSyntaxFunctionDepth = scope.LoadedSyntaxFunctionDepth;
                 stage._loadedReaderIgnoresErrexit = scope.LoadedReaderIgnoresErrexit;
                 stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
@@ -1063,6 +1067,7 @@ public sealed partial class Evaluation : IFileTester
         SimpleCommand simpleCommand,
         ScopedEvaluation scope)
     {
+        var directPipelineStage = IsPipelineStageCommand(simpleCommand);
         var reachedCommand = simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0
             || simpleCommand.Redirections.Count != 0;
         var publishStatus = reachedCommand;
@@ -1102,7 +1107,8 @@ public sealed partial class Evaluation : IFileTester
             var redirectionScope = await OpenRedirectionScopeAsync(simpleCommand.Redirections, assignmentRedirections,
                 isolateRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,
                 RedirectionLifetime.Command,
-                isolateRedirections ? RedirectionOrigin.IsolatedCommandless : RedirectionOrigin.Command)
+                isolateRedirections ? RedirectionOrigin.IsolatedCommandless : RedirectionOrigin.Command,
+                reportMoveRestorationFailure: true)
                 .ConfigureAwait(false);
             Exception? assignmentFailure = null;
             var assignmentResult = EvaluationResult.FromExitCode(exitCode);
@@ -1249,7 +1255,8 @@ public sealed partial class Evaluation : IFileTester
         var commandRedirections = await OpenRedirectionScopeAsync(
                 simpleCommand.Redirections, redirectionExpansionScope,
                 externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,
-                preparation.RedirectionLifetime, RedirectionOrigin.Command)
+                preparation.RedirectionLifetime, RedirectionOrigin.Command,
+                reportMoveRestorationFailure: !externalRedirections && !directPipelineStage)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         FunctionBinding[]? exportOwners = null;
@@ -3044,7 +3051,8 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope,
         RedirectionPersistence persistence,
         RedirectionLifetime lifetime,
-        RedirectionOrigin origin)
+        RedirectionOrigin origin,
+        bool reportMoveRestorationFailure)
     {
         if (redirections.Count == 0)
             return new RedirectionScope(this, active: false, [], []);
@@ -3052,7 +3060,7 @@ public sealed partial class Evaluation : IFileTester
         if (_state.CurrentRedirectionTable == null)
             throw new InvalidOperationException("Redirection setup requires an enclosing descriptor table.");
         var evaluation = new RedirectionEvaluation(redirections, CaptureDescriptorBindings().Fork(), origin,
-            preserveBindings: lifetime == RedirectionLifetime.Evaluation);
+            preserveBindings: lifetime == RedirectionLifetime.Evaluation, reportMoveRestorationFailure);
         // Expose the table as setup advances, so later target expansions and their substitutions
         // inherit earlier redirections. Descriptor ownership is finalized after setup succeeds.
         _state.PushRedirectionTable(evaluation.DescriptorTable, evaluation.OpenedDescriptors, evaluation.TouchedDescriptors, Memory);
@@ -3208,6 +3216,23 @@ public sealed partial class Evaluation : IFileTester
     internal Task WriteDescriptorAssignmentErrorAsync(FileDescriptor descriptor, ShellValue variable, EvaluationContext context) =>
         WriteOperationDiagnosticAsync(descriptor, variable, string.Empty, path: null,
             new OperationError("cannot assign fd to variable\n"), GetBuiltinDiagnosticPrefix(context));
+
+    internal async Task WriteEmptyDescriptorDiagnosticAsync(FileDescriptor descriptor, LogicalDescriptor? destination,
+        bool reportDuplication, EvaluationContext context)
+    {
+        var path = context.CallerSource?.Path;
+        var error = new OperationError("Bad file descriptor\n");
+        if (reportDuplication)
+        {
+            await WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, "redirection error: cannot duplicate fd: ", path: null,
+                error, new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, line: null))
+                .ConfigureAwait(false);
+        }
+        var line = context.Coordinates.RedirectionOpenLine ?? context.Coordinates.Line;
+        var prefix = new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, line == 0 ? null : line);
+        await WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, destination?.ToString() ?? string.Empty,
+            error, prefix).ConfigureAwait(false);
+    }
 
     private Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, ShellValue name, string prefix, string? path,
         OperationError error, SyntaxDiagnosticPrefix sourcePrefix) =>
@@ -4916,7 +4941,7 @@ public sealed partial class Evaluation : IFileTester
         IReadOnlyList<Redirection> redirections, ScopedEvaluation scope, bool writeToCapture)
     {
         var redirectionScope = await OpenRedirectionScopeAsync(redirections, scope,
-            RedirectionPersistence.None, RedirectionLifetime.Command, RedirectionOrigin.InputSubstitution)
+            RedirectionPersistence.None, RedirectionLifetime.Command, RedirectionOrigin.InputSubstitution, reportMoveRestorationFailure: false)
             .ConfigureAwait(false);
         var result = new CommandSubstitutionResult(ShellValue.Empty, 1, IgnoredNuls: false);
         OperationError? closeError;

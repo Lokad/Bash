@@ -34,8 +34,7 @@ public sealed partial class Evaluation
             scope = BeginPreparedCommandUnit(scope);
         var coordinates = scope.Context.Coordinates;
         var lineScope = default(Variables.LineNumberScope);
-        var locationCommand = _pipelineStageSource is { } source && _state.Script.Commands is [var stage]
-            && ReferenceEquals(stage, command) ? source : command;
+        var locationCommand = _pipelineStageSource is { } source && IsPipelineStageCommand(command) ? source : command;
         if (coordinates.Locations is { } locations && locations.TryGet(locationCommand, out var location))
         {
             coordinates = coordinates.At(locationCommand, location);
