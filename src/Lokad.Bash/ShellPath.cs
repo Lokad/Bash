@@ -18,11 +18,6 @@ public sealed class ShellPath
 {
     public string Path { get; }
 
-    private ShellPath()
-    {
-        Path = "/";
-    }
-
     /// <summary> Is this the root path? </summary>
     public bool IsRoot => Path == "/";
 
@@ -43,7 +38,7 @@ public sealed class ShellPath
     }
 
     /// <summary> The root path '/' </summary>
-    public static ShellPath Root = new();
+    public static ShellPath Root = new("/", validate: false);
 
     /// <summary> The '/tmp' path </summary>
     public static readonly ShellPath Tmp = new("/tmp");
@@ -51,24 +46,30 @@ public sealed class ShellPath
     /// <summary> True if the path ends with the given extension (e.g. ".nvn"). </summary>
     public bool HasExtension(string ext) => Path.EndsWith(ext, StringComparison.Ordinal);
 
-    public ShellPath(string path)
+    public ShellPath(string path) : this(path, validate: true) { }
+
+    private ShellPath(string path, bool validate)
     {
-        if (!IsValid(path))
+        if (validate && !IsValid(path))
             throw new ArgumentException($"'{path}' is not a valid absolute shell path.", nameof(path));
         Path = path;
     }
+
+    internal static ShellPath? TryCreate(string path) => IsValid(path) ? new ShellPath(path, validate: false) : null;
 
     /// <summary> Returns true if <paramref name="path"/> satisfies all ShellPath constraints. </summary>
     public static bool IsValid(string path)
     {
         if (path.Length == 0 || path[0] != '/') return false;
-        if (path == "/") return true;
-        if (path[^1] == '/') return false;
+        return path.Length == 1 || HasValidComponents(path.AsSpan(1));
+    }
 
-        var segments = path.AsSpan(1);
-        foreach (var range in segments.Split('/'))
+    private static bool HasValidComponents(ReadOnlySpan<char> suffix)
+    {
+        if (suffix[^1] == '/') return false;
+        foreach (var range in suffix.Split('/'))
         {
-            var seg = segments[range];
+            var seg = suffix[range];
             if (seg.Length == 0) return false;   // double slash
             if (seg.SequenceEqual(".") || seg.SequenceEqual("..")) return false;
             foreach (var c in seg)
@@ -99,8 +100,13 @@ public sealed class ShellPath
     /// </summary>
     public ShellPath? TryChild(string name)
     {
+        if (string.IsNullOrEmpty(name))
+            return IsRoot ? new ShellPath("/", validate: false) : null;
+        if (!HasValidComponents(name.AsSpan()))
+            return null;
+
         var combined = IsRoot ? "/" + name : Path + "/" + name;
-        return IsValid(combined) ? new ShellPath(combined) : null;
+        return new ShellPath(combined, validate: false);
     }
 
     /// <summary>

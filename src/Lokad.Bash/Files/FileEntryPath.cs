@@ -45,8 +45,8 @@ public readonly record struct FileEntryPath
     /// <summary>Resolves lexical checkpoints for providers whose filesystem has no symbolic links.</summary>
     public (ShellPath Path, IReadOnlyList<ShellPath> RequiredDirectories) ResolveWithoutSymbolicLinks()
     {
-        if (ShellPath.IsValid(Path))
-            return (new ShellPath(Path), Array.Empty<ShellPath>());
+        if (ShellPath.TryCreate(Path) is { } canonical)
+            return (canonical, Array.Empty<ShellPath>());
         var directories = new List<ShellPath>();
         var path = RawShellPath.Parse(Path).ToAbsoluteForEntryLookup(directories);
         // Defer a check only to the next lookup, without skipping unrelated checkpoints.

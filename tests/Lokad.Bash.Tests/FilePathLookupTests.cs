@@ -44,6 +44,8 @@ public sealed class FilePathLookupTests
     }
 
     [Theory]
+    [InlineData("/", "/")]
+    [InlineData("/with space/.hidden/β", "/with space/.hidden/β")]
     [InlineData("a/./b//./leaf", "/a/b/leaf")]
     [InlineData("a/.", "/a", "/a")]
     [InlineData("a/./", "/a", "/a")]

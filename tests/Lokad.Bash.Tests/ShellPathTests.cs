@@ -42,6 +42,49 @@ public sealed class ShellPathTests
 
     #endregion
 
+    #region Child
+
+    [Theory]
+    [InlineData("/", "", "/")]
+    [InlineData("/", "leaf", "/leaf")]
+    [InlineData("/a/b", "nested/.name/β", "/a/b/nested/.name/β")]
+    [InlineData("/dir", ".hidden", "/dir/.hidden")]
+    public void Child_PreservesCanonicalSuffixes(string parent, string name, string expected)
+    {
+        var path = new ShellPath(parent);
+
+        Assert.Equal(expected, path.TryChild(name)?.Path);
+        Assert.Equal(expected, path.Child(name).Path);
+    }
+
+    [Theory]
+    [InlineData("/a/b", "")]
+    [InlineData("/", "/child")]
+    [InlineData("/dir", "a//b")]
+    [InlineData("/dir", "a/.")]
+    [InlineData("/dir", "a/..")]
+    [InlineData("/dir", "a/")]
+    [InlineData("/dir", "a/x\u007f")]
+    public void Child_RejectsNoncanonicalSuffixes(string parent, string name)
+    {
+        var path = new ShellPath(parent);
+
+        Assert.Null(path.TryChild(name));
+        Assert.Throws<ArgumentException>("name", () => path.Child(name));
+    }
+
+    [Fact]
+    public void TryChild_RejectsBeforeCopyingTheParentPath()
+    {
+        var path = new ShellPath(string.Concat(Enumerable.Repeat("/segment", 256)));
+        const string invalidChild = "nested/../child";
+        Assert.Null(path.TryChild(invalidChild));
+
+        AllocationAssert.SustainedReuse(() => path.TryChild(invalidChild), iterations: 32, maximumBytes: 2048);
+    }
+
+    #endregion
+
     #region Valid paths
 
     [Theory]
