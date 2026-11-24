@@ -324,6 +324,8 @@ element supplies the line unless an initial command word is followed by a
 token on a later line. Usage lines keep their builtin name prefix.
 
 A leading `cd --help` prints help and returns 2 before any navigation.
+An invalid leading option reports the first rejected flag byte and the
+supported usage. It returns 2 even with shell-closed stderr.
 `pwd` accepts leading `-L` and `-P` options, including bundles. Both use the
 single current directory tracked by the host model. Invalid leading flags
 report usage and return 2. A reached `--help` returns 2, including with

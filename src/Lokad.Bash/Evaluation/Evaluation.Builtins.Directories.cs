@@ -74,8 +74,8 @@ public sealed partial class Evaluation
         var first = 1;
         if (first < words.Count)
         {
-            var operand = words[first];
-            switch (ClassifyShortOptionField(operand.Bytes.Span))
+            var option = words[first].Bytes;
+            switch (ClassifyShortOptionField(option.Span))
             {
                 case ShortOptionField.Terminator:
                     first++;
@@ -84,7 +84,8 @@ public sealed partial class Evaluation
                     return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Cd, "cd", negated)
                         .ConfigureAwait(false);
                 case ShortOptionField.Flags:
-                    await ReportBuiltinDiagnosticAsync([words[0]], [operand, ShellValue.FromText(": invalid option")], context)
+                    await WriteInvalidShortOptionUnlessStderrClosedAsync(words[0], ShellValue.FromBytes(option[..1]),
+                            option.Slice(1, 1), BuiltinKind.Cd, "cd", GetBuiltinDiagnosticPrefix(context))
                         .ConfigureAwait(false);
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
             }

@@ -168,15 +168,17 @@ public sealed class ExecutionLifetimeTests
     }
 
     [Theory]
-    [InlineData("cd \"-$1\"", "line 1: cd: -", ": invalid option\n", 2, 56 * 1024)]
-    [InlineData("trap -p \"$1\"", "trap: ", ": invalid signal specification\n", 1, 32 * 1024)]
+    [InlineData("cd \"-$1\"", "line 1: cd: -", ": invalid option\ncd: usage: cd [--] [dir]\n", 2, 56 * 1024, 1)]
+    [InlineData("trap -p \"$1\"", "trap: ", ": invalid signal specification\n", 1, 32 * 1024, 4096)]
     public async Task RejectedOperandFitsWithOneDiagnosticBuffer(
-        string command, string prefix, string suffix, int status, int allowance)
+        string command, string prefix, string suffix, int status, int allowance, int reportedBytes)
     {
         var operand = new byte[4096];
         operand.AsSpan().Fill((byte)'x');
-        operand[^1] = 0xff;
-        byte[] expected = [.. System.Text.Encoding.ASCII.GetBytes(prefix), .. operand, .. System.Text.Encoding.ASCII.GetBytes(suffix)];
+        operand[0] = 0xff;
+        operand[^1] = 0xfe;
+        byte[] expected = [.. System.Text.Encoding.ASCII.GetBytes(prefix), .. operand.AsSpan(0, reportedBytes),
+            .. System.Text.Encoding.ASCII.GetBytes(suffix)];
         var state = new Eval(Parser.Parse(command + " 2>out"));
         state.ReplacePositionalParameters([ShellValue.FromBytes(operand)]);
         var governor = new MemoryGovernor(allowance);
