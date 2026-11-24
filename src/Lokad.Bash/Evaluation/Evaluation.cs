@@ -1586,7 +1586,8 @@ public sealed partial class Evaluation : IFileTester
                 ref inheritedDescriptors,
                 CaptureDescriptorBindings().Bindings,
                 functions);
-            var execution = await ExecuteRunCommandAsync(commandInvocation).ConfigureAwait(false);
+            var execution = await ExecuteRunCommandAsync(commandInvocation, invocationScope,
+                executable.Completion == CommandCompletion.ExitEvaluation).ConfigureAwait(false);
             var commandResult = await FinalizeResultAsync(
                     EvaluationResult.FromExitCode(execution.ShellExitCode),
                     false)
@@ -4684,12 +4685,35 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Emits a run-command operation and returns its execution result.
     /// </summary>
-    private async Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command)
+    private async Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command, ScopedEvaluation scope, bool exec)
     {
         CheckCancellation();
-        // The invocation borrows arguments, exports and descriptors until the host settles.
-        var result = await RunCommand.AsTask(PublishOperation, command).ConfigureAwait(false);
+        var directPath = command.CommandName.Contains('/');
+        // The current redirection frame retains stderr until the command and any launch diagnostic settle.
+        // Direct exec paths retain the host's reporting of the resolved executable.
+        var result = await RunCommand.AsTask(PublishOperation, command, canReportLaunchFailure: !exec || !directPath, out var request)
+            .ConfigureAwait(false);
         CheckCancellation();
+        if (request.CallerReportsLaunchFailure && !command.StdErr.IsClosed)
+        {
+            OperationError? error = result switch
+            {
+                CommandExecutionResult.NotFound when exec => new OperationError("not found\n"),
+                CommandExecutionResult.NotFound when directPath => new OperationError("No such file or directory\n"),
+                CommandExecutionResult.NotFound => new OperationError("command not found\n"),
+                CommandExecutionResult.NotExecutable notExecutable => notExecutable.Error,
+                _ => null
+            };
+            if (error is { } failure)
+            {
+                var context = scope.Context;
+                var prefix = context.Coordinates.Locations is null ? default
+                    : new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath,
+                        SyntaxDiagnosticOrigin.ScriptLine, context.Coordinates.Line);
+                await WriteOperationDiagnosticAsync(command.StdErr, ShellValue.Empty, exec ? "exec: " : string.Empty,
+                    command.CommandName, failure, prefix).ConfigureAwait(false);
+            }
+        }
         return result;
     }
 

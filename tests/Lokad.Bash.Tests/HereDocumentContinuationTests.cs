@@ -98,7 +98,7 @@ public sealed class HereDocumentContinuationTests
             // definition-export
             yield return [prepared, "f(){ cat <<END\na\\\nEND\nEND\n}; export -f f; /usr/bin/bash -c f", 0, "61454E440A", "", "{}"];
             // literal-variable-delimiter
-            yield return [prepared, "x=VALUE; cat <<$x\n$x\n$x\nprintf tail", 0, "7461696C", "56414C55453A20636F6D6D616E64206E6F7420666F756E640A", "{}"];
+            yield return [prepared, "x=VALUE; cat <<$x\n$x\n$x\nprintf tail", 0, "7461696C", "6C696E6520333A2056414C55453A20636F6D6D616E64206E6F7420666F756E640A", "{}"];
             // literal-variable-delimiter-body
             yield return [prepared, "x=VALUE; cat <<$x\nliteral-$x\n$x\nprintf tail", 0, "6C69746572616C2D56414C55450A7461696C", "", "{}"];
             // A command in the delimiter stays inert while the body can have effects.

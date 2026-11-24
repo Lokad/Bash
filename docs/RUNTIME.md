@@ -487,6 +487,11 @@ the host takes precedence over a matching name. New-host startup uses its own
 environment and descriptors. Child commands preserve captured descriptor bindings,
 exported functions and the working directory without taking ownership of borrowed
 handles. The host owns and admits any copies made by its argument consumers.
+The engine requests caller-side reporting for ordinary launch failures and
+name-based `exec` launch failures. The evaluator formats the typed failure
+at the reached command's source location and writes through its retained
+stderr binding before restoring redirections. Direct-path `exec` diagnostics
+remain host-reported. A completed tool's status and stderr pass through unchanged.
 
 Read buffers are borrowed until disposal. Mark the consumed prefix before disposal;
 unconsumed bytes remain available through aliases. Retain or copy bytes before

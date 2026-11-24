@@ -15,7 +15,7 @@ public sealed class SpecialParameterTests
     [InlineData("set --; unset missing; a=('' tail ''); f(){ printf '[%s]' \"$#\"; for v; do printf '<%s>' \"$v\"; done; }; f \"$@${missing:-\"${a[@]}\"}\"", "[3]<><tail><>", "", 0)]
     [InlineData("set -- first; f(){ printf '<%s:%s>' \"$#\" \"${1-absent}\"; }; f \"$9\"; shift; f \"$10\"", "<1:><1:0>", "", 0)]
     [InlineData("set --; values=(\"$1\"); printf '<%s:%s>' \"${#values[@]}\" \"${values[0]+set}\"", "<1:set>", "", 0)]
-    [InlineData("set --; \"$1\" true", "", ": command not found\n", 127)]
+    [InlineData("set --; \"$1\" true", "", "line 1: : command not found\n", 127)]
     [InlineData("set --; printf '<%s>\\n' \"${#}\" \"${##}\" \"${#@}\" \"${#*}\" \"${#1}\" \"${1:-fallback}\"\n", "<0>\n<1>\n<0>\n<0>\n<0>\n<fallback>\n", "", 0)]
     [InlineData("false; printf '<%s>\\n' \"${?}\" \"$?\" \"${#?}\"\n", "<1>\n<1>\n<1>\n", "", 0)]
     [InlineData("set -- keep; printf '<%s>\\n' \"${1:-$(printf bad >&2)}\" \"${1:+yes}\" \"${2:-fallback}\"\n", "<keep>\n<yes>\n<fallback>\n", "", 0)]

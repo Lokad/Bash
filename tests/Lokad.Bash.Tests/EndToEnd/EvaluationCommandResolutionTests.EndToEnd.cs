@@ -154,15 +154,40 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
-    public async Task Evaluation_UnknownCommand_ReportsNotFound()
+    [Theory]
+    [InlineData("missing", "line 1: missing: command not found\n", 127)]
+    [InlineData(":\ncommand missing", "line 2: missing: command not found\n", 127)]
+    [InlineData("eval ':\nmissing'", "line 3: missing: command not found\n", 127)]
+    [InlineData("./missing", "line 1: ./missing: No such file or directory\n", 127)]
+    [InlineData("./dir", "line 1: ./dir: Is a directory\n", 126)]
+    [InlineData("missing 2>&-", "", 127)]
+    [InlineData(":\nexec missing\nprintf unreachable", "line 2: exec: missing: not found\n", 127)]
+    [InlineData("bash -c 'printf tool >&2; exit 127'", "tool", 127)]
+    public async Task Evaluation_LaunchDiagnosticsUseTypedOutcomes(string script, string error, int status)
     {
-        var script = @"missing";
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("missing: command not found\n", result.StdErr);
-        Assert.Equal(127, result.ExitCode);
+        Assert.Equal(error, result.StdErr);
+        Assert.Equal(status, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Evaluation_SourcedFunctionLaunchDiagnosticUsesDefinitionAndRedirectedStderr(bool prepared)
+    {
+        await using var host = EndToEndHarness.BuildTree([("/input", "fixture() {\n missing\n}\n")]);
+        const string script = "source input\nfixture 2>report\n";
+
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(127, status);
+        Assert.Empty(host.GetOutput(FileDescriptor.StdErr));
+        Assert.Equal("input: line 2: missing: command not found\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Fact]

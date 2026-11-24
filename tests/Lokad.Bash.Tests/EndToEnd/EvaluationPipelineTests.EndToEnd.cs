@@ -171,7 +171,7 @@ public sealed class EvaluationPipelineTestsEndToEnd
 
         Assert.Equal(127, result.ExitCode);
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("missing: command not found\n", result.StdErr);
+        Assert.Equal("line 1: missing: command not found\n", result.StdErr);
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public sealed class EvaluationPipelineTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("missing: command not found\n", result.StdErr);
+        Assert.Equal("line 1: missing: command not found\n", result.StdErr);
     }
 
     [Fact]

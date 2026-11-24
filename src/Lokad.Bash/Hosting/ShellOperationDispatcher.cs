@@ -65,7 +65,7 @@ internal static class ShellOperationDispatcher
                 state.Host.ResolveCommandsAsync(
                     request.CommandNames, request.CurrentDirectory, request.Environment, state.CancellationToken)),
             RunCommand command => command.UseResult(state, static (request, state) =>
-                state.Host.RunCommandAsync(request.Command, CommandLaunchFailureReporting.Host, state.CancellationToken)),
+                state.Host.RunCommandAsync(request.Command, request.SelectLaunchFailureReporting(), state.CancellationToken)),
             RunPipelineEvaluations pipeline => pipeline.UseResult(state, static (request, state) =>
                 ExecutePipelineAsync(request.Stages, state.Host, state.CancellationToken)),
             RunCapturedEvaluation capture => capture.UseResult(state, static (request, state) =>

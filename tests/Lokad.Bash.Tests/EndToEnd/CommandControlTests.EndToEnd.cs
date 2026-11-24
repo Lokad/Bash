@@ -81,7 +81,7 @@ public sealed class CommandControlTestsEndToEnd
     [InlineData("command -vp -pV printf", "printf is a shell builtin\n", "", 0)]
     [InlineData("command -p echo ok", "ok\n", "", 0)]
     [InlineData("command -pp; printf '<%s>\\n' \"$?\"", "<0>\n", "", 0)]
-    [InlineData("command -p -- ''; printf '<%s>\\n' \"$?\"", "<127>\n", ": command not found\n", 0)]
+    [InlineData("command -p -- ''; printf '<%s>\\n' \"$?\"", "<127>\n", "line 1: : command not found\n", 0)]
     [InlineData("command -p printf '<%s>\\n' -p --", "<-p>\n<-->\n", "", 0)]
     [InlineData("command -pv printf -p", "printf\n", "", 0)]
     [InlineData("command -ppVpxv printf; printf '<%s>\\n' \"$?\"", "<2>\n", "command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", 0)]

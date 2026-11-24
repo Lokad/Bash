@@ -237,15 +237,32 @@ public sealed class RunCommand(
     /// <summary>Gets the command invocation to execute.</summary>
     public CommandInvocation Command { get; } = command;
 
+    private bool CanReportLaunchFailure { get; init; }
+
+    // Set by the dispatcher before invoking the host. Custom operation consumers
+    // can still handle the original public request and its launch diagnostics.
+    internal bool CallerReportsLaunchFailure { get; private set; }
+
+    internal CommandLaunchFailureReporting SelectLaunchFailureReporting()
+    {
+        CallerReportsLaunchFailure = CanReportLaunchFailure;
+        return CallerReportsLaunchFailure ? CommandLaunchFailureReporting.Caller : CommandLaunchFailureReporting.Host;
+    }
+
     /// <summary>
     /// Creates a <see cref="RunCommand"/> operation and returns a task for its execution result.
     /// </summary>
     public static Task<CommandExecutionResult> AsTask(
         Action<EvaluationOperation> use,
-        CommandInvocation command)
+        CommandInvocation command) =>
+        AsTask(use, command, canReportLaunchFailure: false, out _);
+
+    internal static Task<CommandExecutionResult> AsTask(Action<EvaluationOperation> use, CommandInvocation command,
+        bool canReportLaunchFailure, out RunCommand request)
     {
         var tcs = new TaskCompletionSource<CommandExecutionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        use(new RunCommand(tcs, command));
+        request = new RunCommand(tcs, command) { CanReportLaunchFailure = canReportLaunchFailure };
+        use(request);
         return tcs.Task;
     }
 }

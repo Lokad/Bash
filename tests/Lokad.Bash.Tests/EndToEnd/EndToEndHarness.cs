@@ -181,8 +181,18 @@ public class TestHost : MockFileSystem
                 await WriteAsync(command.StdOut, bytes, cancel).ConfigureAwait(false);
                 return new CommandExecutionResult.Completed(0);
             }
-            await this.WriteLineAsync(command.StdErr, $"{command.CommandName}: command not found", cancel).ConfigureAwait(false);
-            return new CommandExecutionResult.Completed(127);
+            var result = await ResolveFixtureLaunchFailureAsync(command, cancel).ConfigureAwait(false);
+            if (reporting == CommandLaunchFailureReporting.Host && !command.StdErr.IsClosed)
+            {
+                var message = result switch
+                {
+                    CommandExecutionResult.NotExecutable failure => failure.Error.MessageWithoutTerminator,
+                    _ when command.CommandName.Contains('/') => "No such file or directory",
+                    _ => "command not found"
+                };
+                await this.WriteLineAsync(command.StdErr, $"{command.CommandName}: {message}", cancel).ConfigureAwait(false);
+            }
+            return result;
         }
         finally
         {
@@ -200,6 +210,29 @@ public class TestHost : MockFileSystem
                 read.Consume(content.Length);
                 if (!(await WriteAsync(command.StdOut, content, cancel).ConfigureAwait(false)).CanAcceptMore) return;
             }
+        }
+        async Task<CommandExecutionResult> ResolveFixtureLaunchFailureAsync(CommandInvocation invocation, CancellationToken cancellationToken)
+        {
+            if (invocation.CommandName.Contains('/') && RawShellPath.TryParse(invocation.CommandName, out var path))
+            {
+                var lookup = new FilePathLookup(path, invocation.CurrentDirectory, FileLinkFollowing.Follow);
+                var info = (await ResolvePathsAsync([lookup], FilePathInfoRequest.KindOnly, FileSnapshotRequest.None, cancellationToken)
+                    .ConfigureAwait(false))[0];
+                if (info.Error is { } error)
+                    return new CommandExecutionResult.NotExecutable(error);
+                if (info.Info.Kind == FilePathKind.Directory)
+                    return new CommandExecutionResult.NotExecutable(new OperationError("Is a directory\n")
+                    {
+                        Kind = OperationErrorKind.IsDirectory
+                    });
+                // The fixture's registered tools are handled above. Existing fixture files are data.
+                if (info.Info.Kind != FilePathKind.Missing)
+                    return new CommandExecutionResult.NotExecutable(new OperationError("Permission denied\n")
+                    {
+                        Kind = OperationErrorKind.PermissionDenied
+                    });
+            }
+            return new CommandExecutionResult.NotFound();
         }
     }
 
