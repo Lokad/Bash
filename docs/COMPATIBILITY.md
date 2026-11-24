@@ -185,6 +185,13 @@ active, it exits before applying later items and keeps the earlier writes
 visible to EXIT. The exit status is the current nonzero status or 1.
 A tested `source` or `eval` reader retains its errexit suppression.
 
+An empty indexed initializer selector follows the same failure rules.
+An `@` or `*` selector reports `cannot assign to non-numeric index`
+and sets both `$?` and `PIPESTATUS` to 1 for later expansions.
+Without errexit, an assignment-only command uses that status if it has
+already run a command substitution. A later substitution can supply its
+own status. With errexit active the invalid selector exits with 1.
+
 `declare`, `typeset`, `local`, `export`, and `readonly` report usage after an
 unrecognized leading option. A reached `--help` writes the command's synopsis
 and Lokad.Bash's builtin documentation to stdout with status 2. At script

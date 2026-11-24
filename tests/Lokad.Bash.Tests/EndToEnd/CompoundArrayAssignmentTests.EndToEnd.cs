@@ -35,6 +35,28 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
         return AssertBothEntryPointsAsync(script, status, $"<{status}>[first]", "line 3: [-3]=rejected: bad array subscript\n");
     }
 
+    [Theory]
+    [InlineData("(exit 7) || a=([@]=bad last) seen=\"$?:${PIPESTATUS[*]}\"", "<0|1:1|last>", "[@]=bad: cannot assign to non-numeric index")]
+    [InlineData("a=([*]=bad \"$(printf last; exit 7)\") seen=\"$?:${PIPESTATUS[*]}\"", "<1|1:1|last>", "[*]=bad: cannot assign to non-numeric index")]
+    [InlineData("a=([@]=bad last) b=$(printf ok; exit 7) seen=$?", "<7|7|last>", "[@]=bad: cannot assign to non-numeric index")]
+    [InlineData("a=([]=$(printf bad; exit 7) last) seen=$?", "<7|7|last>", "[]=bad: bad array subscript")]
+    public Task RejectedInitializerSelectorsUpdateStatusAtTheReachedItem(string body, string output, string diagnostic)
+    {
+        var script = body + "\nprintf '<%s|%s|%s>' \"$?\" \"$seen\" \"${a[-1]}\"\n";
+        return AssertBothEntryPointsAsync(script, 0, output, "line 1: " + diagnostic + "\n");
+    }
+
+    [Theory]
+    [InlineData("(exit 7) || a=([0]=first [@]=bad later)", 1, "[@]=bad: cannot assign to non-numeric index")]
+    [InlineData("(exit 7) || a=([0]=first []=bad later)", 7, "[]=bad: bad array subscript")]
+    [InlineData("declare -a a=([0]=first [*]=bad later) && printf unused", 1, "[*]=bad: cannot assign to non-numeric index")]
+    public Task RejectedInitializerSelectorsStopLaterWritesUnderErrexit(string body, int status, string diagnostic)
+    {
+        var script = "trap 'printf \"<%s>[%s]\" \"$?\" \"${a[@]}\"' EXIT\nset -e\n"
+            + body + "\nprintf skipped\n";
+        return AssertBothEntryPointsAsync(script, status, $"<{status}>[first]", "line 3: " + diagnostic + "\n");
+    }
+
     private const string RejectedQuotedKey = "[\"lead$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\"]";
 
     [Theory]
@@ -163,10 +185,10 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
 
     // Bash 5.2.21: staged selectors and nested aggregates retain their expansion context.
     [Theory]
-    [InlineData("k=@; a=([$k]=bad tail); printf '<%s>' \"${a[@]}\"", "<tail>", "a[$k]: bad array subscript\n", 0)]
-    [InlineData("k='*'; a=(old); a+=([$k]=bad tail); printf '<%s>' \"${a[@]}\"", "<old><tail>", "a[$k]: bad array subscript\n", 0)]
-    [InlineData("a=([\"*\"]=bad tail); printf '<%s>' \"${a[@]}\"", "<tail>", "a[\"*\"]: bad array subscript\n", 0)]
-    [InlineData("a=([$(printf @; printf selector >&2)]=$(printf bad; printf rhs >&2) tail); printf '<%s>' \"${a[@]}\"", "<tail>", "selectorrhsa[$(printf @; printf selector >&2)]: bad array subscript\n", 0)]
+    [InlineData("k=@; a=([$k]=bad tail); printf '<%s>' \"${a[@]}\"", "<tail>", "line 1: [@]=bad: cannot assign to non-numeric index\n", 0)]
+    [InlineData("k='*'; a=(old); a+=([$k]=bad tail); printf '<%s>' \"${a[@]}\"", "<old><tail>", "line 1: [*]=bad: cannot assign to non-numeric index\n", 0)]
+    [InlineData("a=([\"*\"]=bad tail); printf '<%s>' \"${a[@]}\"", "<tail>", "line 1: [*]=bad: cannot assign to non-numeric index\n", 0)]
+    [InlineData("a=([$(printf @; printf selector >&2)]=$(printf bad; printf rhs >&2) tail); printf '<%s>' \"${a[@]}\"", "<tail>", "selectorrhsline 1: [@]=bad: cannot assign to non-numeric index\n", 0)]
     [InlineData("declare -A a; k=@; a=([$k]=at [\"*\"]=star); printf '<%s>' \"${a['@']}\" \"${a['*']}\"", "<at><star>", "", 0)]
     [InlineData("k=@; a=(['$k']=bad tail); printf after", "", "line 1: @: syntax error: operand expected (error token is \"@\")\n", 1)]
     [InlineData("k=@; a[$k]=bad; printf after", "", "line 1: @: syntax error: operand expected (error token is \"@\")\n", 1)]
@@ -191,10 +213,10 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("a=([\"$empty\"]=x tail); printf '<%s>' \"${a[@]}\"", "<tail>", "a[\"$empty\"]: bad array subscript\n")]
-    [InlineData("a=(['']=x tail); printf '<%s>' \"${a[@]}\"", "<tail>", "a['']: bad array subscript\n")]
-    [InlineData("a=([$(true)]=x tail); printf '<%s>' \"${a[@]}\"", "<tail>", "a[$(true)]: bad array subscript\n")]
-    [InlineData("a=(old); a+=([\"$empty\"]=x tail); printf '<%s>' \"${a[@]}\"", "<old><tail>", "a[\"$empty\"]: bad array subscript\n")]
+    [InlineData("a=([\"$empty\"]=x tail); printf '<%s>' \"${a[@]}\"", "<tail>", "line 1: []=x: bad array subscript\n")]
+    [InlineData("a=(['']=x tail); printf '<%s>' \"${a[@]}\"", "<tail>", "line 1: []=x: bad array subscript\n")]
+    [InlineData("a=([$(true)]=x tail); printf '<%s>' \"${a[@]}\"", "<tail>", "line 1: []=x: bad array subscript\n")]
+    [InlineData("a=(old); a+=([\"$empty\"]=x tail); printf '<%s>' \"${a[@]}\"", "<old><tail>", "line 1: []=x: bad array subscript\n")]
     [InlineData("declare -A a; a=([bad] [ok]=yes); printf '<%s>' \"${a[ok]}\" \"${a['[bad]']}\"", "<yes><>", "a: must use subscript when assigning associative array\n")]
     [InlineData("declare -A a; a=([bad] $(printf forbidden >&2) [ok]=yes); printf '<%s>' \"${a[ok]}\"", "<yes>", "a: must use subscript when assigning associative array\na: must use subscript when assigning associative array\n")]
     [InlineData("declare -A a; a=('[bad]' value [ok]=yes tail); printf '<%s>' \"${a['[bad]']}\" \"${a['[ok]=yes']}\"", "<value><tail>", "")]
@@ -404,7 +426,7 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("declare -A map; readonly map; map=([$(printf a; printf selector >&2)]=$(printf new; printf rhs >&2)); printf after", "", "line 1: map: readonly variable\n", 1)]
     [InlineData("arr=(old); arr=(new [-2]=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "line 1: [-2]=bad: bad array subscript\n", 0)]
     [InlineData("arr[5]=old; arr=([-1]=new tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<tail>\n<0>\n", "line 1: [-1]=new: bad array subscript\n", 0)]
-    [InlineData("arr=(old); arr=(new []=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "arr[]: bad array subscript\n", 0)]
+    [InlineData("arr=(old); arr=(new []=bad tail); printf '<%s>\\n' \"$?\" \"${arr[@]}\" \"${!arr[@]}\"", "<0>\n<new>\n<tail>\n<0>\n<1>\n", "line 1: []=bad: bad array subscript\n", 0)]
     [InlineData("declare -A map; map[old]=old; map=([a]=new [\"\"]=bad [b]=tail); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<new>:<tail>\n", "map[\"\"]: bad array subscript\n", 0)]
     [InlineData("declare -A map; map=([a]=one plain [b]=two); printf '<%s>:<%s>:<%s>\\n' \"$?\" \"${map[a]}\" \"${map[b]}\"", "<0>:<one>:<two>\n", "map: must use subscript when assigning associative array\n", 0)]
     [InlineData("declare -A map; map=(foo bar [x]=y); printf '<%s>:<%s>:<%s>\\n' \"${map[foo]}\" \"${map['[x]=y']-missing}\" \"${#map[@]}\"", "<bar>:<>:<2>\n", "", 0)]

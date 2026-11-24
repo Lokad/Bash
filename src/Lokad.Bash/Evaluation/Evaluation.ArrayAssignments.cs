@@ -354,16 +354,25 @@ public sealed partial class Evaluation
     }
 
     /// <summary>Reports the rejected expanded item before later array writes can run.</summary>
-    internal Task ReportCompoundIndexFailureAsync(ReadOnlySpan<ShellValue> item, ScopedEvaluation scope)
+    internal Task ReportCompoundIndexFailureAsync(ReadOnlySpan<ShellValue> item, bool aggregate, ScopedEvaluation scope)
     {
         if (ReaderErrexitEnabled(scope))
         {
-            var status = _state.LastExitCode is { } previous && previous != 0 ? previous : 1;
+            var status = !aggregate && _state.LastExitCode is { } previous && previous != 0 ? previous : 1;
             SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CompoundArrayIndex, status));
             _state.LastExitCode = status;
             PublishExpansionPipelineStatus(status, scope);
         }
-        return ReportCommandDiagnosticAsync(item, [ShellValue.FromText("bad array subscript")], scope);
+        else if (aggregate)
+        {
+            _state.LastExitCode = 1;
+            PublishExpansionPipelineStatus(1, scope);
+            // Assignment-only completion uses this status only after a capture has run.
+            if (_state.LastCommandSubstitutionExitCode.HasValue)
+                _state.LastCommandSubstitutionExitCode = 1;
+        }
+        var message = aggregate ? "cannot assign to non-numeric index" : "bad array subscript";
+        return ReportCommandDiagnosticAsync(item, [ShellValue.FromText(message)], scope);
     }
 
     private readonly record struct ExpandedArrayItem(

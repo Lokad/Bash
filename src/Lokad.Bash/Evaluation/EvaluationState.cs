@@ -35,7 +35,7 @@ internal enum ExpansionFailureKind
     IntegerAssignment,
     /// <summary>Arithmetic selection of an indexed array element failed.</summary>
     ArrayIndex,
-    /// <summary>A negative compound array index was out of range with errexit active.</summary>
+    /// <summary>A compound initializer rejected an indexed selector with errexit active.</summary>
     CompoundArrayIndex,
     /// <summary>A reached parameter-default write failed after its operand expanded.</summary>
     ParameterDefaultAssignment,
@@ -270,7 +270,7 @@ internal sealed class EvaluationState
     internal bool KeepsLocalsOnErrexit => ForkKind is ShellForkKind.Subshell or ShellForkKind.PipelineSimpleCommand;
 
     /// <summary>
-    /// Last substitution in the current simple command; null means none ran.
+    /// Assignment status from the last substitution in the current simple command; null means none ran.
     /// Reset at command entry and do not copy into nested evaluation state.
     /// </summary>
     public int? LastCommandSubstitutionExitCode { get; set; }

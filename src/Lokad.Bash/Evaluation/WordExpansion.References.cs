@@ -531,7 +531,7 @@ internal static partial class WordExpansion
         // Compound preparation has already selected the binding.
         var name = use == ReferenceUse.CompoundAssign ? reference.Name : targetVariables.ResolveNamerefName(reference.Name);
         var associative = targetVariables.AssociativeArrays.ContainsKey(name);
-        // Prepared selectors validate expanded bytes; compound diagnostics retain source spelling.
+        // Prepared and staged selectors validate expanded bytes.
         var selector = preparedSubscript is { } preparedSelector
             ? VariableReference.ForElement(reference.Name, ShellSource.FromBytes(preparedSelector.Value.Bytes))
             : compound is { } staged
@@ -539,6 +539,11 @@ internal static partial class WordExpansion
             : reference;
         if (selector.Subscript.IsEmpty || selector.IsAggregate && !associative)
         {
+            if (!associative && compound is { } invalidItem)
+            {
+                await ReportRejectedCompoundElementAsync(invalidItem, aggregate: selector.IsAggregate).ConfigureAwait(false);
+                return null;
+            }
             if (use == ReferenceUse.Presence && selector.Subscript.IsEmpty)
                 return null;
             if (use == ReferenceUse.ArithmeticAssign && selector.Subscript.IsEmpty)
@@ -604,10 +609,7 @@ internal static partial class WordExpansion
                 return new ResolvedVariableReference.Indexed(name, position) { ReadOwner = targetVariables };
             if (compound is { } item)
             {
-                var separator = item.Operator == AssignmentOperator.Append ? "]+=" : "]=";
-                await scope.Effects.ReportCompoundIndexFailureAsync(
-                    [ShellValue.FromText("["), item.Subscript, ShellValue.FromText(separator), item.Value],
-                    scope).ConfigureAwait(false);
+                await ReportRejectedCompoundElementAsync(item, aggregate: false).ConfigureAwait(false);
                 return null;
             }
         }
@@ -615,6 +617,14 @@ internal static partial class WordExpansion
         if (use != ReferenceUse.Length || !associative)
             await ReportBadSubscriptAsync().ConfigureAwait(false);
         return null;
+
+        Task ReportRejectedCompoundElementAsync(CompoundElement item, bool aggregate)
+        {
+            var separator = item.Operator == AssignmentOperator.Append ? "]+=" : "]=";
+            return scope.Effects.ReportCompoundIndexFailureAsync(
+                [ShellValue.FromText("["), item.Subscript, ShellValue.FromText(separator), item.Value],
+                aggregate, scope);
+        }
 
         Task ReportEmptyArithmeticAssignmentAsync()
         {
