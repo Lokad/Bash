@@ -327,7 +327,10 @@ public sealed partial class Evaluation
         };
 
         var result = EvaluationResult.FromExitCode(0);
-        var scanContext = new ShellScanContext();
+        var scanContext = new ShellScanContext
+        {
+            ReadsCommandString = kind != ScriptExecutionKind.Root || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
+        };
         using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
         while (true)
         {
@@ -402,7 +405,7 @@ public sealed partial class Evaluation
                             return await ExitLoadedSyntaxFailureAsync(scope, status, unwindChildFirst: true).ConfigureAwait(false);
                         }
                         if (failedUnit.Failure.Kind is ParserFailureKind.ArrayQuotedSubstitutionForHeader
-                            or ParserFailureKind.ArraySubstitutionDelimiter)
+                            or ParserFailureKind.ArrayDelimiter)
                             return result.WithExitCode(1);
                         if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
                             return EvaluationResult.Exit(2);

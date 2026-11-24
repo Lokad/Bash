@@ -35,7 +35,7 @@ internal sealed class HereDocumentReader
 
     internal bool TryReadBodies(Tokenizer tokenizer)
     {
-        var eofLineAdvance = tokenizer.HereDocumentHeaderAtContinuedEnd ? 1 : 0;
+        var eofLineAdvance = tokenizer.HereDocumentHeaderLineAdvance;
         while (_pending.TryDequeue(out var redirection))
         {
             bool allowExpansion;

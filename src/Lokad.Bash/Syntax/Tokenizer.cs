@@ -24,6 +24,7 @@ internal sealed class Tokenizer
     private List<RedirectedCommand>? _compoundHereDocuments;
     private bool _continuedAtEndOfInput;
     private bool _spacingContinuedAtEndOfInput;
+    private bool _wordEndsWithUnframedBackslash;
     private int _lastPhysicalNewline;
     private int _functionBraceLine;
 
@@ -146,8 +147,17 @@ internal sealed class Tokenizer
 
     internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
 
-    internal bool HereDocumentHeaderAtContinuedEnd => _readingAhead == null && Position == _input.Length
-        && (_continuedAtEndOfInput || _spacingContinuedAtEndOfInput);
+    internal int HereDocumentHeaderLineAdvance
+    {
+        get
+        {
+            if (_readingAhead != null || Position != _input.Length)
+                return 0;
+            if (_wordEndsWithUnframedBackslash)
+                return 2;
+            return _continuedAtEndOfInput || _spacingContinuedAtEndOfInput ? 1 : 0;
+        }
+    }
 
     internal int GetRedirectionLookaheadLine(Token token)
     {
@@ -157,11 +167,14 @@ internal sealed class Tokenizer
         return GetLine(end);
     }
 
-    /// <summary>Whether reaching EOF also completes a final logical line without a terminating LF.</summary>
+    /// <summary>Extra diagnostic lines reached past the last physical input line.</summary>
     internal int EndOfInputLineAdvance
     {
         get
         {
+            // Reading the end of a word reaches the continued line and then EOF.
+            if (_wordEndsWithUnframedBackslash)
+                return 2;
             var source = _input.AsSpan();
             return source.IsEmpty || source[^1] != (byte)'\n' || _continuedAtEndOfInput ? 1 : 0;
         }
@@ -243,7 +256,8 @@ internal sealed class Tokenizer
             return;
         var atEnd = token.Kind == TokenKind.EndOfInput;
         var reachedEnd = atEnd && Position == _input.Length && QuotedEndOfInputFailure == null;
-        var implicitNewline = allowsImplicitNewline && reachedEnd && !_input.IsEmpty && _input[Position - 1] != (byte)'\n';
+        var implicitNewline = allowsImplicitNewline && reachedEnd && !_spacingContinuedAtEndOfInput && !_continuedAtEndOfInput
+            && !_input.IsEmpty && _input[Position - 1] != (byte)'\n';
         UnexpectedSyntax? unexpected = null;
         if (TrackUnexpectedTokens)
         {
@@ -287,7 +301,11 @@ internal sealed class Tokenizer
                 unexpected = GetSyntheticNewlineSyntax();
         }
         RecordFailure(new ParserFailure(new SyntaxError("Expected a word after redirection operator.", Position),
-            ParserFailureKind.RedirectionOperand) { UnexpectedToken = unexpected });
+            ParserFailureKind.RedirectionOperand)
+        {
+            UnexpectedToken = unexpected,
+            UnexpectedEndOfInput = token.Kind == TokenKind.EndOfInput && Position == _input.Length && _spacingContinuedAtEndOfInput
+        });
     }
 
     internal void RecordFailure(ParserFailure failure)
@@ -301,7 +319,7 @@ internal sealed class Tokenizer
     internal void MarkCompoundArrayFailure()
     {
         if (_failure is { Kind: ParserFailureKind.Delimiter, UnclosedDelimiter: not null } missingCloser)
-            _failure = missingCloser with { Kind = ParserFailureKind.ArraySubstitutionDelimiter };
+            _failure = missingCloser with { Kind = ParserFailureKind.ArrayDelimiter };
         if ((_failure ?? QuotedEndOfInputFailure) is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
         {
             _failure = failure with { Kind = ParserFailureKind.ArrayQuotedSubstitutionForHeader };
@@ -324,6 +342,7 @@ internal sealed class Tokenizer
             {
                 UnclosedDelimiter = new UnclosedDelimiter(delimiter, start)
                 {
+                    AtOpeningDelimiter = true,
                     PayloadLine = _scanContext.LegacyOrigin == LegacySubstitutionOrigin.HereDocument ? GetLine(start) : 0
                 }
             });
@@ -719,6 +738,12 @@ internal sealed class Tokenizer
         {
             var beforeSpacing = Position;
             Position = ShellSourceCursor.SkipTokenSpacing(span, Position);
+            if (Position == span.Length - 1 && span[Position] == (byte)'\\'
+                && _scanContext.GetFinalBackslash(_input) == FinalBackslash.Continuation)
+            {
+                Position++;
+                _spacingContinuedAtEndOfInput = true;
+            }
             if (SkipCollectedHereDocuments())
                 continue;
             if (OmittedSeparators is { } edits && _nextOmittedSeparator < edits.Count
@@ -737,7 +762,8 @@ internal sealed class Tokenizer
                     if (AllowEofHereDocuments)
                     {
                         // A continued final header never reaches its here-document boundary.
-                        if (!IsCommandSubstitution || !EndsInLineContinuation(span))
+                        if (!IsCommandSubstitution || !EndsInLineContinuation(span)
+                            && !_spacingContinuedAtEndOfInput && !_continuedAtEndOfInput)
                             pending.TryReadBodies(this);
                     }
                     else
@@ -1143,13 +1169,13 @@ internal sealed class Tokenizer
     /// <summary>Consumes nested lookahead syntax without resetting its caller's structural allowance.</summary>
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
         ShellScanContext context, [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
-        => TryReadExpansionWord(content, syntax, outerQuote, context, default, out word, out error);
+        => TryReadExpansionWord(content, syntax, outerQuote, context, default, FinalBackslash.Invalid, out word, out error);
 
     internal static bool TryReadExpansionWord(ShellSource content, ExpansionWordSyntax syntax, ShellQuoteKind outerQuote,
-        ShellScanContext context, ConditionalParser.OperandSpelling spelling,
+        ShellScanContext context, ConditionalParser.OperandSpelling spelling, FinalBackslash finalBackslash,
         [NotNullWhen(true)] out Word? word, [NotNullWhen(false)] out SyntaxError? error)
     {
-        var tokenizer = new Tokenizer(content, 0, context) { _isExpansionOperand = true };
+        var tokenizer = new Tokenizer(content, 0, context) { _isExpansionOperand = true, _finalBackslash = finalBackslash };
         var parsed = tokenizer.ReadWord(content.AsSpan(), delimiterStart: content.Length, syntax, outerQuote, spelling);
         error = tokenizer.Error;
         word = error == null ? parsed : null;
@@ -1173,6 +1199,7 @@ internal sealed class Tokenizer
 
     private bool _retainArithmeticSubscripts;
     private bool _isExpansionOperand;
+    private FinalBackslash _finalBackslash;
 
     /// <summary>Reads one already-delimited word after generated punctuation changes its quote context.</summary>
     internal static Word ReadBraceExpandedWord(ShellSource content, MemoryCapacity memory)
@@ -1366,6 +1393,21 @@ internal sealed class Tokenizer
                 Position++;
                 if (Position >= span.Length)
                 {
+                    var finalBackslash = _isExpansionOperand ? _finalBackslash : _scanContext.GetFinalBackslash(_input);
+                    if (!quotedOperand && finalBackslash != FinalBackslash.Invalid)
+                    {
+                        _wordEndsWithUnframedBackslash = true;
+                        if (finalBackslash == FinalBackslash.Continuation)
+                            _continuedAtEndOfInput = true;
+                        else
+                        {
+                            FlushUnquoted();
+                            if (!TryReserveSyntax())
+                                return new Word([]);
+                            AddPart(CopyEscapedLiteral(Position - 1, 1));
+                        }
+                        break;
+                    }
                     if (braceExpanded)
                     {
                         unquoted.AppendSource(Position - 1, 1);

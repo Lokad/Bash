@@ -715,6 +715,9 @@ internal enum BracedParameterRecognition
     DoubleQuotedOnly,
 }
 
+/// <summary>How the reader presents a final unpaired, unquoted backslash.</summary>
+internal enum FinalBackslash { Invalid, Continuation, Literal }
+
 /// <summary>Owns recursion bounds and temporary lookahead parses for one source traversal.</summary>
 internal sealed class ShellScanContext
 {
@@ -762,6 +765,15 @@ internal sealed class ShellScanContext
     }
 
     internal bool CanReadAhead(ShellSource source) => !ScriptInput.IsEmpty && source.Bytes.Equals(ScriptInput.Bytes);
+
+    internal bool ReadsCommandString { get; init; }
+
+    internal FinalBackslash GetFinalBackslash(ShellSource source)
+    {
+        if (!CanReadAhead(source))
+            return FinalBackslash.Invalid;
+        return ReadsCommandString ? FinalBackslash.Literal : FinalBackslash.Continuation;
+    }
 
     // Capture tokenizers count relative to their bodies. Reader diagnostics use the enclosing script.
     internal int GetScriptDiagnosticLine(int offset) => _scriptDiagnosticLines.GetLine(ScriptInput, offset)

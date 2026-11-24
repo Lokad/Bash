@@ -4205,13 +4205,11 @@ public sealed partial class Evaluation : IFileTester
         if (descriptor.IsClosed)
             return;
         lineOffset += failure.CaptureLineOffset.GetValueOrDefault();
+        if (origin == SyntaxDiagnosticOrigin.Script)
+            origin = SyntaxDiagnosticOrigin.ScriptLine;
         if (failure.DoubleQuoted is { } doubleQuoted)
-        {
-            if (origin == SyntaxDiagnosticOrigin.Script)
-                origin = SyntaxDiagnosticOrigin.ScriptLine;
             await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.QuoteLine),
                 doubleQuoted ? MissingDoubleQuote : MissingSingleQuote).ConfigureAwait(false);
-        }
         await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.Diagnostic.ReasonLine),
             GetConditionalEndOfInputMessage(failure.Diagnostic.Error, failure.DoubleQuoted.HasValue)).ConfigureAwait(false);
         if (failure.Diagnostic.UnclosedGroupLines is { } groups)
@@ -4275,7 +4273,7 @@ public sealed partial class Evaluation : IFileTester
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
-        if (origin == SyntaxDiagnosticOrigin.Script && endOfInput.Delimiter != ')')
+        if (origin == SyntaxDiagnosticOrigin.Script && endOfInput.AtOpeningDelimiter)
             origin = SyntaxDiagnosticOrigin.ScriptLine;
         var prefix = new SyntaxDiagnosticPrefix(path, origin, line);
         var message = endOfInput.Delimiter switch

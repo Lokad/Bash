@@ -1347,7 +1347,7 @@ public static class Parser
             return false;
         }
         var tokenizer = CreateCompoundInitializerTokenizer(source, memory, trackDiagnostics: false);
-        items = ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput, declaration: false);
+        items = ReadCompoundArrayValues(tokenizer, openingOffset: null, declaration: false);
         error = tokenizer.Error ?? tokenizer.QuotedEndOfInputFailure?.Error;
         return error == null;
     }
@@ -1356,7 +1356,7 @@ public static class Parser
     internal static ParserFailure? ReadCompoundInitializerFailure(ShellSource source, MemoryCapacity memory, out int line)
     {
         var tokenizer = CreateCompoundInitializerTokenizer(source, memory, trackDiagnostics: true);
-        ReadCompoundArrayValues(tokenizer, TokenKind.EndOfInput, declaration: false);
+        ReadCompoundArrayValues(tokenizer, openingOffset: null, declaration: false);
         var failure = tokenizer.Failure;
         line = tokenizer.GetLine(failure?.UnexpectedToken?.ReadPosition ?? tokenizer.Position);
         return failure;
@@ -1369,8 +1369,9 @@ public static class Parser
             TrackUnexpectedTokens = trackDiagnostics
         };
 
-    private static IReadOnlyList<CompoundArrayItem> ReadCompoundArrayValues(Tokenizer tokenizer, TokenKind terminator, bool declaration)
+    private static IReadOnlyList<CompoundArrayItem> ReadCompoundArrayValues(Tokenizer tokenizer, int? openingOffset, bool declaration)
     {
+        var terminator = openingOffset.HasValue ? TokenKind.CloseParen : TokenKind.EndOfInput;
         List<CompoundArrayItem>? values = null;
         while (true)
         {
@@ -1382,6 +1383,15 @@ public static class Parser
             }
             if (token.Kind == terminator)
                 break;
+            if (token.Kind == TokenKind.EndOfInput && openingOffset is { } start)
+            {
+                tokenizer.RecordFailure(new ParserFailure(
+                    new SyntaxError("Unexpected token in array assignment.", tokenizer.Position), ParserFailureKind.ArrayDelimiter)
+                {
+                    UnclosedDelimiter = new UnclosedDelimiter(')', start) { AtOpeningDelimiter = true }
+                });
+                break;
+            }
             if (token.Kind == TokenKind.Newline)
                 continue;
             if (token.Kind is not (TokenKind.Word or TokenKind.OpenBrace or TokenKind.CloseBrace))
@@ -1563,7 +1573,7 @@ public static class Parser
                                 return null;
                             }
 
-                            var arrayValues = ReadCompoundArrayValues(tokenizer, TokenKind.CloseParen, declaration: !allowAssignments);
+                            var arrayValues = ReadCompoundArrayValues(tokenizer, opening.Source.Start.Value, declaration: !allowAssignments);
                             if (tokenizer.Error != null)
                                 return null;
                             if (tokenizer.IsAtWordBoundary())

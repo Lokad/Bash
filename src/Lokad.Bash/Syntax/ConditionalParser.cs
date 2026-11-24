@@ -28,6 +28,8 @@ internal sealed class ConditionalParser : IDisposable
     private ParserFailure? _failure;
     private int[]? _unclosedGroupLines;
     private bool _wordContinuedAtEndOfInput;
+    private bool _wordEndsWithUnframedBackslash;
+    private bool _finalBackslashContinuedAtBoundary;
     private bool _localReaderFailure;
 
     private ConditionalParser(ShellSource source, ShellScanContext context, Range? opening, Tokenizer? reader)
@@ -311,9 +313,11 @@ internal sealed class ConditionalParser : IDisposable
 
     private Word? ParseWord(Token token, ShellQuoteKind quote, ExpansionWordSyntax syntax, bool recordSpelling)
     {
+        var finalBackslash = _wordEndsWithUnframedBackslash && token.Offset + token.Source.Length == _source.Length
+            ? _context.GetFinalBackslash(_source) : FinalBackslash.Invalid;
         if (Tokenizer.TryReadExpansionWord(token.Source, syntax, quote, _context,
                 recordSpelling ? new OperandSpelling(this, token.Offset) : default,
-                out var word, out var error))
+                finalBackslash, out var word, out var error))
             return word;
         Fail(error.Message, token.Offset + error.Offset);
         return null;
@@ -389,6 +393,12 @@ internal sealed class ConditionalParser : IDisposable
                 Ignore(_position, next);
                 _position = next;
             }
+            else if (_position == span.Length - 1 && span[_position] == (byte)'\\'
+                && _context.GetFinalBackslash(_source) == FinalBackslash.Continuation)
+            {
+                _position++;
+                _finalBackslashContinuedAtBoundary = true;
+            }
             else
                 break;
         }
@@ -449,6 +459,7 @@ internal sealed class ConditionalParser : IDisposable
         var cursor = new ShellSourceCursor(_source, start, _context);
         var parentheses = 0;
         var quoteStart = 0;
+        var trimFinalBackslash = false;
         while (!cursor.IsAtEnd)
         {
             if (cursor.TrySkipReadAheadBodies())
@@ -474,6 +485,12 @@ internal sealed class ConditionalParser : IDisposable
                     IgnoreContinuations(preceding, cursor.Position);
                 if (!wasQuoted && cursor.IsQuoted)
                     quoteStart = cursor.Position - 1;
+                if (!wasQuoted && cursor.IsAtEnd && preceding == span.Length - 1 && span[preceding] == (byte)'\\')
+                {
+                    var finalBackslash = _context.GetFinalBackslash(_source);
+                    _wordEndsWithUnframedBackslash = finalBackslash != FinalBackslash.Invalid;
+                    trimFinalBackslash = finalBackslash == FinalBackslash.Continuation;
+                }
                 _wordContinuedAtEndOfInput |= !wasQuoted && cursor.IsAtEnd
                     && span[preceding..].SequenceEqual("\\\n"u8);
                 continue;
@@ -485,7 +502,7 @@ internal sealed class ConditionalParser : IDisposable
                 nested = new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Command,
                     new ParserFailure(new SyntaxError("Invalid expansion in conditional operand.", preceding), ParserFailureKind.Delimiter)
                     {
-                        UnclosedDelimiter = new UnclosedDelimiter('`', preceding)
+                        UnclosedDelimiter = new UnclosedDelimiter('`', preceding) { AtOpeningDelimiter = true }
                     });
             }
             switch (nested)
@@ -528,7 +545,8 @@ internal sealed class ConditionalParser : IDisposable
 
         // Regex-word reading can yield an empty operand before a shell metacharacter.
         // The next read uses conditional token rules and handles that character.
-        var word = _source.Slice(start, _position - start);
+        var wordEnd = trimFinalBackslash ? _position - 1 : _position;
+        var word = _source.Slice(start, wordEnd - start);
         var boundary = _position < span.Length && span[_position] is (byte)'<' or (byte)'>'
             && IsDescriptorNumber(word.AsSpan());
         return new(boundary ? TokenKind.DescriptorNumber : TokenKind.Word, word, start);
@@ -562,8 +580,13 @@ internal sealed class ConditionalParser : IDisposable
     private int GroupReaderPosition(Token opening) =>
         ShellSourceCursor.SkipLineContinuations(_source.AsSpan(), opening.Offset + opening.Source.Length);
 
-    private int GetEndLine() => _reader == null ? 0
-        : _reader.GetLine(_source.Length) + (_wordContinuedAtEndOfInput ? 1 : _reader.EndOfInputLineAdvance);
+    private int GetEndLine()
+    {
+        if (_reader == null)
+            return 0;
+        var advance = _wordContinuedAtEndOfInput ? 1 : _reader.EndOfInputLineAdvance;
+        return _reader.GetLine(_source.Length) + (_wordEndsWithUnframedBackslash ? 2 : advance);
+    }
 
     private void RecordUnclosedGroup(int depth, int offset)
     {
@@ -599,7 +622,7 @@ internal sealed class ConditionalParser : IDisposable
             && _reader != null)
         {
             var readLine = _reader.GetLine(delimiter.ReadPosition) + delimiter.LineAdvance;
-            var delimiterReasonLine = delimiter.Delimiter == ')' ? readLine : GetEndLine();
+            var delimiterReasonLine = delimiter.AtOpeningDelimiter ? GetEndLine() : readLine;
             if (error is ConditionalReaderError.MissingCloser or ConditionalReaderError.GroupClose)
                 delimiterReasonLine = _reader.GetLine(reasonPosition);
             _failure = failure with
@@ -625,7 +648,8 @@ internal sealed class ConditionalParser : IDisposable
 
         _localReaderFailure = true;
         if (token.Kind == TokenKind.End && (error is ConditionalReaderError.MissingCloser
-                or ConditionalReaderError.GroupClose or ConditionalReaderError.Term || _source.AsSpan()[^1] == (byte)'\n'))
+                or ConditionalReaderError.GroupClose or ConditionalReaderError.Term || _source.AsSpan()[^1] == (byte)'\n'
+                || _wordEndsWithUnframedBackslash || _finalBackslashContinuedAtBoundary))
         {
             var endLine = GetEndLine();
             var line = error is ConditionalReaderError.MissingCloser or ConditionalReaderError.GroupClose

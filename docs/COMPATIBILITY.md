@@ -485,6 +485,9 @@ Sourced and evaluated commands include their reader line. Anonymous streamed
 roots use the diagnostic body directly for reached tokens. The displayed line
 retains its original bytes, including CR. An incomplete compound command reports
 the reader line at unexpected end of input, including in an anonymous stream.
+A final unquoted backslash in a script file continues the last line, even
+without a physical LF. Command strings read by `source` and `eval` keep the
+final backslash as one literal byte.
 Legacy `$[expression]` uses the same arithmetic evaluation as `$((expression))`,
 with a single closing bracket outside nested brackets. Within a double-quoted
 word, an unescaped inner double quote at that level causes a substitution failure

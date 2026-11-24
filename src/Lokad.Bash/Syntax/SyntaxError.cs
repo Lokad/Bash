@@ -75,6 +75,7 @@ internal readonly record struct ConditionalEndOfInput(int EndLine, bool? DoubleQ
 internal sealed record UnclosedDelimiter(char Delimiter, int ReadPosition)
 {
     internal int LineAdvance { get; init; }
+    internal bool AtOpeningDelimiter { get; init; }
     /// <summary>Line in a here-document expansion payload when its reader reports the failure.</summary>
     internal int PayloadLine { get; init; }
     internal ConditionalReadDiagnostic? Conditional { get; init; }
@@ -94,5 +95,5 @@ internal enum ParserFailureKind
     SubstitutionForHeader,
     QuotedSubstitutionForHeader,
     ArrayQuotedSubstitutionForHeader,
-    ArraySubstitutionDelimiter,
+    ArrayDelimiter,
 }

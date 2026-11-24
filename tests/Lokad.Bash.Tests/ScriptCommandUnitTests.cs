@@ -48,6 +48,8 @@ public sealed class ScriptCommandUnitTests
     [Theory]
     [InlineData("printf discarded |&\\\n", "Expected command after pipeline operator.")]
     [InlineData("printf discarded &&", "Expected command after list operator.")]
+    [InlineData("printf discarded >\\", "Expected a word after redirection operator.")]
+    [InlineData("read -r word <<\\", "Expected a word after redirection operator.")]
     [InlineData("if true; then :\n", "Expected fi keyword.")]
     [InlineData("if true; then :", "Expected terminator before reserved word.")]
     [InlineData("while false; do :\n", "Expected done keyword.")]
@@ -68,6 +70,77 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("before", host.StandardOutput.TextContent);
         Assert.Equal("line 3: syntax error: unexpected end of file\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("printf '[%s]' word\\", "[word]")]
+    [InlineData("f(){ printf '%s' \"$#\"; }; f \\", "0")]
+    [InlineData("printf kept; \\", "kept")]
+    [InlineData("printf '[%s]' word\\\\\\", "[word\\]")]
+    [InlineData("printf '[%s]' \"`printf '%s' word\\\\`\"", "[word\\]")]
+    public async Task FinalFileContinuationPreservesCompletedWordsAndUnits(string script, string output)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, "printf '[%s]' word\\", "[word\\]")]
+    [InlineData(false, "printf '[%s]' \"word\"\\", "[word\\]")]
+    [InlineData(true, "f(){ printf '%s' \"$#\"; }; f \\", "1")]
+    [InlineData(false, "f(){ printf '%s' \"$#\"; }; f \\", "1")]
+    public async Task LoadedReaderKeepsTheFinalBackslashInItsArgument(bool source, string input, string output)
+    {
+        await using var host = new TestHost();
+        if (source)
+            host.AddFile("/input", input);
+        var invoke = source ? "source input" : "eval '" + input.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+        var result = await host.RunAsync(invoke, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task SourcedFinalRedirectionPassesLiteralBackslashToTheHost()
+    {
+        var memory = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        host.AddFile("/input", "printf written >out\\");
+
+        var result = await host.RunAsync("source input", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("written", host.ReadFile("/out\\"));
+        Assert.False(host.FileExists("/out"));
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ContinuedConditionalWordReportsOpeningAndReachedEofLines()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("printf prior\n[[ -n value\\", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("prior", host.StandardOutput.TextContent);
+        Assert.Equal("line 2: unexpected EOF while looking for `]]'\nline 4: syntax error: unexpected end of file\n",
+            host.StandardError.TextContent);
     }
 
     [Fact]
@@ -509,7 +582,8 @@ public sealed class ScriptCommandUnitTests
     [Theory]
     [InlineData("a=('open\n", '\'')]
     [InlineData("declare -a a=(\"open\n", '"')]
-    public async Task UnclosedQuoteInSourcedInitializerReportsAssignmentFailure(string unit, char quote)
+    [InlineData("a=(word\\", ')')]
+    public async Task UnclosedSourcedInitializerReportsAssignmentFailure(string unit, char delimiter)
     {
         var memory = new MemoryGovernor(256 * 1024);
         await using var host = new TestHost { MemoryBudget = memory };
@@ -519,7 +593,7 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("before:1:after", host.StandardOutput.TextContent);
-        Assert.Equal($"input: line 2: unexpected EOF while looking for matching `{quote}'\n", host.StandardError.TextContent);
+        Assert.Equal($"input: line 2: unexpected EOF while looking for matching `{delimiter}'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, memory.ReservedBytes);
     }

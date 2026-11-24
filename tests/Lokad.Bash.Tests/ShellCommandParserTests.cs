@@ -644,7 +644,6 @@ public class ShellCommandParserTests
     [InlineData("cat a &&; ls /")]
     [InlineData("cat a |")]
     [InlineData("( cat a }")]
-    [InlineData("cat a\\")]
     [InlineData("cat <<EOF\nmissing delimiter")]
     [InlineData("cat a; )")]
     [InlineData("; cat a")]
@@ -654,6 +653,22 @@ public class ShellCommandParserTests
     public void TryParseChain_MalformedSourceIsNotPartiallyRecognized(string source)
     {
         Assert.Null(ShellCommandParser.TryParseChain(source));
+    }
+
+    [Fact]
+    public void TryParseChain_KeepsTheSourceOfAnUnframedFinalContinuation()
+    {
+        const string source = "cat a\\";
+
+        var result = ShellCommandParser.TryParseChain(source);
+
+        Assert.NotNull(result);
+        var segment = Assert.Single(result);
+        Assert.Equal(source, segment.Text);
+        Assert.NotNull(segment.Stages);
+        var stage = Assert.Single(segment.Stages);
+        Assert.Equal("cat", stage.Name);
+        Assert.Equal(["a"], stage.Arguments);
     }
 
     [Theory]
