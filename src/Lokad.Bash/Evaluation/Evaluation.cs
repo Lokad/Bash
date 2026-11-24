@@ -1910,7 +1910,7 @@ public sealed partial class Evaluation : IFileTester
             }
             if (missingLocalScope)
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("can only be used in a function"))
+                await ReportDeclarationDiagnosticAsync([ShellValue.FromText("can only be used in a function")])
                     .ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), declarationNegated).ConfigureAwait(false);
             }
@@ -2072,7 +2072,7 @@ public sealed partial class Evaluation : IFileTester
                         && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
                     {
                         // Unlike a missing name, an attempted function assignment stops later attribute writes.
-                        await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("cannot use `-f' to make functions"))
+                        await ReportDeclarationDiagnosticAsync([ShellValue.FromText("cannot use `-f' to make functions")])
                             .ConfigureAwait(false);
                         return 1;
                     }
@@ -3005,8 +3005,12 @@ public sealed partial class Evaluation : IFileTester
                 if (options.Readonly) variables.SetReadonlyBinding(name);
             }
 
+            Task ReportDeclarationDiagnosticAsync(ReadOnlySpan<ShellValue> message) =>
+                WriteDiagnosticAsync([ShellValue.FromText(commandName)], message, _builtinDiagnostics,
+                    ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(declarationScope.Context));
+
             Task ReportDeclarationOperandAsync(ShellValue subject, string message) =>
-                ReportExpansionDiagnosticAsync([ShellValue.FromText(commandName)], [subject, ShellValue.FromText(": " + message)]);
+                ReportDeclarationDiagnosticAsync([subject, ShellValue.FromText(": " + message)]);
 
             Task DiagnoseAsync(BindingName subject, string message)
             {

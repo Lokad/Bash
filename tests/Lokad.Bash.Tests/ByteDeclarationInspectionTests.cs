@@ -18,10 +18,10 @@ public sealed class ByteDeclarationInspectionTests
     [InlineData("declare -A a=(['two words']=$'\\377\\r'); declare -p a; printf '%s' \"${a['two words']}\"", "6465636C617265202D4120613D285B2274776F20776F726473225D3D24275C3337375C722720290AFF0D", "")]
     [InlineData("x=$'\\377'; declare -n ref=x; declare -p ref x; printf '%s' \"$ref\"", "6465636C617265202D6E207265663D2278220A6465636C617265202D2D20783D24275C333737270AFF", "")]
     [InlineData("declare x; y=$'\\377'; z=; declare -p x y z; printf '<%s>' \"${x-unset}\" \"$y\" \"$z\"", "6465636C617265202D2D20780A6465636C617265202D2D20793D24275C333737270A6465636C617265202D2D207A3D22220A3C756E7365743E3CFF3E3C3E", "")]
-    [InlineData("x=$'\\376'; declare -p x=$'\\377' x; printf '%s:' \"$?\"; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFE", "6465636C6172653A20783DFF3A206E6F7420666F756E640A")]
-    [InlineData("x=$'\\376'; declare -p x+=$'\\377' x; printf '%s:' \"$?\"; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFE", "6465636C6172653A20782B3DFF3A206E6F7420666F756E640A")]
-    [InlineData("x=$'\\376'; declare -p $'\\377' x; printf '%s:' \"$?\"; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFE", "6465636C6172653A20FF3A206E6F7420666F756E640A")]
-    [InlineData("x=$'\\377'; f(){ local x=$'\\376'; local -p x=$'\\375' x; printf '%s:' \"$?\"; printf '%s' \"$x\"; }; f; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFEFF", "6C6F63616C3A20783DFD3A206E6F7420666F756E640A")]
+    [InlineData("x=$'\\376'; declare -p x=$'\\377' x; printf '%s:' \"$?\"; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFE", "6C696E6520313A206465636C6172653A20783DFF3A206E6F7420666F756E640A")]
+    [InlineData("x=$'\\376'; declare -p x+=$'\\377' x; printf '%s:' \"$?\"; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFE", "6C696E6520313A206465636C6172653A20782B3DFF3A206E6F7420666F756E640A")]
+    [InlineData("x=$'\\376'; declare -p $'\\377' x; printf '%s:' \"$?\"; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFE", "6C696E6520313A206465636C6172653A20FF3A206E6F7420666F756E640A")]
+    [InlineData("x=$'\\377'; f(){ local x=$'\\376'; local -p x=$'\\375' x; printf '%s:' \"$?\"; printf '%s' \"$x\"; }; f; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333736270A313AFEFF", "6C696E6520313A206C6F63616C3A20783DFD3A206E6F7420666F756E640A")]
     [InlineData("probe_x=$'\\377'; probe_x=$'\\376' declare -p probe_x; probe_x=$'\\375' declare -p | fixture-bindings; declare -p probe_x", "6465636C617265202D782070726F62655F783D24275C333736270A6465636C617265202D2D2070726F62655F783D24275C333737270A6465636C617265202D2D2070726F62655F783D24275C333737270A", "")]
     [InlineData("probe_x=$'\\377\\r\\n'; declare | fixture-bindings; printf '%s' \"$probe_x\"", "70726F62655F783D24275C3337375C725C6E270AFF0D0A", "")]
     [InlineData("declare -pa a=($'\\377' $'\\376'); printf '%s' \"${a[@]}\"", "6465636C617265202D6120613D285B305D3D24275C33373727205B315D3D24275C33373627290AFFFE", "")]
@@ -38,7 +38,7 @@ public sealed class ByteDeclarationInspectionTests
 
     [Theory]
     [InlineData("x='", "'; declare -p x; printf '%s' \"$x\"", "6465636C617265202D2D20783D24275C333737270AFF", "")]
-    [InlineData("x=ok; declare -p '", "' x; printf '%s' \"$?\"", "6465636C617265202D2D20783D226F6B220A31", "6465636C6172653A20FF3A206E6F7420666F756E640A")]
+    [InlineData("x=ok; declare -p '", "' x; printf '%s' \"$?\"", "6465636C617265202D2D20783D226F6B220A31", "6C696E6520313A206465636C6172653A20FF3A206E6F7420666F756E640A")]
     public async Task InspectionPreservesRawSourceBytes(
         string prefix, string suffix, string outputHex, string errorHex)
     {
@@ -244,7 +244,7 @@ public sealed class ByteDeclarationInspectionTests
         FileDescriptor[] descriptors = missing ? [FileDescriptor.StdErr, FileDescriptor.StdOut] : [FileDescriptor.StdOut];
         Assert.Equal(descriptors, host.Appends.Select(static append => append.Descriptor));
         if (missing)
-            Assert.Equal("declare: absent: not found\n"u8.ToArray(), host.Appends[0].Content);
+            Assert.Equal("line 1: declare: absent: not found\n"u8.ToArray(), host.Appends[0].Content);
         var lastRow = functions ? "declare -f present\n" : "declare -- present=\"value\"\n";
         Assert.Equal(Utf8Text.Encode(lastRow).ToArray(), host.Appends[^1].Content);
     }
@@ -367,8 +367,8 @@ public sealed class ByteDeclarationInspectionTests
     }
 
     [Theory]
-    [InlineData("declare -p", "declare: ", ": not found\n", 56 * 1024)]
-    [InlineData("declare -fp", "declare: ", ": not found\n", 32 * 1024)]
+    [InlineData("declare -p", "line 1: declare: ", ": not found\n", 56 * 1024)]
+    [InlineData("declare -fp", "line 1: declare: ", ": not found\n", 32 * 1024)]
     [InlineData("declare", "line 1: declare: `", "': not a valid identifier\n", 56 * 1024)]
     public async Task DeclarationDiagnosticFitsWithoutAnIntermediateOperandCopy(
         string command, string prefix, string suffix, int allowance)

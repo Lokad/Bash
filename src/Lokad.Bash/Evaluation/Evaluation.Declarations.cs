@@ -121,11 +121,14 @@ public sealed partial class Evaluation
                     {
                         if (compoundGlobal && scope.Context.FunctionContext != null)
                         {
-                            await ReportExpansionDiagnosticAsync(declaredName.ToValue(), ShellValue.FromText(ArrayConversionMessage(kind))).ConfigureAwait(false);
+                            await ReportCommandDiagnosticAsync([declaredName.ToValue()],
+                                [ShellValue.FromText(ArrayConversionMessage(kind))], scope).ConfigureAwait(false);
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;
                         }
-                        await ReportFatalExpansionAsync((compoundGlobal ? declaredName : name).ToValue(), ShellValue.FromText(ArrayConversionMessage(kind)), ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);
+                        await ReportFatalExpansionAsync([(compoundGlobal ? declaredName : name).ToValue()],
+                            [ShellValue.FromText(ArrayConversionMessage(kind))], ExpansionFailureKind.AssignmentTarget,
+                            GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                         break;
                     }
                     var unsetReference = targetVariables.TryGetNameref(name, out var referenceTarget) && referenceTarget.IsEmpty;
@@ -144,8 +147,8 @@ public sealed partial class Evaluation
                                 await ReportCommandDiagnosticAsync([function.FunctionName],
                                     [name.ToValue(), ShellValue.FromText(": readonly variable")], scope).ConfigureAwait(false);
                             else
-                                await ReportExpansionDiagnosticAsync(name.ToValue(), ShellValue.FromText(ArrayConversionMessage(kind)))
-                                    .ConfigureAwait(false);
+                                await ReportCommandDiagnosticAsync([name.ToValue()],
+                                    [ShellValue.FromText(ArrayConversionMessage(kind))], scope).ConfigureAwait(false);
                             // Dispatch still visits this name and later operands; a shadowing function can also run.
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;

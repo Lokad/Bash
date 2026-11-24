@@ -371,7 +371,7 @@ public sealed class ExecutionLifetimeTests
     [InlineData("trap 'echo borrowed >/out' EXIT; exit 7", "borrowed\n")]
     [InlineData("trap $'trap - EXIT\\necho borrowed >/out\\n' EXIT; exit 7", "borrowed\n")]
     [InlineData("a=borrowed; f(){ local -n a=a; echo \"$a\" >/out; }; f 2>/dev/null", "borrowed\n")]
-    [InlineData("declare -n a=a 2>/out", "declare: a: nameref variable self references not allowed\n")]
+    [InlineData("declare -n a=a 2>/out", "line 1: declare: a: nameref variable self references not allowed\n")]
     [InlineData("printf '%d' $'\\377' 2>/out", "line 1: printf: ÿ: invalid number\n")]
     public async Task CancellationRetainsBorrowedOutputUntilWriteAndCloseSettle(string source, string expected)
     {

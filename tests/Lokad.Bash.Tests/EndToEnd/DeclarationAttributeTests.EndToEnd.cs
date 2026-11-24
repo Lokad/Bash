@@ -20,7 +20,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("export -aA x=edited; declare -p x", "declare -ax x=([0]=\"edited\")\n", "")]
     [InlineData("x=(old spare); export -A x=edited later=next; printf '<%s>' \"$?\"; declare -p x later",
         "<1>declare -ax x=([0]=\"old\" [1]=\"spare\")\ndeclare -Ax later=([0]=\"next\" )\n",
-        "export: x: cannot convert indexed to associative array\n")]
+        "line 1: export: x: cannot convert indexed to associative array\n")]
     [InlineData("readonly x=old; export -a x=edited; printf '<%s>' \"$?\"; declare -p x",
         "<1>declare -rx x=\"old\"\n", "line 1: export: x: readonly variable\n")]
     [InlineData("x=outer; f(){ local x=inner; export -a x+=tail; declare -p x; }; f; declare -p x",
@@ -87,7 +87,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("f(){ :; }; readonly -f f\nreadonly -fn f\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -pF f",
         "[0:0]declare -fr f\n", "")]
     [InlineData("readonly -na missing\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p missing; :",
-        "[0:0]", "declare: missing: not found\n")]
+        "[0:0]", "line 2: declare: missing: not found\n")]
     [InlineData("a=(old); declare -n r='a[0]'\nreadonly -n r=new\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r a",
         "[0:0]declare -n r=\"a[0]\"\ndeclare -a a=([0]=\"new\")\n", "")]
     public async Task ReadonlyDashNAllowsAssignmentsAndPreservesAttributes(string script, string output, string error)
@@ -186,7 +186,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
             "declare -r 'a[1]=new'; declare -A a; printf '%s/<%s>' \"$?\" \"${a[*]}\"");
 
         Assert.Equal("1/<>", result.StdOut);
-        Assert.Equal("line 1: a: readonly variable\ndeclare: a: cannot convert indexed to associative array\n", result.StdErr);
+        Assert.Equal("line 1: a: readonly variable\nline 1: declare: a: cannot convert indexed to associative array\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -402,8 +402,8 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("declare -n r=s s; declare -an r", "0:<s>/<>", "")]
     [InlineData("declare -nr r=s; declare -n s; declare -an r=value", "1:<>/<>", "line 1: declare: r: readonly variable\n")]
     [InlineData("declare -nr r=s; declare -n s; declare -an r", "1:<>/<>", "line 1: declare: r: readonly variable\n")]
-    [InlineData("declare -n r=s s; declare -an r=(one two)", "1:<one two>/<>", "declare: r: reference variable cannot be an array\n")]
-    [InlineData("declare -nr r=s; declare -n s; declare -an r=(one two)", "1:<one two>/<>", "declare: r: reference variable cannot be an array\n")]
+    [InlineData("declare -n r=s s; declare -an r=(one two)", "1:<one two>/<>", "line 1: declare: r: reference variable cannot be an array\n")]
+    [InlineData("declare -nr r=s; declare -n s; declare -an r=(one two)", "1:<one two>/<>", "line 1: declare: r: reference variable cannot be an array\n")]
     [InlineData("declare -n r=s s; declare -a +n r=value", "0:<value>/<>", "")]
     public async Task ArrayAndNamerefFlagsRetainTheirDeclarationOrder(string declaration, string output, string error)
     {
@@ -498,7 +498,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("1:<" + expected + ">", result.StdOut);
-        Assert.Equal(command + ": r: reference variable cannot be an array\n", result.StdErr);
+        Assert.Equal("line 1: " + command + ": r: reference variable cannot be an array\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -507,9 +507,9 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("declare -n r=a; declare -an r=(one two); printf '%s:<%s>:<%s>' \"$?\" \"${a[*]}\" \"${r[*]}\"", "0:<one two>:<a>", "", 0)]
     [InlineData("declare -n r=a; declare -An r=([key]=one); printf '%s:<%s>:<%s>' \"$?\" \"${a[*]}\" \"${r[*]}\"", "0:<one>:<a>", "", 0)]
     [InlineData("declare -n r=a; declare -an r=value; printf '%s:<%s>:<%s>' \"$?\" \"${a[*]}\" \"${r[*]}\"", "0:<>:<value>", "", 0)]
-    [InlineData("f(){ local -n r=a; local -an r=(one two); printf '%s:<%s>:<%s>' \"$?\" \"${a[*]}\" \"${r[*]}\"; }; f", "1:<one two>:<>", "local: r: reference variable cannot be an array\n", 0)]
-    [InlineData("f(){ local -n r=a; local -an r=value; printf '%s:<%s>:<%s>' \"$?\" \"${a[*]}\" \"${r[*]}\"; }; f", "1:<>:<>", "local: r: reference variable cannot be an array\n", 0)]
-    [InlineData("f(){ local -an r; printf '%s:<%s>' \"$?\" \"${r[*]}\"; }; f", "1:<>", "local: r: reference variable cannot be an array\n", 0)]
+    [InlineData("f(){ local -n r=a; local -an r=(one two); printf '%s:<%s>:<%s>' \"$?\" \"${a[*]}\" \"${r[*]}\"; }; f", "1:<one two>:<>", "line 1: local: r: reference variable cannot be an array\n", 0)]
+    [InlineData("f(){ local -n r=a; local -an r=value; printf '%s:<%s>:<%s>' \"$?\" \"${a[*]}\" \"${r[*]}\"; }; f", "1:<>:<>", "line 1: local: r: reference variable cannot be an array\n", 0)]
+    [InlineData("f(){ local -an r; printf '%s:<%s>' \"$?\" \"${r[*]}\"; }; f", "1:<>", "line 1: local: r: reference variable cannot be an array\n", 0)]
     [InlineData("declare -n r; declare -a r=(one two); printf '%s:<%s>' \"${#r[@]}\" \"${r[*]}\"", "2:<one two>", "", 0)]
     [InlineData("declare -n r; declare -A r=([key]=value); printf '%s:<%s>' \"${#r[@]}\" \"${r[key]}\"", "1:<value>", "", 0)]
     [InlineData("declare -n r; declare -a r+=(one two); printf '%s:<%s>' \"${#r[@]}\" \"${r[*]}\"", "2:<one two>", "", 0)]
@@ -520,7 +520,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("readonly x=old; declare +r x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<1>:<old>\n", "line 1: declare: x: readonly variable\n", 0)]
     [InlineData("declare +r x=old; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<old>\n", "", 0)]
     [InlineData("declare -r +r x=old; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<old>\n", "", 0)]
-    [InlineData("x=(old); declare +a x; printf '<%s>:<%s>\\n' \"$?\" \"${x[0]}\"", "<1>:<old>\n", "declare: x: cannot destroy array variables in this way\n", 0)]
+    [InlineData("x=(old); declare +a x; printf '<%s>:<%s>\\n' \"$?\" \"${x[0]}\"", "<1>:<old>\n", "line 1: declare: x: cannot destroy array variables in this way\n", 0)]
     [InlineData("declare +a x=old; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<old>\n", "", 0)]
     [InlineData("target=value; ref=target; declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<0>:<value>\n", "", 0)]
     [InlineData("target=value; declare -n ref=target; declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<0>:<value>\n", "", 0)]
@@ -530,7 +530,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("declare -n ref=''; printf '<%s>:<%s>\\n' \"$?\" \"${ref+set}\"", "<1>:<>\n", "line 1: declare: `': not a valid identifier\n", 0)]
     [InlineData("ref='bad name'; declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<1>:<bad name>\n", "line 1: declare: `bad name': invalid variable name for name reference\n", 0)]
     [InlineData("declare -n ref='bad name'; printf '<%s>:<%s>\\n' \"$?\" \"${ref+set}\"", "<1>:<>\n", "line 1: declare: `bad name': invalid variable name for name reference\n", 0)]
-    [InlineData("ref=(target); declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"${ref[0]}\"", "<1>:<target>\n", "declare: ref: reference variable cannot be an array\n", 0)]
+    [InlineData("ref=(target); declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"${ref[0]}\"", "<1>:<target>\n", "line 1: declare: ref: reference variable cannot be an array\n", 0)]
     [InlineData("readonly target=value; ref=target; declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<0>:<value>\n", "", 0)]
     [InlineData("readonly target=value; declare -n ref=target; declare -n ref; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<0>:<value>\n", "", 0)]
     [InlineData("readonly first=one; second=two; declare -n ref=first; declare -n ref=second; printf '<%s>:<%s>\\n' \"$?\" \"$ref\"", "<0>:<two>\n", "", 0)]
@@ -546,7 +546,7 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("x=old; declare -A x+=([key]=new); printf '<%s>:<%s>:<%s>:<%s>\\n' \"$?\" \"${x[0]-unset}\" \"${x[key]}\" \"${#x[@]}\"", "<0>:<old>:<new>:<2>\n", "", 0)]
     [InlineData("x=old; declare -A x=([key]=new); printf '<%s>:<%s>:<%s>:<%s>\\n' \"$?\" \"${x[0]-unset}\" \"${x[key]}\" \"${#x[@]}\"", "<0>:<unset>:<new>:<1>\n", "", 0)]
     [InlineData("readonly x=old; declare -A x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<old>\n", "", 0)]
-    [InlineData("declare +Z x=value; printf '<%s>:<%s>\\n' \"$?\" \"${x+set}\"", "<2>:<>\n", "declare: +Z: invalid option\n" + EvaluationTestHelper.DeclareUsage, 0)]
+    [InlineData("declare +Z x=value; printf '<%s>:<%s>\\n' \"$?\" \"${x+set}\"", "<2>:<>\n", "line 1: declare: +Z: invalid option\n" + EvaluationTestHelper.DeclareUsage, 0)]
     [InlineData("export x=outer; x=temp export -n x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<outer>\n", "", 0)]
     [InlineData("export x=outer; x=temp declare +x x; printf '<%s>:<%s>\\n' \"$?\" \"$x\"", "<0>:<outer>\n", "", 0)]
     [InlineData("export x=outer; f() { export -n x; }; x=temp f; printf '<%s>\\n' \"$x\"", "<outer>\n", "", 0)]

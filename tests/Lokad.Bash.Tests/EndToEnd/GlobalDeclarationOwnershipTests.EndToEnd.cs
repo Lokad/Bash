@@ -68,7 +68,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("x=original; f(){ local x=hidden; local -gp x; }; f; declare -p x",
         "declare -- x=\"hidden\"\ndeclare -- x=\"original\"\n", "")]
     [InlineData("x=original; f(){ local -gp x; printf '<%s>' \"$?\"; }; f",
-        "<1>", "local: x: not found\n")]
+        "<1>", "line 1: local: x: not found\n")]
     [InlineData("x=original; f(){ local x=hidden; local -g; }; f",
         "declare -- x=\"hidden\"\n", "")]
     [InlineData("x=original; f(){ local +g x=edited; printf '<%s>' \"$x\"; }; f; declare -p x",
@@ -82,7 +82,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("x=original; f(){ local x=hidden; command local -g x=edited; }; f; declare -p x",
         "declare -- x=\"edited\"\n", "")]
     [InlineData("x=original; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"",
-        "<1><original>", "local: can only be used in a function\n")]
+        "<1><original>", "line 1: local: can only be used in a function\n")]
     [InlineData("readonly x=original; f(){ local x=hidden; local -g x=edited; printf '<%s><%s>' \"$?\" \"$x\"; }; f; declare -p x",
         "<1><original>declare -r x=\"original\"\n", "line 1: local: x: readonly variable\nline 1: local: x: readonly variable\n")]
     public async Task LocalGlobalUsesGlobalWritesAndKeepsLocalInspection(
@@ -470,22 +470,22 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("x=global; f(){ local x=local; declare -g x=changed; printf 'inside=%s/' \"$x\"; }; x=temp eval 'f; printf \"temporary=%s/\" \"$x\"'; printf 'after=%s' \"$x\"", "inside=local/temporary=temp/after=changed", "", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local x=local; declare -ga r=(one two); printf '<%s>/' \"${x[*]}\"; }; f; printf '<%s>' \"${x[*]}\"", "<one two>/<global>", "", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local x=local; declare -g r=(one two); printf '<%s>/' \"${x[*]}\"; }; f; printf '<%s>' \"${x[*]}\"", "<one two>/<global>", "", 0)]
-    [InlineData("declare -A x=([key]=global); declare -n r=x; f(){ local x=local; declare -ga r=(one two); printf '%s:<%s>' \"$?\" \"$x\"; }; f", "1:<local>", "r: cannot convert associative to indexed array\ndeclare: r: cannot convert associative to indexed array\n", 0)]
-    [InlineData("x=(global); declare -n r=x; f(){ local x=local; declare -gA r=(one two); printf '%s:<%s>' \"$?\" \"$x\"; }; f", "1:<local>", "r: cannot convert indexed to associative array\ndeclare: r: cannot convert indexed to associative array\n", 0)]
+    [InlineData("declare -A x=([key]=global); declare -n r=x; f(){ local x=local; declare -ga r=(one two); printf '%s:<%s>' \"$?\" \"$x\"; }; f", "1:<local>", "line 1: r: cannot convert associative to indexed array\nline 1: declare: r: cannot convert associative to indexed array\n", 0)]
+    [InlineData("x=(global); declare -n r=x; f(){ local x=local; declare -gA r=(one two); printf '%s:<%s>' \"$?\" \"$x\"; }; f", "1:<local>", "line 1: r: cannot convert indexed to associative array\nline 1: declare: r: cannot convert indexed to associative array\n", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local -a x=(local); declare -gA r=(one two); printf '<%s>:<%s>/' \"${!x[@]}\" \"${x[*]}\"; }; f; printf '<%s>' \"$x\"", "<one>:<two>/<global>", "", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local -A x=([key]=local); declare -ga r=(one two); printf '<%s>' \"${x[@]}\"; }; f; printf '/<%s>' \"$x\"", "<'one'><'two'>/<global>", "", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local -A x=([key]=local); declare -g r=('two words' '' \"q'uote\"); printf '<%s>' \"${x[@]}\"; }; f", "<'two words'><''><'q'\\''uote'>", "", 0)]
     [InlineData("x=global; declare -n r=x; f(){ local -A x=([key]=local); declare -ga r=([1]=one); printf after; }; f", "", "line 1: '1': syntax error: operand expected (error token is \"'1'\")\n", 1)]
     [InlineData("declare -A x=([old]=prior); declare -n r=x; declare -g r=(one two); printf '<%s>:<%s>' \"${!x[*]}\" \"${x[*]}\"", "<one>:<two>", "", 0)]
-    [InlineData("declare -A x=([old]=prior); declare -n r=x; declare -ga r=(one two); printf after", "", "r: cannot convert associative to indexed array\n", 1)]
+    [InlineData("declare -A x=([old]=prior); declare -n r=x; declare -ga r=(one two); printf after", "", "line 1: r: cannot convert associative to indexed array\n", 1)]
     [InlineData("declare -n r=s s; f(){ local r=local; declare -ga r=(one two); printf '<%s>/' \"$r\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<local>/<one two>/<>", "", 0)]
     [InlineData("declare -nr s; declare -n r=s; f(){ local r=local; declare -gA r=([key]=value); }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<value>/<>", "", 0)]
     [InlineData("declare -n r=s s; f(){ local r=local; declare -ga r+=value; printf '<%s>/' \"$r\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<localvalue>/<>/<>", "", 0)]
     [InlineData("declare -n r=s s; f(){ local r=local; declare -gA r=value; printf '<%s>/' \"$r\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<local>/<value>/<>", "", 0)]
     [InlineData("declare -n r=s s; f(){ local s=local; declare -gA r=value; printf '<%s>/' \"$s\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<value>/<>/<>", "", 0)]
     [InlineData("declare -n r=s s; f(){ local -n r; declare -ga r=value; printf 'status=%s/' \"$?\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "status=0/<>/<>", "declare: `': not a valid identifier\n", 0)]
-    [InlineData("declare -A a=([key]=old); f(){ local a=inner; declare -ga a=(new); printf 'status=%s:<%s>/' \"$?\" \"$a\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1:<inner>/<old>", "a: cannot convert associative to indexed array\ndeclare: a: cannot convert associative to indexed array\n", 0)]
-    [InlineData("declare -A a=([key]=old); f(){ declare -ga a=(new); printf 'status=%s/' \"$?\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1/<old>", "a: cannot convert associative to indexed array\ndeclare: a: cannot convert associative to indexed array\n", 0)]
+    [InlineData("declare -A a=([key]=old); f(){ local a=inner; declare -ga a=(new); printf 'status=%s:<%s>/' \"$?\" \"$a\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1:<inner>/<old>", "line 1: a: cannot convert associative to indexed array\nline 1: declare: a: cannot convert associative to indexed array\n", 0)]
+    [InlineData("declare -A a=([key]=old); f(){ declare -ga a=(new); printf 'status=%s/' \"$?\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1/<old>", "line 1: a: cannot convert associative to indexed array\nline 1: declare: a: cannot convert associative to indexed array\n", 0)]
     public async Task Evaluation_GlobalDeclarations_SelectOwnersWithoutLeakingAcrossScopes(
         string script, string expectedOutput, string expectedError, int expectedExitCode)
     {

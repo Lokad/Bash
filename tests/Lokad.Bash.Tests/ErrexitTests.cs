@@ -349,7 +349,7 @@ public sealed class ErrexitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("local -\ndeclare -- value=\"kept\"\ng=1;declare -- -\ndeclare -- -\noff", host.StandardOutput.TextContent);
-        Assert.Equal("local: -: not found\n", host.StandardError.TextContent);
+        Assert.Equal("line 2: local: -: not found\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 

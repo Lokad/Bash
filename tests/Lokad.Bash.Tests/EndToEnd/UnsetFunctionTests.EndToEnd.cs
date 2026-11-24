@@ -218,7 +218,7 @@ public sealed class UnsetFunctionTestsEndToEnd
     [InlineData("f(){ :; }; export -f f; unset -f f; f(){ printf new; }; declare -Fp f; f", "declare -f f\nnew", "", 0)]
     [InlineData("f(){ :; }; n=0; unset -f \"$((n+=1))\" f \"$((n+=1))\"; printf 'n=%s status=%s\\n' \"$n\" \"$?\"; declare -F", "n=2 status=0\n", "", 0)]
     [InlineData("f(){ :; }; unset -n f; declare -F; printf 'status=%s\\n' \"$?\"", "declare -f f\nstatus=0\n", "", 0)]
-    [InlineData("f(){ :; }; target=value; declare -n f=target; unset -n f; declare -F; declare -p target; declare -p f", "declare -f f\ndeclare -- target=\"value\"\n", "declare: f: not found\n", 1)]
+    [InlineData("f(){ :; }; target=value; declare -n f=target; unset -n f; declare -F; declare -p target; declare -p f", "declare -f f\ndeclare -- target=\"value\"\n", "line 1: declare: f: not found\n", 1)]
     [InlineData("f(){ readonly -f f; unset -f f; printf finish; }; f; declare -Fp f", "finishdeclare -fr f\n", "line 1: unset: f: cannot unset: readonly function\n", 0)]
     [InlineData("f(){ :; }; eval 'unset -f f'; declare -F", "", "", 0)]
     [InlineData("function if { :; }; unset -f if; declare -F", "", "", 0)]

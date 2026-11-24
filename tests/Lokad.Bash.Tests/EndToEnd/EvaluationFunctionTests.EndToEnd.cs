@@ -516,7 +516,7 @@ public sealed class EvaluationFunctionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("local: can only be used in a function\n", result.StdErr);
+        Assert.Equal("line 1: local: can only be used in a function\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

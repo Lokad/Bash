@@ -119,7 +119,7 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
     [InlineData("""readonly x=outer; f(){ local -I x; printf '<%s>' "$?"; }; f; declare -p x""",
         "<1>declare -r x=\"outer\"\n", "line 1: local: x: readonly variable\n")]
     [InlineData("""declare -A a=([k]=x); f(){ local -Ia a; printf '<%s>' "$?"; }; f; declare -p a""",
-        "<1>declare -A a=([k]=\"x\" )\n", "local: a: cannot convert associative to indexed array\n")]
+        "<1>declare -A a=([k]=\"x\" )\n", "line 1: local: a: cannot convert associative to indexed array\n")]
     [InlineData("""getopts ab x -ab; f(){ local -I OPTIND; getopts cd y -cd; printf '<%s:%s>' "$y" "$OPTIND"; }; f; getopts ab x -ab; printf '<%s:%s>' "$x" "$OPTIND" """,
         "<c:1><b:2>", "")]
     public async Task InheritedLocalsSeparateCallerAndCalleeBindings(string script, string expected, string diagnostics)

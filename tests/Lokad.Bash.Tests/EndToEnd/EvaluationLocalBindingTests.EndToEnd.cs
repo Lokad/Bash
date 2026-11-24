@@ -125,7 +125,7 @@ public sealed class EvaluationLocalBindingTestsEndToEnd
     [InlineData("x=outer; f(){ x=before; declare -n x='bad target'; printf '%s' \"$?\"; }; f; printf '/%s' \"$x\"", "1/before", "line 1: declare: `bad target': invalid variable name for name reference\n")]
     [InlineData("f(){ declare -n r; local r=; printf '%s/' \"$?\"; local r=target; target=hello; printf '%s' \"$r\"; }; f", "1/hello", "line 1: local: `': invalid variable name for name reference\n")]
     [InlineData("x=outer; f(){ x='bad target' declare -n x; printf '%s/' \"$?\"; x=after; }; f; printf '%s' \"$x\"", "1/after", "line 1: declare: `bad target': invalid variable name for name reference\n")]
-    [InlineData("f(){ declare -a a; a[0]=one; declare -A a; printf '%s/%s' \"$?\" \"${a[0]}\"; }; f", "1/one", "declare: a: cannot convert indexed to associative array\n")]
+    [InlineData("f(){ declare -a a; a[0]=one; declare -A a; printf '%s/%s' \"$?\" \"${a[0]}\"; }; f", "1/one", "line 1: declare: a: cannot convert indexed to associative array\n")]
     [InlineData("f(){ declare -a a; a[0]=first; declare 'a[@]=next'; printf '%s/<%s>' \"$?\" \"${a[@]}\"; }; f", "1/<first>", "line 1: a[@]: bad array subscript\n")]
     public async Task FailedDeclarations_PreserveValues(string script, string expected, string expectedError)
     {

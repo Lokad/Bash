@@ -130,9 +130,9 @@ public sealed class EvaluationHelpTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("local -q", "local: can only be used in a function\n", 1)]
-    [InlineData("readonly -fq --help", "readonly: -q: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\n", 2)]
-    [InlineData("readonly --unknown", "readonly: --: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\n", 2)]
+    [InlineData("local -q", "line 1: local: can only be used in a function\n", 1)]
+    [InlineData("readonly -fq --help", "line 1: readonly: -q: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\n", 2)]
+    [InlineData("readonly --unknown", "line 1: readonly: --: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\n", 2)]
     [InlineData("readonly -- --help", "line 1: readonly: `--help': not a valid identifier\n", 1)]
     [InlineData("readonly --help >&-", "", 2)]
     public async Task DeclarationOptionFailuresPreserveTheirStatusAndDescriptor(string source, string error, int status)
