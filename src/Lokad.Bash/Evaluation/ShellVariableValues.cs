@@ -92,8 +92,11 @@ internal sealed class IndexedArray
 
     internal long EstimatedMemoryBytes => (long)_entryCapacity * ElementMemoryBytes + _valueBytes;
 
-    /// <summary>Creates an empty array with optional capacity for already admitted entries.</summary>
-    public IndexedArray(bool isInitialized, int capacity = 0)
+    /// <summary>Creates an empty array, retaining whether it has received an assignment.</summary>
+    public IndexedArray(bool isInitialized) : this(isInitialized, capacity: 0) { }
+
+    /// <summary>Creates an empty array with capacity for already admitted entries.</summary>
+    internal IndexedArray(bool isInitialized, int capacity)
     {
         _elements = new(capacity);
         _positions = [];
