@@ -31,6 +31,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
     private readonly Dictionary<FileDescriptor, OpenFileState> _openFiles = new();
     /// <summary> Stores output buffers for descriptors written via WriteAsync. </summary>
     private readonly Dictionary<FileDescriptor, ByteMemoryBuilder> _outputs = new();
+    private readonly Lock _outputLock = new();
     /// <summary> Stores read-open failures keyed by absolute path. </summary>
     private readonly Dictionary<string, OperationError> _readOpenErrors = new(StringComparer.Ordinal);
     /// <summary> Stores the stdin read state when configured. </summary>
@@ -44,7 +45,11 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public int OpenFileCount => _openFiles.Count;
 
-    public void ResetOutput() => _outputs.Clear();
+    public void ResetOutput()
+    {
+        lock (_outputLock)
+            _outputs.Clear();
+    }
 
     public bool PreparedReadsAreBuffered { get; init; } = true;
 
@@ -135,12 +140,8 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public byte[] GetOutputBytes(FileDescriptor descriptor)
     {
-        if (!_outputs.TryGetValue(descriptor, out var bytes))
-        {
-            return [];
-        }
-
-        return bytes.ToMemory().ToArray();
+        lock (_outputLock)
+            return _outputs.TryGetValue(descriptor, out var bytes) ? bytes.ToMemory().ToArray() : [];
     }
 
     public byte[] ReadFileBytes(string path)
@@ -191,12 +192,10 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public string GetOutput(FileDescriptor descriptor)
     {
-        if (!_outputs.TryGetValue(descriptor, out var bytes))
-        {
-            return string.Empty;
-        }
-
-        return Encoding.UTF8.GetString(bytes.ToMemory().Span);
+        lock (_outputLock)
+            return _outputs.TryGetValue(descriptor, out var bytes)
+                ? Encoding.UTF8.GetString(bytes.ToMemory().Span)
+                : string.Empty;
     }
 
     public string ReadFile(string path)
@@ -257,13 +256,16 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
                 : DescriptorWriteResult.Failure(new OperationError("Write failed\n")));
         }
 
-        if (!_outputs.TryGetValue(fileDescriptor, out var bytes))
+        lock (_outputLock)
         {
-            bytes = ByteMemoryBuilder.CreateUnaccounted(256);
-            _outputs[fileDescriptor] = bytes;
-        }
+            if (!_outputs.TryGetValue(fileDescriptor, out var bytes))
+            {
+                bytes = ByteMemoryBuilder.CreateUnaccounted(256);
+                _outputs[fileDescriptor] = bytes;
+            }
 
-        bytes.Append(content);
+            bytes.Append(content);
+        }
         return ValueTask.FromResult(success);
     }
 

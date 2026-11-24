@@ -139,4 +139,47 @@ public sealed class MockFileSystemWriteTests
                 Assert.True((await host.WriteAsync(descriptor, bytes, CancellationToken.None)).CanAcceptMore);
         }
     }
+
+    [Fact]
+    public async Task ConcurrentOutputWritesPreserveEachDescriptorAndRecord()
+    {
+        await using var host = new MockFileSystem();
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const int writesPerProducer = 2_000;
+        var writers = Task.WhenAll(
+            WriteRecordsAsync(FileDescriptor.StdOut, (byte)'a'),
+            WriteRecordsAsync(FileDescriptor.StdOut, (byte)'b'),
+            WriteRecordsAsync(FileDescriptor.StdErr, (byte)'c'),
+            WriteRecordsAsync(FileDescriptor.StdErr, (byte)'d'));
+        start.SetResult();
+        await writers.WaitAsync(TimeSpan.FromSeconds(10));
+
+        AssertRecords(FileDescriptor.StdOut, (byte)'a', (byte)'b');
+        AssertRecords(FileDescriptor.StdErr, (byte)'c', (byte)'d');
+
+        async Task WriteRecordsAsync(FileDescriptor descriptor, byte producer)
+        {
+            await start.Task.ConfigureAwait(false);
+            byte[] record = [producer, (byte)'\n'];
+            for (var index = 0; index < writesPerProducer; index++)
+                Assert.True((await host.WriteAsync(descriptor, record, CancellationToken.None)).CanAcceptMore);
+        }
+
+        void AssertRecords(FileDescriptor descriptor, byte first, byte second)
+        {
+            var output = host.GetOutputBytes(descriptor);
+            Assert.Equal(4 * writesPerProducer, output.Length);
+            var firstCount = 0;
+            var secondCount = 0;
+            for (var index = 0; index < output.Length; index += 2)
+            {
+                Assert.Equal((byte)'\n', output[index + 1]);
+                if (output[index] == first) firstCount++;
+                if (output[index] == second) secondCount++;
+            }
+
+            Assert.Equal(writesPerProducer, firstCount);
+            Assert.Equal(writesPerProducer, secondCount);
+        }
+    }
 }
