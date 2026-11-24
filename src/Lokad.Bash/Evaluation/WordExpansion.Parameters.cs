@@ -1451,15 +1451,15 @@ internal static partial class WordExpansion
                     if (!FunctionDefinitionFormatter.TryAppendSourceWithCaptures(spelling, lengthScan, rendered,
                             scope.Effects.Memory.Budget, cancellationToken))
                         throw new ByteMemoryBuilder.LimitExceededException();
-                    await scope.Effects.ReportFatalExpansionAsync(ShellValue.FromBytes(rendered.ToMemory()), detail,
+                    await scope.Effects.ReportParameterFatalExpansionAsync(ShellValue.FromBytes(rendered.ToMemory()), detail, scope,
                             ExpansionFailureKind.Arithmetic).ConfigureAwait(false);
                     return;
                 }
-                await scope.Effects.ReportFatalExpansionAsync(spelling.ToValue(), detail, ExpansionFailureKind.Arithmetic)
+                await scope.Effects.ReportParameterFatalExpansionAsync(spelling.ToValue(), detail, scope, ExpansionFailureKind.Arithmetic)
                     .ConfigureAwait(false);
             }
 
-            Task ReportUnclosedOffsetAsync(ShellValue spelling) => scope.Effects.ReportUnitExpansionFailureAsync(
+            Task ReportUnclosedOffsetAsync(ShellValue spelling) => scope.Effects.ReportParameterExpansionFailureAsync(
                 [ShellValue.FromText("bad substitution")], [ShellValue.FromText("no closing `)' in "), spelling],
                 scope, ExpansionFailureKind.WordSyntax);
 

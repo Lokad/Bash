@@ -3709,10 +3709,8 @@ public sealed partial class Evaluation : IFileTester
         }
         else if (length)
             SetFatalExpansionError(ExpansionFailureKind.Arithmetic);
-        var prefix = scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument
-            ? GetHereDocumentParameterDiagnosticPrefix(scope)
-            : GetCommandDiagnosticPrefix(scope);
-        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
+        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+            GetParameterExpansionDiagnosticPrefix(scope));
     }
 
     /// <summary>Uses the assignment's lexical spelling while retaining its original source location.</summary>
@@ -3780,14 +3778,18 @@ public sealed partial class Evaluation : IFileTester
         ReportUnitExpansionFailureAsync(subject, message, scope, kind,
             kind is ExpansionFailureKind.Arithmetic or ExpansionFailureKind.ArrayIndex ? GetBuiltinDiagnosticPrefix(scope.Context) : default);
 
-    internal Task ReportParameterExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
-        ScopedEvaluation scope, ExpansionFailureKind kind)
-    {
-        var prefix = scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument
+    private static SyntaxDiagnosticPrefix GetParameterExpansionDiagnosticPrefix(ScopedEvaluation scope) =>
+        scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument
             ? GetHereDocumentParameterDiagnosticPrefix(scope)
             : GetCommandDiagnosticPrefix(scope);
-        return ReportUnitExpansionFailureAsync(subject, message, scope, kind, prefix);
-    }
+
+    internal Task ReportParameterExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
+        ScopedEvaluation scope, ExpansionFailureKind kind) =>
+        ReportUnitExpansionFailureAsync(subject, message, scope, kind, GetParameterExpansionDiagnosticPrefix(scope));
+
+    internal Task ReportParameterFatalExpansionAsync(ShellValue subject, ShellValue message, ScopedEvaluation scope,
+        ExpansionFailureKind kind) =>
+        ReportFatalExpansionAsync([subject], [message], kind, GetParameterExpansionDiagnosticPrefix(scope));
 
     private Task ReportUnitExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
         ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)

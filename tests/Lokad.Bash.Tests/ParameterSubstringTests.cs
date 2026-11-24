@@ -143,12 +143,12 @@ public sealed class ParameterSubstringTests
     [InlineData("x=abc; eval 'printf \"${x:}\"'; printf 'after:%s' \"$?\"", "after:1", "${x:}: bad substitution\n", 0)]
     [InlineData("a=([2]=two [5]=five [9]=nine); printf '<%s>\\n' \"${a[@]:3:1}\" \"${a[@]:3:2}\" \"${a[@]:6}\" \"${a[@]:0:2}\"\n", "<five>\n<five>\n<nine>\n<nine>\n<two>\n<five>\n", "", 0)]
     [InlineData("a=([2]=two [5]=five [9]=nine); printf '<%s>\\n' \"${a[@]: -1}\" \"${a[@]: -5:2}\" \"${a[@]: -11:2}\"\n", "<nine>\n<five>\n<nine>\n", "", 0)]
-    [InlineData("a=([2]=two [5]=five); printf '<%s>\\n' \"${a[@]:2:-1}\"; printf after\n", "", "-1: substring expression < 0\n", 1)]
+    [InlineData("a=([2]=two [5]=five); printf '<%s>\\n' \"${a[@]:2:-1}\"; printf after\n", "", "line 1: -1: substring expression < 0\n", 1)]
     [InlineData("unset a; i=0; printf '<%s>\\n' \"${a[@]:i++:i++}\" \"$i\"; a=(); printf '<%s>\\n' \"${a[@]:i++:i++}\" \"$i\"\n", "<0>\n<0>\n", "", 0)]
     [InlineData("a=([2]=two [5]=five); i=0; printf '<%s>\\n' \"${a[@]:6:i++}\" \"$i\" \"${a[@]:99:i++}\" \"$i\" \"${a[@]: -99:i++}\" \"$i\"\n", "<0>\n<0>\n<0>\n", "", 0)]
     [InlineData("a=([2]=two [5]=five); printf '<%s>\\n' \"${a[@]:6:-1}\"; printf after\n", "<>\nafter", "", 0)]
     [InlineData("set -- one two three; printf '<%s>\\n' \"${@:1:2}\" \"${@:2}\" \"${@:4}\"\n", "<one>\n<two>\n<two>\n<three>\n", "", 0)]
-    [InlineData("set -- one two; printf '<%s>\\n' \"${@:1:-1}\"; printf after\n", "", "-1: substring expression < 0\n", 1)]
+    [InlineData("set -- one two; printf '<%s>\\n' \"${@:1:-1}\"; printf after\n", "", "line 1: -1: substring expression < 0\n", 1)]
     [InlineData("set -- one two; i=0; printf '<%s>\\n' \"${@:3:i++}\" \"$i\" \"${@:99:i++}\" \"$i\" \"${@: -99:i++}\" \"$i\"\n", "<1>\n<1>\n<1>\n", "", 0)]
     [InlineData("set -- 'a b' '' c; IFS=:; f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${*:2:2}\"; f \"${@:2:2}\"\n", "n=1\n<:c>\nn=2\n<>\n<c>\n", "", 0)]
     [InlineData("x=abcdef; printf '<%s>\\n' \"${x[@]:0:1}\" \"${x[@]:1:1}\" \"${x[@]: -1:1}\" \"${x[@]: -2:1}\"\n", "<a>\n<b>\n<f>\n<e>\n", "", 0)]
@@ -159,35 +159,35 @@ public sealed class ParameterSubstringTests
     [InlineData("unset x; i=1; printf '<%s>\\n' \"${x:$(printf effect >&2; printf 1):i++}\" \"$i\"\n", "<>\n<1>\n", "", 0)]
     [InlineData("x=abcdef; printf '<%s>\\n' \"${x:1?2:3:2}\" \"${x:(1?2:3):2}\"\n", "<cd>\n<cd>\n", "", 0)]
     [InlineData("x=abc; i=0; printf '<%s>\\n' \"${x:99:i++}\" \"$i\" \"${x: -99:i++}\" \"$i\"\n", "<>\n<0>\n<>\n<0>\n", "", 0)]
-    [InlineData("x=abc; printf '<%s>\\n' \"${x:2:-2}\"; printf after\n", "", "-2: substring expression < 0\n", 1)]
+    [InlineData("x=abc; printf '<%s>\\n' \"${x:2:-2}\"; printf after\n", "", "line 1: -2: substring expression < 0\n", 1)]
     [InlineData("a=(abcdef); printf '%s' \"${a[0]:1:3}\"", "bcd", "", 0)]
     [InlineData("a=(); a[2]=''; a[9]=last; for f in \"${a[@]:2:1}\"; do printf '<%s>' \"$f\"; done", "<>", "", 0)]
     [InlineData("a=(); a[2]=''; a[9]=last; for f in \"${a[@]:2:0}\"; do printf bad; done", "", "", 0)]
     [InlineData("a=('a b' '' c); IFS=:; printf '<%s>' \"${a[*]:1:2}\"", "<:c>", "", 0)]
     [InlineData("x=abc; eval 'printf bad\"${x:1/0}\"'; printf '%s' \"$?\"", "1", "line 1: x: 1/0: division by 0 (error token is \"0\")\n", 0)]
-    [InlineData("x=abc; eval 'printf bad\"${x:2:-2}\"'; printf '%s' \"$?\"", "1", "-2: substring expression < 0\n", 0)]
+    [InlineData("x=abc; eval 'printf bad\"${x:2:-2}\"'; printf '%s' \"$?\"", "1", "line 1: -2: substring expression < 0\n", 0)]
     [InlineData("a=(a b c); i=0; eval 'printf \"${a[@]:i++:1/0}\"'; printf '%s:%s' \"$?\" \"$i\"", "1:1", "line 1: a[@]: 1/0: division by 0 (error token is \"0\")\n", 0)]
     [InlineData("a=([2]='a b' [5]='' [9]=c); IFS=:; f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${a[*]:3:2}\"; f \"${a[@]:3:2}\"\n", "n=1\n<:c>\nn=2\n<>\n<c>\n", "", 0)]
     [InlineData("a=([2]=two [5]=''); f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${a[@]:6}\"; f \"${a[*]:6}\"; f \"${a[@]:5:0}\"; f \"${a[@]:5:1}\"\n", "n=0\n<>\nn=1\n<>\nn=0\n<>\nn=1\n<>\n", "", 0)]
     [InlineData("set -- one two; f(){ printf 'n=%s\\n' \"$#\"; [ \"$1\" = \"$0\" ] && printf zero; }; f \"${@:0:1}\"; printf '\\n'; f \"${@:0:2}\"\n", "n=1\nzero\nn=2\nzero", "", 0)]
     [InlineData("a=([2]='' [9]=last); f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f pre\"${a[@]:3:0}\"post; f pre\"${a[@]:2:1}\"post\n", "n=1\n<prepost>\nn=1\n<prepost>\n", "", 0)]
     [InlineData("a=([2]=two); printf '<%s>\\n' \"${a[@]:3:${a[9]:=1}}\"; printf 'all=<%s>\\n' \"${a[@]}\"\n", "<>\nall=<two>\n", "", 0)]
-    [InlineData("a=([2]=two [9]=nine); i=0; printf '<%s>\\n' \"${a[@]:3:i++}\" \"$i\"; printf '<%s>\\n' \"${a[@]:3:-1}\"; printf after\n", "<1>\n", "-1: substring expression < 0\n", 1)]
+    [InlineData("a=([2]=two [9]=nine); i=0; printf '<%s>\\n' \"${a[@]:3:i++}\" \"$i\"; printf '<%s>\\n' \"${a[@]:3:-1}\"; printf after\n", "<1>\n", "line 1: -1: substring expression < 0\n", 1)]
     [InlineData("x=''; i=0; f(){ printf 'n=%s\\n' \"$#\"; printf '<%s>\\n' \"$@\"; }; f \"${x[@]:i++:i++}\"; printf 'i=%s\\n' \"$i\"\n", "n=1\n<>\ni=2\n", "", 0)]
     [InlineData("sh -c 'set --; i=0; f(){ printf \"n=%s\\n\" \"$#\"; printf \"<%s>\\n\" \"$@\"; }; f \"${@:0:1}\"; f \"${@:i++:i++}\"; printf \"i=%s\\n\" \"$i\"' chosen-zero\n", "n=1\n<chosen-zero>\nn=1\n<chosen-zero>\ni=2\n", "", 0)]
     [InlineData("sh -c 'set -- one two three; f(){ printf \"n=%s\\n\" \"$#\"; printf \"<%s>\\n\" \"$@\"; }; f \"${@: -4:1}\"; f \"${@: -5:1}\"' chosen-zero\n", "n=1\n<chosen-zero>\nn=0\n<>\n", "", 0)]
-    [InlineData("x=abc; i=0; printf '<%s>\\n' \"${x:3:i++}\" \"$i\"; printf '<%s>\\n' \"${x:3:-1}\"; printf after\n", "<>\n<1>\n", "-1: substring expression < 0\n", 1)]
+    [InlineData("x=abc; i=0; printf '<%s>\\n' \"${x:3:i++}\" \"$i\"; printf '<%s>\\n' \"${x:3:-1}\"; printf after\n", "<>\n<1>\n", "line 1: -1: substring expression < 0\n", 1)]
     [InlineData("x=abcdef; i=1; printf '<%s>\\n' \"${x:$(printf 2):i?2:1}\" \"$i\"\n", "<cd>\n<1>\n", "", 0)]
     [InlineData("declare -A a; a[one]=ONE; a[two]=TWO; printf '<%s>\\n' \"${a[@]:0:1}\" \"${a[@]:1:1}\" \"${a[@]:2:1}\"", "<ONE>\n<ONE>\n<TWO>\n", "", 0)]
     [InlineData("x=abcdef; declare -A m=(['a)b']=1); printf '<%s>' \"${x:m[a)b]:$(printf length >&2; printf 1)}\"", "<b>", "length", 0)]
     [InlineData("x=abcdef; declare -A m=(['a)(b)c']=3); printf '<%s>' \"${x:m[a)(b)c]:1}\"", "<d>", "", 0)]
-    [InlineData("x=abcdef; declare -A m=(['a(b']=2); printf '<%s>' \"${x:m[a(b]}\"\nprintf 'after:%s' \"$?\"", "after:1", "bad substitution: no closing `)' in m[a(b]\n", 0)]
+    [InlineData("x=abcdef; declare -A m=(['a(b']=2); printf '<%s>' \"${x:m[a(b]}\"\nprintf 'after:%s' \"$?\"", "after:1", "line 1: bad substitution: no closing `)' in m[a(b]\n", 0)]
     [InlineData("x=abcdef; declare -A m=(['a(b']=2); printf '<%s>' \"${x:$(printf 0; : >offset)+m[a(b]:$(printf 1; : >length)}\"\nprintf 'after:%s' \"$?\"; if [[ -e offset || -e length ]]; then printf side; fi",
-        "after:1", "bad substitution: no closing `)' in $(printf 0; : > offset)+m[a(b]:$(printf 1; : > length)\n", 0)]
+        "after:1", "line 1: bad substitution: no closing `)' in $(printf 0; : > offset)+m[a(b]:$(printf 1; : > length)\n", 0)]
     [InlineData("x=abc; set -e\nif printf '%s' \"${x:(1:2}\"; then printf inside; fi\nprintf after", "",
-        "bad substitution: no closing `)' in (1:2\n", 1)]
+        "line 2: bad substitution: no closing `)' in (1:2\n", 1)]
     [InlineData("x=abc; printf '%s' \"${x:(1+\r2:2}\"\nprintf 'after:%s' \"$?\"", "after:1",
-        "bad substitution: no closing `)' in (1+\r2:2\n", 0)]
+        "line 1: bad substitution: no closing `)' in (1+\r2:2\n", 0)]
     [InlineData("x=$'a\\u03bb\\U0001f642z'; printf '<%s><%s><%s>\\n' \"${x:4:$(printf end >&2; printf 1)}\""
         + " \"${x:5:$(printf skipped >&2; printf 1)}\" \"${x: -5:$(printf skipped >&2; printf 1)}\"", "<><><>\n", "end", 0)]
     public async Task SubstringsPreserveFieldsAndOperandEffects(string script, string expected, string error, int status)
@@ -211,7 +211,7 @@ public sealed class ParameterSubstringTests
     {
         var result = await EvaluationTestHelper.RunAsync(script);
         Assert.Equal(output, result.StdOut);
-        Assert.Equal(subject + ": substring expression < 0\n", result.StdErr);
+        Assert.Equal("line 1: " + subject + ": substring expression < 0\n", result.StdErr);
         Assert.Equal(status, result.ExitCode);
     }
 
@@ -231,9 +231,34 @@ public sealed class ParameterSubstringTests
         Assert.Equal("reached", await EndToEndHarness.ReadFileAsync(host, "/seen"));
         Assert.Equal(writesDiagnostic, await EndToEndHarness.FileExistsAsync(host, "/diagnostic"));
         if (writesDiagnostic)
-            Assert.Equal("0+$(printf reached >> seen; printf -- -1): substring expression < 0\n",
+            Assert.Equal("line 2: 0+$(printf reached >> seen; printf -- -1): substring expression < 0\n",
                 await EndToEndHarness.ReadFileAsync(host, "/diagnostic"));
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("${value:$(printf off >offset; printf 1)+(1:2}",
+        "bad substitution: no closing `)' in $(printf off > offset; printf 1)+(1:2", null)]
+    [InlineData("${value:4:$(printf ran >>length; printf -- -7)}",
+        "$(printf ran >> length; printf -- -7): substring expression < 0", "ran")]
+    public async Task SourcedSubstringDiagnosticsKeepTheirPrefixThroughRedirection(string expansion, string diagnostic, string? lengthEffect)
+    {
+        const string script = ". ./part 2>diagnostic\nprintf '<outer:%s>' \"$?\"\n";
+        var body = "value=abcdef\nprintf '<%s>' \"" + expansion + "\"\nprintf '<inner:%s>' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/part", body);
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+            Assert.Equal(0, status);
+            Assert.Equal("<inner:1><outer:0>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal("./part: line 2: " + diagnostic + "\n", host.ReadFile("/diagnostic"));
+            Assert.False(host.FileExists("/offset"));
+            Assert.Equal(lengthEffect, host.FileExists("/length") ? host.ReadFile("/length") : null);
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Theory]
