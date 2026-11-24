@@ -240,21 +240,24 @@ internal sealed class ExpandedWordBuilder
     }
 
     /// <summary>Retains literal-source provenance before field splitting.</summary>
-    public void AppendSource(ShellSource source, bool globQuoted)
+    public void AppendSource(ShellSource source, bool globQuoted) =>
+        AppendSource(source, globQuoted, retainCompactBacking: true);
+
+    internal void AppendSource(ShellSource source, bool globQuoted, bool retainCompactBacking)
     {
         if (!globQuoted && OperandFields != ParameterOperandFields.Default)
             AppendExpansion(source.ToValue(), allowWordSplitting: false, globQuoted: false);
         else
             GetPart(globQuoted ? PartOrigin.Protected : Purpose == ExpansionPurpose.CasePattern
-                ? PartOrigin.Expansion : PartOrigin.Source, globQuoted).AppendValue(source.ToValue());
+                ? PartOrigin.Expansion : PartOrigin.Source, globQuoted).AppendValue(source.ToValue(), retainCompactBacking);
     }
 
     /// <summary>Records the source run's IFS membership before later expansions can change it.</summary>
-    internal void AppendUnquotedSource(ShellSource source, ref int sourceSeparators)
+    internal void AppendUnquotedSource(ShellSource source, ref int sourceSeparators, bool retainCompactBacking)
     {
         if (_splitOnSpaces)
         {
-            AppendSource(source, globQuoted: false);
+            AppendSource(source, globQuoted: false, retainCompactBacking);
             return;
         }
         if (sourceSeparators == UntrackedSourceSeparators)
@@ -276,7 +279,7 @@ internal sealed class ExpandedWordBuilder
                 sourceSeparators = snapshots.Count;
             }
         }
-        GetPart(PartOrigin.Source, globQuoted: false, sourceSeparators).AppendValue(source.ToValue());
+        GetPart(PartOrigin.Source, globQuoted: false, sourceSeparators).AppendValue(source.ToValue(), retainCompactBacking);
     }
 
     public void AppendValue(ShellValue value, bool globQuoted) =>
@@ -1511,11 +1514,13 @@ internal sealed class ExpandedWordBuilder
         public int Length => _bytes?.Length ?? _retained.Bytes.Length;
         public bool IsEmpty => Length == 0;
 
-        public void AppendValue(ShellValue value)
+        public void AppendValue(ShellValue value) => AppendValue(value, retainCompactBacking: true);
+
+        public void AppendValue(ShellValue value, bool retainCompactBacking)
         {
             if (value.IsEmpty)
                 return;
-            if (_bytes == null && _retained.IsEmpty && value.TryGetCompactArrayCapacity(out var capacity))
+            if (retainCompactBacking && _bytes == null && _retained.IsEmpty && value.TryGetCompactArrayCapacity(out var capacity))
             {
                 // The result retains the array even when its producer gives up its charge.
                 _memory.Charge(_storage, 32L + capacity);

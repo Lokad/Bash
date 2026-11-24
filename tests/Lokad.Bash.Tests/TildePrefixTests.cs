@@ -87,6 +87,20 @@ public sealed partial class TildePrefixTests
     }
 
     [Fact]
+    public async Task LongAssignmentArgumentExpandsEachReachedTildeInOrder()
+    {
+        var prefix = new string('p', 4096);
+        await using var host = new TestHost();
+        var result = await host.RunAsync("HOME=before; i=0; printf '<%s>' path=" + prefix
+            + ":~/$((++i)):~/$((++i)) \"$i\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<path=" + prefix + ":before/1:before/2><2>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task NumericStackPrefixesSelectTheCurrentChildStackAndRealPaths()
     {
         await using var host = EndToEndHarness.BuildTree(["/a", "/b", "/c"], []);

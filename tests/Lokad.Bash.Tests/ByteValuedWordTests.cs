@@ -125,6 +125,36 @@ public sealed class ByteValuedWordTests
         Assert.InRange(slice.Array.Length, result.Bytes.Length, 2 * result.Bytes.Length);
     }
 
+    [Theory]
+    [InlineData(WordPartKind.Unquoted)]
+    [InlineData(WordPartKind.DoubleQuoted)]
+    public async Task MixedWordPreservesLiteralBytesAcrossAFullScanAndExpansion(WordPartKind kind)
+    {
+        var prefix = new byte[64 * 1024 + 3];
+        Array.Fill(prefix, (byte)'p');
+        prefix[64 * 1024 - 1] = 0xc3;
+        prefix[64 * 1024] = 0xa9;
+        prefix[^1] = 0xff;
+        byte[] source = [.. prefix, .. "${x}"u8, .. "end\r"u8];
+        byte[] expected = [.. prefix, .. "valueend\r"u8];
+        var word = new Word([WordPart.FromSource(kind, ShellSource.FromBytes(source))]);
+        var governor = new MemoryGovernor(4 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        var evaluation = new Eval(Parser.Parse(string.Empty));
+        evaluation.Memory.Budget = owner;
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("x", ShellValue.FromText("value")));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+
+        using (evaluation.Memory.BeginCommand(scope))
+        {
+            var result = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
+            Assert.Equal(expected, result.Bytes.ToArray());
+        }
+        evaluation.Memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task SplitFieldsKeepTheirBytesAfterThePendingBufferIsReused()
     {

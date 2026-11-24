@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
@@ -15,6 +16,9 @@ internal enum TildeExpansion { None, Leading, Assignment, Argument, AssignDefaul
 /// </summary>
 internal static partial class WordExpansion
 {
+    private static readonly SearchValues<byte> LiteralRunBoundaries = SearchValues.Create("$`\\"u8);
+    private static readonly SearchValues<byte> AssignmentLiteralRunBoundaries = SearchValues.Create("$`\\=:"u8);
+
     internal static Task<ShellValue> ExpandAssignmentValueAsync(Word word, ScopedEvaluation scope) =>
         ExpandUnsplitValueAsync(word, scope, ExpansionPurpose.Assignment, TildeExpansion.Assignment);
 
@@ -667,6 +671,9 @@ internal static partial class WordExpansion
         ShellScanContext? parameterScan = null;
         var trackSourceIfs = output.Purpose == ExpansionPurpose.Normal && allowWordSplitting && !globQuoted
             && quoteContext == ExpansionQuoteContext.Unquoted;
+        // Selected operands and here-document operands assign provenance to individual literal bytes.
+        var literalBoundaries = inHereDocumentOperand || !globQuoted && output.OperandFields != ParameterOperandFields.Default
+            ? null : assignment.HasValue ? AssignmentLiteralRunBoundaries : LiteralRunBoundaries;
         var sourceSeparators = 0;
         for (var index = start.Offset; index < length; index++)
         {
@@ -754,7 +761,16 @@ internal static partial class WordExpansion
 
             if (value != (byte)'$')
             {
-                var literal = content.Slice(index, 1);
+                var literalLength = 1;
+                if (literalBoundaries != null && !literalBoundaries.Contains(value))
+                {
+                    const int MaximumLiteralRun = 64 * 1024;
+                    scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                    var scanLength = Math.Min(length - index, MaximumLiteralRun);
+                    var boundary = content.AsSpan(index, scanLength).IndexOfAny(literalBoundaries);
+                    literalLength = boundary < 0 ? scanLength : boundary;
+                }
+                var literal = content.Slice(index, literalLength);
                 // In a here-document operand, punctuation handled by the word scanner
                 // can participate in the enclosing body's IFS split.
                 if (inHereDocumentOperand && value is (byte)':' or (byte)'=' or (byte)'~' or (byte)'\'')
@@ -773,6 +789,8 @@ internal static partial class WordExpansion
                         return suffix;
                     index = suffix.Offset - 1;
                 }
+                else
+                    index += literalLength - 1;
                 continue;
             }
 
@@ -1032,10 +1050,12 @@ internal static partial class WordExpansion
 
         void AppendLiteral(ShellSource literal)
         {
+            // A batched append copies into the result, just like the earlier byte-wise appends.
+            var retainCompactBacking = literal.Length == 1;
             if (trackSourceIfs)
-                output.AppendUnquotedSource(literal, ref sourceSeparators);
+                output.AppendUnquotedSource(literal, ref sourceSeparators, retainCompactBacking);
             else
-                output.AppendSource(literal, globQuoted);
+                output.AppendSource(literal, globQuoted, retainCompactBacking);
         }
 
         static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, ParserFailure? error)
