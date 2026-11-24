@@ -95,12 +95,11 @@ public sealed partial class Evaluation
                 if (!elementResult.Succeeded)
                     exitCode = 1;
                 if (HasPendingExpansionError) break;
-                if (!elementResult.Succeeded || elementResult.ScalarToUnset.IsEmpty)
+                if (!elementResult.Succeeded || elementResult.BindingToUnset.IsEmpty)
                     continue;
-                // Selector evaluation can change bindings before whole-name cleanup of scalar [0].
-                name = elementResult.ScalarToUnset;
+                // A scalar's zero selector removes the whole binding, including a kind change during evaluation.
+                name = elementResult.BindingToUnset;
                 resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out binding);
-                unsetFlags = UnsetFlags.ScalarOnly;
             }
             // An uninitialized terminal has no referent. After namespace fallback,
             // ordinary unset can remove the named reference without touching the terminal.

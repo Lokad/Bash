@@ -166,8 +166,8 @@ internal static partial class WordExpansion
 
     internal enum UnsetReferenceKind { Direct, Nameref }
 
-    /// <summary>A nonempty ScalarToUnset defers whole-binding removal to the caller's scope cleanup.</summary>
-    internal readonly record struct ElementUnsetResult(bool Succeeded, BindingName ScalarToUnset);
+    /// <summary>A nonempty BindingToUnset defers whole-binding removal to the caller's scope cleanup.</summary>
+    internal readonly record struct ElementUnsetResult(bool Succeeded, BindingName BindingToUnset);
 
     /// <summary>Removes array elements; scalar removal is returned to the builtin that owns local/prefix cleanup.</summary>
     internal static async Task<ElementUnsetResult> UnsetElementAsync(
@@ -186,15 +186,18 @@ internal static partial class WordExpansion
         if (!variables.HasBinding(resolvedName))
             return new(true, BindingName.Empty);
 
-        if (reference.IsAggregate && variables.IndexedArrays.TryGetValue(resolvedName, out var aggregate))
+        // The unset policy is selected before the selector can change the binding's kind.
+        var arrayMetadata = variables.GetArrayMetadata(resolvedName);
+        if (arrayMetadata is null)
+            return await UnsetScalarElementAsync().ConfigureAwait(false);
+        if (reference.IsAggregate && arrayMetadata is { Kind: ArrayKind.Indexed } aggregate)
             return new(aggregate.Count == 0
                 || variables.TryAssignResolvedArray(resolvedName, [], ArrayKind.Indexed, initializeReadonly: false), BindingName.Empty);
-        if (kind == UnsetReferenceKind.Direct && reference.IsAggregate && !variables.AssociativeArrays.ContainsKey(resolvedName))
-            return await NotAnArrayAsync().ConfigureAwait(false);
 
         var target = await ResolveReferenceAsync(reference, ReferenceUse.Unset, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
+        // A nameref unset ignores an element-removal failure, while expansion failures still reach the reader.
         if (!scope.CanExpand || target == null)
-            return new(false, BindingName.Empty);
+            return new(kind == UnsetReferenceKind.Nameref && !scope.Effects.HasPendingExpansionError, BindingName.Empty);
         using var bindingMemory = variables.TrackBindingMemory(target.Name);
         switch (target)
         {
@@ -214,11 +217,35 @@ internal static partial class WordExpansion
                 throw new InvalidOperationException("An element selector must resolve to an array location.");
         }
 
+        async Task<ElementUnsetResult> UnsetScalarElementAsync()
+        {
+            if (reference.IsAggregate)
+                return kind == UnsetReferenceKind.Nameref
+                    ? new(true, BindingName.Empty)
+                    : await NotAnArrayAsync().ConfigureAwait(false);
+
+            var expanded = await ExpandSubscriptAsync(reference.Subscript, scope, ExpansionPurpose.ArithmeticSource,
+                allowLeadingTilde: false).ConfigureAwait(false);
+            if (!scope.CanExpand)
+                return new(false, BindingName.Empty);
+            var index = await EvaluateArithmeticAsync(ArithmeticOperand.FromValue(expanded), scope, ArithmeticFailureMode.ArrayIndex)
+                .ConfigureAwait(false);
+            if (index is null)
+                return new(false, BindingName.Empty);
+            if (index.Value == 0)
+                return new(true, resolvedName);
+
+            if (kind == UnsetReferenceKind.Nameref)
+                return new(true, BindingName.Empty);
+            if (variables.GetArrayMetadata(resolvedName) != null)
+                return new(false, BindingName.Empty);
+            return await NotAnArrayAsync().ConfigureAwait(false);
+        }
+
         async Task<ElementUnsetResult> NotAnArrayAsync()
         {
-            await scope.Effects.ReportExpansionDiagnosticAsync(
-                [ShellValue.FromText("unset: "), name.ToValue()],
-                [ShellValue.FromText("not an array variable")]).ConfigureAwait(false);
+            await scope.Effects.ReportBuiltinDiagnosticAsync([ShellValue.FromText("unset")],
+                [resolvedName.ToValue(), ShellValue.FromText(": not an array variable")], scope.Context).ConfigureAwait(false);
             return new(false, BindingName.Empty);
         }
     }
@@ -666,6 +693,9 @@ internal static partial class WordExpansion
                     scope, length: true);
 
             var message = ShellValue.FromText("bad array subscript");
+            if (use == ReferenceUse.Unset)
+                return scope.Effects.ReportBuiltinDiagnosticAsync([ShellValue.FromText("unset")],
+                    [ShellValue.FromText("["), reference.Subscript.ToValue(), ShellValue.FromText("]: "), message], scope.Context);
             if (use == ReferenceUse.ArithmeticRead && !selector.Subscript.IsEmpty && !selector.IsAggregate)
                 return scope.Effects.ReportBuiltinDiagnosticAsync([referenceName], [message], scope.Context);
 
@@ -674,14 +704,13 @@ internal static partial class WordExpansion
                 : use == ReferenceUse.DirectAssign
                     ? scope.Effects.GetAssignmentDiagnosticSpelling(reference.Subscript, scope.ExpansionOrigin)
                     : reference.Subscript.ToValue();
-            var prefix = use == ReferenceUse.Unset ? ShellValue.FromText("unset: ") : ShellValue.Empty;
-            ReadOnlySpan<ShellValue> subject = [prefix, referenceName, ShellValue.FromText("["), subscript, ShellValue.FromText("]")];
+            ReadOnlySpan<ShellValue> subject = [referenceName, ShellValue.FromText("["), subscript, ShellValue.FromText("]")];
             return use switch
             {
                 ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead
                     or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign =>
                     scope.Effects.ReportBuiltinDiagnosticAsync(subject, [message], scope.Context),
-                ReferenceUse.Unset or ReferenceUse.CompoundAssign =>
+                ReferenceUse.CompoundAssign =>
                     scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]),
                 ReferenceUse.Assign => scope.Effects.ReportParameterDefaultFailureAsync(subject, [message], scope),
                 ReferenceUse.DirectAssign => scope.Effects.ReportAssignmentTargetFailureAsync(subject, [message], scope),

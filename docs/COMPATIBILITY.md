@@ -1236,6 +1236,14 @@ ends the option scan. Reached help preserves the operand bindings.
 `unset -v` accepts identifiers, valid array selectors and existing literal
 bindings. Invalid operands report their original bytes and set status 1 while
 later operands still run. An empty operand to plain `unset` has no effect.
+For an element selector that reaches a scalar, `unset` selects the scalar
+policy before evaluating the index. A zero result removes the whole binding,
+including an array created by the selector. A nonzero result preserves the
+selector's effects. A direct operand returns status 1 and reports the resolved
+name if it is still a scalar. An element nameref returns status 0 for ordinary
+removal failures, including an invalid array subscript. A fatal expansion error
+still applies the reader's failure rules. Reached subscript diagnostics include
+the builtin's source line and the original selector spelling.
 When a nameref chain ends at an uninitialized reference, ordinary variable
 removal selects the originally named reference and preserves the terminal
 declaration. Function fallback still applies before that removal.

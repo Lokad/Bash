@@ -7,6 +7,24 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class UnsetFunctionTestsEndToEnd
 {
     [Theory]
+    [InlineData("a=single; i=-1\nunset 'a[i++]'\nprintf '<%s:%s:%s>' \"$?\" \"$i\" \"$a\"", "<1:0:single>", "line 2: unset: a: not an array variable\n")]
+    [InlineData("a=single; declare -n r=a; unset 'r[2]'; printf '<%s:%s>' \"$?\" \"$a\"", "<1:single>", "line 1: unset: a: not an array variable\n")]
+    [InlineData("a=single; unset 'a[(a[1]=3,-1)]'; printf '<%s:%s:%s>' \"$?\" \"${a[0]-missing}\" \"${a[1]-missing}\"", "<1:single:3>", "")]
+    [InlineData("a=single; declare -n r='a[(a[1]=3,0)]'; unset r; printf '<%s:%s>' \"$?\" \"${a[1]-missing}\"", "<0:missing>", "")]
+    [InlineData("a=single; declare -n r='a[-1]'; unset r; printf '<%s:%s>' \"$?\" \"$a\"", "<0:single>", "")]
+    [InlineData("a=(zero); declare -n r='a[-2]'; unset r; printf '<%s>' \"$?\"", "<0>", "line 1: unset: [-2]: bad array subscript\n")]
+    [InlineData("declare -A a=([x]=yes); unset 'a[$missing]'; printf '<%s>' \"$?\"", "<1>", "line 1: unset: [$missing]: bad array subscript\n")]
+    [InlineData("a=single; unset 'a[-1]' 2>&-; printf '<%s:%s>' \"$?\" \"$a\"", "<1:single>", "")]
+    public async Task ElementUnsetKeepsTheSelectedBindingKindAndReportsReachedOperands(string script, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("unset --help value -q")]
     [InlineData("command unset -fv --help value")]
     public async Task ReachedHelpPreservesTheOperandAndReturnsUsageStatus(string invocation)
@@ -160,7 +178,7 @@ public sealed class UnsetFunctionTestsEndToEnd
     [InlineData("function a[1] { :; }; a=(zero one); unset -v 'a[1]'; declare -p a; declare -F 'a[1]'", "declare -a a=([0]=\"zero\")\na[1]\n", "", 0)]
     [InlineData("function a[1] { :; }; a=(zero one); unset -f 'a[1]'; declare -p a; declare -F 'a[1]'", "declare -a a=([0]=\"zero\" [1]=\"one\")\n", "", 1)]
     [InlineData("function r[1] { :; }; a=(zero one); declare -n r=a; unset 'r[1]'; declare -p a r; declare -F 'r[1]'", "declare -a a=([0]=\"zero\")\ndeclare -n r=\"a\"\nr[1]\n", "", 0)]
-    [InlineData("function a[1] { :; }; a=scalar; unset 'a[1]'; printf 'status=%s\\n' \"$?\"; declare -p a; declare -F 'a[1]'", "status=1\ndeclare -- a=\"scalar\"\na[1]\n", "unset: a: not an array variable\n", 0)]
+    [InlineData("function a[1] { :; }; a=scalar; unset 'a[1]'; printf 'status=%s\\n' \"$?\"; declare -p a; declare -F 'a[1]'", "status=1\ndeclare -- a=\"scalar\"\na[1]\n", "line 1: unset: a: not an array variable\n", 0)]
     [InlineData("function a[0] { :; }; a=scalar; unset 'a[0]'; printf '<%s>\\n' \"${a-unset}\"; declare -F 'a[0]'", "<unset>\na[0]\n", "", 0)]
     [InlineData("function a[@] { :; }; a=(zero one); unset 'a[@]'; declare -p a; declare -F 'a[@]'", "declare -a a=()\na[@]\n", "", 0)]
     [InlineData("function a[*] { :; }; declare -a a; unset 'a[*]'; declare -p a; declare -F 'a[*]'", "declare -a a\na[*]\n", "", 0)]
