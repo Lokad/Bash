@@ -282,6 +282,36 @@ public sealed class PrintfTimeFormatTests
             $"Flagged directives allocated {flagged.Median:N0} bytes and plain directives allocated {plain.Median:N0} bytes.");
     }
 
+    [Theory]
+    [InlineData(GnuDateFormatDialect.Date, "<0001-01-01>|Mon Jan  1 00:00:00 UTC 0001|  MON JAN  1 00:00:00 0001")]
+    [InlineData(GnuDateFormatDialect.Strftime, "<1-01-01>|%+|     MON JAN  1 00:00:00 1")]
+    public void CompositeDateFieldsKeepTheirDialectAndOuterWidth(GnuDateFormatDialect dialect, string expected)
+    {
+        Assert.Equal(expected, GnuDateFormatting.Format(DateTimeOffset.MinValue, "<%F>|%+|%^26c", dialect));
+    }
+
+    [Theory]
+    [InlineData(GnuDateFormatDialect.Date)]
+    [InlineData(GnuDateFormatDialect.Strftime)]
+    public void CompositeDateFieldsAvoidNestedOutputBuilders(GnuDateFormatDialect dialect)
+    {
+        const int iterations = 64;
+        var composite = string.Concat(Enumerable.Repeat("%T|%D", 16));
+        var expanded = string.Concat(Enumerable.Repeat("%H:%M:%S|%m/%d/%y", 16));
+        string Format(string text) => GnuDateFormatting.Format(DateTimeOffset.UnixEpoch, text, dialect);
+        for (var index = 0; index < 16; index++)
+        {
+            _ = Format(composite);
+            _ = Format(expanded);
+        }
+        Assert.Equal(Format(expanded), Format(composite));
+
+        var compact = AllocationAssert.MeasureAllocatedBytes(() => Format(composite), iterations);
+        var control = AllocationAssert.MeasureAllocatedBytes(() => Format(expanded), iterations);
+        Assert.True(compact.Median <= control.Median + 1024 * iterations,
+            $"Composite directives allocated {compact.Median:N0} bytes and scalar directives allocated {control.Median:N0} bytes.");
+    }
+
     [Fact]
     public void TimeFormatProjectionRequiresAdmissionBeforeItsAllocation()
     {

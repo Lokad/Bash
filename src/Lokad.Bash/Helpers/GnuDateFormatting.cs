@@ -25,8 +25,6 @@ public static class GnuDateFormatting
 
     private enum DirectiveCase { Unchanged, Upper, Lower, Swap }
 
-    private readonly record struct FormattedDirective(string Text, char DefaultPadding);
-
     // Weekdays and leap days repeat in a 400-year Gregorian cycle.
     private readonly record struct CalendarTime(DateTimeOffset Local, long YearOffset, long UnixSeconds)
     {
@@ -83,10 +81,7 @@ public static class GnuDateFormatting
     public static string Format(
         DateTimeOffset value,
         string format,
-        GnuDateFormatDialect dialect) =>
-        Format(new CalendarTime(value, 0, value.ToUnixTimeSeconds()), format, dialect);
-
-    private static string Format(CalendarTime value, string format, GnuDateFormatDialect dialect)
+        GnuDateFormatDialect dialect)
     {
         if (!TryFormat(value, format, dialect, int.MaxValue, out var result, static _ => { }))
             throw new InvalidOperationException("Unbounded date formatting unexpectedly exceeded its limit.");
@@ -127,6 +122,8 @@ public static class GnuDateFormatting
             reserveCharacters(initialCapacity);
         var builder = new StringBuilder(initialCapacity);
         var strftime = dialect == GnuDateFormatDialect.Strftime;
+        // Fixed calendar recipes fit even with a signed 32-bit year or a numeric zone.
+        Span<char> compositeText = stackalloc char[48];
 
         for (var index = 0; index < format.Length; index++)
         {
@@ -254,11 +251,31 @@ public static class GnuDateFormatting
             }
 
             var directive = format.AsSpan(directiveStart, index - directiveStart + 1);
-            var formatted = FormatDirective(value, specifier, colonCount, directive, dialect);
+            if (colonCount > 0 && specifier != 'z')
+                throw new GnuDateFormatException(directive.ToString());
+
+            var composite = specifier switch
+            {
+                'r' => "%I:%M:%S %p",
+                'R' => "%H:%M",
+                'T' or 'X' => "%H:%M:%S",
+                '+' => "%a %b %e %H:%M:%S %Z %Y",
+                'c' => "%a %b %e %H:%M:%S %Y",
+                'D' or 'x' => "%m/%d/%y",
+                'F' => "%Y-%m-%d",
+                _ => null
+            };
+            ReadOnlySpan<char> text = composite == null
+                ? FormatScalarDirective(value, specifier, colonCount, directive, strftime)
+                : compositeText[..FormatComposite(value, composite, strftime, compositeText)];
+            var defaultPadding = specifier is
+                'C' or 'd' or 'g' or 'G' or 'H' or 'I' or 'j' or 'm' or 'M'
+                    or 'S' or 'u' or 'U' or 'V' or 'w' or 'W' or 'y' or 'Y'
+                ? '0' : ' ';
 
             if (strftime)
             {
-                if (!TryAppendStrftime(formatted.Text, specifier, noPadding, padding, formatted.DefaultPadding, width,
+                if (!TryAppendStrftime(text, specifier, noPadding, padding, defaultPadding, width,
                         GetStrftimeCase(specifier, uppercase, changeCase)))
                 {
                     result = string.Empty;
@@ -268,7 +285,7 @@ public static class GnuDateFormatting
             }
 
             var dateCase = uppercase ? DirectiveCase.Upper : changeCase ? DirectiveCase.Swap : DirectiveCase.Unchanged;
-            if (!TryAppendDate(formatted.Text, specifier, noPadding, padding, formatted.DefaultPadding, width, dateCase))
+            if (!TryAppendDate(text, specifier, noPadding, padding, defaultPadding, width, dateCase))
             {
                 result = string.Empty;
                 return false;
@@ -472,19 +489,36 @@ public static class GnuDateFormatting
             return DirectiveCase.Unchanged;
         }
 
-        static FormattedDirective FormatDirective(
+        static int FormatComposite(CalendarTime calendar, string recipe, bool strftime, Span<char> destination)
+        {
+            // Recipes contain literal separators and unmodified scalar directives.
+            var length = 0;
+            for (var index = 0; index < recipe.Length; index++)
+            {
+                var ch = recipe[index];
+                if (ch != '%')
+                {
+                    destination[length++] = ch;
+                    continue;
+                }
+
+                index++;
+                var field = FormatScalarDirective(calendar, recipe[index], 0, recipe.AsSpan(index, 1), strftime);
+                field.AsSpan().CopyTo(destination[length..]);
+                length += field.Length;
+            }
+            return length;
+        }
+
+        static string FormatScalarDirective(
             CalendarTime calendar,
             char specifier,
             int colonCount,
             ReadOnlySpan<char> directive,
-            GnuDateFormatDialect directiveDialect)
+            bool strftime)
         {
-            if (colonCount > 0 && specifier != 'z')
-                throw new GnuDateFormatException(directive.ToString());
-
             var directiveValue = calendar.Local;
-            var strftime = directiveDialect == GnuDateFormatDialect.Strftime;
-            var text = specifier switch
+            return specifier switch
             {
                 '%' => "%",
                 'n' => "\n",
@@ -497,26 +531,18 @@ public static class GnuDateFormatting
                 'N' => FormatNanoseconds(directiveValue),
                 'p' => directiveValue.ToString("tt", Culture),
                 'P' => directiveValue.ToString("tt", Culture).ToLowerInvariant(),
-                'r' => Format(calendar, "%I:%M:%S %p", directiveDialect),
-                'R' => Format(calendar, "%H:%M", directiveDialect),
                 's' => calendar.UnixSeconds.ToString(Culture),
                 'S' => directiveValue.ToString("ss", Culture),
-                'T' => Format(calendar, "%H:%M:%S", directiveDialect),
-                'X' => Format(calendar, "%H:%M:%S", directiveDialect),
-                '+' => Format(calendar, "%a %b %e %H:%M:%S %Z %Y", directiveDialect),
                 'z' => FormatOffset(directiveValue.Offset, colonCount),
                 'Z' => directiveValue.Offset == TimeSpan.Zero ? "UTC" : FormatOffset(directiveValue.Offset, 1),
                 'a' => directiveValue.ToString("ddd", Culture),
                 'A' => directiveValue.ToString("dddd", Culture),
                 'b' => directiveValue.ToString("MMM", Culture),
                 'B' => directiveValue.ToString("MMMM", Culture),
-                'c' => Format(calendar, "%a %b %e %H:%M:%S %Y", directiveDialect),
                 'C' when strftime => ((calendar.StrftimeYear - (long)LastTwoDigits(calendar.StrftimeYear)) / 100).ToString(Culture),
                 'C' => (directiveValue.Year / 100).ToString(Culture).PadLeft(2, '0'),
                 'd' => directiveValue.ToString("dd", Culture),
-                'D' => Format(calendar, "%m/%d/%y", directiveDialect),
                 'e' => directiveValue.Day.ToString(Culture).PadLeft(2, ' '),
-                'F' => Format(calendar, "%Y-%m-%d", directiveDialect),
                 'g' when strftime => LastTwoDigits(calendar.GetStrftimeIsoWeek().Year).ToString("00", Culture),
                 'g' => (ISOWeek.GetYear(directiveValue.DateTime) % 100).ToString(Culture).PadLeft(2, '0'),
                 'G' when strftime => calendar.GetStrftimeIsoWeek().Year.ToString(Culture),
@@ -531,26 +557,18 @@ public static class GnuDateFormatting
                 'V' => ISOWeek.GetWeekOfYear(directiveValue.DateTime).ToString(Culture).PadLeft(2, '0'),
                 'w' => ((int)directiveValue.DayOfWeek).ToString(Culture),
                 'W' => GetWeekNumber(directiveValue, mondayFirst: true).ToString(Culture).PadLeft(2, '0'),
-                'x' => Format(calendar, "%m/%d/%y", directiveDialect),
                 'y' when strftime => LastTwoDigits(directiveValue.Year + calendar.YearOffset).ToString("00", Culture),
                 'y' => directiveValue.ToString("yy", Culture),
                 'Y' when strftime => calendar.StrftimeYear.ToString(Culture),
                 'Y' => directiveValue.ToString("yyyy", Culture),
                 _ => throw new GnuDateFormatException(directive.ToString())
             };
-            return new FormattedDirective(text, GetDefaultPadding(specifier));
 
             static int LastTwoDigits(long year)
             {
                 var remainder = (int)(year % 100);
                 return remainder < 0 ? remainder + 100 : remainder;
             }
-
-            static char GetDefaultPadding(char value) => value is
-                'C' or 'd' or 'g' or 'G' or 'H' or 'I' or 'j' or 'm' or 'M'
-                    or 'S' or 'u' or 'U' or 'V' or 'w' or 'W' or 'y' or 'Y'
-                ? '0'
-                : ' ';
         }
 
         static bool IsStrftimeSpecifier(char value, char? alternativeModifier)
