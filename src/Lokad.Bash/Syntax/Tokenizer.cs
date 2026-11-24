@@ -1174,7 +1174,7 @@ internal sealed class Tokenizer
     /// </summary>
     internal bool TryReadConditionalCommand(Token opening, [NotNullWhen(true)] out ConditionalCommand? command)
     {
-        if (!ConditionalParser.TryReadCommand(_input, opening.Source.End.Value, _scanContext, TrackUnexpectedTokens,
+        if (!ConditionalParser.TryReadCommand(_input, opening.Source, this,
                 out command, out var end, out var error))
         {
             RecordFailure(error);

@@ -315,6 +315,44 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
+    [InlineData("[[ a wrong $(printf hidden) ]] >untouched\n",
+        "input: line 2: conditional binary operator expected\ninput: line 2: syntax error near `wrong'\n"
+        + "input: line 2: `[[ a wrong $(printf hidden) ]] >untouched'\n")]
+    [InlineData("[[ (\n (\n a ]]\n",
+        "input: line 3: unexpected token `]]', expected `)'\ninput: line 2: expected `)'\n"
+        + "input: line 4: syntax error near `]]'\ninput: line 4: ` a ]]'\n")]
+    [InlineData("[[ a == a\n ) ]]\n",
+        "input: line 2: syntax error in conditional expression: unexpected token `)'\n"
+        + "input: line 3: syntax error near `)'\ninput: line 3: ` ) ]]'\n")]
+    [InlineData("[[ (\n a == first\\\n\"last\n",
+        "input: line 4: unexpected EOF while looking for matching `\"'\n"
+        + "input: line 5: unexpected argument to conditional binary operator\ninput: line 2: expected `)'\n")]
+    [InlineData("[[ a == a\n# the last physical line",
+        "input: line 2: unexpected EOF while looking for `]]'\ninput: line 4: syntax error: unexpected end of file\n")]
+    [InlineData("[[ a == a\\\n",
+        "input: line 2: unexpected EOF while looking for `]]'\ninput: line 4: syntax error: unexpected end of file\n")]
+    [InlineData("[[ a == \\\n",
+        "input: line 3: unexpected argument `EOF' to conditional binary operator\ninput: line 3: syntax error: unexpected end of file\n")]
+    [InlineData("[[ a == ",
+        "input: line 2: unexpected argument `newline' to conditional binary operator\n"
+        + "input: line 2: syntax error near `=='\ninput: line 2: `[[ a == '\n")]
+    public async Task SourcedConditionalDiagnosticsUseTheLineForEachReaderMessage(string unit, string diagnostic)
+    {
+        var memory = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        host.AddFile("/input", "printf before\n" + unit);
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
+        Assert.False(host.FileExists("/untouched"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("[[ \"unfinished", "\"", "unexpected token `", "' in conditional command\n")]
     [InlineData("[[ $'unfinished", "'", "unexpected token `", "' in conditional command\n")]
     [InlineData("[[ ( x =~ \"unfinished", "\"", "unexpected argument to conditional binary operator\nexpected `)'\n", "")]

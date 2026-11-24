@@ -4077,41 +4077,68 @@ public sealed partial class Evaluation : IFileTester
         if (descriptor.IsClosed)
             return;
 
-        var conditional = syntax.ConditionalError != ConditionalArgumentError.None;
-        var reason = syntax.ConditionalError switch
+        var conditional = syntax.Conditional;
+        var error = conditional?.Error ?? ConditionalReaderError.None;
+        var hasArgument = !syntax.Argument.IsEmpty;
+        var argumentPrefix = !hasArgument ? ReadOnlySpan<byte>.Empty : error switch
         {
-            ConditionalArgumentError.UnaryOperand => "' to conditional unary operator\n"u8,
-            ConditionalArgumentError.BinaryOperand => "' to conditional binary operator\n"u8,
-            ConditionalArgumentError.BinaryOperator => "', conditional binary operator expected\n"u8,
+            ConditionalReaderError.UnaryOperand or ConditionalReaderError.BinaryOperand => "unexpected argument `"u8,
+            ConditionalReaderError.Expression => "syntax error in conditional expression: unexpected token `"u8,
+            _ => "unexpected token `"u8
+        };
+        var reason = error switch
+        {
+            ConditionalReaderError.UnaryOperand when hasArgument => "' to conditional unary operator\n"u8,
+            ConditionalReaderError.UnaryOperand => MissingConditionalUnaryArgument,
+            ConditionalReaderError.BinaryOperand when hasArgument => "' to conditional binary operator\n"u8,
+            ConditionalReaderError.BinaryOperand => MissingConditionalBinaryArgument,
+            ConditionalReaderError.BinaryOperator when hasArgument => "', conditional binary operator expected\n"u8,
+            ConditionalReaderError.BinaryOperator => MissingConditionalBinaryOperator,
+            ConditionalReaderError.GroupClose when hasArgument => "', expected `)'\n"u8,
+            ConditionalReaderError.GroupClose => MissingConditionalGroup,
+            ConditionalReaderError.Expression when hasArgument => "'\n"u8,
+            ConditionalReaderError.Expression => "syntax error in conditional expression\n"u8,
+            ConditionalReaderError.Term => "' in conditional command\n"u8,
             _ => ReadOnlySpan<byte>.Empty
         };
-        var argumentPrefix = syntax.ConditionalError == ConditionalArgumentError.BinaryOperator
-            ? "unexpected token `"u8 : "unexpected argument `"u8;
-        var tokenPrefix = conditional ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
-        var groupMessage = "expected `)'\n"u8;
+        var tokenPrefix = conditional != null ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
         var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);
         var prefixLength = prefix.Length;
-        var length = prefixLength + tokenPrefix.Length + (long)syntax.Token.Length + 2
-            + syntax.UnclosedGroups * (long)(prefixLength + groupMessage.Length);
+        var length = prefixLength + tokenPrefix.Length + (long)syntax.Token.Length + 2;
+        var lineOffset = line - (conditional?.ReadLine ?? line);
+        var reasonPrefix = reason.IsEmpty || conditional is not { } read || read.ReasonLine == read.ReadLine
+            ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + read.ReasonLine);
+        var groups = conditional?.UnclosedGroupLines;
+        if (groups != null)
+        {
+            // Reserve for any 32-bit line number without formatting each prefix twice.
+            const int maximumLineNumberGrowth = 10;
+            length += groups.Count * (long)(prefixLength + maximumLineNumberGrowth + MissingConditionalGroup.Length);
+        }
         if (includeLine)
             length += prefixLength + (long)syntax.Line.Length + 3;
-        if (conditional)
-            length += prefixLength + argumentPrefix.Length + syntax.Argument.Length + reason.Length;
+        if (!reason.IsEmpty)
+            length += reasonPrefix.Length + argumentPrefix.Length + syntax.Argument.Length + reason.Length;
         if (!TryReserveDiagnostic(length, out var reservation))
             throw new MemoryBudgetExceededException();
 
         using var memory = reservation;
         using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
-        if (conditional)
+        if (!reason.IsEmpty)
         {
-            prefix.AppendTo(diagnostic);
+            reasonPrefix.AppendTo(diagnostic);
             diagnostic.Append(argumentPrefix);
             AppendToken(syntax.Argument.AsSpan());
             diagnostic.Append(reason);
-            for (var group = 0; group < syntax.UnclosedGroups; group++)
+        }
+        if (groups != null)
+        {
+            foreach (var groupLine in groups)
             {
-                prefix.AppendTo(diagnostic);
-                diagnostic.Append(groupMessage);
+                var groupPrefix = lineOffset + groupLine == line
+                    ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + groupLine);
+                groupPrefix.AppendTo(diagnostic);
+                diagnostic.Append(MissingConditionalGroup);
             }
         }
         prefix.AppendTo(diagnostic);
@@ -4151,23 +4178,40 @@ public sealed partial class Evaluation : IFileTester
     private static readonly byte[] MissingConditionalSingleQuote = "unexpected EOF while looking for matching `''\n"u8.ToArray();
     private static readonly byte[] MissingConditionalUnaryArgument = "unexpected argument to conditional unary operator\n"u8.ToArray();
     private static readonly byte[] MissingConditionalBinaryArgument = "unexpected argument to conditional binary operator\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalBinaryOperator = "conditional binary operator expected\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalUnaryArgumentAtEnd = "unexpected argument `EOF' to conditional unary operator\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalBinaryArgumentAtEnd = "unexpected argument `EOF' to conditional binary operator\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalBinaryOperatorAtEnd = "unexpected token `EOF', conditional binary operator expected\n"u8.ToArray();
     private static readonly byte[] MissingConditionalGroup = "expected `)'\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalGroupAtEnd = "unexpected token `EOF', expected `)'\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalClose = "unexpected EOF while looking for `]]'\n"u8.ToArray();
+    private static readonly byte[] MissingConditionalTermAtEnd = "unexpected token `EOF' in conditional command\n"u8.ToArray();
 
-    private async Task ReportUnclosedConditionalQuoteAsync(ConditionalQuoteEnd failure)
+    private async Task ReportConditionalEndOfInputAsync(ConditionalEndOfInput failure, string? path,
+        SyntaxDiagnosticOrigin origin, int lineOffset)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
-        await ExecuteWriteAsync(descriptor, failure.DoubleQuoted ? MissingConditionalDoubleQuote : MissingConditionalSingleQuote)
-            .ConfigureAwait(false);
-        await ExecuteWriteAsync(descriptor, failure.Role switch
+        if (failure.DoubleQuoted is { } doubleQuoted)
+            await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.QuoteLine),
+                doubleQuoted ? MissingConditionalDoubleQuote : MissingConditionalSingleQuote).ConfigureAwait(false);
+        await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.Diagnostic.ReasonLine), failure.Diagnostic.Error switch
         {
-            ConditionalArgumentError.UnaryOperand => MissingConditionalUnaryArgument,
-            ConditionalArgumentError.BinaryOperand => MissingConditionalBinaryArgument,
-            _ => UnreadConditionalToken
+            ConditionalReaderError.UnaryOperand => failure.DoubleQuoted.HasValue ? MissingConditionalUnaryArgument : MissingConditionalUnaryArgumentAtEnd,
+            ConditionalReaderError.BinaryOperand => failure.DoubleQuoted.HasValue ? MissingConditionalBinaryArgument : MissingConditionalBinaryArgumentAtEnd,
+            ConditionalReaderError.BinaryOperator => failure.DoubleQuoted.HasValue ? MissingConditionalBinaryOperator : MissingConditionalBinaryOperatorAtEnd,
+            ConditionalReaderError.GroupClose => failure.DoubleQuoted.HasValue ? MissingConditionalGroup : MissingConditionalGroupAtEnd,
+            ConditionalReaderError.MissingCloser => MissingConditionalClose,
+            _ => failure.DoubleQuoted.HasValue ? UnreadConditionalToken : MissingConditionalTermAtEnd
         }).ConfigureAwait(false);
-        for (var group = 0; group < failure.UnclosedGroups; group++)
-            await ExecuteWriteAsync(descriptor, MissingConditionalGroup).ConfigureAwait(false);
+        if (failure.Diagnostic.UnclosedGroupLines is { } groups)
+            foreach (var groupLine in groups)
+                await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(groupLine), MissingConditionalGroup).ConfigureAwait(false);
+        if (!failure.DoubleQuoted.HasValue)
+            await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.EndLine), UnexpectedSyntaxEndOfInput).ConfigureAwait(false);
+
+        SyntaxDiagnosticPrefix Prefix(int line) => new(path, origin, lineOffset + line);
     }
 
     internal async Task ReportHereDocumentCaptureEndOfInputAsync(

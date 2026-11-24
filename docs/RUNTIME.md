@@ -528,6 +528,8 @@ from the failed unit to the runtime diagnostic. The line counter includes any
 buffered here-document advance, and the displayed bytes come from the physical
 line at the failure. The source owner and diagnostic record remain admitted
 through stderr write completion.
+Conditional failures retain the line for each part of the diagnostic, including
+open groups and quotes, the rejected token, and the end of input.
 Quoted bracketed initializer items retain their reader diagnostics with the
 command unit. The prepared tree associates them with the same unit boundary
 used for here-document warnings. Execution reports them before dispatching the

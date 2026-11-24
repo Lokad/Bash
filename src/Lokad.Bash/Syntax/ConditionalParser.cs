@@ -14,7 +14,8 @@ internal sealed class ConditionalParser : IDisposable
     private readonly ShellSource _source;
     private readonly ShellScanContext _context;
     private readonly bool _command;
-    private readonly bool _trackUnexpectedTokens;
+    private readonly Tokenizer? _reader;
+    private readonly int _opening;
     private List<(int Start, int End)>? _ignoredRanges;
     private List<SpellingEdit>? _spellingEdits;
     private List<SpacingEdit>? _spacingEdits;
@@ -24,16 +25,24 @@ internal sealed class ConditionalParser : IDisposable
     private int _position;
     private Token? _lookahead;
     private ParserFailure? _failure;
+    private int[]? _unclosedGroupLines;
+    private bool _wordContinuedAtEndOfInput;
+    private bool _localReaderFailure;
 
-    private ConditionalParser(ShellSource source, int position, ShellScanContext context, bool command, bool trackUnexpectedTokens) =>
-        (_source, _position, _context, _command, _trackUnexpectedTokens) = (source, position, context, command, trackUnexpectedTokens);
+    private ConditionalParser(ShellSource source, ShellScanContext context, Range? opening, Tokenizer? reader)
+    {
+        (_source, _context, _reader) = (source, context, reader);
+        _command = opening.HasValue;
+        _opening = opening?.Start.Value ?? 0;
+        _position = opening?.End.Value ?? 0;
+    }
 
     internal static bool TryParse(ShellSource source,
         [NotNullWhen(true)] out ConditionalExpression? expression,
         out SourceSpelling spelling,
         [NotNullWhen(false)] out SyntaxError? error)
     {
-        using var parser = new ConditionalParser(source, 0, new ShellScanContext(), command: false, trackUnexpectedTokens: false);
+        using var parser = new ConditionalParser(source, new ShellScanContext(), null, null);
         spelling = default;
         if (!parser.TryParse(out expression, out var failure))
         {
@@ -46,11 +55,12 @@ internal sealed class ConditionalParser : IDisposable
     }
 
     /// <summary>The operand grammar owns closing-delimiter recognition as well as comments and regex words.</summary>
-    internal static bool TryReadCommand(ShellSource source, int start, ShellScanContext context, bool trackUnexpectedTokens,
+    internal static bool TryReadCommand(ShellSource source, Range opening, Tokenizer reader,
         [NotNullWhen(true)] out ConditionalCommand? command, out int end,
         [NotNullWhen(false)] out ParserFailure? error)
     {
-        using var parser = new ConditionalParser(source, start, context, command: true, trackUnexpectedTokens);
+        using var parser = new ConditionalParser(source, reader.ScanContext, opening, reader.TrackUnexpectedTokens ? reader : null);
+        var start = opening.End.Value;
         command = null;
         end = start;
         if (!parser.TryParse(out var expression, out error))
@@ -69,12 +79,15 @@ internal sealed class ConditionalParser : IDisposable
         [NotNullWhen(false)] out ParserFailure? error)
     {
         expression = ParseOr(0);
-        if (_failure?.UnexpectedToken == null)
+        if (!HasReaderFailure)
         {
             var ending = Peek();
             if (ending.Kind != (_command ? TokenKind.EndCommand : TokenKind.End))
-                Fail(ending.Kind == TokenKind.End ? "Unterminated conditional command."
-                    : "Unexpected conditional operator or operand.", ending.Offset);
+                FailReader(ending.Kind == TokenKind.End ? "Unterminated conditional command."
+                        : "Unexpected conditional operator or operand.", ending,
+                    ending.Kind == TokenKind.End || _failure?.ConditionalEndOfInput != null
+                        ? ConditionalReaderError.MissingCloser : ConditionalReaderError.Expression,
+                    _opening);
         }
         error = _context.LimitError is { } limit ? new ParserFailure(limit, ParserFailureKind.Limit) : _failure;
         if (error != null || expression == null)
@@ -85,6 +98,9 @@ internal sealed class ConditionalParser : IDisposable
         }
         return true;
     }
+
+    private bool HasReaderFailure => _failure?.UnexpectedToken != null
+        || _failure?.ConditionalEndOfInput is { Diagnostic.Error: not ConditionalReaderError.None };
 
     private ConditionalExpression? ParseOr(int depth)
     {
@@ -129,27 +145,31 @@ internal sealed class ConditionalParser : IDisposable
         ConditionalExpression? expression;
         if (Peek().Kind == TokenKind.Open)
         {
-            RecordSpacing(Take(), termStart, negated, implicitPredicate: false);
+            var open = Take();
+            RecordSpacing(open, termStart, negated, implicitPredicate: false);
             if (depth >= ShellSourceCursor.MaximumNestedExpansionDepth)
             {
                 Fail("Conditional nesting exceeds the parsing limit.");
                 return null;
             }
             expression = ParseOr(depth + 1);
-            if (_failure?.UnexpectedToken != null)
+            if (HasReaderFailure)
+            {
+                if (_localReaderFailure)
+                    RecordUnclosedGroup(depth, GroupReaderPosition(open));
                 return null;
+            }
             if (Peek().Kind == TokenKind.Close)
                 RecordSpacing(Take());
             else
-                Fail("Closing conditional parenthesis expected.", Peek().Offset);
+                FailReader("Closing conditional parenthesis expected.", Peek(), ConditionalReaderError.GroupClose, GroupReaderPosition(open));
         }
         else
         {
             var token = Take();
             if (token.Kind != TokenKind.Word)
             {
-                SetQuoteEndRole(ConditionalArgumentError.None, depth);
-                Fail("Conditional operand expected.", token.Offset);
+                FailReader("Conditional operand expected.", token, ConditionalReaderError.Term, token.Offset);
                 return null;
             }
             if (ShellPredicates.TryGetUnaryPredicate(operation[..ReadOperator(token, operation)], out var unary))
@@ -163,7 +183,7 @@ internal sealed class ConditionalParser : IDisposable
                 }
                 else
                 {
-                    var operand = ReadOperand(false, ConditionalArgumentError.UnaryOperand, depth);
+                    var operand = ReadOperand(false, ConditionalReaderError.UnaryOperand);
                     expression = operand == null ? null : new ConditionalExpression.Unary(unary, operand);
                 }
             }
@@ -175,13 +195,15 @@ internal sealed class ConditionalParser : IDisposable
                     RecordSpacing(token, termStart, negated, implicitPredicate: false);
                     RecordSpacing(Take());
                     var right = ReadOperand(binary.Operator == ShellPredicates.BinaryPredicateKind.RegexMatch,
-                        ConditionalArgumentError.BinaryOperand, depth);
+                        ConditionalReaderError.BinaryOperand);
                     expression = left == null || right == null ? null : new ConditionalExpression.Binary(binary, left, right);
                 }
                 else
                 {
-                    if (Peek().Kind == TokenKind.Newline)
-                        FailArgument("Conditional binary operator expected.", Peek(), ConditionalArgumentError.BinaryOperator, depth);
+                    var next = Peek();
+                    if (next.Kind == TokenKind.Newline || _reader != null
+                        && next.Kind is not (TokenKind.EndCommand or TokenKind.And or TokenKind.Or or TokenKind.Close))
+                        FailReader("Conditional binary operator expected.", next, ConditionalReaderError.BinaryOperator, next.Offset);
                     else
                         RecordSpacing(token, termStart, negated, implicitPredicate: true);
                     expression = left == null ? null : new ConditionalExpression.NonEmpty(left);
@@ -189,7 +211,7 @@ internal sealed class ConditionalParser : IDisposable
             }
         }
         // Looking beyond a reached argument failure can collect bodies from an unread line.
-        if (_failure?.UnexpectedToken == null)
+        if (!HasReaderFailure)
             SkipNewlines();
         return negated && expression != null ? new ConditionalExpression.Negated(expression) : expression;
 
@@ -210,15 +232,14 @@ internal sealed class ConditionalParser : IDisposable
         }
     }
 
-    private Word? ReadOperand(bool regex, ConditionalArgumentError error, int depth)
+    private Word? ReadOperand(bool regex, ConditionalReaderError error)
     {
         // A regex operand has its own shell lexical context: | and balanced parentheses
         // belong to the regex word, while an unmatched ) closes a conditional group.
         var token = _lookahead == null ? Read(regex) : Take();
         if (token.Kind != TokenKind.Word)
         {
-            SetQuoteEndRole(error, depth);
-            FailArgument("Conditional operand expected.", token, error, depth);
+            FailReader("Conditional operand expected.", token, error, token.Offset);
             return null;
         }
         RecordSpacing(token);
@@ -414,6 +435,7 @@ internal sealed class ConditionalParser : IDisposable
         }
         var cursor = new ShellSourceCursor(_source, start, _context);
         var parentheses = 0;
+        var quoteStart = 0;
         while (!cursor.IsAtEnd)
         {
             if (cursor.TrySkipReadAheadBodies())
@@ -430,12 +452,17 @@ internal sealed class ConditionalParser : IDisposable
                 else if (parentheses == 0 && Tokenizer.IsWordDelimiter(ch) && (!regex || ch != (byte)'|'))
                     break;
             }
-            var quotedLiteral = cursor.IsQuoted && !cursor.IsDoubleQuoted;
+            var wasQuoted = cursor.IsQuoted;
+            var quotedLiteral = wasQuoted && !cursor.IsDoubleQuoted;
             var preceding = cursor.Position;
             if (cursor.TryConsumeQuoteOrEscape())
             {
                 if (!quotedLiteral)
                     IgnoreContinuations(preceding, cursor.Position);
+                if (!wasQuoted && cursor.IsQuoted)
+                    quoteStart = preceding;
+                _wordContinuedAtEndOfInput |= !wasQuoted && cursor.IsAtEnd
+                    && span[preceding..].SequenceEqual("\\\n"u8);
                 continue;
             }
             switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
@@ -455,9 +482,18 @@ internal sealed class ConditionalParser : IDisposable
         _position = cursor.Position;
         if (cursor.IsQuoted || parentheses != 0 || (!regex && _position == start))
         {
-            Fail("Invalid or unterminated conditional operand.", _position);
-            if (_trackUnexpectedTokens && cursor.IsQuoted && cursor.IsAtEnd && _failure is { } failure)
-                _failure = failure with { ConditionalQuoteEnd = new ConditionalQuoteEnd(cursor.IsDoubleQuoted) };
+            if (_failure == null && _reader != null && cursor.IsQuoted && cursor.IsAtEnd)
+            {
+                _localReaderFailure = true;
+                _failure = new ParserFailure(new SyntaxError("Invalid or unterminated conditional operand.", _position),
+                    ParserFailureKind.Grammar)
+                {
+                    ConditionalEndOfInput = new ConditionalEndOfInput(GetEndLine(), cursor.IsDoubleQuoted,
+                        _reader.GetLine(quoteStart), default)
+                };
+            }
+            else
+                Fail("Invalid or unterminated conditional operand.", _position);
             return new(TokenKind.Invalid, default, _position);
         }
 
@@ -493,32 +529,87 @@ internal sealed class ConditionalParser : IDisposable
     private void Fail(string message, int offset) =>
         _failure ??= new ParserFailure(new SyntaxError(message, offset), ParserFailureKind.Grammar);
 
-    private void SetQuoteEndRole(ConditionalArgumentError role, int depth)
+    // The reader looks past an opening parenthesis through any continuations.
+    private int GroupReaderPosition(Token opening) =>
+        ShellSourceCursor.SkipLineContinuations(_source.AsSpan(), opening.Offset + opening.Source.Length);
+
+    private int GetEndLine() => _reader == null ? 0
+        : _reader.GetLine(_source.Length) + (_wordContinuedAtEndOfInput ? 1 : _reader.EndOfInputLineAdvance);
+
+    private void RecordUnclosedGroup(int depth, int offset)
     {
-        if (_failure is { ConditionalQuoteEnd: { } quote })
-            _failure = _failure with { ConditionalQuoteEnd = quote with { Role = role, UnclosedGroups = depth } };
+        if (_reader == null || _failure is not { } failure)
+            return;
+        if (_unclosedGroupLines == null)
+        {
+            _context.SyntaxMemory?.Grow(24L + (depth + 1) * sizeof(int));
+            _unclosedGroupLines = new int[depth + 1];
+            if (failure.UnexpectedToken is { Conditional: { } conditional } token)
+                _failure = failure with
+                {
+                    UnexpectedToken = token with { Conditional = conditional with { UnclosedGroupLines = _unclosedGroupLines } }
+                };
+            else if (failure.ConditionalEndOfInput is { } eof)
+                _failure = failure with
+                {
+                    ConditionalEndOfInput = eof with { Diagnostic = eof.Diagnostic with { UnclosedGroupLines = _unclosedGroupLines } }
+                };
+        }
+        _unclosedGroupLines[_unclosedGroupLines.Length - depth - 1] = _reader.GetLine(offset);
     }
 
-    private void FailArgument(string message, Token token, ConditionalArgumentError error, int depth)
+    private void FailReader(string message, Token token, ConditionalReaderError error, int reasonPosition)
     {
+        if (_localReaderFailure && _failure is { ConditionalEndOfInput: { } quote } && _reader != null)
+        {
+            var line = error is ConditionalReaderError.MissingCloser or ConditionalReaderError.GroupClose
+                ? _reader.GetLine(reasonPosition) : quote.EndLine;
+            _failure = _failure with { ConditionalEndOfInput = quote with { Diagnostic = new(error, line) } };
+            return;
+        }
         if (_failure != null)
             return;
-        if (!_trackUnexpectedTokens)
+        if (_reader == null)
         {
             Fail(message, token.Offset);
             return;
         }
 
+        _localReaderFailure = true;
+        if (token.Kind == TokenKind.End && (error is ConditionalReaderError.MissingCloser
+                or ConditionalReaderError.GroupClose or ConditionalReaderError.Term || _source.AsSpan()[^1] == (byte)'\n'))
+        {
+            var endLine = GetEndLine();
+            var line = error is ConditionalReaderError.MissingCloser or ConditionalReaderError.GroupClose
+                ? _reader.GetLine(reasonPosition) : endLine;
+            _failure = new ParserFailure(new SyntaxError(message, token.Offset), ParserFailureKind.Grammar)
+            {
+                ConditionalEndOfInput = new ConditionalEndOfInput(endLine, null, 0, new(error, line))
+            };
+            return;
+        }
+
         var atLineEnd = token.Kind is TokenKind.Newline or TokenKind.End;
         var readPosition = token.Offset + (atLineEnd ? 0 : token.Source.Length);
-        var line = _source.GetPhysicalLine(readPosition, out var lineStart);
+        var physicalLine = _source.GetPhysicalLine(readPosition, out var lineStart);
+        var argument = token.Kind switch
+        {
+            TokenKind.Newline or TokenKind.End => UnexpectedSyntax.NewlineToken,
+            TokenKind.Word or TokenKind.DescriptorNumber => default,
+            // An empty term followed by the closing delimiter has only the near-token diagnostic.
+            TokenKind.EndCommand when error == ConditionalReaderError.Term => default,
+            _ => token.Source
+        };
+        if (error == ConditionalReaderError.Term && argument.IsEmpty)
+            error = ConditionalReaderError.None;
+        var reasonLine = _reader.GetLine(error is ConditionalReaderError.GroupClose or ConditionalReaderError.Expression
+            ? reasonPosition : readPosition);
         _failure = new ParserFailure(new SyntaxError(message, token.Offset), ParserFailureKind.Grammar)
         {
-            UnexpectedToken = new UnexpectedSyntax(FindNearToken(), line, readPosition)
+            UnexpectedToken = new UnexpectedSyntax(FindNearToken(), physicalLine, readPosition)
             {
-                Argument = atLineEnd ? UnexpectedSyntax.NewlineToken : token.Source,
-                ConditionalError = error,
-                UnclosedGroups = depth
+                Argument = argument,
+                Conditional = new(error, reasonLine) { ReadLine = _reader.GetLine(readPosition) }
             }
         };
 
@@ -526,14 +617,14 @@ internal sealed class ConditionalParser : IDisposable
         {
             // Bash uses the physical reader line for this second diagnostic, including skipped comments.
             // The byte at the read position can be the separator immediately after the rejected argument.
-            var nearEnd = Math.Min(line.Length, readPosition - lineStart + 1);
-            var preceding = line.AsSpan(0, nearEnd).TrimEnd(" \t"u8);
+            var nearEnd = Math.Min(physicalLine.Length, readPosition - lineStart + 1);
+            var preceding = physicalLine.AsSpan(0, nearEnd).TrimEnd(" \t"u8);
             if (preceding.IsEmpty)
                 return token.Source;
             var start = Math.Max(0, preceding.LastIndexOfAny(" \t;|&"u8));
             if (preceding[start] is (byte)' ' or (byte)'\t')
                 start++;
-            return line.Slice(start, preceding.Length - start);
+            return physicalLine.Slice(start, preceding.Length - start);
         }
     }
 

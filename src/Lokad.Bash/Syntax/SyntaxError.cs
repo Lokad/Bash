@@ -19,7 +19,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
     internal CaptureEndOfInput? CaptureEndOfInput { get; init; }
     internal CaptureHereDocumentWarnings? CaptureWarnings { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
-    internal ConditionalQuoteEnd? ConditionalQuoteEnd { get; init; }
+    internal ConditionalEndOfInput? ConditionalEndOfInput { get; init; }
     internal bool MissingCommandAtEndOfInput { get; init; }
     internal bool IsNestedSubstitution { get; init; }
 
@@ -47,22 +47,25 @@ internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int
 
     /// <summary>Byte offset where the enclosing capture starts reading its payload.</summary>
     internal int CapturePayloadStart { get; init; }
-    internal ConditionalArgumentError ConditionalError { get; init; }
+    internal ConditionalReadDiagnostic? Conditional { get; init; }
     internal ShellSource Argument { get; init; }
-    internal int UnclosedGroups { get; init; }
 }
 
 /// <summary>A quoted bracketed item whose capture is diagnosed as its unit is read.</summary>
 internal readonly record struct CompoundItemReadDiagnostic(Word Item, int EndLine,
     ShellSource DeclarationPrefix, int PrefixEndLine, SubstitutionSyntaxFailure CaptureFailure);
 
-internal enum ConditionalArgumentError { None, UnaryOperand, BinaryOperand, BinaryOperator }
+internal enum ConditionalReaderError { None, UnaryOperand, BinaryOperand, BinaryOperator, Term, GroupClose, Expression, MissingCloser }
 
-internal readonly record struct ConditionalQuoteEnd(bool DoubleQuoted)
+/// <summary>The primary grammar diagnostic and then any enclosing groups, in reader order.</summary>
+internal readonly record struct ConditionalReadDiagnostic(ConditionalReaderError Error, int ReasonLine)
 {
-    internal ConditionalArgumentError Role { get; init; }
-    internal int UnclosedGroups { get; init; }
+    internal int ReadLine { get; init; }
+    internal IReadOnlyList<int>? UnclosedGroupLines { get; init; }
 }
+
+internal readonly record struct ConditionalEndOfInput(int EndLine, bool? DoubleQuoted, int QuoteLine,
+    ConditionalReadDiagnostic Diagnostic);
 
 /// <summary>Diagnostics from reading a capture that could not reach its closing parenthesis.</summary>
 internal sealed record CaptureEndOfInput(char Delimiter, int ReadPosition)
