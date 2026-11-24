@@ -17,14 +17,14 @@ public sealed class RegexCaptureTests
         var caller = Variables.CreateEmpty();
         var name = Variables.RegexCaptureName;
         if (useCommandScope)
-            caller.SetRegexCaptures([]);
+            caller.ClearRegexCaptures();
         var governor = new MemoryGovernor(64 * 1024);
         var memory = new EvaluationMemory(governor);
         try
         {
             var owner = useCommandScope ? Variables.CreateCommandScope(caller, memory, CancellationToken.None) : caller;
 
-            owner.SetRegexCaptures([]);
+            owner.ClearRegexCaptures();
 
             Assert.False(owner.IsBorrowedBinding(name));
             var first = owner.IndexedArrays[name];
@@ -34,7 +34,7 @@ public sealed class RegexCaptureTests
                 Assert.NotSame(caller.IndexedArrays[name], first);
             var bytes = owner.EstimatedMemoryBytes;
 
-            owner.SetRegexCaptures([]);
+            owner.ClearRegexCaptures();
 
             Assert.Same(first, owner.IndexedArrays[name]);
             Assert.Equal(bytes, owner.EstimatedMemoryBytes);
@@ -48,7 +48,7 @@ public sealed class RegexCaptureTests
     {
         var variables = Variables.CreateEmpty();
         var name = Variables.RegexCaptureName;
-        variables.SetRegexCaptures([ShellValue.FromText("match")]);
+        variables.SetRegexCaptures(IndexedArray.FromSequential([ShellValue.FromText("match")]));
         var previous = variables.IndexedArrays[name];
         using (variables.TrackBindingMemory(name))
             previous.Remove(default);
@@ -56,7 +56,7 @@ public sealed class RegexCaptureTests
         Assert.True(previous.EstimatedMemoryBytes > 0);
         var before = variables.EstimatedMemoryBytes;
 
-        variables.SetRegexCaptures([]);
+        variables.ClearRegexCaptures();
 
         var current = variables.IndexedArrays[name];
         Assert.NotSame(previous, current);
@@ -89,7 +89,7 @@ public sealed class RegexCaptureTests
         {
             var owner = useCommandScope ? Variables.CreateCommandScope(caller, memory, CancellationToken.None) : caller;
 
-            owner.SetRegexCaptures(captures);
+            owner.SetRegexCaptures(IndexedArray.FromSequential(captures));
 
             Assert.Equal<ShellValue>(captures, owner.IndexedArrays[name].PresentValues);
             Assert.DoesNotContain(name, owner.ExportedNames);
@@ -150,6 +150,34 @@ public sealed class RegexCaptureTests
         Assert.Equal(fits ? "0:101:<" + value + ">" : "1:2:<o>", host.StandardOutput.TextContent);
         if (fits) Assert.Empty(host.StandardError.Content.ToArray());
         else Assert.Contains("memory", host.StandardError.TextContent, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task CancellationDuringCaptureAdmissionKeepsEarlierResults()
+    {
+        const int Groups = 256;
+        var pattern = new string('(', Groups) + "x" + new string(')', Groups);
+        var evaluation = new Eval(Parser.Parse($"[[ old =~ (o) ]]; [[ x =~ {pattern} ]]"));
+        var governor = new MemoryGovernor(1024 * 1024);
+        var budget = new CountingMemoryBudget(governor);
+        using var cancellation = new CancellationTokenSource();
+        await using var host = new TestHost { MemoryBudget = budget };
+        using var owner = budget.CreateScope();
+        budget.AdmissionSucceeded += () =>
+        {
+            // Only the second match's capture admission reaches this threshold.
+            if (governor.ReservedBytes >= 64 * 1024)
+                cancellation.Cancel();
+        };
+
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new Engine().RunAsync(evaluation, host, owner, cancellation.Token));
+
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal<ShellValue>([ShellValue.FromText("o"), ShellValue.FromText("o")],
+            evaluation.IndexedArrays[Variables.RegexCaptureName]);
+        owner.Dispose();
         Assert.Equal(0, governor.ReservedBytes);
     }
 

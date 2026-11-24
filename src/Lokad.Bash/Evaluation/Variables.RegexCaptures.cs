@@ -1,19 +1,20 @@
-using System.Collections.Generic;
-
 namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Variables
 {
     internal static readonly BindingName RegexCaptureName = "BASH_REMATCH";
 
-    /// <summary>Publishes admitted captures on the selected global owner, replacing prior kind and attributes.</summary>
-    internal void SetRegexCaptures(IReadOnlyList<ShellValue> captures)
+    /// <summary>Clears captures after a completed match attempt with no match.</summary>
+    internal void ClearRegexCaptures()
     {
         // Element removal can leave an empty array with backing that publication releases.
-        if (captures.Count == 0 && _bindings.TryGetValue(RegexCaptureName, out var prior)
+        if (_bindings.TryGetValue(RegexCaptureName, out var prior)
             && prior is IndexedSlot { Attributes: BindingAttributes.None, Value: { IsInitialized: true, EstimatedMemoryBytes: 0 } })
             return;
 
-        StoreBinding(RegexCaptureName, new IndexedSlot(IndexedArray.FromSequential(captures)));
+        SetRegexCaptures(new IndexedArray(isInitialized: true));
     }
+
+    /// <summary>Publishes the owned, admitted array on the selected global owner.</summary>
+    internal void SetRegexCaptures(IndexedArray captures) => StoreBinding(RegexCaptureName, new IndexedSlot(captures));
 }

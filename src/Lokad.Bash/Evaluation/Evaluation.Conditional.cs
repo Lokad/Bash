@@ -175,7 +175,7 @@ public sealed partial class Evaluation
             var owner = scope.Context.GetGlobalBindingOwner(global::Lokad.Bash.Evaluation.Variables.RegexCaptureName, scope.Variables);
             if (!match.Success)
             {
-                owner.SetRegexCaptures([]);
+                owner.ClearRegexCaptures();
                 return 1;
             }
             var groups = match.Groups;
@@ -218,30 +218,36 @@ public sealed partial class Evaluation
                 bytes = checked(bytes + length);
             }
             Memory.Charge(checked(256L * groups.Count + 2L * bytes));
-            var captures = new ShellValue[groups.Count];
+            _cancellationToken.ThrowIfCancellationRequested();
+            var captures = new IndexedArray(isInitialized: true, capacity: groups.Count);
             previousPartial = null;
             var previousBytes = ReadOnlyMemory<byte>.Empty;
-            for (var index = 0; index < captures.Length; index++)
+            for (var index = 0; index < groups.Count; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 var group = groups[index];
-                if (group.Length == 0)
-                    continue;
-                if (ascii || group.Length == text.Length)
+                var value = ShellValue.Empty;
+                if (group.Length != 0)
                 {
-                    var original = ascii ? inputBytes.Slice(group.Index, group.Length) : inputBytes;
-                    captures[index] = ShellValue.FromBytes(original.ToArray());
-                    continue;
+                    if (ascii || group.Length == text.Length)
+                    {
+                        var original = ascii ? inputBytes.Slice(group.Index, group.Length) : inputBytes;
+                        value = ShellValue.FromBytes(original.ToArray());
+                    }
+                    else
+                    {
+                        // Equal consecutive partial spans share encoding work. Each result still owns its buffer.
+                        var content = SameSpan(group, previousPartial) ? previousBytes.ToArray()
+                            : CopyPartialCapture(group, partialLengths.IsEmpty
+                                ? Encoding.UTF8.GetByteCount(group.ValueSpan) : partialLengths[index]);
+                        value = ShellValue.FromBytes(content);
+                        previousPartial = group;
+                        previousBytes = content;
+                    }
                 }
-
-                // Equal consecutive partial spans share encoding work. Each result still owns its buffer.
-                var content = SameSpan(group, previousPartial) ? previousBytes.ToArray()
-                    : CopyPartialCapture(group, partialLengths.IsEmpty
-                        ? Encoding.UTF8.GetByteCount(group.ValueSpan) : partialLengths[index]);
-                captures[index] = ShellValue.FromBytes(content);
-                previousPartial = group;
-                previousBytes = content;
+                captures.Set(IndexedArrayIndex.FromUnsigned((uint)index), value);
             }
+            _cancellationToken.ThrowIfCancellationRequested();
             owner.SetRegexCaptures(captures);
             return 0;
 
