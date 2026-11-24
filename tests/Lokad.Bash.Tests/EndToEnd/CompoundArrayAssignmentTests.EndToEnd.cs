@@ -8,6 +8,17 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class CompoundArrayAssignmentTestsEndToEnd
 {
     [Theory]
+    [InlineData("declare -ai a=(\n[1]=1/0\n)", "")]
+    [InlineData("declare -Ai 'a=([first]=2 [bad]=1/0)'", "")]
+    [InlineData("f(){ local -Ai a=([bad]=1/0); }; f", "")]
+    [InlineData("declare -i scalar=1/0", "declare: ")]
+    public Task IntegerInitializerDiagnosticsUseTheReachedArithmeticOperand(string body, string prefix)
+    {
+        return AssertBothEntryPointsAsync(body + "\nprintf '<%s>' \"$?\"\n", 0, "<1>",
+            "line 1: " + prefix + "1/0: division by 0 (error token is \"0\")\n");
+    }
+
+    [Theory]
     [InlineData("a=", "old", "")]
     [InlineData("a+=", "first", "")]
     [InlineData("declare -A a=", "old", "skiplate")]

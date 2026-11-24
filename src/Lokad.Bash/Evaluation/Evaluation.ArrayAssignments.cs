@@ -12,11 +12,10 @@ public sealed partial class Evaluation
     /// <summary>Expands and applies an initializer whose destination has already been selected.</summary>
     private async Task<bool> ExpandAndApplyCompoundArrayItemsAsync(
         VariableBinding target, ArrayKind kind, AssignmentOperator operation, IReadOnlyList<CompoundArrayItem> items,
-        AssignmentContext context, ScopedEvaluation scope, BindingName sourceName, ShellValue command,
-        bool initializeReadonly)
+        AssignmentContext context, ScopedEvaluation scope, BindingName sourceName, bool initializeReadonly)
     {
         if (kind == ArrayKind.Associative)
-            return await ApplyAssociativeInitializerAsync(target, operation, scope, sourceName, command,
+            return await ApplyAssociativeInitializerAsync(target, operation, scope, sourceName,
                 initializeReadonly, accept => VisitAssociativeInitializerAsync(target.Name, items, context, scope,
                     prepareDeclaration: false, accept)).ConfigureAwait(false);
 
@@ -25,7 +24,7 @@ public sealed partial class Evaluation
             : await ExpandCompoundArrayItemsAsync(target.Name, items, kind, operation, context, scope, itemMemory)
                 .ConfigureAwait(false);
         return expanded != null && await ApplyCompoundArrayItemsAsync(target.Name, operation, kind, expanded,
-            scope, target.Owner, sourceName, command, initializeReadonly).ConfigureAwait(false);
+            scope, target.Owner, sourceName, initializeReadonly).ConfigureAwait(false);
     }
 
     /// <summary>Expands compound operands against the old binding, before replacement starts.</summary>
@@ -335,13 +334,12 @@ public sealed partial class Evaluation
     /// <summary>Applies expanded items in order; selector effects observe earlier writes.</summary>
     private async Task<bool> ApplyCompoundArrayItemsAsync(
         BindingName name, AssignmentOperator operation, ArrayKind kind, IReadOnlyList<ExpandedArrayItem> expanded,
-        ScopedEvaluation scope, Variables targetVariables, BindingName sourceName, ShellValue command,
-        bool initializeReadonly)
+        ScopedEvaluation scope, Variables targetVariables, BindingName sourceName, bool initializeReadonly)
     {
         if (kind == ArrayKind.Associative)
         {
             var target = new VariableBinding(VariableReference.ForName(name), targetVariables);
-            return await ApplyAssociativeInitializerAsync(target, operation, scope, sourceName, command,
+            return await ApplyAssociativeInitializerAsync(target, operation, scope, sourceName,
                 initializeReadonly, VisitPreparedItemsAsync).ConfigureAwait(false);
         }
 
@@ -391,7 +389,7 @@ public sealed partial class Evaluation
             // Bash 5.2 prefixes reclassified += items with element zero, including earlier writes.
             if (item.PrefixWithElementZero && targetVariables.TryGetExpansionValue(name, out var previous))
                 value = WordExpansion.AppendAssignmentValue(previous, value, scope);
-            if (await target.AssignValueAsync(scope, targetVariables, sourceName, value, item.Operator, command, write)
+            if (await target.AssignValueAsync(scope, targetVariables, sourceName, value, item.Operator, ShellValue.Empty, write)
                     .ConfigureAwait(false) is null)
                 return false;
             if (target is WordExpansion.ResolvedVariableReference.Indexed element)
@@ -414,7 +412,7 @@ public sealed partial class Evaluation
     /// <summary>Applies each associative element to the live append target or to a private replacement.</summary>
     private async Task<bool> ApplyAssociativeInitializerAsync(
         VariableBinding target, AssignmentOperator operation, ScopedEvaluation scope, BindingName sourceName,
-        ShellValue command, bool initializeReadonly, Func<Func<ExpandedArrayItem, ValueTask<bool>>, Task<bool>> visit)
+        bool initializeReadonly, Func<Func<ExpandedArrayItem, ValueTask<bool>>, Task<bool>> visit)
     {
         var name = target.Name;
         var owner = target.Owner;
@@ -443,7 +441,7 @@ public sealed partial class Evaluation
             if (replacement == null)
             {
                 var location = new WordExpansion.ResolvedVariableReference.Associative(name, key);
-                return await location.AssignValueAsync(scope, owner, sourceName, item.Value, item.Operator, command, write)
+                return await location.AssignValueAsync(scope, owner, sourceName, item.Value, item.Operator, ShellValue.Empty, write)
                     .ConfigureAwait(false) != null;
             }
 
@@ -451,7 +449,7 @@ public sealed partial class Evaluation
             ShellValue? previous = item.Operator == AssignmentOperator.Append && owner.TryReadArrayElement(name, key, out var stored)
                 ? stored : null;
             var attributes = owner.GetAssignmentAttributes(name);
-            if (await WordExpansion.PrepareAssignmentValueAsync(item.Value, previous, attributes, scope, command)
+            if (await WordExpansion.PrepareAssignmentValueAsync(item.Value, previous, attributes, scope, ShellValue.Empty)
                     .ConfigureAwait(false) is not { } prepared)
                 return false;
             replacement.Set(key, global::Lokad.Bash.Evaluation.Variables.ConvertAssignmentCase(attributes, prepared, Memory), Memory);

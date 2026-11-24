@@ -2562,8 +2562,7 @@ public sealed partial class Evaluation : IFileTester
                         return status == 2 ? EvaluationResult.Exit(status) : EvaluationResult.DiscardCompoundInitializerUnit();
                     }
                     if (!await AwaitWordExpansionAsync(ExpandAndApplyCompoundArrayItemsAsync(initializerTarget, initializerKind,
-                            operand.Operator, items, AssignmentContext.Declaration, executionScope, sourceName,
-                            ShellValue.FromText(commandName), initializeReadonly))
+                            operand.Operator, items, AssignmentContext.Declaration, executionScope, sourceName, initializeReadonly))
                             .ConfigureAwait(false))
                     {
                         exitCode = 1;
@@ -2987,7 +2986,7 @@ public sealed partial class Evaluation : IFileTester
             var kind = scope.Variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
             return await ExpandAndApplyCompoundArrayItemsAsync(
                 new VariableBinding(VariableReference.ForName(name), scope.Variables), kind, assignment.Operator, items,
-                AssignmentContext.Direct, scope, compoundTarget.Name, ShellValue.Empty, initializeReadonly: false).ConfigureAwait(false);
+                AssignmentContext.Direct, scope, compoundTarget.Name, initializeReadonly: false).ConfigureAwait(false);
         }
     }
 

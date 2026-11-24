@@ -162,7 +162,7 @@ public sealed partial class Evaluation
                     targetVariables.SetCaseAttributes(name, GetCompoundCaseChange(setCompoundTransforms));
                     if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, targetVariables, declaredName,
-                            ShellValue.FromText(commandName), initializeReadonly: false)).ConfigureAwait(false))
+                            initializeReadonly: false)).ConfigureAwait(false))
                     {
                         if (!HasPendingExpansionError)
                             SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
