@@ -247,6 +247,41 @@ public sealed class PrefixScopeOwnershipTests
     }
 
     [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
+    public async Task RejectedIntegerAssignmentLeavesTheArrayBorrowed(ArrayKind kind)
+    {
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromText("7");
+        var entries = kind == ArrayKind.Indexed ? new[] { value } : new[] { ShellValue.FromText("0"), value };
+        Assert.True(caller.TryAssignArray("x", entries, kind));
+        caller.SetIntegerBinding("x", true);
+        caller.SetReadonlyBinding("x");
+        WordExpansion.ResolvedVariableReference target = kind == ArrayKind.Indexed
+            ? new WordExpansion.ResolvedVariableReference.Indexed("x", default)
+            : new WordExpansion.ResolvedVariableReference.Associative("x", AssociativeArrayKey.Zero);
+        var governor = new MemoryGovernor(64 * 1024);
+        var evaluation = new Eval(Parser.Parse(""), EvaluationDescriptorSetup.Standard,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        try
+        {
+            var command = Variables.CreateCommandScope(caller, evaluation.Memory, CancellationToken.None);
+            var scope = new ScopedEvaluation(evaluation, command, default);
+            var workspace = evaluation.Memory.Workspace.Bytes;
+
+            var result = await target.AssignValueAsync(scope, "x", ShellValue.FromText("42"), AssignmentOperator.Replace);
+
+            Assert.Null(result);
+            Assert.Equal(workspace, evaluation.Memory.Workspace.Bytes);
+            Assert.True(command.IsBorrowedBinding("x"));
+            Assert.True(command.TryGetExpansionValue("x", out var retained));
+            Assert.Equal(value, retained);
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(ArrayKind.Indexed, false)]
     [InlineData(ArrayKind.Associative, false)]
     [InlineData(ArrayKind.Indexed, true)]

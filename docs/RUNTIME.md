@@ -374,7 +374,9 @@ when the definition is evaluated again.
 Prefix assignment preparation borrows caller state for the surrounding command.
 It admits each detached binding once, retaining independent array containers
 and attributes. Read-only presence, attribute and nameref queries inspect
-the visible binding in its existing owner. Whole-value replacement reads
+the visible binding in its existing owner. Assignment preparation reads
+the conversion flags there and the element writer takes ownership when
+it reaches publication. Whole-value replacement reads
 the previous attributes from that owner and publishes only the new value.
 Sizing a binding borrows its backing. Copying a binding admits destination
 storage and takes one independent copy, leaving the source owner in place.
