@@ -11,19 +11,20 @@ internal static class ManagedMemory
             throw new ArgumentException("memory-managed DIRECTORY CASE_ID public|prepared");
         var directory = Path.GetFullPath(args[1]);
         var catalogPath = Path.Combine(directory, "catalog.json");
-        var catalog = File.ReadAllBytes(catalogPath);
-        var workload = WorkloadCatalog.Read(catalog).Cases.Single(row => row.Id == args[2]);
+        var catalogBytes = File.ReadAllBytes(catalogPath);
+        var catalog = new WorkloadCatalogSnapshot(catalogBytes);
+        var workload = catalog.Cases.Single(row => row.Id == args[2]);
         if (workload.SkipReason.Length > 0) throw new InvalidDataException(workload.SkipReason);
         var root = Path.Combine(directory, "memory", $"net{Environment.Version.Major}-" + Guid.NewGuid().ToString("N"));
         EvidenceFiles.CreateDirectory(root);
-        EvidenceFiles.WriteBytes(Path.Combine(root, "catalog.json"), catalog);
+        EvidenceFiles.WriteBytes(Path.Combine(root, "catalog.json"), catalogBytes);
         var managedReport = $"managed-net{Environment.Version.Major}-verification.json";
         var processReport = $"process-net{Environment.Version.Major}-verification.json";
         File.Copy(Path.Combine(directory, managedReport), Path.Combine(root, managedReport));
         File.Copy(Path.Combine(directory, processReport), Path.Combine(root, processReport));
-        VerificationGate.Read(Path.Combine(root, managedReport), catalog, VerificationTransport.InProcess, false, probeExecutable: null);
+        VerificationGate.Read(Path.Combine(root, managedReport), catalog, VerificationTransport.InProcess, probeExecutable: null);
         var (executable, identity) = ProbeInvocation.Freeze(Path.Combine(root, "probe"));
-        VerificationGate.Read(Path.Combine(root, processReport), catalog, VerificationTransport.ManagedProcess, false, executable);
+        VerificationGate.Read(Path.Combine(root, processReport), catalog, VerificationTransport.ManagedProcess, executable);
         var path = Path.Combine(root, "result.json");
         var source = MeasurementDispatch.IdentifySource();
         ProcessOutput? output = null;
@@ -52,7 +53,7 @@ internal static class ManagedMemory
             recordedAt = DateTimeOffset.UtcNow, workload.Id, mode, source, probeIdentity = identity,
             runtime = RuntimeInformation.FrameworkDescription, os = RuntimeInformation.OSDescription,
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
-            catalogSha256 = Blob.Hash(catalog),
+            catalogSha256 = catalog.Sha256,
             harnessSha256 = Blob.Hash(File.ReadAllBytes(typeof(ManagedMemory).Assembly.Location)),
             output, probe, failure,
             allocationScope = "GC.GetTotalAllocatedBytes(precise: true) across all child managed threads during awaited execution and evaluation cleanup. Source/input/host setup, prepared parsing/evaluator construction, result serialization and final host disposal are excluded. Public invocation includes its own parsing/evaluator construction. Cold single invocation; no steady-state claim.",

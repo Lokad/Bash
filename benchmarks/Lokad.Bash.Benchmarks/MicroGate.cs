@@ -15,7 +15,7 @@ internal static class MicroGate
     public static void Validate(VerificationReport report, string catalogPath)
     {
         var catalog = File.ReadAllBytes(catalogPath);
-        VerificationGate.ValidateIdentity(report, catalog, VerificationTransport.MicroCore, false);
+        VerificationGate.ValidateIdentity(report, Blob.Hash(catalog), VerificationTransport.MicroCore);
         if (report.Reference != null || report.Probe != null || report.HostChecksPassed)
             throw new InvalidDataException("Core micro evidence must not claim host or native qualification.");
         var expected = MicroCatalog.Read(catalog).Cases.ToDictionary(row => row.Id, StringComparer.Ordinal);

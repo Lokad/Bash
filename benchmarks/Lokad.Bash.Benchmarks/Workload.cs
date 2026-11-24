@@ -98,3 +98,10 @@ internal sealed record WorkloadCatalog(int SchemaVersion, int Seed, IReadOnlyDic
         return catalog;
     }
 }
+
+/// <summary>The validated workloads and the identity of the exact bytes from which they were read.</summary>
+internal sealed class WorkloadCatalogSnapshot(ReadOnlySpan<byte> bytes)
+{
+    public IReadOnlyList<Workload> Cases { get; } = WorkloadCatalog.Read(bytes).Cases;
+    public string Sha256 { get; } = Blob.Hash(bytes);
+}

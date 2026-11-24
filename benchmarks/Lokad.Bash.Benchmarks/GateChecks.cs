@@ -7,11 +7,13 @@ internal static class GateChecks
 {
     public static void Run(string directory)
     {
-        var catalog = Path.Combine(directory, "catalog.json");
+        var catalogBytes = File.ReadAllBytes(Path.Combine(directory, "catalog.json"));
+        var catalog = new WorkloadCatalogSnapshot(catalogBytes);
         var report = VerificationGate.Read(Path.Combine(directory, $"managed-net{Environment.Version.Major}-verification.json"),
-            catalog, VerificationTransport.InProcess, false);
+            catalog, VerificationTransport.InProcess, probeExecutable: null);
         Rejected(report with { Complete = false });
         Rejected(report with { CatalogSha256 = "changed" });
+        CheckCatalogIdentity();
         Rejected(report with { HarnessSha256 = "changed" });
         Rejected(report with { InterpreterSha256 = "changed" });
         Rejected(report with { HostChecksPassed = false });
@@ -31,21 +33,37 @@ internal static class GateChecks
         var processPath = Path.Combine(directory, $"process-net{Environment.Version.Major}-verification.json");
         if (File.Exists(processPath))
         {
-            var process = VerificationGate.Read(processPath, catalog, VerificationTransport.ManagedProcess, false);
+            var process = VerificationGate.Read(processPath, catalog, VerificationTransport.ManagedProcess, probeExecutable: null);
             var rejected = false;
-            try { VerificationGate.Validate(process with { Probe = null }, catalog, VerificationTransport.ManagedProcess, false); }
+            try { VerificationGate.Validate(process with { Probe = null }, catalog, VerificationTransport.ManagedProcess, probeExecutable: null, referenceCatalog: null); }
             catch (InvalidDataException) { rejected = true; }
             if (!rejected) throw new InvalidOperationException("Unidentified probe was accepted.");
         }
         CheckProbeResult();
         CheckExclusiveEvidence();
-        try { new MeasurementContext(directory, directory, MeasurementLane.Public, [], null, null, null).Validate(true); }
-        catch (InvalidDataException) { Console.WriteLine("Verification gates reject stale, partial or duplicate evidence, mismatched outcomes and timing without a quiet VM declaration."); return; }
+        try { new MeasurementContext(directory, directory, MeasurementLane.Public, [], null, null, null).Validate(timing: true, snapshot: null); }
+        catch (InvalidDataException error) when (error.Message.Contains("quiet dedicated VM", StringComparison.Ordinal))
+        {
+            Console.WriteLine("Verification gates reject stale, partial or duplicate evidence, mismatched outcomes and timing without a quiet VM declaration.");
+            return;
+        }
         throw new InvalidOperationException("Timing without a quiet VM declaration was accepted.");
+
+        void CheckCatalogIdentity()
+        {
+            // This preserves the decoded workloads while changing the catalog's exact byte identity.
+            var changedBytes = new byte[catalogBytes.Length + 1];
+            catalogBytes.CopyTo(changedBytes, 0);
+            changedBytes[^1] = (byte)'\n';
+            var changed = new WorkloadCatalogSnapshot(changedBytes);
+            try { VerificationGate.Validate(report, changed, VerificationTransport.InProcess, probeExecutable: null, referenceCatalog: null); }
+            catch (InvalidDataException error) when (error.Message == "Catalog changed after verification.") { return; }
+            throw new InvalidOperationException("A changed catalog was accepted against an earlier verification report.");
+        }
 
         void CheckProbeResult()
         {
-            var workload = WorkloadCatalog.Read(catalog).Cases.First(row => row.SkipReason.Length == 0);
+            var workload = catalog.Cases.First(row => row.SkipReason.Length == 0);
             var root = Path.Combine(directory, "gate-checks", Guid.NewGuid().ToString("N"));
             var invocation = new ProbeInvocation(workload, ProbeMode.Public, allocationCounters: false,
                 Path.Combine(root, "synthetic-probe"), root, captureStderr: false);
@@ -107,7 +125,7 @@ internal static class GateChecks
 
         void Rejected(VerificationReport invalid)
         {
-            try { VerificationGate.Validate(invalid, catalog, VerificationTransport.InProcess, false); }
+            try { VerificationGate.Validate(invalid, catalog, VerificationTransport.InProcess, probeExecutable: null, referenceCatalog: null); }
             catch (InvalidDataException) { return; }
             throw new InvalidOperationException("Invalid verification evidence was accepted.");
         }

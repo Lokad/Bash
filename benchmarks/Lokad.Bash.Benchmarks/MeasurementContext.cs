@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Lokad.Bash.Benchmarks;
 
@@ -19,29 +18,33 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
 {
     public const string EnvironmentKey = "LOKAD_BASH_BENCH_CONTEXT";
     public string CatalogPath => Path.Combine(CatalogDirectory, "catalog.json");
-    [JsonIgnore] public WorkloadCatalog Catalog => WorkloadCatalog.Read(CatalogPath);
-    public Workload Case(string id) => Catalog.Cases.Single(row => row.Id == id && CaseIds.Contains(id));
-    public static MeasurementContext Load(bool timing)
+
+    public static (MeasurementContext Context, Workload Workload) LoadCase(string id)
     {
-        var context = LoadMetadata();
-        context.Validate(timing);
-        return context;
+        var context = ReadContext();
+        var selected = context.Validate(timing: true, snapshot: null);
+        return (context, selected.Single(row => row.Id == id));
     }
     public static MeasurementContext LoadMetadata()
     {
-        var path = Environment.GetEnvironmentVariable(EnvironmentKey) ?? throw new InvalidOperationException("Missing measurement context.");
-        var context = JsonSerializer.Deserialize<MeasurementContext>(File.ReadAllBytes(path), WorkloadCatalog.Json)
-            ?? throw new InvalidDataException("Missing measurement context.");
-        _ = context.SelectedCases(context.Catalog);
+        var context = ReadContext();
+        _ = context.SelectedCases(WorkloadCatalog.Read(context.CatalogPath).Cases);
         return context;
     }
-    public void Validate(bool timing)
+
+    private static MeasurementContext ReadContext()
+    {
+        var path = Environment.GetEnvironmentVariable(EnvironmentKey) ?? throw new InvalidOperationException("Missing measurement context.");
+        return JsonSerializer.Deserialize<MeasurementContext>(File.ReadAllBytes(path), WorkloadCatalog.Json)
+            ?? throw new InvalidDataException("Missing measurement context.");
+    }
+    public IReadOnlyList<Workload> Validate(bool timing, WorkloadCatalogSnapshot? snapshot)
     {
         if (timing) VmDeclaration.RequireQuiet(Vm);
-        var catalog = File.ReadAllBytes(CatalogPath);
-        var selected = SelectedCases(WorkloadCatalog.Read(catalog));
+        var catalog = snapshot ?? new WorkloadCatalogSnapshot(File.ReadAllBytes(CatalogPath));
+        var selected = SelectedCases(catalog.Cases);
         VerificationGate.Read(Path.Combine(CatalogDirectory, $"managed-net{Environment.Version.Major}-verification.json"),
-            catalog, VerificationTransport.InProcess, false, probeExecutable: null);
+            catalog, VerificationTransport.InProcess, probeExecutable: null);
         var nativeReports = new List<VerificationReport>();
         foreach (var id in new[] { "gnu-msys", "gnu-linux" })
         {
@@ -51,14 +54,15 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
                 ?? throw new InvalidDataException("Missing GNU correctness evidence.");
             if (report.Transport is not (VerificationTransport.NativeDirect or VerificationTransport.WslCorrectness) || report.Reference?.Id != id)
                 throw new InvalidDataException("Wrong native evidence identity or transport.");
-            VerificationGate.ValidateNative(report, catalog, Path.Combine(CatalogDirectory, "reference-catalog.json"));
+            VerificationGate.Validate(report, catalog, report.Transport, probeExecutable: null,
+                Path.Combine(CatalogDirectory, "reference-catalog.json"));
             nativeReports.Add(report);
         }
         if (Lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess)
         {
             var executable = ProbeExecutable ?? throw new InvalidDataException("Missing frozen managed process probe.");
             VerificationGate.Read(Path.Combine(CatalogDirectory, $"process-net{Environment.Version.Major}-verification.json"),
-                catalog, VerificationTransport.ManagedProcess, false, executable);
+                catalog, VerificationTransport.ManagedProcess, executable);
             nativeReports.RemoveAll(report => report.Transport != VerificationTransport.NativeDirect);
             if (nativeReports.Count == 0)
                 throw new InvalidDataException("Whole-process comparison needs direct native qualification; WSL startup is excluded.");
@@ -74,12 +78,13 @@ internal sealed record MeasurementContext(string CatalogDirectory, string Output
         if (selected.Any(workload => !nativeReports.Any(report => workload.NativeExclusion(
                 (report.Reference ?? throw new InvalidDataException("Missing reference.")).Id).Length == 0)))
             throw new InvalidDataException("Selected cases lack native equivalence evidence for their locale/reference; UTF-8 rows need pinned GNU Linux C.utf8.");
+        return selected;
     }
 
-    private IReadOnlyList<Workload> SelectedCases(WorkloadCatalog catalog)
+    private IReadOnlyList<Workload> SelectedCases(IReadOnlyList<Workload> cases)
     {
         if (Environment.Version.Major is not (10 or 11) || !Enum.IsDefined(Lane)) throw new InvalidDataException("Unsupported benchmark runtime or lane.");
-        var selected = catalog.Cases.Where(workload => CaseIds.Contains(workload.Id)).ToArray();
+        var selected = cases.Where(workload => CaseIds.Contains(workload.Id)).ToArray();
         if (selected.Length != CaseIds.Count || selected.Length == 0 || CaseIds.Distinct(StringComparer.Ordinal).Count() != CaseIds.Count
             || selected.Any(workload => workload.SkipReason.Length > 0
                 || Lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess && workload.ProcessComparisonExclusion.Length > 0))

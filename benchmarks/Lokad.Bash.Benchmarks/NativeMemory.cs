@@ -17,17 +17,18 @@ internal static class NativeMemory
             throw new InvalidOperationException("Native RSS collection uses Linux GNU time; Windows qualification requires an explicit WSL distribution.");
         var directory = Path.GetFullPath(args[1]);
         var catalogPath = Path.Combine(directory, "catalog.json");
-        var catalog = File.ReadAllBytes(catalogPath);
-        var workload = WorkloadCatalog.Read(catalog).Cases.Single(row => row.Id == args[2]);
+        var catalogBytes = File.ReadAllBytes(catalogPath);
+        var catalog = new WorkloadCatalogSnapshot(catalogBytes);
+        var workload = catalog.Cases.Single(row => row.Id == args[2]);
         var exclusion = workload.NativeExclusion("gnu-linux");
         if (exclusion.Length > 0) throw new InvalidDataException(exclusion);
         var transport = distribution == null ? VerificationTransport.NativeDirect : VerificationTransport.WslCorrectness;
         var root = Path.Combine(directory, "memory", $"Native-net{Environment.Version.Major}-" + Guid.NewGuid().ToString("N"));
         EvidenceFiles.CreateDirectory(root);
-        EvidenceFiles.WriteBytes(Path.Combine(root, "catalog.json"), catalog);
+        EvidenceFiles.WriteBytes(Path.Combine(root, "catalog.json"), catalogBytes);
         var nativeReport = VerificationReport.NativePath(root, "gnu-linux");
         File.Copy(VerificationReport.NativePath(directory, "gnu-linux"), nativeReport);
-        VerificationGate.Read(nativeReport, catalog, transport, false, probeExecutable: null);
+        VerificationGate.Read(nativeReport, catalog, transport, probeExecutable: null);
         var native = distribution == null ? Path.GetFullPath(args[3]) : args[3];
         var collector = distribution == null ? Path.GetFullPath(args[4]) : args[4];
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -78,7 +79,7 @@ internal static class NativeMemory
             recordedAt = DateTimeOffset.UtcNow, source, environment, nativePlatform = platform.TrimEnd(),
             transport, reference = pin, collector = identity, resourceFormat = "%M\\n%x", formatChecksPassed = true,
             workload.Id, workload.Locale, workload.Variant, workload.Rounds,
-            catalogSha256 = Blob.Hash(catalog),
+            catalogSha256 = catalog.Sha256,
             harnessSha256 = Blob.Hash(File.ReadAllBytes(typeof(NativeMemory).Assembly.Location)),
             output, files, raw, resource,
             scope = "Linux GNU time %M high-water RSS in KiB, including startup/script parsing. It is not summed simultaneous process-tree residency. This separate instrumented invocation verifies exact shell status/output/effects. No parent CLR or Windows/WSL launcher memory is observed. Compare neither this metric nor cooperative live admission with cumulative managed allocation bytes."

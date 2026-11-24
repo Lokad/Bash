@@ -7,28 +7,18 @@ namespace Lokad.Bash.Benchmarks;
 /// <summary>Requires complete, current, exactly covered evidence and rechecks the recorded outcomes.</summary>
 internal static class VerificationGate
 {
-    public static VerificationReport Read(string path, string catalogPath, VerificationTransport transport, bool forMeasurement) =>
-        Read(path, File.ReadAllBytes(catalogPath), transport, forMeasurement, probeExecutable: null);
-
-    public static VerificationReport Read(string path, ReadOnlySpan<byte> catalog, VerificationTransport transport, bool forMeasurement,
-        string? probeExecutable)
+    public static VerificationReport Read(string path, WorkloadCatalogSnapshot catalog, VerificationTransport transport, string? probeExecutable)
     {
         var report = JsonSerializer.Deserialize<VerificationReport>(File.ReadAllBytes(path), WorkloadCatalog.Json)
             ?? throw new InvalidDataException("Missing verification report.");
-        Validate(report, catalog, transport, forMeasurement, probeExecutable, referenceCatalog: null);
+        Validate(report, catalog, transport, probeExecutable, referenceCatalog: null);
         return report;
     }
 
-    public static void Validate(VerificationReport report, string catalogPath, VerificationTransport transport, bool forMeasurement) =>
-        Validate(report, File.ReadAllBytes(catalogPath), transport, forMeasurement, probeExecutable: null, referenceCatalog: null);
-
-    public static void ValidateNative(VerificationReport report, ReadOnlySpan<byte> catalog, string referenceCatalog) =>
-        Validate(report, catalog, report.Transport, false, probeExecutable: null, referenceCatalog);
-
-    private static void Validate(VerificationReport report, ReadOnlySpan<byte> catalogBytes, VerificationTransport transport, bool forMeasurement,
+    public static void Validate(VerificationReport report, WorkloadCatalogSnapshot catalog, VerificationTransport transport,
         string? probeExecutable, string? referenceCatalog)
     {
-        ValidateIdentity(report, catalogBytes, transport, forMeasurement);
+        ValidateIdentity(report, catalog.Sha256, transport);
         if (transport == VerificationTransport.MicroCore) throw new InvalidDataException("Micro evidence requires its own exact-coverage gate.");
         if (transport == VerificationTransport.InProcess)
             Require(report.HostChecksPassed && report.Reference == null && report.Probe == null, "Managed host ownership checks are missing.");
@@ -45,7 +35,6 @@ internal static class VerificationGate
                 && pin.GetProperty("version").GetString() == reference.Version
                 && pin.GetProperty("sha256").GetString() == reference.Sha256), "Native reference is not pinned.");
         }
-        var catalog = WorkloadCatalog.Read(catalogBytes);
         var expected = new Dictionary<(string Id, VerificationLane Lane), Workload>();
         foreach (var workload in catalog.Cases)
         {
@@ -101,10 +90,10 @@ internal static class VerificationGate
         Require(expected.Count == 0, "Verification is incomplete.");
     }
 
-    internal static void ValidateIdentity(VerificationReport report, ReadOnlySpan<byte> catalog, VerificationTransport transport, bool forMeasurement)
+    internal static void ValidateIdentity(VerificationReport report, string catalogSha256, VerificationTransport transport)
     {
         Require(report.SchemaVersion == 2 && report.Complete, "Verification is partial or uses an unsupported schema.");
-        Require(report.CatalogSha256 == Blob.Hash(catalog), "Catalog changed after verification.");
+        Require(report.CatalogSha256 == catalogSha256, "Catalog changed after verification.");
         Require(report.HarnessSha256 == Blob.Hash(File.ReadAllBytes(Assembly.GetExecutingAssembly().Location))
             && report.InterpreterSha256 == Blob.Hash(File.ReadAllBytes(typeof(BashScript).Assembly.Location)), "Verified binaries changed.");
         Require(report.RuntimeMajor == Environment.Version.Major && report.Runtime == RuntimeInformation.FrameworkDescription
@@ -112,7 +101,6 @@ internal static class VerificationGate
             && report.ServerGC == System.Runtime.GCSettings.IsServerGC && report.ProcessorCount == Environment.ProcessorCount,
             "Verification belongs to another runtime/environment.");
         Require(report.Transport == transport && Enum.IsDefined(transport), "Verification covers another transport.");
-        Require(!forMeasurement || transport != VerificationTransport.WslCorrectness, "WSL is a correctness transport, excluded from measurement.");
     }
 
     internal static string FindReferenceCatalog() =>

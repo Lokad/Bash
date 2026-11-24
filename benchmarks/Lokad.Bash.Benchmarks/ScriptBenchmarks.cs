@@ -12,10 +12,10 @@ public class ParseBenchmarks
     public IEnumerable<string> Cases => MeasurementContext.LoadMetadata().CaseIds;
     [GlobalSetup] public void Setup()
     {
-        Prepare(MeasurementContext.Load(true));
+        Prepare(MeasurementContext.LoadCase(CaseId).Workload);
     }
-    internal void Prepare(MeasurementContext context) =>
-        _source = new System.Text.UTF8Encoding(false, true).GetString(context.Case(CaseId).Script.Bytes);
+    internal void Prepare(Workload workload) =>
+        _source = new System.Text.UTF8Encoding(false, true).GetString(workload.Script.Bytes);
     [Benchmark] public ParsedScript Parse() => Parser.Parse(_source);
 }
 
@@ -30,10 +30,10 @@ public abstract class ScriptBenchmarks
     protected abstract bool Prepared { get; }
     [ParamsSource(nameof(Cases))] public string CaseId { get; set; } = "";
     public IEnumerable<string> Cases => MeasurementContext.LoadMetadata().CaseIds;
-    [GlobalSetup] public Task Setup() => PrepareAsync(MeasurementContext.Load(true));
-    internal async Task PrepareAsync(MeasurementContext context)
+    [GlobalSetup] public Task Setup() => PrepareAsync(MeasurementContext.LoadCase(CaseId).Workload);
+    internal async Task PrepareAsync(Workload workload)
     {
-        _workload = context.Case(CaseId);
+        _workload = workload;
         if (Prepared) _prepared = Parser.Parse(new System.Text.UTF8Encoding(false, true).GetString(_workload.Script.Bytes));
         // Populate source-owned metadata outside measurement, and validate this exact setup.
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -90,12 +90,13 @@ public class ProcessBenchmarks
     public IEnumerable<string> Cases => MeasurementContext.LoadMetadata().CaseIds;
     [GlobalSetup] public void Setup()
     {
-        Prepare(MeasurementContext.Load(true));
+        var (context, workload) = MeasurementContext.LoadCase(CaseId);
+        Prepare(context, workload);
     }
-    internal void Prepare(MeasurementContext context)
+    internal void Prepare(MeasurementContext context, Workload workload)
     {
         _context = context;
-        _workload = _context.Case(CaseId);
+        _workload = workload;
     }
     [IterationSetup] public void BeforeInvocation()
     {

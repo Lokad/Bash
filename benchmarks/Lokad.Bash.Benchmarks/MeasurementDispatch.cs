@@ -37,17 +37,16 @@ internal static class MeasurementDispatch
         File.Copy(VerificationGate.FindReferenceCatalog(), referenceCatalog);
         foreach (var evidence in Directory.EnumerateFiles(directory, "*verification.json"))
             File.Copy(evidence, Path.Combine(root, Path.GetFileName(evidence)));
-        var catalogBytes = File.ReadAllBytes(catalogPath);
-        var catalog = WorkloadCatalog.Read(catalogBytes);
-        var selected = catalog.Cases.Where(workload => workload.SkipReason.Length == 0
+        var catalog = new WorkloadCatalogSnapshot(File.ReadAllBytes(catalogPath));
+        var caseIds = catalog.Cases.Where(workload => workload.SkipReason.Length == 0
             && workload.Id.StartsWith(prefix, StringComparison.Ordinal)
             && (lane is not (MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess)
                 || workload.ProcessComparisonExclusion.Length == 0 && workload.NativeExclusion(OperatingSystem.IsWindows() ? "gnu-msys" : "gnu-linux").Length == 0)
-            && (lane != MeasurementLane.Parse || workload.Variant == WorkloadVariant.WholeInvocation)).ToArray();
+            && (lane != MeasurementLane.Parse || workload.Variant == WorkloadVariant.WholeInvocation)).Select(workload => workload.Id).ToArray();
         var probe = lane is MeasurementLane.ManagedProcess or MeasurementLane.NativeProcess
             ? ProbeInvocation.Freeze(Path.Combine(root, "probe")).Executable : null;
-        var context = new MeasurementContext(root, root, lane, selected.Select(workload => workload.Id).ToArray(), native, probe, vm);
-        context.Validate(timing);
+        var context = new MeasurementContext(root, root, lane, caseIds, native, probe, vm);
+        var selected = context.Validate(timing, catalog);
         var contextPath = Path.Combine(root, "context.json");
         context.Write(contextPath);
         var environment = HostEnvironmentInfo.GetInformation();
@@ -68,7 +67,7 @@ internal static class MeasurementDispatch
                 _ => typeof(ProcessBenchmarks)
             };
             using var run = BenchmarkConverter.TypeToBenchmarks(type, config);
-            benchmarkCount = ValidateDiscovery(run, selected.Length, root);
+            benchmarkCount = ValidateDiscovery(run, selected.Count, root);
             if (timing)
             {
                 var summary = BenchmarkRunner.Run(run);
@@ -97,7 +96,7 @@ internal static class MeasurementDispatch
                 schemaVersion = 1, timingsRequested = timing, timingsComplete = completed, lifecycleChecked,
                 recordedAt = DateTimeOffset.UtcNow, source, environment, vm, lane, benchmarkCount,
                 runtimeRole = Environment.Version.Major == 11 ? "primary" : "compatibility-control",
-                catalogSha256 = Blob.Hash(catalogBytes),
+                catalogSha256 = catalog.Sha256,
                 referenceCatalogSha256 = Blob.Hash(File.ReadAllBytes(referenceCatalog)),
                 harnessSha256 = Blob.Hash(File.ReadAllBytes(typeof(MeasurementDispatch).Assembly.Location)),
                 interpreterSha256 = Blob.Hash(File.ReadAllBytes(typeof(BashScript).Assembly.Location)),
@@ -126,18 +125,18 @@ internal static class MeasurementDispatch
 
         async Task CheckLifecycleAsync()
         {
-            var id = context.CaseIds[0];
+            var workload = selected[0];
             if (lane == MeasurementLane.Parse)
             {
-                var benchmark = new ParseBenchmarks { CaseId = id };
-                benchmark.Prepare(context);
+                var benchmark = new ParseBenchmarks { CaseId = workload.Id };
+                benchmark.Prepare(workload);
                 if (benchmark.Parse().Commands.Count == 0) throw new InvalidDataException("The parse result was empty.");
             }
             else if (lane is MeasurementLane.Public or MeasurementLane.Prepared)
             {
                 ScriptBenchmarks benchmark = lane == MeasurementLane.Public ? new PublicBenchmarks() : new PreparedBenchmarks();
-                benchmark.CaseId = id;
-                await benchmark.PrepareAsync(context);
+                benchmark.CaseId = workload.Id;
+                await benchmark.PrepareAsync(workload);
                 benchmark.BeforeInvocation();
                 benchmark.AfterInvocation(); // The empty overhead iteration also owns setup/cleanup.
                 benchmark.BeforeInvocation();
@@ -146,8 +145,8 @@ internal static class MeasurementDispatch
             }
             else
             {
-                var benchmark = new ProcessBenchmarks { CaseId = id };
-                benchmark.Prepare(context);
+                var benchmark = new ProcessBenchmarks { CaseId = workload.Id };
+                benchmark.Prepare(context, workload);
                 benchmark.BeforeInvocation();
                 benchmark.AfterInvocation();
                 benchmark.BeforeInvocation();
