@@ -167,6 +167,20 @@ internal sealed class Tokenizer
         return GetLine(end);
     }
 
+    internal int GetCommandWordLine(int offset, bool readEndOfInput = false)
+    {
+        var line = GetLine(offset);
+        if (offset != _input.Length)
+            return line;
+        // Reading a terminal backslash in a word reaches the continued line.
+        // Looking past that word for a function opener reaches EOF as well.
+        if (_wordEndsWithUnframedBackslash)
+            return line + (readEndOfInput ? EndOfInputLineAdvance : 1);
+        if (_spacingContinuedAtEndOfInput && _input.AsSpan()[^1] == (byte)'\\')
+            return line + 1;
+        return line;
+    }
+
     /// <summary>Extra diagnostic lines reached past the last physical input line.</summary>
     internal int EndOfInputLineAdvance
     {

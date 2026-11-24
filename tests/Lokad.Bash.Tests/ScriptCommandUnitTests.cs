@@ -113,6 +113,41 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("missing\\", "line 4: missing: command not found\n")]
+    [InlineData("\"$LINENO\" \\", "line 3: 3: command not found\n")]
+    [InlineData("missing earlier \\", "line 2: missing: command not found\n")]
+    public async Task FinalFileBackslashPreservesCommandWordLookahead(string command, string diagnostic)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var script = ":\n" + command;
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(127, status);
+            Assert.Empty(host.StandardOutput.TextContent);
+            Assert.Equal(diagnostic, host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, "input: line 3: 3: command not found\n")]
+    [InlineData(false, "line 4: 4: command not found\n")]
+    public async Task FinalStringBackslashKeepsTheFirstArgumentReaderLine(bool source, string diagnostic)
+    {
+        await using var host = new TestHost();
+        const string body = ":\n\"$LINENO\" \\";
+        host.AddFile("/input", body);
+
+        var result = await host.RunAsync(source ? "source input" : "eval '" + body + "'", CancellationToken.None);
+
+        Assert.Equal(127, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
+    }
+
     [Fact]
     public async Task SourcedFinalRedirectionPassesLiteralBackslashToTheHost()
     {

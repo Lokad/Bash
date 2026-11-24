@@ -1460,7 +1460,7 @@ public static class Parser
             if (tokenizer.Error != null)
                 return null;
             if (sawAny && commandLine == 0 && tokenizer.TrackCommandLocations)
-                commandLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
+                commandLine = tokenizer.GetCommandWordLine(tokenizer.ConsumedPosition);
             var peek = tokenizer.PeekTokenCore();
             if (tokenizer.Error != null)
                 return null;
@@ -1610,7 +1610,7 @@ public static class Parser
                     }
 
                     if (trackNextTokenLine)
-                        RecordNextTokenLine(tokenizer.GetLine(tokenizer.ConsumedPosition));
+                        RecordNextTokenLine(tokenizer.GetCommandWordLine(tokenizer.ConsumedPosition));
                     if (words == null)
                     {
                         // An initial word has a grammar lookahead for a possible function definition.
@@ -1640,7 +1640,7 @@ public static class Parser
             {
                 var position = trailing.Kind == TokenKind.Newline ? trailing.Source.Start.Value : trailing.Source.End.Value;
                 if (position >= tokenizer.ConsumedPosition)
-                    RecordNextTokenLine(tokenizer.GetLine(position));
+                    RecordNextTokenLine(tokenizer.GetCommandWordLine(position, readEndOfInput: trailing.Kind == TokenKind.EndOfInput));
             }
             var command = new SimpleCommand(
                 assignments is null ? Array.Empty<AssignmentWord>() : assignments,
@@ -1654,7 +1654,7 @@ public static class Parser
         void AddAssignment(AssignmentWord assignment, Word word)
         {
             if (trackNextTokenLine)
-                RecordNextTokenLine(tokenizer.GetLine(tokenizer.ConsumedPosition));
+                RecordNextTokenLine(tokenizer.GetCommandWordLine(tokenizer.ConsumedPosition));
             if (allowAssignments)
             {
                 (assignments ??= []).Add(assignment);

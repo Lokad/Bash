@@ -524,7 +524,10 @@ storage after temporary consumers settle.
 `BashScript.RunAsync`, `source`, `eval` and reached EXIT actions parse and execute complete command units
 through the same evaluator. A newline completes a unit only after its compound
 syntax, continuations, quoting and here-documents are complete. Later syntax errors
-retain earlier units' effects. A direct double-quoted command substitution with
+retain earlier units' effects. A terminal backslash can advance the command's
+reader line during initial word lookahead. That line supplies `LINENO` and
+launch diagnostics while source offsets continue to refer to physical bytes.
+A direct double-quoted command substitution with
 a malformed arithmetic `for` header can end the input at that word. The evaluator
 reports the diagnostic and sets the parser status to 2 before running any prefix
 that forms a complete command list there. The prefix supplies the unit's final status.
