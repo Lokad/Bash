@@ -78,6 +78,40 @@ public sealed class EvaluationRedirectionTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("f() if :; then :; fi <missing\nf", "missing: No such file or directory\n")]
+    [InlineData("source ./defines\nf", "./defines: missing: No such file or directory\n")]
+    [InlineData("\n\nfalse && g(){ :; }\nf() while false; do :; done <missing\nf", "line 3: missing: No such file or directory\n")]
+    [InlineData("f(){\n\n g(){ :; }\n if :; then :; fi <missing\n}\nf", "line 3: missing: No such file or directory\n")]
+    [InlineData("f(){\n for ((n=0;n<1;n++)); do\n :\n done <missing\n}\nf", "line 2: missing: No such file or directory\n")]
+    [InlineData("f(){\n (\n  if :; then :; fi <missing\n )\n}\nf", "line 4: missing: No such file or directory\n")]
+    [InlineData("(\n :\n) \\\n <missing", "line 3: missing: No such file or directory\n")]
+    [InlineData("source ./anchor\nf() if :; then :; fi <missing\nf", "line 3: missing: No such file or directory\n")]
+    [InlineData("source ./anchor; f() if :; then :; fi <missing; f", "missing: No such file or directory\n")]
+    [InlineData("(source ./anchor)\nf() if :; then :; fi <missing\nf", "missing: No such file or directory\n")]
+    [InlineData("false && v=$(\n\n g(){ :; }\n)\nf() if :; then :; fi <missing\nf", "line 3: missing: No such file or directory\n")]
+    [InlineData("v=$(\n a=\"${unset-$(\n  g(){ :; }\n )}\"\n)\nf() if :; then :; fi <missing\nf", "line 7: missing: No such file or directory\n")]
+    [InlineData("v=$(g(){ :; }\n source ./defines\n f)\n", "./defines: line 4: missing: No such file or directory\n")]
+    [InlineData("v=$(g(){ :; }\n eval 'f() if :; then :; fi <missing; f')\n", "line 3: missing: No such file or directory\n")]
+    public async Task CompoundOpenFailureUsesTheReaderEntryLine(string script, string error)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = EndToEndHarness.BuildTree([
+                ("/defines", "f() if :; then :; fi <missing\n"),
+                ("/anchor", "\n\ng(){ :; }\n")
+            ]);
+            var exitCode = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(host.StandardOutput.Content.ToArray());
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData("", "<1>", "$(f): ambiguous redirect\n", null)]
     [InlineData("2>error", "<1>", "", "$(f): ambiguous redirect\n")]
     [InlineData("2>&1", "$(f): ambiguous redirect\n<1>", "", null)]

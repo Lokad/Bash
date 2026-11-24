@@ -25,6 +25,7 @@ internal sealed class Tokenizer
     private bool _continuedAtEndOfInput;
     private bool _spacingContinuedAtEndOfInput;
     private int _lastPhysicalNewline;
+    private int _functionBraceLine;
 
     internal bool TrackCommandLocations { get; init; }
     internal bool TrackUnexpectedTokens { get; init; }
@@ -34,6 +35,8 @@ internal sealed class Tokenizer
     internal IReadOnlyList<SourceLineAdjustment>? LineAdjustments { get; init; }
     internal CommandLocations? Locations { get; private set; }
     internal int ConsumedPosition { get; private set; }
+    private int FunctionBraceLine => !IsCommandSubstitution && OmittedSeparators == null && _scanContext.CanReadAhead(_input)
+        ? _scanContext.FunctionBraceLine : _functionBraceLine;
 
     internal ShellScanContext ScanContext => _scanContext;
 
@@ -41,7 +44,26 @@ internal sealed class Tokenizer
     {
         _arraySubscripts = null;
         Locations = null;
+        _functionBraceLine = 0;
+        _scanContext.FunctionBraceLine = 0;
         _scanContext.ClearCommandUnitLookahead();
+    }
+
+    internal void RecordFunctionBrace(int offset)
+    {
+        _functionBraceLine = GetLine(offset);
+        // Delimiter parsing reads physical function braces in the enclosing source. Layout
+        // replay has its own coordinates and leaves that physical read boundary alone.
+        if (OmittedSeparators == null && LineAdjustments == null && _scanContext.CanReadAhead(_input))
+            _scanContext.FunctionBraceLine = IsCommandSubstitution ? _scanContext.GetScriptDiagnosticLine(offset) : _functionBraceLine;
+    }
+
+    internal int TakeFunctionBraceLine()
+    {
+        var line = FunctionBraceLine;
+        _functionBraceLine = 0;
+        _scanContext.FunctionBraceLine = 0;
+        return line;
     }
 
     internal int GetLine(int offset)
@@ -79,7 +101,8 @@ internal sealed class Tokenizer
             new CommandLocation(startLine, commandLine, GetLine(ConsumedPosition))
             {
                 RedirectionDiagnosticLine = redirectionDiagnosticLine,
-                RedirectionOpenLine = redirectionOpenLine
+                RedirectionOpenLine = redirectionOpenLine,
+                FunctionBraceLine = command is FunctionDefinition ? FunctionBraceLine : 0
             }, _scanContext.SyntaxMemory);
     }
 
@@ -90,8 +113,10 @@ internal sealed class Tokenizer
     {
         if (!TrackCommandLocations)
             return;
-        var openLine = command.Body is ArithmeticCommand or ConditionalCommand
-            && Locations?.TryGet(command.Body, out var body) == true ? body.EndLine : 0;
+        var openLine = 0;
+        if (command.Body is ArithmeticCommand or ConditionalCommand or SubshellCommand or ArithmeticForCommand
+            && Locations?.TryGet(command.Body, out var body) == true)
+            openLine = command.Body is ArithmeticForCommand ? body.CommandLine : body.EndLine;
         RecordLocation(command, startLine, startLine, 0, openLine);
         if (command.Body is SubshellCommand
             || !command.Redirections.Any(redirection => redirection.Kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs))

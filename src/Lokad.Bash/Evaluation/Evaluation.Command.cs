@@ -30,6 +30,8 @@ public sealed partial class Evaluation
         if (negated ^ command is PipelineCommand { Negated: true })
             scope = scope with { Context = scope.Context.WithErrexitIgnored() };
 
+        if (scope.Context.Coordinates.FunctionBraceBeforeUnit == null && command is not ListCommand)
+            scope = BeginPreparedCommandUnit(scope);
         var coordinates = scope.Context.Coordinates;
         var lineScope = default(Variables.LineNumberScope);
         var locationCommand = _pipelineStageSource is { } source && _state.Script.Commands is [var stage]
@@ -103,6 +105,7 @@ public sealed partial class Evaluation
             if (_state.FatalExpansion is { } failure)
                 return EvaluationResult.Exit(failure.ExitCode);
             var readDiagnostics = scope.Context.Coordinates.Locations?.GetReadDiagnostics(command) ?? default;
+            ApplyReadFunctionBraceLine(scope.Context.Coordinates.Offset, readDiagnostics.FunctionBraceLine);
             if (readDiagnostics.HereDocumentWarnings is { } warnings)
                 await ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Offset,
                     scope.Context.CallerSource?.Path, useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
@@ -209,6 +212,7 @@ public sealed partial class Evaluation
             {
                 var traversal = listCommand.GetTraversal(CancellationToken).Steps;
                 var result = EvaluationResult.FromExitCode(0);
+                var unitScope = listScope;
                 for (var index = 0; index < traversal.Count; index++)
                 {
                     CheckCancellation();
@@ -220,8 +224,10 @@ public sealed partial class Evaluation
                         continue;
                     }
 
+                    if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
+                        unitScope = BeginPreparedCommandUnit(listScope);
                     var currentScope = step.ErrexitIgnored
-                        ? listScope with { Context = listScope.Context.WithErrexitIgnored() } : listScope;
+                        ? unitScope with { Context = unitScope.Context.WithErrexitIgnored() } : unitScope;
                     result = await EvaluateCommandAsync(step.Command, currentScope, negated: false).ConfigureAwait(false);
                     if (result.Flow != FlowControlKind.None)
                     {
@@ -246,6 +252,22 @@ public sealed partial class Evaluation
                 return ApplyNegation(result, listNegated);
             }
         }
+    }
+
+    private ScopedEvaluation BeginPreparedCommandUnit(ScopedEvaluation scope) => scope with
+    {
+        Context = scope.Context.WithCoordinates(BeginCommandUnit(scope.Context.Coordinates))
+    };
+
+    private CommandCoordinates BeginCommandUnit(CommandCoordinates coordinates) => coordinates with
+    {
+        FunctionBraceBeforeUnit = _state.FunctionBraceLine
+    };
+
+    private void ApplyReadFunctionBraceLine(int offset, int braceLine)
+    {
+        if (braceLine != 0)
+            _state.FunctionBraceLine = offset + braceLine;
     }
 
     internal sealed class ActiveTiming(

@@ -260,6 +260,7 @@ internal sealed class EvaluationState
     /// Last shell-visible status, including completed substitutions used by later expansions; null before execution.
     /// </summary>
     public int? LastExitCode { get; set; }
+    internal int FunctionBraceLine { get; set; }
 
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
     public bool ErrexitEnabled { get; set; }
@@ -468,6 +469,7 @@ internal sealed class EvaluationState
         var clone = new EvaluationState(script, redirections, childStack)
         {
             LastExitCode = LastExitCode,
+            FunctionBraceLine = FunctionBraceLine,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
             ForkKind = kind,
             Traps = Traps?.Fork(kind)
@@ -553,7 +555,7 @@ internal sealed class EvaluationState
             ? coordinates.Offset + body.StartLine : coordinates.Line;
         SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, context.SourceMemory, memory)
         {
-            Coordinates = coordinates with { FunctionBodyLine = bodyLine }
+            Coordinates = coordinates with { FunctionBodyLine = bodyLine, CompoundOpenLine = coordinates.RedirectionOpenLine }
         });
         return true;
     }

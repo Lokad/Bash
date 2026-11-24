@@ -753,6 +753,9 @@ public sealed partial class Evaluation : IFileTester
             memory.TrimExcess();
         }
         var (childVars, childContext) = scope.ForkBindings();
+        var coordinates = childContext.Coordinates;
+        if (coordinates.Locations?.TryGet(subshellCommand, out var location) == true)
+            childContext = childContext.WithCoordinates(coordinates with { CompoundOpenLine = coordinates.Offset + location.EndLine });
         var childState = parentState.CloneForSubshell(Memory);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
@@ -3189,9 +3192,9 @@ public sealed partial class Evaluation : IFileTester
         EvaluationContext context)
     {
         var coordinates = context.Coordinates;
-        var line = coordinates.RedirectionOpenLine == 0 ? coordinates.Line : coordinates.RedirectionOpenLine;
+        var line = coordinates.RedirectionOpenLine ?? coordinates.Line;
         var prefix = path != null && error.Kind != OperationErrorKind.Unknown && coordinates.Locations != null
-            ? new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line) : default;
+            ? new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line == 0 ? null : line) : default;
         return WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, path, error, prefix);
     }
 
@@ -4019,20 +4022,20 @@ public sealed partial class Evaluation : IFileTester
         private readonly SyntaxDiagnosticOrigin _origin;
         private readonly ReadOnlyMemory<byte> _lineNumber;
 
-        internal SyntaxDiagnosticPrefix(string? path, SyntaxDiagnosticOrigin origin, int line)
+        internal SyntaxDiagnosticPrefix(string? path, SyntaxDiagnosticOrigin origin, int? line)
             : this(path, ShellValue.Empty, origin, line) { }
 
-        internal SyntaxDiagnosticPrefix(string? path, ShellValue subject, SyntaxDiagnosticOrigin origin, int line)
+        internal SyntaxDiagnosticPrefix(string? path, ShellValue subject, SyntaxDiagnosticOrigin origin, int? line)
         {
             _path = path;
             _pathLength = path == null ? 0 : Utf8Text.StrictUtf8.GetByteCount(path);
             _subject = subject;
             _origin = origin;
             var hasPrefix = path != null || !subject.IsEmpty || origin != SyntaxDiagnosticOrigin.Script;
-            _lineNumber = hasPrefix ? NumberFormatting.FormatNumber(line) : ReadOnlyMemory<byte>.Empty;
+            _lineNumber = hasPrefix && line is { } value ? NumberFormatting.FormatNumber(value) : ReadOnlyMemory<byte>.Empty;
             Length = hasPrefix ? (path == null ? 0 : _pathLength + 2)
                 + (subject.IsEmpty ? 0 : subject.Bytes.Length + 2) + GetOrigin().Length
-                + "line "u8.Length + _lineNumber.Length + ": "u8.Length : 0;
+                + (_lineNumber.IsEmpty ? 0 : "line "u8.Length + _lineNumber.Length + ": "u8.Length) : 0;
         }
 
         internal int Length { get; }
@@ -4048,7 +4051,9 @@ public sealed partial class Evaluation : IFileTester
             }
             if (!_subject.IsEmpty)
                 diagnostic.Append(_subject.Bytes.Span).Append(": "u8);
-            diagnostic.Append(GetOrigin()).Append("line "u8).Append(_lineNumber.Span).Append(": "u8);
+            diagnostic.Append(GetOrigin());
+            if (!_lineNumber.IsEmpty)
+                diagnostic.Append("line "u8).Append(_lineNumber.Span).Append(": "u8);
         }
 
         private ReadOnlySpan<byte> GetOrigin() => _origin switch
@@ -4792,6 +4797,9 @@ public sealed partial class Evaluation : IFileTester
     /// </summary>
     internal async Task<ShellValue> ExecuteCommandSubstitutionAsync(CommandSubstitutionSyntax script, ScopedEvaluation scope)
     {
+        // Before the child starts, the caller reads the rendered capture from its current line.
+        if (script is CommandSubstitutionSyntax.Parsed parsed)
+            ApplyReadFunctionBraceLine(scope.Context.Coordinates.Line, parsed.Script.RenderedFunctionBraceLine);
         var evaluation = new CommandSubstitutionEvaluation(script);
         var result = await evaluation.EvaluateAsync(scope).ConfigureAwait(false);
         _state.LastExitCode = result.ExitCode;

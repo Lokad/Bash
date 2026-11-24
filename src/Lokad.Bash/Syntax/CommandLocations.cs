@@ -10,6 +10,8 @@ internal readonly record struct CommandLocation(int StartLine, int CommandLine, 
     internal int RedirectionDiagnosticLine { get; init; }
     /// <summary>Overrides the command line when reporting a failed redirection open.</summary>
     internal int RedirectionOpenLine { get; init; }
+    /// <summary>Latest function brace read in this unit when the definition was completed.</summary>
+    internal int FunctionBraceLine { get; init; }
     /// <summary>Line reached by the reader before a compound here-document redirection expands.</summary>
     internal int CompoundHereDocumentLine { get; init; }
 }
@@ -50,9 +52,13 @@ internal sealed class CommandLocations
     {
         if (_firstReadDiagnostics == null)
         {
-            memory?.Grow(40);
+            memory?.Grow(48);
             _firstReadDiagnostics = new ReadDiagnosticEntry(command, diagnostics);
         }
+        else if (ReferenceEquals(_firstReadDiagnostics.Command, command))
+            _firstReadDiagnostics.Diagnostics = diagnostics;
+        else if (_otherReadDiagnostics?.ContainsKey(command) == true)
+            _otherReadDiagnostics[command] = diagnostics;
         else
         {
             memory?.Grow(128);
@@ -109,6 +115,6 @@ internal sealed class CommandLocations
     private sealed class ReadDiagnosticEntry(ICommand command, CommandReadDiagnostics diagnostics)
     {
         internal ICommand Command { get; set; } = command;
-        internal CommandReadDiagnostics Diagnostics { get; } = diagnostics;
+        internal CommandReadDiagnostics Diagnostics { get; set; } = diagnostics;
     }
 }

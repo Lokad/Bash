@@ -741,6 +741,7 @@ internal sealed class ShellScanContext
     internal int RejectedCaptureReads { get; set; }
     internal SubstitutionSyntaxFailure LastRejectedCaptureRead { get; set; }
     internal ShellSource ScriptInput { get; set; }
+    internal int FunctionBraceLine { get; set; }
     internal HereDocumentReadAhead? HereDocumentReadAhead { get; private set; }
     private List<HereDocumentWarning>? _captureWarnings;
     private SourceLineCursor _scriptDiagnosticLines;

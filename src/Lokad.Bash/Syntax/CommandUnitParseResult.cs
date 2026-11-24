@@ -2,11 +2,12 @@ using System.Collections.Generic;
 
 namespace Lokad.Bash.Syntax;
 
-/// <summary>Diagnostics produced before executing any command in the current unit.</summary>
+/// <summary>Reader information produced before executing any command in the current unit.</summary>
 internal readonly record struct CommandReadDiagnostics(IReadOnlyList<HereDocumentWarning>? HereDocumentWarnings,
     IReadOnlyList<CompoundItemReadDiagnostic>? CompoundItems)
 {
-    internal bool IsEmpty => HereDocumentWarnings == null && CompoundItems == null;
+    internal int FunctionBraceLine { get; init; }
+    internal bool IsEmpty => HereDocumentWarnings == null && CompoundItems == null && FunctionBraceLine == 0;
 }
 
 /// <summary>A complete script command unit or its terminal syntax failure.</summary>

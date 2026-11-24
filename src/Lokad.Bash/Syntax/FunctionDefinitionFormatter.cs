@@ -53,6 +53,7 @@ internal static class FunctionDefinitionFormatter
         var counter = new LineCounter(collectOmittedSeparators, memory);
         TryAppend(new Step.Commands(script.Commands), counter, memory?.Budget, Format.CaptureCoordinates, CancellationToken.None, locations);
         script.RenderedLineBreaks = counter.Line - 1;
+        script.RenderedFunctionBraceLine = counter.FunctionBraceLine;
         return counter.OmittedSeparators;
     }
 
@@ -148,6 +149,7 @@ internal static class FunctionDefinitionFormatter
         var capture = lines != null;
         var functionDepth = 0;
         var readerDepth = 0;
+        ICommand? unitFirstCommand = null;
         var flushedHereDocuments = false;
         // Explicit work items keep long left-associated lists off the CLR call stack.
         using var workMemory = budget == null ? null : new MemoryCapacity(budget, 0);
@@ -184,8 +186,10 @@ internal static class FunctionDefinitionFormatter
                 case Step.EnterFunction:
                     functionDepth++;
                     break;
-                case Step.LeaveFunction(var resetHereDocuments):
+                case Step.LeaveFunction(var completedFunction, var resetHereDocuments):
                     functionDepth--;
+                    if (lines != null && locations?.TryGet(completedFunction, out var definitionLocation) == true)
+                        locations.Update(completedFunction, definitionLocation with { FunctionBraceLine = lines.FunctionBraceLine });
                     if (resetHereDocuments) flushedHereDocuments = false;
                     break;
                 case Step.FlushDocuments:
@@ -232,7 +236,11 @@ internal static class FunctionDefinitionFormatter
                         if (!FlushCaptureDocuments()) return false;
                         // A separator inside a compound still belongs to its enclosing reader unit.
                         if (readerDepth == 0 && (newline || pendingDocuments))
+                        {
                             CompleteCompoundDocumentLocations(lines.Line - (pendingDocuments ? 1 : 0));
+                            if (functionDepth == 0)
+                                CompleteCapturedUnit();
+                        }
                         if (followsFlushedDocuments && !newline && functionDepth == 0)
                             lines.RecordOmittedSeparator(separator);
                         var breaks = functionDepth != 0
@@ -418,14 +426,16 @@ internal static class FunctionDefinitionFormatter
                     {
                         // Bash emits an outer group even for a function with a different compound body.
                         var grouped = body is GroupCommand or RedirectedCommand { Body: GroupCommand };
+                        if (lines != null)
+                            lines.RecordFunctionBraceLine(lines.Line + 1);
                         Push(new Step.Text(grouped ? "\n" : "\n{\n"), new Step.EnterFunction(),
                             new Step.Command(body, indent), new Step.FlushDocuments(),
-                            new Step.LeaveFunction(body is not RedirectedCommand { Body: GroupCommand }),
+                            new Step.LeaveFunction(function, body is not RedirectedCommand { Body: GroupCommand }),
                             new Step.Text(grouped ? "" : "\n}"));
                     }
                     else if (substitutionSource || display && nested)
                         Push(new Step.Layout(indent), new Step.EnterFunction(), new Step.Command(body, indent),
-                            new Step.LeaveFunction(body is not RedirectedCommand { Body: GroupCommand }));
+                            new Step.LeaveFunction(function, body is not RedirectedCommand { Body: GroupCommand }));
                     else Push(new Step.Layout(indent), new Step.Command(body, indent));
                     break;
                 case Step.IfArm(var conditional, var arm, var indent):
@@ -451,6 +461,8 @@ internal static class FunctionDefinitionFormatter
                         new Step.Layout(indent + 4), new Step.Command(thenBody, indent + 4), new Step.Line(indent, Terminate: true));
                     break;
                 case Step.Command(var command, var indent):
+                    if (lines != null && command is not (ListCommand or NegatedCommand))
+                        unitFirstCommand ??= command;
                     if (lines != null && locations?.TryGet(command, out var physical) == true)
                     {
                         locations.Update(command, new CommandLocation(lines.Line, lines.Line, lines.Line));
@@ -623,7 +635,15 @@ internal static class FunctionDefinitionFormatter
             var pendingDocuments = hereDocuments.Count != 0;
             if (!FlushCaptureDocuments()) return false;
             CompleteCompoundDocumentLocations(lines.Line - (pendingDocuments ? 1 : 0));
+            CompleteCapturedUnit();
             return true;
+        }
+
+        void CompleteCapturedUnit()
+        {
+            if (unitFirstCommand is { } first && lines != null && locations != null)
+                lines.RecordUnitFunctionBrace(locations, first);
+            unitFirstCommand = null;
         }
         return !inlineSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
 
@@ -650,6 +670,8 @@ internal static class FunctionDefinitionFormatter
                     && !Append("\"\"")) return false;
                 if (quotedPart != doubleQuoted && !Append("\"")) return false;
                 doubleQuoted = quotedPart;
+                if (lines != null && part is SourceWordPart sourcePart)
+                    CountWordFunctionBraces(sourcePart, lines);
                 var success = part.Kind switch
                 {
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when !capture && part is SourceWordPart
@@ -733,9 +755,39 @@ internal static class FunctionDefinitionFormatter
 
         bool CountCaptureWord(CommandSubstitutionSyntax substitution)
         {
-            if (substitution is CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } breaks })
+            if (substitution is CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } breaks } parsed)
+            {
+                if (lines != null && parsed.Script.RenderedFunctionBraceLine > 0)
+                    lines.RecordFunctionBraceLine(lines.Line + parsed.Script.RenderedFunctionBraceLine - 1);
                 return output.TryAppend(breaks, (byte)'\n');
+            }
             return output.TryAppend(substitution.Source.AsSpan());
+        }
+
+        static void CountWordFunctionBraces(SourceWordPart word, LineCounter counter)
+        {
+            if (word.SpellingCaptures is not { } captures)
+                return;
+
+            var source = word.Source.AsSpan();
+            var written = 0;
+            var line = counter.Line;
+            foreach (var capture in captures)
+            {
+                var offset = capture.Offset - word.SourceOffset;
+                if (offset < written || offset + capture.Length > source.Length)
+                    continue;
+                line += source[written..offset].Count((byte)'\n');
+                written = offset + capture.Length;
+                if (capture.Syntax is CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } breaks } parsed)
+                {
+                    if (parsed.Script.RenderedFunctionBraceLine > 0)
+                        counter.RecordFunctionBraceLine(line + parsed.Script.RenderedFunctionBraceLine - 1);
+                    line += breaks;
+                }
+                else
+                    line += source[offset..written].Count((byte)'\n');
+            }
         }
 
         bool FlushCaptureDocuments()
@@ -901,6 +953,23 @@ internal static class FunctionDefinitionFormatter
     private sealed class LineCounter(bool collectOmittedSeparators, MemoryCapacity? memory) : IByteMemoryWriter
     {
         internal int Line { get; private set; } = 1;
+        internal int FunctionBraceLine { get; private set; }
+        private bool _unitReadFunctionBrace;
+
+        internal void RecordFunctionBraceLine(int line)
+        {
+            FunctionBraceLine = line;
+            _unitReadFunctionBrace = true;
+        }
+
+        internal void RecordUnitFunctionBrace(CommandLocations locations, ICommand first)
+        {
+            if (!_unitReadFunctionBrace)
+                return;
+            _unitReadFunctionBrace = false;
+            var diagnostics = locations.GetReadDiagnostics(first) with { FunctionBraceLine = FunctionBraceLine };
+            locations.SetReadDiagnostics(first, diagnostics, memory);
+        }
         internal List<Range>? OmittedSeparators { get; private set; }
 
         internal void RecordOmittedSeparator(Range separator)
@@ -942,7 +1011,7 @@ internal static class FunctionDefinitionFormatter
         public sealed record FlushDocuments : Step;
         public sealed record CompactEnd(string Closer, bool Terminate) : Step;
         public sealed record EnterFunction : Step;
-        public sealed record LeaveFunction(bool ResetHereDocuments) : Step;
+        public sealed record LeaveFunction(FunctionDefinition Definition, bool ResetHereDocuments) : Step;
         public sealed record Location(ICommand Node, LocationEdge Edge) : Step;
         public sealed record Commands(IReadOnlyList<ICommand> Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;

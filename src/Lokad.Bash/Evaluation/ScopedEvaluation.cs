@@ -7,13 +7,17 @@ namespace Lokad.Bash.Evaluation;
 internal readonly record struct CommandCoordinates(CommandLocations? Locations, int Offset, int Line, int EndLine)
 {
     internal int RedirectionDiagnosticLine { get; init; }
-    internal int RedirectionOpenLine { get; init; }
+    internal int? RedirectionOpenLine { get; init; }
     internal int CompoundHereDocumentLine { get; init; }
     /// <summary>Overrides a here-document warning's prefix while retaining the document's own line.</summary>
     internal int HereDocumentWarningLine { get; init; }
     /// <summary>Identifies the capture reader and the function depth where it began.</summary>
     internal int? CaptureFunctionDepth { get; init; }
     internal int FunctionBodyLine { get; init; }
+    /// <summary>The absolute function brace line when the command unit began, or zero before any brace.</summary>
+    internal int? FunctionBraceBeforeUnit { get; init; }
+    /// <summary>The entry line inherited by non-forking compound redirections.</summary>
+    internal int? CompoundOpenLine { get; init; }
 
     internal CommandCoordinates At(ICommand command, CommandLocation location) => this with
     {
@@ -27,10 +31,13 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
         RedirectionDiagnosticLine = location.RedirectionDiagnosticLine == 0 ? 0 : Offset + location.RedirectionDiagnosticLine,
         RedirectionOpenLine = command switch
         {
+            FunctionDefinition => location.FunctionBraceLine == 0 ? FunctionBraceBeforeUnit.GetValueOrDefault() : Offset + location.FunctionBraceLine,
+            RedirectedCommand { Body: GroupCommand or ForCommand or WhileCommand or UntilCommand or IfCommand or CaseCommand }
+                when CompoundOpenLine.HasValue => CompoundOpenLine,
             _ when location.RedirectionOpenLine != 0 => Offset + location.RedirectionOpenLine,
             RedirectedCommand when location.CompoundHereDocumentLine != 0 => Offset + location.CompoundHereDocumentLine,
             RedirectedCommand => Offset + location.EndLine,
-            _ => 0
+            _ => null
         },
         CompoundHereDocumentLine = location.CompoundHereDocumentLine == 0 ? 0 : Offset + location.CompoundHereDocumentLine
     };

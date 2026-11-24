@@ -220,7 +220,7 @@ public static class Parser
             if (trailing.Kind is not TokenKind.Newline and not TokenKind.EndOfInput)
                 tokenizer.RecordUnexpectedToken("Unexpected token after command list.", trailing, trailing.Source.Start.Value);
             var diagnostics = new CommandReadDiagnostics(scanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.Warnings),
-                scanContext.TakeCompoundItemDiagnostics());
+                scanContext.TakeCompoundItemDiagnostics()) { FunctionBraceLine = tokenizer.TakeFunctionBraceLine() };
 
             if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
             {
@@ -1024,6 +1024,7 @@ public static class Parser
         var nameToken = tokenizer.ReadForHeader(out var separators);
         if (nameToken.Kind == TokenKind.ArithmeticCommand)
         {
+            bindingLine = tokenizer.GetLine(nameToken.Source.Start.Value);
             if (tokenizer.PeekTokenCore().Kind == TokenKind.Semicolon)
                 tokenizer.NextTokenCore();
             var arithmeticBody = ParseBody(acceptsBraces: true);
@@ -1276,10 +1277,11 @@ public static class Parser
     /// <summary>Both function headers require a compound body, including its trailing redirections.</summary>
     private static ICommand? ParseFunctionBody(Tokenizer tokenizer)
     {
+        SkipNewlines(tokenizer);
+        var opening = tokenizer.PeekTokenCore();
+        if (opening.Kind == TokenKind.OpenBrace)
+            tokenizer.RecordFunctionBrace(opening.Source.Start.Value);
         var body = ParseCommandAtom(tokenizer, afterPipe: false);
-        if (body is RedirectedCommand { Body: GroupCommand } group
-            && tokenizer.Locations is { } locations && locations.TryGet(group, out var location))
-            locations.Update(group, location with { RedirectionOpenLine = location.StartLine });
         var compound = body;
         while (compound is RedirectedCommand redirected)
             compound = redirected.Body;
@@ -2020,7 +2022,7 @@ public static class Parser
         {
             var diagnostics = new CommandReadDiagnostics(
                 tokenizer.ScanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.TakeWarnings()),
-                tokenizer.ScanContext.TakeCompoundItemDiagnostics());
+                tokenizer.ScanContext.TakeCompoundItemDiagnostics()) { FunctionBraceLine = tokenizer.TakeFunctionBraceLine() };
             if (diagnostics.IsEmpty)
                 return;
             // These messages precede the whole unit, including commands before a semicolon.

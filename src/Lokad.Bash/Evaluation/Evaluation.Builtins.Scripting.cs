@@ -343,6 +343,9 @@ public sealed partial class Evaluation
                 var path = scope.Context.CallerSource?.Path;
                 var diagnosticLine = failedUnit == null ? 0 : lineOffset + failedUnit.DiagnosticLine;
                 var readDiagnostics = commands.Current.ReadDiagnostics;
+                var unitCoordinates = BeginCommandUnit(
+                    new CommandCoordinates(commands.Current.Locations, lineOffset, lineOffset + 1, lineOffset + 1));
+                ApplyReadFunctionBraceLine(lineOffset, readDiagnostics.FunctionBraceLine);
                 if (readDiagnostics.HereDocumentWarnings is { } warnings)
                 {
                     var adjacentCapture = kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution;
@@ -416,8 +419,7 @@ public sealed partial class Evaluation
                 result = await EvaluateCommandAsync(command,
                     scope with
                     {
-                        Context = scope.Context.WithSourceMemory(unitMemory).WithCoordinates(
-                            new CommandCoordinates(commands.Current.Locations, lineOffset, lineOffset + 1, lineOffset + 1))
+                        Context = scope.Context.WithSourceMemory(unitMemory).WithCoordinates(unitCoordinates)
                     }, negated: false)
                     .ConfigureAwait(false);
                 if (result.Flow == FlowControlKind.Return)

@@ -565,6 +565,10 @@ their current unit; unrecoverable failures and explicit exit stop the script.
 Runtime source copies and parsed units retain coarse admitted ownership through
 surviving definitions and active users. Completed unrelated units release their
 metadata; deferred substitutions use the same parser with a reached syntax owner.
+For failed compound redirections, a function retains the brace line available
+when its definition was read. Each command unit snapshots the previous reader
+line before executing any of its commands. Later readers can publish a new
+brace line, and child evaluations keep their own reader state.
 Memory refusal while preparing an EXIT action reports through its active stderr
 mapping and returns status 1 through ordinary cleanup.
 EXIT actions retain their own flow/status policy: normal completion preserves the
