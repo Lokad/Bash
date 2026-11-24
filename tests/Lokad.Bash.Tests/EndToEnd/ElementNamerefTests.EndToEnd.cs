@@ -144,4 +144,28 @@ public sealed class ElementNamerefTestsEndToEnd
         Assert.True(result.Host.StandardError.Content.IsEmpty);
         Assert.Equal(0, result.ExitCode);
     }
+
+    [Theory]
+    [InlineData("""a=(global); a=temp V="${a[3]:=fresh}" eval 'printf "<%s:%s:%s>/" "$V" "$a" "${a[3]-missing}"'; printf '<%s:%s>' "$a" "${a[3]}" """,
+        "<fresh:temp:missing>/<global:fresh>")]
+    [InlineData("""a=(global); declare -n r='a[3]'; a=temp V="${r:=fresh}" W="${a[3]-missing}" eval 'printf "<%s:%s:%s>/" "$V" "$W" "${a[3]-missing}"'; printf '<%s:%s>' "$a" "${a[3]}" """,
+        "<global:missing:missing>/<global:fresh>")]
+    [InlineData("""declare -ai a=(11); declare -n r='a[3]'; a=4 V="${r:=a[0]=5,7}" eval 'printf "<%s:%s>/" "$V" "$a"'; printf '<%s:%s>' "$a" "${a[3]}" """,
+        "<5:4>/<5:7>")]
+    [InlineData("""a=([0]=global [8]=tail); i=3; declare -n r='a[i-=2]'; a=temp V="${r:=fresh}" eval 'printf "<%s:%s:%s>/" "$V" "$a" "$i"'; printf '<%s:%s:%s>' "$a" "${a[8]}" "$i" """,
+        "<fresh:temp:-1>/<fresh:tail:-1>")]
+    [InlineData("""a=(11); a=4 V=$((a[0]++)) eval 'printf "<%s:%s>/" "$V" "$a"'; printf '<%s>' "$a" """,
+        "<4:4>/<5>")]
+    [InlineData("""a=(global); declare -n alias=a; a=temp V="${alias[3]:=fresh}" eval 'printf "<%s:%s:%s>/" "$V" "$a" "${a[3]-missing}"'; printf '<%s:%s>' "$a" "${a[3]-missing}" """,
+        "<fresh:temp:fresh>/<global:missing>")]
+    [InlineData("""a=(11); declare -n alias=a; a=4 V=$((alias[0]++)) eval 'printf "<%s:%s>/" "$V" "$a"'; printf '<%s>' "$a" """,
+        "<4:5>/<11>")]
+    public async Task ElementWritesInPrefixExpansionSelectTheExpectedOwner(string script, string expectedOutput)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
 }

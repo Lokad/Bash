@@ -107,7 +107,10 @@ internal readonly record struct ScopedEvaluation(
         Context.Fork(Variables, Effects.Memory, Effects.CancellationToken);
 
     /// <summary>The current simple command owns the prefix-name set, adding names as their bindings are prepared.</summary>
-    internal readonly record struct ExpansionBindings(Variables Variables, HashSet<BindingName> PrefixNames);
+    internal readonly record struct ExpansionBindings(Variables Variables, HashSet<BindingName> PrefixNames)
+    {
+        internal bool PreparingPrefixes { get; init; }
+    }
 
     public ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value)
     {

@@ -14,8 +14,7 @@ internal static partial class WordExpansion
     /// <summary>A selected location; its typed index is not expanded again when read.</summary>
     internal abstract record ResolvedVariableReference(BindingName Name)
     {
-        // Circular local reads can select the hidden global store. Assignment selection
-        // remains separate; this owner only supplies the already selected read value.
+        // The selected store can differ from the active scope through a fallback or a prepared prefix.
         internal Variables? ReadOwner { get; init; }
         internal bool IsWholeBindingRead { get; init; }
         internal sealed record Scalar(BindingName VariableName) : ResolvedVariableReference(VariableName);
@@ -25,6 +24,22 @@ internal static partial class WordExpansion
             internal bool ReplaceAssociative { get; init; }
         }
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
+
+        /// <summary>Uses the selected element to write through a prepared scalar prefix to its caller.</summary>
+        internal ResolvedVariableReference SelectPrefixElementWrite(VariableReference source, ScopedEvaluation scope)
+        {
+            if (this is Scalar || scope.ExpansionWriteTarget is not { PreparingPrefixes: true } prefix
+                || !prefix.PrefixNames.Contains(Name)
+                || source.Kind != VariableReferenceKind.Name && source.Name != Name)
+                return this;
+
+            var owner = prefix.Variables;
+            if (this is Indexed indexed && owner.AssociativeArrays.ContainsKey(Name)
+                && AssociativeArrayKey.TryCreate(ShellValue.FromInteger(indexed.Index.Value), out var key))
+                return new Associative(Name, key) { ReadOwner = owner };
+
+            return this with { ReadOwner = owner };
+        }
 
         public bool TryRead(Variables variables, out ShellValue value)
         {
@@ -109,6 +124,8 @@ internal static partial class WordExpansion
                 target.SetExpansionValueIgnoringReadonly(sourceName, value, scope.Effects.Memory);
                 return true;
             }
+            if (ReferenceEquals(target, scope.Variables))
+                return true;
 
             // Forward the selected location without replaying effects or imposing the temporary binding's kind.
             var forwardedName = scope.Variables.TryResolveBinding(sourceName, selectOwner: null, out var binding)

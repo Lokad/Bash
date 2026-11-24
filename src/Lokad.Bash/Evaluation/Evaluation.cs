@@ -1706,6 +1706,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 Variables = commandVars,
                 ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(scope.Variables, prefixNames)
+                    { PreparingPrefixes = true }
             };
             foreach (var assignment in simpleCommand.Assignments)
             {

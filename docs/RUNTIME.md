@@ -381,6 +381,12 @@ the previous attributes from that owner and publishes only the new value.
 Sizing a binding borrows its backing. Copying a binding admits destination
 storage and takes one independent copy, leaving the source owner in place.
 Local publication reuses a visible slot already owned by the receiving scope.
+While preparing command prefixes, element selectors still read the prepared
+values. Default and arithmetic writes to a named element of an earlier
+scalar prefix, or through a nameref to that element, use the caller's
+binding and its assignment attributes. Later prefixes and the command
+still see the prepared scalar. A subscript applied to a whole-name
+nameref follows the prepared binding.
 The existing expansion write target forwards actual RHS effects, including
 same-value writes, with nameref and array-kind rules intact. In-process
 execution consumes only the prepared prefix slots and preserves the original

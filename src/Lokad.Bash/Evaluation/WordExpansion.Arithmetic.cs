@@ -261,6 +261,8 @@ internal static partial class WordExpansion
                 // Builtin output selects its local fallback before checking that destination's readonly state.
                 if (assignOutput != null && assignOutput(reference, target, formatted))
                     return null;
+                if (assignOutput == null)
+                    target = target.SelectPrefixElementWrite(reference, scope);
                 var readOnly = scope.Variables.IsReadonly(reference.Name) || (target.ReadOwner ?? scope.Variables).IsReadonly(target.Name);
                 if (assignOutput == null && !readOnly && AssignExpansion(reference, target, formatted))
                     return null;

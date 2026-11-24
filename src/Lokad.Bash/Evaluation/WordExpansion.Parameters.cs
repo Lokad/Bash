@@ -267,10 +267,13 @@ internal static partial class WordExpansion
                         }
                         else if (target != null && parameter.Source is { } source)
                         {
-                            assigned = await target.AssignValueAsync(scope, source.Name, expanded, AssignmentOperator.Replace).ConfigureAwait(false);
+                            target = target.SelectPrefixElementWrite(source, scope);
+                            var destination = target.ReadOwner ?? scope.Variables;
+                            assigned = await target.AssignValueAsync(scope, destination, source.Name, expanded,
+                                AssignmentOperator.Replace, ShellValue.Empty, DeclarationWrite.Ordinary).ConfigureAwait(false);
                             if (elementNameref && assigned.HasValue)
                             {
-                                scope.Variables.TryGetExpansionValue(target.Name, out var arrayScalar);
+                                destination.TryGetExpansionValue(target.Name, out var arrayScalar);
                                 assigned = arrayScalar;
                             }
                         }
