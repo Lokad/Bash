@@ -1702,8 +1702,8 @@ public sealed partial class Variables
     internal bool TryRemoveNamerefAttribute(BindingName name) =>
         !HasAttribute(name, BindingAttributes.Readonly) && RemoveValue<NamerefSlot>(name);
 
-    /// <summary>Leaves a readonly declaration after rejecting an element write on its nameref.</summary>
-    internal void DetachReadonlyElementNameref(BindingName name) => ReplaceValue(name, new UnassignedSlot());
+    /// <summary>Replaces a nameref with an unassigned scalar while preserving its declaration attributes.</summary>
+    internal void DetachNamerefToUnassigned(BindingName name) => ReplaceValue(name, new UnassignedSlot());
 
     internal void SetReadonlyBinding(BindingName name) => SetAttribute(name, BindingAttributes.Readonly, true);
 

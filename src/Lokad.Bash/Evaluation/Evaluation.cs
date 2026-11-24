@@ -2228,8 +2228,9 @@ public sealed partial class Evaluation : IFileTester
             const string NamerefArrayError = "reference variable cannot be an array";
             var exitCode = 0;
             List<Variables.CommandBindings>? exposedPrefixes = null;
-            foreach (var operand in operands)
+            foreach (var preparedOperand in operands)
             {
+                var operand = preparedOperand;
                 if (operand.Value == null && TrySaveLocalOptions(operand.Name))
                     continue;
                 if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference)
@@ -2392,10 +2393,11 @@ public sealed partial class Evaluation : IFileTester
                 var existingLocal = declarationScope.Context.FunctionContext?.Locals.Declares(name) == true;
                 var hasIntegerInitializer = options.IntegerChange == DeclarationAttributeChange.Set && operand.Value != null;
                 var rejectsIntegerNamerefInitializer = hasIntegerInitializer && options.Nameref;
-                var rejectsIntegerNamerefRemoval = hasIntegerInitializer && options.NamerefChange == DeclarationAttributeChange.Clear
-                    && arrayKind == ArrayAssignmentKind.Auto && !element
-                    && targetVars.TryGetNameref(name, out var removedTarget)
-                    && (local ? existingLocal : name == sourceName && removedTarget.IsEmpty);
+                ShellValue? clearedNamerefTarget = options.NamerefChange == DeclarationAttributeChange.Clear
+                    && (!local || existingLocal) && targetVars.TryGetNameref(name, out var removedTarget) ? removedTarget : null;
+                var clearsWholeNameref = clearedNamerefTarget.HasValue && arrayKind == ArrayAssignmentKind.Auto && !element;
+                var rejectsIntegerNamerefRemoval = hasIntegerInitializer && clearsWholeNameref
+                    && (local || name == sourceName && clearedNamerefTarget is { IsEmpty: true });
                 if (resolution == BindingResolution.LastNameref && name != sourceName
                     && arrayKind == ArrayAssignmentKind.Auto && !operand.CompoundApplied
                     && targetVars.TryGetNameref(name, out var unsetTarget) && unsetTarget.IsEmpty)
@@ -2520,10 +2522,20 @@ public sealed partial class Evaluation : IFileTester
                     ? functionContext?.Locals.Declares(localDeclarationTarget) == true : existingLocal;
                 var shadowEnclosingLocal = followsLocalNameref && !existingTargetLocal
                     && functionContext?.Enclosing?.IsLocal(localDeclarationTarget) == true;
+                // When +n cannot find the immediate target's spelling, the local declaration creates it.
+                var keepLocalNameref = local && clearedNamerefTarget is { IsEmpty: false } localTarget
+                    && !targetVars.HasBinding(BindingNameExpansion.FromValue(localTarget, Memory));
+                var localizesTarget = clearsWholeNameref && keepLocalNameref && !rejectsIntegerNamerefRemoval;
+                var localizesElementSpelling = !element && arrayKind == ArrayAssignmentKind.Auto
+                    && selectedLocalBinding is { Reference.Kind: VariableReferenceKind.Element };
+                var clearsReadonlyUnsetNameref = clearsWholeNameref && clearedNamerefTarget is { IsEmpty: true }
+                    && operand.Value == null && options.ReadonlyChange != DeclarationAttributeChange.Clear
+                    && targetVars.IsReadonlyBinding(name);
                 // Local redeclarations apply readonly and initialization to the reached binding.
                 var readonlyBinding = followsLocalNameref ? !shadowEnclosingLocal && targetVars.IsReadonlyBinding(localDeclarationTarget)
                     : options.NamerefChange != DeclarationAttributeChange.Unchanged && reference.Kind == VariableReferenceKind.Name
-                        ? targetVars.IsReadonlyBinding(name) : targetVars.IsReadonly(name);
+                        ? !localizesTarget && !clearsReadonlyUnsetNameref && targetVars.IsReadonlyBinding(name)
+                        : !localizesElementSpelling && targetVars.IsReadonly(name);
                 var declarationName = resolution == BindingResolution.LastNameref || followsLocalNameref && existingTargetLocal
                     ? sourceName : selectedLocalBinding?.Name ?? name;
                 var redeclaresLocalArray = followsLocalNameref && existingTargetLocal && element && operand.Value == null;
@@ -2599,23 +2611,33 @@ public sealed partial class Evaluation : IFileTester
                         await DiagnoseQuotedAsync(initializer, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
-                var keepLocalNameref = false;
-                if (local && existingLocal && options.NamerefChange == DeclarationAttributeChange.Clear
-                    && targetVars.TryGetNameref(name, out var localTarget) && !localTarget.IsEmpty)
+                if (clearsReadonlyUnsetNameref)
+                    targetVars.DetachNamerefToUnassigned(name);
+                else if (local && !keepLocalNameref && clearedNamerefTarget is { } oldTarget
+                    && (!oldTarget.IsEmpty || clearsWholeNameref))
                 {
-                    // Test the immediate target: an existing intermediate nameref also detaches +n.
-                    // A missing target instead becomes local, leaving this reference intact.
-                    keepLocalNameref = !targetVars.HasBinding(BindingNameExpansion.FromValue(localTarget, Memory));
-                    if (!keepLocalNameref)
+                    if (clearsWholeNameref && operand.Value is { } initializer)
                     {
-                        var retainedTarget = localTarget;
-                        if (!targetVars.TryRemoveNamerefAttribute(name))
+                        // Validate the bound spelling while the name is still a reference.
+                        var append = operand.Operator == AssignmentOperator.Append;
+                        var value = append ? WordExpansion.AppendAssignmentValue(oldTarget, initializer, declarationScope) : initializer;
+                        if (!TryParseDeclarationReference(ShellSource.FromBytes(value.Bytes), out _))
                         {
-                            await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                            if (!append || !TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out _))
+                                await DiagnoseQuotedAsync(initializer, "not a valid identifier").ConfigureAwait(false);
+                            else
+                                exitCode = 1;
                             continue;
                         }
-                        targetVars.TrySetResolvedScalar(name, retainedTarget, Memory);
+                        operand = operand with { Value = value, Operator = AssignmentOperator.Replace };
                     }
+                    if (!targetVars.TryRemoveNamerefAttribute(name))
+                    {
+                        await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (!oldTarget.IsEmpty)
+                        targetVars.TrySetResolvedScalar(name, oldTarget, Memory);
                 }
                 var convertedReference = false;
                 if (options.Nameref && (!local || existingLocal)
@@ -3165,7 +3187,7 @@ public sealed partial class Evaluation : IFileTester
 
             async Task RejectReadonlyElementNamerefAsync(BindingName name, Variables variables)
             {
-                variables.DetachReadonlyElementNameref(name);
+                variables.DetachNamerefToUnassigned(name);
                 await ReportElementNamerefRemovalAsync(name).ConfigureAwait(false);
                 await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
             }

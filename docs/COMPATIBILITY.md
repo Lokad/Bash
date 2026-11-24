@@ -158,6 +158,14 @@ copies its readonly attribute into the new local. An element initializer that
 reaches a readonly scalar local declares its array kind before rejecting the
 write. The selector remains unevaluated.
 
+For a whole-name `local +n` declaration, a target spelling that has no
+binding becomes a local of its own. A readonly alias can take this path and
+keeps its attributes. An element spelling such as `array[1]` can name that
+separate local while the array keeps its existing elements. When `+n` clears
+a local reference, it validates the initializer as a reference spelling
+before storing the resulting scalar. A name-only `+n` can clear an unset
+readonly reference and preserve the readonly attribute on its name.
+
 With named operands, `readonly -n` processes assignments and preserves
 existing attributes. It skips adding the readonly attribute. Without operands,
 it lists readonly bindings.

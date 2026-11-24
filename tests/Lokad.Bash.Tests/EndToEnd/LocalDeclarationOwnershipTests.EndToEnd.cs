@@ -217,6 +217,61 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("local +n r=new", "new")]
+    [InlineData("declare +n r+=tail", "tail")]
+    [InlineData("typeset +n r='a[1]'", "a[1]")]
+    public async Task ClearingAnUnsetLocalNamerefKeepsTheValidatedInitializer(string declaration, string value)
+    {
+        var result = await EvaluationTestHelper.RunAsync("a=([1]=outer)\nf() {\nlocal -n r\n" + declaration
+            + "\nprintf '<%s:%s:%s>' \"$?\" \"$r\" \"${a[1]}\"\ndeclare -p r\n}\nf\n");
+
+        Assert.Equal($"<0:{value}:outer>declare -- r=\"{value}\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -n r", "r=$((++i))", "unset", "-n r", "line 4: local: `1': not a valid identifier\n", 1)]
+    [InlineData("local -n r=target", "r+=' two words'", "stored", "-n r=\"target\"", "line 4: local: ` two words': not a valid identifier\n", 0)]
+    [InlineData("local -n r='a[1]'; local r=before", "r+=tail", "before", "-n r=\"a[1]\"", "", 0)]
+    public async Task ClearingALocalNamerefValidatesBeforeDetaching(string setup, string operand, string value,
+        string listing, string diagnostic, int counter)
+    {
+        var result = await EvaluationTestHelper.RunAsync("a=([1]=outer); target=stored; i=0\nf() {\n" + setup
+            + "\nlocal +n " + operand + "\nprintf '<%s:%s:%s:%s>' \"$?\" \"${r-unset}\" \"${a[1]}\" \"$i\"\ndeclare -p r\n}\nf\n");
+
+        Assert.Equal($"<1:{value}:outer:{counter}>declare {listing}\n", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -nr r; local -x +n r", "-rx")]
+    [InlineData("declare -gnr r; declare -g +n r", "-r")]
+    public async Task NameOnlyClearPreservesTheReadonlyAttributeOfAnUnsetNameref(string declaration, string attributes)
+    {
+        var result = await EvaluationTestHelper.RunAsync("f() {\n" + declaration
+            + "\nprintf '<%s:%s>' \"$?\" \"${r-unset}\"\ndeclare -p r\n}\nf\n");
+
+        Assert.Equal($"<0:unset>declare {attributes} r\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local r=inside")]
+    [InlineData("local +n r=inside")]
+    public async Task ReadonlyElementNamerefCanCreateASeparateLocalForTheTargetSpelling(string declaration)
+    {
+        var result = await EvaluationTestHelper.RunAsync("a=([1]=outer)\nf() {\nlocal -nr r='a[1]'\n" + declaration
+            + "\nfirst=$?\nlocal +n r=late\nprintf '<%s:%s:%s:%s>' \"$first\" \"$?\" \"$r\" \"${a[1]}\"\ndeclare -p r\n}\nf\n");
+
+        Assert.Equal("<0:1:inside:outer>declare -nr r=\"a[1]\"\n", result.StdOut);
+        Assert.Equal("line 6: local: r: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
 
     [Fact]
     public async Task Evaluation_DeclareScalar_ShadowsInheritedNameref()
