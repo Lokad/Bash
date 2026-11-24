@@ -152,9 +152,7 @@ internal sealed class Tokenizer
     internal int GetRedirectionLookaheadLine(Token token)
     {
         var end = token.Source.End.Value;
-        // Bash peeks one logical character past these operators to distinguish longer spellings.
-        if (token.RedirectionKind is RedirectionKind.Input or RedirectionKind.Output
-            or RedirectionKind.HereDocument or RedirectionKind.OutputAndError)
+        if (PeeksPastShellOperator(token))
             end = ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), end);
         return GetLine(end);
     }
@@ -762,18 +760,6 @@ internal sealed class Tokenizer
                 return Located(Token.Newline());
             }
 
-            if (current == (byte)';')
-            {
-                if (TryConsumeLogicalText(";;&"))
-                    return Located(Token.CaseTerminator(CaseContinuation.Retest));
-                if (TryConsumeLogicalText(";&"))
-                    return Located(Token.CaseTerminator(CaseContinuation.FallThrough));
-                if (TryConsumeLogicalText(";;"))
-                    return Located(Token.CaseTerminator(CaseContinuation.Stop));
-                Position++;
-                return Located(Token.Semicolon());
-            }
-
             if (current == '(')
             {
                 var status = forHeader
@@ -819,24 +805,18 @@ internal sealed class Tokenizer
                 return Located(Token.CloseBrace());
             }
 
-            var listOperator = TryReadListOperator(span);
-            if (listOperator.Kind != TokenKind.None)
+            if (current is (byte)'<' or (byte)'>'
+                && ShellSourceCursor.TryMatchLogicalText(span, Position, current == (byte)'<' ? "<(" : ">(", out _))
             {
-                return Located(listOperator);
-            }
-
-            var pipelineOperator = TryReadPipelineOperator(span);
-            if (pipelineOperator.Kind != TokenKind.None)
-            {
-                return Located(pipelineOperator);
-            }
-
-            var redirection = TryReadRedirection(span);
-            if (Error != null)
+                RecordError("process substitution is not supported", Position);
                 return Located(Token.EndOfInput());
-            if (redirection.Kind != TokenKind.None)
+            }
+
+            var shellOperator = ReadShellOperator(_input, _scanContext, Position);
+            if (shellOperator.Kind != TokenKind.None)
             {
-                return Located(redirection);
+                Position = shellOperator.Source.End.Value;
+                return Located(shellOperator);
             }
 
             if (span[Position] == (byte)'&')
@@ -1055,119 +1035,52 @@ internal sealed class Tokenizer
         return false;
     }
 
-    /// <summary>
-    /// Attempts to read a redirection operator at the current position.
-    /// </summary>
-    private Token TryReadRedirection(ReadOnlySpan<byte> span)
+    /// <summary>Reads one shell metacharacter token with its physical range.</summary>
+    internal static Token ReadShellOperator(ShellSource source, ShellScanContext context, int start)
     {
-        if (ShellSourceCursor.TryMatchLogicalText(span, Position, "<(", out _)
-            || ShellSourceCursor.TryMatchLogicalText(span, Position, ">(", out _))
+        var end = start;
+        var token = source[start] switch
         {
-            RecordError("process substitution is not supported", Position);
-            return Token.None();
-        }
+            (byte)';' when Match(";;&") => Token.CaseTerminator(CaseContinuation.Retest),
+            (byte)';' when Match(";&") => Token.CaseTerminator(CaseContinuation.FallThrough),
+            (byte)';' when Match(";;") => Token.CaseTerminator(CaseContinuation.Stop),
+            (byte)';' => Single(Token.Semicolon()),
+            (byte)'&' when Match("&&") => Token.FromListOperator(ListOperator.And),
+            (byte)'&' when Match("&>>") => Token.Redirection(RedirectionKind.OutputAndErrorAppend),
+            (byte)'&' when Match("&>") => Token.Redirection(RedirectionKind.OutputAndError),
+            (byte)'|' when Match("||") => Token.FromListOperator(ListOperator.Or),
+            (byte)'|' when Match("|&") => Token.FromPipelineOperator(PipelineOperator.PipeAndError),
+            (byte)'|' => Single(Token.FromPipelineOperator(PipelineOperator.Pipe)),
+            (byte)'<' when Match("<&") => Token.Redirection(RedirectionKind.DuplicateInput),
+            (byte)'<' when Match("<<-") => Token.Redirection(RedirectionKind.HereDocumentStripTabs),
+            (byte)'<' when Match("<<<") => Token.Redirection(RedirectionKind.HereString),
+            (byte)'<' when Match("<<") => Token.Redirection(RedirectionKind.HereDocument),
+            (byte)'<' when Match("<>") => Token.Redirection(RedirectionKind.InputOutput),
+            (byte)'<' => Single(Token.Redirection(RedirectionKind.Input)),
+            (byte)'>' when Match(">|") => Token.Redirection(RedirectionKind.ForceOutput),
+            (byte)'>' when Match(">&") => Token.Redirection(RedirectionKind.DuplicateOutput),
+            (byte)'>' when Match(">>") => Token.Redirection(RedirectionKind.OutputAppend),
+            (byte)'>' => Single(Token.Redirection(RedirectionKind.Output)),
+            _ => Token.None()
+        };
+        return token with { Source = start..end };
 
-        if (TryConsumeLogicalText("&>>"))
+        bool Match(string spelling) => ShellSourceCursor.TryMatchLogicalText(source, context, start, spelling, out end);
+
+        Token Single(Token matched)
         {
-            return Token.Redirection(RedirectionKind.OutputAndErrorAppend);
+            end = start + 1;
+            return matched;
         }
-
-        if (TryConsumeLogicalText("&>"))
-        {
-            return Token.Redirection(RedirectionKind.OutputAndError);
-        }
-
-        if (TryConsumeLogicalText(">|"))
-        {
-            return Token.Redirection(RedirectionKind.ForceOutput);
-        }
-
-        if (TryConsumeLogicalText(">&"))
-        {
-            return Token.Redirection(RedirectionKind.DuplicateOutput);
-        }
-
-        if (TryConsumeLogicalText("<&"))
-        {
-            return Token.Redirection(RedirectionKind.DuplicateInput);
-        }
-
-        if (TryConsumeLogicalText("<<-"))
-        {
-            return Token.Redirection(RedirectionKind.HereDocumentStripTabs);
-        }
-
-        if (TryConsumeLogicalText("<<<"))
-        {
-            return Token.Redirection(RedirectionKind.HereString);
-        }
-
-        if (TryConsumeLogicalText("<<"))
-        {
-            return Token.Redirection(RedirectionKind.HereDocument);
-        }
-
-        if (TryConsumeLogicalText(">>"))
-        {
-            return Token.Redirection(RedirectionKind.OutputAppend);
-        }
-
-        if (TryConsumeLogicalText("<>"))
-        {
-            return Token.Redirection(RedirectionKind.InputOutput);
-        }
-
-        if (span[Position] == (byte)'<')
-        {
-            Position++;
-            return Token.Redirection(RedirectionKind.Input);
-        }
-
-        if (span[Position] == (byte)'>')
-        {
-            Position++;
-            return Token.Redirection(RedirectionKind.Output);
-        }
-
-        return Token.None();
     }
 
-    /// <summary>
-    /// Attempts to read a list operator (&amp;&amp; or ||) at the current position.
-    /// </summary>
-    private Token TryReadListOperator(ReadOnlySpan<byte> span)
-    {
-        if (TryConsumeLogicalText("&&"))
-        {
-            return Token.FromListOperator(ListOperator.And);
-        }
-
-        if (TryConsumeLogicalText("||"))
-        {
-            return Token.FromListOperator(ListOperator.Or);
-        }
-
-        return Token.None();
-    }
-
-    /// <summary>
-    /// Attempts to read a pipeline operator (| or |&amp;) at the current position.
-    /// </summary>
-    private Token TryReadPipelineOperator(ReadOnlySpan<byte> span)
-    {
-        if (TryConsumeLogicalText("|&"))
-        {
-            return Token.FromPipelineOperator(PipelineOperator.PipeAndError);
-        }
-
-        if (span[Position] == (byte)'|')
-        {
-            Position++;
-            return Token.FromPipelineOperator(PipelineOperator.Pipe);
-        }
-
-        return Token.None();
-    }
+    /// <summary>Identifies operators whose reader checks for a longer spelling.</summary>
+    internal static bool PeeksPastShellOperator(Token token) => token is
+        { Kind: TokenKind.Semicolon }
+        or { Kind: TokenKind.CaseTerminator, CaseContinuation: CaseContinuation.Stop }
+        or { PipelineOperator: PipelineOperator.Pipe }
+        or { RedirectionKind: RedirectionKind.Input or RedirectionKind.Output
+            or RedirectionKind.HereDocument or RedirectionKind.OutputAndError };
 
     /// <summary>
     /// Parses through the conditional grammar's closing ]] with the caller's scan context.
@@ -1183,17 +1096,6 @@ internal sealed class Tokenizer
         Position = end;
         if (TrackCommandLocations)
             ConsumedPosition = end;
-        return true;
-    }
-
-    /// <summary>
-    /// Consumes a matching logical token and retains its physical ending position.
-    /// </summary>
-    private bool TryConsumeLogicalText(string text)
-    {
-        if (!ShellSourceCursor.TryMatchLogicalText(_input, _scanContext, Position, text, out var end))
-            return false;
-        Position = end;
         return true;
     }
 

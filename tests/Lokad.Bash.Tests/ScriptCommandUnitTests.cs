@@ -336,6 +336,29 @@ public sealed class ScriptCommandUnitTests
     [InlineData("[[ a == ",
         "input: line 2: unexpected argument `newline' to conditional binary operator\n"
         + "input: line 2: syntax error near `=='\ninput: line 2: `[[ a == '\n")]
+    [InlineData("[[ a <<< value ]] >untouched\n",
+        "input: line 2: unexpected token `<<<', conditional binary operator expected\n"
+        + "input: line 2: syntax error near `<<<'\ninput: line 2: `[[ a <<< value ]] >untouched'\n")]
+    [InlineData("[[ -n |& ]]\n",
+        "input: line 2: unexpected argument `|&' to conditional unary operator\n"
+        + "input: line 2: syntax error near `&'\ninput: line 2: `[[ -n |& ]]'\n")]
+    [InlineData("[[ a == >> ]]\n",
+        "input: line 2: unexpected argument `>>' to conditional binary operator\n"
+        + "input: line 2: syntax error near `>>'\ninput: line 2: `[[ a == >> ]]'\n")]
+    [InlineData("[[ ( a == a ;; ]]\n",
+        "input: line 2: unexpected token `;;', expected `)'\n"
+        + "input: line 2: syntax error near `;'\ninput: line 2: `[[ ( a == a ;; ]]'\n")]
+    [InlineData("[[ a ;\\\n;\\\n& ]]\n",
+        "input: line 4: unexpected token `;;&', conditional binary operator expected\n"
+        + "input: line 4: syntax error near `&'\ninput: line 4: `& ]]'\n")]
+    [InlineData("[[ a ;;\\\n x ]]\n",
+        "input: line 3: unexpected token `;;', conditional binary operator expected\n"
+        + "input: line 3: syntax error near ` '\ninput: line 3: ` x ]]'\n")]
+    [InlineData("[[ a ;;\\\n\n x ]]\n",
+        "input: line 3: unexpected token `;;', conditional binary operator expected\n"
+        + "input: line 3: syntax error near `\n'\ninput: line 3: `'\n")]
+    [InlineData("[[ a ;;\\\n",
+        "input: line 3: unexpected token `;;', conditional binary operator expected\ninput: line 3: syntax error\n")]
     public async Task SourcedConditionalDiagnosticsUseTheLineForEachReaderMessage(string unit, string diagnostic)
     {
         var memory = new MemoryGovernor(256 * 1024);

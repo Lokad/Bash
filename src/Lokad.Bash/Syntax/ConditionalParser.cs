@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
+using ShellTokenKind = Lokad.Bash.Syntax.TokenKind;
 
 namespace Lokad.Bash.Syntax;
 
@@ -415,22 +416,32 @@ internal sealed class ConditionalParser : IDisposable
         }
         if (!regex)
         {
-            var logicalEnd = start;
-            var kind = span[start] switch
+            var shellOperator = Tokenizer.ReadShellOperator(_source, _context, start);
+            if (shellOperator.Kind != ShellTokenKind.None)
+            {
+                var operatorKind = shellOperator switch
+                {
+                    { ListOperator: ListOperator.And } => TokenKind.And,
+                    { ListOperator: ListOperator.Or } => TokenKind.Or,
+                    { RedirectionKind: RedirectionKind.Input or RedirectionKind.Output } => TokenKind.Order,
+                    _ when Tokenizer.PeeksPastShellOperator(shellOperator) => TokenKind.InvalidWithLookahead,
+                    _ => TokenKind.Invalid
+                };
+                _position = shellOperator.Source.End.Value;
+                IgnoreContinuations(start, _position);
+                return new(operatorKind, _source.Slice(start, _position - start), start);
+            }
+            var punctuation = span[start] switch
             {
                 (byte)'(' => TokenKind.Open,
                 (byte)')' => TokenKind.Close,
-                (byte)'<' or (byte)'>' => TokenKind.Order,
-                (byte)'&' when ShellSourceCursor.TryMatchLogicalText(_source, _context, start, "&&", out logicalEnd) => TokenKind.And,
-                (byte)'|' when ShellSourceCursor.TryMatchLogicalText(_source, _context, start, "||", out logicalEnd) => TokenKind.Or,
-                (byte)'&' or (byte)'|' or (byte)';' => TokenKind.Invalid,
+                (byte)'&' => TokenKind.InvalidWithLookahead,
                 _ => TokenKind.End
             };
-            if (kind != TokenKind.End)
+            if (punctuation != TokenKind.End)
             {
-                _position = kind is TokenKind.And or TokenKind.Or ? logicalEnd : start + 1;
-                IgnoreContinuations(start, _position);
-                return new(kind, _source.Slice(start, _position - start), start);
+                _position++;
+                return new(punctuation, _source.Slice(start, 1), start);
             }
         }
         var cursor = new ShellSourceCursor(_source, start, _context);
@@ -589,8 +600,10 @@ internal sealed class ConditionalParser : IDisposable
             return;
         }
 
-        var atLineEnd = token.Kind is TokenKind.Newline or TokenKind.End;
-        var readPosition = token.Offset + (atLineEnd ? 0 : token.Source.Length);
+        var tokenEnd = token.Kind is TokenKind.Newline or TokenKind.End ? token.Offset : token.Offset + token.Source.Length;
+        var peeksPastToken = token.Kind is TokenKind.InvalidWithLookahead or TokenKind.Open or TokenKind.Order
+            || token.Kind == TokenKind.Close && !_reader.IsCommandSubstitution;
+        var readPosition = peeksPastToken ? ShellSourceCursor.SkipLineContinuations(_source.AsSpan(), tokenEnd) : tokenEnd;
         var physicalLine = _source.GetPhysicalLine(readPosition, out var lineStart);
         var argument = token.Kind switch
         {
@@ -617,10 +630,12 @@ internal sealed class ConditionalParser : IDisposable
         {
             // Bash uses the physical reader line for this second diagnostic, including skipped comments.
             // The byte at the read position can be the separator immediately after the rejected argument.
+            if (readPosition > tokenEnd && readPosition == _source.Length)
+                return default;
             var nearEnd = Math.Min(physicalLine.Length, readPosition - lineStart + 1);
             var preceding = physicalLine.AsSpan(0, nearEnd).TrimEnd(" \t"u8);
             if (preceding.IsEmpty)
-                return token.Source;
+                return lineStart < _source.Length ? _source.Slice(lineStart, 1) : token.Source;
             var start = Math.Max(0, preceding.LastIndexOfAny(" \t;|&"u8));
             if (preceding[start] is (byte)' ' or (byte)'\t')
                 start++;
@@ -783,6 +798,6 @@ internal sealed class ConditionalParser : IDisposable
     private readonly record struct SpellingEdit(int Start, int End, SourceSpelling Spelling, CommandSubstitutionSyntax? Capture,
         SpellingEditKind Kind);
 
-    private enum TokenKind { End, Word, And, Or, Open, Close, Order, DescriptorNumber, EndCommand, Newline, Invalid }
+    private enum TokenKind { End, Word, And, Or, Open, Close, Order, DescriptorNumber, EndCommand, Newline, Invalid, InvalidWithLookahead }
     private sealed record Token(TokenKind Kind, ShellSource Source, int Offset);
 }

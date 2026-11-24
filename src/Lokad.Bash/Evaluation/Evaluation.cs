@@ -4101,10 +4101,17 @@ public sealed partial class Evaluation : IFileTester
             ConditionalReaderError.Term => "' in conditional command\n"u8,
             _ => ReadOnlySpan<byte>.Empty
         };
+        // Operator lookahead can reach EOF between physical lines, leaving no text to quote.
+        var hasNearToken = conditional == null || !syntax.Token.IsEmpty;
+        includeLine &= hasNearToken;
         var tokenPrefix = conditional != null ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
+        if (!hasNearToken)
+            tokenPrefix = "syntax error\n"u8;
         var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);
         var prefixLength = prefix.Length;
-        var length = prefixLength + tokenPrefix.Length + (long)syntax.Token.Length + 2;
+        var length = (long)prefixLength + tokenPrefix.Length;
+        if (hasNearToken)
+            length += syntax.Token.Length + 2L;
         var lineOffset = line - (conditional?.ReadLine ?? line);
         var reasonPrefix = reason.IsEmpty || conditional is not { } read || read.ReasonLine == read.ReadLine
             ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + read.ReasonLine);
@@ -4143,8 +4150,11 @@ public sealed partial class Evaluation : IFileTester
         }
         prefix.AppendTo(diagnostic);
         diagnostic.Append(tokenPrefix);
-        AppendToken(syntax.Token.AsSpan());
-        diagnostic.Append("'\n"u8);
+        if (hasNearToken)
+        {
+            AppendToken(syntax.Token.AsSpan());
+            diagnostic.Append("'\n"u8);
+        }
         if (includeLine)
         {
             prefix.AppendTo(diagnostic);
