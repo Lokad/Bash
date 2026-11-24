@@ -96,7 +96,8 @@ internal static class ArithmeticExpansionScanner
 
     /// <summary>
     /// Scans a command with adjacent closers, sharing the tokenizer's nesting budget.
-    /// NotFound leaves nested-subshell prefixes to the shell grammar; only Complete makes the expression valid.
+    /// NotFound leaves nested-subshell prefixes to the shell grammar and returns the
+    /// first closer when the fallback consumed the last line break of a file.
     /// </summary>
     internal static ShellScanStatus ScanCommand(
         ShellScanContext context,
@@ -127,6 +128,44 @@ internal static class ArithmeticExpansionScanner
         out int endIndex) =>
         ScanCore(context, text, startIndex, out endIndex, out _, out _, out _, out _, out _, out _,
             captureExpression: false, form: ArithmeticForm.AdjacentSubshell) == ShellScanStatus.Complete;
+
+    private static ParserFailure? ReadPartialCommandCloser(ShellScanContext context, ShellSource text,
+        int expressionStart, int closer, bool forHeader, ref int endIndex)
+    {
+        var afterCloser = closer + 1;
+        var following = text.AsSpan()[afterCloser..];
+        if (following.StartsWith("\\\n"u8) || following.SequenceEqual("\\"u8))
+            return new ParserFailure(new SyntaxError("Invalid arithmetic command.", afterCloser),
+                ParserFailureKind.ContinuedArithmeticCloser);
+        if (!following.IsEmpty && following[0] != (byte)'\n')
+            return null;
+
+        if (expressionStart == closer)
+        {
+            // The fallback reader sees an empty subshell in its replayed prefix.
+            return new ParserFailure(new SyntaxError("Invalid arithmetic command.", closer), ParserFailureKind.Grammar)
+            {
+                UnexpectedToken = new UnexpectedSyntax(text.Slice(closer, 1), text.Slice(closer - 1, 2), afterCloser)
+            };
+        }
+
+        // A file reader can resume nested-subshell parsing after the physical LF.
+        if (!context.ReadsCommandString && !forHeader)
+        {
+            if (following.Length <= 1)
+                endIndex = closer;
+            return null;
+        }
+
+        var line = text.GetPhysicalLine(afterCloser, out var lineStart);
+        return new ParserFailure(new SyntaxError("Invalid arithmetic command.", closer), ParserFailureKind.Delimiter)
+        {
+            UnexpectedToken = new UnexpectedSyntax(line.GetNearToken(afterCloser - lineStart), line, afterCloser)
+            {
+                UseNearPrefix = true
+            }
+        };
+    }
 
     private static ShellScanStatus ScanCore(
         ShellScanContext context,
@@ -249,10 +288,9 @@ internal static class ArithmeticExpansionScanner
                 {
                     if (isCommand)
                     {
-                        // A continued double closer is invalid arithmetic, not a subshell fallback.
-                        return ShellSourceCursor.TryMatchLogicalText(span, cursor.Position, "))", out _)
-                            ? ShellScanStatus.Invalid
-                            : ShellScanStatus.NotFound;
+                        error = ReadPartialCommandCloser(context, text, expressionStart, cursor.Position,
+                            form == ArithmeticForm.ForHeader, ref endIndex);
+                        return error == null ? ShellScanStatus.NotFound : ShellScanStatus.Invalid;
                     }
 
                     // This closes the subshell opener in a command substitution.

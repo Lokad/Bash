@@ -107,7 +107,7 @@ public sealed partial class Evaluation
             if (failed.Failure.UnexpectedToken is { } token)
             {
                 // Bash imports before setting the script reader's initial line to one.
-                var line = source.ToMemory().Span[..token.ReadPosition].Count((byte)'\n');
+                var line = source.ToMemory().Span[..token.ReadPosition].Count((byte)'\n') + token.LineAdvance;
                 await ReportUnexpectedSyntaxAsync(token, inherited.CommandName, definition.Name.Value,
                     SyntaxDiagnosticOrigin.Script, line, includeLine: true).ConfigureAwait(false);
             }

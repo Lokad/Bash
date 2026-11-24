@@ -49,6 +49,18 @@ public readonly struct ShellSource
         return Slice(start, (end < 0 ? source.Length : position + end) - start);
     }
 
+    /// <summary>Selects the diagnostic token at the end of a physical line prefix.</summary>
+    internal ShellSource GetNearToken(int length)
+    {
+        var preceding = AsSpan(0, length).TrimEnd(" \t"u8);
+        if (preceding.IsEmpty)
+            return Empty;
+        var start = Math.Max(0, preceding.LastIndexOfAny(" \t;|&"u8));
+        if (preceding[start] is (byte)' ' or (byte)'\t')
+            start++;
+        return Slice(start, preceding.Length - start);
+    }
+
     /// <summary>Trims shell blanks from a clause boundary; CR remains source data.</summary>
     internal ShellSource TrimBlanks()
     {

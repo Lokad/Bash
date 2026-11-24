@@ -29,6 +29,7 @@ internal sealed class Tokenizer
     private int _wordLookaheadEnd = -1;
     private int _lastPhysicalNewline;
     private int _functionBraceLine;
+    private int _arithmeticFailureStart = -1;
 
     internal bool TrackCommandLocations { get; init; }
     internal bool TrackUnexpectedTokens { get; init; }
@@ -193,6 +194,8 @@ internal sealed class Tokenizer
                 return 2;
             var source = _input.AsSpan();
             var advance = source.IsEmpty || source[^1] != (byte)'\n' || _continuedAtEndOfInput ? 1 : 0;
+            if (_arithmeticFallbackAtFileEnd)
+                advance++;
             return _redirectionLookaheadAtEndOfInput ? advance + 1 : advance;
         }
     }
@@ -238,6 +241,7 @@ internal sealed class Tokenizer
     }
 
     private ParserFailure? _failure;
+    private bool _arithmeticFallbackAtFileEnd;
 
     /// <summary>The first failure; later reads stop without replacing its diagnostic.</summary>
     internal ParserFailure? Failure => _failure ?? (_scanContext.LimitError is { } limit
@@ -313,18 +317,22 @@ internal sealed class Tokenizer
         finally { _scanContext.RetainCaptureLookahead = retainLookahead; }
     }
 
-    /// <summary>Selects the opener diagnostic when the local arithmetic scan occurred outside command position.</summary>
-    internal void RejectIncompleteArithmeticCommand() => RejectIncompleteArithmeticCommand(ParserFailureKind.Grammar);
+    /// <summary>Selects the local opener diagnostic when a failed arithmetic scan occurred in a word position.</summary>
+    internal bool RejectArithmeticCommandInWordPosition() => RejectArithmeticCommandInWordPosition(ParserFailureKind.Grammar);
 
-    private void RejectIncompleteArithmeticCommand(ParserFailureKind kind)
+    private bool RejectArithmeticCommandInWordPosition(ParserFailureKind kind)
     {
-        if (TrackUnexpectedTokens && _failure is { Kind: ParserFailureKind.IncompleteArithmeticCommand } failure)
-            _failure = failure with
-            {
-                Kind = kind,
-                UnclosedDelimiter = null,
-                UnexpectedToken = GetUnexpectedSyntax(SecondArithmeticOpener(failure.Error.Offset))
-            };
+        if (!TrackUnexpectedTokens || _arithmeticFailureStart < 0
+            || (_failure ?? QuotedEndOfInputFailure) is not { Kind: not ParserFailureKind.Limit } failure)
+            return false;
+
+        _failure = new ParserFailure(failure.Error, kind)
+        {
+            UnexpectedToken = GetUnexpectedSyntax(SecondArithmeticOpener(_arithmeticFailureStart))
+        };
+        _arithmeticFailureStart = -1;
+        QuotedEndOfInputFailure = null;
+        return true;
     }
 
     private Token SecondArithmeticOpener(int start)
@@ -375,7 +383,7 @@ internal sealed class Tokenizer
 
     internal void RecordMissingRedirectionOperand(Token redirection, Token operand)
     {
-        RejectIncompleteArithmeticCommand();
+        RejectArithmeticCommandInWordPosition();
         if (Error != null)
             return;
         var continuedToEnd = operand.Kind == TokenKind.EndOfInput && Position == _input.Length && _spacingContinuedAtEndOfInput;
@@ -422,7 +430,7 @@ internal sealed class Tokenizer
 
     internal void MarkCompoundArrayFailure()
     {
-        RejectIncompleteArithmeticCommand(ParserFailureKind.ArrayDelimiter);
+        RejectArithmeticCommandInWordPosition(ParserFailureKind.ArrayDelimiter);
         if (_failure is { Kind: ParserFailureKind.Delimiter, UnclosedDelimiter: not null } missingCloser)
             _failure = missingCloser with { Kind = ParserFailureKind.ArrayDelimiter };
         if ((_failure ?? QuotedEndOfInputFailure) is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
@@ -437,8 +445,8 @@ internal sealed class Tokenizer
     {
         if (PeekTokenCore().Kind == TokenKind.OpenParen)
             return true;
-        if (_failure is { Kind: ParserFailureKind.IncompleteArithmeticCommand } failure
-            && ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), assignment.Source.End.Value) == failure.Error.Offset)
+        if (_arithmeticFailureStart >= 0
+            && ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), assignment.Source.End.Value) == _arithmeticFailureStart)
             MarkCompoundArrayFailure();
         return false;
     }
@@ -933,8 +941,11 @@ internal sealed class Tokenizer
 
                 if (status != ShellScanStatus.NotFound)
                 {
+                    _arithmeticFailureStart = Position;
                     if (error != null)
                     {
+                        if (error.Kind == ParserFailureKind.ContinuedArithmeticCloser)
+                            error = ReadContinuedArithmeticCloser(error.Error);
                         if (error is { Kind: ParserFailureKind.IncompleteArithmeticCommand, UnclosedDelimiter: { } delimiter }
                             && _scanContext.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
                             error = error with { UnclosedDelimiter = delimiter with { PayloadLine = GetLine(delimiter.ReadPosition) } };
@@ -945,6 +956,7 @@ internal sealed class Tokenizer
                             ? "Unterminated arithmetic command." : "Invalid arithmetic command.", Position);
                     return Located(Token.EndOfInput());
                 }
+                _arithmeticFallbackAtFileEnd |= arithmeticEnd > Position;
 
                 Position++;
                 return Located(Token.OpenParen());
@@ -1271,6 +1283,56 @@ internal sealed class Tokenizer
     private Word ReadWord(ReadOnlySpan<byte> span)
     {
         return ReadWord(span, delimiterStart: 0, ExpansionWordSyntax.Parameter, ShellQuoteKind.None);
+    }
+
+    private ParserFailure ReadContinuedArithmeticCloser(SyntaxError error)
+    {
+        var start = error.Offset;
+        var source = _input.AsSpan();
+        var wordStart = ShellSourceCursor.SkipLineContinuations(source, start);
+        var readPosition = wordStart;
+        var terminalBackslash = start == source.Length - 1;
+        ShellSource token = default;
+        if (terminalBackslash)
+        {
+            // The file reader consumes its implicit LF. A command string quotes the final backslash.
+            readPosition = source.Length;
+            if (_scanContext.ReadsCommandString)
+                token = ShellSource.FromText(@"\\");
+        }
+        else if (wordStart < source.Length && !IsWordDelimiter(source[wordStart]))
+        {
+            var wordReader = new Tokenizer(_input, wordStart, _scanContext);
+            wordReader.ReadWord(source);
+            if (wordReader.Failure is { } wordFailure)
+                return wordFailure;
+            readPosition = wordReader.Position;
+            token = _input.Slice(wordStart, readPosition - wordStart);
+            if (token.AsSpan().IndexOf("\\\n"u8) >= 0)
+                token = ShellSourceCursor.RemoveLineContinuations(_scanContext, token);
+        }
+
+        var captureContinuation = IsCommandSubstitution && wordStart > start;
+        if (captureContinuation || token.AsSpan().IndexOfAnyExceptInRange((byte)0x20, (byte)0x7e) >= 0)
+        {
+            using var quoted = _scanContext.CreateByteBuilder(0);
+            if (captureContinuation)
+            {
+                using var spelling = _scanContext.CreateByteBuilder(0);
+                spelling.Append(source.Slice(start, 2)).Append(token.Bytes);
+                if (!ShellArgumentEscaping.TryAppendArithmeticDiagnosticToken(quoted, spelling.ToMemory().Span))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+            }
+            else if (!ShellArgumentEscaping.TryAppendArithmeticDiagnosticToken(quoted, token.AsSpan()))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            token = ShellSource.FromBytes(quoted.ToMemory());
+        }
+
+        var line = terminalBackslash ? default : _input.GetPhysicalLine(readPosition, out _);
+        return new ParserFailure(error with { Offset = Position }, ParserFailureKind.Grammar)
+        {
+            UnexpectedToken = new UnexpectedSyntax(token, line, readPosition) { LineAdvance = terminalBackslash ? 1 : 0 }
+        };
     }
 
     /// <summary>Reads an expansion operand under its surrounding quote context, without adding source quotes.</summary>

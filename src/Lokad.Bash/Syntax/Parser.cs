@@ -235,7 +235,7 @@ public static class Parser
                     {
                         { UnclosedDelimiter: { } captureEnd } =>
                             tokenizer.GetLine(captureEnd.ReadPosition) + captureEnd.LineAdvance,
-                        { UnexpectedToken: { } diagnostic } => tokenizer.GetLine(diagnostic.ReadPosition),
+                        { UnexpectedToken: { } diagnostic } => tokenizer.GetLine(diagnostic.ReadPosition) + diagnostic.LineAdvance,
                         { Kind: ParserFailureKind.Grammar or ParserFailureKind.RedirectionOperand } when trailing.Kind == TokenKind.EndOfInput
                             && failure.Error.Offset == input.Length && tokenizer.Position == input.Length =>
                             tokenizer.GetLine(input.Length) + tokenizer.EndOfInputLineAdvance,
@@ -824,9 +824,7 @@ public static class Parser
                     }
 
                     var simple = ParseSimpleCommand(tokenizer, startLine);
-                    if (simple == null)
-                        tokenizer.RejectIncompleteArithmeticCommand();
-                    return simple;
+                    return tokenizer.RejectArithmeticCommandInWordPosition() ? null : simple;
             }
 
             if (command == null)
@@ -1162,7 +1160,7 @@ public static class Parser
         var subjectToken = tokenizer.NextTokenCore();
         if (!tokenizer.TryGetOperandWord(subjectToken, out var subjectWord))
         {
-            tokenizer.RejectIncompleteArithmeticCommand();
+            tokenizer.RejectArithmeticCommandInWordPosition();
             tokenizer.RecordUnexpectedTokenBeforeNewline("Expected case subject word.", subjectToken);
             return null;
         }
@@ -1354,7 +1352,8 @@ public static class Parser
         var tokenizer = CreateCompoundInitializerTokenizer(source, memory, trackDiagnostics: true);
         ReadCompoundArrayValues(tokenizer, openingOffset: null, declaration: false);
         var failure = tokenizer.Failure;
-        line = tokenizer.GetLine(failure?.UnexpectedToken?.ReadPosition ?? tokenizer.Position);
+        line = failure?.UnexpectedToken is { } token
+            ? tokenizer.GetLine(token.ReadPosition) + token.LineAdvance : tokenizer.GetLine(tokenizer.Position);
         return failure;
     }
 

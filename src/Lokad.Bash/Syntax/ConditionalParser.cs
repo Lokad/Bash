@@ -694,13 +694,10 @@ internal sealed class ConditionalParser : IDisposable
             if (readPosition > tokenEnd && readPosition == _source.Length)
                 return default;
             var nearEnd = Math.Min(physicalLine.Length, readPosition - lineStart + 1);
-            var preceding = physicalLine.AsSpan(0, nearEnd).TrimEnd(" \t"u8);
-            if (preceding.IsEmpty)
+            var nearToken = physicalLine.GetNearToken(nearEnd);
+            if (nearToken.IsEmpty)
                 return lineStart < _source.Length ? _source.Slice(lineStart, 1) : token.Source;
-            var start = Math.Max(0, preceding.LastIndexOfAny(" \t;|&"u8));
-            if (preceding[start] is (byte)' ' or (byte)'\t')
-                start++;
-            return physicalLine.Slice(start, preceding.Length - start);
+            return nearToken;
         }
     }
 

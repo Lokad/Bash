@@ -3945,7 +3945,7 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private static int GetCaptureDiagnosticLine(UnexpectedSyntax token, ReadOnlyMemory<byte> spelling, int baseLine) =>
-        Math.Max(1, baseLine) + spelling.Span[token.CapturePayloadStart..token.ReadPosition].Count((byte)'\n') + 1;
+        Math.Max(1, baseLine) + spelling.Span[token.CapturePayloadStart..token.ReadPosition].Count((byte)'\n') + 1 + token.LineAdvance;
 
     private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
     private const int DiagnosticPunctuationBytes = 3; // Colon, space and LF.
@@ -4191,7 +4191,8 @@ public sealed partial class Evaluation : IFileTester
         // Operator lookahead can reach EOF between physical lines, leaving no text to quote.
         var hasNearToken = conditional == null || !syntax.Token.IsEmpty;
         includeLine &= hasNearToken;
-        var tokenPrefix = conditional != null ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
+        var tokenPrefix = conditional != null || syntax.UseNearPrefix
+            ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
         if (!hasNearToken)
             tokenPrefix = "syntax error\n"u8;
         var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);

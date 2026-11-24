@@ -48,6 +48,8 @@ internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int
 
     /// <summary>Byte offset where the enclosing capture starts reading its payload.</summary>
     internal int CapturePayloadStart { get; init; }
+    internal int LineAdvance { get; init; }
+    internal bool UseNearPrefix { get; init; }
     internal ConditionalReadDiagnostic? Conditional { get; init; }
     internal ShellSource Argument { get; init; }
 }
@@ -92,6 +94,7 @@ internal enum ParserFailureKind
     Delimiter,
     Limit,
     IncompleteArithmeticCommand,
+    ContinuedArithmeticCloser,
     ArithmeticForHeader,
     SubstitutionGrammar,
     SubstitutionForHeader,

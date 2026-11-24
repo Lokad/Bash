@@ -335,6 +335,68 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("f (( $(if :) ))", 2, "near unexpected token `('", "f (( $(if :) ))")]
+    [InlineData("((printf skipped)\n)", 2, "near `skipped)'", "((printf skipped)")]
+    [InlineData("((printf skipped)\\\n )", 3, "near unexpected token `'", " )")]
+    [InlineData("((printf skipped)\\\n\"two words\"; :", 3, "near unexpected token `\"two words\"'", "\"two words\"; :")]
+    public async Task ArithmeticReaderFailureKeepsTheCallerAndTheReachedPhysicalLine(
+        string unit, int line, string diagnostic, string shown)
+    {
+        var memory = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        host.AddFile("/input", "printf before\n" + unit + "\nprintf skipped\n");
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal($"input: line {line}: syntax error {diagnostic}\ninput: line {line}: `{shown}'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task RawScriptCanRunNestedSubshellsWithClosersOnSeparateLines()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("((printf body)\n)\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("body", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task BlankBeforeLineBreakAllowsSourcedNestedSubshells()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "((printf body) \n)\n");
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("body:0:after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task ContinuedArithmeticCloserInACaptureQuotesTheReachedToken()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\nprintf '<%s>' \"$( ((printf skipped)\\\n ) )\"\n");
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal("input: line 3: syntax error near unexpected token `$'\\\\\\n''\ninput: line 3: ` ) )\"'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task IncompleteSourcedCompoundReportsHereDocumentWarningBeforeEndOfInput()
     {
