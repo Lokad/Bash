@@ -128,8 +128,8 @@ public sealed class ReturnArgumentTests
     }
 
     [Theory]
-    [InlineData("word", 0, "[root:2]", "return: word: numeric argument required\n")]
-    [InlineData("1 2", 1, "", "return: too many arguments\n")]
+    [InlineData("word", 0, "[root:2]", "/script: line 1: return: word: numeric argument required\n")]
+    [InlineData("1 2", 1, "", "/script: line 1: return: too many arguments\n")]
     public async Task ReturnOperandErrorsRespectTheSourceBoundary(
         string operand, int expectedStatus, string expectedOutput, string expectedError)
     {

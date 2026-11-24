@@ -743,6 +743,11 @@ stage terminates on discard with the preceding nonzero status or 1. A direct
 builtin pipeline stage or command substitution reports 1. A discard inside
 an EXIT action ends the action and preserves the pending exit status.
 
+Control-builtin operand and loop-scope diagnostics include the filename and
+reached line from sourced input. A function keeps the source of its definition
+for these diagnostics after the source call returns. The message follows the
+active stderr mapping.
+
 `exit` and `return` use the low byte of an explicit signed 64-bit decimal
 status. An invalid numeric operand diagnoses and selects status 2.
 Inside an EXIT action, bare `exit` uses the saved status that started the

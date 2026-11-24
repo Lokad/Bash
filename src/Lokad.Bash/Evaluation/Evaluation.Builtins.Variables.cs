@@ -229,7 +229,7 @@ public sealed partial class Evaluation
             if (!TryParseControlNumber(words[first], out count))
                 return await ReportCountErrorAsync(words[first], ": numeric argument required").ConfigureAwait(false);
             if (words.Count - first > 1)
-                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("shift")).ConfigureAwait(false);
+                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("shift"), scope).ConfigureAwait(false);
             // Bash reports the original first operand for a negative count, including a leading --.
             if (count < 0)
                 return await ReportCountErrorAsync(words[1], ": shift count out of range").ConfigureAwait(false);
@@ -240,8 +240,8 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> ReportCountErrorAsync(ShellValue operand, string message)
         {
-            await ReportExpansionDiagnosticAsync([ShellValue.FromText("shift")],
-                [operand, ShellValue.FromText(message)]).ConfigureAwait(false);
+            await ReportControlDiagnosticAsync([ShellValue.FromText("shift")],
+                [operand, ShellValue.FromText(message)], scope).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
     }

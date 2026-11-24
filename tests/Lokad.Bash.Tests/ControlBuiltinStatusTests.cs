@@ -128,6 +128,51 @@ public sealed class ControlBuiltinStatusTests
     }
 
     [Theory]
+    [InlineData("exit 1 2", "exit: too many arguments", 1)]
+    [InlineData("for x in a; do break 1 2; done", "break: too many arguments", 1)]
+    [InlineData("for x in a; do continue 1 2; done", "continue: too many arguments", 1)]
+    [InlineData("shift 1 2", "shift: too many arguments", 1)]
+    public async Task ControlFailureReportsTheSourcedLineBeforeUnwinding(string invocation, string diagnostic, int status)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", $"# Leading line\n{invocation}\nprintf unexpected\n");
+        var result = await host.RunAsync("source ./body\nprintf '<%s>' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}>", host.StandardOutput.TextContent);
+        Assert.Equal($"./body: line 2: {diagnostic}\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task RedirectedControlDiagnosticUsesTheOperandLineInRetainedSource()
+    {
+        const string script = "source ./body\nf; printf '<%s>' \"$?\"";
+        await using var host = new TestHost();
+        host.AddFile("/body", "# Leading line\nf(){\nshift \\\nbad \\\n2>error\n}\n");
+        var result = await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./body: line 4: shift: bad: numeric argument required\n", host.ReadFile("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ControlDiagnosticKeepsUnnamedFunctionContextInsideSource()
+    {
+        const string script = "f(){ shift bad; }; source ./body; printf '<%s>' \"$?\"";
+        await using var host = new TestHost();
+        host.AddFile("/body", "# Leading line\nf\n");
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Equal("shift: bad: numeric argument required\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task DiscardRetainsTheLastFailedPipelineStatusAtEndOfInput(bool prepared)
