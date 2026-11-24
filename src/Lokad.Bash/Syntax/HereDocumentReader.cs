@@ -33,8 +33,12 @@ internal sealed class HereDocumentReader
 
     internal void Enqueue(Redirection redirection) => _pending.Enqueue(redirection);
 
-    internal bool TryReadBodies(Tokenizer tokenizer)
+    internal bool TryReadBodies(Tokenizer tokenizer) => TryReadBodies(tokenizer, out _);
+
+    /// <summary>Collects bodies and returns the physical LFs consumed, including delimiter lines.</summary>
+    internal bool TryReadBodies(Tokenizer tokenizer, out int lineFeeds)
     {
+        lineFeeds = 0;
         var eofLineAdvance = tokenizer.HereDocumentHeaderLineAdvance;
         while (_pending.TryDequeue(out var redirection))
         {
@@ -49,7 +53,8 @@ internal sealed class HereDocumentReader
             var bodyStart = tokenizer.Position;
             var documentLineAdvance = eofLineAdvance;
             var complete = tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
-                joinContinuations: allowExpansion, out var content, out var continuedFinalLine);
+                joinContinuations: allowExpansion, out var content, out var continuedFinalLine, out var documentLineFeeds);
+            lineFeeds += documentLineFeeds;
             if (continuedFinalLine)
                 eofLineAdvance = 1;
             if (!complete)

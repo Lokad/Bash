@@ -24,6 +24,24 @@ public sealed class ParserHereDocumentTests
     }
 
     [Theory]
+    [InlineData("a\\\nb\nE\\\nND\ntail", true, false, true, "ab\n", 4)]
+    [InlineData("a\\\nb\nEND", false, false, true, "a\\\nb\n", 2)]
+    [InlineData("\ta\r\n\tEND\n", true, true, true, "a\r\n", 2)]
+    [InlineData("\\\n", true, false, false, "", 1)]
+    [InlineData("body", true, false, false, "body\n", 0)]
+    [InlineData("", true, false, false, "", 0)]
+    public void BodyReaderReportsPhysicalLineFeedsIndependentlyOfTheCollectedText(
+        string source, bool joinContinuations, bool stripTabs, bool matched, string text, int lineFeeds)
+    {
+        var tokenizer = new Tokenizer(ShellSource.FromText(source)) { AllowEofHereDocuments = true };
+
+        Assert.Equal(matched, tokenizer.TryReadHereDocument(ShellSource.FromText("END"), stripTabs, joinContinuations,
+            out var body, out _, out var consumedLineFeeds));
+        Assert.Equal(text, body.ToUtf8String());
+        Assert.Equal(lineFeeds, consumedLineFeeds);
+    }
+
+    [Theory]
     [InlineData("$(printf 'END')", "$(printf 'END')", true)]
     [InlineData("\"$(printf \"END\")\"", "$(printf END)", false)]
     [InlineData("''$(printf 'END')", "$(printf END)", false)]

@@ -28,7 +28,7 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
         return newline < 0 ? input.Length : position + newline + 1;
     }
 
-    internal void Add(int afterCloser, int beginning, int end, MemoryCapacity? memory)
+    internal void Add(int afterCloser, int beginning, int end, int lineFeeds, MemoryCapacity? memory)
     {
         if (beginning != end)
         {
@@ -41,7 +41,7 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
             }
         }
 
-        var lines = source.AsSpan(beginning, end - beginning).Count((byte)'\n');
+        var lines = lineFeeds;
         if (beginning != end && source[end - 1] != (byte)'\n')
             lines++;
         if (_headerAdvances.Count != 0 && _headerAdvances[^1].End == _headerEnd)

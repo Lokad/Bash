@@ -219,8 +219,8 @@ internal sealed class Tokenizer
         Position = start;
         try
         {
-            pending.TryReadBodies(this);
-            readAhead.Add(afterCloser, start, Position, _scanContext.SyntaxMemory);
+            pending.TryReadBodies(this, out var lineFeeds);
+            readAhead.Add(afterCloser, start, Position, lineFeeds, _scanContext.SyntaxMemory);
             if (pending.Warnings is { } warnings)
                 _scanContext.AppendCaptureWarnings(warnings);
         }
@@ -1109,16 +1109,19 @@ internal sealed class Tokenizer
     /// <param name="joinContinuations">Whether the unquoted delimiter permits removing escaped LF before comparison.</param>
     /// <param name="body">The collected body with continuation/tab normalization, without value expansion.</param>
     /// <param name="continuedFinalLine">Whether EOF completed a nonempty line ending in a continuation.</param>
+    /// <param name="lineFeeds">Physical LFs consumed, including continuations and any delimiter line.</param>
     /// <returns>Whether the delimiter was found. A script reader can use the collected EOF body.</returns>
     internal bool TryReadHereDocument(
         ShellSource delimiter,
         bool stripTabs,
         bool joinContinuations,
         out ShellSource body,
-        out bool continuedFinalLine)
+        out bool continuedFinalLine,
+        out int lineFeeds)
     {
         body = default;
         continuedFinalLine = false;
+        lineFeeds = 0;
         ByteMemoryBuilder? content = null;
         var bodyStart = Position;
         var span = _input.AsSpan();
@@ -1139,6 +1142,7 @@ internal sealed class Tokenizer
                         hasContinuedBytes |= Position != runStart;
                         AppendRun(content, span[runStart..Position]);
                         Position += 2;
+                        lineFeeds++;
                         _continuedAtEndOfInput |= Position == span.Length;
                         runStart = Position;
                         continue;
@@ -1166,6 +1170,7 @@ internal sealed class Tokenizer
 
             var newlineLength = Position < span.Length ? 1 : 0;
             Position += newlineLength;
+            lineFeeds += newlineLength;
             continuedFinalLine = newlineLength == 0 && run.IsEmpty && runStart != physicalLineStart;
             if (line.SequenceEqual(delimiter.AsSpan()))
             {

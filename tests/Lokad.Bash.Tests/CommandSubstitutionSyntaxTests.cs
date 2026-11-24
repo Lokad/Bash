@@ -701,6 +701,10 @@ public sealed class CommandSubstitutionSyntaxTests
         ReadAheadWarning + "line 3: " + PendingDocumentWarning, 0)]
     [InlineData("v=$(cat <<FIRST <<SECOND); printf '<%s>' \"$v\"\none\nFIRST\ntwo\nSECOND", "<two>",
         "line 1: warning: command substitution: 2 unterminated here-documents\n", 0)]
+    [InlineData("v=$(cat <<A <<B); printf '<%s:%s>' \"$v\" \"$LINENO\"\na\\\nb\nA\nx\\\ny\nB\nprintf '<%s>' \"$LINENO\"",
+        "<xy:7><8>", "line 1: warning: command substitution: 2 unterminated here-documents\n", 0)]
+    [InlineData("a=$(cat <<A) b=$(cat <<B); printf '<%s:%s:%s>' \"$a\" \"$b\" \"$LINENO\"\na\\\nb\nA\nx\\\ny\nB\nprintf '<%s>' \"$LINENO\"",
+        "<ab:xy:7><8>", ReadAheadWarning + "line 4: " + PendingDocumentWarning, 0)]
     [InlineData("cat <<OUTER; v=$(cat <<INNER); printf '<%s>' \"$v\"\nin\nINNER\nout\nOUTER\nprintf tail", "out\n<in>tail",
         ReadAheadWarning, 0)]
     [InlineData("printf '<%s>' \"$(cat <<A)\"\none\nA\nprintf '<%s>' \"$(cat <<B)\"\ntwo\nB", "<one><two>",
