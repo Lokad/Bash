@@ -240,6 +240,19 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData("\"'\"", "\\'")]
+    [InlineData("\"''\"", "''\\'''\\'''")]
+    [InlineData("\"a'b\"", "'a'\\''b'")]
+    public async Task TrapListingQuotesApostrophes(string action, string quoted)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"trap -- {action} EXIT; trap -p EXIT; trap - EXIT");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"trap -- {quoted} EXIT\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("trap -p", "trap: write error: Bad file descriptor\n")]
     [InlineData("trap -p HUP unknown_name TERM", "trap: unknown_name: invalid signal specification\n"
         + "trap: write error: Bad file descriptor\n")]
