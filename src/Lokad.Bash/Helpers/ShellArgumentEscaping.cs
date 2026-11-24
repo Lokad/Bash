@@ -44,24 +44,24 @@ public static class ShellArgumentEscaping
             return style == ShellQuoteStyle.AssignmentValue
                 || output.TryAppend(style == ShellQuoteStyle.DoubleQuoted ? "\"\""u8 : "''"u8);
 
-        var needsAnsi = style == ShellQuoteStyle.AnsiC;
-        for (var index = 0; !needsAnsi && index < input.Length;)
+        var printablePrefix = 0;
+        if (style != ShellQuoteStyle.AnsiC)
         {
-            var length = PrintableCharacterLength(input[index..]);
-            if (length == 0)
+            while (printablePrefix < input.Length)
             {
-                needsAnsi = true;
-                break;
+                var length = PrintableCharacterLength(input[printablePrefix..]);
+                if (length == 0)
+                    break;
+                printablePrefix += length;
             }
-            index += length;
         }
 
-        if (needsAnsi)
+        if (style == ShellQuoteStyle.AnsiC || printablePrefix < input.Length)
         {
-            if (!output.TryAppend("$'"u8))
+            if (!output.TryAppend("$'"u8) || !AppendPrintablePrefix(output, input[..printablePrefix]))
                 return false;
             Span<byte> octalEscape = stackalloc byte[4];
-            for (var index = 0; index < input.Length; index++)
+            for (var index = printablePrefix; index < input.Length; index++)
             {
                 var value = input[index];
                 ReadOnlySpan<byte> escaped = value switch
@@ -129,6 +129,33 @@ public static class ShellArgumentEscaping
                 return false;
         }
         return !delimited || output.TryAppend(quote);
+
+        static bool AppendPrintablePrefix(IByteMemoryWriter output, ReadOnlySpan<byte> bytes)
+        {
+            // The first scan validated these characters. Only the ANSI-C quote and escape bytes need rewriting.
+            while (!bytes.IsEmpty)
+            {
+                var escape = bytes.IndexOfAny((byte)'\\', (byte)'\'');
+                var literal = escape < 0 ? bytes : bytes[..escape];
+                if (!literal.IsEmpty && !output.TryAppend(literal))
+                {
+                    // Keep the same complete characters when a bounded writer rejects the span.
+                    while (!literal.IsEmpty)
+                    {
+                        var length = PrintableCharacterLength(literal);
+                        if (!output.TryAppend(literal[..length]))
+                            return false;
+                        literal = literal[length..];
+                    }
+                }
+                if (escape < 0)
+                    return true;
+                if (!output.TryAppend(bytes[escape] == (byte)'\\' ? "\\\\"u8 : "\\'"u8))
+                    return false;
+                bytes = bytes[(escape + 1)..];
+            }
+            return true;
+        }
 
         // Resume character recognition after each escaped byte, preserving printable suffixes.
         static int PrintableCharacterLength(ReadOnlySpan<byte> bytes)

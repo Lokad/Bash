@@ -148,6 +148,49 @@ public sealed class ShellQuotedOutputTests
             "'"u8.ToArray(), [0xff], "x"u8.ToArray(), "'\\''"u8.ToArray(), "'\\''"u8.ToArray(),
             [0], "\n"u8.ToArray(), "y"u8.ToArray(), "'"u8.ToArray(),
         ];
+        AssertPrefixes(atoms, output => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input));
+    }
+
+    [Fact]
+    public void LiteralSingleQuotesWriteLongRunsAsSpans()
+    {
+        var input = Utf8Text.Encode(new string('a', 1024) + "'" + new string('b', 1024));
+        var output = new CountingWriter();
+
+        Assert.True(ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input.Span));
+        Assert.Equal(input.Length + 5, output.Written);
+        Assert.InRange(output.Appends, 1, 5);
+    }
+
+    [Theory]
+    [InlineData(ShellQuoteStyle.Backslash)]
+    [InlineData(ShellQuoteStyle.AnsiC)]
+    public void AnsiQuotesKeepCompleteCharactersAndEscapes(ShellQuoteStyle style)
+    {
+        byte[] input = [.. "aé\\b'🙂x"u8, 0xff, (byte)'z'];
+        byte[][] atoms =
+        [
+            "$'"u8.ToArray(), "a"u8.ToArray(), "é"u8.ToArray(), "\\\\"u8.ToArray(), "b"u8.ToArray(),
+            "\\'"u8.ToArray(), "🙂"u8.ToArray(), "x"u8.ToArray(), "\\377"u8.ToArray(), "z"u8.ToArray(), "'"u8.ToArray(),
+        ];
+        AssertPrefixes(atoms, output => ShellArgumentEscaping.TryAppendQuoted(output, input, style));
+    }
+
+    [Fact]
+    public void AnsiQuotesAppendAValidatedPrefixInOneSpan()
+    {
+        var input = new byte[4097];
+        input.AsSpan(0, 4096).Fill((byte)'a');
+        input[^1] = 0xff;
+        var output = new CountingWriter();
+
+        Assert.True(ShellArgumentEscaping.TryAppendQuoted(output, input, ShellQuoteStyle.Backslash));
+        Assert.Equal(input.Length + 6, output.Written);
+        Assert.InRange(output.Appends, 1, 4);
+    }
+
+    private static void AssertPrefixes(byte[][] atoms, Func<IByteMemoryWriter, bool> write)
+    {
         var length = atoms.Sum(atom => atom.Length);
         for (var limit = 0; limit <= length; limit++)
         {
@@ -160,20 +203,9 @@ public sealed class ShellQuotedOutputTests
                 expected.AddRange(atom);
             }
 
-            Assert.Equal(limit == length, ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input));
+            Assert.Equal(limit == length, write(output));
             Assert.Equal(expected.ToArray(), output.ToMemory().ToArray());
         }
-    }
-
-    [Fact]
-    public void LiteralSingleQuotesWriteLongRunsAsSpans()
-    {
-        var input = Utf8Text.Encode(new string('a', 1024) + "'" + new string('b', 1024));
-        var output = new CountingWriter();
-
-        Assert.True(ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input.Span));
-        Assert.Equal(input.Length + 5, output.Written);
-        Assert.InRange(output.Appends, 1, 5);
     }
 
     private sealed class CountingWriter : IByteMemoryWriter
