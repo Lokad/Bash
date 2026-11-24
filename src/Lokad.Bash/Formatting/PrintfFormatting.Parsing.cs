@@ -14,7 +14,6 @@ public static partial class PrintfFormatting
             Func<PrintfVariableAssignment, ValueTask<bool>> assignCount)
         {
             var diagnosticOutputClosed = false;
-            using var timeMemory = new MemoryCapacity(memoryBudget, 0);
             using var numericMemory = new MemoryCapacity(memoryBudget, 0);
             try
             {
@@ -348,7 +347,7 @@ public static partial class PrintfFormatting
 
                             try
                             {
-                                timeMemory.Resize(0);
+                                using var timeMemory = new MemoryCapacity(memoryBudget, 0);
                                 // Strftime has ASCII directives and byte-valued literals. A reversible
                                 // byte/character projection lets both APIs share the existing renderer.
                                 timeMemory.Grow(32L + 2L * configuredFormat.Bytes.Length);

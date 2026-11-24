@@ -363,6 +363,36 @@ public sealed class PrintfTimeFormatTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TimeScratchIsRefundedBeforeTheNextCount(bool assignOutput)
+    {
+        var literal = await MeasureAtCount("00%n", [ShellValue.FromText("count")]);
+        var formatted = await MeasureAtCount("%(%H)T%n", [ShellValue.FromText("0"), ShellValue.FromText("count")]);
+        Assert.Equal(literal, formatted);
+
+        async Task<long> MeasureAtCount(string format, ShellValue[] arguments)
+        {
+            var governor = new MemoryGovernor(64 * 1024);
+            using var owner = governor.CreateScope();
+            var checkpoints = new List<long>();
+            var result = await PrintfFormatting.EvaluateAsync(
+                ShellValue.FromText(format), arguments, DateTimeOffset.UnixEpoch, assignOutput, owner,
+                assignment =>
+                {
+                    Assert.Equal(new PrintfVariableAssignment("count", 2), assignment);
+                    checkpoints.Add(governor.ReservedBytes);
+                    return ValueTask.FromResult(true);
+                }, null, CancellationToken.None);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("00"u8.ToArray(), result.Output.ToArray());
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return Assert.Single(checkpoints);
+        }
+    }
+
     [Fact]
     public async Task CancellationAfterProjectionAdmissionKeepsEarlierCountAndSkipsLaterWork()
     {
