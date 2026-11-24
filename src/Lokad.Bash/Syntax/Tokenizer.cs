@@ -559,10 +559,10 @@ internal sealed class Tokenizer
         _pushback.Count == 0 && IsWordBoundary(_input.AsSpan(), Position);
 
     /// <summary>Checks function punctuation without advancing past a possible array-assignment word.</summary>
-    internal bool IsFollowedByFunctionParentheses(WordToken token)
+    internal bool IsFollowedByFunctionParentheses(Token token)
     {
         var source = _input.AsSpan();
-        var opening = ShellSourceCursor.SkipTokenSpacing(source, token.Token.Source.End.Value);
+        var opening = ShellSourceCursor.SkipTokenSpacing(source, token.Source.End.Value);
         if (opening >= source.Length || source[opening] != (byte)'(')
             return false;
         var closing = ShellSourceCursor.SkipTokenSpacing(source, opening + 1);

@@ -43,6 +43,8 @@ public sealed class FunctionNameTestsEndToEnd
     [InlineData("i=0; function probe_$((i+=1)) { printf bad; }; printf 'status=%s i=%s\\n' \"$?\" \"$i\"; declare -F", "status=1 i=0\n", "`probe_$((i+=1))': not a valid identifier\n", 0)]
     [InlineData("function a=b { printf literal; }; 'a=b'; declare -Fp 'a=b'; declare -f 'a=b'; printf 'status=%s\\n' \"$?\"; export -f 'a=b'; declare -Fp 'a=b'; unset -f 'a=b'; declare -F", "literaldeclare -f a=b\nstatus=1\ndeclare -f a=b\n", "line 1: declare: cannot use `-f' to make functions\nline 1: export: a=b: cannot export\n", 0)]
     [InlineData("probe-f \\\n( \\\n ) { printf yes; }; 'probe-f'", "yes", "", 0)]
+    [InlineData("function { \\\n( \\\n) { printf hit; }; '{'", "hit", "", 0)]
+    [InlineData("function } \\\n( \\\n) (printf hit); '}'", "hit", "", 0)]
     [InlineData("outer(){ 'bad-name'(){ :; }; printf 'status=%s\\n' \"$?\"; }; declare -f outer; outer", "outer () \n{ \n    function 'bad-name' () \n    { \n        :\n    };\n    printf 'status=%s\\n' \"$?\"\n}\nstatus=1\n", "`'bad-name'': not a valid identifier\n", 0)]
     [InlineData("probe-f(){ :; }; declare -f probe-f; type probe-f", "probe-f () \n{ \n    :\n}\nprobe-f is a function\nprobe-f () \n{ \n    :\n}\n", "", 0)]
     [InlineData("function a`printf effect` { :; }; declare -f 'a`printf effect`'; 'a`printf effect`'; printf 'status=%s\\n' \"$?\"", "a`printf effect` () \n{ \n    :\n}\nstatus=0\n", "", 0)]

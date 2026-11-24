@@ -816,7 +816,7 @@ public static class Parser
                         break;
                     }
 
-                    if (TryParseNameFunctionDefinition(tokenizer, out var functionDefinition))
+                    if (TryParseNameFunctionDefinition(tokenizer, token, out var functionDefinition))
                     {
                         command = functionDefinition;
                         break;
@@ -1139,7 +1139,7 @@ public static class Parser
         if (!tokenizer.TryReadFunctionName(nameTokenWord, out var name))
             return null;
 
-        if (tokenizer.IsFollowedByFunctionParentheses(nameTokenWord))
+        if (tokenizer.IsFollowedByFunctionParentheses(nameToken))
         {
             tokenizer.NextTokenCore();
             var close = tokenizer.NextTokenCore();
@@ -1244,18 +1244,15 @@ public static class Parser
     /// <summary>
     /// Attempts to parse a function definition introduced by name () syntax.
     /// </summary>
-    private static bool TryParseNameFunctionDefinition(Tokenizer tokenizer, out ICommand? functionDefinition)
+    private static bool TryParseNameFunctionDefinition(Tokenizer tokenizer, Token first, out ICommand? functionDefinition)
     {
         functionDefinition = null;
-        var first = tokenizer.PeekTokenCore();
-        if (!first.TryGetWordToken(out var firstWord))
-            return false;
-        if (!tokenizer.IsFollowedByFunctionParentheses(firstWord))
+        if (first.Word is not { } word || !tokenizer.IsFollowedByFunctionParentheses(first))
             return false;
 
         // Assignment-shaped names are only valid with the function keyword.
         // Leave the raw parentheses unread so an array assignment can own them.
-        if (!tokenizer.TryReadFunctionName(firstWord, out var name)
+        if (!tokenizer.TryReadFunctionName(new WordToken(first, word), out var name)
             || name.Syntax.HasFlag(FunctionNameSyntax.KeywordOnly))
             return false;
 

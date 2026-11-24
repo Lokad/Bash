@@ -351,6 +351,16 @@ public class ParserTests
     }
 
     [Fact]
+    public void Parse_ContinuedEmptyArrayInitializerRetainsAssignmentRole()
+    {
+        var command = AssertSingleCommand(Parser.Parse("files=\\\n(\\\n)"));
+        var assignment = Assert.Single(command.Assignments);
+
+        Assert.Equal("files", assignment.Target.ToUtf8String());
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<CompoundArrayItem>>(assignment.ArrayValues));
+    }
+
+    [Fact]
     public void Parse_CompoundAssignmentContinuationBeforeWord_PreservesAssignment()
     {
         var script = Parser.Parse("files=(a b)\\\n echo done");
