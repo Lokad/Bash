@@ -14,6 +14,7 @@ public static partial class PrintfFormatting
             Func<PrintfVariableAssignment, ValueTask<bool>> assignCount)
         {
             var diagnosticOutputClosed = false;
+            (MemoryCapacity Capacity, Action<int> ReserveCharacters)? timeScratch = null;
             using var numericMemory = new MemoryCapacity(memoryBudget, 0);
             try
             {
@@ -46,6 +47,7 @@ public static partial class PrintfFormatting
             }
             finally
             {
+                timeScratch?.Capacity.Dispose();
                 _pendingDiagnostics?.Clear();
                 _diagnosticMemory?.Dispose();
                 _temporaryOutput?.Dispose();
@@ -347,32 +349,7 @@ public static partial class PrintfFormatting
 
                             try
                             {
-                                using var timeMemory = new MemoryCapacity(memoryBudget, 0);
-                                // Strftime has ASCII directives and byte-valued literals. A reversible
-                                // byte/character projection lets both APIs share the existing renderer.
-                                timeMemory.Grow(32L + 2L * configuredFormat.Bytes.Length);
-                                cancellationToken.ThrowIfCancellationRequested();
-                                var timeFormat = configuredFormat.IsEmpty ? "%X"
-                                    : Encoding.Latin1.GetString(configuredFormat.Bytes.Span);
-                                const int MaximumTimeBytes = 127; // GNU's 128-byte strftime buffer includes its terminator.
-                                if (!GnuDateFormatting.TryFormatUnixTime(
-                                        seconds,
-                                        timestamp.Offset,
-                                        timeFormat,
-                                        MaximumTimeBytes,
-                                        out var text, count =>
-                                        {
-                                            timeMemory.Grow(GnuDateFormatting.EstimatedBytesPerCharacter * count);
-                                            cancellationToken.ThrowIfCancellationRequested();
-                                        }))
-                                {
-                                    // A full strftime buffer produces an empty value before outer field formatting.
-                                    text = string.Empty;
-                                }
-
-                                cancellationToken.ThrowIfCancellationRequested();
-                                // Invariant directive results are ASCII; projected literals map back exactly.
-                                ApplyText(specification, Encoding.Latin1.GetBytes(text), ignorePrecision: false);
+                                ApplyTime(specification, configuredFormat, seconds);
                             }
                             catch (GnuDateFormatException error)
                             {
@@ -604,6 +581,50 @@ public static partial class PrintfFormatting
 
                 void ApplyText(FormatSpecification textSpecification, ReadOnlyMemory<byte> bytes, bool ignorePrecision) =>
                     ApplyTextWithLength(textSpecification, bytes, bytes.Length, ignorePrecision);
+
+                void ApplyTime(FormatSpecification timeSpecification, ShellValue configuredFormat, long seconds)
+                {
+                    var (capacity, reserveCharacters) = timeScratch ??= CreateTimeScratch();
+                    try
+                    {
+                        // Strftime has ASCII directives and byte-valued literals. A reversible
+                        // byte/character projection lets both APIs share the existing renderer.
+                        capacity.Grow(32L + 2L * configuredFormat.Bytes.Length);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var timeFormat = configuredFormat.IsEmpty ? "%X"
+                            : Encoding.Latin1.GetString(configuredFormat.Bytes.Span);
+                        const int MaximumTimeBytes = 127; // GNU's 128-byte strftime buffer includes its terminator.
+                        if (!GnuDateFormatting.TryFormatUnixTime(seconds, timestamp.Offset, timeFormat, MaximumTimeBytes,
+                                out var text, reserveCharacters))
+                        {
+                            // A full strftime buffer produces an empty value before outer field formatting.
+                            text = string.Empty;
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
+                        // Invariant directive results are ASCII; projected literals map back exactly.
+                        ApplyText(timeSpecification, Encoding.Latin1.GetBytes(text), ignorePrecision: false);
+                    }
+                    finally
+                    {
+                        // Keep the handle reusable while returning the entire projected field allowance.
+                        if (capacity.Bytes != 0)
+                        {
+                            capacity.Resize(0);
+                            capacity.ReleaseUnusedCapacity();
+                        }
+                    }
+
+                    (MemoryCapacity, Action<int>) CreateTimeScratch()
+                    {
+                        var scratch = new MemoryCapacity(memoryBudget, 0);
+                        return (scratch, count =>
+                        {
+                            scratch.Grow(GnuDateFormatting.EstimatedBytesPerCharacter * count);
+                            cancellationToken.ThrowIfCancellationRequested();
+                        });
+                    }
+                }
 
                 void ApplyTextWithLength(
                     FormatSpecification textSpecification,

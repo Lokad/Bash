@@ -394,6 +394,31 @@ public sealed class PrintfTimeFormatTests
     }
 
     [Fact]
+    public void RepeatedTimeFieldsReuseTheReservationHandle()
+    {
+        const int fieldCount = 16;
+        const string timeField = "%(%H)T";
+        var single = CountReservations(timeField + string.Concat(Enumerable.Repeat("%s", fieldCount - 1)),
+            [ShellValue.FromText("0"), .. Enumerable.Repeat(ShellValue.FromText("00"), fieldCount - 1)]);
+        var repeated = CountReservations(string.Concat(Enumerable.Repeat(timeField, fieldCount)),
+            Enumerable.Repeat(ShellValue.FromText("0"), fieldCount).ToArray());
+        Assert.Equal(single, repeated);
+
+        static long CountReservations(string format, ShellValue[] arguments)
+        {
+            var governor = new MemoryGovernor(64 * 1024);
+            var budget = new CountingMemoryBudget(governor);
+            using var owner = budget.CreateScope();
+            var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText(format), arguments, owner);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(Enumerable.Repeat((byte)'0', fieldCount * 2).ToArray(), result.Output.ToArray());
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return budget.ReservationCalls;
+        }
+    }
+
+    [Fact]
     public async Task CancellationAfterProjectionAdmissionKeepsEarlierCountAndSkipsLaterWork()
     {
         var format = ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append("x%n"u8)
