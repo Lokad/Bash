@@ -282,9 +282,11 @@ listing write fails, and the write cause is reported through active stderr.
 With shell-closed stdout, operand-free `local` and operand-free `declare`
 attribute and function listings report the write diagnostic and keep their
 listing status. Assignment-style listings and named declaration queries
-return failure on a closed descriptor. Host write errors still fail a
-declaration listing. Downstream reader closure stops the listing and
-preserves any failure already reported for an operand.
+return failure on a closed descriptor. Named print inspections report missing
+operands before the buffered write diagnostic. Named function listings without
+the print flag report the write diagnostic for each reached function.
+Host write errors still fail a declaration listing. Downstream reader closure
+stops the listing and preserves any failure already reported for an operand.
 `caller` uses a compact display of active function and
 sourced invocations for unnamed script input. Both `source` and `.` appear
 as `source`. An omitted index selects the current invocation. Explicit

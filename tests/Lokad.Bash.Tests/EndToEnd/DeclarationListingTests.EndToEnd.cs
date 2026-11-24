@@ -72,19 +72,42 @@ public sealed class DeclarationListingTestsEndToEnd
 
     [Theory]
     [InlineData("f(){ local a=value; local -F >&-; }; f", "local", 0)]
-    [InlineData("f(){ local a=value; local -p a >&-; }; f", "local", 1)]
+    [InlineData("f(){ local a=value; local -p a >&-; }; f", "line 1: local", 1)]
     [InlineData("declare -a a=([7]=tail); declare -a >&-", "declare", 0)]
     [InlineData("probe_f(){ :; }; declare -F >&-", "declare", 0)]
-    [InlineData("probe_f(){ :; }; declare -F probe_f >&-", "declare", 1)]
+    [InlineData("probe_f(){ :; }; declare -F probe_f >&-", "line 1: declare", 1)]
     [InlineData("a=value; declare >&-", "declare", 1)]
     public async Task ClosedStdoutKeepsTheListingDiagnosticAndSelectsStatusByRole(
-        string script, string builtin, int status)
+        string script, string diagnosticLabel, int status)
     {
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(status, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal(builtin + ": write error: Bad file descriptor\n", result.StdErr);
+        Assert.Equal(diagnosticLabel + ": write error: Bad file descriptor\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("declare -p a missing b absent 1>&-",
+        "missing: not found\n|absent: not found\n|write error: Bad file descriptor\n", false)]
+    [InlineData("declare -fp a missing b absent 2>&1 1>&-",
+        "missing: not found\n|absent: not found\n|write error: Bad file descriptor\n", true)]
+    [InlineData("declare -F a missing b absent 1>&-",
+        "write error: Bad file descriptor\n|write error: Bad file descriptor\n", false)]
+    [InlineData("declare -f a b=value b absent 1>&-",
+        "write error: Bad file descriptor\n|cannot use `-f' to make functions\n", false)]
+    [InlineData("declare -p missing absent 1>&-",
+        "missing: not found\n|absent: not found\n", false)]
+    public async Task NamedListingsKeepCheckingOperandsWhenTheShellClosesStdout(
+        string command, string messages, bool remapped)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "a=one; b=two; a(){ :; }; b(){ :; }\n" + command + "\nprintf '<%s:%s>' \"$?\" \"$_\"");
+        var diagnostic = string.Concat(messages.Split('|').Select(message => "line 2: declare: " + message));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(remapped ? diagnostic + "<1:absent>" : "<1:absent>", result.StdOut);
+        Assert.Equal(remapped ? string.Empty : diagnostic, result.StdErr);
     }
 
     [Fact]

@@ -198,6 +198,37 @@ public sealed class ByteDeclarationInspectionTests
         Assert.Empty(host.ClosedDescriptors);
     }
 
+    [Fact]
+    public async Task NamedInspectionDefersTheReachedClosedOutputFailure()
+    {
+        var state = new Eval(Parser.Parse("x=one; declare -p x missing x 1>&-"));
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("Output closed\n")));
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        await new Engine().RunAsync(state, host, CancellationToken.None);
+
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Collection(host.Appends,
+            row =>
+            {
+                Assert.Equal(FileDescriptor.Closed, row.Descriptor);
+                Assert.Equal("declare -- x=\"one\"\n"u8.ToArray(), row.Content);
+            },
+            missing =>
+            {
+                Assert.Equal(FileDescriptor.StdErr, missing.Descriptor);
+                Assert.Equal("line 1: declare: missing: not found\n"u8.ToArray(), missing.Content);
+            },
+            failure =>
+            {
+                Assert.Equal(FileDescriptor.StdErr, failure.Descriptor);
+                Assert.Equal("line 1: declare: write error: Output closed\n"u8.ToArray(), failure.Content);
+            });
+        Assert.Empty(host.ClosedDescriptors);
+    }
+
     [Theory]
     [InlineData("x=one; y=two; declare -p")]
     [InlineData("x(){ :; }; y(){ :; }; declare -F")]

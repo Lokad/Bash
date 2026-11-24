@@ -1938,6 +1938,8 @@ public sealed partial class Evaluation : IFileTester
                     : options.FunctionNamesOnly ? VariableDisplayStyle.DeclarationWithoutScalarValues : VariableDisplayStyle.Declaration;
                 var preserveStatusOnClosedOutput = listing && (options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
                     && style != VariableDisplayStyle.Assignment;
+                var deferClosedOutput = !listing && GetStdOutDescriptor().IsClosed;
+                var deferredFailure = DescriptorWriteResult.Open;
                 var printStatus = 0;
                 var outputClosed = false;
                 await foreach (var name in GetNamesAsync(GetListedNames,
@@ -1955,6 +1957,8 @@ public sealed partial class Evaluation : IFileTester
                         await ReportDeclarationOperandAsync(name.ToValue(), "not found").ConfigureAwait(false);
                         continue;
                     }
+                    if (outputClosed)
+                        continue;
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
                     if (optionSnapshot)
                         output.Append(listing && localBuiltinFrame != null ? "local -\n"u8 : "declare -- -\n"u8);
@@ -1966,14 +1970,22 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (output.Length == 0)
                         continue;
-                    var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
+                    var result = await WriteListingRowAsync(output.ToMemory(), deferClosedOutput).ConfigureAwait(false);
                     if (!result.CanAcceptMore)
                     {
                         printStatus = GetListingWriteStatus(result, printStatus, preserveStatusOnClosedOutput);
                         outputClosed = true;
+                        if (deferClosedOutput && result.IsError)
+                        {
+                            // Named -p reports the buffered output failure after visiting the operands.
+                            deferredFailure = result;
+                            continue;
+                        }
                         break;
                     }
                 }
+                if (deferredFailure.IsError)
+                    await ReportNamedListingOutputFailureAsync(deferredFailure).ConfigureAwait(false);
                 if (printStatus == 0 && !outputClosed && style == VariableDisplayStyle.Assignment && !HasPendingExpansionError)
                     printStatus = await EvaluateFunctionsAsync().ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(printStatus), declarationNegated).ConfigureAwait(false);
@@ -2035,6 +2047,13 @@ public sealed partial class Evaluation : IFileTester
             int GetListingWriteStatus(DescriptorWriteResult result, int status, bool preserveStatusOnClosedOutput) =>
                 result.IsError && (!preserveStatusOnClosedOutput || !GetStdOutDescriptor().IsClosed) ? 1 : status;
 
+            Task<DescriptorWriteResult> WriteListingRowAsync(ReadOnlyMemory<byte> output, bool shellClosed) => shellClosed
+                ? ExecuteWriteAsync(GetStdOutDescriptor(), output)
+                : WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output);
+
+            Task ReportNamedListingOutputFailureAsync(DescriptorWriteResult result) => ReportBuiltinWriteFailureAsync(
+                ShellValue.FromText(commandName), result, declarationScope.Context);
+
             async Task<int> EvaluateFunctionsAsync()
             {
                 const DeclarationListingAttributes ArrayFilters =
@@ -2066,6 +2085,8 @@ public sealed partial class Evaluation : IFileTester
                 if (options.ListingAttributes.HasFlag(DeclarationListingAttributes.Exported)) filter |= FunctionAttributes.Exported;
                 var filterNames = noOperands && (options.ListingAttributes != DeclarationListingAttributes.None
                     || caseAttributes != FunctionAttributes.None);
+                var namedClosedOutput = !noOperands && GetStdOutDescriptor().IsClosed;
+                var deferredFailure = DescriptorWriteResult.Open;
                 var functionStatus = 0;
                 await foreach (var name in GetNamesAsync(GetListedFunctionNames, static value => value).ConfigureAwait(false))
                 {
@@ -2117,6 +2138,8 @@ public sealed partial class Evaluation : IFileTester
                         continue;
                     }
 
+                    if (deferredFailure.IsError)
+                        continue;
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
                     var style = !options.Functions ? FunctionDisplayStyle.Definition : !options.FunctionNamesOnly
                         ? noOperands || options.Print ? FunctionDisplayStyle.DefinitionWithAttributes : FunctionDisplayStyle.Definition
@@ -2126,10 +2149,21 @@ public sealed partial class Evaluation : IFileTester
                         await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("output limit exceeded")).ConfigureAwait(false);
                         return 1;
                     }
-                    var result = await WriteBuiltinOutputAsync(ShellValue.FromText(commandName), output.ToMemory()).ConfigureAwait(false);
+                    var result = await WriteListingRowAsync(output.ToMemory(), namedClosedOutput).ConfigureAwait(false);
+                    if (namedClosedOutput && result.IsError)
+                    {
+                        functionStatus = 1;
+                        if (options.Print)
+                            deferredFailure = result;
+                        else
+                            await ReportNamedListingOutputFailureAsync(result).ConfigureAwait(false);
+                        continue;
+                    }
                     if (!result.CanAcceptMore)
                         return GetListingWriteStatus(result, functionStatus, preserveStatusOnClosedOutput);
                 }
+                if (deferredFailure.IsError)
+                    await ReportNamedListingOutputFailureAsync(deferredFailure).ConfigureAwait(false);
                 return functionStatus;
 
                 IEnumerable<ShellValue> GetListedFunctionNames(MemoryCapacity listingMemory)
