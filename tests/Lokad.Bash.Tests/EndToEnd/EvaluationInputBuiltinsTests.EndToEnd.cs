@@ -53,6 +53,33 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("read -u4 -N nope value", 1, "read: nope: invalid number\n")]
+    [InlineData("mapfile -u nope arr", 1, "mapfile: nope: invalid file descriptor specification\n")]
+    [InlineData("read -u3 -n2 value", 1, "read: read error: 3: Bad file descriptor\n")]
+    [InlineData("readarray -u4 -d", 2, "readarray: -d: option requires an argument\n"
+        + "readarray: usage: readarray [-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [-C callback] [-c quantum] [--] [array]\n")]
+    public async Task InputOptionAndReadErrorsReportTheReachedSource(string invocation, int status, string diagnostic)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", ":\n" + invocation + "\n");
+        host.AddFile("/input", "first\nsecond\n");
+        var result = await host.RunAsync("""
+            value=old; arr=(old)
+            exec 3>out 4<input
+            source /body
+            status=$?
+            IFS= read -r -u4 tail
+            exec 3>&- 4<&-
+            printf '<%s><%s><%s><%s>' "$status" "$value" "${arr[0]}" "$tail"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}><old><old><first>", host.StandardOutput.TextContent);
+        Assert.Equal($"/body: line 2: {diagnostic}", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("read -ra values", "read")]
     [InlineData("mapfile -n1", "mapfile")]
     [InlineData("readarray -t", "readarray")]

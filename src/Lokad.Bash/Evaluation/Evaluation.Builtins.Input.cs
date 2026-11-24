@@ -27,10 +27,11 @@ public sealed partial class Evaluation
     private DescriptorBinding ResolveInputBinding(LogicalDescriptor descriptor) =>
         _state.CurrentRedirectionTable?.ResolveBinding(descriptor) ?? CaptureDescriptorBindings().ResolveBinding(descriptor);
 
-    private Task ReportInvalidInputDescriptorAsync(ShellValue command, ShellValue operand, LogicalDescriptor? number) =>
+    private Task ReportInvalidInputDescriptorAsync(ShellValue command, ShellValue operand, LogicalDescriptor? number,
+        EvaluationContext context) =>
         number is { } logical
-            ? ReportExpansionDiagnosticAsync(command, ShellValue.FromText(logical + ": invalid file descriptor: Bad file descriptor"))
-            : ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(": invalid file descriptor specification")]);
+            ? ReportBuiltinDiagnosticAsync(command, logical + ": invalid file descriptor: Bad file descriptor", context)
+            : ReportBuiltinDiagnosticAsync([command], [operand, ShellValue.FromText(": invalid file descriptor specification")], context);
 
     // Each evaluator owns its workspace: pipeline stages and command substitutions may overlap.
     private sealed class ReadWorkspace(IMemoryBudget budget) : IDisposable
@@ -92,7 +93,8 @@ public sealed partial class Evaluation
             {
                 if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var length) || length is < 0 or > int.MaxValue)
                     return await FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([command],
-                        [operand, ShellValue.FromText(": invalid number")], diagnostics), 1).ConfigureAwait(false);
+                        [operand, ShellValue.FromText(": invalid number")], diagnostics, GetBuiltinDiagnosticPrefix(scope.Context)), 1)
+                        .ConfigureAwait(false);
                 count = (int)length;
                 ignoreDelimiter |= flag == (byte)'N';
                 continue;
@@ -111,7 +113,7 @@ public sealed partial class Evaluation
             var (number, binding) = ResolveInputDescriptorOperand(operand.Bytes.Span);
             if (number is not { } logical || binding.Handle.IsClosed)
             {
-                await ReportInvalidInputDescriptorAsync(command, operand, number)
+                await ReportInvalidInputDescriptorAsync(command, operand, number, scope.Context)
                     .ConfigureAwait(false);
                 return await FinishAsync(1).ConfigureAwait(false);
             }
@@ -228,7 +230,8 @@ public sealed partial class Evaluation
             EvaluationResult.FromExitCode(diagnostics.Result.IsError ? 1 : status), negated);
 
         Task<EvaluationResult> FailUsageAsync(ReadOnlySpan<ShellValue> message) =>
-            FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([command], message, diagnostics), 2);
+            FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([command], message, diagnostics,
+                GetBuiltinDiagnosticPrefix(scope.Context)), 2);
 
         async Task<EvaluationResult> FinishFailureAsync(Task diagnostic, int status)
         {
@@ -335,7 +338,8 @@ public sealed partial class Evaluation
 
             async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> ReadFailureAsync(OperationError error)
             {
-                await ReportBuiltinOperationErrorAsync(command, $"read error: {inputNumber}: ", path: null, error)
+                await ReportBuiltinOperationErrorAsync(command, $"read error: {inputNumber}: ", path: null, error,
+                        GetBuiltinDiagnosticPrefix(scope.Context))
                     .ConfigureAwait(false);
                 return (1, default, true);
             }

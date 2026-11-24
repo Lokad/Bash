@@ -1147,6 +1147,12 @@ Closing stderr also suppresses `getopts` option warnings while the scan still
 updates its option variables.
 Write failures reported by the host still follow the builtin's status policy.
 
+Input option and descriptor diagnostics from `read`, `mapfile` and
+`readarray` report the reached source location on the first line. A
+following usage line describes the supported options. Descriptor read
+failures from `read` report the same source location and the logical
+descriptor number.
+
 `printf`, `read`, `mapfile` and `readarray` accept `--help` while scanning
 options. Help describes the supported options and returns status 2, including
 when the shell has closed stdout. An option that expects an argument consumes

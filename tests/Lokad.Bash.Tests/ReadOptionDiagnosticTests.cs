@@ -17,7 +17,7 @@ public sealed class ReadOptionDiagnosticTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2><data>", result.StdOut);
-        Assert.Equal($"read: -{flag}: option requires an argument\n"
+        Assert.Equal($"line 1: read: -{flag}: option requires an argument\n"
             + "read: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n",
             result.StdErr);
     }
@@ -57,7 +57,7 @@ public sealed class ReadOptionDiagnosticTests
         string script, string outputHex, string optionHex)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
-        byte[] diagnostic = [.. "read: -"u8, .. Convert.FromHexString(optionHex),
+        byte[] diagnostic = [.. "line 1: read: -"u8, .. Convert.FromHexString(optionHex),
             .. ": invalid option\nread: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n"u8];
 
         Assert.Equal(0, result.ExitCode);

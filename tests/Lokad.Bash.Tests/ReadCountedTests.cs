@@ -148,7 +148,7 @@ public sealed class ReadCountedTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1><seed><abc>", result.StdOut);
-        Assert.Equal($"read: {operand}: invalid number\n", result.StdErr);
+        Assert.Equal($"line 1: read: {operand}: invalid number\n", result.StdErr);
     }
 
     [Fact]

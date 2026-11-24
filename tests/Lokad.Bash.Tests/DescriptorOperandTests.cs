@@ -242,7 +242,7 @@ public sealed class DescriptorOperandTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("first;1:", host.StandardOutput.TextContent);
-        Assert.Equal("read: 3: invalid file descriptor: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: read: 3: invalid file descriptor: Bad file descriptor\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 

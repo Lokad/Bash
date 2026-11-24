@@ -648,7 +648,7 @@ public partial class EvaluationTests
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
         var reason = command.Split(' ')[1] + ": invalid option";
-        Assert.Equal($"mapfile: {reason}\nmapfile: usage: mapfile {MapfileUsageArguments}\n",
+        Assert.Equal($"line 1: mapfile: {reason}\nmapfile: usage: mapfile {MapfileUsageArguments}\n",
             Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
@@ -682,9 +682,9 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("mapfile -u9 -u3", false, "mapfile: 9: invalid file descriptor: Bad file descriptor\n")]
-    [InlineData("readarray -u +009", true, "readarray: 9: invalid file descriptor: Bad file descriptor\n")]
-    [InlineData("mapfile -u -1", false, "mapfile: -1: invalid file descriptor specification\n")]
+    [InlineData("mapfile -u9 -u3", false, "line 1: mapfile: 9: invalid file descriptor: Bad file descriptor\n")]
+    [InlineData("readarray -u +009", true, "line 1: readarray: 9: invalid file descriptor: Bad file descriptor\n")]
+    [InlineData("mapfile -u -1", false, "line 1: mapfile: -1: invalid file descriptor specification\n")]
     public async Task Evaluation_MapfileBuiltin_RejectsInvalidDescriptorBeforeInput(
         string command, bool explicitlyClosed, string error)
     {
@@ -723,7 +723,7 @@ public partial class EvaluationTests
         var state = new Eval(Parser.Parse($"arr=(old); {command}"));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal($"{builtin}: {option}: option requires an argument\n{builtin}: usage: {builtin} {MapfileUsageArguments}\n",
+        Assert.Equal($"line 1: {builtin}: {option}: option requires an argument\n{builtin}: usage: {builtin} {MapfileUsageArguments}\n",
             Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
@@ -733,12 +733,12 @@ public partial class EvaluationTests
     }
 
     [Theory]
-    [InlineData("mapfile -n -1", "mapfile: -1: invalid line count\n")]
-    [InlineData("readarray -O4294967296", "readarray: 4294967296: invalid array origin\n")]
-    [InlineData("readarray -s-1", "readarray: -1: invalid line count\n")]
-    [InlineData("mapfile -c0 -c2", "mapfile: 0: invalid callback quantum\n")]
-    [InlineData("readarray -c4294967296", "readarray: 4294967296: invalid callback quantum\n")]
-    [InlineData("mapfile -c --help", "mapfile: --help: invalid callback quantum\n")]
+    [InlineData("mapfile -n -1", "line 1: mapfile: -1: invalid line count\n")]
+    [InlineData("readarray -O4294967296", "line 1: readarray: 4294967296: invalid array origin\n")]
+    [InlineData("readarray -s-1", "line 1: readarray: -1: invalid line count\n")]
+    [InlineData("mapfile -c0 -c2", "line 1: mapfile: 0: invalid callback quantum\n")]
+    [InlineData("readarray -c4294967296", "line 1: readarray: 4294967296: invalid callback quantum\n")]
+    [InlineData("mapfile -c --help", "line 1: mapfile: --help: invalid callback quantum\n")]
     public async Task Evaluation_MapfileBuiltin_RejectsInvalidNumbersBeforeReading(string command, string error)
     {
         var state = new Eval(Parser.Parse($"arr=(old); {command} arr"));

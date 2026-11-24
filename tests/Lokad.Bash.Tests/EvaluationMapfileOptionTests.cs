@@ -13,23 +13,23 @@ public sealed class EvaluationMapfileOptionTests
 
     // Usage intentionally advertises the supported subset; native comparisons retain the full Bash text.
     [Theory]
-    [InlineData("arr=(old); mapfile -x arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("arr=(old); readarray -x arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "readarray: -x: invalid option\nreadarray: usage: readarray " + UsageArguments + "\n")]
-    [InlineData("arr=(old); mapfile -ttx arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("mapfile -xtz; printf '<%s>' \"$?\"", 0, "<2>", "mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("mapfile --invalid; printf '<%s>' \"$?\"", 0, "<2>", "mapfile: --: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("arr=(old); arr=temporary mapfile -x arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("! mapfile -x arr; printf '<%s>' \"$?\"", 0, "<0>", "mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("readarray -x 2>&1; printf '<%s>' \"$?\"", 0, "readarray: -x: invalid option\nreadarray: usage: readarray " + UsageArguments + "\n<2>", "")]
+    [InlineData("arr=(old); mapfile -x arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "line 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("arr=(old); readarray -x arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "line 1: readarray: -x: invalid option\nreadarray: usage: readarray " + UsageArguments + "\n")]
+    [InlineData("arr=(old); mapfile -ttx arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "line 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("mapfile -xtz; printf '<%s>' \"$?\"", 0, "<2>", "line 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("mapfile --invalid; printf '<%s>' \"$?\"", 0, "<2>", "line 1: mapfile: --: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("arr=(old); arr=temporary mapfile -x arr; printf '<%s,%s>' \"$?\" \"${arr[0]}\"", 0, "<2,old>", "line 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("! mapfile -x arr; printf '<%s>' \"$?\"", 0, "<0>", "line 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("readarray -x 2>&1; printf '<%s>' \"$?\"", 0, "line 1: readarray: -x: invalid option\nreadarray: usage: readarray " + UsageArguments + "\n<2>", "")]
     [InlineData("mapfile -x 2>&-; printf '<%s>' \"$?\"", 0, "<2>", "")]
-    [InlineData("mapfile -x \"$(printf expanded >&2)\"; printf '<%s>' \"$?\"", 0, "<2>", "expandedmapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("readonly arr; mapfile -x arr; printf '<%s>' \"$?\"", 0, "<2>", "mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
-    [InlineData("mapfile -x bad-name; printf '<%s>' \"$?\"", 0, "<2>", "mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("mapfile -x \"$(printf expanded >&2)\"; printf '<%s>' \"$?\"", 0, "<2>", "expandedline 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("readonly arr; mapfile -x arr; printf '<%s>' \"$?\"", 0, "<2>", "line 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
+    [InlineData("mapfile -x bad-name; printf '<%s>' \"$?\"", 0, "<2>", "line 1: mapfile: -x: invalid option\nmapfile: usage: mapfile " + UsageArguments + "\n")]
     [InlineData("arr=(old); mapfile -n 1 arr </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,empty>", "")]
     [InlineData("arr=(old); mapfile -O0 -n 1 arr </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,old>", "")]
-    [InlineData("mapfile -n -1; printf '<%s>' \"$?\"", 0, "<1>", "mapfile: -1: invalid line count\n")]
-    [InlineData("readarray -tO0x2; printf '<%s>' \"$?\"", 0, "<1>", "readarray: 0x2: invalid array origin\n")]
-    [InlineData("mapfile -n $'2\\r'; printf '<%s>' \"$?\"", 0, "<1>", "mapfile: 2\r: invalid line count\n")]
+    [InlineData("mapfile -n -1; printf '<%s>' \"$?\"", 0, "<1>", "line 1: mapfile: -1: invalid line count\n")]
+    [InlineData("readarray -tO0x2; printf '<%s>' \"$?\"", 0, "<1>", "line 1: readarray: 0x2: invalid array origin\n")]
+    [InlineData("mapfile -n $'2\\r'; printf '<%s>' \"$?\"", 0, "<1>", "line 1: mapfile: 2\r: invalid line count\n")]
     [InlineData("mapfile -n $'\\n+2' <<< line; printf '<%s,%s>' \"$?\" \"${#MAPFILE[@]}\"", 0, "<0,1>", "")]
     [InlineData("a=scalar; mapfile -tn1 -O3 a <<< value; printf '<%s><%s>' \"${a[0]}\" \"${a[3]}\"", 0, "<scalar><value>", "")]
     [InlineData("declare -a a; mapfile -tO4294967294 -n4 a <<< $'first\\nsecond\\nthird\\nfourth\\nignored'; printf '<%s>/<%s>' \"${!a[*]}\" \"${a[*]}\"", 0, "<0 1 4294967294 4294967295>/<third fourth first second>", "")]
@@ -60,7 +60,7 @@ public sealed class EvaluationMapfileOptionTests
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
         byte[] expected =
         [
-            .. Encoding.UTF8.GetBytes(builtin + ": -"), 0xff,
+            .. Encoding.UTF8.GetBytes("line 1: " + builtin + ": -"), 0xff,
             .. Encoding.UTF8.GetBytes(": invalid option\n" + builtin + ": usage: " + builtin + " " + UsageArguments + "\n")
         ];
 
@@ -80,7 +80,7 @@ public sealed class EvaluationMapfileOptionTests
         var state = new Eval(Parser.Parse(script));
         var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal(builtin + ": -x: invalid option\n" + builtin + ": usage: " + builtin + " " + UsageArguments + "\n",
+        Assert.Equal("line 1: " + builtin + ": -x: invalid option\n" + builtin + ": usage: " + builtin + " " + UsageArguments + "\n",
             Encoding.UTF8.GetString(diagnostic.Content.Span));
         diagnostic.SetResult(DescriptorWriteResult.Failure(new OperationError("Write failed\n")));
 

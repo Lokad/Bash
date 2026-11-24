@@ -50,7 +50,7 @@ public sealed partial class Evaluation
                 var (number, binding) = ResolveInputDescriptorOperand(operand.Bytes.Span);
                 if (number == null || binding.Handle.IsClosed)
                 {
-                    await ReportInvalidInputDescriptorAsync(arguments[0], operand, number).ConfigureAwait(false);
+                    await ReportInvalidInputDescriptorAsync(arguments[0], operand, number, scope.Context).ConfigureAwait(false);
                     return await FinishAsync(1).ConfigureAwait(false);
                 }
                 input = binding;
@@ -314,7 +314,8 @@ public sealed partial class Evaluation
             var result = await WriteDiagnosticUnlessStderrClosedAsync([commandName],
                 [ShellValue.FromText("-"), ShellValue.FromBytes(option), ShellValue.FromText(detail + "\n"),
                     commandName, ShellValue.FromText(": usage: "), commandName,
-                    ShellValue.FromText(" " + BuiltinDocumentation.For(BuiltinKind.Mapfile).Arguments)], scope: null).ConfigureAwait(false);
+                    ShellValue.FromText(" " + BuiltinDocumentation.For(BuiltinKind.Mapfile).Arguments)], scope: null,
+                GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 2), negated).ConfigureAwait(false);
         }
 
@@ -326,8 +327,8 @@ public sealed partial class Evaluation
                 (byte)'O' => ": invalid array origin",
                 _ => ": invalid line count"
             };
-            await ReportExpansionDiagnosticAsync([arguments[0]], [ShellValue.FromBytes(operand),
-                ShellValue.FromText(detail)]).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync([arguments[0]], [ShellValue.FromBytes(operand),
+                ShellValue.FromText(detail)], scope.Context).ConfigureAwait(false);
             return await FinishAsync(1).ConfigureAwait(false);
         }
     }

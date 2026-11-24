@@ -3036,7 +3036,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("read: -z: invalid option\nread: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: read: -z: invalid option\nread: usage: read [-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(2, state.LastExitCode);
@@ -3056,7 +3056,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("read: read error: 0: read error\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: read: read error: 0: read error\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

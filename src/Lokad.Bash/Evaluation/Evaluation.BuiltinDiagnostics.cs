@@ -17,7 +17,11 @@ public sealed partial class Evaluation
 
     private Task<DescriptorWriteResult> WriteDiagnosticUnlessStderrClosedAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope) =>
-        WriteDiagnosticAsync(name, message, scope, ClosedStderrHandling.Discard);
+        WriteDiagnosticUnlessStderrClosedAsync(name, message, scope, default);
+
+    private Task<DescriptorWriteResult> WriteDiagnosticUnlessStderrClosedAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        BuiltinDiagnosticScope? scope, SyntaxDiagnosticPrefix prefix) =>
+        WriteDiagnosticAsync(name, message, scope, ClosedStderrHandling.Discard, prefix);
 
     private Task ReportBuiltinDiagnosticAsync(ShellValue name, string message, EvaluationContext context) =>
         ReportBuiltinDiagnosticAsync([name], [ShellValue.FromText(message)], context);
@@ -124,9 +128,6 @@ public sealed partial class Evaluation
             ? ReportBuiltinOperationErrorAsync(name, "write error: ", path: null, cause,
                 GetBuiltinDiagnosticPrefix(diagnosticContext))
             : Task.CompletedTask;
-
-    private Task ReportBuiltinOperationErrorAsync(ShellValue name, string prefix, string? path, OperationError error) =>
-        ReportBuiltinOperationErrorAsync(name, prefix, path, error, default);
 
     private async Task ReportBuiltinOperationErrorAsync(ShellValue name, string prefix, string? path, OperationError error,
         SyntaxDiagnosticPrefix sourcePrefix)

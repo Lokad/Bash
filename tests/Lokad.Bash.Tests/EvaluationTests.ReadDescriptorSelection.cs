@@ -48,7 +48,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("read: 9: invalid file descriptor: Bad file descriptor\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: read: 9: invalid file descriptor: Bad file descriptor\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -75,7 +75,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("read: read error: 3: read error\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: read: read error: 3: read error\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

@@ -306,7 +306,7 @@ public sealed class ReadTargetBindingTests
         await ShellOperationDispatcher.DispatchAsync(read, host, CancellationToken.None);
         var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.True(diagnostic.Content.Span.SequenceEqual("read: read error: 0: fixture read failure\n"u8));
+        Assert.True(diagnostic.Content.Span.SequenceEqual("line 1: read: read error: 0: fixture read failure\n"u8));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await state.GetNextStep());
