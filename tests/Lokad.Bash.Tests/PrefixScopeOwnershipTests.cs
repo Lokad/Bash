@@ -247,6 +247,118 @@ public sealed class PrefixScopeOwnershipTests
     }
 
     [Theory]
+    [InlineData(ArrayKind.Indexed, false)]
+    [InlineData(ArrayKind.Associative, false)]
+    [InlineData(ArrayKind.Indexed, true)]
+    public void LocalPublicationReusesOnlyBackingAlreadyOwnedByItsDestination(ArrayKind kind, bool inherited)
+    {
+        var caller = Variables.CreateEmpty();
+        var value = ShellValue.FromBytes(new byte[] { 0xff, 0x20 });
+        var entries = kind == ArrayKind.Indexed ? new[] { value } : new[] { ShellValue.FromText("0"), value };
+        Assert.True(caller.TryAssignArray("x", entries, kind));
+        caller.SetExported("x", true);
+        var original = ReadArray(caller);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var owner = inherited ? Variables.CreateCommandScope(caller, memory, CancellationToken.None) : caller;
+            var command = Variables.CreateCommandScope(owner, memory, CancellationToken.None);
+            var locals = new Variables.LocalBindings(owner, parent: null, prefixes: null);
+            var workspace = memory.Workspace.Bytes;
+
+            locals.Publish("x", command);
+
+            Assert.Equal(workspace + (inherited ? caller.EstimateBindingBytes("x") : 0), memory.Workspace.Bytes);
+            Assert.True(command.IsBorrowedBinding("x"));
+            Assert.False(owner.IsBorrowedBinding("x"));
+            Assert.Contains((BindingName)"x", owner.ExportedNames);
+            Assert.True(owner.TryGetExpansionValue("x", out var published));
+            Assert.Equal(value, published);
+            var backing = ReadArray(owner);
+            if (inherited)
+                Assert.NotSame(original, backing);
+            else
+                Assert.Same(original, backing);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        object ReadArray(Variables variables) =>
+            kind == ArrayKind.Indexed ? variables.IndexedArrays["x"] : variables.AssociativeArrays["x"];
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LocalPublicationOfBorrowedOptindTransfersTheCursorUnlessCanceled(bool canceled)
+    {
+        var owner = Variables.CreateEmpty();
+        Assert.True(owner.TrySetScalar("OPTIND", ShellValue.FromText("1")));
+        var original = new GetoptsCursor(1, 1, 1);
+        var advanced = new GetoptsCursor(1, 1, 2);
+        owner.GetoptsPosition = original;
+        using var cancellation = new CancellationTokenSource();
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var command = Variables.CreateCommandScope(owner, memory, cancellation.Token);
+            var locals = new Variables.LocalBindings(owner, parent: null, prefixes: null);
+            command.GetoptsPosition = advanced;
+
+            if (canceled)
+            {
+                cancellation.Cancel();
+                var error = Assert.Throws<OperationCanceledException>(() => locals.Publish("OPTIND", command));
+                Assert.Equal(cancellation.Token, error.CancellationToken);
+            }
+            else
+                locals.Publish("OPTIND", command);
+
+            Assert.True(command.IsBorrowedBinding("OPTIND"));
+            Assert.Equal(canceled ? original : advanced, owner.GetoptsPosition);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LocalPublicationAppliesAnOwnedCommandChange(bool hidden)
+    {
+        var owner = Variables.CreateEmpty();
+        var value = ShellValue.FromText("original");
+        Assert.True(owner.TrySetScalar("x", value));
+        owner.SetExported("x", true);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var command = Variables.CreateCommandScope(owner, memory, CancellationToken.None);
+            var locals = new Variables.LocalBindings(owner, parent: null, prefixes: null);
+            if (hidden)
+                Assert.True(command.TryUnset("x"));
+            else
+                command.SetReadonlyBinding("x");
+
+            locals.Publish("x", command);
+
+            Assert.Equal(!hidden, owner.HasBinding("x"));
+            Assert.Equal(!hidden, owner.IsReadonly("x"));
+            Assert.Equal(!hidden, owner.ExportedNames.Contains((BindingName)"x"));
+            if (!hidden)
+            {
+                Assert.True(owner.TryGetScalar("x", out var published));
+                Assert.Equal(value, published);
+            }
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(ArrayKind.Indexed)]
     [InlineData(ArrayKind.Associative)]
     public Task AggregateAlternateUsesBorrowedArrayBeforeExpandingItsWord(ArrayKind kind) =>

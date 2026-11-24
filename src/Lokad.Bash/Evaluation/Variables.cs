@@ -1586,13 +1586,15 @@ public sealed partial class Variables
                 || ShellArgumentEscaping.TryAppendQuoted(output, assigned.Bytes.Span, ShellQuoteStyle.DoubleQuoted));
     }
 
-    /// <summary>Copies a complete binding without detaching the source, admitting a borrowed copy when needed.</summary>
+    /// <summary>Publishes a complete binding, reusing a slot already owned by the destination.</summary>
     internal void CopyBindingFrom(Variables source, BindingName name) =>
         CopyBindingFrom(source, name, borrowedCopyAdmitted: false);
 
     private void CopyBindingFrom(Variables source, BindingName name, bool borrowedCopyAdmitted)
     {
-        if (source.TryGetBinding(name, detachBorrowed: false, out var slot))
+        if (!source.TryGetBinding(name, detachBorrowed: false, out var slot))
+            ClearBinding(name);
+        else if (!_bindings.TryGetValue(name, out var owned) || !ReferenceEquals(owned, slot))
         {
             var borrow = source.IsBorrowedBinding(name) ? source._commandSource : null;
             if (borrow != null && !borrowedCopyAdmitted)
@@ -1604,8 +1606,6 @@ public sealed partial class Variables
             borrow?.CancellationToken.ThrowIfCancellationRequested();
             StoreBinding(name, copy);
         }
-        else
-            ClearBinding(name);
         if (name.CachedText == "OPTIND")
             _getoptsCursor = source._getoptsCursor;
     }

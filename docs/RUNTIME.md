@@ -378,6 +378,7 @@ the visible binding in its existing owner. Whole-value replacement reads
 the previous attributes from that owner and publishes only the new value.
 Sizing a binding borrows its backing. Copying a binding admits destination
 storage and takes one independent copy, leaving the source owner in place.
+Local publication reuses a visible slot already owned by the receiving scope.
 The existing expansion write target forwards actual RHS effects, including
 same-value writes, with nameref and array-kind rules intact. In-process
 execution consumes only the prepared prefix slots and preserves the original
