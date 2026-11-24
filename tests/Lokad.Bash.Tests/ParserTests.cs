@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
@@ -47,9 +48,47 @@ public class ParserTests
         Assert.True(MemoryMarshal.TryGetArray(assignment.Target.Bytes, out var backing));
         Assert.NotNull(backing.Array);
         Assert.Equal(name.Length, backing.Array.Length);
+        Assert.IsType<WordPart[]>(assignment.Value.Parts);
         Assert.Collection(assignment.Value.Parts,
             part => Assert.Equal(new byte[] { 0xff }, part.GetUnexpandedValue().Bytes.ToArray()),
             part => Assert.Equal(" tail", part.GetUnexpandedValue().ToUtf8String()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AssignmentSuffixAdmitsItsPartBacking(bool keepLeadingPart)
+    {
+        var leading = Assert.IsType<SourceWordPart>(WordPart.FromText(
+            WordPartKind.Unquoted, keepLeadingPart ? "x=lead" : "x="));
+        var quoted = WordPart.FromText(WordPartKind.DoubleQuoted, "quoted");
+        var literal = WordPart.FromText(WordPartKind.SingleQuoted, "literal");
+        var original = new Word([leading, quoted, literal]);
+        var count = keepLeadingPart ? 3 : 2;
+        var bytes = MemoryCapacity.ArrayBackingBytes<WordPart>(count);
+        var governor = new MemoryGovernor(bytes);
+
+        using (var owner = governor.CreateScope())
+        using (var syntax = new MemoryCapacity(owner, 0))
+        {
+            using (owner.Reserve(1))
+            {
+                Assert.Throws<MemoryBudgetExceededException>(() => original.AfterSourcePrefix(leading, 2, syntax));
+                Assert.Equal(0, syntax.Bytes);
+                Assert.Equal(1, governor.ReservedBytes);
+            }
+
+            var suffix = original.AfterSourcePrefix(leading, 2, syntax);
+            var parts = Assert.IsType<WordPart[]>(suffix.Parts);
+            Assert.Equal(count, parts.Length);
+            Assert.Equal(bytes, syntax.Bytes);
+            Assert.Same(quoted, parts[^2]);
+            Assert.Same(literal, parts[^1]);
+            if (keepLeadingPart)
+                Assert.Equal("lead", parts[0].GetUnexpandedValue().ToUtf8String());
+        }
+
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Theory]
@@ -265,6 +304,7 @@ public class ParserTests
             var item = Assert.Single(Assert.IsAssignableFrom<IReadOnlyList<CompoundArrayItem>>(assignment.ArrayValues));
             original = item.Word;
             rhs = Assert.IsType<CompoundArrayElement>(item.Element).Value;
+            Assert.IsType<WordPart[]>(rhs.Parts);
         }
         else
         {

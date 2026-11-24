@@ -79,11 +79,19 @@ public sealed class Word
     /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
     internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)
     {
-        var suffix = new List<WordPart>();
-        if (prefixLength < leading.Source.Length)
-            suffix.Add(leading.Slice(prefixLength, leading.Source.Length - prefixLength, memory));
-        for (var index = 1; index < Parts.Count; index++)
-            suffix.Add(Parts[index]);
+        var leadingLength = leading.Source.Length - prefixLength;
+        var skippedParts = leadingLength > 0 ? 0 : 1;
+        var partCount = Parts.Count;
+        var count = partCount - skippedParts;
+        if (count == 0)
+            return new Word([]);
+
+        memory?.Grow(MemoryCapacity.ArrayBackingBytes<WordPart>(count));
+        var suffix = new WordPart[count];
+        if (skippedParts == 0)
+            suffix[0] = leading.Slice(prefixLength, leadingLength, memory);
+        for (var index = 1; index < partCount; index++)
+            suffix[index - skippedParts] = Parts[index];
         return new Word(suffix);
     }
 
