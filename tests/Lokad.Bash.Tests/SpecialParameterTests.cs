@@ -59,8 +59,12 @@ public sealed class SpecialParameterTests
     [InlineData("set --; printf '<%s>' \"${!1@U}\" \"${!1:1:2}\" \"${!1/a/b}\"", "<><><>", "", 0)]
     [InlineData("target=kept; set -- target; f(){ printf '<%s>' \"${!1:-inner}\"; }; f; printf '<%s>' \"${!1}\"", "<inner><kept>", "", 0)]
     [InlineData("set --; printf '<%s>' \"${!1:?required}\"\nprintf after", "", "!1: required\n", 1)]
-    [InlineData("set --; printf '<%s>' \"${!1:=$(printf reached >&2; printf value)}\"; printf same\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"", "<1:1>", "line 1: !1: invalid indirect expansion\n", 0)]
-    [InlineData("set -e; set --; printf '<%s>' \"${!1:=$(printf reached >&2; printf value)}\"\nprintf after", "", "line 1: !1: invalid indirect expansion\n", 1)]
+    [InlineData("set --; printf '<%s>' \"${!1:=$(printf reached >&2; printf value)}\"; printf same\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"", "<1:1>", "reachedline 1: !1: invalid indirect expansion\n", 0)]
+    [InlineData("set -e; set --; printf '<%s>' \"${!1:=$(printf reached >&2; printf value)}\"\nprintf after", "", "reachedline 1: !1: invalid indirect expansion\n", 1)]
+    [InlineData("set --; unset saved\nprintf '<%s>' \"${!1:=${saved:=assigned}}\"\nprintf '<%s:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$saved\"",
+        "<1:1:assigned>", "line 2: !1: invalid indirect expansion\n", 0)]
+    [InlineData("set --\nprintf '<%s>' \"${!1:=${bad!}}\"\nprintf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+        "<1:1>", "line 2: ${bad!}: bad substitution\n", 0)]
     public async Task IndirectMissingPositionUsesTheReachedOperator(
         string script, string expectedOutput, string expectedError, int expectedStatus)
     {

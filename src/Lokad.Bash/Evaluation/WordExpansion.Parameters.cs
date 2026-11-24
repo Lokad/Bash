@@ -232,7 +232,7 @@ internal static partial class WordExpansion
                             await ReportIndirectFailureAsync([invalidTarget.ToValue()], "invalid variable name").ConfigureAwait(false);
                         else
                         {
-                            // An empty aggregate has no indirect target, but its assignment RHS still expands.
+                            // An absent argument or empty aggregate supplied no name.
                             await ReportIndirectFailureAsync([ShellValue.FromText("!"), parsed.Name.ToValue()],
                                 "invalid indirect expansion").ConfigureAwait(false);
                         }
@@ -601,14 +601,7 @@ internal static partial class WordExpansion
                 if (source.Kind is VariableReferenceKind.At or VariableReferenceKind.Star)
                     return new ParameterValue(VariableReferenceKind.Name, [ShellValue.Empty], false, null, null);
                 if (syntax.Special == SpecialParameterKind.Positional)
-                {
-                    // A missing argument supplies no name. Read operators see an unset value,
-                    // while an assigning default rejects the missing target before expanding its word.
-                    if (parsed.Kind == BracedParameterOperatorKind.AssignDefault)
-                        await ReportIndirectFailureAsync([ShellValue.FromText("!"), name.ToValue()],
-                            "invalid indirect expansion").ConfigureAwait(false);
                     return source;
-                }
                 // A selected element can be absent while its base variable still exists.
                 if (syntax.Reference is { Kind: VariableReferenceKind.Element } && source.Target is { } location
                     && (location.ReadOwner ?? scope.Variables).HasBindingOrAttributes(location.Name))
