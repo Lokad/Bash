@@ -11,9 +11,11 @@ public sealed partial class Evaluation
     private enum BuiltinHelpFormat { Catalog, Detailed, Description, Synopsis, Manual }
 
     /// <summary>Prints builtin documentation through the current command's stdout and redirections.</summary>
-    private async Task<EvaluationResult> EvaluateBuiltinHelpAsync(IReadOnlyList<ShellValue> words, bool negated)
+    private async Task<EvaluationResult> EvaluateBuiltinHelpAsync(
+        IReadOnlyList<ShellValue> words, EvaluationContext context, bool negated)
     {
         var command = words[0];
+        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
         var descriptions = false;
         var synopses = false;
         var manual = false;
@@ -26,7 +28,8 @@ public sealed partial class Evaluation
                 case (byte)'s': synopses = true; break;
                 case (byte)'m': manual = true; break;
                 default:
-                    await WriteInvalidShortOptionUnlessStderrClosedAsync(command, option, BuiltinKind.Help, "help")
+                    await WriteInvalidShortOptionUnlessStderrClosedAsync(command, ShellValue.FromText("-"),
+                        option, BuiltinKind.Help, "help", sourcePrefix)
                         .ConfigureAwait(false);
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
             }
@@ -74,10 +77,11 @@ public sealed partial class Evaluation
             var topic = words[^1];
             await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("no help topics match `"),
                 topic, ShellValue.FromText("'.  Try `help help' or `man -k "),
-                topic, ShellValue.FromText("' or `info "), topic, ShellValue.FromText("'.")], scope: null).ConfigureAwait(false);
+                topic, ShellValue.FromText("' or `info "), topic, ShellValue.FromText("'.")], scope: null, sourcePrefix)
+                .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
-        var result = await WriteBuiltinOutputAsync(command, output.ToMemory()).ConfigureAwait(false);
+        var result = await WriteBuiltinOutputAsync(command, output.ToMemory(), sourcePrefix).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 0), negated).ConfigureAwait(false);
 
         bool AppendPatternTopics(ShellValue pattern, GlobMask mask)

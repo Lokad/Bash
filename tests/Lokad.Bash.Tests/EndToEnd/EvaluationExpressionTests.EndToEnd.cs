@@ -170,6 +170,20 @@ public sealed class EvaluationExpressionTestsEndToEnd
     }
 
     [Fact]
+    public async Task SourcedLetWithNoExpressionsReportsTheContinuedOperandLine()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", "# Leading line\nlet \\\n-- \\\n2>diagnostic\n");
+        var result = await host.RunAsync("source ./body", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal("./body: line 3: let: expression expected\n", host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task Evaluation_LetBuiltin_UsesLastArgumentResult()
     {
         // This test verifies that "let" uses the last expression's value for its exit status.

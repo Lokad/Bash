@@ -703,6 +703,9 @@ During option scanning, `--help` writes the builtin synopsis and returns 2.
 It returns 2 silently with closed stdout. After `--` or the first name,
 `--help` is an ordinary name.
 
+`help` reports the source filename and reached line for an invalid option,
+an unmatched topic, or a failed topic write in named input.
+
 `hash` uses an empty command cache. A bare invocation reports that the
 table is empty. `-r` clears it and `-l` lists its reusable entries.
 Both succeed silently, including when bundled or repeated. With named operands,
@@ -1161,7 +1164,8 @@ and renders parsed command substitutions without running them again.
 `let` consumes one leading `--` after operand expansion. A leading `--help`
 requests help on stdout and returns status 2 even with closed stdout. Later
 fields are arithmetic expressions. If no expressions remain, `let` reports
-`expression expected` and returns status 1. A quoted empty expression
+`expression expected` and returns status 1. In a named source, the diagnostic
+includes the filename and reached line. A quoted empty expression
 evaluates to zero and returns status 1 without a diagnostic.
 
 Associative arrays enumerate keys in ascending lexicographic order of unsigned

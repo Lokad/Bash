@@ -116,6 +116,38 @@ public sealed class EvaluationHelpTestsEndToEnd
         Assert.Equal(expected, host.StandardError.Content.ToArray());
     }
 
+    [Fact]
+    public async Task SourcedHelpMissKeepsTopicBytesAndIncludesTheSourceLine()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", "# Leading line\nhelp first_missing $'\\377'\n");
+        var result = await host.RunAsync("source ./body", CancellationToken.None);
+        byte[] expected = [.. "./body: line 2: help: no help topics match `"u8, 0xff,
+            .. "'.  Try `help help' or `man -k "u8, 0xff, .. "' or `info "u8, 0xff, .. "'.\n"u8];
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.Equal(expected, host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("help \\\n-Q", 2, 3, "help: -Q: invalid option\nhelp: usage: help [-dms] [pattern ...]\n")]
+    [InlineData("help -s : >&-", 1, 2, "help: write error: Bad file descriptor\n")]
+    public async Task SourcedHelpErrorsUseTheReachedLineAndDescriptor(string invocation,
+        int status, int line, string diagnostic)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", $"# Leading line\n{invocation} \\\n2>diagnostic\n");
+        var result = await new Engine().RunAsync(new Eval(Parser.Parse("source ./body")), host, CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal($"./body: line {line}: " + diagnostic, host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("local --help -q", "local: local [option] name[=value] ...\n")]
     [InlineData("command typeset --help", "typeset: typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]\n")]

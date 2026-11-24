@@ -400,8 +400,8 @@ public sealed partial class Evaluation
         }
 
         if (first == words.Count)
-            await ReportExpansionDiagnosticAsync(words[0], ShellValue.FromText("expression expected"))
-                .ConfigureAwait(false);
+            await WriteDiagnosticAsync([words[0]], [ShellValue.FromText("expression expected")], _builtinDiagnostics,
+                ClosedStderrHandling.AttemptWrite, GetNamedSourceDiagnosticPrefix(context)).ConfigureAwait(false);
 
         long? lastResult = 0;
         for (var index = first; index < words.Count; index++)
