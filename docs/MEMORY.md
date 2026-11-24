@@ -419,7 +419,10 @@ Name, kind and path queries keep the selected classification.
 Command queries borrow the expanded operands and admit their resolution records
 and output offsets as a batch. Decoded host names and their list remain admitted
 through the lookup. Request scratch retires before formatting, which consumes
-host replies in the order of the marked operands.
+host replies in the order of the marked operands. After rendering, the bytes and
+output offsets stay admitted through writes. The resolution records retire before
+the first output write. The selected function-borrow list stays admitted through
+completion.
 
 Serialized function exports share one admitted cache owner across namespaces and
 attribute copies. Its scope belongs to the binding's creator, even when a pipeline

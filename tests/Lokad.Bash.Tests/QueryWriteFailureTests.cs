@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
@@ -395,6 +396,76 @@ public sealed class QueryWriteFailureTests
         Assert.True(pending - budget.ReservedBytes >= expected.Length);
         owner.Dispose();
         Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueryReturnsResolutionAllowanceBeforeTheWrite(bool showDefinition)
+    {
+        const int NameCount = 128;
+        var command = showDefinition ? "type" : "type -p";
+        var names = string.Join(' ', Enumerable.Repeat("probe", NameCount - 1));
+        var state = new Eval(Parser.Parse($"f(){{ :; }}\n{command} f {names}"));
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var resolutionBytes = Eval.EstimateCommandQueryResolutionBytes(NameCount);
+        var budget = new QueryBudget(owner, resolutionBytes);
+        state.Memory.Budget = budget;
+
+        var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep(deadline.Token));
+        Assert.Equal(NameCount - 1, lookup.CommandNames.Count);
+        Assert.All(lookup.CommandNames, name => Assert.Equal("probe", name));
+        var reservation = Assert.IsAssignableFrom<IMemoryReservation>(budget.Resolution);
+        Assert.Equal(resolutionBytes, reservation.Bytes);
+        lookup.SetResult(Enumerable.Repeat<CommandLookupResult>(new CommandLookupResult.Found("/bin/probe"),
+            NameCount - 1).ToArray());
+
+        var write = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+        try
+        {
+            Assert.Equal(FileDescriptor.StdOut, write.FileDescriptor);
+            var row = showDefinition ? "probe is /bin/probe\n" : "/bin/probe\n";
+            var content = Encoding.UTF8.GetString(write.Content.Span);
+            var expectedSuffix = string.Concat(Enumerable.Repeat(row, NameCount - 1));
+            if (showDefinition)
+            {
+                Assert.StartsWith("f is a function\n", content);
+                Assert.EndsWith(expectedSuffix, content);
+                Assert.InRange(reservation.Bytes, 1, resolutionBytes - 1);
+            }
+            else
+            {
+                Assert.Equal(expectedSuffix, content);
+                Assert.Equal(0, reservation.Bytes);
+            }
+            Assert.True(governor.ReservedBytes >= write.Content.Length);
+        }
+        finally { write.SetResult(DescriptorWriteResult.Open); }
+
+        Assert.Null(await state.GetNextStep(deadline.Token));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(0, reservation.Bytes);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class QueryBudget(IMemoryBudget inner, long resolutionBytes) : IMemoryBudget
+    {
+        public IMemoryReservation? Resolution { get; private set; }
+
+        public IMemoryScope CreateScope() => inner.CreateScope();
+
+        public bool TryReserve(long bytes, [NotNullWhen(true)] out IMemoryReservation? reservation)
+        {
+            if (!inner.TryReserve(bytes, out reservation))
+                return false;
+            if (bytes == resolutionBytes)
+                Resolution ??= reservation;
+            return true;
+        }
     }
 
     [Fact]

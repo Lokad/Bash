@@ -564,11 +564,12 @@ public sealed class SourceMemoryLifetimeTests
         var evaluation = new Eval(Parser.Parse($"source /a; {query} f other; unset -f f"));
         var replacement = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ printf new; }").Commands));
         var liveAtLookup = -1;
+        var liveAtWrite = -1;
         await using var host = new LookupHost(() =>
         {
             evaluation.SetExportedFunction(replacement);
             liveAtLookup = scopes.Count(s => s.Depth > 1 && s.OwnBytes >= PaddingBytes);
-        }) { MemoryBudget = budget };
+        }, () => liveAtWrite = scopes.Count(s => s.Depth > 1 && s.OwnBytes >= PaddingBytes)) { MemoryBudget = budget };
         host.AddFile("/a", "f(){ printf old; }\n#" + new string('a', PaddingBytes) + "\n");
         using var owner = budget.CreateScope();
         using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -580,12 +581,14 @@ public sealed class SourceMemoryLifetimeTests
         if (expectedOutput == null)
         {
             Assert.Equal(1, liveAtLookup);
+            Assert.Equal(1, liveAtWrite);
             Assert.Contains("old", stdout);
             Assert.DoesNotContain("new", stdout);
         }
         else
         {
             Assert.Equal(0, liveAtLookup);
+            Assert.Equal(0, liveAtWrite);
             Assert.Equal(expectedOutput, stdout);
         }
         Assert.Empty(host.GetOutput(FileDescriptor.StdErr));
@@ -633,7 +636,7 @@ public sealed class SourceMemoryLifetimeTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    private sealed class LookupHost(Action lookup) : MockFileSystem
+    private sealed class LookupHost(Action lookup, Action beforeWrite) : MockFileSystem
     {
         public override Task<IReadOnlyList<CommandLookupResult>> ResolveCommandsAsync(
             IReadOnlyList<string> names, ShellPath directory,
@@ -642,6 +645,14 @@ public sealed class SourceMemoryLifetimeTests
             lookup();
             return Task.FromResult<IReadOnlyList<CommandLookupResult>>(names
                 .Select(name => (CommandLookupResult)new CommandLookupResult.Found("/bin/" + name)).ToArray());
+        }
+
+        public override ValueTask<DescriptorWriteResult> WriteAsync(
+            FileDescriptor descriptor, ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
+        {
+            if (descriptor == FileDescriptor.StdOut)
+                beforeWrite();
+            return base.WriteAsync(descriptor, content, cancellationToken);
         }
     }
 

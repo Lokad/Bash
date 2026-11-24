@@ -321,9 +321,6 @@ public sealed partial class Evaluation
                         return await OutputLimitAsync().ConfigureAwait(false);
                     FinishRun(diagnostic: false);
                 }
-                // The output buffer owns the rendered bytes before the first write.
-                hostResults = [];
-
                 bool AppendFound(ShellValue name, CommandQueryResolution resolution, CommandLookupResult.Found? hostCommand)
                 {
                     if (outputMode == CommandQueryOutputMode.TypePath && hostCommand == null)
@@ -376,6 +373,12 @@ public sealed partial class Evaluation
                 if (output.Length == 0)
                     return queryExitCode;
 
+                // The output has its own copy. Keep the selected function borrows through settlement.
+                resolutions = [];
+                localMatches = null;
+                hostResults = [];
+                resolutionMemory.Resize(MemoryCapacity.ArrayBackingBytes<FunctionBinding>(functionOwners?.Capacity ?? 0));
+                resolutionMemory.ReleaseUnusedCapacity();
                 runMemory?.ReleaseUnusedCapacity();
                 var content = output.ToMemory();
                 var startOffset = 0;
