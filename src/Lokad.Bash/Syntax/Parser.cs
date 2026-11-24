@@ -644,9 +644,13 @@ public static class Parser
         var prefixed = false;
         while (true)
         {
-            if (TryConsumeNegation(tokenizer))
+            var text = GetUnquotedTokenText(tokenizer.PeekTokenCore());
+            if (text.SequenceEqual("!"u8))
+            {
+                tokenizer.NextTokenCore();
                 negated = !negated;
-            else if (IsKeyword(tokenizer.PeekTokenCore(), "time"))
+            }
+            else if (text.SequenceEqual("time"u8))
             {
                 tokenizer.NextTokenCore();
                 timed = true;
@@ -756,12 +760,6 @@ public static class Parser
                     tokenizer.NextTokenCore();
                     command = new ArithmeticCommand(token.CommandExpression, tokenizer.ScanContext.SyntaxMemory);
                     break;
-                case TokenKind.Word when IsKeyword(token, "[["):
-                    // Reserved words introduce syntax only at a command boundary.
-                    if (!tokenizer.TryReadConditionalCommand(tokenizer.NextTokenCore(), out var conditionalCommand))
-                        return null;
-                    command = conditionalCommand;
-                    break;
                 case TokenKind.OpenParen:
                     command = ParseSubshell(tokenizer);
                     break;
@@ -770,37 +768,47 @@ public static class Parser
                     command = groupBody == null ? null : new GroupCommand(groupBody);
                     break;
                 default:
-                    if (IsKeyword(token, KeywordFunction))
+                    var text = GetUnquotedTokenText(token);
+                    if (text.SequenceEqual("[["u8))
+                    {
+                        // Reserved words introduce syntax only at a command boundary.
+                        if (!tokenizer.TryReadConditionalCommand(tokenizer.NextTokenCore(), out var conditionalCommand))
+                            return null;
+                        command = conditionalCommand;
+                        break;
+                    }
+
+                    if (AsciiByte.EqualsAscii(text, KeywordFunction))
                     {
                         command = ParseFunctionDefinition(tokenizer);
                         break;
                     }
 
-                    if (IsKeyword(token, KeywordCase))
+                    if (AsciiByte.EqualsAscii(text, KeywordCase))
                     {
                         command = ParseCase(tokenizer);
                         break;
                     }
 
-                    if (IsKeyword(token, KeywordIf))
+                    if (AsciiByte.EqualsAscii(text, KeywordIf))
                     {
                         command = ParseIf(tokenizer);
                         break;
                     }
 
-                    if (IsKeyword(token, KeywordWhile))
+                    if (AsciiByte.EqualsAscii(text, KeywordWhile))
                     {
                         command = ParseWhile(tokenizer);
                         break;
                     }
 
-                    if (IsKeyword(token, KeywordUntil))
+                    if (AsciiByte.EqualsAscii(text, KeywordUntil))
                     {
                         command = ParseUntil(tokenizer);
                         break;
                     }
 
-                    if (IsKeyword(token, KeywordFor))
+                    if (AsciiByte.EqualsAscii(text, KeywordFor))
                     {
                         command = ParseFor(tokenizer, out var bindingLine);
                         if (bindingLine != 0)
@@ -814,10 +822,7 @@ public static class Parser
                         break;
                     }
 
-                    if (token.TryGetWordToken(out var reservedWord)
-                        && TryGetPlainUnquotedSource(reservedWord.Word, out var reservedText)
-                        && IsSupportedKeyword(reservedText.AsSpan())
-                        && !(afterPipe && reservedText.AsSpan().SequenceEqual("time"u8)))
+                    if (!text.IsEmpty && IsSupportedKeyword(text) && !(afterPipe && text.SequenceEqual("time"u8)))
                     {
                         tokenizer.RecordUnexpectedToken("Unexpected reserved word.", token, tokenizer.Position);
                         return null;
@@ -1873,19 +1878,10 @@ public static class Parser
     }
 
     /// <summary>
-    /// Consumes a leading ! token for pipeline negation.
+    /// Borrows unquoted token text for reserved-word comparisons.
     /// </summary>
-    private static bool TryConsumeNegation(Tokenizer tokenizer)
-    {
-        var token = tokenizer.PeekTokenCore();
-        if (IsKeyword(token, "!"))
-        {
-            tokenizer.NextTokenCore();
-            return true;
-        }
-
-        return false;
-    }
+    private static ReadOnlySpan<byte> GetUnquotedTokenText(Token token) =>
+        token.Word is { } word && TryGetPlainUnquotedSource(word, out var source) ? source.AsSpan() : [];
 
     private static ICommand? ParseListUntilKeyword(Tokenizer tokenizer, string keyword)
     {
@@ -1939,10 +1935,8 @@ public static class Parser
     /// <summary>
     /// Returns true when a token matches a specific reserved keyword.
     /// </summary>
-    private static bool IsKeyword(Token token, string keyword)
-    {
-        return token.Kind == TokenKind.Word && token.TryGetWordToken(out var wordToken) && IsKeyword(wordToken.Word, keyword);
-    }
+    private static bool IsKeyword(Token token, string keyword) =>
+        token.Word is { } word && IsKeyword(word, keyword);
 
     internal static bool IsKeyword(Word word, string keyword) =>
         TryGetPlainUnquotedSource(word, out var source) && AsciiByte.EqualsAscii(source.AsSpan(), keyword);

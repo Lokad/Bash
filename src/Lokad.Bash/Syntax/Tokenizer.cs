@@ -2186,7 +2186,7 @@ internal readonly struct Token
     /// <summary>
     /// Gets the word value for word tokens.
     /// </summary>
-    private Word? Word { get; }
+    internal Word? Word { get; }
 
     /// <summary>
     /// Attempts to treat this token as a word token.

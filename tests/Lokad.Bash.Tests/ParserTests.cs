@@ -936,6 +936,25 @@ public class ParserTests
         AssertListOperator(group.Body, ListOperator.Sequence);
     }
 
+    [Theory]
+    [InlineData("i\\\nf :; then :; fi", typeof(IfCommand))]
+    [InlineData("i''f word", typeof(SimpleCommand))]
+    [InlineData("t\\\nime :", typeof(TimedCommand))]
+    [InlineData("t''ime word", typeof(SimpleCommand))]
+    [InlineData("'[[' word", typeof(SimpleCommand))]
+    public void Parse_CommandStartDistinguishesContinuedKeywordsFromQuotedWords(string source, Type commandType)
+    {
+        Assert.IsType(commandType, Assert.Single(Parser.Parse(source).Commands));
+    }
+
+    [Fact]
+    public void Parse_TimeAfterPipeIsAnOrdinaryCommandWord()
+    {
+        var pipeline = Assert.IsType<PipelineCommand>(Assert.Single(Parser.Parse(": | time operand").Commands));
+        var right = Assert.IsType<SimpleCommand>(pipeline.Right);
+        Assert.Equal("time", WordText(right.Words[0]));
+    }
+
     [Fact]
     public void Parse_If_Basic()
     {
