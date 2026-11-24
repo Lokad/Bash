@@ -127,7 +127,7 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         return destination;
     }
 
-    private static byte[] AllocateValue(long length, EvaluationMemory memory)
+    internal static byte[] AllocateValue(long length, EvaluationMemory memory)
     {
         if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();

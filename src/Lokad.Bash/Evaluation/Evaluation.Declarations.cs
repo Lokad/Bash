@@ -290,19 +290,14 @@ public sealed partial class Evaluation
         if (HasPendingExpansionError)
             PublishAssignmentTargetFailure(scope);
         else if (lastAssignment is { } assignmentArgument)
-        {
-            if (assignmentArgument.Value.HasValue)
-            {
-                Memory.Charge(256);
-                lastArgument = await ExpandWordValueAsync(assignmentArgument.ToWord(), scope).ConfigureAwait(false);
-            }
-            else
-                lastArgument = assignmentArgument.Name;
-        }
+            lastArgument = assignmentArgument.Value.HasValue
+                ? await GetDeclarationOperandValueAsync(assignmentArgument, scope).ConfigureAwait(false)
+                : assignmentArgument.Name;
         return new PreparedDeclaration(words == null ? command : command with { Words = words }, options, operands, lastArgument);
 
         PreparedDeclarationOperand PrepareVariableOperand(ShellValue input) =>
-            AssignmentWord.TrySplitOperand(ShellSource.FromBytes(input.Bytes), Memory.Workspace, out var name, out var value, out var operation)
+            !options.UsesCompleteOperands
+            && AssignmentWord.TrySplitOperand(ShellSource.FromBytes(input.Bytes), Memory.Workspace, out var name, out var value, out var operation)
                 ? new PreparedDeclarationOperand(name.ToValue(), value.ToValue(), operation, CompoundApplied: false)
                 : new PreparedDeclarationOperand(input, null, AssignmentOperator.Replace, CompoundApplied: false);
 
@@ -414,13 +409,43 @@ public sealed partial class Evaluation
     private static string ArrayConversionMessage(ArrayKind kind) => kind == ArrayKind.Associative
         ? "cannot convert indexed to associative array" : "cannot convert associative to indexed array";
 
+    /// <summary>Reads the frozen operand bytes without constructing a second syntax word.</summary>
+    private ValueTask<ShellValue> GetDeclarationOperandValueAsync(PreparedDeclarationOperand operand, ScopedEvaluation scope)
+    {
+        if (!scope.CanExpand)
+            return new(ShellValue.Empty);
+        CheckCancellation();
+        if (operand.Value is not { } value)
+            return new(operand.Name);
+
+        var name = operand.Name.Bytes.Span;
+        var separator = operand.AssignmentSeparator.Bytes.Span;
+        try
+        {
+            var bytes = ExpandedWord.AllocateValue((long)name.Length + separator.Length + value.Bytes.Length, Memory);
+            name.CopyTo(bytes);
+            separator.CopyTo(bytes.AsSpan(name.Length));
+            value.Bytes.Span.CopyTo(bytes.AsSpan(name.Length + separator.Length));
+            return new(ShellValue.FromBytes(bytes));
+        }
+        catch (ByteMemoryBuilder.LimitExceededException error)
+        {
+            return new(AwaitWordExpansionAsync(Task.FromException<ShellValue>(error)));
+        }
+    }
+
     /// <summary>Null Value means a name without an explicit value, not an assigned empty value.</summary>
     private readonly record struct PreparedDeclarationOperand(ShellValue Name, ShellValue? Value, AssignmentOperator Operator, bool CompoundApplied)
     {
-        // Frozen pieces reuse ordinary word flattening only when dispatch or inspection needs a joined value.
+        private static readonly ShellValue Replacement = ShellValue.FromText("=");
+        private static readonly ShellValue Append = ShellValue.FromText("+=");
+
+        public ShellValue AssignmentSeparator => Operator == AssignmentOperator.Append ? Append : Replacement;
+
+        // Retain a syntax word when the command can dispatch through the ordinary argument path.
         public Word ToWord() => new(Value is { } value
             ? [WordPart.FromValue(WordPartKind.SingleQuoted, Name),
-                WordPart.FromValue(WordPartKind.SingleQuoted, ShellValue.FromText(Operator == AssignmentOperator.Append ? "+=" : "=")),
+                WordPart.FromValue(WordPartKind.SingleQuoted, AssignmentSeparator),
                 WordPart.FromValue(WordPartKind.SingleQuoted, value)]
             : [WordPart.FromValue(WordPartKind.SingleQuoted, Name)]);
     }
@@ -471,6 +496,8 @@ public sealed partial class Evaluation
         public bool Inherit { get; private set; }
         public bool Print { get; private set; }
         public bool Functions { get; private set; }
+        public bool PrintNamedVariables => Print && Builtin is BuiltinKind.Declare or BuiltinKind.Local;
+        public bool UsesCompleteOperands => Functions || PrintNamedVariables;
         public bool FunctionNamesOnly { get; private set; }
         public bool RemoveFunctions { get; private set; }
         public string InvalidFunctionAttribute { get; private set; } = string.Empty;

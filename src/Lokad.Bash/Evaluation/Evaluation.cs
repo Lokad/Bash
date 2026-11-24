@@ -1928,7 +1928,7 @@ public sealed partial class Evaluation : IFileTester
             var listing = operands.Count == 0;
             if (options.Functions && (!listing || options.Builtin != BuiltinKind.Local))
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(await EvaluateFunctionsAsync().ConfigureAwait(false)), declarationNegated).ConfigureAwait(false);
-            if (listing || options.Print && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
+            if (listing || options.PrintNamedVariables)
             {
                 var listOptionSnapshot = listing && localBuiltinFrame?.HasOwnOptionSnapshot == true;
                 var showAssignments = options.Builtin == BuiltinKind.Set
@@ -2177,10 +2177,10 @@ public sealed partial class Evaluation : IFileTester
                 }
                 else
                 {
-                    // Explicit operands remain literal and join through the shared budget/diagnostic path.
+                    // Named inspection materializes only the reached operand.
                     foreach (var operand in operands)
                     {
-                        var value = await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
+                        var value = await GetDeclarationOperandValueAsync(operand, declarationScope).ConfigureAwait(false);
                         if (HasPendingExpansionError)
                             yield break;
                         yield return bindOperand(value);
@@ -2200,7 +2200,7 @@ public sealed partial class Evaluation : IFileTester
                 if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference)
                     || operand.Value == null && reference is { Kind: VariableReferenceKind.Element, Subscript.IsEmpty: true })
                 {
-                    var invalidOperand = await ExpandWordValueAsync(operand.ToWord(), declarationScope).ConfigureAwait(false);
+                    var invalidOperand = await GetDeclarationOperandValueAsync(operand, declarationScope).ConfigureAwait(false);
                     if (HasPendingExpansionError)
                         break;
                     await DiagnoseQuotedAsync(invalidOperand, "not a valid identifier").ConfigureAwait(false);
@@ -2980,7 +2980,7 @@ public sealed partial class Evaluation : IFileTester
                         var suffix = ShellValue.FromBytes(operand.Name.Bytes[source.ByteLength..]);
                         exitCode = 1;
                         await ReportDeclarationDiagnosticAsync([ShellValue.FromText("`"), target.Reference.ToValue(Memory), suffix,
-                            ShellValue.FromText(operand.Operator == AssignmentOperator.Append ? "+=" : "="),
+                            operand.AssignmentSeparator,
                             operand.Value.GetValueOrDefault(), ShellValue.FromText("': not a valid identifier")]).ConfigureAwait(false);
                         return true;
                     }

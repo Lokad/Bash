@@ -56,6 +56,9 @@ public sealed class ByteDeclarationTests
     // Bash 5.2 controls preserve operand bytes and stage effects; option usage lines remain omitted.
     [Theory]
     [InlineData("declare value=$'\\377'; declare value+=$'\\376'; printf '%s' \"$value\"", "FFFE", "")]
+    [InlineData("probe=seed; declare probe+=$'\\377'; printf '[%s:%s]' \"$_\" \"$probe\"", "5B70726F62652B3DFF3A73656564FF5D", "")]
+    [InlineData("probe=seed; declare(){ printf '[%s]' \"$@\"; }; declare -a scratch=(seed) probe+=' x'; printf '<%s:%s:%s>' \"$_\" \"$probe\" \"${scratch[0]}\"",
+        "5B2D615D5B736372617463685D5B70726F62652B3D20785D3C70726F62652B3D20783A736565643A736565643E", "")]
     [InlineData("declare -a a=($'\\377' '' $'\\376'); declare -a a+=($'\\375'); printf '<%s>' \"${a[@]}\"", "3CFF3E3C3E3CFE3E3CFD3E", "")]
     [InlineData("declare -A a=([key]=$'\\377'); declare a[key]+=$'\\376'; printf '%s' \"${a[key]}\"", "FFFE", "")]
     [InlineData("value=$'\\377'; f() { value=$'\\376'; local value=$'\\375'; printf '%s' \"$value\"; }; f; printf '%s' \"$value\"", "FDFE", "")]

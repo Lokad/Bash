@@ -17,6 +17,8 @@ public sealed class LastArgumentTests
     [InlineData(": outer; (: inner); : first | : last; printf '<%s>' \"$_\"", "<outer>", 0)]
     [InlineData("declare -a v=(one two); printf '<%s>' \"$_\"; command --; printf '<%s>' \"$_\"", "<v><-->", 0)]
     [InlineData("builtin declare v='two words'; printf '<%s:%s>' \"$_\" \"$v\"", "<v=two words:two words>", 0)]
+    [InlineData("v=old; declare v+=; printf '<%s:%s>' \"$_\" \"$v\"", "<v+=:old>", 0)]
+    [InlineData("declare -a scratch=(one) v+='* $x $(ghost)'; printf '<%s>' \"$_\"", "<v+=* $x $(ghost)>", 0)]
     [InlineData("f(){ local; printf '<%s>' \"$_\"; }; f", "<local>", 0)]
     [InlineData("builtin test; printf '<%s:%s>' \"$?\" \"$_\"", "<1:test>", 0)]
     [InlineData("declare -n _=target; : tail; printf '<%s:%s>' \"$_\" \"$target\"", "<tail:tail>", 0)]
