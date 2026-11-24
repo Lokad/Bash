@@ -120,15 +120,21 @@ public static class ShellArgumentEscaping
         var delimited = style != ShellQuoteStyle.Backslash;
         if (delimited && !output.TryAppend(quote))
             return false;
+        var runStart = 0;
         for (var index = 0; index < input.Length; index++)
         {
             var value = input[index];
             var escape = style == ShellQuoteStyle.Backslash ? !IsShellSafe(input, index)
                 : style == ShellQuoteStyle.DoubleQuoted && value is (byte)'"' or (byte)'$' or (byte)'`' or (byte)'\\';
-            if (escape && !output.TryAppend((byte)'\\') || !output.TryAppend(value))
+            if (!escape)
+                continue;
+
+            if (!AppendLiteralRun(output, input[runStart..index])
+                || !output.TryAppend((byte)'\\') || !output.TryAppend(value))
                 return false;
+            runStart = index + 1;
         }
-        return !delimited || output.TryAppend(quote);
+        return AppendLiteralRun(output, input[runStart..]) && (!delimited || output.TryAppend(quote));
 
         static bool AppendPrintablePrefix(IByteMemoryWriter output, ReadOnlySpan<byte> bytes)
         {
@@ -203,17 +209,17 @@ public static class ShellArgumentEscaping
         }
 
         return target.TryAppend((byte)'\'');
+    }
 
-        static bool AppendLiteralRun(IByteMemoryWriter target, ReadOnlySpan<byte> bytes)
-        {
-            if (bytes.Length > 1 && target.TryAppend(bytes))
-                return true;
-
-            // A rejected span leaves the writer unchanged. Fill the same partial prefix as single-byte appends.
-            foreach (var value in bytes)
-                if (!target.TryAppend(value))
-                    return false;
+    private static bool AppendLiteralRun(IByteMemoryWriter target, ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length > 1 && target.TryAppend(bytes))
             return true;
-        }
+
+        // A rejected span leaves the writer unchanged. Fill the same partial prefix as single-byte appends.
+        foreach (var value in bytes)
+            if (!target.TryAppend(value))
+                return false;
+        return true;
     }
 }

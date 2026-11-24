@@ -163,6 +163,30 @@ public sealed class ShellQuotedOutputTests
     }
 
     [Theory]
+    [InlineData(ShellQuoteStyle.Backslash, "#é a=~:~b#", "\\#é\\ a=\\~:\\~b#")]
+    [InlineData(ShellQuoteStyle.DoubleQuoted, "aé$\"z", "\"aé\\$\\\"z\"")]
+    public void PrintableQuotesPreserveEveryBytePrefix(ShellQuoteStyle style, string input, string rendered)
+    {
+        var bytes = Utf8Text.Encode(input);
+        var atoms = Utf8Text.Encode(rendered).ToArray().Select(value => new[] { value }).ToArray();
+        AssertPrefixes(atoms, output => ShellArgumentEscaping.TryAppendQuoted(output, bytes.Span, style));
+    }
+
+    [Theory]
+    [InlineData(ShellQuoteStyle.Backslash, ' ', 4, 1)]
+    [InlineData(ShellQuoteStyle.DoubleQuoted, '$', 6, 3)]
+    public void PrintableQuotesAppendLongLiteralRunsInSpans(
+        ShellQuoteStyle style, char escaped, int appends, int addedBytes)
+    {
+        var input = Utf8Text.Encode(new string('a', 1024) + escaped + new string('b', 1024));
+        var output = new CountingWriter();
+
+        Assert.True(ShellArgumentEscaping.TryAppendQuoted(output, input.Span, style));
+        Assert.Equal(input.Length + addedBytes, output.Written);
+        Assert.Equal(appends, output.Appends);
+    }
+
+    [Theory]
     [InlineData(ShellQuoteStyle.Backslash)]
     [InlineData(ShellQuoteStyle.AnsiC)]
     public void AnsiQuotesKeepCompleteCharactersAndEscapes(ShellQuoteStyle style)
