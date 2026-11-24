@@ -1626,6 +1626,8 @@ public static class Parser
                         else
                             tokenizer.RecordUnexpectedToken(message, token, tokenizer.Position);
                     }
+                    else if (token.Kind == TokenKind.ArithmeticCommand)
+                        tokenizer.RecordUnexpectedArithmeticCommand(message, token);
                     else
                         tokenizer.RecordError(message, tokenizer.Position);
                     return null;

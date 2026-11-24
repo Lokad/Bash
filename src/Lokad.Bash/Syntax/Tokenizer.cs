@@ -267,6 +267,18 @@ internal sealed class Tokenizer
     internal void RecordUnexpectedTokenBeforeNewline(string message, Token token) =>
         RecordUnexpectedToken(message, token, Position, allowsImplicitNewline: true);
 
+    /// <summary>Reports the second opener when a simple command rejects an arithmetic token.</summary>
+    internal void RecordUnexpectedArithmeticCommand(string message, Token token)
+    {
+        if (TrackUnexpectedTokens)
+        {
+            var opener = ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), token.Source.Start.Value + 1);
+            RecordUnexpectedToken(message, Token.OpenParen() with { Source = opener..(opener + 1) }, Position);
+        }
+        else
+            RecordError(message, Position);
+    }
+
     private void RecordUnexpectedToken(string message, Token token, int errorOffset, bool allowsImplicitNewline)
     {
         if (Error != null)

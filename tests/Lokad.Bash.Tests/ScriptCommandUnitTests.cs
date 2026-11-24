@@ -233,6 +233,7 @@ public sealed class ScriptCommandUnitTests
     [InlineData("f (", "newline", "f (")]
     [InlineData("x=y f (word)\n", "(", "x=y f (word)")]
     [InlineData("n= ()\n", "(", "n= ()")]
+    [InlineData("f (( 1 ))\n", "(", "f (( 1 ))")]
     public async Task InvalidCompoundOrCommandReportsTheReachedTokenAndLine(string unit, string token, string line)
     {
         await using var host = new TestHost();
@@ -243,6 +244,21 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("before:2:after", host.StandardOutput.TextContent);
         Assert.Equal($"input: line 2: syntax error near unexpected token `{token}'\ninput: line 2: `{line}'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ArithmeticTokenAfterAnAssignmentReportsTheSecondOpener()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\nvalue=x (\\\n\\\n( 1 ))\nprintf skipped\n");
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal("input: line 4: syntax error near unexpected token `('\ninput: line 4: `( 1 ))'\n",
             host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
