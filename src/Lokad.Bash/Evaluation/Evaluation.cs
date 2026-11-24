@@ -2247,8 +2247,11 @@ public sealed partial class Evaluation : IFileTester
                     ? prefixValue : null;
                 var inferElementArray = element && operand.Value == null && !local && arrayKind == ArrayAssignmentKind.Auto
                     && options.IndexedChange != DeclarationAttributeChange.Clear;
+                var clearIndexedElement = element && !local && !operand.CompoundApplied
+                    && arrayKind == ArrayAssignmentKind.Auto && options.IndexedChange == DeclarationAttributeChange.Clear;
+                var selectElementBinding = inferElementArray || clearIndexedElement && (operand.Value == null || options.Global);
                 var global = (options.Global || arrayAttributeAssignment)
-                    && (reference.Kind == VariableReferenceKind.Name || inferElementArray);
+                    && (reference.Kind == VariableReferenceKind.Name || selectElementBinding);
                 if (!global && !local && !operand.CompoundApplied && operand.Value == null)
                 {
                     var visibleName = options.Nameref ? sourceName : StripArraySubscript(commandVars.ResolveNamerefName(sourceName));
@@ -2273,7 +2276,7 @@ public sealed partial class Evaluation : IFileTester
                 var circular = false;
                 var recreateArrayReference = false;
                 var detachElementNameref = false;
-                if (global || inferElementArray)
+                if (global || selectElementBinding)
                 {
                     if (options.NamerefChange == DeclarationAttributeChange.Set)
                         targetVars = SelectGlobalOwner(reference.Name);
@@ -2289,13 +2292,13 @@ public sealed partial class Evaluation : IFileTester
                             binding = new VariableBinding(VariableReference.ForName(sourceName),
                                 global ? SelectGlobalOwner(sourceName) : commandVars);
                         }
-                        if (inferElementArray)
+                        if (selectElementBinding)
                         {
                             if (circular)
                                 await ReportCommandDiagnosticAsync([ShellValue.FromText("warning")],
                                     [GetDiagnosticName(sourceName), ShellValue.FromText(": circular name reference")], declarationScope)
                                     .ConfigureAwait(false);
-                            if (global && binding.Reference.Kind != VariableReferenceKind.Name)
+                            if ((global || clearIndexedElement) && binding.Reference.Kind != VariableReferenceKind.Name)
                             {
                                 exitCode = 1;
                                 await ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
@@ -2304,9 +2307,9 @@ public sealed partial class Evaluation : IFileTester
                                         ShellValue.FromText("': not a valid identifier")], declarationScope).ConfigureAwait(false);
                                 continue;
                             }
-                            // Ordinary lookup keeps an existing whole referent. Global lookup can declare a missing one.
+                            // Ordinary inference keeps an existing whole referent. Global lookup and +a can declare a missing one.
                             if (binding.IsUnsetNameref || binding.Reference.Kind != VariableReferenceKind.Name
-                                || !global && binding.Name != sourceName && !binding.Owner.HasBinding(binding.Name))
+                                || !global && !clearIndexedElement && binding.Name != sourceName && !binding.Owner.HasBinding(binding.Name))
                                 binding = new VariableBinding(VariableReference.ForName(sourceName),
                                     global ? SelectGlobalOwner(sourceName) : commandVars);
                             else
@@ -2321,7 +2324,7 @@ public sealed partial class Evaluation : IFileTester
                             binding = declaredOwner.SelectArrayDeclarationBinding(reference.Name, binding);
                             recreateArrayReference = binding.Owner.TryGetNameref(binding.Name, out _);
                         }
-                        reference = inferElementArray
+                        reference = selectElementBinding
                             ? VariableReference.ForElement(binding.Name, reference.Subscript) : binding.Reference;
                         targetVars = binding.Owner;
                         if (global && reference.Kind != VariableReferenceKind.Name && bindings?.Contains(reference.Name) == true)
@@ -2437,9 +2440,10 @@ public sealed partial class Evaluation : IFileTester
                         }
                     }
                 }
-                if (operand.Value != null && reference.Kind != VariableReferenceKind.Name
+                var removeElementNameref = operand.Value != null && reference.Kind != VariableReferenceKind.Name
                     && !local && options.NamerefChange != DeclarationAttributeChange.Clear
-                    && targetVars.TryGetNameref(name, out _))
+                    && targetVars.TryGetNameref(name, out _);
+                if (removeElementNameref)
                 {
                     if (!targetVars.TryRemoveNamerefAttribute(name))
                     {
@@ -2564,10 +2568,19 @@ public sealed partial class Evaluation : IFileTester
                     continue;
                 }
                 var resolvedName = targetVars.ResolveNamerefName(name);
+                var arrayRemovalName = name;
+                if (clearIndexedElement && !removeElementNameref)
+                {
+                    if (resolvedName.IsEmpty)
+                        resolvedName = name;
+                    // A refusal names an existing operand. A newly created array names its binding.
+                    arrayRemovalName = targetVars.PrepareIndexedAttributeRemoval(resolvedName, operand.Value != null)
+                        ? resolvedName : sourceName;
+                }
                 if (options.IndexedChange == DeclarationAttributeChange.Clear && targetVars.IndexedArrays.ContainsKey(resolvedName)
                     || options.AssociativeChange == DeclarationAttributeChange.Clear && targetVars.AssociativeArrays.ContainsKey(resolvedName))
                 {
-                    await DiagnoseAsync(name, "cannot destroy array variables in this way").ConfigureAwait(false);
+                    await DiagnoseAsync(arrayRemovalName, "cannot destroy array variables in this way").ConfigureAwait(false);
                     continue;
                 }
                 // Global element references and +n keep attribute ownership separate from the active write owner.

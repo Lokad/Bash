@@ -1812,6 +1812,23 @@ public sealed partial class Variables
         _ = TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.DiscardValue);
     }
 
+    /// <summary>Prepares the selected binding for a nonlocal +a declaration with an element operand.</summary>
+    /// <returns>Whether the declaration created an indexed array binding.</returns>
+    internal bool PrepareIndexedAttributeRemoval(BindingName name, bool hasInitializer)
+    {
+        // A missing binding first receives the indexed kind. An assigned scalar stays
+        // scalar with an empty value, even when its declaration carries readonly.
+        if (!TryGetBinding(name, detachBorrowed: false, out var slot)
+            || slot is AttributeSlot or NamerefSlot { Value.IsEmpty: true })
+        {
+            ReplaceValue(name, new IndexedSlot(new IndexedArray(isInitialized: hasInitializer)));
+            return true;
+        }
+        if (slot is ScalarSlot)
+            SetResolvedScalar(name, ShellValue.Empty);
+        return false;
+    }
+
     /// <summary>
     /// Attempts to get a nameref mapping.
     /// </summary>

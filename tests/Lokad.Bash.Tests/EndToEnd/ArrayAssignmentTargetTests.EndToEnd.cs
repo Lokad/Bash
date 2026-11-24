@@ -131,6 +131,34 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         AssertDeclarationAsync(body + "\n", output, error);
 
     [Theory]
+    [InlineData("declare +a arr[2]; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -a arr\n", "line 1: declare: arr: cannot destroy array variables in this way\n")]
+    [InlineData("readonly arr=seed; typeset +a arr[2]; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<0>\ndeclare -r arr=\"\"\n", "")]
+    [InlineData("arr=seed; i=4; declare +a 'arr[i++]'; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr",
+        "<0:4>\ndeclare -- arr=\"\"\n", "")]
+    [InlineData("arr=seed; i=4; declare +a \"arr[$((i++))]\"; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr",
+        "<0:5>\ndeclare -- arr=\"\"\n", "")]
+    [InlineData("i=3; declare +a 'arr[i++]=value'; printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p arr",
+        "<1:3>\ndeclare -a arr=()\n", "line 1: declare: arr: cannot destroy array variables in this way\n")]
+    [InlineData("declare -i arr=7; declare +a 'arr[2]=5'; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<0>\ndeclare -ai arr=([0]=\"\" [2]=\"5\")\n", "")]
+    [InlineData("target=([3]=seed); declare -n arr=target; declare +a arr[2]; printf '<%s>\\n' \"$?\"; declare -p arr target",
+        "<1>\ndeclare -n arr=\"target\"\ndeclare -a target=([3]=\"seed\")\n", "line 1: declare: arr: cannot destroy array variables in this way\n")]
+    [InlineData("declare -n arr=target; declare +a arr[2]; printf '<%s>\\n' \"$?\"; declare -p arr target",
+        "<1>\ndeclare -n arr=\"target\"\ndeclare -a target\n", "line 1: declare: target: cannot destroy array variables in this way\n")]
+    [InlineData("target=([3]=seed); declare -n arr='target[3]'; declare +a arr[2]; printf '<%s>\\n' \"$?\"; declare -p arr target",
+        "<1>\ndeclare -n arr=\"target[3]\"\ndeclare -a target=([3]=\"seed\")\n", "line 1: declare: `target[3][2]': not a valid identifier\n")]
+    [InlineData("arr=seed; f(){ local arr=near; declare -g +a 'arr[2]=new'; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<0>\ndeclare -a arr=([0]=\"near\" [2]=\"new\")\ndeclare -- arr=\"\"\n", "")]
+    [InlineData("arr=outer; f(){ local arr=old; local +a arr[2]; printf '<%s>\\n' \"$?\"; declare -p arr; }; f; declare -p arr",
+        "<1>\ndeclare -a arr=()\ndeclare -- arr=\"outer\"\n", "line 1: local: arr: cannot destroy array variables in this way\n")]
+    [InlineData("arr=seed; declare +A arr[2]; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<0>\ndeclare -a arr=([0]=\"seed\")\n", "")]
+    public Task ClearingIndexedAttributeUsesTheSelectedBindingBeforeTheSelector(string body, string output, string error) =>
+        AssertDeclarationAsync(body + "\n", output, error);
+
+    [Theory]
     [InlineData("arr=old; declare -n arr[2]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
         "<1>\ndeclare -- arr=\"old\"\n", "line 1: declare: arr[2]: reference variable cannot be an array\n")]
     [InlineData("i=0; typeset -n 'arr[i++]=target'; printf '<%s:%s>' \"$?\" \"$i\"",
