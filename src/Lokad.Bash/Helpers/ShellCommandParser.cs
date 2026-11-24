@@ -258,8 +258,22 @@ public static class ShellCommandParser
 
         static bool ContainsNestedCommandSubstitutionOrMalformedExpansion(ShellSource text)
         {
-            for (var index = 0; index < text.Length; index++)
+            var bytes = text.AsSpan();
+            for (var index = 0; index < bytes.Length; index++)
             {
+                // A continuation before the opener does not affect its classification.
+                // The scanners still handle continuations within the opener.
+                var next = bytes[index..].IndexOfAny((byte)'$', (byte)'`');
+                if (next < 0)
+                    break;
+                index += next;
+                if (bytes[index] == (byte)'`')
+                    return true;
+                // Ordinary dollar parameters need none of the nested expansion scanners.
+                if (index + 1 == bytes.Length
+                    || bytes[index + 1] is not ((byte)'(' or (byte)'[' or (byte)'{' or (byte)'\\'))
+                    continue;
+
                 if (ArithmeticExpansionScanner.HasPrefix(text, index))
                 {
                     if (!ArithmeticExpansionScanner.TryScan(

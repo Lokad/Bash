@@ -343,6 +343,36 @@ public class ShellCommandParserTests
         Assert.Equal(["$((1 + 2))"], result.Value.Arguments);
     }
 
+    [Theory]
+    [InlineData("show \"$\\\n((1+2))\"", "$((1+2))")]
+    [InlineData("show \"$\\\n[1+2]\"", "$[1+2]")]
+    [InlineData("show \"$\\\n{v:-fallback}\"", "${v:-fallback}")]
+    [InlineData("show \"$name:$:$\"", "$name:$:$")]
+    public void TryParseChain_KeepsDisplayWordsWithParameterAndArithmeticMarkers(string source, string expected)
+    {
+        var result = ShellCommandParser.TryParseChain(source);
+
+        Assert.NotNull(result);
+        var segment = Assert.Single(result);
+        Assert.Equal(source, segment.Text);
+        Assert.NotNull(segment.Stages);
+        Assert.Equal(expected, Assert.Single(Assert.Single(segment.Stages).Arguments));
+    }
+
+    [Theory]
+    [InlineData("show \"${v:-$\\\n(printf hidden)}\"")]
+    [InlineData("show \"$\\\n{v:-`printf hidden`}\"")]
+    [InlineData("show \"$\\\n(($\\\n(printf hidden)+1))\"")]
+    public void TryParseChain_ContinuedNestedCapturesLeaveStagesUnflattened(string source)
+    {
+        var result = ShellCommandParser.TryParseChain(source);
+
+        Assert.NotNull(result);
+        var segment = Assert.Single(result);
+        Assert.Equal(source, segment.Text);
+        Assert.Null(segment.Stages);
+    }
+
     [Fact]
     public void TryParse_LegacyBacktickCommandSubstitutionInsideBracedParameter_ReturnsNull()
     {
