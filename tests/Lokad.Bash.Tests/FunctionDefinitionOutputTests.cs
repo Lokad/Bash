@@ -35,6 +35,40 @@ public sealed class FunctionDefinitionOutputTests
     }
 
     [Theory]
+    [InlineData("$(", false)]
+    [InlineData("$(", true)]
+    [InlineData("$\\\n(", false)]
+    [InlineData("$\\\n(", true)]
+    public void SourceRenderingUsesOnlyCapturesCachedAtTheReachedPosition(string opening, bool cached)
+    {
+        const string prefix = "$x${name}";
+        const string suffix = "printf ok)$";
+        var source = ShellSource.FromText("|" + prefix + opening + suffix);
+        var captureStart = 1 + prefix.Length;
+        var context = new ShellScanContext();
+        if (cached)
+            Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsedForLaterReuse(
+                context, source, captureStart, out _, out _, out _));
+
+        using var output = ByteMemoryBuilder.CreateUnaccounted(0);
+        Assert.True(FunctionDefinitionFormatter.TryAppendSourceWithCaptures(source.Slice(1), context,
+            output, budget: null, CancellationToken.None));
+        Assert.Equal(prefix + (cached ? "$(" : opening) + suffix, Utf8Text.Decode(output.ToMemory()));
+    }
+
+    [Fact]
+    public void SourceRenderingObservesCancellationWithAnEmptyCaptureCache()
+    {
+        using var output = ByteMemoryBuilder.CreateUnaccounted(0);
+        var context = new ShellScanContext();
+        var canceled = new CancellationToken(canceled: true);
+        Assert.Throws<OperationCanceledException>(() => FunctionDefinitionFormatter.TryAppendSourceWithCaptures(
+            ShellSource.FromText("$x"), context, output, budget: null, canceled));
+        Assert.True(FunctionDefinitionFormatter.TryAppendSourceWithCaptures(ShellSource.Empty, context,
+            output, budget: null, canceled));
+    }
+
+    [Theory]
     [InlineData("a=b")]
     [InlineData("a[1]=x")]
     public async Task DefinitionOutput_KeepsAssignmentLikeNamesReparsable(string name)

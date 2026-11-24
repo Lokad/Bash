@@ -922,6 +922,13 @@ internal static class FunctionDefinitionFormatter
         CancellationToken cancellationToken, out ShellScanContext.CachedParse parsed)
     {
         var bytes = source.AsSpan();
+        if (!context.HasCommandSubstitutionLookahead)
+        {
+            if (start < bytes.Length)
+                cancellationToken.ThrowIfCancellationRequested();
+            parsed = default;
+            return -1;
+        }
         for (var position = start; position < bytes.Length; position++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -929,7 +936,9 @@ internal static class FunctionDefinitionFormatter
             if (relative < 0)
                 break;
             position += relative;
-            if (context.TryGetCommandSubstitution(source, position, out parsed)
+            // A modern capture starts with $(, possibly separated by a physical line continuation.
+            if (position + 1 < bytes.Length && bytes[position + 1] is (byte)'(' or (byte)'\\'
+                && context.TryGetCommandSubstitution(source, position, out parsed)
                 && (!readAheadOnly || parsed.Substitution is CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }))
                 return position;
         }
