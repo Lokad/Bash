@@ -499,6 +499,7 @@ public sealed partial class Evaluation : IFileTester
                 try { closeError = await CloseEvaluationDescriptorsAsync(failure != null || result.ExitCode != 0).ConfigureAwait(false); }
                 finally
                 {
+                    _state.PreparationDiagnosticName = default;
                     ReleaseReadWorkspace();
                     Interlocked.Exchange(ref _preparedSubstitutionMemory, null)?.Release();
                     _state.ReleaseExportedFunctionSelection();
@@ -1088,6 +1089,7 @@ public sealed partial class Evaluation : IFileTester
 
         if (commandWords.Count == 0)
         {
+            _state.PreparationDiagnosticName = default;
             // Assignments run in the enclosing descriptor scope, before any command-local redirections.
             var exitCode = 0;
             foreach (var assignment in simpleCommand.Assignments)
@@ -1252,6 +1254,8 @@ public sealed partial class Evaluation : IFileTester
                 ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(commandVars, prefixNames)
             };
         }
+        using var diagnosticName = new EvaluationState.CommandDiagnosticScope(_state,
+            preparation is PreparedCommand.Executable invocation ? invocation.CommandValue : commandValue);
         var commandRedirections = await OpenRedirectionScopeAsync(
                 simpleCommand.Redirections, redirectionExpansionScope,
                 externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,

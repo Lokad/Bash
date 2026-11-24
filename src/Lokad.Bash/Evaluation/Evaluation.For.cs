@@ -38,6 +38,7 @@ public sealed partial class Evaluation
         foreach (var item in items)
         {
             CheckCancellation();
+            _state.PreparationDiagnosticName = default;
             var value = item;
             if (scope.Variables.IsIntegerBinding(name) && !scope.Variables.TryGetNameref(name, out _)
                 && !scope.Variables.IsReadonlyBinding(name))

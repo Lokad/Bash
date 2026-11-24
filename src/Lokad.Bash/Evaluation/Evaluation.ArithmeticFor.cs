@@ -21,6 +21,7 @@ public sealed partial class Evaluation
         var conditionExpression = arithmeticForCommand.Condition;
         var updateExpression = arithmeticForCommand.Update;
 
+        _state.PreparationDiagnosticName = ArithmeticDiagnosticName;
         if (await EvaluateOperandAsync(initExpression).ConfigureAwait(false) == null)
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated);
 
@@ -60,7 +61,9 @@ public sealed partial class Evaluation
         {
             // The condition and increment finish each iteration, just like the body command.
             using var memory = Memory.BeginCommand(scope);
-            return await EvaluateArithmeticCommandOperandAsync(expression, scope).ConfigureAwait(false);
+            var result = await EvaluateArithmeticCommandOperandAsync(expression, scope).ConfigureAwait(false);
+            _state.PreparationDiagnosticName = ArithmeticDiagnosticName;
+            return result;
         }
     }
 }

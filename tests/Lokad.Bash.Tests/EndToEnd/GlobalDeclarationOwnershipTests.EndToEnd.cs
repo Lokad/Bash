@@ -485,7 +485,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("declare -n r=s s; f(){ local s=local; declare -gA r=value; printf '<%s>/' \"$s\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<value>/<>/<>", "", 0)]
     [InlineData("declare -n r=s s; f(){ local -n r; declare -ga r=value; printf 'status=%s/' \"$?\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "status=0/<>/<>", "declare: `': not a valid identifier\n", 0)]
     [InlineData("declare -A a=([key]=old); f(){ local a=inner; declare -ga a=(new); printf 'status=%s:<%s>/' \"$?\" \"$a\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1:<inner>/<old>", "line 1: a: cannot convert associative to indexed array\nline 1: declare: a: cannot convert associative to indexed array\n", 0)]
-    [InlineData("declare -A a=([key]=old); f(){ declare -ga a=(new); printf 'status=%s/' \"$?\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1/<old>", "line 1: a: cannot convert associative to indexed array\nline 1: declare: a: cannot convert associative to indexed array\n", 0)]
+    [InlineData("declare -A a=([key]=old); f(){ declare -ga a=(new); printf 'status=%s/' \"$?\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1/<old>", "line 1: f: a: cannot convert associative to indexed array\nline 1: declare: a: cannot convert associative to indexed array\n", 0)]
     public async Task Evaluation_GlobalDeclarations_SelectOwnersWithoutLeakingAcrossScopes(
         string script, string expectedOutput, string expectedError, int expectedExitCode)
     {
@@ -494,5 +494,51 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
         Assert.Equal(expectedOutput, result.StdOut);
         Assert.Equal(expectedError, result.StdErr);
         Assert.Equal(expectedExitCode, result.ExitCode);
+    }
+
+    private const string ToIndexed = "arr: cannot convert associative to indexed array\n";
+    private const string ToAssociative = "arr: cannot convert indexed to associative array\n";
+
+    [Theory]
+    [InlineData("arr=(old)\n[[ yes ]]; declare -gA arr=([k]=new); printf unreached\n", "", "line 2: [[: " + ToAssociative, 1)]
+    [InlineData("arr=(old)\nworker(){ builtin command eval 'declare -gA arr=([k]=new); printf \"<%s:%s>\" \"$?\" \"${arr[0]}\"'; }; worker\n",
+        "<1:old>", "line 2: eval: " + ToAssociative + "line 2: declare: " + ToAssociative, 0)]
+    [InlineData("declare -A arr=([k]=old)\nworker(){ declare -ga arr=(new) | :; printf \"<%s>\" \"${PIPESTATUS[*]}\"; }; worker\n",
+        "<1 0>", "line 2: worker: " + ToIndexed + "line 2: declare: " + ToIndexed, 0)]
+    [InlineData("declare -A arr=([k]=old)\nworker(){ for ((i=0; i<1; i++)); do declare -ga arr=(new); printf \"<%s:%s>\" \"$?\" \"${arr[k]}\"; done; }; worker\n",
+        "<1:old>", "line 2: ((: " + ToIndexed + "line 2: declare: " + ToIndexed, 0)]
+    [InlineData("declare -A arr=([k]=old)\nworker(){ for i in item; do declare -ga arr=(new); printf \"<%s:%s>\" \"$?\" \"${arr[k]}\"; done; }; worker\n",
+        "<1:old>", "line 2: " + ToIndexed + "line 2: declare: " + ToIndexed, 0)]
+    [InlineData("declare -A arr=([k]=old)\ntrap 'declare -ga arr=(new); printf unreached' EXIT\nexit 0\n",
+        "", "line 1: exit: " + ToIndexed, 0)]
+    [InlineData("declare -A arr=([k]=old)\ntrap 'declare -ga arr=(new)' EXIT\n[[ yes ]]; printf \"%s\" \"${unset_label:?empty}\"\n",
+        "", "line 3: unset_label: empty\nline 1: [[: " + ToIndexed, 1)]
+    [InlineData("declare -A arr=([k]=old)\nworker(){ : <<< \"$(declare -ga arr=(new))\"; }; worker\n",
+        "", "line 2: :: " + ToIndexed + "line 2: declare: " + ToIndexed, 0)]
+    [InlineData("declare -A arr=([k]=old)\nworker(){ ( [[ yes ]]; declare -ga arr=(new) ); declare -ga arr=(new); }; worker\n",
+        "", "line 2: [[: " + ToIndexed + "line 2: declare: " + ToIndexed
+            + "line 2: worker: " + ToIndexed + "line 2: declare: " + ToIndexed, 1)]
+    [InlineData("declare -A arr=([k]=old)\nworker(){ declare -ga arr=(new) 2>&1; printf \"<%s>\" \"$?\"; }; worker\n",
+        "line 2: declare: " + ToIndexed + "<1>", "line 2: worker: " + ToIndexed, 0)]
+    public async Task CompoundConversionDiagnosticsUseTheReachedCommandLabel(
+        string script, string expectedOutput, string expectedError, int expectedExitCode)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+        Assert.Equal(expectedExitCode, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task SourcedCompoundConversionUsesTheInvocationSpelling()
+    {
+        var tree = EndToEndHarness.BuildTree([("/child.sh", "declare -ga arr=(new); printf \"<%s:%s>\" \"$?\" \"${arr[k]}\"\n")]);
+        var result = await EndToEndHarness.RunScriptAsync(
+            "declare -A arr=([k]=old)\nworker(){ . ./child.sh; }; worker\n", tree);
+
+        Assert.Equal("<1:old>", result.StdOut);
+        Assert.Equal("./child.sh: line 1: .: " + ToIndexed + "./child.sh: line 1: declare: " + ToIndexed, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
     }
 }

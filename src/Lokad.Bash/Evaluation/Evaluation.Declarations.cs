@@ -119,15 +119,18 @@ public sealed partial class Evaluation
                     if (!local && (!compoundGlobal || compoundArrayKind != ArrayAssignmentKind.Auto)
                         && HasConflictingArrayKind(declarationBinding.Owner, declarationBinding.Name, kind))
                     {
+                        var subject = (compoundGlobal ? declaredName : name).ToValue();
+                        var diagnosticName = _state.PreparationDiagnosticName;
+                        ReadOnlySpan<ShellValue> diagnosticSubject = diagnosticName.IsEmpty
+                            ? [subject] : [diagnosticName, ShellValue.FromText(": "), subject];
+                        ReadOnlySpan<ShellValue> diagnosticMessage = [ShellValue.FromText(ArrayConversionMessage(kind))];
                         if (compoundGlobal && scope.Context.FunctionContext != null)
                         {
-                            await ReportCommandDiagnosticAsync([declaredName.ToValue()],
-                                [ShellValue.FromText(ArrayConversionMessage(kind))], scope).ConfigureAwait(false);
+                            await ReportCommandDiagnosticAsync(diagnosticSubject, diagnosticMessage, scope).ConfigureAwait(false);
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;
                         }
-                        await ReportFatalExpansionAsync([(compoundGlobal ? declaredName : name).ToValue()],
-                            [ShellValue.FromText(ArrayConversionMessage(kind))], ExpansionFailureKind.AssignmentTarget,
+                        await ReportFatalExpansionAsync(diagnosticSubject, diagnosticMessage, ExpansionFailureKind.AssignmentTarget,
                             GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                         break;
                     }

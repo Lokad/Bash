@@ -9,6 +9,9 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private static readonly ShellValue ArithmeticDiagnosticName = ShellValue.FromText("((");
+    private static readonly ShellValue ConditionalDiagnosticName = ShellValue.FromText("[[");
+
     /// <summary>
     /// Dispatches evaluation based on the concrete command kind, handling negation chaining.
     /// </summary>
@@ -171,6 +174,7 @@ public sealed partial class Evaluation
                 case PipelineCommand pipelineCommand:
                     return await EvaluatePipelineAsync(pipelineCommand, scope, negated).ConfigureAwait(false);
                 case ArithmeticCommand arithmeticCommand:
+                    _state.PreparationDiagnosticName = ArithmeticDiagnosticName;
                     PreparePipelineStatusStorage(1);
                     var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Syntax, scope)
                         .ConfigureAwait(false);
@@ -178,6 +182,7 @@ public sealed partial class Evaluation
                     return await FinalizeResultAsync(
                         EvaluationResult.FromExitCode(arithmeticStatus), negated);
                 case ConditionalCommand conditionalCommand:
+                    _state.PreparationDiagnosticName = ConditionalDiagnosticName;
                     return await EvaluateConditionalCommandAsync(conditionalCommand, scope, negated).ConfigureAwait(false);
                 case CaseCommand caseCommand:
                     return await EvaluateCaseAsync(caseCommand, scope, negated).ConfigureAwait(false);

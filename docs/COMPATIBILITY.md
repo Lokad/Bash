@@ -670,6 +670,12 @@ Named `local -p` still inspects the current function's local binding.
 A parser-recognized compound initializer takes its scope, array kind and
 value transforms from source options. The builtin then handles the expanded
 options and the resulting name, without repeating initializer effects.
+Preparation of a conflicting nonlocal compound initializer reports the active
+command label. A function call or loaded reader can supply that label.
+Arithmetic and conditional commands supply `((` and `[[`. A completed simple
+command clears the label. An isolated child inherits the label and updates it
+in its own state. A second diagnostic emitted during builtin dispatch uses
+the declaration builtin's name and the reached stderr mapping.
 
 `type -p` prints the host's reported path when the selected name resolves to an
 external command. Builtins, keywords and functions resolve successfully in this

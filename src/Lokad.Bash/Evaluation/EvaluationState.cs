@@ -202,6 +202,23 @@ internal sealed class EvaluationState
     /// <summary>An exec invocation ended the shell; cleanup has run or been discarded, and enclosing timers cannot print.</summary>
     public bool ExitedThroughExec { get; set; }
 
+    /// <summary>The active command label before a simple command publishes its own name.</summary>
+    internal ShellValue PreparationDiagnosticName { get; set; }
+
+    /// <summary>Borrows an invocation's name through execution and clears the label when it completes.</summary>
+    internal readonly struct CommandDiagnosticScope : IDisposable
+    {
+        private readonly EvaluationState _state;
+
+        internal CommandDiagnosticScope(EvaluationState state, ShellValue name)
+        {
+            _state = state;
+            state.PreparationDiagnosticName = name;
+        }
+
+        public void Dispose() => _state.PreparationDiagnosticName = default;
+    }
+
     // Embedded and kept private so mutable scope state cannot escape as a value copy.
     private RedirectionState _redirections;
 
@@ -473,6 +490,8 @@ internal sealed class EvaluationState
         var clone = new EvaluationState(script, redirections, childStack)
         {
             LastExitCode = LastExitCode,
+            // The parent command remains alive through the child's execution and cleanup.
+            PreparationDiagnosticName = PreparationDiagnosticName,
             FunctionBraceLine = FunctionBraceLine,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
             ForkKind = kind,
