@@ -369,7 +369,7 @@ public sealed class ByteDeclarationInspectionTests
     [Theory]
     [InlineData("declare -p", "declare: ", ": not found\n", 56 * 1024)]
     [InlineData("declare -fp", "declare: ", ": not found\n", 32 * 1024)]
-    [InlineData("declare", "declare: `", "': not a valid identifier\n", 56 * 1024)]
+    [InlineData("declare", "line 1: declare: `", "': not a valid identifier\n", 56 * 1024)]
     public async Task DeclarationDiagnosticFitsWithoutAnIntermediateOperandCopy(
         string command, string prefix, string suffix, int allowance)
     {

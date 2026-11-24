@@ -545,9 +545,9 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
     [InlineData("x=1; a=(['$x']=ok); printf '<%s>' \"${!a[@]}\" \"${a[@]}\"", "<1><ok>", "", 0)]
     [InlineData("HOME=house; declare -A a; a=([~]=value ['$x']=literal); printf '<%s>' \"${a['~']}\" \"${a['$x']}\"", "<value><literal>", "", 0)]
     [InlineData("i=0; a=(zero one); a[i++]+=new; printf '<%s>' \"$i\" \"${a[@]}\"", "<1><zeronew><one>", "", 0)]
-    [InlineData("i=0; a=(old); f(){ printf '<%s>' \"${a[@]}\"; }; a[i++]+=$((i+=2)) f; printf '<%s>' \"$i\" \"${a[@]}\"", "<old><0><old>", "a[i++]: not a valid identifier\n", 0)]
-    [InlineData("a=(old tail); f(){ printf '<%s>' \"${a[@]}\"; }; a[1]=$(printf forbidden >&2;printf new) f; printf '<%s>' \"$?\" \"${a[@]}\"", "<old><tail><0><old><tail>", "a[1]: not a valid identifier\n", 0)]
-    [InlineData("a=(old tail); a[1]+=new false; printf '<%s>' \"$?\" \"${a[@]}\"", "<1><old><tail>", "a[1]: not a valid identifier\n", 0)]
+    [InlineData("i=0; a=(old); f(){ printf '<%s>' \"${a[@]}\"; }; a[i++]+=$((i+=2)) f; printf '<%s>' \"$i\" \"${a[@]}\"", "<old><0><old>", "line 1: `a[i++]': not a valid identifier\n", 0)]
+    [InlineData("a=(old tail); f(){ printf '<%s>' \"${a[@]}\"; }; a[1]=$(printf forbidden >&2;printf new) f; printf '<%s>' \"$?\" \"${a[@]}\"", "<old><tail><0><old><tail>", "line 1: `a[1]': not a valid identifier\n", 0)]
+    [InlineData("a=(old tail); a[1]+=new false; printf '<%s>' \"$?\" \"${a[@]}\"", "<1><old><tail>", "line 1: `a[1]': not a valid identifier\n", 0)]
     [InlineData("x='$(printf side >&2)1'; a=([$x]=ok); printf '<%s>' \"${!a[@]}\" \"${a[@]}\"", "<1><ok>", "side", 0)]
     [InlineData("i=0; a=(['$((i++))']=ok [$((i++))]=other); printf '<%s>' \"$i\" \"${a[@]}\" \"${!a[@]}\"", "<2><other><ok><0><1>", "", 0)]
     public async Task Evaluation_CompoundArrayAssignment_PreservesStagingAndItemForms(

@@ -184,7 +184,7 @@ public sealed class EvaluationDeclareTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("declare: `1bad': not a valid identifier\n", result.StdErr);
+        Assert.Equal("line 1: declare: `1bad': not a valid identifier\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 

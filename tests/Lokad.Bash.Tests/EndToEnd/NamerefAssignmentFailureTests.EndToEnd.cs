@@ -53,7 +53,7 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
             + assignment + "; printf unreachable; }; f; printf unreachable");
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("a[-3]: bad array subscript\n", result.StdErr);
+        Assert.Equal("line 1: a[-3]: bad array subscript\n", result.StdErr);
         Assert.Equal(exitCode, result.ExitCode);
     }
 
@@ -72,7 +72,8 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
             EndToEndHarness.BuildTree([("/script", body)]));
 
         Assert.Equal("<1>", result.StdOut);
-        Assert.Equal("a[-3]: bad array subscript\n", result.StdErr);
+        var source = command == "source" ? "/script: " : "";
+        Assert.Equal(source + "line 1: a[-3]: bad array subscript\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -390,11 +391,11 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     [InlineData("target=value; declare -n ref; ref+=target; printf '<%s>\\n' \"$ref\"", "<value>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; first=target; printf 'after=<%s>\\n' \"$?\"", "", "", 1)]
     [InlineData("target=value; declare -n first=second second; first+=target; printf 'after=<%s>\\n' \"$?\"", "", "", 1)]
-    [InlineData("declare -n ref; declare ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "declare: `bad name': not a valid identifier\n", 0)]
-    [InlineData("declare -n ref; export ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "export: `bad name': not a valid identifier\nexport: `': not a valid identifier\n", 0)]
+    [InlineData("declare -n ref; declare ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "line 1: declare: `bad name': not a valid identifier\n", 0)]
+    [InlineData("declare -n ref; export ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "line 1: export: `bad name': not a valid identifier\nline 1: export: `': not a valid identifier\n", 0)]
     [InlineData("target=value; declare -n first=second second; declare -g first=target; printf 'after=<%s>\\n' \"$?\"", "after=<0>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; declare first=target; printf 'after=<%s>\\n' \"$?\"", "after=<0>\n", "", 0)]
-    [InlineData("target=value; declare -n first=second second; export first=target; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "export: `': not a valid identifier\n", 0)]
+    [InlineData("target=value; declare -n first=second second; export first=target; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "line 1: export: `': not a valid identifier\n", 0)]
     [InlineData("target=value; declare -n first=second second; first=target true; printf 'after=<%s>\\n' \"$?\"", "after=<0>\n", "", 0)]
     [InlineData("declare -n ref; printf '<%s>\\n' \"${ref:=bad name}\"; printf 'after=<%s>\\n' \"$?\"", "", "line 1: `bad name': not a valid identifier\n", 2)]
     [InlineData("target=value; declare -n first=second second; printf '<%s>\\n' \"${first:=target}\"; printf 'after=<%s>\\n' \"$?\"", "", "", 2)]
@@ -410,13 +411,13 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     [InlineData("declare -nr ref; printf '<%s>\\n' \"${ref:=bad name}\"; printf after", "", "line 1: `bad name': not a valid identifier\n", 2)]
     [InlineData("declare -nr first=second; declare -n second; first=target; printf after", "", "", 1)]
     [InlineData("declare -n ref; (printf '<%s>\\n' \"${ref:=bad name}\"; printf child); printf 'parent=<%s>\\n' \"$?\"", "parent=<2>\n", "line 1: `bad name': not a valid identifier\n", 0)]
-    [InlineData("declare -n ref; declare ref='bad name' after=kept; printf '<%s>:<%s>\\n' \"$?\" \"$after\"", "<1>:<kept>\n", "declare: `bad name': not a valid identifier\n", 0)]
-    [InlineData("declare -n ref; export -n ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "export: `bad name': not a valid identifier\n", 0)]
+    [InlineData("declare -n ref; declare ref='bad name' after=kept; printf '<%s>:<%s>\\n' \"$?\" \"$after\"", "<1>:<kept>\n", "line 1: declare: `bad name': not a valid identifier\n", 0)]
+    [InlineData("declare -n ref; export -n ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "line 1: export: `bad name': not a valid identifier\n", 0)]
     [InlineData("target=value; declare -n first=second second; export -n first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<1>:<>:<>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; declare -x first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<0>:<>:<>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; declare +n first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<0>:<>:<>\n", "", 0)]
-    [InlineData("target=value; declare -n first=second second; readonly first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<1>:<>:<>\n", "readonly: `': not a valid identifier\n", 0)]
-    [InlineData("declare -n ref; readonly ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "readonly: `bad name': not a valid identifier\nreadonly: `': not a valid identifier\n", 0)]
+    [InlineData("target=value; declare -n first=second second; readonly first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<1>:<>:<>\n", "line 1: readonly: `': not a valid identifier\n", 0)]
+    [InlineData("declare -n ref; readonly ref='bad name'; printf 'status=<%s>\\n' \"$?\"", "status=<1>\n", "line 1: readonly: `bad name': not a valid identifier\nline 1: readonly: `': not a valid identifier\n", 0)]
     [InlineData("target=value; declare -n first=second second; declare -g first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<0>:<>:<>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; declare first=target; printf 'status=<%s>:<%s>:<%s>\\n' \"$?\" \"$first\" \"$second\"", "status=<0>:<>:<>\n", "", 0)]
     public async Task Evaluation_NamerefAssignments_PreserveContextSpecificFailures(

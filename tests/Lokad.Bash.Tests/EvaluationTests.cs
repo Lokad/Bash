@@ -3782,7 +3782,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("declare: `1bad': not a valid identifier\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: declare: `1bad': not a valid identifier\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -3975,7 +3975,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("export: `" + name + "': not a valid identifier\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: export: `" + name + "': not a valid identifier\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

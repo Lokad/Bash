@@ -1705,8 +1705,7 @@ public sealed partial class Evaluation : IFileTester
                 // Element prefixes are invalid identifiers, even before expanding their operands.
                 if (assignment.Target.AsSpan().Contains((byte)'['))
                 {
-                    await ReportExpansionDiagnosticAsync(
-                        assignment.Target.ToValue(), ShellValue.FromText("not a valid identifier")).ConfigureAwait(false);
+                    await ReportInvalidElementPrefixAsync(assignment.Target, assignmentScope).ConfigureAwait(false);
                     continue;
                 }
 
@@ -2953,7 +2952,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 exitCode = 1;
                 return WriteQuotedOperandDiagnosticAsync(ShellValue.FromText(commandName), subject, message,
-                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, default);
+                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(declarationScope.Context));
             }
         }
         async Task<bool> ApplyAssignmentAsync(AssignmentWord assignment)
@@ -3655,8 +3654,41 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Reports a rejected assignment with the lexical coordinate of the reached command.</summary>
     internal Task ReportAssignmentTargetFailureAsync(ShellValue name, string message, ScopedEvaluation scope) =>
-        ReportFatalExpansionAsync([name], [ShellValue.FromText(message)], ExpansionFailureKind.AssignmentTarget,
+        ReportAssignmentTargetFailureAsync([name], [ShellValue.FromText(message)], scope);
+
+    internal Task ReportAssignmentTargetFailureAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        ScopedEvaluation scope) =>
+        ReportFatalExpansionAsync(name, message, ExpansionFailureKind.AssignmentTarget,
             GetCommandDiagnosticPrefix(scope));
+
+    /// <summary>Uses the assignment's lexical spelling while retaining its original source location.</summary>
+    internal ShellValue GetAssignmentDiagnosticSpelling(ShellSource spelling, LegacySubstitutionOrigin origin) =>
+        spelling.AsSpan().IndexOf("\\\n"u8) < 0 ? spelling.ToValue()
+            : ShellSourceCursor.RemoveLineContinuations(
+                new ShellScanContext { SyntaxMemory = Memory.Workspace, LegacyOrigin = origin }, spelling).ToValue();
+
+    private async Task ReportInvalidElementPrefixAsync(ShellSource target, ScopedEvaluation scope)
+    {
+        var spelling = GetAssignmentDiagnosticSpelling(target, scope.ExpansionOrigin);
+        if (spelling.Bytes.Span.IndexOf("$("u8) >= 0)
+        {
+            using var syntax = new MemoryCapacity(Memory.Budget, 0);
+            if (Tokenizer.TryReadExpansionWord(ShellSource.FromBytes(spelling.Bytes), ExpansionWordSyntax.Parameter,
+                    ShellQuoteKind.None, syntax, out var word, out _))
+            {
+                using var output = new ByteMemoryBuilder(0, Memory.Budget);
+                if (!FunctionDefinitionFormatter.TryAppendWordDisplay(word, output, Memory.Budget, _cancellationToken))
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                await ReportAsync(ShellValue.FromBytes(output.ToMemory())).ConfigureAwait(false);
+                return;
+            }
+        }
+        await ReportAsync(spelling).ConfigureAwait(false);
+
+        Task ReportAsync(ShellValue subject) => ReportCommandDiagnosticAsync(
+            [ShellValue.FromText("`"), subject, ShellValue.FromText("'")],
+            [ShellValue.FromText("not a valid identifier")], scope);
+    }
 
     internal Task ReportIntegerAssignmentFailureAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         ScopedEvaluation scope) => ReportFatalExpansionAsync(name, message, ExpansionFailureKind.IntegerAssignment,

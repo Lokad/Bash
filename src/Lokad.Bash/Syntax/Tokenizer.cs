@@ -578,6 +578,8 @@ internal sealed class Tokenizer
         if (!TryReadSubscriptAssignment(token, position, closing, out var element, out _))
             return false;
         RecordWordLookahead();
+        if (TrackCommandLocations)
+            ConsumedPosition = Position;
 
         // The leading word part has the logical name. The selector retains quoting for
         // the eventual array kind, with any read-ahead here-documents included.

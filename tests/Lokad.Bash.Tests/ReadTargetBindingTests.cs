@@ -413,7 +413,7 @@ public sealed class ReadTargetBindingTests
     [InlineData("read '' <<< x; printf '<%s>' \"$?\"", 0, "3C313E", "6C696E6520313A20726561643A2060273A206E6F7420612076616C6964206964656E7469666965720A")]
     [InlineData("{ read 1bad later; printf '<%s><%s>' \"$?\" \"${later-unset}\"; read next; printf '<%s>' \"$next\"; } <<< $'one two\\nnext'", 0, "3C313E3C756E7365743E3C6F6E652074776F3E", "6C696E6520313A20726561643A206031626164273A206E6F7420612076616C6964206964656E7469666965720A")]
     [InlineData("{ read first 1bad later; printf '<%s><%s><%s>' \"$?\" \"$first\" \"${later-unset}\"; read next; printf '<%s>' \"$next\"; } <<< $'one two three\\nnext'", 0, "3C313E3C6F6E653E3C756E7365743E3C6E6578743E", "6C696E6520313A20726561643A206031626164273A206E6F7420612076616C6964206964656E7469666965720A")]
-    [InlineData("read 'a[-1]' later <<< 'one two'; printf '<%s><%s>' \"$?\" \"${later-unset}\"", 0, "3C313E3C756E7365743E", "615B2D315D3A20626164206172726179207375627363726970740A")]
+    [InlineData("read 'a[-1]' later <<< 'one two'; printf '<%s><%s>' \"$?\" \"${later-unset}\"", 0, "3C313E3C756E7365743E", "6C696E6520313A20615B2D315D3A20626164206172726179207375627363726970740A")]
     [InlineData("readonly a=old; read a later <<< 'one two'; printf '<%s><%s><%s>' \"$?\" \"$a\" \"${later-unset}\"", 0, "3C313E3C6F6C643E3C756E7365743E", "6C696E6520313A20613A20726561646F6E6C79207661726961626C650A")]
     [InlineData("a=old; declare -rn ref=a; read ref <<< new; printf '<%s><%s>' \"$?\" \"$a\"", 0, "3C303E3C6E65773E", "")]
     [InlineData("i=0; readonly -a a=(old); read 'a[i++]' <<< value; printf '<%s><%s><%s>' \"$?\" \"$i\" \"${a[0]}\"", 0, "3C313E3C313E3C6F6C643E", "6C696E6520313A20613A20726561646F6E6C79207661726961626C650A")]
@@ -427,7 +427,7 @@ public sealed class ReadTargetBindingTests
     [InlineData("readonly stop=old; read first stop later <<< 'one two three'; printf '<%s><%s><%s>' \"$?\" \"$first\" \"${later-unset}\"", 0, "3C313E3C6F6E653E3C756E7365743E", "6C696E6520313A2073746F703A20726561646F6E6C79207661726961626C650A")]
     [InlineData("readonly a; { read a; read next; printf '<%s>' \"$next\"; } <<< $'value\\nnext'", 0, "3C6E6578743E", "6C696E6520313A20613A20726561646F6E6C79207661726961626C650A")]
     [InlineData("{ read 'a[]'; read next; printf '<%s>' \"$next\"; } <<< $'value\\nnext'", 0, "3C76616C75653E", "6C696E6520313A20726561643A2060615B5D273A206E6F7420612076616C6964206964656E7469666965720A")]
-    [InlineData("{ read 'a[-1]'; read next; printf '<%s>' \"$next\"; } <<< $'value\\nnext'", 0, "3C6E6578743E", "615B2D315D3A20626164206172726179207375627363726970740A")]
+    [InlineData("{ read 'a[-1]'; read next; printf '<%s>' \"$next\"; } <<< $'value\\nnext'", 0, "3C6E6578743E", "6C696E6520313A20615B2D315D3A20626164206172726179207375627363726970740A")]
     [InlineData("{ read $'\\377'; read next; printf '<%s>' \"$next\"; } <<< $'value\\nnext'", 0, "3C76616C75653E", "6C696E6520313A20726561643A2060FF273A206E6F7420612076616C6964206964656E7469666965720A")]
     public async Task SelectsTargetsAfterInputAndPriorWrites(
         string script, int exitCode, string outputHex, string errorHex)

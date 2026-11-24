@@ -59,7 +59,7 @@ public sealed class ByteDeclarationTests
     [InlineData("declare -a a=($'\\377' '' $'\\376'); declare -a a+=($'\\375'); printf '<%s>' \"${a[@]}\"", "3CFF3E3C3E3CFE3E3CFD3E", "")]
     [InlineData("declare -A a=([key]=$'\\377'); declare a[key]+=$'\\376'; printf '%s' \"${a[key]}\"", "FFFE", "")]
     [InlineData("value=$'\\377'; f() { value=$'\\376'; local value=$'\\375'; printf '%s' \"$value\"; }; f; printf '%s' \"$value\"", "FDFE", "")]
-    [InlineData("export value=$'\\376'; f() { local -n value=$'\\377'; printf '%s:' \"$?\"; printf '%s' \"$value\"; }; f; printf ':%s' \"$value\"", "313AFE3AFE", "6C6F63616C3A2060FF273A20696E76616C6964207661726961626C65206E616D6520666F72206E616D65207265666572656E63650A")]
+    [InlineData("export value=$'\\376'; f() { local -n value=$'\\377'; printf '%s:' \"$?\"; printf '%s' \"$value\"; }; f; printf ':%s' \"$value\"", "313AFE3AFE", "6C696E6520313A206C6F63616C3A2060FF273A20696E76616C6964207661726961626C65206E616D6520666F72206E616D65207265666572656E63650A")]
     [InlineData("x=$'\\377'; f() { local x=$'\\376'; declare -g x+=$'\\375'; printf '%s:' \"$x\"; }; f; printf '%s' \"$x\"", "FE3AFFFD", "")]
     [InlineData("a=($'\\377'); declare -a a=(\"${a[@]}\" $'\\376') b=(\"${a[@]}\"); printf '%s:' \"${a[*]}\"; printf '%s' \"${b[*]}\"", "FF20FE3AFF20FE", "")]
     [InlineData("a=$'\\377'; declare a=$'\\376' b=\"$a\"; printf '%s:%s' \"$a\" \"$b\"", "FE3AFF", "")]
@@ -70,8 +70,8 @@ public sealed class ByteDeclarationTests
     [InlineData("builtin declare x=$'\\377'; printf '%s' \"$x\"", "FF", "")]
     [InlineData("declare probe_x; printf '<%s>:<%s>' \"${!probe_*}\" \"${probe_x-unset}\"; declare probe_x=; printf ':<%s>' \"${probe_x-unset}\"", "3C3E3A3C756E7365743E3A3C3E", "")]
     [InlineData("export value; printf '<%s>' \"${value-unset}\"; export value=$'\\377'; printf '<%s>' \"$value\"", "3C756E7365743E3CFF3E", "")]
-    [InlineData("declare $'\\377=value' later=$'\\376'; printf '%s:%s' \"$?\" \"$later\"", "313AFE", "6465636C6172653A2060FF3D76616C7565273A206E6F7420612076616C6964206964656E7469666965720A")]
-    [InlineData("declare $'x\\377+=\\376' later=ok; printf '%s:%s' \"$?\" \"$later\"", "313A6F6B", "6465636C6172653A206078FF2B3DFE273A206E6F7420612076616C6964206964656E7469666965720A")]
+    [InlineData("declare $'\\377=value' later=$'\\376'; printf '%s:%s' \"$?\" \"$later\"", "313AFE", "6C696E6520313A206465636C6172653A2060FF3D76616C7565273A206E6F7420612076616C6964206964656E7469666965720A")]
+    [InlineData("declare $'x\\377+=\\376' later=ok; printf '%s:%s' \"$?\" \"$later\"", "313A6F6B", "6C696E6520313A206465636C6172653A206078FF2B3DFE273A206E6F7420612076616C6964206964656E7469666965720A")]
     [InlineData("declare $'-\\377' value=yes; printf '%s:%s' \"$?\" \"${value-unset}\"", "323A756E736574", "6465636C6172653A202DFF3A20696E76616C6964206F7074696F6E0A" + DeclareUsageHex)]
     [InlineData("declare $'-ax\\377' a=($'\\376'); printf '%s:%s' \"$?\" \"${a[0]-unset}\"", "323AFE", "6465636C6172653A202DFF3A20696E76616C6964206F7074696F6E0A" + DeclareUsageHex)]
     [InlineData("declare $'-\\377A' a=([key]=$'\\376'); printf '%s:%s' \"$?\" \"${a[key]-unset}\"", "323AFE", "6465636C6172653A202DFF3A20696E76616C6964206F7074696F6E0A" + DeclareUsageHex)]
@@ -93,7 +93,7 @@ public sealed class ByteDeclarationTests
 
     [Theory]
     [InlineData("declare value='", "'; printf '%s' \"$value\"", "FF", "")]
-    [InlineData("declare '", "=value' later=ok; printf '%s:%s' \"$?\" \"$later\"", "313A6F6B", "6465636C6172653A2060FF3D76616C7565273A206E6F7420612076616C6964206964656E7469666965720A")]
+    [InlineData("declare '", "=value' later=ok; printf '%s:%s' \"$?\" \"$later\"", "313A6F6B", "6C696E6520313A206465636C6172653A2060FF3D76616C7565273A206E6F7420612076616C6964206964656E7469666965720A")]
     public async Task Evaluation_DeclarationsPreserveRawSourceBytes(
         string prefix, string suffix, string outputHex, string errorHex)
     {

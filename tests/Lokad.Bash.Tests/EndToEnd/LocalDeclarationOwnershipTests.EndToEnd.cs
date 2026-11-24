@@ -213,7 +213,7 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
     [InlineData("arr=(old); f() { arr=(changed); local -a arr=(local); }; f; printf '<%s>\\n' \"${arr[@]}\"", "<changed>\n", "", 0)]
     [InlineData("first=one; second=two; declare -n ref=first; f() { declare -gn ref=second; local ref=local; }; f; printf '<%s>\\n' \"$ref\"", "<two>\n", "", 0)]
     [InlineData("x=global; f() { export x=changed; local x=local; }; f; printf '<%s>\\n' \"$x\"", "<changed>\n", "", 0)]
-    [InlineData("x=global; f() { x=changed; local -n x='bad name'; }; f; printf '<%s>\\n' \"$x\"", "<changed>\n", "local: `bad name': invalid variable name for name reference\n", 0)]
+    [InlineData("x=global; f() { x=changed; local -n x='bad name'; }; f; printf '<%s>\\n' \"$x\"", "<changed>\n", "line 1: local: `bad name': invalid variable name for name reference\n", 0)]
     [InlineData("x=global; f() { unset x; local x=local; }; f; printf '<%s>\\n' \"${x-unset}\"", "<unset>\n", "", 0)]
     [InlineData("x=global; f() { x=changed; local x=local; }; x=prefix f; printf '<%s>\\n' \"$x\"", "<global>\n", "", 0)]
     [InlineData("x=global; f() { export x=changed; local x=local; }; x=prefix f; printf '<%s>\\n' \"$x\"", "<local>\n", "", 0)]

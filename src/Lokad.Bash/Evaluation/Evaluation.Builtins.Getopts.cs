@@ -103,7 +103,8 @@ public sealed partial class Evaluation
         {
             if (!VariableNames.IsValidVariableName(name.Bytes.Span))
             {
-                await WriteInvalidIdentifierDiagnosticAsync(command, name, diagnostics, ClosedStderrHandling.AttemptWrite)
+                await WriteInvalidIdentifierDiagnosticAsync(command, name, diagnostics, ClosedStderrHandling.AttemptWrite,
+                        GetBuiltinDiagnosticPrefix(scope.Context))
                     .ConfigureAwait(false);
                 return 1;
             }

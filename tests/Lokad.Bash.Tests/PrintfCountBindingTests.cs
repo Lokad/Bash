@@ -28,7 +28,7 @@ public sealed class PrintfCountBindingTests
     [InlineData("declare -A a; declare -n count='a[$(printf selector >&2; printf key)]'; printf 'before%n%dafter' count nope; printf '<%s>' \"${a[key]}\"", "6265666F72653061667465723C363E", "73656C6563746F727072696E74663A206E6F70653A20696E76616C6964206E756D6265720A", 0)]
     [InlineData("declare -A a; declare -n count='a[$(printf selector >&2; printf key)]'; printf '%d%n%s' nope count after; printf '<%s>' \"${a[key]}\"", "3061667465723C313E", "7072696E74663A206E6F70653A20696E76616C6964206E756D6265720A73656C6563746F72", 0)]
     [InlineData("declare -n count='a[1/0]'; printf 'before%n-after' count; printf next", "6265666F7265", "6C696E6520313A20312F303A206469766973696F6E206279203020286572726F7220746F6B656E20697320223022290A", 1)]
-    [InlineData("declare -n count='a[-1]'; printf 'before%n-after' count; printf '<%s>' \"$?\"", "6265666F72652D61667465723C303E", "615B2D315D3A20626164206172726179207375627363726970740A", 0)]
+    [InlineData("declare -n count='a[-1]'; printf 'before%n-after' count; printf '<%s>' \"$?\"", "6265666F72652D61667465723C303E", "6C696E6520313A20615B2D315D3A20626164206172726179207375627363726970740A", 0)]
     [InlineData("readonly a=old; declare -n count=a; printf 'before%n-after' count; printf '<%s>' \"$?\"", "6265666F72652D61667465723C303E", "6C696E6520313A20613A20726561646F6E6C79207661726961626C650A", 0)]
     [InlineData("arr=(old keep); printf 'abc%n%Z' arr; printf '<%s><%s><%s>' \"$?\" \"${arr[0]}\" \"${arr[1]}\"", "6162633C313E3C333E3C6B6565703E", "7072696E74663A20605A273A20696E76616C696420666F726D6174206368617261637465720A", 0)]
     [InlineData("declare -A a; k=$'\\377'; declare -n count='a[$k]'; printf 'abc%n' count; printf '<%s>' \"${a[$k]}\"", "6162633C333E", "", 0)]

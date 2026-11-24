@@ -7,13 +7,13 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArrayAssignmentTargetTestsEndToEnd
 {
     [Theory]
-    [InlineData("arr[-1]=x", "arr[-1]: bad array subscript\n", true, false)]
+    [InlineData("arr[-1]=x", "line 1: arr[-1]: bad array subscript\n", true, true)]
     [InlineData("arr[1/0]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", false, true)]
     [InlineData("arr[$((1/0))]=x", "line 1: 1/0: division by 0 (error token is \"0\")\n", true, true)]
     [InlineData("arr[0]=$((1/0))", "line 1: 1/0: division by 0 (error token is \"0\")\n", true, true)]
     [InlineData("readonly arr; arr[0]=x", "line 1: arr: readonly variable\n", true, true)]
     [InlineData("readonly arr; arr=x", "line 1: arr: readonly variable\n", true, true)]
-    [InlineData("declare -A arr; key=; arr[$key]=x", "arr[$key]: bad array subscript\n", true, false)]
+    [InlineData("declare -A arr; key=; arr[$key]=x", "line 1: arr[$key]: bad array subscript\n", true, true)]
     [InlineData("arr[${missing:?bad}]=x", "missing: bad\n", false, false)]
     [InlineData("readonly arr; : ${arr:=x}", "line 1: arr: readonly variable\n", true, true)]
     public async Task Evaluation_AssignmentFailures_RespectEvalAndSourceBoundaries(
@@ -29,6 +29,30 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
             Assert.Equal(recoverable ? "after:1" : string.Empty, result.StdOut);
             Assert.Equal(reportsSourcePath ? path + expectedError : expectedError, result.StdErr);
             Assert.Equal(recoverable ? 0 : 1, result.ExitCode);
+        }
+    }
+
+    [Theory]
+    [InlineData("a[\\\n-3\n]=no", "<after:1>", "line 3: a[-3\n]: bad array subscript\n", null)]
+    [InlineData("2>log declare 'a[-3]=first\nlast'", "<after:1>", "", "line 1: a[-3]: bad array subscript\n")]
+    [InlineData("a[$(printf forbidden >&2)]='value' true", "<after:0>",
+        "line 1: `a[$(printf forbidden 1>&2)]': not a valid identifier\n", null)]
+    public async Task RejectedArrayTargetsRetainTheirSourceLineAndSpelling(
+        string body, string output, string error, string? redirectedError)
+    {
+        var script = body + "\nprintf '<after:%s>' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            if (redirectedError is not null)
+                Assert.Equal(ShellValue.FromText(redirectedError).Bytes.ToArray(), host.ReadFileBytes("/log"));
+            Assert.Equal(0, host.OpenFileCount);
         }
     }
 
@@ -57,9 +81,9 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
 
     [Theory]
     [InlineData("arr[\n0]=value", "<0:value>", "")]
-    [InlineData("declare arr[ 0 ]=value", "<1:>", "declare: `arr[': not a valid identifier\ndeclare: `0': not a valid identifier\ndeclare: `]=value': not a valid identifier\n")]
-    [InlineData("declare -a arr[\n0]=value", "<127:>", "declare: `arr[': not a valid identifier\nline 2: 0]=value: command not found\n")]
-    [InlineData("typeset arr[\nprintf '<next>'; ]=value", "<next><127:>", "typeset: `arr[': not a valid identifier\nline 2: ]=value: command not found\n")]
+    [InlineData("declare arr[ 0 ]=value", "<1:>", "line 1: declare: `arr[': not a valid identifier\nline 1: declare: `0': not a valid identifier\nline 1: declare: `]=value': not a valid identifier\n")]
+    [InlineData("declare -a arr[\n0]=value", "<127:>", "line 1: declare: `arr[': not a valid identifier\nline 2: 0]=value: command not found\n")]
+    [InlineData("typeset arr[\nprintf '<next>'; ]=value", "<next><127:>", "line 1: typeset: `arr[': not a valid identifier\nline 2: ]=value: command not found\n")]
     [InlineData("declare arr[\\\n0]=value", "<0:value>", "")]
     [InlineData("declare arr[\"\n0\"]=value", "<0:value>", "")]
     [InlineData("declare arr[$(cat <<EOF\n0\nEOF\n)]=value", "<0:value>", "")]
@@ -215,13 +239,13 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [InlineData("printf '<%s>\\n' arr[1 + 2]=three", "<arr[1>\n<+>\n<2]=three>\n", "", 0)]
     [InlineData("key=literal; printf '<%s>\\n' map[\"$key\"]=value", "<map[literal]=value>\n", "", 0)]
     [InlineData("arr=(old); readonly arr; arr[1]=new; printf after", "", "line 1: arr: readonly variable\n", 1)]
-    [InlineData("arr=(old); arr[-2]=new; printf after", "", "arr[-2]: bad array subscript\n", 1)]
-    [InlineData("arr[]=new; printf after", "", "arr[]: bad array subscript\n", 1)]
-    [InlineData("declare -A map; key=; map[$key]=new; printf after", "", "map[$key]: bad array subscript\n", 1)]
+    [InlineData("arr=(old); arr[-2]=new; printf after", "", "line 1: arr[-2]: bad array subscript\n", 1)]
+    [InlineData("arr[]=new; printf after", "", "line 1: arr[]: bad array subscript\n", 1)]
+    [InlineData("declare -A map; key=; map[$key]=new; printf after", "", "line 1: map[$key]: bad array subscript\n", 1)]
     [InlineData("HOME=/home/test; declare -A map; map[~]=value; printf '<%s>\\n' \"${!map[@]}\"", "</home/test>\n", "", 0)]
     [InlineData("i=0; arr[$(printf 2; printf selector >&2)]=$(printf value; printf rhs >&2); printf '<%s>\\n' \"${arr[2]}\"", "<value>\n", "rhsselector", 0)]
     [InlineData("arr=(old); readonly arr; arr[$(printf 1; printf selector >&2)]=$(printf value; printf rhs >&2); printf after", "", "rhsselectorline 1: arr: readonly variable\n", 1)]
-    [InlineData("arr=(old); arr[-2]=$(printf value; printf rhs >&2); printf after", "", "rhsarr[-2]: bad array subscript\n", 1)]
+    [InlineData("arr=(old); arr[-2]=$(printf value; printf rhs >&2); printf after", "", "rhsline 1: arr[-2]: bad array subscript\n", 1)]
     [InlineData("arr[2]=old; declare -n ref=arr; ref[2]=new; printf '<%s>:<%s>\\n' \"${arr[2]}\" \"${ref[2]}\"", "<new>:<new>\n", "", 0)]
     [InlineData("x=wrong; declare -A map; map['$x']=value; printf '<%s>\\n' \"${map[\\$x]}\"", "<value>\n", "", 0)]
     [InlineData("declare -A map; map[\"a=b]\"]=value; printf '<%s>\\n' \"${map['a=b]']}\"", "<value>\n", "", 0)]

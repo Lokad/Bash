@@ -163,7 +163,7 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1:2>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal<byte>([.. "getopts: `x"u8, 0xff, .. "': not a valid identifier\n"u8], host.ReadFileBytes("/diagnostic"));
+        Assert.Equal<byte>([.. "line 1: getopts: `x"u8, 0xff, .. "': not a valid identifier\n"u8], host.ReadFileBytes("/diagnostic"));
         Assert.Equal(0, host.OpenFileCount);
     }
 

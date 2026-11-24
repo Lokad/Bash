@@ -651,7 +651,9 @@ internal static partial class WordExpansion
 
             var subscript = preparedSubscript is { } prepared
                 ? prepared.Value
-                : ShellValue.FromBytes(reference.Subscript.Bytes);
+                : use == ReferenceUse.DirectAssign
+                    ? scope.Effects.GetAssignmentDiagnosticSpelling(reference.Subscript, scope.ExpansionOrigin)
+                    : reference.Subscript.ToValue();
             var closingBracket = ShellValue.FromText("]");
             if (use == ReferenceUse.Length)
                 return scope.Effects.ReportFatalExpansionAsync([subscript, closingBracket], [message], ExpansionFailureKind.Arithmetic);
@@ -660,12 +662,13 @@ internal static partial class WordExpansion
             ReadOnlySpan<ShellValue> subject = [prefix, referenceName, ShellValue.FromText("["), subscript, closingBracket];
             return use switch
             {
-                ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead =>
+                ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead
+                    or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign =>
                     scope.Effects.ReportBuiltinDiagnosticAsync(subject, [message], scope.Context),
-                ReferenceUse.Unset or ReferenceUse.CompoundAssign or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign =>
+                ReferenceUse.Unset or ReferenceUse.CompoundAssign =>
                     scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]),
                 ReferenceUse.Assign => scope.Effects.ReportParameterDefaultFailureAsync(subject, [message], scope),
-                ReferenceUse.DirectAssign => scope.Effects.ReportFatalExpansionAsync(subject, [message], ExpansionFailureKind.AssignmentTarget),
+                ReferenceUse.DirectAssign => scope.Effects.ReportAssignmentTargetFailureAsync(subject, [message], scope),
                 _ => throw new InvalidOperationException("Unknown reference use."),
             };
         }
