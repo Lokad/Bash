@@ -31,6 +31,8 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     /// <summary> Stores the root directory node for the in-memory filesystem. </summary>
     private readonly DirectoryNode _root = new(DateTimeOffset.UtcNow, FileTreePermission.ReadWrite);
+    // Guards directory entries and operation checks. Test callbacks run outside this lock.
+    private readonly Lock _treeLock = new();
     /// <summary> Tracks open file descriptors and their associated read state. </summary>
     private readonly Dictionary<FileDescriptor, OpenFileState> _openFiles = new();
     private readonly Lock _descriptorLock = new();
@@ -114,24 +116,21 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public void AddDirectory(string path, DateTimeOffset? modifiedAt = null, FileTreePermission permission = FileTreePermission.ReadWrite)
     {
-        EnsureAbsolutePath(path);
-        EnsureDirectory(path, modifiedAt, permission);
+        lock (_treeLock)
+            EnsureDirectory(path, modifiedAt, permission);
     }
 
-    public void AddFile(string path, string content, DateTimeOffset? modifiedAt = null, FileTreePermission permission = FileTreePermission.ReadWrite)
-    {
-        EnsureAbsolutePath(path);
-        var (parent, name) = GetParentAndName(path);
-        var directory = EnsureDirectory(parent, modifiedAt);
-        directory.Children[name] = new FileNode(Encoding.UTF8.GetBytes(content), modifiedAt ?? DateTimeOffset.UtcNow, permission);
-    }
+    public void AddFile(string path, string content, DateTimeOffset? modifiedAt = null, FileTreePermission permission = FileTreePermission.ReadWrite) =>
+        AddFile(path, Encoding.UTF8.GetBytes(content), modifiedAt, permission);
 
     public void AddFile(string path, byte[] content, DateTimeOffset? modifiedAt = null, FileTreePermission permission = FileTreePermission.ReadWrite)
     {
-        EnsureAbsolutePath(path);
         var (parent, name) = GetParentAndName(path);
-        var directory = EnsureDirectory(parent, modifiedAt);
-        directory.Children[name] = new FileNode(content, modifiedAt ?? DateTimeOffset.UtcNow, permission);
+        lock (_treeLock)
+        {
+            var directory = EnsureDirectory(parent, modifiedAt);
+            directory.Children[name] = new FileNode(content, modifiedAt ?? DateTimeOffset.UtcNow, permission);
+        }
     }
 
     public void AddReadOpenError(string path, string message)
@@ -142,8 +141,8 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     public bool FileExists(string path)
     {
-        EnsureAbsolutePath(path);
-        return TryResolveNode(path, out var node) && node is FileNode;
+        lock (_treeLock)
+            return ResolveNode(path) is FileNode;
     }
 
     public byte[] GetOutputBytes(FileDescriptor descriptor)
@@ -152,40 +151,40 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             return _outputs.TryGetValue(descriptor, out var bytes) ? bytes.ToMemory().ToArray() : [];
     }
 
-    public byte[] ReadFileBytes(string path)
-    {
-        EnsureAbsolutePath(path);
-        if (!TryResolveNode(path, out var node) || node is not FileNode file)
-        {
-            throw new InvalidOperationException("File not found.");
-        }
+    public byte[] ReadFileBytes(string path) => ReadFileContent(path).ToArray();
 
-        return file.Content.ToArray();
+    private byte[] ReadFileContent(string path)
+    {
+        lock (_treeLock)
+            return ResolveNode(path) is FileNode file ? file.Content : throw new InvalidOperationException("File not found.");
     }
 
     /// <summary>Captures the complete synthetic tree after execution and descriptor cleanup have settled.</summary>
     internal IReadOnlyDictionary<string, (FilePathKind Kind, string ContentHex)> CaptureEntries()
     {
-        var entries = new SortedDictionary<string, (FilePathKind Kind, string ContentHex)>(StringComparer.Ordinal);
-        var pending = new Stack<(string Path, DirectoryNode Directory)>();
-        pending.Push((string.Empty, _root));
-        while (pending.TryPop(out var parent))
+        lock (_treeLock)
         {
-            foreach (var (name, node) in parent.Directory.Children)
+            var entries = new SortedDictionary<string, (FilePathKind Kind, string ContentHex)>(StringComparer.Ordinal);
+            var pending = new Stack<(string Path, DirectoryNode Directory)>();
+            pending.Push((string.Empty, _root));
+            while (pending.TryPop(out var parent))
             {
-                var path = parent.Path.Length == 0 ? name : parent.Path + "/" + name;
-                if (node is DirectoryNode directory)
+                foreach (var (name, node) in parent.Directory.Children)
                 {
-                    entries.Add(path, (FilePathKind.Directory, string.Empty));
-                    pending.Push((path, directory));
+                    var path = parent.Path.Length == 0 ? name : parent.Path + "/" + name;
+                    if (node is DirectoryNode directory)
+                    {
+                        entries.Add(path, (FilePathKind.Directory, string.Empty));
+                        pending.Push((path, directory));
+                    }
+                    else if (node is FileNode file)
+                        entries.Add(path, (FilePathKind.File, Convert.ToHexString(file.Content)));
+                    else
+                        throw new InvalidOperationException("Unknown fixture node.");
                 }
-                else if (node is FileNode file)
-                    entries.Add(path, (FilePathKind.File, Convert.ToHexString(file.Content)));
-                else
-                    throw new InvalidOperationException("Unknown fixture node.");
             }
+            return entries;
         }
-        return entries;
     }
 
     public void SetStandardInput(string content) => SetStandardInputBytes(Encoding.UTF8.GetBytes(content));
@@ -204,16 +203,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
                 : string.Empty;
     }
 
-    public string ReadFile(string path)
-    {
-        EnsureAbsolutePath(path);
-        if (!TryResolveNode(path, out var node) || node is not FileNode file)
-        {
-            throw new InvalidOperationException("File not found.");
-        }
-
-        return Encoding.UTF8.GetString(file.Content);
-    }
+    public string ReadFile(string path) => Encoding.UTF8.GetString(ReadFileContent(path));
 
     public virtual Task<IReadOnlyList<CommandLookupResult>> ResolveCommandsAsync(
         IReadOnlyList<string> commandNames,
@@ -274,7 +264,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         return ValueTask.FromResult(success);
     }
 
-    public async Task<FileOpenResult> OpenWritableFileAsync(
+    public Task<FileOpenResult> OpenWritableFileAsync(
         FilePathLookup path, WritableFileOpenMode mode, FileCreationMode creationMode, FileWriteRetention retention,
         CancellationToken cancellationToken)
     {
@@ -289,41 +279,51 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         BeforeWritableOpen?.Invoke(new ShellPath(path.Path));
         cancellationToken.ThrowIfCancellationRequested();
         var (resolved, directories) = path.ResolveWithoutSymbolicLinks();
-        if (await CheckTraversalAsync(resolved, directories, nullDeviceIsFile: true, cancellationToken) is { } traversalError)
-            return FileOpenResult.Failed(traversalError);
-        var pathString = resolved.Path;
-        if (creationMode == FileCreationMode.CreateNew
-            && (resolved.Equals(FileDescriptor.DevNullPath) || TryResolveNode(pathString, out _)))
-            return FileOpenResult.Failed(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists });
-        if (string.Equals(pathString, FileDescriptor.DevNullPath.Path, StringComparison.Ordinal))
-        {
-            return FileOpenResult.Opened(FileDescriptor.ForWritableDevNull(mode), readSize: null);
-        }
+        lock (_treeLock)
+            return Task.FromResult(OpenFile());
 
-        var (parentPath, name) = GetParentAndName(pathString);
-        if (string.IsNullOrEmpty(name))
+        FileOpenResult OpenFile()
         {
-            return FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
-        }
-        if (!TryResolveNode(parentPath, out var parentNode))
-            return FileOpenResult.Failed(await MissingPathErrorAsync(resolved, "No such file or directory\n", cancellationToken));
-        if (parentNode is not DirectoryNode parent)
-            return FileOpenResult.Failed(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
-        if (parent.Children.TryGetValue(name, out var target) && target is DirectoryNode)
-            return FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
-        if (target == null && creationMode == FileCreationMode.OpenExisting)
-            return FileOpenResult.Failed(new OperationError("No such file or directory\n") { Kind = OperationErrorKind.NotFound });
+            if (CheckTraversal(resolved, directories, nullDeviceIsFile: true, cancellationToken) is { } traversalError)
+                return FileOpenResult.Failed(traversalError);
+            if (resolved.Equals(FileDescriptor.DevNullPath))
+            {
+                return creationMode == FileCreationMode.CreateNew
+                    ? FileOpenResult.Failed(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists })
+                    : FileOpenResult.Opened(FileDescriptor.ForWritableDevNull(mode), readSize: null);
+            }
 
-        var modifiedAt = DateTimeOffset.UtcNow;
-        var file = target as FileNode ?? new FileNode([], modifiedAt, FileTreePermission.ReadWrite);
-        if (mode == WritableFileOpenMode.WriteTruncate)
-        {
-            file.Content = [];
-            file.StatusChangedAt = file.ModifiedAt = modifiedAt;
+            var (parentPath, name) = GetParentAndName(resolved.Path);
+            if (string.IsNullOrEmpty(name))
+            {
+                return creationMode == FileCreationMode.CreateNew
+                    ? FileOpenResult.Failed(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists })
+                    : FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
+            }
+
+            var parentNode = ResolveNode(parentPath, out var missingKind);
+            if (parentNode == null)
+                return FileOpenResult.Failed(MissingPathError(missingKind));
+            if (parentNode is not DirectoryNode parent)
+                return FileOpenResult.Failed(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
+
+            var target = parent.Children.GetValueOrDefault(name);
+            if (target != null && creationMode == FileCreationMode.CreateNew)
+                return FileOpenResult.Failed(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists });
+            if (target is DirectoryNode)
+                return FileOpenResult.Failed(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory });
+            if (target == null && creationMode == FileCreationMode.OpenExisting)
+                return FileOpenResult.Failed(MissingPathError(OperationErrorKind.NotFound));
+
+            var modifiedAt = DateTimeOffset.UtcNow;
+            var file = target as FileNode ?? new FileNode([], modifiedAt, FileTreePermission.ReadWrite);
+            if (mode == WritableFileOpenMode.WriteTruncate)
+                file.ReplaceContent([], modifiedAt);
+            if (target == null)
+                parent.Children.Add(name, file);
+            var descriptor = AddOpenFile(OpenFileState.ForWrite(file, mode, RecordConsumption));
+            return FileOpenResult.Opened(descriptor, readSize: null);
         }
-        parent.Children[name] = file;
-        var descriptor = AddOpenFile(OpenFileState.ForWrite(file, mode, RecordConsumption));
-        return FileOpenResult.Opened(descriptor, readSize: null);
     }
 
     public List<IReadOnlyList<FilePathLookup>> ResolutionBatches { get; } = [];
@@ -331,21 +331,23 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
     public bool IncludeListingSnapshots { get; init; } = true;
     public bool IncludeListingMetadata { get; init; } = true;
 
-    private async Task<OperationError?> CheckTraversalAsync(
+    private OperationError? CheckTraversal(
         ShellPath path, IReadOnlyList<ShellPath> directories, bool nullDeviceIsFile, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var directory in directories)
         {
-            TryResolveNode(directory.Path, out var parent);
-            var blockedByNullDevice = nullDeviceIsFile && FileDescriptor.DevNullPath.IsEqualToOrParentOf(directory);
-            if (parent is DirectoryNode && !blockedByNullDevice)
-                continue;
-            if (parent is null && !blockedByNullDevice)
-                return await MissingPathErrorAsync(directory, "No such file or directory\n", cancellationToken);
-            return new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory };
+            if (nullDeviceIsFile && FileDescriptor.DevNullPath.IsEqualToOrParentOf(directory))
+                return MissingPathError(OperationErrorKind.NotDirectory);
+
+            var parent = ResolveNode(directory.Path, out var missingKind);
+            if (parent == null)
+                return MissingPathError(missingKind);
+            if (parent is not DirectoryNode)
+                return MissingPathError(OperationErrorKind.NotDirectory);
         }
         return nullDeviceIsFile && FileDescriptor.DevNullPath.IsParentOf(path)
-            ? new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory } : null;
+            ? MissingPathError(OperationErrorKind.NotDirectory) : null;
     }
 
     public async Task<FileOpenResult> OpenReadAsync(FileSnapshot file, FileReadOpenMode mode, CancellationToken cancellationToken)
@@ -397,9 +399,12 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         DirectoryAccessPattern accessPattern, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        DirectoryListingBatches.Add(paths.ToArray());
-        DirectoryMetadataRequests.Add(metadata);
-        DirectorySnapshotRequests.Add(snapshots);
+        lock (_treeLock)
+        {
+            DirectoryListingBatches.Add(paths.ToArray());
+            DirectoryMetadataRequests.Add(metadata);
+            DirectorySnapshotRequests.Add(snapshots);
+        }
         var results = new DirectoryListingResult[paths.Count];
         for (var i = 0; i < paths.Count; i++)
             results[i] = await ListDirectoryAsync(paths[i]).ConfigureAwait(false);
@@ -409,31 +414,48 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var (path, directories) = lookup.ResolveWithoutSymbolicLinks();
-            if (await CheckTraversalAsync(path, directories, nullDeviceIsFile: true, cancellationToken) is { } error)
-                return DirectoryListingResult.Failure(error);
-            if (FileDescriptor.DevNullPath.Equals(path))
-                return DirectoryListingResult.Failure(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
-            BeforeListDirectory?.Invoke(path);
-            if (!TryResolveNode(path.Path, out var node))
-                return DirectoryListingResult.Failure(await MissingPathErrorAsync(path, "No such file or directory\n", cancellationToken));
-            if (node is not DirectoryNode directory)
-                return DirectoryListingResult.Failure(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
-
-            var entries = new List<DirectoryEntry>(directory.Children.Count);
-            List<FileMetadata?>? available = metadata == DirectoryMetadataRequest.Available && IncludeListingMetadata ? [] : null;
-            foreach (var entry in directory.Children)
+            if (BeforeListDirectory is { } beforeListDirectory)
             {
-                entries.Add(new DirectoryEntry(entry.Key, entry.Value is DirectoryNode ? FilePathKind.Directory : FilePathKind.File)
-                {
-                    Snapshot = snapshots == DirectorySnapshotRequest.CaptureAvailable && IncludeListingSnapshots && entry.Value is FileNode file
-                        ? new PreparedRead(this, path.Child(entry.Key), file.Content) : null
-                });
-                available?.Add(GetMetadata(entry.Value));
+                lock (_treeLock)
+                    if (CheckDirectoryTraversal() is { } error)
+                        return DirectoryListingResult.Failure(error);
+                beforeListDirectory(path);
             }
-            var result = available == null ? DirectoryListingResult.Success(entries) : DirectoryListingResult.Success(entries, available);
+
+            DirectoryListingResult result;
+            lock (_treeLock)
+            {
+                if (CheckDirectoryTraversal() is { } error)
+                    return DirectoryListingResult.Failure(error);
+
+                var node = ResolveNode(path.Path, out var missingKind);
+                if (node == null)
+                    return DirectoryListingResult.Failure(MissingPathError(missingKind));
+                if (node is not DirectoryNode directory)
+                    return DirectoryListingResult.Failure(MissingPathError(OperationErrorKind.NotDirectory));
+
+                var entries = new List<DirectoryEntry>(directory.Children.Count);
+                List<FileMetadata?>? available = metadata == DirectoryMetadataRequest.Available && IncludeListingMetadata
+                    ? new List<FileMetadata?>(directory.Children.Count) : null;
+                foreach (var (name, child) in directory.Children)
+                {
+                    entries.Add(new DirectoryEntry(name, child is DirectoryNode ? FilePathKind.Directory : FilePathKind.File)
+                    {
+                        Snapshot = snapshots == DirectorySnapshotRequest.CaptureAvailable && IncludeListingSnapshots && child is FileNode file
+                            ? new PreparedRead(this, path.Child(name), file.Content) : null
+                    });
+                    available?.Add(GetMetadata(child));
+                }
+                result = available == null ? DirectoryListingResult.Success(entries) : DirectoryListingResult.Success(entries, available);
+            }
+
             if (AfterListDirectory is { } afterListDirectory)
-                await afterListDirectory(path);
+                await afterListDirectory(path).ConfigureAwait(false);
             return result;
+
+            OperationError? CheckDirectoryTraversal() =>
+                CheckTraversal(path, directories, nullDeviceIsFile: true, cancellationToken)
+                ?? (FileDescriptor.DevNullPath.Equals(path) ? MissingPathError(OperationErrorKind.NotDirectory) : null);
         }
     }
 
@@ -472,10 +494,13 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (snapshots == FileSnapshotRequest.Capture)
-            ResolutionBatches.Add(paths.ToArray());
-        else
-            PathInfoBatches.Add((paths.ToArray(), request));
+        lock (_treeLock)
+        {
+            if (snapshots == FileSnapshotRequest.Capture)
+                ResolutionBatches.Add(paths.ToArray());
+            else
+                PathInfoBatches.Add((paths.ToArray(), request));
+        }
         var results = new FilePathResolutionResult[paths.Count];
         for (var i = 0; i < paths.Count; i++)
             results[i] = await GetInfoAsync(paths[i]);
@@ -483,44 +508,62 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             AfterResolveFiles?.Invoke();
         return results;
 
+        FilePathResolutionResult TraversalFailure(OperationError error) =>
+            (error.Kind == OperationErrorKind.NotFound
+                ? FilePathResolutionResult.Success(FilePathInfo.FromKind(FilePathKind.Missing))
+                : FilePathResolutionResult.Failure(error)) with
+            {
+                File = snapshots == FileSnapshotRequest.Capture ? FileSnapshotResult.Failure(error) : null
+            };
+
         async Task<FilePathResolutionResult> GetInfoAsync(FilePathLookup lookup)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 var (path, directories) = lookup.ResolveWithoutSymbolicLinks();
-                if (await CheckTraversalAsync(path, directories, nullDeviceIsFile: true, cancellationToken) is { } traversalError)
-                    return (traversalError.Kind == OperationErrorKind.NotFound
-                        ? FilePathResolutionResult.Success(FilePathInfo.FromKind(FilePathKind.Missing))
-                        : FilePathResolutionResult.Failure(traversalError)) with
-                    {
-                        File = snapshots == FileSnapshotRequest.Capture ? FileSnapshotResult.Failure(traversalError) : null
-                    };
-                BeforeGetPathInfo?.Invoke(path);
-                cancellationToken.ThrowIfCancellationRequested();
-                TryResolveNode(path.Path, out var node);
-                var isNullDevice = path.Equals(FileDescriptor.DevNullPath);
-                var kind = isNullDevice ? FilePathKind.CharacterDevice : node is DirectoryNode ? FilePathKind.Directory
-                    : node is FileNode || _readOpenErrors.ContainsKey(path.Path) ? FilePathKind.File : FilePathKind.Missing;
-                if (kind == FilePathKind.Missing
-                    && await MissingPathErrorAsync(path, "No such file or directory\n", cancellationToken) is { Kind: not OperationErrorKind.NotFound } missingError)
-                    return FilePathResolutionResult.Failure(missingError) with
-                    {
-                        File = snapshots == FileSnapshotRequest.Capture ? FileSnapshotResult.Failure(missingError) : null
-                    };
-                var metadata = node is null ? default : GetMetadata(node);
-                var info = request == FilePathInfoRequest.KindOnly ? FilePathInfo.FromKind(kind) : new FilePathInfo(kind, metadata);
-                var result = FilePathResolutionResult.Success(info) with
+                if (BeforeGetPathInfo is { } beforeGetPathInfo)
                 {
-                    File = snapshots != FileSnapshotRequest.Capture ? null
-                        : isNullDevice ? FileSnapshotResult.Success(new PreparedRead(this, path, []))
-                        : node is FileNode sourceFile ? FileSnapshotResult.Success(new PreparedRead(this, path, sourceFile.Content))
-                        // Injected open failures still need a snapshot without a backing file.
-                        : _readOpenErrors.ContainsKey(path.Path) ? FileSnapshotResult.Success(new PreparedRead(this, path, []))
-                        : FileSnapshotResult.NotFile(kind)
-                };
+                    lock (_treeLock)
+                        if (CheckTraversal(path, directories, nullDeviceIsFile: true, cancellationToken) is { } error)
+                            return TraversalFailure(error);
+                    beforeGetPathInfo(path);
+                }
+
+                FilePathResolutionResult result;
+                lock (_treeLock)
+                {
+                    if (CheckTraversal(path, directories, nullDeviceIsFile: true, cancellationToken) is { } error)
+                        return TraversalFailure(error);
+
+                    var node = ResolveNode(path.Path, out var missingKind);
+                    var isNullDevice = path.Equals(FileDescriptor.DevNullPath);
+                    var injectedFailure = _readOpenErrors.ContainsKey(path.Path);
+                    var kind = isNullDevice ? FilePathKind.CharacterDevice : node is DirectoryNode ? FilePathKind.Directory
+                        : node is FileNode || injectedFailure ? FilePathKind.File : FilePathKind.Missing;
+                    if (kind == FilePathKind.Missing && missingKind != OperationErrorKind.NotFound)
+                    {
+                        var missing = MissingPathError(missingKind);
+                        return FilePathResolutionResult.Failure(missing) with
+                        {
+                            File = snapshots == FileSnapshotRequest.Capture ? FileSnapshotResult.Failure(missing) : null
+                        };
+                    }
+
+                    var info = request == FilePathInfoRequest.KindOnly ? FilePathInfo.FromKind(kind)
+                        : new FilePathInfo(kind, node == null ? default : GetMetadata(node));
+                    result = FilePathResolutionResult.Success(info) with
+                    {
+                        File = snapshots != FileSnapshotRequest.Capture ? null
+                            : node is FileNode sourceFile && !isNullDevice ? FileSnapshotResult.Success(new PreparedRead(this, path, sourceFile.Content))
+                            // Injected open failures still need a snapshot without a backing file.
+                            : isNullDevice || injectedFailure ? FileSnapshotResult.Success(new PreparedRead(this, path, []))
+                            : FileSnapshotResult.NotFile(kind)
+                    };
+                }
+
                 if (AfterGetPathInfo is { } afterGetPathInfo)
-                    await afterGetPathInfo(path, request);
+                    await afterGetPathInfo(path, request).ConfigureAwait(false);
                 return result;
             }
             catch (Exception exception) when (exception is PermissionDeniedException or MissingPathException)
@@ -540,151 +583,147 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             ? FileAccessRights.Read | FileAccessRights.Execute : FileAccessRights.Read | FileAccessRights.Write | FileAccessRights.Execute;
         return node switch
         {
-            FileNode file => new FileMetadata(file.Length, file.ModifiedAt, access, file.StatusChangedAt,
-                accessedAt: null, specialModeBits: FileSpecialModeBits.None, ownershipMatch: null, identity: null),
+            FileNode file => file.CaptureMetadata(access),
             DirectoryNode directory => new FileMetadata(0, directory.ModifiedAt, access, directory.StatusChangedAt,
                 accessedAt: null, specialModeBits: FileSpecialModeBits.None, ownershipMatch: null, identity: null),
             _ => default
         };
     }
 
-    public async Task<DirectoryCreationResult> CreateDirectoryAsync(FilePathLookup path, CancellationToken cancellationToken)
+    public Task<DirectoryCreationResult> CreateDirectoryAsync(FilePathLookup path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (CreateDirectoryOverride?.Invoke(path) is { } result)
-            return result;
+            return Task.FromResult(result);
 
         var resolved = path.ResolveDirectoryCreationWithoutSymbolicLinks();
-        if (await CheckTraversalAsync(resolved.Path, resolved.RequiredDirectories, nullDeviceIsFile: false, cancellationToken) is { } error)
-            return new DirectoryCreationResult.Failed(error);
+        lock (_treeLock)
+            return Task.FromResult(Create());
 
-        var (parentPath, name) = GetParentAndName(resolved.Path.Path);
-        if (string.IsNullOrEmpty(name))
+        DirectoryCreationResult Create()
         {
-            return new DirectoryCreationResult.AlreadyExistsAsDirectory();
+            if (CheckTraversal(resolved.Path, resolved.RequiredDirectories, nullDeviceIsFile: false, cancellationToken) is { } error)
+                return new DirectoryCreationResult.Failed(error);
+            var (parentPath, name) = GetParentAndName(resolved.Path.Path);
+            if (string.IsNullOrEmpty(name))
+                return new DirectoryCreationResult.AlreadyExistsAsDirectory();
+
+            var parentNode = ResolveNode(parentPath, out var missingKind);
+            if (parentNode == null)
+                return new DirectoryCreationResult.Failed(MissingPathError(missingKind));
+            if (parentNode is not DirectoryNode parent)
+                return new DirectoryCreationResult.Failed(MissingPathError(OperationErrorKind.NotDirectory));
+
+            if (parent.Children.TryGetValue(name, out var existing))
+            {
+                return existing is DirectoryNode
+                    ? new DirectoryCreationResult.AlreadyExistsAsDirectory()
+                    : new DirectoryCreationResult.Failed(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists });
+            }
+
+            if (parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
+                return new DirectoryCreationResult.Failed(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied });
+
+            var timestamp = DateTimeOffset.UtcNow;
+            parent.Children[name] = new DirectoryNode(timestamp, FileTreePermission.ReadWrite) { StatusChangedAt = timestamp };
+            return new DirectoryCreationResult.Created();
         }
-
-        if (!TryResolveNode(parentPath, out var parentNode))
-        {
-            return new DirectoryCreationResult.Failed(await MissingPathErrorAsync(new ShellPath(parentPath),
-                "No such file or directory\n", cancellationToken));
-        }
-
-        if (parentNode is not DirectoryNode parent)
-            return new DirectoryCreationResult.Failed(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory });
-
-        if (parent.Children.TryGetValue(name, out var existing))
-        {
-            return existing is DirectoryNode
-                ? new DirectoryCreationResult.AlreadyExistsAsDirectory()
-                : new DirectoryCreationResult.Failed(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists });
-        }
-
-        if (parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
-            return new DirectoryCreationResult.Failed(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied });
-
-        var timestamp = DateTimeOffset.UtcNow;
-        parent.Children[name] = new DirectoryNode(timestamp, FileTreePermission.ReadWrite) { StatusChangedAt = timestamp };
-        return new DirectoryCreationResult.Created();
     }
 
-    public async Task<OperationError?> DeleteDirectoryAsync(FileEntryPath lookup, CancellationToken cancellationToken)
+    public Task<OperationError?> DeleteDirectoryAsync(FileEntryPath lookup, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var (path, directories) = lookup.ResolveWithoutSymbolicLinks();
-        if (await CheckTraversalAsync(path, directories, nullDeviceIsFile: false, cancellationToken) is { } error)
-            return error;
-        if (lookup.HasFinalDotComponent)
-            return new OperationError("Cannot delete '.' or '..' directory entries\n") { Kind = OperationErrorKind.PermissionDenied };
-        BeforeDeleteDirectory?.Invoke(path);
-        if (DeleteDirectoryError?.Invoke(path, cancellationToken) is { } failure)
-            return failure;
-
-        var (parentPath, name) = GetParentAndName(path.Path);
-        if (string.IsNullOrEmpty(name))
+        if (BeforeDeleteDirectory != null || DeleteDirectoryError != null)
         {
-            return new OperationError("Operation failed.\n") { Kind = OperationErrorKind.PermissionDenied };
+            lock (_treeLock)
+                if (CheckTarget() is { } error)
+                    return Task.FromResult<OperationError?>(error);
+            BeforeDeleteDirectory?.Invoke(path);
+            if (DeleteDirectoryError?.Invoke(path, cancellationToken) is { } failure)
+                return Task.FromResult<OperationError?>(failure);
         }
 
-        if (!TryResolveNode(parentPath, out var parentNode) || parentNode is not DirectoryNode parent)
+        lock (_treeLock)
+            return Task.FromResult(Delete());
+
+        OperationError? CheckTarget() => CheckTraversal(path, directories, nullDeviceIsFile: false, cancellationToken)
+            ?? (lookup.HasFinalDotComponent
+                ? new OperationError("Cannot delete '.' or '..' directory entries\n") { Kind = OperationErrorKind.PermissionDenied }
+                : null);
+
+        OperationError? Delete()
         {
-            return await MissingPathErrorAsync(path, "No such file or directory\n", cancellationToken);
+            if (CheckTarget() is { } error)
+                return error;
+            var (parentPath, name) = GetParentAndName(path.Path);
+            if (string.IsNullOrEmpty(name))
+                return new OperationError("Operation failed.\n") { Kind = OperationErrorKind.PermissionDenied };
+
+            var parentNode = ResolveNode(parentPath, out var missingKind);
+            if (parentNode is not DirectoryNode parent)
+                return MissingPathError(parentNode == null ? missingKind : OperationErrorKind.NotDirectory);
+
+            if (!parent.Children.TryGetValue(name, out var node))
+                return MissingPathError(OperationErrorKind.NotFound);
+            if (node is not DirectoryNode directory)
+                return MissingPathError(OperationErrorKind.NotDirectory);
+            if (directory.Permission == FileTreePermission.ReadOnly
+                || parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
+                return new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied };
+            if (directory.Children.Count > 0)
+                return new OperationError("Directory not empty\n") { Kind = OperationErrorKind.DirectoryNotEmpty };
+
+            parent.Children.Remove(name);
+            return null;
         }
-
-        if (!parent.Children.TryGetValue(name, out var node))
-        {
-            return new OperationError("No such file or directory\n") { Kind = OperationErrorKind.NotFound };
-        }
-
-        if (node is not DirectoryNode directory)
-            return new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory };
-
-        if (directory.Permission == FileTreePermission.ReadOnly)
-            return new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied };
-        if (parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
-            return new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied };
-
-        if (directory.Children.Count > 0)
-        {
-            return new OperationError("Directory not empty\n") { Kind = OperationErrorKind.DirectoryNotEmpty };
-        }
-
-        parent.Children.Remove(name);
-        return null;
     }
 
-    public async Task<OperationError?> DeleteFileAsync(FileEntryPath lookup, CancellationToken cancellationToken)
+    public Task<OperationError?> DeleteFileAsync(FileEntryPath lookup, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var (path, directories) = lookup.ResolveWithoutSymbolicLinks();
-        if (await CheckTraversalAsync(path, directories, nullDeviceIsFile: false, cancellationToken) is { } traversalError)
-            return traversalError;
-        BeforeDeleteFile?.Invoke(path);
-        if (DeleteFileError is { } error)
-            return error;
-
-        var (parentPath, name) = GetParentAndName(path.Path);
-        if (string.IsNullOrEmpty(name))
+        if (BeforeDeleteFile != null || DeleteFileError != null)
         {
-            return new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory };
+            lock (_treeLock)
+                if (CheckTraversal(path, directories, nullDeviceIsFile: false, cancellationToken) is { } traversalError)
+                    return Task.FromResult<OperationError?>(traversalError);
+            BeforeDeleteFile?.Invoke(path);
+            if (DeleteFileError is { } error)
+                return Task.FromResult<OperationError?>(error);
         }
 
-        if (!TryResolveNode(parentPath, out var parentNode))
+        lock (_treeLock)
+            return Task.FromResult(Delete());
+
+        OperationError? Delete()
         {
-            return await MissingPathErrorAsync(path, "No such file or directory\n", cancellationToken);
-        }
-        if (parentNode is not DirectoryNode parent)
-            return new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory };
+            if (CheckTraversal(path, directories, nullDeviceIsFile: false, cancellationToken) is { } traversalError)
+                return traversalError;
+            var (parentPath, name) = GetParentAndName(path.Path);
+            if (string.IsNullOrEmpty(name))
+                return new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory };
 
-        if (!parent.Children.TryGetValue(name, out var node))
-        {
-            return new OperationError("No such file or directory\n") { Kind = OperationErrorKind.NotFound };
-        }
-        if (node is not FileNode file)
-            return new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory };
-        if (file.Permission == FileTreePermission.ReadOnly)
-            return new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied };
-        if (parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
-            return new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied };
+            var parentNode = ResolveNode(parentPath, out var missingKind);
+            if (parentNode == null)
+                return MissingPathError(missingKind);
+            if (parentNode is not DirectoryNode parent)
+                return MissingPathError(OperationErrorKind.NotDirectory);
+            if (!parent.Children.TryGetValue(name, out var node))
+                return MissingPathError(OperationErrorKind.NotFound);
+            if (node is not FileNode file)
+                return new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory };
+            if (file.Permission == FileTreePermission.ReadOnly
+                || parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
+                return new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied };
 
-        parent.Children.Remove(name);
-        return null;
-    }
-
-    private async Task<OperationError> MissingPathErrorAsync(ShellPath path, string message, CancellationToken cancellationToken)
-    {
-        var kind = await PathResolution.ClassifyMissingPathAsync(
-            path, static current => current.Parent, GetNamespaceKindAsync, cancellationToken);
-        return new OperationError(kind == OperationErrorKind.NotDirectory ? "Not a directory\n" : message) { Kind = kind };
-
-        Task<FilePathKind> GetNamespaceKindAsync(ShellPath current, CancellationToken token)
-        {
-            token.ThrowIfCancellationRequested();
-            TryResolveNode(current.Path, out var node);
-            return Task.FromResult(node is DirectoryNode ? FilePathKind.Directory
-                : node is FileNode ? FilePathKind.File : FilePathKind.Missing);
+            parent.Children.Remove(name);
+            return null;
         }
     }
+
+    private static OperationError MissingPathError(OperationErrorKind kind) =>
+        new(kind == OperationErrorKind.NotDirectory ? "Not a directory\n" : "No such file or directory\n") { Kind = kind };
 
     public Task<FileTransferError?> CopyFileAsync(
         FilePathLookup sourceLookup,
@@ -702,7 +741,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
 
     private enum TransferKind { Copy, Rename }
 
-    private async Task<FileTransferError?> TransferAsync(FileEntryPath sourceLookup, FileEntryPath destinationLookup,
+    private Task<FileTransferError?> TransferAsync(FileEntryPath sourceLookup, FileEntryPath destinationLookup,
         FileOverwriteMode mode, TransferKind kind, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -711,95 +750,120 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         if (kind == TransferKind.Rename)
         {
             if (sourceLookup.HasFinalDotComponent || destinationLookup.HasFinalDotComponent)
-                return new FileTransferError(new OperationError("Cannot rename '.' or '..' directory entries\n"),
+                return Task.FromResult<FileTransferError?>(new FileTransferError(
+                    new OperationError("Cannot rename '.' or '..' directory entries\n"),
                     sourceLookup.HasFinalDotComponent && destinationLookup.HasFinalDotComponent ? FileTransferOperand.Operation
-                    : sourceLookup.HasFinalDotComponent ? FileTransferOperand.Source : FileTransferOperand.Destination);
+                    : sourceLookup.HasFinalDotComponent ? FileTransferOperand.Source : FileTransferOperand.Destination));
             if (RenameEntryError?.Invoke(sourceLookup, destinationLookup, cancellationToken) is { } failure)
-                return failure;
+                return Task.FromResult<FileTransferError?>(failure);
         }
+
         var (sourcePath, sourceDirectories) = sourceLookup.ResolveWithoutSymbolicLinks();
-        var (destinationPath, destinationDirectories) = destinationLookup.ResolveWithoutSymbolicLinks();
-        if (await CheckTraversalAsync(sourcePath, sourceDirectories, nullDeviceIsFile: false, cancellationToken) is { } sourceError)
-            return new FileTransferError(sourceError, FileTransferOperand.Source);
-        if (kind == TransferKind.Rename && TryResolveNode(sourcePath.Path, out var sourceEntry) && sourceEntry is DirectoryNode)
-            (destinationPath, destinationDirectories) = destinationLookup.ResolveDirectoryCreationWithoutSymbolicLinks();
-        if (await CheckTraversalAsync(destinationPath, destinationDirectories, nullDeviceIsFile: false, cancellationToken) is { } destinationError)
-            return new FileTransferError(destinationError, FileTransferOperand.Destination);
-        BeforeFileTransfer?.Invoke(destinationPath);
-
-        if (!TryResolveNode(sourcePath.Path, out var sourceNode)
-            || kind == TransferKind.Copy && sourceNode is not FileNode)
+        var (destinationEntryPath, destinationDirectories) = destinationLookup.ResolveWithoutSymbolicLinks();
+        if (BeforeFileTransfer is { } beforeFileTransfer)
         {
-            return new FileTransferError(new OperationError("Operation failed.\n"), FileTransferOperand.Source);
+            ShellPath destination;
+            lock (_treeLock)
+                if (CheckPaths(out destination, out _) is { } error)
+                    return Task.FromResult<FileTransferError?>(error);
+            beforeFileTransfer(destination);
         }
 
-        var (parentPath, name) = GetParentAndName(destinationPath.Path);
-        if (string.IsNullOrEmpty(name))
+        lock (_treeLock)
+            return Task.FromResult(Transfer());
+
+        FileTransferError? CheckPaths(out ShellPath destination, out Node? source)
         {
-            return new FileTransferError(new OperationError("Operation failed.\n"), FileTransferOperand.Destination);
+            var directories = destinationDirectories;
+            destination = destinationEntryPath;
+            source = null;
+            if (CheckTraversal(sourcePath, sourceDirectories, nullDeviceIsFile: false, cancellationToken) is { } sourceError)
+                return new FileTransferError(sourceError, FileTransferOperand.Source);
+            source = ResolveNode(sourcePath.Path);
+            if (kind == TransferKind.Rename && source is DirectoryNode)
+                (destination, directories) = destinationLookup.ResolveDirectoryCreationWithoutSymbolicLinks();
+            return CheckTraversal(destination, directories, nullDeviceIsFile: false, cancellationToken) is { } destinationError
+                ? new FileTransferError(destinationError, FileTransferOperand.Destination) : null;
         }
 
-        if (!TryResolveNode(parentPath, out var parentNode) || parentNode is not DirectoryNode parent)
+        FileTransferError? Transfer()
         {
-            return new FileTransferError(new OperationError("Operation failed.\n"), FileTransferOperand.Destination);
-        }
+            if (CheckPaths(out var destinationPath, out var sourceNode) is { } error)
+                return error;
+            if (sourceNode == null || kind == TransferKind.Copy && sourceNode is not FileNode)
+                return new FileTransferError(new OperationError("Operation failed.\n"), FileTransferOperand.Source);
 
-        var destination = parent.Children.GetValueOrDefault(name);
-        if (destination != null && mode == FileOverwriteMode.RequireNewDestination)
-            return new FileTransferError(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists }, FileTransferOperand.Destination);
-        if (sourcePath.Equals(destinationPath))
-            return new FileTransferError(new OperationError("Source and destination are the same file\n"), FileTransferOperand.Operation);
-        if (sourceNode is DirectoryNode && sourcePath.IsEqualToOrParentOf(destinationPath))
-            return new FileTransferError(new OperationError("Cannot move a directory to itself or a subdirectory\n"), FileTransferOperand.Operation);
-        if (destination is DirectoryNode && sourceNode is not DirectoryNode)
-            return new FileTransferError(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory }, FileTransferOperand.Destination);
-        if (destination != null && destination is not DirectoryNode && sourceNode is DirectoryNode)
-            return new FileTransferError(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory }, FileTransferOperand.Destination);
-        if (destination is DirectoryNode { Children.Count: > 0 })
-            return new FileTransferError(new OperationError("Directory not empty\n") { Kind = OperationErrorKind.DirectoryNotEmpty }, FileTransferOperand.Destination);
-        var permission = destination?.Permission ?? parent.Permission;
-        if ((destination != null || parentPath != "/") && permission == FileTreePermission.ReadOnly)
-            return new FileTransferError(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied }, FileTransferOperand.Destination);
-
-        if (kind == TransferKind.Rename)
-        {
-            var (sourceParentPath, sourceName) = GetParentAndName(sourcePath.Path);
-            if (!TryResolveNode(sourceParentPath, out var sourceParentNode) || sourceParentNode is not DirectoryNode sourceParent)
-                throw new InvalidOperationException("The resolved source file has no parent directory.");
-            if (sourceNode.Permission == FileTreePermission.ReadOnly
-                || sourceParentPath != "/" && sourceParent.Permission == FileTreePermission.ReadOnly)
-                return new FileTransferError(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied }, FileTransferOperand.Source);
-            if (parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
-                return new FileTransferError(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied }, FileTransferOperand.Destination);
-            cancellationToken.ThrowIfCancellationRequested();
-            sourceParent.Children.Remove(sourceName);
-            parent.Children[name] = sourceNode;
-            RecordRename(sourceNode, DateTimeOffset.UtcNow);
-
-            static void RecordRename(Node node, DateTimeOffset statusChangedAt)
+            var (parentPath, name) = GetParentAndName(destinationPath.Path);
+            if (string.IsNullOrEmpty(name))
             {
-                node.StatusChangedAt = statusChangedAt;
-                if (node is DirectoryNode directory)
-                    foreach (var child in directory.Children.Values)
-                        RecordRename(child, statusChangedAt);
+                return new FileTransferError(new OperationError("Operation failed.\n"), FileTransferOperand.Destination);
             }
-        }
-        else
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var content = ((FileNode)sourceNode).Content.ToArray();
-            if (destination is FileNode target)
+
+            if (ResolveNode(parentPath) is not DirectoryNode parent)
             {
-                target.Content = content;
-                target.StatusChangedAt = target.ModifiedAt = DateTimeOffset.UtcNow;
+                return new FileTransferError(new OperationError("Operation failed.\n"), FileTransferOperand.Destination);
+            }
+
+            var destination = parent.Children.GetValueOrDefault(name);
+            if (destination != null && mode == FileOverwriteMode.RequireNewDestination)
+                return new FileTransferError(new OperationError("File exists\n") { Kind = OperationErrorKind.AlreadyExists }, FileTransferOperand.Destination);
+            if (sourcePath.Equals(destinationPath))
+                return new FileTransferError(new OperationError("Source and destination are the same file\n"), FileTransferOperand.Operation);
+            if (sourceNode is DirectoryNode && sourcePath.IsEqualToOrParentOf(destinationPath))
+                return new FileTransferError(new OperationError("Cannot move a directory to itself or a subdirectory\n"), FileTransferOperand.Operation);
+            if (destination is DirectoryNode && sourceNode is not DirectoryNode)
+                return new FileTransferError(new OperationError("Is a directory\n") { Kind = OperationErrorKind.IsDirectory }, FileTransferOperand.Destination);
+            if (destination != null && destination is not DirectoryNode && sourceNode is DirectoryNode)
+                return new FileTransferError(new OperationError("Not a directory\n") { Kind = OperationErrorKind.NotDirectory }, FileTransferOperand.Destination);
+            if (destination is DirectoryNode { Children.Count: > 0 })
+                return new FileTransferError(new OperationError("Directory not empty\n") { Kind = OperationErrorKind.DirectoryNotEmpty }, FileTransferOperand.Destination);
+            var permission = destination?.Permission ?? parent.Permission;
+            if ((destination != null || parentPath != "/") && permission == FileTreePermission.ReadOnly)
+                return new FileTransferError(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied }, FileTransferOperand.Destination);
+
+            if (kind == TransferKind.Rename)
+            {
+                var (sourceParentPath, sourceName) = GetParentAndName(sourcePath.Path);
+                if (ResolveNode(sourceParentPath) is not DirectoryNode sourceParent)
+                    throw new InvalidOperationException("The resolved source file has no parent directory.");
+                if (sourceNode.Permission == FileTreePermission.ReadOnly
+                    || sourceParentPath != "/" && sourceParent.Permission == FileTreePermission.ReadOnly)
+                    return new FileTransferError(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied }, FileTransferOperand.Source);
+                if (parentPath != "/" && parent.Permission == FileTreePermission.ReadOnly)
+                    return new FileTransferError(new OperationError("Permission denied\n") { Kind = OperationErrorKind.PermissionDenied }, FileTransferOperand.Destination);
+                cancellationToken.ThrowIfCancellationRequested();
+                sourceParent.Children.Remove(sourceName);
+                parent.Children[name] = sourceNode;
+                RecordRename(sourceNode, DateTimeOffset.UtcNow);
+
+                static void RecordRename(Node node, DateTimeOffset statusChangedAt)
+                {
+                    if (node is FileNode file)
+                        file.RecordRename(statusChangedAt);
+                    else if (node is DirectoryNode directory)
+                    {
+                        directory.StatusChangedAt = statusChangedAt;
+                        foreach (var child in directory.Children.Values)
+                            RecordRename(child, statusChangedAt);
+                    }
+                }
             }
             else
             {
-                var timestamp = DateTimeOffset.UtcNow;
-                parent.Children[name] = new FileNode(content, timestamp, FileTreePermission.ReadWrite) { StatusChangedAt = timestamp };
+                cancellationToken.ThrowIfCancellationRequested();
+                var content = ((FileNode)sourceNode).Content.ToArray();
+                if (destination is FileNode target)
+                {
+                    target.ReplaceContent(content, DateTimeOffset.UtcNow);
+                }
+                else
+                {
+                    var timestamp = DateTimeOffset.UtcNow;
+                    parent.Children[name] = new FileNode(content, timestamp, FileTreePermission.ReadWrite) { StatusChangedAt = timestamp };
+                }
             }
+            return null;
         }
-        return null;
     }
 
     /// <summary>
@@ -867,33 +931,25 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
         return current;
     }
 
-    /// <summary>
-    /// Resolves a path to a node, returning false when any segment is missing.
-    /// </summary>
-    private bool TryResolveNode(string path, out Node node)
+    // All namespace reads and writes run under the tree lock.
+    private Node? ResolveNode(string path) => ResolveNode(path, out _);
+
+    private Node? ResolveNode(string path, out OperationErrorKind missingKind)
     {
-        EnsureAbsolutePath(path);
-        var parts = SplitPath(path);
         var current = (Node)_root;
-        foreach (var part in parts)
+        missingKind = OperationErrorKind.NotFound;
+        foreach (var part in SplitPath(path))
         {
             if (current is not DirectoryNode directory)
             {
-                node = null!;
-                return false;
+                missingKind = OperationErrorKind.NotDirectory;
+                return null;
             }
-
             if (!directory.Children.TryGetValue(part, out var child))
-            {
-                node = null!;
-                return false;
-            }
-
+                return null;
             current = child;
         }
-
-        node = current;
-        return true;
+        return current;
     }
 
     /// <summary>
@@ -1015,21 +1071,37 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
                     return _snapshot;
                 }
             }
-            set
+        }
+
+        public void ReplaceContent(byte[] content, DateTimeOffset modifiedAt)
+        {
+            lock (_contentLock)
             {
-                lock (_contentLock)
-                {
-                    _writeData?.Dispose();
-                    _writeData = null;
-                    _snapshot = value;
-                    _snapshotCurrent = true;
-                }
+                _writeData?.Dispose();
+                _writeData = null;
+                _snapshot = content;
+                _snapshotCurrent = true;
+                StatusChangedAt = ModifiedAt = modifiedAt;
             }
         }
 
+        public void RecordRename(DateTimeOffset statusChangedAt)
+        {
+            lock (_contentLock) StatusChangedAt = statusChangedAt;
+        }
+
+        public FileMetadata CaptureMetadata(FileAccessRights access)
+        {
+            lock (_contentLock)
+                return new FileMetadata(CurrentLength, ModifiedAt, access, StatusChangedAt,
+                    accessedAt: null, specialModeBits: FileSpecialModeBits.None, ownershipMatch: null, identity: null);
+        }
+
+        private int CurrentLength => _writeData is { } data ? checked((int)data.Length) : _snapshot.Length;
+
         public int Length
         {
-            get { lock (_contentLock) return _writeData is { } data ? checked((int)data.Length) : _snapshot.Length; }
+            get { lock (_contentLock) return CurrentLength; }
         }
 
         public void OpenWriter() { lock (_contentLock) _writers++; }
@@ -1069,7 +1141,7 @@ public class MockFileSystem : IBashHost, IAsyncDisposable
             }
         }
 
-        public DateTimeOffset ModifiedAt { get; set; }
+        private DateTimeOffset ModifiedAt { get; set; }
     }
 
 
