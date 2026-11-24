@@ -698,7 +698,7 @@ internal sealed class ShellSourceCursor
             ShellScanStatus status,
             ShellNestedExpansionKind kind,
             ParserFailure? failure) =>
-            status == ShellScanStatus.Incomplete && failure?.CaptureEndOfInput == null
+            status == ShellScanStatus.Incomplete && failure?.UnclosedDelimiter == null
                 ? new ShellNestedExpansionScan.Incomplete(kind)
                 : new ShellNestedExpansionScan.Invalid(kind, failure?.InDoubleQuotes(IsDoubleQuoted));
     }

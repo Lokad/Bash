@@ -300,7 +300,7 @@ internal sealed class Tokenizer
 
     internal void MarkCompoundArrayFailure()
     {
-        if (_failure is { Kind: ParserFailureKind.Delimiter, CaptureEndOfInput: not null } missingCloser)
+        if (_failure is { Kind: ParserFailureKind.Delimiter, UnclosedDelimiter: not null } missingCloser)
             _failure = missingCloser with { Kind = ParserFailureKind.ArraySubstitutionDelimiter };
         if ((_failure ?? QuotedEndOfInputFailure) is { Kind: ParserFailureKind.QuotedSubstitutionForHeader } failure)
         {
@@ -313,13 +313,16 @@ internal sealed class Tokenizer
         RecordFailure(failure?.InDoubleQuotes(quoted)
             ?? new ParserFailure(new SyntaxError(missingDelimiter, start), ParserFailureKind.Delimiter));
 
+    private bool TracksScriptDiagnostics => !IsCommandSubstitution && TrackCommandLocations && TrackUnexpectedTokens;
+
     private void RecordUnclosedQuote(char delimiter, int start, string message)
     {
-        if (IsCommandSubstitution && AllowEofHereDocuments)
+        var inCapture = IsCommandSubstitution && AllowEofHereDocuments;
+        if (inCapture || TracksScriptDiagnostics)
         {
             RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.Delimiter)
             {
-                CaptureEndOfInput = new CaptureEndOfInput(delimiter, start)
+                UnclosedDelimiter = new UnclosedDelimiter(delimiter, start)
                 {
                     PayloadLine = _scanContext.LegacyOrigin == LegacySubstitutionOrigin.HereDocument ? GetLine(start) : 0
                 }
@@ -1426,7 +1429,10 @@ internal sealed class Tokenizer
             var complete = cursor.TryReadQuotedLiteral(out var value, allowUnterminated: braceExpanded);
             Position = cursor.Position;
             if (!complete)
-                RecordUnclosedQuote('\'', start, "Unterminated single-quoted string.");
+            {
+                var opening = _input[start] == (byte)'$' ? ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), start + 1) : start;
+                RecordUnclosedQuote('\'', opening, "Unterminated single-quoted string.");
+            }
             return value;
         }
     }
@@ -1482,7 +1488,8 @@ internal sealed class Tokenizer
                 return new BraceExpansionFailureWordPart(
                     BraceExpansionFailureWordPart.FormatMissingDelimiter(_input.Slice(start), delimiter, memory));
             }
-            if (status == ShellScanStatus.Incomplete && IsCommandSubstitution && _input[start] == (byte)'`')
+            if (status == ShellScanStatus.Incomplete && _input[start] == (byte)'`'
+                && (IsCommandSubstitution || TracksScriptDiagnostics))
                 RecordUnclosedQuote('`', start, "Unterminated command substitution.");
             else
                 RecordExpansionFailure(error, kind == WordPartKind.CommandSubstitutionQuoted,
@@ -1661,7 +1668,7 @@ internal sealed class Tokenizer
                         Position++;
                         break;
                     }
-                    RecordError("Unexpected end of input after escape.", Position);
+                    RecordUnclosedQuote('"', quoteStart, "Unexpected end of input after escape.");
                     return parts;
                 }
 

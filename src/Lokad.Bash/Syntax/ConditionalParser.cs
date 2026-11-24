@@ -87,6 +87,7 @@ internal sealed class ConditionalParser : IDisposable
                 FailReader(ending.Kind == TokenKind.End ? "Unterminated conditional command."
                         : "Unexpected conditional operator or operand.", ending,
                     ending.Kind == TokenKind.End || _failure?.ConditionalEndOfInput != null
+                        || _failure?.UnclosedDelimiter?.Conditional != null
                         ? ConditionalReaderError.MissingCloser : ConditionalReaderError.Expression,
                     _opening);
         }
@@ -101,7 +102,8 @@ internal sealed class ConditionalParser : IDisposable
     }
 
     private bool HasReaderFailure => _failure?.UnexpectedToken != null
-        || _failure?.ConditionalEndOfInput is { Diagnostic.Error: not ConditionalReaderError.None };
+        || _failure?.ConditionalEndOfInput is { Diagnostic.Error: not ConditionalReaderError.None }
+        || _failure?.UnclosedDelimiter?.Conditional is { Error: not ConditionalReaderError.None };
 
     private ConditionalExpression? ParseOr(int depth)
     {
@@ -471,18 +473,34 @@ internal sealed class ConditionalParser : IDisposable
                 if (!quotedLiteral)
                     IgnoreContinuations(preceding, cursor.Position);
                 if (!wasQuoted && cursor.IsQuoted)
-                    quoteStart = preceding;
+                    quoteStart = cursor.Position - 1;
                 _wordContinuedAtEndOfInput |= !wasQuoted && cursor.IsAtEnd
                     && span[preceding..].SequenceEqual("\\\n"u8);
                 continue;
             }
-            switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
+            var nested = cursor.SkipNestedExpansion(BracedParameterRecognition.All);
+            if (_reader != null && nested is ShellNestedExpansionScan.Incomplete { Kind: ShellNestedExpansionKind.Command }
+                && span[preceding] == (byte)'`')
+            {
+                nested = new ShellNestedExpansionScan.Invalid(ShellNestedExpansionKind.Command,
+                    new ParserFailure(new SyntaxError("Invalid expansion in conditional operand.", preceding), ParserFailureKind.Delimiter)
+                    {
+                        UnclosedDelimiter = new UnclosedDelimiter('`', preceding)
+                    });
+            }
+            switch (nested)
             {
                 case ShellNestedExpansionScan.Complete: continue;
                 case ShellNestedExpansionScan.Invalid { Failure: { } failure }:
-                    _failure ??= failure.CaptureEndOfInput is { } missingCloser
-                        ? failure with { CaptureEndOfInput = missingCloser with { InsideConditional = true } }
-                        : failure;
+                    if (_failure == null)
+                    {
+                        if (failure.UnclosedDelimiter is { Conditional: null } delimiter)
+                        {
+                            failure = failure with { UnclosedDelimiter = delimiter with { Conditional = default(ConditionalReadDiagnostic) } };
+                            _localReaderFailure = _reader != null;
+                        }
+                        _failure = failure;
+                    }
                     return new(TokenKind.Invalid, default, failure.Error.Offset);
                 case ShellNestedExpansionScan.Incomplete or ShellNestedExpansionScan.Invalid:
                     Fail("Invalid expansion in conditional operand.", cursor.Position);
@@ -565,12 +583,31 @@ internal sealed class ConditionalParser : IDisposable
                 {
                     ConditionalEndOfInput = eof with { Diagnostic = eof.Diagnostic with { UnclosedGroupLines = _unclosedGroupLines } }
                 };
+            else if (failure.UnclosedDelimiter is { Conditional: { } diagnostic } delimiter)
+                _failure = failure with
+                {
+                    UnclosedDelimiter = delimiter with { Conditional = diagnostic with { UnclosedGroupLines = _unclosedGroupLines } }
+                };
         }
         _unclosedGroupLines[_unclosedGroupLines.Length - depth - 1] = _reader.GetLine(offset);
     }
 
     private void FailReader(string message, Token token, ConditionalReaderError error, int reasonPosition)
     {
+        if (_localReaderFailure
+            && _failure is { UnclosedDelimiter: { Conditional.Error: ConditionalReaderError.None } delimiter } failure
+            && _reader != null)
+        {
+            var readLine = _reader.GetLine(delimiter.ReadPosition) + delimiter.LineAdvance;
+            var delimiterReasonLine = delimiter.Delimiter == ')' ? readLine : GetEndLine();
+            if (error is ConditionalReaderError.MissingCloser or ConditionalReaderError.GroupClose)
+                delimiterReasonLine = _reader.GetLine(reasonPosition);
+            _failure = failure with
+            {
+                UnclosedDelimiter = delimiter with { Conditional = new ConditionalReadDiagnostic(error, delimiterReasonLine) { ReadLine = readLine } }
+            };
+            return;
+        }
         if (_localReaderFailure && _failure is { ConditionalEndOfInput: { } quote } && _reader != null)
         {
             var line = error is ConditionalReaderError.MissingCloser or ConditionalReaderError.GroupClose

@@ -530,6 +530,9 @@ line at the failure. The source owner and diagnostic record remain admitted
 through stderr write completion.
 Conditional failures retain the line for each part of the diagnostic, including
 open groups and quotes, the rejected token, and the end of input.
+An unclosed quote carries the physical line of its opening delimiter through
+script, capture and here-document readers. When it prevents a conditional
+operand from being read, the operand diagnostic uses its own reader line.
 Quoted bracketed initializer items retain their reader diagnostics with the
 command unit. The prepared tree associates them with the same unit boundary
 used for here-document warnings. Execution reports them before dispatching the

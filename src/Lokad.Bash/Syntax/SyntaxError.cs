@@ -16,7 +16,7 @@ public sealed record SyntaxError(string Message, int Offset)
 /// <summary>Retains the parser's failure class independently of the public diagnostic.</summary>
 internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
-    internal CaptureEndOfInput? CaptureEndOfInput { get; init; }
+    internal UnclosedDelimiter? UnclosedDelimiter { get; init; }
     internal CaptureHereDocumentWarnings? CaptureWarnings { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
     internal ConditionalEndOfInput? ConditionalEndOfInput { get; init; }
@@ -65,15 +65,19 @@ internal readonly record struct ConditionalReadDiagnostic(ConditionalReaderError
 }
 
 internal readonly record struct ConditionalEndOfInput(int EndLine, bool? DoubleQuoted, int QuoteLine,
-    ConditionalReadDiagnostic Diagnostic);
+    ConditionalReadDiagnostic Diagnostic)
+{
+    /// <summary>Physical lines before the capture whose reader produced the diagnostic.</summary>
+    internal int? CaptureLineOffset { get; init; }
+}
 
-/// <summary>Diagnostics from reading a capture that could not reach its closing parenthesis.</summary>
-internal sealed record CaptureEndOfInput(char Delimiter, int ReadPosition)
+/// <summary>A delimiter diagnostic with the reader position used when reporting it.</summary>
+internal sealed record UnclosedDelimiter(char Delimiter, int ReadPosition)
 {
     internal int LineAdvance { get; init; }
     /// <summary>Line in a here-document expansion payload when its reader reports the failure.</summary>
     internal int PayloadLine { get; init; }
-    internal bool InsideConditional { get; init; }
+    internal ConditionalReadDiagnostic? Conditional { get; init; }
 }
 
 /// <summary>Warnings collected inside a capture, with each document line relative to its payload.</summary>

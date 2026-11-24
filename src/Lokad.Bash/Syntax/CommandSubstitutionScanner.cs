@@ -163,9 +163,9 @@ internal static class CommandSubstitutionScanner
                         { AdjacentSpelling = adjacentSpelling }
                 };
             }
-            else if (status == ShellScanStatus.Incomplete && error is { CaptureEndOfInput: not null })
+            else if (status == ShellScanStatus.Incomplete && error is { UnclosedDelimiter: not null })
                 error = error with { Error = error.Error with { Offset = startIndex } };
-            else if (status == ShellScanStatus.Invalid && error is { CaptureEndOfInput: null } && context.LimitError == null
+            else if (status == ShellScanStatus.Invalid && error is { UnclosedDelimiter: null } && context.LimitError == null
                 && ArithmeticExpansionScanner.TryScanAdjacentSubshell(context, text, startIndex, out var adjacentEnd))
             {
                 endIndex = adjacentEnd;

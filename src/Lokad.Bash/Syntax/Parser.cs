@@ -241,7 +241,7 @@ public static class Parser
                     ReadDiagnostics = diagnostics,
                     DiagnosticLine = failure switch
                     {
-                        { CaptureEndOfInput: { } captureEnd } =>
+                        { UnclosedDelimiter: { } captureEnd } =>
                             tokenizer.GetLine(captureEnd.ReadPosition) + captureEnd.LineAdvance,
                         { UnexpectedToken: { } diagnostic } => tokenizer.GetLine(diagnostic.ReadPosition),
                         { Kind: ParserFailureKind.Grammar or ParserFailureKind.RedirectionOperand } when trailing.Kind == TokenKind.EndOfInput
@@ -489,12 +489,20 @@ public static class Parser
                     tokenizer.EndOfInputLineAdvance, GetPayloadEndLine(tokenizer, source.Length));
                 return ShellScanStatus.Invalid;
             }
-            if (bodyFailure != null && (missingOperand || context.ParsingLimitExceeded || bodyFailure.CaptureEndOfInput != null
+            if (bodyFailure != null && (missingOperand || context.ParsingLimitExceeded || bodyFailure.UnclosedDelimiter != null
+                || bodyFailure.ConditionalEndOfInput.HasValue
                 || bodyFailure.Error.Offset < source.Length || tokenizer.HasPendingClosingParenthesis))
             {
-                error = bodyFailure.InSubstitution();
+                error = bodyFailure.ConditionalEndOfInput.HasValue
+                    ? bodyFailure with { Kind = ParserFailureKind.Delimiter }
+                    : bodyFailure.InSubstitution();
                 if (error.UnexpectedToken is { } unexpected)
                     error = error with { UnexpectedToken = unexpected with { CapturePayloadStart = start } };
+                if (error.ConditionalEndOfInput is { CaptureLineOffset: null } conditionalEnd)
+                    error = error with
+                    {
+                        ConditionalEndOfInput = conditionalEnd with { CaptureLineOffset = source.AsSpan(0, start).Count((byte)'\n') }
+                    };
                 if (missingOperand)
                     error = error with { CaptureWarnings = GetCaptureWarnings(tokenizer.HereDocuments?.Warnings, source, start) };
                 return ShellScanStatus.Invalid;
@@ -504,7 +512,7 @@ public static class Parser
             {
                 error = new ParserFailure(new SyntaxError("Unterminated command substitution.", start), ParserFailureKind.Delimiter)
                 {
-                    CaptureEndOfInput = new CaptureEndOfInput(')', source.Length)
+                    UnclosedDelimiter = new UnclosedDelimiter(')', source.Length)
                     {
                         LineAdvance = tokenizer.EndOfInputLineAdvance,
                         PayloadLine = GetPayloadEndLine(tokenizer, source.Length)
@@ -534,7 +542,7 @@ public static class Parser
         static ParserFailure MissingCloser(CaptureHereDocumentWarnings? warnings, int eofOffset, int lineAdvance, int payloadLine) =>
             new(new SyntaxError("unexpected EOF while looking for matching `)'", eofOffset), ParserFailureKind.Delimiter)
             {
-                CaptureEndOfInput = new CaptureEndOfInput(')', eofOffset) { LineAdvance = lineAdvance, PayloadLine = payloadLine },
+                UnclosedDelimiter = new UnclosedDelimiter(')', eofOffset) { LineAdvance = lineAdvance, PayloadLine = payloadLine },
                 CaptureWarnings = warnings
             };
 

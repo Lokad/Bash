@@ -422,6 +422,22 @@ public sealed class ScriptCommandUnitTests
         + "input: line 3: syntax error near `\n'\ninput: line 3: `'\n")]
     [InlineData("[[ a ;;\\\n",
         "input: line 3: unexpected token `;;', conditional binary operator expected\ninput: line 3: syntax error\n")]
+    [InlineData("[[ -n $\\\n'last\n",
+        "input: line 3: unexpected EOF while looking for matching `''\n"
+        + "input: line 4: unexpected argument to conditional unary operator\n")]
+    [InlineData("[[ x == $(printf '%s' 'last\n",
+        "input: line 2: unexpected EOF while looking for matching `''\n"
+        + "input: line 3: unexpected argument to conditional binary operator\n")]
+    [InlineData("printf '%s' \"$( [[ x == \"last\n",
+        "input: line 2: unexpected EOF while looking for matching `\"'\n"
+        + "input: line 3: unexpected argument to conditional binary operator\n")]
+    [InlineData("[[ x == `printf open\n",
+        "input: line 2: unexpected EOF while looking for matching ``'\n"
+        + "input: line 3: unexpected argument to conditional binary operator\n")]
+    [InlineData("[[ (\n (\n x == $(printf '%s' 'open\n",
+        "input: line 4: unexpected EOF while looking for matching `''\n"
+        + "input: line 5: unexpected argument to conditional binary operator\n"
+        + "input: line 3: expected `)'\ninput: line 2: expected `)'\n")]
     public async Task SourcedConditionalDiagnosticsUseTheLineForEachReaderMessage(string unit, string diagnostic)
     {
         var memory = new MemoryGovernor(256 * 1024);
@@ -441,7 +457,7 @@ public sealed class ScriptCommandUnitTests
     [Theory]
     [InlineData("[[ \"unfinished", "\"", "unexpected token `", "' in conditional command\n")]
     [InlineData("[[ $'unfinished", "'", "unexpected token `", "' in conditional command\n")]
-    [InlineData("[[ ( x =~ \"unfinished", "\"", "unexpected argument to conditional binary operator\nexpected `)'\n", "")]
+    [InlineData("[[ ( x =~ \"unfinished", "\"", "unexpected argument to conditional binary operator\nline 1: expected `)'\n", "")]
     public async Task ConditionalQuoteEndOfInputReportsTheUnfinishedRole(string script, string quote, string reason, string suffix)
     {
         await using var host = new TestHost();
@@ -449,9 +465,63 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        var prefix = System.Text.Encoding.UTF8.GetBytes($"unexpected EOF while looking for matching `{quote}'\n" + reason);
+        var prefix = System.Text.Encoding.UTF8.GetBytes($"line 1: unexpected EOF while looking for matching `{quote}'\nline 2: " + reason);
         byte[] expected = suffix.Length == 0 ? prefix : [.. prefix, 0xff, .. System.Text.Encoding.UTF8.GetBytes(suffix)];
         Assert.Equal(expected, host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("printf '%s' 'open\n", '\'', 2, "Unterminated single-quoted string.", 0)]
+    [InlineData("printf '%s' $\\\n'open\n", '\'', 3, "Unterminated single-quoted string.", 0)]
+    [InlineData("printf '%s' $\\\n\"open\n", '"', 3, "Unterminated double-quoted string.", 0)]
+    [InlineData("printf '%s' \"open\\", '"', 2, "Unexpected end of input after escape.", -1)]
+    public async Task UnclosedWordQuoteReportsItsOpeningLine(string unit, char quote, int line, string message, int offsetAdjustment)
+    {
+        var script = "printf before\n" + unit;
+        Assert.False(Parser.TryParse(script, out _, out var error));
+        Assert.Equal(message, error?.Message);
+        Assert.Equal(script.Length + offsetAdjustment, error?.Offset);
+
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal($"line {line}: unexpected EOF while looking for matching `{quote}'\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task UnclosedQuoteInReachedLegacyCaptureUsesItsReaderOrigin()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "printf before\nvalue=`printf '%s' 'open\n`\n");
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:2:after", host.StandardOutput.TextContent);
+        Assert.Equal("input: command substitution: line 3: unexpected EOF while looking for matching `''\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("a=('open\n", '\'')]
+    [InlineData("declare -a a=(\"open\n", '"')]
+    public async Task UnclosedQuoteInSourcedInitializerReportsAssignmentFailure(string unit, char quote)
+    {
+        var memory = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = memory };
+        host.AddFile("/input", "printf before\n" + unit);
+
+        var result = await host.RunAsync("source input\nprintf ':%s:after' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before:1:after", host.StandardOutput.TextContent);
+        Assert.Equal($"input: line 2: unexpected EOF while looking for matching `{quote}'\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, memory.ReservedBytes);
     }
 
     [Theory]

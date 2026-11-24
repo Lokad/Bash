@@ -363,10 +363,10 @@ public sealed partial class Evaluation
                 {
                     if (failedUnit.Failure.CaptureWarnings is { } captureWarnings)
                         await ReportCaptureHereDocumentWarningsAsync(captureWarnings, path, lineOffset,
-                            failedUnit.Failure.CaptureEndOfInput == null ? diagnosticLine : diagnosticLine - 1).ConfigureAwait(false);
-                    if (failedUnit.Failure.CaptureEndOfInput is { } captureEnd)
+                            failedUnit.Failure.UnclosedDelimiter == null ? diagnosticLine : diagnosticLine - 1).ConfigureAwait(false);
+                    if (failedUnit.Failure.UnclosedDelimiter is { } captureEnd)
                     {
-                        await ReportCaptureEndOfInputAsync(captureEnd, diagnosticLine, path, diagnosticOrigin).ConfigureAwait(false);
+                        await ReportUnclosedDelimiterAsync(captureEnd, diagnosticLine, path, diagnosticOrigin).ConfigureAwait(false);
                     }
                     else if (failedUnit.Failure.UnexpectedToken is { } token)
                         await ReportUnexpectedSyntaxAsync(token, path, diagnosticOrigin, diagnosticLine, includeLine: true)

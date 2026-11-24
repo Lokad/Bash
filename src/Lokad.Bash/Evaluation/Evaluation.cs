@@ -4184,8 +4184,9 @@ public sealed partial class Evaluation : IFileTester
         [.. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
     private static readonly byte[] UnexpectedSyntaxEndOfInput = "syntax error: unexpected end of file\n"u8.ToArray();
     private static readonly byte[] MissingCommandSubstitutionClose = "unexpected EOF while looking for matching `)'\n"u8.ToArray();
-    private static readonly byte[] MissingConditionalDoubleQuote = "unexpected EOF while looking for matching `\"'\n"u8.ToArray();
-    private static readonly byte[] MissingConditionalSingleQuote = "unexpected EOF while looking for matching `''\n"u8.ToArray();
+    private static readonly byte[] MissingDoubleQuote = "unexpected EOF while looking for matching `\"'\n"u8.ToArray();
+    private static readonly byte[] MissingSingleQuote = "unexpected EOF while looking for matching `''\n"u8.ToArray();
+    private static readonly byte[] MissingBacktick = "unexpected EOF while looking for matching ``'\n"u8.ToArray();
     private static readonly byte[] MissingConditionalUnaryArgument = "unexpected argument to conditional unary operator\n"u8.ToArray();
     private static readonly byte[] MissingConditionalBinaryArgument = "unexpected argument to conditional binary operator\n"u8.ToArray();
     private static readonly byte[] MissingConditionalBinaryOperator = "conditional binary operator expected\n"u8.ToArray();
@@ -4203,18 +4204,16 @@ public sealed partial class Evaluation : IFileTester
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
+        lineOffset += failure.CaptureLineOffset.GetValueOrDefault();
         if (failure.DoubleQuoted is { } doubleQuoted)
-            await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.QuoteLine),
-                doubleQuoted ? MissingConditionalDoubleQuote : MissingConditionalSingleQuote).ConfigureAwait(false);
-        await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.Diagnostic.ReasonLine), failure.Diagnostic.Error switch
         {
-            ConditionalReaderError.UnaryOperand => failure.DoubleQuoted.HasValue ? MissingConditionalUnaryArgument : MissingConditionalUnaryArgumentAtEnd,
-            ConditionalReaderError.BinaryOperand => failure.DoubleQuoted.HasValue ? MissingConditionalBinaryArgument : MissingConditionalBinaryArgumentAtEnd,
-            ConditionalReaderError.BinaryOperator => failure.DoubleQuoted.HasValue ? MissingConditionalBinaryOperator : MissingConditionalBinaryOperatorAtEnd,
-            ConditionalReaderError.GroupClose => failure.DoubleQuoted.HasValue ? MissingConditionalGroup : MissingConditionalGroupAtEnd,
-            ConditionalReaderError.MissingCloser => MissingConditionalClose,
-            _ => failure.DoubleQuoted.HasValue ? UnreadConditionalToken : MissingConditionalTermAtEnd
-        }).ConfigureAwait(false);
+            if (origin == SyntaxDiagnosticOrigin.Script)
+                origin = SyntaxDiagnosticOrigin.ScriptLine;
+            await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.QuoteLine),
+                doubleQuoted ? MissingDoubleQuote : MissingSingleQuote).ConfigureAwait(false);
+        }
+        await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.Diagnostic.ReasonLine),
+            GetConditionalEndOfInputMessage(failure.Diagnostic.Error, failure.DoubleQuoted.HasValue)).ConfigureAwait(false);
         if (failure.Diagnostic.UnclosedGroupLines is { } groups)
             foreach (var groupLine in groups)
                 await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(groupLine), MissingConditionalGroup).ConfigureAwait(false);
@@ -4224,8 +4223,18 @@ public sealed partial class Evaluation : IFileTester
         SyntaxDiagnosticPrefix Prefix(int line) => new(path, origin, lineOffset + line);
     }
 
+    private static ReadOnlyMemory<byte> GetConditionalEndOfInputMessage(ConditionalReaderError error, bool followsUnclosedDelimiter) => error switch
+    {
+        ConditionalReaderError.UnaryOperand => followsUnclosedDelimiter ? MissingConditionalUnaryArgument : MissingConditionalUnaryArgumentAtEnd,
+        ConditionalReaderError.BinaryOperand => followsUnclosedDelimiter ? MissingConditionalBinaryArgument : MissingConditionalBinaryArgumentAtEnd,
+        ConditionalReaderError.BinaryOperator => followsUnclosedDelimiter ? MissingConditionalBinaryOperator : MissingConditionalBinaryOperatorAtEnd,
+        ConditionalReaderError.GroupClose => followsUnclosedDelimiter ? MissingConditionalGroup : MissingConditionalGroupAtEnd,
+        ConditionalReaderError.MissingCloser => MissingConditionalClose,
+        _ => followsUnclosedDelimiter ? UnreadConditionalToken : MissingConditionalTermAtEnd
+    };
+
     internal async Task ReportHereDocumentCaptureEndOfInputAsync(
-        CaptureEndOfInput endOfInput, CaptureHereDocumentWarnings? warnings, ScopedEvaluation scope)
+        UnclosedDelimiter endOfInput, CaptureHereDocumentWarnings? warnings, ScopedEvaluation scope)
     {
         if (warnings is { } captureWarnings)
             await ReportHereDocumentCaptureWarningsAsync(captureWarnings.Warnings, scope).ConfigureAwait(false);
@@ -4233,7 +4242,7 @@ public sealed partial class Evaluation : IFileTester
             || (scope.Context.Coordinates.CaptureFunctionDepth.HasValue && !scope.InNestedCommandUnits)
             ? SyntaxDiagnosticOrigin.CommandSubstitution
             : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
-        await ReportCaptureEndOfInputAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
+        await ReportUnclosedDelimiterAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
             scope.Context.CallerSource?.Path, origin).ConfigureAwait(false);
     }
 
@@ -4260,19 +4269,34 @@ public sealed partial class Evaluation : IFileTester
         return coordinates.FunctionBodyLine != 0 ? coordinates.FunctionBodyLine : coordinates.Line;
     }
 
-    private async Task ReportCaptureEndOfInputAsync(
-        CaptureEndOfInput endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin)
+    private async Task ReportUnclosedDelimiterAsync(
+        UnclosedDelimiter endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
+        if (origin == SyntaxDiagnosticOrigin.Script && endOfInput.Delimiter != ')')
+            origin = SyntaxDiagnosticOrigin.ScriptLine;
         var prefix = new SyntaxDiagnosticPrefix(path, origin, line);
-        await WriteSyntaxDiagnosticLineAsync(descriptor, prefix,
-                endOfInput.Delimiter == ')' ? MissingCommandSubstitutionClose
-                    : Utf8Text.EncodeLine($"unexpected EOF while looking for matching `{endOfInput.Delimiter}'"))
-            .ConfigureAwait(false);
-        if (endOfInput.InsideConditional)
-            await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, UnreadConditionalToken).ConfigureAwait(false);
+        var message = endOfInput.Delimiter switch
+        {
+            ')' => MissingCommandSubstitutionClose,
+            '"' => MissingDoubleQuote,
+            '\'' => MissingSingleQuote,
+            '`' => MissingBacktick,
+            _ => Utf8Text.EncodeLine($"unexpected EOF while looking for matching `{endOfInput.Delimiter}'")
+        };
+        await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, message).ConfigureAwait(false);
+        if (endOfInput.Conditional is { } conditional)
+        {
+            var lineOffset = line - conditional.ReadLine;
+            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, lineOffset + conditional.ReasonLine),
+                GetConditionalEndOfInputMessage(conditional.Error, followsUnclosedDelimiter: true)).ConfigureAwait(false);
+            if (conditional.UnclosedGroupLines is { } groups)
+                foreach (var groupLine in groups)
+                    await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, lineOffset + groupLine),
+                        MissingConditionalGroup).ConfigureAwait(false);
+        }
     }
 
     private async Task ReportReaderGrammarEndOfInputAsync(string? path, SyntaxDiagnosticOrigin origin, int line)

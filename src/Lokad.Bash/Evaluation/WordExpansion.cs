@@ -1037,7 +1037,7 @@ internal static partial class WordExpansion
 
         static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, ParserFailure? error)
         {
-            if (error is { CaptureEndOfInput: { } missingCloser })
+            if (error is { UnclosedDelimiter: { } missingCloser })
                 await failedScope.Effects.ReportHereDocumentCaptureEndOfInputAsync(missingCloser, error.CaptureWarnings, failedScope)
                     .ConfigureAwait(false);
             else
