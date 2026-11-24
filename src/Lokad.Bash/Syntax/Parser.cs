@@ -819,7 +819,7 @@ public static class Parser
                         && IsSupportedKeyword(reservedText.AsSpan())
                         && !(afterPipe && reservedText.AsSpan().SequenceEqual("time"u8)))
                     {
-                        tokenizer.RecordError("Unexpected reserved word.", tokenizer.Position);
+                        tokenizer.RecordUnexpectedToken("Unexpected reserved word.", token, tokenizer.Position);
                         return null;
                     }
 

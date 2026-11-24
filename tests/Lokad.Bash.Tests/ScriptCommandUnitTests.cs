@@ -226,7 +226,9 @@ public sealed class ScriptCommandUnitTests
     [InlineData("if true; then )\n", ")", "if true; then )")]
     [InlineData("case a in (a ;;\n", ";;", "case a in (a ;;")]
     [InlineData("f() printf hidden\n", "printf", "f() printf hidden")]
-    public async Task IncompleteCompoundReportsTheReachedTokenAndLine(string unit, string token, string line)
+    [InlineData("do\n", "do", "do")]
+    [InlineData(": | ]]\n", "]]", ": | ]]")]
+    public async Task InvalidCompoundOrCommandReportsTheReachedTokenAndLine(string unit, string token, string line)
     {
         await using var host = new TestHost();
         host.AddFile("/input", "printf before\n" + unit);
