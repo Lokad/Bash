@@ -655,6 +655,9 @@ its operands against the previous statuses. Publication preserves scalar,
 associative, and declaration-only bindings. Initialized sparse arrays reuse their
 positions when they fit the incoming status list. Empty loops and function
 definitions preserve the previous array.
+A direct commandless stage reports an isolated redirection failure to stderr
+and publishes its assignment status. Ordinary output redirection failures and
+failures in a compound stage contribute their own nonzero status.
 For `|&`, the left stage applies an implicit `2>&1` after its explicit
 redirections. Setup diagnostics use the stderr mapping reached so far.
 Readonly descriptor allocation reports the selected binding first and the

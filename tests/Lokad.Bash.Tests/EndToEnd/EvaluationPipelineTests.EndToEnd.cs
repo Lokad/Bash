@@ -7,6 +7,42 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationPipelineTestsEndToEnd
 {
 
+    [Theory]
+    [InlineData("<missing/path | :", "<0|0 0|unset>", "missing/path: No such file or directory")]
+    [InlineData(": | value=set <missing/path", "<0|0 0|unset>", "missing/path: No such file or directory")]
+    [InlineData(": | {hold}>missing/path", "<0|0 0|unset>", "missing/path: No such file or directory")]
+    [InlineData(": | <\"${missing?required}\"", "<0|0 0|unset>", "missing: required")]
+    [InlineData(": | >missing/path", "<1|0 1|unset>", "missing/path: No such file or directory")]
+    [InlineData(": | { <missing/path; }", "<1|0 1|unset>", "missing/path: No such file or directory")]
+    public async Task CommandlessPipelineStageStatusFollowsTheRedirectionIsolationBoundary(
+        string pipeline, string output, string diagnostic)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            pipeline + "\nprintf '<%s|%s|%s>' \"$?\" \"${PIPESTATUS[*]}\" \"${value-unset}\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal("line 1: " + diagnostic + "\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ErrexitContinuesAfterAnIsolatedRedirectionFailsInACommandlessPipelineStage()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "set -e\n: | 2>errors <missing/path\nprintf '<%s|%s>' \"$?\" \"${PIPESTATUS[*]}\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0|0 0>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("line 2: missing/path: No such file or directory\n", host.ReadFile("/errors"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_Pipeline_CreatesPipeAndExecutesSegments()
     {

@@ -1115,12 +1115,14 @@ public sealed partial class Evaluation : IFileTester
             Exception? assignmentFailure = null;
             var assignmentResult = EvaluationResult.FromExitCode(exitCode);
             OperationError? assignmentCloseError = null;
+            bool redirectionFailed;
             try
             {
                 // An isolated redirection produces its own status, including a local expansion failure.
                 if (isolateRedirections)
                     _state.FatalExpansion = null;
-                if (_state.TryConsumeExpansionError(out var assignmentRedirectionExitCode, out var errorKind))
+                redirectionFailed = _state.TryConsumeExpansionError(out var assignmentRedirectionExitCode, out var errorKind);
+                if (redirectionFailed)
                     assignmentResult = await CompleteRedirectionFailureAsync(assignmentRedirectionExitCode, errorKind, scope)
                         .ConfigureAwait(false);
                 else
@@ -1140,6 +1142,10 @@ public sealed partial class Evaluation : IFileTester
                 assignmentCloseError = await redirectionScope.CloseAsync(
                     assignmentFailure != null || assignmentResult.ExitCode != 0).ConfigureAwait(false);
             }
+            // A commandless pipeline stage publishes its assignment status after isolated
+            // redirection setup. Cleanup still sees the actual setup failure.
+            if (redirectionFailed && isolateRedirections && directPipelineStage)
+                assignmentResult = assignmentResult.WithExitCode(exitCode);
             return await CompleteSimpleCommandAsync(assignmentResult, assignmentCloseError, ShellValue.Empty)
                 .ConfigureAwait(false);
         }
