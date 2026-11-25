@@ -13,6 +13,10 @@ public enum ShellQuoteStyle { Backslash, SingleQuoted, DoubleQuoted, AnsiC, Asso
 /// <summary>Provides helpers for rendering shell command arguments safely.</summary>
 public static class ShellArgumentEscaping
 {
+    // Printable ASCII except the two bytes escaped inside ANSI-C quotes.
+    private static readonly SearchValues<byte> AnsiCLiteralAscii = SearchValues.Create(
+        " !\"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"u8);
+
     /// <summary>Delimits a diagnostic operand without decoding or escaping its bytes.</summary>
     public static ShellValue QuoteDiagnosticOperand(ShellValue operand) =>
         ShellValue.FromBytes(ByteMemoryBuilder.CreateUnaccounted(0).Append((byte)'`').Append(operand.Bytes).Append((byte)'\'').ToMemory());
@@ -95,7 +99,18 @@ public static class ShellArgumentEscaping
                         return false;
                     continue;
                 }
-                var length = cLocaleDiagnostic ? (value is >= 0x20 and <= 0x7e ? 1 : 0) : PrintableCharacterLength(input[index..]);
+                if (value is >= 0x20 and <= 0x7e)
+                {
+                    var rest = input[(index + 1)..];
+                    var end = rest.IndexOfAnyExcept(AnsiCLiteralAscii);
+                    var runLength = end < 0 ? rest.Length + 1 : end + 1;
+                    // Each ASCII byte is a complete character in the writer's partial output.
+                    if (!AppendLiteralRun(output, input.Slice(index, runLength)))
+                        return false;
+                    index += runLength - 1;
+                    continue;
+                }
+                var length = cLocaleDiagnostic ? 0 : PrintableCharacterLength(input[index..]);
                 if (length == 0)
                 {
                     octalEscape[0] = (byte)'\\';

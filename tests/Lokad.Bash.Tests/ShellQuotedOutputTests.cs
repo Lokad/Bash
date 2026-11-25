@@ -191,11 +191,13 @@ public sealed class ShellQuotedOutputTests
     [InlineData(ShellQuoteStyle.AnsiC)]
     public void AnsiQuotesKeepCompleteCharactersAndEscapes(ShellQuoteStyle style)
     {
-        byte[] input = [.. "aé\\b'🙂x"u8, 0xff, (byte)'z'];
+        byte[] input = [.. "aé\\b'🙂x"u8, 0xff, .. "xyzéab"u8];
         byte[][] atoms =
         [
             "$'"u8.ToArray(), "a"u8.ToArray(), "é"u8.ToArray(), "\\\\"u8.ToArray(), "b"u8.ToArray(),
-            "\\'"u8.ToArray(), "🙂"u8.ToArray(), "x"u8.ToArray(), "\\377"u8.ToArray(), "z"u8.ToArray(), "'"u8.ToArray(),
+            "\\'"u8.ToArray(), "🙂"u8.ToArray(), "x"u8.ToArray(), "\\377"u8.ToArray(),
+            "x"u8.ToArray(), "y"u8.ToArray(), "z"u8.ToArray(), "é"u8.ToArray(), "a"u8.ToArray(), "b"u8.ToArray(),
+            "'"u8.ToArray(),
         ];
         AssertPrefixes(atoms, output => ShellArgumentEscaping.TryAppendQuoted(output, input, style));
     }
@@ -211,6 +213,22 @@ public sealed class ShellQuotedOutputTests
         Assert.True(ShellArgumentEscaping.TryAppendQuoted(output, input, ShellQuoteStyle.Backslash));
         Assert.Equal(input.Length + 6, output.Written);
         Assert.InRange(output.Appends, 1, 4);
+    }
+
+    [Theory]
+    [InlineData(ShellQuoteStyle.Backslash)]
+    [InlineData(ShellQuoteStyle.AnsiC)]
+    public void AnsiQuotesAppendAsciiRunsAfterTheFirstEscapeInSpans(ShellQuoteStyle style)
+    {
+        var input = new byte[4098];
+        input.AsSpan().Fill((byte)'a');
+        input[0] = 0xff;
+        input[2049] = (byte)'\\';
+        var output = new CountingWriter();
+
+        Assert.True(ShellArgumentEscaping.TryAppendQuoted(output, input, style));
+        Assert.Equal(input.Length + 7, output.Written);
+        Assert.Equal(6, output.Appends);
     }
 
     private static void AssertPrefixes(byte[][] atoms, Func<IByteMemoryWriter, bool> write)
