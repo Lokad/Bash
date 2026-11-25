@@ -135,11 +135,14 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         return new byte[(int)length];
     }
 
-    /// <summary>Projects joined bytes and quote runs directly from the expanded fields.</summary>
-    internal static (ShellValue Value, GlobMask Mask) JoinPatternWithSpaces(
+    /// <summary>Projects joined bytes and quote runs. A null mask denotes a literal operand.</summary>
+    internal static (ShellValue Value, GlobMask? Mask) JoinPatternWithSpaces(
         IReadOnlyList<ExpandedWord> words, EvaluationMemory memory)
     {
         var value = JoinValuesWithSpaces(words, memory);
+        if (HasOnlyQuotedContent(words))
+            return (value, null);
+
         var length = value.Bytes.Length;
         byte[]? mask = null;
         var position = 0;
@@ -154,6 +157,22 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
             position = words[index].AppendGlobMask(length, position, memory, ref mask);
         }
         return (value, new GlobMask(mask));
+
+        static bool HasOnlyQuotedContent(IReadOnlyList<ExpandedWord> words)
+        {
+            // Inserted spaces carry no pattern or replacement syntax.
+            for (var index = 0; index < words.Count; index++)
+            {
+                var segments = words[index].Segments;
+                for (var part = 0; part < segments.Count; part++)
+                {
+                    var segment = segments[part];
+                    if (!segment.IsGlobQuoted && !segment.Content.IsEmpty)
+                        return false;
+                }
+            }
+            return true;
+        }
     }
 
     private int AppendGlobMask(int length, int position, EvaluationMemory memory, ref byte[]? mask)

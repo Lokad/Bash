@@ -198,7 +198,7 @@ public sealed class ParameterTransformTests
             var result = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
             Assert.Equal(matched ? replacement : subject, result.ToUtf8String());
             var workspace = evaluation.Memory.Workspace.Bytes - baseline;
-            // Operand masks and backing are still needed in both cases. Only a match keeps output backing.
+            // Only a match retains the emitted replacement backing.
             Assert.InRange(workspace, 0, (matched ? 6L : 4L) * width);
         }
         evaluation.Memory.Finish(retainVariables: false);

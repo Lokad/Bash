@@ -976,11 +976,12 @@ internal static partial class WordExpansion
                     return;
                 // Anchors can come from an expansion, but quoted prefixes and global replacements stay literal.
                 if (mode == ParameterReplacementMode.First && !pattern.Value.IsEmpty
-                    && pattern.Mask.AsSpan()[0] == GlobMask.Active && pattern.Value.Bytes.Span[0] is (byte)'#' or (byte)'%')
+                    && pattern.Mask is { } patternMask && patternMask.AsSpan()[0] == GlobMask.Active
+                    && pattern.Value.Bytes.Span[0] is (byte)'#' or (byte)'%')
                 {
                     mode = pattern.Value.Bytes.Span[0] == (byte)'#' ? ParameterReplacementMode.Prefix : ParameterReplacementMode.Suffix;
                     pattern = new ParameterOperand(ShellValue.FromBytes(pattern.Value.Bytes[1..]),
-                        new GlobMask(pattern.Mask.Memory.IsEmpty ? ReadOnlyMemory<byte>.Empty : pattern.Mask.Memory[1..]));
+                        new GlobMask(patternMask.Memory.IsEmpty ? ReadOnlyMemory<byte>.Empty : patternMask.Memory[1..]));
                 }
                 var canMatch = TryUnescapePattern(pattern, out pattern);
                 var replacement = await ExpandOperandAsync(separator < 0 ? ShellSource.Empty : operand[(separator + 1)..],
@@ -989,7 +990,7 @@ internal static partial class WordExpansion
                     return;
                 var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken) : null;
                 var syntaxStart = replacement.Value.Bytes.Span.IndexOfAny((byte)'&', (byte)'\\');
-                using var encoded = matcher != null && syntaxStart >= 0 && !replacement.Mask.Memory.IsEmpty
+                using var encoded = matcher != null && syntaxStart >= 0 && replacement.Mask is not { Memory.IsEmpty: true }
                     ? new ByteMemoryBuilder(0, budget.Budget)
                     : null;
                 ReadOnlyMemory<byte>? template = null;
@@ -1019,13 +1020,14 @@ internal static partial class WordExpansion
                     if (encoded == null)
                         return replacement.Value.Bytes;
                     var bytes = replacement.Value.Bytes.Span;
-                    var mask = replacement.Mask.AsSpan();
+                    var activity = replacement.Mask;
+                    var mask = activity == null ? default : activity.AsSpan();
                     var copiedThrough = 0;
                     for (var index = syntaxStart; index < bytes.Length; index++)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         // Preserve quoted escapes in one stream: an earlier unquoted backslash can consume them.
-                        if (mask[index] == GlobMask.Active || bytes[index] is not ((byte)'&' or (byte)'\\'))
+                        if (bytes[index] is not ((byte)'&' or (byte)'\\') || activity != null && mask[index] == GlobMask.Active)
                             continue;
                         encoded.Append(bytes[copiedThrough..index]).Append((byte)'\\');
                         copiedThrough = index;
@@ -1163,6 +1165,12 @@ internal static partial class WordExpansion
 
             bool TryUnescapePattern(ParameterOperand operand, out ParameterOperand pattern)
             {
+                if (operand.Mask == null)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    pattern = operand;
+                    return true;
+                }
                 var success = operand.Mask.TryUnescape(operand.Value, budget, cancellationToken, out var value, out var mask);
                 pattern = new ParameterOperand(value, mask);
                 return success;
@@ -1604,14 +1612,14 @@ internal static partial class WordExpansion
         }
     }
 
-    private sealed record ParameterOperand(ShellValue Value, GlobMask Mask);
+    private sealed record ParameterOperand(ShellValue Value, GlobMask? Mask);
 
     /// <summary>Reuses character matches across the fields of a single expanded pattern.</summary>
     private sealed class CasePatternMatcher(ParameterOperand operand, MemoryCapacity memory)
     {
         private const int EntryCount = 32;
         private readonly ParameterOperand _operand = operand;
-        private readonly bool _bytePattern = !System.Text.Unicode.Utf8.IsValid(operand.Value.Bytes.Span);
+        private readonly bool _bytePattern = operand.Mask != null && !System.Text.Unicode.Utf8.IsValid(operand.Value.Bytes.Span);
         private readonly MemoryCapacity _memory = memory;
         private Entries _entries;
 
@@ -1624,9 +1632,12 @@ internal static partial class WordExpansion
             if ((entry & ~1) == key)
                 return (entry & 1) != 0;
 
-            var mask = _operand.Mask.AsSpan();
-            var matched = TextGlobMatcher.MatchUtf8(_operand.Value.Bytes.Span, in mask, character, requireEnd: true,
-                _bytePattern, _memory, cancellationToken, out _) == GlobMatchResult.Match;
+            var pattern = _operand.Value.Bytes.Span;
+            var activity = _operand.Mask;
+            var mask = activity == null ? default : activity.AsSpan();
+            var matched = activity == null ? pattern.SequenceEqual(character)
+                : TextGlobMatcher.MatchUtf8(pattern, in mask, character, requireEnd: true,
+                    _bytePattern, _memory, cancellationToken, out _) == GlobMatchResult.Match;
             entry = key | (matched ? 1 : 0);
             return matched;
         }

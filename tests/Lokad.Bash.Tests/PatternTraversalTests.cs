@@ -25,7 +25,7 @@ public sealed class PatternTraversalTests
         {
             var (value, mask) = ExpandedWord.JoinPatternWithSpaces([word], memory);
             Assert.Equal<byte>([0xc3, 0xa9, (byte)'*', 0xff, (byte)'?'], value.Bytes.ToArray());
-            Assert.Equal<byte>(quotedContent ? [1, 0, 0, 1, 1] : [], mask.Memory.ToArray());
+            Assert.Equal<byte>(quotedContent ? [1, 0, 0, 1, 1] : [], Assert.IsType<GlobMask>(mask).Memory.ToArray());
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);
@@ -47,7 +47,29 @@ public sealed class PatternTraversalTests
             var (value, mask) = ExpandedWord.JoinPatternWithSpaces(fields, memory);
             Assert.Equal<byte>([(byte)'q', (byte)' ', 0xff, (byte)'*', (byte)' ', (byte)' ', (byte)'?'],
                 value.Bytes.ToArray());
-            Assert.Equal<byte>([1, 1, 0, 0, 1, 1, 1], mask.Memory.ToArray());
+            Assert.Equal<byte>([1, 1, 0, 0, 1, 1, 1], Assert.IsType<GlobMask>(mask).Memory.ToArray());
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void FullyQuotedPatternJoinRetainsSpacesAndEmptyFields()
+    {
+        ExpandedWord[] words = [
+            new([new(ShellValue.FromText("?"), isGlobQuoted: true)]),
+            new([], isEmptyAggregateField: true),
+            new([new(ShellValue.FromText("\\*"), isGlobQuoted: true)])
+        ];
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, memory);
+            Assert.Equal(ShellValue.FromText("?  \\*"), value);
+            Assert.Null(mask);
+            Assert.True(ShellPattern.MatchesWords(words, "?  \\*"u8, memory, CancellationToken.None));
+            Assert.False(ShellPattern.MatchesWords(words, "a  \\*"u8, memory, CancellationToken.None));
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);
@@ -350,6 +372,46 @@ public sealed class PatternTraversalTests
             Assert.False(ShellPattern.MatchesWords(words, [0xfe, (byte)'x'], memory, CancellationToken.None));
         }
         finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FullyQuotedPatternsMatchBytesWithoutAdmittingAMask(bool prepareMatcher)
+    {
+        var bytes = new byte[16 * 1024];
+        bytes.AsSpan().Fill(0xff);
+        bytes[0] = (byte)'?';
+        bytes[^1] = (byte)'\\';
+        var different = (byte[])bytes.Clone();
+        different[0] = (byte)'a';
+        ExpandedWord[] words = [new([new(ShellValue.FromBytes(bytes), isGlobQuoted: true)])];
+        var governor = new MemoryGovernor(prepareMatcher ? 256 : 0);
+        var memory = new EvaluationMemory(governor);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        try
+        {
+            if (prepareMatcher)
+            {
+                var pattern = ShellPattern.FromWords(words, memory, CancellationToken.None);
+                Assert.True(pattern.TryMatchPrefix(bytes, shortest: true, CancellationToken.None, out var length));
+                Assert.Equal(bytes.Length, length);
+                Assert.False(pattern.TryMatchSuffix(different, shortest: false, CancellationToken.None, out _));
+                Assert.Throws<OperationCanceledException>(() =>
+                    ShellPattern.FromWords(words, memory, cancelled.Token));
+            }
+            else
+            {
+                Assert.True(ShellPattern.MatchesWords(words, bytes, memory, CancellationToken.None));
+                Assert.False(ShellPattern.MatchesWords(words, different, memory, CancellationToken.None));
+                Assert.Throws<OperationCanceledException>(() =>
+                    ShellPattern.MatchesWords(words, bytes, memory, cancelled.Token));
+            }
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(prepareMatcher ? 256L : 0L, governor.PeakBytes);
         Assert.Equal(0, governor.ReservedBytes);
     }
 

@@ -7,13 +7,13 @@ namespace Lokad.Bash.Evaluation;
 internal sealed class ShellPattern
 {
     private readonly ShellValue _value;
-    private readonly GlobMask _mask;
+    private readonly GlobMask? _mask;
     private readonly bool _literal;
     private readonly EvaluationMemory _memory;
     private ReadOnlyMemory<int>? _scalarAtoms;
     private ReadOnlyMemory<int>? _byteAtoms;
 
-    private ShellPattern(ShellValue value, GlobMask mask, bool literal, EvaluationMemory memory)
+    private ShellPattern(ShellValue value, GlobMask? mask, bool literal, EvaluationMemory memory)
     {
         _value = value;
         _mask = mask;
@@ -24,6 +24,7 @@ internal sealed class ShellPattern
 
     public bool IsEmpty => _value.IsEmpty;
     public bool RequiresByteCharacters { get; }
+    private GlobMaskSpan Mask => _mask == null ? default : _mask.AsSpan();
 
     public static ShellPattern FromWords(
         IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
@@ -33,9 +34,10 @@ internal sealed class ShellPattern
     }
 
     /// <summary>Retains an already unescaped value and its quoting metadata for this command's matching.</summary>
-    public static ShellPattern FromUnescaped(ShellValue value, GlobMask mask, EvaluationMemory memory, CancellationToken cancellationToken)
+    public static ShellPattern FromUnescaped(ShellValue value, GlobMask? mask, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        var literal = IsLiteral(value.Bytes.Span, mask.AsSpan(), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var literal = mask == null || IsLiteral(value.Bytes.Span, mask.AsSpan(), cancellationToken);
         memory.Charge(256);
         return new ShellPattern(value, mask, literal, memory);
     }
@@ -54,6 +56,10 @@ internal sealed class ShellPattern
     {
         var (value, activity) = PrepareWords(words, memory, cancellationToken);
         var bytes = value.Bytes.Span;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (activity == null)
+            return text.SequenceEqual(bytes);
+
         var mask = activity.AsSpan();
         if (IsLiteral(bytes, mask, cancellationToken))
             return text.SequenceEqual(bytes);
@@ -68,17 +74,20 @@ internal sealed class ShellPattern
             requireEnd: true, byteCharacters, memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
     }
 
-    private static (ShellValue Value, GlobMask Mask) PrepareWords(
+    private static (ShellValue Value, GlobMask? Mask) PrepareWords(
         IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, memory);
-        _ = mask.TryUnescape(value, memory, cancellationToken, out value, out mask);
+        if (mask != null)
+        {
+            _ = mask.TryUnescape(value, memory, cancellationToken, out value, out var unescapedMask);
+            mask = unescapedMask;
+        }
         return (value, mask);
     }
 
     private static bool IsLiteral(ReadOnlySpan<byte> bytes, GlobMaskSpan mask, CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         for (var index = 0; index < bytes.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -103,7 +112,7 @@ internal sealed class ShellPattern
             length = _value.Bytes.Length;
             return text.StartsWith(_value.Bytes.Span);
         }
-        var mask = _mask.AsSpan();
+        var mask = Mask;
         return TextGlobMatcher.MatchUtf8Prefix(_value.Bytes.Span, in mask, text,
             shortest, byteCharacters, _memory.Workspace, cancellationToken, out length) == GlobMatchResult.Match;
     }
@@ -114,12 +123,12 @@ internal sealed class ShellPattern
         if (_literal)
             return TextGlobMatcher.TryFindLiteral(_value.Bytes.Span, text, out start, out length);
 
-        var mask = _mask.AsSpan();
+        var mask = Mask;
         return TextGlobMatcher.FindUtf8(_value.Bytes.Span, in mask, text,
             byteCharacters, _memory.Workspace, cancellationToken, out start, out length) == GlobMatchResult.Match;
     }
 
-    public TextGlobMatcher.Utf8Search CreateSearch(MemoryCapacity scratch) => new(_value.Bytes.Span, _mask.AsSpan(), _literal, scratch);
+    public TextGlobMatcher.Utf8Search CreateSearch(MemoryCapacity scratch) => new(_value.Bytes.Span, Mask, _literal, scratch);
 
     public bool TryMatchSuffix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int start) =>
         TryMatchSuffix(text, shortest, UsesByteCharacters(text), cancellationToken, out start);
@@ -133,7 +142,7 @@ internal sealed class ShellPattern
             return start >= 0 && text.EndsWith(_value.Bytes.Span);
         }
         ref var prepared = ref (byteCharacters ? ref _byteAtoms : ref _scalarAtoms);
-        var mask = _mask.AsSpan();
+        var mask = Mask;
         prepared ??= TextGlobMatcher.PrepareUtf8Atoms(_value.Bytes.Span, in mask, byteCharacters, _memory, cancellationToken);
         var matched = TextGlobMatcher.MatchUtf8Suffix(_value.Bytes.Span, in mask, prepared.Value.Span, text,
             shortest, byteCharacters, _memory.Workspace, cancellationToken, out var length) == GlobMatchResult.Match;
