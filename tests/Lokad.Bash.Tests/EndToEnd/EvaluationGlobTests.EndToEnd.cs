@@ -212,6 +212,27 @@ public sealed class EvaluationGlobTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("leaf", "<d1/leaf>")]
+    [InlineData("'item[ab]'", "<d1/item[ab]>")]
+    [InlineData("item[ab]", "<d1/itema><d1/itemb>")]
+    [InlineData("open[", "<d1/open[>")]
+    [InlineData("😀é", "<d1/😀é>")]
+    public async Task Evaluation_GlobExpansion_DistinguishesLiteralAndActiveSuffixes(string suffix, string expected)
+    {
+        var tree = EndToEndHarness.BuildTree([
+            ("/d1/leaf", ""), ("/d2/Leaf", ""), ("/d2/leaflet", ""),
+            ("/d1/item[ab]", ""), ("/d1/itemb", ""), ("/d1/itema", ""),
+            ("/d1/open[", ""), ("/d1/open[a", ""),
+            ("/d1/😀é", ""), ("/d1/😁é", ""), ("/d1/😀e\u0301", "")
+        ]);
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' d*/" + suffix, tree: tree);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Fact]
     public async Task Evaluation_GlobExpansion_RequestsDirectoryListing()
     {

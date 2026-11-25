@@ -80,7 +80,8 @@ internal sealed class GlobEvaluation
 
         List<Candidate> candidates = [];
         List<Candidate> matches = [];
-        var prefix = PreparePrefix(component.Start.Value, out var candidatePathBytes);
+        var firstWildcardStart = component.Start.Value;
+        var prefix = PreparePrefix(firstWildcardStart, out var candidatePathBytes);
         _memory.PrepareListCapacity(candidates, 1);
         candidates.Add(prefix);
         var trailingSlash = text.EndsWith('/');
@@ -111,6 +112,8 @@ internal sealed class GlobEvaluation
             {
                 var requireDirectory = hasNext || markDirectory;
                 var matchDot = name.Span[0] == '.';
+                var hasWildcard = component.Start.Value == firstWildcardStart
+                    || GlobPattern.RequiresExpansion(name.Span, _pattern.GetMask(component));
                 long matchPathBytes = 0;
                 foreach (var parent in candidates)
                 {
@@ -125,8 +128,11 @@ internal sealed class GlobEvaluation
                             continue;
                         if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
                             continue;
-                        if (!TextGlobMatcher.MatchesPathComponent(name.Span, _pattern.GetMask(component), entryName,
-                                _memory, _cancellationToken))
+                        var matchesName = hasWildcard
+                            ? TextGlobMatcher.MatchesPathComponent(name.Span, _pattern.GetMask(component), entryName,
+                                _memory, _cancellationToken)
+                            : name.Span.SequenceEqual(entryName);
+                        if (!matchesName)
                             continue;
 
                         var checkLink = requireDirectory && entry.Kind == FilePathKind.SymbolicLink;

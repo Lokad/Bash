@@ -53,6 +53,40 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData("*/leaf", false, "parent/leaf")]
+    [InlineData("*/leaf/", false, "*/leaf/")]
+    [InlineData("*/leaf/", true, "parent/leaf/")]
+    public async Task GlobLiteralSuffixResolvesOnlyMatchingDirectoryLinks(string pattern, bool isDirectory, string expected)
+    {
+        var state = new Eval(Parser.Parse("cmd " + pattern), options:
+            EvaluationOptions.Default with { CurrentDirectory = new ShellPath("/work") });
+        var root = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
+        Assert.Equal("/work", root.Path.Path);
+        root.SetResult(DirectoryListingResult.Success([new DirectoryEntry("parent", FilePathKind.Directory)]));
+
+        var child = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
+        Assert.Equal("/work/parent", child.Path.Path);
+        child.SetResult(DirectoryListingResult.Success([
+            new DirectoryEntry("leaflet", FilePathKind.SymbolicLink),
+            new DirectoryEntry("leaf", FilePathKind.SymbolicLink)
+        ]));
+
+        if (pattern.EndsWith('/'))
+        {
+            var lookup = await NextPathKindsAsync(state);
+            Assert.Equal(new FilePathLookup(RawShellPath.Parse("parent/leaf"),
+                new ShellPath("/work"), FileLinkFollowing.Follow), Assert.Single(lookup.Paths));
+            lookup.SetResult([PathKindResult(isDirectory ? FilePathKind.Directory : FilePathKind.File)]);
+        }
+
+        var command = await NextCommandAsync(state, "cmd");
+        Assert.Equal(expected, Assert.Single(command.Command.Arguments).ToUtf8String());
+        command.SetResult(new CommandExecutionResult.Completed(0));
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task GlobListingsPreserveTraversalAndFailurePolicy(bool failed)
