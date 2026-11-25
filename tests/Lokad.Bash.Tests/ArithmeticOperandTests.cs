@@ -10,6 +10,55 @@ namespace Lokad.Bash.Tests;
 public sealed class ArithmeticOperandTests
 {
     [Theory]
+    [InlineData("", false)]
+    [InlineData("[0]", false)]
+    [InlineData("[0]", true)]
+    public async Task DynamicReferencesDecodeTheirNameOnceInEitherOperand(string subscript, bool prepared)
+    {
+        var name = new string('a', 4096);
+        var reference = name + subscript;
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+
+        var leading = await EvaluateAsync(" " + reference + " + 1 ", 1);
+        var right = await EvaluateAsync(" 1 + " + reference + " ", 5);
+        Assert.Equal(right, leading);
+        Assert.True(right > 0);
+        Assert.Equal(0, governor.ReservedBytes);
+
+        async Task<long> EvaluateAsync(string expression, int referenceStart)
+        {
+            var input = ShellValue.FromText(expression);
+            var expandedSelector = prepared
+                ? new ExpandedArraySubscript(ShellValue.FromText("0"), QuoteForArithmetic: true)
+                : (ExpandedArraySubscript?)null;
+            var operand = expandedSelector is { } selector
+                ? new ArithmeticOperand(input, new Dictionary<int, ArithmeticOperand.Subscript>
+                {
+                    [referenceStart + name.Length] = new(ShellSource.FromText("0"), selector)
+                }, syntax: null)
+                : ArithmeticOperand.FromValue(input);
+            using var scratch = new MemoryCapacity(owner, 0);
+            var reads = 0;
+            var result = await ArithmeticEvaluation.EvaluateAsync<string>(operand, Bind,
+                static (_, _, _) => throw new InvalidOperationException("Unexpected write"), scratch, CancellationToken.None);
+            Assert.Equal(new ArithmeticResult(8, null), result);
+            Assert.Equal(1, reads);
+            return scratch.Bytes;
+
+            ValueTask<ArithmeticBinding<string>> Bind(ArithmeticReference parsed, ArithmeticReferenceUse use)
+            {
+                reads++;
+                Assert.Equal(ArithmeticReferenceUse.Read, use);
+                Assert.Equal((BindingName)name, parsed.Syntax.Name);
+                Assert.Equal(subscript.Length == 0 ? "" : "0", parsed.Syntax.Subscript.ToUtf8String());
+                Assert.Equal(expandedSelector, parsed.ExpandedSubscript);
+                return ValueTask.FromResult<ArithmeticBinding<string>>(new ArithmeticBinding<string>.Bound(name, 7));
+            }
+        }
+    }
+
+    [Theory]
     [InlineData("map[$key]+1")]
     [InlineData("1+map[$key]")]
     public async Task EvaluatingPreparedSelectorsTreatsExpandedBytesAsData(string expression)

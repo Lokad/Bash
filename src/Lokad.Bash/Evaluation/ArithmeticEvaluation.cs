@@ -261,6 +261,7 @@ public static partial class ArithmeticEvaluation
         private int _lastTokenStart;
         private int _suppressedEvaluation;
         private int _nestedParseDepth;
+        private ((int Index, int LastTokenStart) Cursor, ArithmeticReference Reference)? _referenceLookahead;
         private ParseResult _parsed;
         private ArithmeticBinding<TTarget>.Bound? _bound;
         // One serialized parser request is outstanding at a time; results use _parsed and _bound.
@@ -487,13 +488,17 @@ public static partial class ArithmeticEvaluation
         private IEnumerable<ParseStep> TryParseAssignment()
         {
             var saved = (_index, _lastTokenStart);
-            if (!TryParseReference(out var reference) || !TryMatchAssignmentOperator(out var op))
+            var hasReference = TryParseReference(out var reference);
+            var afterReference = (_index, _lastTokenStart);
+            if (!hasReference || !TryMatchAssignmentOperator(out var op))
             {
                 if (Error != null)
                 {
                     _parsed = default;
                     yield break;
                 }
+                if (hasReference)
+                    _referenceLookahead = (afterReference, reference);
                 (_index, _lastTokenStart) = saved;
                 yield return Call(TryParseConditional());
                 if (_parsed.Success && !IsAtEnd && TryMatchAssignmentOperator(out _))
@@ -711,6 +716,10 @@ public static partial class ArithmeticEvaluation
 
         private IEnumerable<ParseStep>? TryParseUnary()
         {
+            // The first operand after a rewind already has an identifier token.
+            if (_referenceLookahead.HasValue)
+                return Parse(this);
+
             var token = PeekToken(out var kind);
             if (kind == ArithmeticTokenKind.Number)
             {
@@ -877,6 +886,17 @@ public static partial class ArithmeticEvaluation
         private bool TryParseReference(out ArithmeticReference reference)
         {
             SkipWhitespace();
+            if (_referenceLookahead is { } lookahead)
+            {
+                // Assignment lookahead only parsed the reference. Binding still happens when reached.
+                _referenceLookahead = null;
+                if (_index == lookahead.Cursor.LastTokenStart)
+                {
+                    (_index, _lastTokenStart) = lookahead.Cursor;
+                    reference = lookahead.Reference;
+                    return true;
+                }
+            }
             if (_index >= Span.Length || !VariableNames.IsNameStart((char)Span[_index]))
             {
                 reference = default;
