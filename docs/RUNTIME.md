@@ -558,6 +558,10 @@ A direct double-quoted command substitution with
 a malformed arithmetic `for` header can end the input at that word. The evaluator
 reports the diagnostic and sets the parser status to 2 before running any prefix
 that forms a complete command list there. The prefix supplies the unit's final status.
+An array item with that header error discards the unit. Its recovery scan can
+report an unmatched delimiter without running any part of that unit. Effective errexit stops the
+streamed root and loaded readers after the first parser diagnostic, before
+recovering a delimiter or preparing a complete prefix.
 Unexpected list tokens and conditional argument failures carry borrowed byte slices
 from the failed unit to the runtime diagnostic. The line counter includes any
 buffered here-document advance, and the displayed bytes come from the physical

@@ -1026,10 +1026,14 @@ they are parsed. Earlier units retain their effects before later syntax failure.
 A malformed arithmetic `for` header in a direct double-quoted command substitution
 can also leave a complete prefix within the current unit. The shell emits the
 diagnostic, publishes status 2, then executes that prefix and returns its status.
-With effective errexit in `source` or `eval`, the parser reports its first
-diagnostic and exits with status 2 before any same-unit recovery. EXIT sees
-the loaded reader's active arguments, locals, and descriptors, and the
-previous pipeline status. A tested invocation suppresses this immediate exit.
+Inside an array initializer, the same failure discards the complete unit.
+A recovered unmatched delimiter supplies a final diagnostic and status 1.
+A nested header failure or a recovery scan with no delimiter error uses status 2.
+With effective errexit, the streamed root, `source` and `eval` readers report
+the first parser diagnostic and exit with status 2 before same-unit recovery. EXIT sees
+the reader's active arguments, locals, descriptors and previous pipeline status.
+A tested invocation suppresses this immediate exit. A streamed root grammar
+error without errexit publishes its parser status before EXIT.
 Explicit whole-script parsing remains available for callers that require validation
 before execution.
 Recoverable expansion failures discard the rest of their unit and expose the

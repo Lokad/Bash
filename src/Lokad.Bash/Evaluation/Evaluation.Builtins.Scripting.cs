@@ -330,7 +330,8 @@ public sealed partial class Evaluation
             ReadsCommandString = kind != ScriptExecutionKind.Root || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
         };
         using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
-        var usesImmediateParserExit = kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap;
+        var streamedRoot = kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.Script;
+        var usesImmediateParserExit = streamedRoot || kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap;
         while (true)
         {
             CheckCancellation();
@@ -366,26 +367,27 @@ public sealed partial class Evaluation
                 ICommand command;
                 if (failedUnit != null)
                 {
+                    var failure = failedUnit.Failure;
                     var detail = stopAfterPrimaryDiagnostic ? SyntaxDiagnosticDetail.PrimaryOnly : SyntaxDiagnosticDetail.Complete;
-                    if (failedUnit.Failure.CaptureWarnings is { } captureWarnings)
+                    if (failure.CaptureWarnings is { } captureWarnings)
                         await ReportCaptureHereDocumentWarningsAsync(captureWarnings, path, lineOffset,
-                            failedUnit.Failure.UnclosedDelimiter == null ? diagnosticLine : diagnosticLine - 1).ConfigureAwait(false);
-                    if (failedUnit.Failure.UnclosedDelimiter is { } captureEnd)
+                            failure.UnclosedDelimiter == null ? diagnosticLine : diagnosticLine - 1).ConfigureAwait(false);
+                    if (failure.UnclosedDelimiter is { } captureEnd)
                     {
                         await ReportUnclosedDelimiterAsync(captureEnd, diagnosticLine, path, diagnosticOrigin, detail).ConfigureAwait(false);
                     }
-                    else if (failedUnit.Failure.UnexpectedToken is { } token)
+                    else if (failure.UnexpectedToken is { } token)
                         await ReportUnexpectedSyntaxAsync(token, path, diagnosticOrigin, diagnosticLine, detail)
                             .ConfigureAwait(false);
-                    else if (failedUnit.Failure.ArithmeticForHeader is { } header)
+                    else if (failure.ArithmeticForHeader is { } header)
                         await ReportArithmeticForHeaderAsync(header, path, diagnosticOrigin, diagnosticLine, detail).ConfigureAwait(false);
-                    else if (failedUnit.Failure.ConditionalEndOfInput is { } conditionalEnd)
+                    else if (failure.ConditionalEndOfInput is { } conditionalEnd)
                         await ReportConditionalEndOfInputAsync(conditionalEnd, path, diagnosticOrigin, lineOffset, detail).ConfigureAwait(false);
-                    else if (failedUnit.DiagnosticLine != 0 && (failedUnit.Failure.UnexpectedEndOfInput
+                    else if (failedUnit.DiagnosticLine != 0 && (failure.UnexpectedEndOfInput
                         || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
-                        || failedUnit.Failure.Kind == ParserFailureKind.RedirectionOperand))
+                        || failure.Kind == ParserFailureKind.RedirectionOperand))
                     {
-                        var eofOrigin = failedUnit.Failure.UnexpectedEndOfInput && diagnosticOrigin == SyntaxDiagnosticOrigin.Script
+                        var eofOrigin = failure.UnexpectedEndOfInput && diagnosticOrigin == SyntaxDiagnosticOrigin.Script
                             ? SyntaxDiagnosticOrigin.ScriptLine : diagnosticOrigin;
                         await ReportReaderGrammarEndOfInputAsync(path, eofOrigin, diagnosticLine).ConfigureAwait(false);
                     }
@@ -401,28 +403,35 @@ public sealed partial class Evaluation
                     if (failedUnit.QuotedRecovery is { } recovery)
                         await ReportUnclosedDelimiterAsync(recovery.Delimiter, lineOffset + recovery.Line, path,
                             diagnosticOrigin, detail).ConfigureAwait(false);
-                    if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)
+                    var quotedArrayFailure = failure.Kind == ParserFailureKind.ArrayQuotedSubstitutionForHeader;
+                    var arrayDelimiterFailure = failure.Kind == ParserFailureKind.ArrayDelimiter
+                        || quotedArrayFailure && failedUnit.QuotedRecovery.HasValue;
+                    var parserStatus = arrayDelimiterFailure ? 1 : 2;
+                    var exitsSubstitution = failure.ExitsSubstitution || quotedArrayFailure && !arrayDelimiterFailure;
+                    var exitsLoadedReader = IsNestedLoadedReader(kind) && exitsSubstitution;
+                    if (failure.IsDirectQuotedSubstitutionFailure
+                        || exitsLoadedReader && failure.ArithmeticForHeader.HasValue
+                        || streamedRoot && (arrayDelimiterFailure || failure.ArithmeticForHeader.HasValue
+                            || failure.UnexpectedToken != null || failure.ConditionalEndOfInput is { DoubleQuoted: null }
+                            || failedUnit.DiagnosticLine != 0 && failure.UnclosedDelimiter == null))
                     {
                         PreparePipelineStatusStorage(1);
-                        scope.Variables.SetPipelineStatuses([2], scope.Context, _cancellationToken);
-                        _state.LastExitCode = 2;
+                        scope.Variables.SetPipelineStatuses([parserStatus], scope.Context, _cancellationToken);
+                        _state.LastExitCode = parserStatus;
                     }
                     if (failedUnit.CompletedPrefix is { } prefix && !skipExecution)
                         command = prefix;
                     else
                     {
-                        if (kind == ScriptExecutionKind.LegacyCapture && failedUnit.Failure.ExitsSubstitution)
+                        if (kind == ScriptExecutionKind.LegacyCapture && exitsSubstitution)
                             return EvaluationResult.Exit(1);
-                        if (IsNestedLoadedReader(kind) && failedUnit.Failure.ExitsSubstitution)
+                        if (exitsLoadedReader)
                         {
-                            var status = failedUnit.Failure.Kind == ParserFailureKind.SubstitutionGrammar
+                            var status = failure.Kind == ParserFailureKind.SubstitutionGrammar
                                 ? BuiltinSyntaxErrorStatus : 2;
                             return await ExitLoadedSyntaxFailureAsync(scope, status, unwindChildFirst: true).ConfigureAwait(false);
                         }
-                        if (failedUnit.Failure.Kind is ParserFailureKind.ArrayQuotedSubstitutionForHeader
-                            or ParserFailureKind.ArrayDelimiter)
-                            return result.WithExitCode(1);
-                        return result.WithExitCode(2);
+                        return result.WithExitCode(parserStatus);
                     }
                 }
                 else

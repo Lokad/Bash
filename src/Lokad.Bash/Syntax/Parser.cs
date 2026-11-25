@@ -214,26 +214,19 @@ public static class Parser
             var diagnostics = new CommandReadDiagnostics(scanContext.TakeHereDocumentWarnings(tokenizer.HereDocuments?.Warnings),
                 scanContext.TakeCompoundItemDiagnostics()) { FunctionBraceLine = tokenizer.TakeFunctionBraceLine() };
 
-            if (tokenizer.QuotedEndOfInputFailure is { } quotedFailure && !scanContext.ParsingLimitExceeded)
+            var quotedFailure = scanContext.ParsingLimitExceeded ? null : tokenizer.QuotedEndOfInputFailure;
+            if ((quotedFailure ?? tokenizer.Failure) is { } failure)
             {
-                var prefix = tokenizer.Error == null && command != null && tokenizer.HereDocuments is not { HasPending: true }
+                var prefix = scanContext.ReadQuotedRecovery && quotedFailure != null && tokenizer.Error == null
+                    && command != null && tokenizer.HereDocuments is not { HasPending: true }
                     ? CompleteHereDocuments(tokenizer, command) : null;
-                var header = quotedFailure.ArithmeticForHeader;
-                yield return new CommandUnitParseResult.Failed(quotedFailure)
+                // Array syntax rejects the whole unit, but a direct quoted item can still leave a delimiter to read.
+                var recoverQuotedSuffix = scanContext.ReadQuotedRecovery && (quotedFailure != null
+                    || failure is { Kind: ParserFailureKind.ArrayQuotedSubstitutionForHeader, IsNestedSubstitution: false });
+                yield return new CommandUnitParseResult.Failed(failure)
                 {
                     CompletedPrefix = prefix,
                     Locations = prefix != null ? tokenizer.Locations : null,
-                    DiagnosticLine = header is { } reached ? tokenizer.GetLine(reached.Start) : 0,
-                    QuotedRecovery = scanContext.ReadQuotedRecovery && header is { } recovery
-                        ? tokenizer.ReadQuotedRecoveryDelimiter(recovery.BodyEnd) : null,
-                    ReadDiagnostics = diagnostics
-                };
-                yield break;
-            }
-            if (tokenizer.Failure is { } failure)
-            {
-                yield return new CommandUnitParseResult.Failed(failure)
-                {
                     ReadDiagnostics = diagnostics,
                     DiagnosticLine = failure switch
                     {
@@ -245,7 +238,9 @@ public static class Parser
                             && failure.Error.Offset == input.Length && tokenizer.Position == input.Length =>
                             tokenizer.GetLine(input.Length) + tokenizer.EndOfInputLineAdvance,
                         _ => 0
-                    }
+                    },
+                    QuotedRecovery = recoverQuotedSuffix && failure.ArithmeticForHeader is { } recovery
+                        ? tokenizer.ReadQuotedRecoveryDelimiter(recovery.BodyEnd) : null
                 };
                 yield break;
             }

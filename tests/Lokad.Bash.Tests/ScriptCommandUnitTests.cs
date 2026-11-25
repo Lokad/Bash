@@ -8,6 +8,8 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ScriptCommandUnitTests
 {
+    private const string PrintParserStatus = "printf \"<%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"";
+
     public static IEnumerable<object[]> CompleteUnits()
     {
         yield return ["printf A\n)\n", "A", 2, true];
@@ -663,6 +665,71 @@ public sealed class ScriptCommandUnitTests
         Assert.Empty(host.CaptureEntries());
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("set +e", 1, "earlier<1:1>", "line 4: syntax error: `((1;))'\n"
+        + "line 4: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("set -e", 2, "earlier<2:0>", "")]
+    public async Task QuotedArrayHeaderFailureDiscardsTheUnitAndItsRedirections(
+        string option, int status, string output, string extraDiagnostics)
+    {
+        var script = $"trap '{PrintParserStatus}' EXIT\n{option}\nprintf earlier\n"
+            + "printf prefix >discarded; items=(\"$(for ((1;)); do :; done)\")\nprintf later\n";
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+
+        Assert.False(Parser.TryParse(script, out _, out var error));
+        Assert.Equal("Arithmetic for header requires two semicolons.", error?.Message);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal("line 4: syntax error: arithmetic expression required\n" + extraDiagnostics, host.StandardError.TextContent);
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("items=(\"$(for ((1;)); do\n :\n done)\"\n tail\n )", 0, "earlier<1:1><0:0>",
+        "./sample.sh: line 4: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("items=(\"$(for ((1;)); do :; done)\n", 2, "earlier<2:2>", "")]
+    [InlineData("items=(\"$(v=\"$(for ((1;)); do :; done)\"; printf child)\")", 2, "earlier<2:2>", "")]
+    public async Task SourcedQuotedArrayHeaderFailureUsesTheRecoveredDelimiterAndStatus(
+        string unit, int status, string output, string recovery)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", "printf earlier\n" + unit + "\nprintf later\n");
+        var script = $"trap '{PrintParserStatus}' EXIT\nset +e\nsource ./sample.sh\n{PrintParserStatus}\n";
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal("./sample.sh: line 2: syntax error: arithmetic expression required\n"
+            + "./sample.sh: line 2: syntax error: `((1;))'\n" + recovery, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("set -e", ")", "earlier<2:0>", "syntax error near unexpected token `)'\n")]
+    [InlineData("set +e", ")", "earlier<2:2>", "syntax error near unexpected token `)'\n`)'\n")]
+    [InlineData("set -e", "[[ ( ( -z ]]", "earlier<2:0>", "unexpected argument `]]' to conditional unary operator\n")]
+    [InlineData("set -e", "printf prefix; value=\"$(for ((1;)); do :; done)\"", "earlier<2:0>",
+        "line 4: syntax error: arithmetic expression required\n")]
+    public async Task StreamedParserFailureUsesTheReachedErrexitState(
+        string option, string unit, string output, string diagnostic)
+    {
+        await using var host = new TestHost();
+        var script = $"trap '{PrintParserStatus}' EXIT\nprintf earlier\n{option}\n{unit}\n";
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
