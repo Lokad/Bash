@@ -624,6 +624,7 @@ public sealed partial class Variables
             bool isNameref,
             bool inherit,
             CaseAttributeChange caseChange,
+            (BindingAttributes Set, BindingAttributes Clear) elementAttributes,
             EvaluationMemory memory,
             Evaluation.FunctionContext? enclosingFunction)
         {
@@ -743,6 +744,9 @@ public sealed partial class Variables
             // A first declaration inherits the prefix export; an unset local retains its own export state.
             if (inheritPrefixExport)
                 updated.SetExported(name, true);
+
+            // Element selectors run after declaration, including when the write fails.
+            updated.UpdateBindingAttributes(name, elementAttributes.Set, elementAttributes.Clear);
 
             if (!ReferenceEquals(updated, command))
             {

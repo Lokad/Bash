@@ -144,7 +144,8 @@ public sealed partial class Evaluation
                             : compoundArrayKind;
                         if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
                                 new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
-                                declarationKind, isNameref: false, inherit, caseChange: default, Memory, function.Enclosing))
+                                declarationKind, isNameref: false, inherit, caseChange: default, elementAttributes: default,
+                                Memory, function.Enclosing))
                         {
                             if (targetVariables.IsReadonly(name))
                                 await ReportCommandDiagnosticAsync([function.FunctionName],

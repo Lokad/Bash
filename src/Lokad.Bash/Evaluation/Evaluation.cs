@@ -2576,7 +2576,8 @@ public sealed partial class Evaluation : IFileTester
                     if (local && !existingLocal && functionContext is { } function
                         && !function.Locals.TryDeclare(declarationScope.Variables, targetVars,
                             new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty), prefixNames,
-                            ArrayAssignmentKind.Auto, isNameref: false, options.Inherit, options.CaseChange, Memory, function.Enclosing))
+                            ArrayAssignmentKind.Auto, isNameref: false, options.Inherit, options.CaseChange,
+                            elementAttributes: default, Memory, function.Enclosing))
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         continue;
@@ -2690,11 +2691,13 @@ public sealed partial class Evaluation : IFileTester
                         reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
                     var checkInheritedReadonly = !existingTargetLocal && options.Inherit
                         && (operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear);
-                    var localCaseChange = checkInheritedReadonly && targetVars.IsReadonlyBinding(localDeclarationTarget)
-                        ? default : options.CaseChange;
+                    var inheritedReadonly = checkInheritedReadonly && targetVars.IsReadonlyBinding(localDeclarationTarget);
+                    var localCaseChange = inheritedReadonly ? default : options.CaseChange;
+                    var elementAttributes = element && operand.Value != null && !options.Readonly && !inheritedReadonly
+                        ? GetAttributeChanges(assignmentExport) : default;
                     if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
                             localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, localCaseChange,
-                            Memory, localFunction.Enclosing))
+                            elementAttributes, Memory, localFunction.Enclosing))
                     {
                         if (!redeclaresLocalArray && (followsLocalNameref ? readonlyBinding : targetVars.IsReadonly(name)))
                             await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
@@ -3056,7 +3059,7 @@ public sealed partial class Evaluation : IFileTester
                     if ((!existing || !indexed && !associative && !hasReference)
                         && !function.Locals.TryDeclare(declarationScope.Variables, variables, declaration,
                             prefixNames, options.ArrayKind, isNameref: false, options.Inherit, caseChange: default,
-                            Memory, function.Enclosing))
+                            elementAttributes: default, Memory, function.Enclosing))
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         return;
@@ -3379,12 +3382,25 @@ public sealed partial class Evaluation : IFileTester
 
             void SetAttributes(BindingName name, Variables variables, DeclarationAttributeChange exportChange)
             {
-                variables.SetCaseAttributes(name, options.CaseChange);
-                if (options.IntegerChange != DeclarationAttributeChange.Unchanged)
-                    variables.SetIntegerBinding(name, options.IntegerChange == DeclarationAttributeChange.Set);
-                if (exportChange != DeclarationAttributeChange.Unchanged)
-                    variables.SetExported(name, exportChange == DeclarationAttributeChange.Set);
-                if (options.Readonly) variables.SetReadonlyBinding(name);
+                var (set, clear) = GetAttributeChanges(exportChange);
+                variables.UpdateBindingAttributes(name, set, clear);
+            }
+
+            (BindingAttributes Set, BindingAttributes Clear) GetAttributeChanges(DeclarationAttributeChange exportChange)
+            {
+                var (set, clear) = options.CaseChange;
+                Include(BindingAttributes.Integer, options.IntegerChange);
+                Include(BindingAttributes.Exported, exportChange);
+                if (options.Readonly) set |= BindingAttributes.Readonly;
+                return (set, clear);
+
+                void Include(BindingAttributes attribute, DeclarationAttributeChange change)
+                {
+                    if (change == DeclarationAttributeChange.Set)
+                        set |= attribute;
+                    else if (change == DeclarationAttributeChange.Clear)
+                        clear |= attribute;
+                }
             }
 
             Task ReportDeclarationDiagnosticAsync(ReadOnlySpan<ShellValue> message) =>

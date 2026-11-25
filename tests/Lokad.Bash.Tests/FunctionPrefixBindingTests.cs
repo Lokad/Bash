@@ -60,7 +60,7 @@ public sealed partial class FunctionPrefixBindingTests
                 Assert.True(locals.TryDeclare(variables, variables,
                     new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName(binding), ShellValue.FromText(value)),
                     prefixes: null, ArrayAssignmentKind.Auto, isNameref, inherit: false, caseChange: default,
-                    memory, enclosingFunction: null));
+                    elementAttributes: default, memory, enclosingFunction: null));
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);
@@ -111,7 +111,7 @@ public sealed partial class FunctionPrefixBindingTests
             Assert.True(locals.TryDeclare(variables, variables,
                 new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName(bindingName), value),
                 prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false,
-                caseChange: default, memory, enclosingFunction: null));
+                caseChange: default, elementAttributes: default, memory, enclosingFunction: null));
 
         Variables.CommandBindings InstallPrefixes(params BindingName[] names)
         {
@@ -383,7 +383,8 @@ public sealed partial class FunctionPrefixBindingTests
         {
             Assert.True(locals.TryDeclare(caller, caller,
                 new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("map"), ShellValue.FromText("local")),
-                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default, memory, enclosingFunction: null));
+                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default,
+                elementAttributes: default, memory, enclosingFunction: null));
             var donor = Assert.IsType<Variables>(locals.SavedBindings);
             var saved = donor.AssociativeArrays["map"];
 
@@ -421,7 +422,8 @@ public sealed partial class FunctionPrefixBindingTests
         {
             Assert.Throws<MemoryBudgetExceededException>(() => locals.TryDeclare(caller, caller,
                 new VariableOperand(VariableOperandKind.Name, VariableReference.ForName("x"), ShellValue.Empty),
-                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default, memory, enclosingFunction: null));
+                prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default,
+                elementAttributes: default, memory, enclosingFunction: null));
             Assert.Empty(locals.SavedNames);
             Assert.Same(array, caller.IndexedArrays["x"]);
             Assert.Equal(256, array.Count);

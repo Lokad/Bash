@@ -598,7 +598,8 @@ public sealed class PrefixScopeOwnershipTests
             {
                 Assert.True(locals.TryDeclare(caller, caller,
                     new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("x"), visible),
-                    prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default, staging, enclosingFunction: null));
+                    prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default,
+                    elementAttributes: default, staging, enclosingFunction: null));
             }
             finally { staging.Finish(retainVariables: false); }
         }

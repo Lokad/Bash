@@ -126,6 +126,39 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(":", "local -x ref[]=j++", "declare -ax dest", "ref[]", 0)]
+    [InlineData("local -x dest=seed", "declare -i ref[i++-9]=j++", "declare -aix dest=()", "ref[i++-9]", 1)]
+    [InlineData("local -Ax dest=([key]=seed)", "local +x ref[]=j++", "declare -A dest=([key]=\"seed\" )", "ref[]", 0)]
+    [InlineData("local -x dest=seed", "dest=prefix typeset -ix ref[]=j++", "declare -aix dest=()", "ref[]", 0)]
+    public async Task RejectedLocalElementInitializerKeepsTheReferentAttributes(
+        string setup, string declaration, string expected, string operand, int indexEffects)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"ref=caller; dest=outer; i=0; j=0\nf(){{ {setup}; local -n ref=dest; {declaration}; "
+            + "printf '<%s:%s:%s>\n' \"$?\" \"$i\" \"$j\"; declare -p ref dest; }\nf\ndeclare -p ref dest");
+
+        Assert.Equal($"<1:{indexEffects}:0>\ndeclare -n ref=\"dest\"\n{expected}\ndeclare -- ref=\"caller\"\ndeclare -- dest=\"outer\"\n",
+            result.StdOut);
+        Assert.Equal($"line 2: {operand}: bad array subscript\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -i 'ref[${dest@a}]=j++'", "<0:1><missing><0>")]
+    [InlineData("local -i \"ref[${dest@a}]=j++\"", "<0:1><0><missing>")]
+    public async Task LocalElementInitializerObservesAttributesAtTheSelectorExpansionPhase(
+        string declaration, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"j=0; f(){{ local -A dest=([0]=old); local -n ref=dest; {declaration}; "
+            + "printf '<%s:%s><%s><%s>' \"$?\" \"$j\" \"${dest[A]-missing}\" \"${dest[Ai]-missing}\"; }; f");
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("local ref[i++]=new", "declare -a dest=([0]=\"new\")", 0, 1, "")]
     [InlineData("local -r ref[i++]=new", "declare -ar dest", 0, 1, "line 2: ref: readonly variable\n")]
     public async Task ReadonlyLocalNamerefCanDeclareItsWritableReferent(

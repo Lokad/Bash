@@ -241,17 +241,20 @@ public sealed partial class Variables
     internal BindingAttributes GetAssignmentAttributes(BindingName name) =>
         TryGetBinding(name, detachBorrowed: false, out var slot) ? slot.Attributes : BindingAttributes.None;
 
-    internal void SetCaseAttributes(BindingName name, CaseAttributeChange change)
+    internal void SetCaseAttributes(BindingName name, CaseAttributeChange change) =>
+        UpdateBindingAttributes(name, change.Set, change.Clear);
+
+    internal void UpdateBindingAttributes(BindingName name, BindingAttributes set, BindingAttributes clear)
     {
-        if (change.IsEmpty || name.IsEmpty)
+        if ((set | clear) == BindingAttributes.None || name.IsEmpty)
             return;
         if (!TryGetBinding(name, out var slot))
         {
-            if ((change.Set & ~change.Clear) == 0)
+            if ((set & ~clear) == 0)
                 return;
             slot = new AttributeSlot();
         }
-        var attributes = (slot.Attributes | change.Set) & ~change.Clear;
+        var attributes = (slot.Attributes | set) & ~clear;
         if (slot.Attributes == attributes)
             return;
         slot.Attributes = attributes;

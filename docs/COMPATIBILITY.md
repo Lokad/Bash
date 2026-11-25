@@ -157,6 +157,11 @@ referent. A readonly local in an enclosing function can be shadowed, and `-I`
 copies its readonly attribute into the new local. An element initializer that
 reaches a readonly scalar local declares its array kind before rejecting the
 write. The selector remains unevaluated.
+For writable local element declarations, integer, case and export changes
+apply to the selected declaration binding before a deferred selector runs.
+A rejected selector leaves those attributes on that binding. Expansions
+that already ran while constructing the command's fields see the earlier
+attributes.
 
 For a whole-name `local +n` declaration, a target spelling that has no
 binding becomes a local of its own. A readonly alias can take this path and
