@@ -53,8 +53,30 @@ public sealed class DeclarationAttributeTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("export link+=new")]
+    [InlineData("readonly link=new")]
+    public async Task NamedAttributeAssignmentsRestoreAnElementNamerefHiddenByAPrefix(string command)
+    {
+        var result = await EvaluationTestHelper.RunAsync("i=0; item=(old other); declare -n link='item[i++]'\n"
+            + "link=temporary " + command + "\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item link");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0>declare -a item=([0]=\"old\" [1]=\"other\")\ndeclare -n link=\"item[i++]\"\n", result.StdOut);
+        Assert.Equal("", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("item=old; declare -rn link=item", "declare -x link+=more",
         "<0:0>declare -x item=\"oldmore\"\ndeclare -nr link=\"item\"\n", "")]
+    [InlineData("item=11; declare -rn link=item", "link=3 command typeset -r link",
+        "<0:0>declare -rx item=\"3\"\ndeclare -nr link=\"item\"\n", "")]
+    [InlineData("item=(old other); declare -n link=item", "link=first item=prefix declare -x link+=more",
+        "<0:0>declare -ax item=([0]=\"prefixmore\" [1]=\"other\")\ndeclare -n link=\"item\"\n", "")]
+    [InlineData("declare -i item=11; declare -n link=item", "link=3 declare -xu link+=7",
+        "<0:0>declare -ixu item=\"37\"\ndeclare -n link=\"item\"\n", "")]
+    [InlineData("declare -l item=DeFault; declare -n link=item", "link=PreFix declare -xu link+=Tail",
+        "<0:0>declare -xlu item=\"PREFIXTAIL\"\ndeclare -n link=\"item\"\n", "")]
     [InlineData("item=(old); declare -rn link='item[i++]'", "typeset link=new",
         "<0:1>declare -a item=([0]=\"new\")\ndeclare -nr link=\"item[i++]\"\n", "")]
     [InlineData("declare -ar item=(old); declare -n link='item[i++]'", "declare -x link=new",

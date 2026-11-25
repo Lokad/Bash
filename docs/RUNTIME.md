@@ -404,6 +404,10 @@ same-value writes, with nameref and array-kind rules intact. In-process
 execution consumes only the prepared prefix slots and preserves the original
 slots in the saved store. An installation refusal leaves the caller's bindings
 at their state after operand expansion.
+Nonlocal declaration promotion retains the reached prefix slot when it belongs
+to a whole-name referent. The existing retained store stages its value and
+assignment attributes before restoration. A named attribute command that sees
+a temporary scalar above an element reference uses ordinary prefix restoration.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.

@@ -785,6 +785,8 @@ before checking the target's readonly attribute. Applying the attribute to
 an element reports a separate diagnostic. A temporary command prefix over the
 target supplies the visible selector bindings and bounds. The selected
 element write reaches the array saved under that prefix.
+A temporary scalar that hides the element reference remains local to
+the `export` or `readonly` invocation. The original reference is restored.
 
 For nonlocal `declare` and `typeset` assignments, a readonly nameref can
 select a writable target. A readonly array already present at the target
@@ -794,6 +796,9 @@ array and its attributes visible to the selector. A newly applied `-r` lets
 a successful selector finish and reports the rejected write with status 0.
 An ordinary assignment through a chain ending at an unset nameref leaves
 the chain intact.
+When nonlocal `declare` or `typeset` promotes a temporary value through
+a whole-name reference, the active prefix supplies its value and new
+attributes. The saved referent retains its array kind and other elements.
 For a nonlocal declaration through an element nameref, `+a` and `+A`
 reject removal of a matching array kind before evaluating the selector.
 With neither array kind explicitly set, `+a` clears a scalar before the

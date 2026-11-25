@@ -410,7 +410,11 @@ public sealed partial class Variables
         }
 
         /// <summary>Captures a promoted binding before function-local restoration can replace it.</summary>
-        public void RetainBinding(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken)
+        public void RetainBinding(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken) =>
+            RetainBinding(name, memory, cancellationToken, BindingAttributes.None);
+
+        public void RetainBinding(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken,
+            BindingAttributes assignmentAttributes)
         {
             if (!_prefixes.Contains(name))
                 return;
@@ -423,6 +427,7 @@ public sealed partial class Variables
                 StageRetainedBinding(_saved, name, memory, cancellationToken);
                 try
                 {
+                    _retained.UpdateBindingAttributes(name, assignmentAttributes, BindingAttributes.None);
                     _retained.SetResolvedValuePreservingArray(name, value, memory);
                 }
                 catch (MemoryBudgetExceededException)

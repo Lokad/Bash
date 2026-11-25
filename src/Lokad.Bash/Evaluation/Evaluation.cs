@@ -3718,6 +3718,25 @@ public sealed partial class Evaluation : IFileTester
                     return;
                 }
                 SetAttributes(attributeName, variables, exportChange);
+                if (!global && !local && bindings is { } commandBindings
+                    && (exportChange == DeclarationAttributeChange.Set || options.Readonly))
+                {
+                    // A nonlocal declaration promotes the prefix reached through its reference.
+                    if (options.Builtin == BuiltinKind.Declare && options.NamerefChange == DeclarationAttributeChange.Unchanged
+                        && attributeName != name && commandBindings.Contains(attributeName))
+                    {
+                        var assignmentAttributes = variables.GetAssignmentAttributes(attributeName)
+                            & (BindingAttributes.Integer | BindingAttributes.Case);
+                        commandBindings.RetainBinding(attributeName, Memory, _cancellationToken, assignmentAttributes);
+                        return;
+                    }
+                    // A named attribute builtin can use a temporary scalar while restoring its saved element reference.
+                    if (setsNamedAttribute && options.ArrayKind == ArrayAssignmentKind.Auto && commandBindings.Contains(name)
+                        && commandBindings.SavedVariables.TryResolveBinding(name,
+                            current => commandBindings.Contains(current) ? commandBindings.SavedVariables : variables, out var saved)
+                        && saved.Reference.Kind == VariableReferenceKind.Element)
+                        return;
+                }
                 PublishAttributes(name, variables, global, local, exportChange);
             }
 
