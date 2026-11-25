@@ -1694,16 +1694,12 @@ public static class Parser
             return false;
 
         var peek = tokenizer.PeekTokenCore();
-        // Only an adjacent number is a descriptor; whitespace leaves it as an argument.
-        if (peek.Kind != TokenKind.Redirection || !tokenizer.AreAdjacent(token.Token, peek))
+        // An out-of-range number remains a word. Consume the operator only for a valid prefix.
+        if (peek.Kind != TokenKind.Redirection || !tokenizer.AreAdjacent(token.Token, peek)
+            || !Integers.TryParseExitStatus(wordText.AsSpan(), out var descriptor))
             return false;
 
         redirectionToken = tokenizer.NextTokenCore();
-        if (!Integers.TryParseExitStatus(wordText.AsSpan(), out var descriptor))
-        {
-            tokenizer.RecordError("File descriptor exceeds the Int32 limit.", token.Token.Source.Start.Value);
-            return false;
-        }
         fileDescriptor = descriptor;
         return true;
     }

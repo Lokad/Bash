@@ -10,6 +10,21 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationRedirectionTestsEndToEnd
 {
+    [Fact]
+    public async Task OversizedDescriptorPrefixInSourceRetainsTheWordAndDefaultRedirection()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/part", "printf '<%s>' body 2147483648>result\n");
+
+        var run = await host.RunAsync("source ./part; printf '<%s>' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("<0>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("<body><2147483648>", host.ReadFile("/result"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData(": \\\n <./missing", "line 2: ./missing: No such file or directory\n")]
     [InlineData(": < \\\n missing", "line 1: missing: No such file or directory\n")]

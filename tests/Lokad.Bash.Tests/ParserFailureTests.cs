@@ -23,7 +23,7 @@ public sealed class ParserFailureTests
     [InlineData("printf \"${a[1\"")]
     [InlineData("printf ${a[1")]
     [InlineData("printf ${value:-$(printf A &&)}")]
-    [InlineData("999999999999999999999>file")]
+    [InlineData("{ :; } 999999999999999999999>file")]
     [InlineData("printf <(printf A)")]
     [InlineData("[[ '#' == # ]] && : >effect")]
     [InlineData("[[ x == x # ignored ]] $( '\n&& ; ]]")]

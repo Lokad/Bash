@@ -1390,8 +1390,11 @@ public class ParserTests
     [InlineData("'600'>out", "600")]
     [InlineData("\"600\">out", "600")]
     [InlineData("\\600>out", "600")]
+    [InlineData("2147483648>out", "2147483648")]
     [InlineData("2147483648 >out", "2147483648")]
-    public void Parse_Redirection_PreservesSeparatedOrQuotedNumber(string suffix, string expected)
+    [InlineData("214748364\\\n8>out", "2147483648")]
+    [InlineData("9999999999999999999999999>out", "9999999999999999999999999")]
+    public void Parse_Redirection_PreservesNumberWithoutValidDescriptorPrefix(string suffix, string expected)
     {
         var command = AssertSingleCommand(Parser.Parse("echo " + suffix));
 
@@ -1407,6 +1410,7 @@ public class ParserTests
     [InlineData("2\\\n>out", 2)]
     [InlineData("2\\\n\\\n>out", 2)]
     [InlineData("1\\\n2>out", 12)]
+    [InlineData("00000000000000000000000000004>out", 4)]
     public void Parse_Redirection_RecognizesLogicallyAdjacentDescriptor(string suffix, int descriptor)
     {
         var command = AssertSingleCommand(Parser.Parse("echo " + suffix));
@@ -1424,6 +1428,17 @@ public class ParserTests
     public void Parse_Redirection_RejectsSeparatedDescriptorAfterCompoundCommand(string source)
     {
         Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+    }
+
+    [Fact]
+    public void Parse_Redirection_ReportsAnOversizedWordAfterACompoundCommand()
+    {
+        const string source = "{ :; } 2147483648>out";
+        var error = Assert.Throws<SyntaxException>(() => Parser.Parse(source));
+        var quoted = Assert.Throws<SyntaxException>(() => Parser.Parse("{ :; } '2147483648'>out"));
+
+        Assert.Equal(source.IndexOf("2147483648", StringComparison.Ordinal), error.Offset);
+        Assert.Equal(quoted.Message, error.Message);
     }
 
     [Fact]

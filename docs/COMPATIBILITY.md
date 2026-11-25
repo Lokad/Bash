@@ -8,6 +8,9 @@ The runtime supports deterministic, non-interactive shell workflows:
   word splitting, pathname expansion and quote removal.
 - Redirections, here-documents, here-strings, logical descriptor aliases and
   allocated descriptors. `exec` can preserve descriptors or replace evaluation.
+  An adjacent unquoted decimal in the nonnegative Int32 range selects the
+  descriptor. A larger number remains an ordinary word. Simple commands use
+  the operator's default descriptor in that case.
   Adjacent unquoted `{name}` supports file open modes, duplication/moves and
   here-inputs; variable closes follow ordinary command restoration. External
   command allocations and selector effects do not change caller bindings.
