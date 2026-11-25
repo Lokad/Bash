@@ -146,7 +146,7 @@ public sealed class ByteNamerefTests
     {
         var script = "declare -A a=(); declare -n r=$'a[\\377]'; " + builtin + " r";
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
-        var expected = ByteMemoryBuilder.CreateUnaccounted(0).Append(ShellValue.FromText(builtin).Bytes)
+        var expected = ByteMemoryBuilder.CreateUnaccounted(0).Append("line 1: "u8).Append(ShellValue.FromText(builtin).Bytes)
             .Append(": `a["u8).Append(0xff).Append("]': not a valid identifier\n"u8).ToMemory();
 
         Assert.Equal(0, result.ExitCode);

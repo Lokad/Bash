@@ -10,13 +10,56 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationAttributeTestsEndToEnd
 {
     [Theory]
+    [InlineData("item=old; declare -rn link=item", "export link+=more",
+        "<0:link+=more>declare -x item=\"oldmore\"\ndeclare -nr link=\"item\"\n", "", 0)]
+    [InlineData("item=(old); declare -rn link='item[i++]'", "export link=new",
+        "<0:link=new>declare -a item=([0]=\"new\")\ndeclare -nr link=\"item[i++]\"\n",
+        "line 2: export: `item[i++]': not a valid identifier\n", 1)]
+    [InlineData("declare -ar item=(old); declare -rn link='item[i++]'", "readonly link=new",
+        "<1:link=new>declare -ar item=([0]=\"old\")\ndeclare -nr link=\"item[i++]\"\n",
+        "line 2: item: readonly variable\nline 2: readonly: `item[i++]': not a valid identifier\n", 1)]
+    [InlineData("declare -rn link", "export link=new",
+        "<1:link=new>declare -nr link\n",
+        "line 2: link: readonly variable\nline 2: export: `': not a valid identifier\n", 0)]
+    public async Task NamedAttributeAssignmentsCheckTheReachedNamerefBinding(
+        string setup, string command, string expectedOutput, string expectedError, int expectedIndex)
+    {
+        var result = await EvaluationTestHelper.RunAsync("i=0; " + setup + "\n" + command
+            + "\nprintf '<%s:%s>' \"$?\" \"$_\"; declare -p item link 2>/dev/null; printf '<%s>' \"$i\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"{expectedOutput}<{expectedIndex}>", result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("i", "i=1", "[0]=\"zero\" [1]=\"oldmore\"")]
+    [InlineData("-1", "", "[0]=\"zeromore\" [1]=\"old\"")]
+    public async Task NamedAttributeElementWritesUseTheSavedArrayUnderAPrefix(string index, string prefix, string savedArray)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            item=(zero old); i=0; declare -rn link='item[{index}]'
+            item=scoped {prefix} command export link+=more
+            printf '<%s:%s:%s>' "$?" "$i" "$_"
+            declare -p item link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:0:link+=more>declare -a item=({savedArray})\ndeclare -nr link=\"item[{index}]\"\n",
+            result.StdOut);
+        Assert.Equal($"line 2: export: `item[{index}]': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("export -a x; declare -p x", "declare -x x\n", "")]
     [InlineData("x=old; readonly -A x; declare -p x", "declare -r x=\"old\"\n", "")]
     [InlineData("x=(one two); export -A x; declare -p x", "declare -ax x=([0]=\"one\" [1]=\"two\")\n", "")]
     [InlineData("declare -n x=target; target=old; readonly -a x; declare -p x target",
         "declare -n x=\"target\"\ndeclare -r target=\"old\"\n", "")]
     [InlineData("declare -n x; export -A x; printf '<%s>' \"$?\"; declare -p x",
-        "<0>declare -n x\n", "export: `': not a valid identifier\n")]
+        "<0>declare -n x\n", "line 1: export: `': not a valid identifier\n")]
     [InlineData("export -aA x=edited; declare -p x", "declare -ax x=([0]=\"edited\")\n", "")]
     [InlineData("x=(old spare); export -A x=edited later=next; printf '<%s>' \"$?\"; declare -p x later",
         "<1>declare -ax x=([0]=\"old\" [1]=\"spare\")\ndeclare -Ax later=([0]=\"next\" )\n",
@@ -104,9 +147,9 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("r=s s", "declare -r", "")]
     [InlineData("r=s s", "declare -gr", "")]
     [InlineData("r", "declare -rx", "")]
-    [InlineData("r", "readonly", "readonly: `': not a valid identifier\n")]
-    [InlineData("r=s s", "readonly", "readonly: `': not a valid identifier\n")]
-    [InlineData("r", "export", "export: `': not a valid identifier\n")]
+    [InlineData("r", "readonly", "line 1: readonly: `': not a valid identifier\n")]
+    [InlineData("r=s s", "readonly", "line 1: readonly: `': not a valid identifier\n")]
+    [InlineData("r", "export", "line 1: export: `': not a valid identifier\n")]
     [InlineData("r", "export -n", "")]
     public async Task UnsetNamerefAttributesDoNotAffectUnrelatedBindings(string references, string declaration, string expectedError)
     {

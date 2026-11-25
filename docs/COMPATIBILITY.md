@@ -753,6 +753,12 @@ diagnostics and local bindings.
 An assignment rejected by `export` or `readonly` reports status 4 as a direct
 pipeline stage. The pipeline publishes that value in `PIPESTATUS`. The same
 rejection during ordinary command execution reports status 1.
+These builtins can assign through a readonly nameref to a writable target.
+An ordinary assignment through an element nameref evaluates the selector
+before checking the target's readonly attribute. Applying the attribute to
+an element reports a separate diagnostic. A temporary command prefix over the
+target supplies the visible selector bindings and bounds. The selected
+element write reaches the array saved under that prefix.
 
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the

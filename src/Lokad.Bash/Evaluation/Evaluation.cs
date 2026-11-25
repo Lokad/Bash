@@ -2521,9 +2521,11 @@ public sealed partial class Evaluation : IFileTester
                         arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                 }
                 var circularLocalReference = false;
-                if (!operand.CompoundApplied && reference.Kind == VariableReferenceKind.Name
-                    && (local || options.NamerefChange != DeclarationAttributeChange.Set)
-                    && (circular || !targetVars.TryResolveBinding(name, selectOwner: null, out _)))
+                var checksWholeBinding = !operand.CompoundApplied && reference.Kind == VariableReferenceKind.Name
+                    && (local || options.NamerefChange != DeclarationAttributeChange.Set);
+                VariableBinding? selectedWholeBinding = checksWholeBinding && !circular
+                    && targetVars.TryResolveBinding(name, selectOwner: null, out var wholeBinding) ? wholeBinding : null;
+                if (checksWholeBinding && selectedWholeBinding == null)
                 {
                     await ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
                     if (local)
@@ -2640,11 +2642,15 @@ public sealed partial class Evaluation : IFileTester
                 var clearsReadonlyUnsetNameref = clearsWholeNameref && clearedNamerefTarget is { IsEmpty: true }
                     && operand.Value == null && options.ReadonlyChange != DeclarationAttributeChange.Clear
                     && targetVars.IsReadonlyBinding(name);
+                var namedAssignmentBinding = setsNamedAttribute && operand.Value.HasValue ? selectedWholeBinding : null;
+                var writesNamedElement = namedAssignmentBinding is { Reference.Kind: VariableReferenceKind.Element };
                 // Local redeclarations apply readonly and initialization to the reached binding.
-                var readonlyBinding = followsLocalNameref ? !shadowEnclosingLocal && targetVars.IsReadonlyBinding(localDeclarationTarget)
-                    : options.NamerefChange != DeclarationAttributeChange.Unchanged && reference.Kind == VariableReferenceKind.Name
-                        ? !localizesTarget && !clearsReadonlyUnsetNameref && targetVars.IsReadonlyBinding(name)
-                        : !localizesElementSpelling && targetVars.IsReadonly(name);
+                var readonlyBinding = namedAssignmentBinding is { IsUnsetNameref: false } assignmentBinding
+                    ? !writesNamedElement && assignmentBinding.Owner.IsReadonlyBinding(assignmentBinding.Name)
+                    : followsLocalNameref ? !shadowEnclosingLocal && targetVars.IsReadonlyBinding(localDeclarationTarget)
+                        : options.NamerefChange != DeclarationAttributeChange.Unchanged && reference.Kind == VariableReferenceKind.Name
+                            ? !localizesTarget && !clearsReadonlyUnsetNameref && targetVars.IsReadonlyBinding(name)
+                            : !localizesElementSpelling && targetVars.IsReadonly(name);
                 var declarationName = resolution == BindingResolution.LastNameref || followsLocalNameref && existingTargetLocal
                     ? sourceName : selectedLocalBinding?.Name ?? name;
                 var redeclaresLocalArray = followsLocalNameref && existingTargetLocal && element && operand.Value == null;
@@ -2654,14 +2660,15 @@ public sealed partial class Evaluation : IFileTester
                 {
                     if (arrayAttributeAssignment)
                     {
-                        await DiagnoseReadonlyAsync(sourceName).ConfigureAwait(false);
+                        await DiagnoseReadonlyAsync(reference.Kind == VariableReferenceKind.Element ? name : sourceName)
+                            .ConfigureAwait(false);
                         await ApplyNamedAttributesAsync(sourceName, assignmentPrefix).ConfigureAwait(false);
                     }
                     else if (operand.Value != null && setsNamedAttribute)
                     {
                         // These builtins apply attributes even when their assignment fails.
                         RecordOperandFailure();
-                        await ReportCommandDiagnosticAsync([GetDiagnosticName(targetVars.ResolveNamerefName(name))],
+                        await ReportCommandDiagnosticAsync([GetDiagnosticName(namedAssignmentBinding?.Name ?? name)],
                             [ShellValue.FromText("readonly variable")], declarationScope).ConfigureAwait(false);
                         await ApplyAttributesAsync(name, targetVars, global, local, assignmentExport).ConfigureAwait(false);
                     }
@@ -3075,24 +3082,33 @@ public sealed partial class Evaluation : IFileTester
                             SetAttributes(attributeName, targetVars, assignmentExport);
                             elementAttributesApplied = true;
                         }
-                        // Direct element writes outlive a named prefix; writes through a nameref stay temporary.
+                        // Element assignments can reach the binding saved under a command prefix.
                         if (reference.Kind != VariableReferenceKind.Name && bindings?.Contains(writeReference.Name) == true
                             && !commandVars.TryGetNameref(writeReference.Name, out _))
                             writeVariables = bindings.SavedVariables;
+                        else if (writesNamedElement && namedAssignmentBinding is { } elementBinding
+                            && bindings?.Contains(elementBinding.Name) == true)
+                        {
+                            writeReference = elementBinding.Reference;
+                            writeVariables = bindings.SavedVariables;
+                        }
                         var writeScope = global ? declarationScope : executionScope;
                         var writeTarget = await AwaitWordExpansionAsync(WordExpansion.ResolveDeclarationReferenceAsync(
                             writeReference, writeScope, writeVariables,
-                            reference.Kind != VariableReferenceKind.Name ? commandVars : writeVariables)).ConfigureAwait(false);
+                            reference.Kind != VariableReferenceKind.Name || writesNamedElement ? commandVars : writeVariables))
+                            .ConfigureAwait(false);
                         if (HasPendingExpansionError || writeTarget == null
                             || !await TryAssignDeclarationValueAsync(writeTarget, writeReference,
                                 writeScope, writeVariables, value, operand.Operator,
                                 declarationWrite, local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName,
-                                applyAssignmentAttributes: true).ConfigureAwait(false))
+                                applyAssignmentAttributes: true, writesNamedElement).ConfigureAwait(false))
                         {
                             RecordOperandFailure();
                             if (HasPendingExpansionError) break;
                             if (arrayAttributeAssignment)
                                 await ApplyNamedAttributesAsync(sourceName, assignmentPrefix).ConfigureAwait(false);
+                            else if (writesNamedElement)
+                                await ApplyAttributesAsync(name, targetVars, global, local, assignmentExport).ConfigureAwait(false);
                             continue;
                         }
                         wroteUnmarkedPrefix = retainUnmarkedPrefix && writeTarget.Name == sourceName
@@ -3461,7 +3477,7 @@ public sealed partial class Evaluation : IFileTester
                     RecordOperandFailure();
                 else if (!await TryAssignDeclarationValueAsync(target, reference, declarationScope, variables,
                     value, operation, WordExpansion.DeclarationWrite.Ordinary, reference.Name,
-                    applyAssignmentAttributes: !assignsGlobalElement).ConfigureAwait(false))
+                    applyAssignmentAttributes: !assignsGlobalElement, writesNamedElement: false).ConfigureAwait(false))
                     RecordOperandFailure();
                 return true;
             }
@@ -3469,10 +3485,16 @@ public sealed partial class Evaluation : IFileTester
             async Task<bool> TryAssignDeclarationValueAsync(
                 WordExpansion.ResolvedVariableReference target, VariableReference reference, ScopedEvaluation writeScope, Variables destination,
                 ShellValue value, AssignmentOperator operation, WordExpansion.DeclarationWrite declarationWrite, BindingName diagnosticName,
-                bool applyAssignmentAttributes)
+                bool applyAssignmentAttributes, bool writesNamedElement)
             {
                 if (declarationWrite != WordExpansion.DeclarationWrite.ActiveGlobalIndexed && destination.IsReadonly(target.Name))
                 {
+                    if (writesNamedElement)
+                    {
+                        await ReportCommandDiagnosticAsync([GetDiagnosticName(target.Name)],
+                            [ShellValue.FromText("readonly variable")], declarationScope).ConfigureAwait(false);
+                        return false;
+                    }
                     if (reference.Kind != VariableReferenceKind.Name)
                     {
                         // A newly applied -r rejects the element write but leaves the declaration successful.
@@ -3528,7 +3550,7 @@ public sealed partial class Evaluation : IFileTester
                             && binding.Reference.Kind != VariableReferenceKind.Name)
                         {
                             var target = binding.Reference;
-                            await ReportExpansionDiagnosticAsync([command],
+                            await ReportDeclarationDiagnosticAsync(
                                 [ShellValue.FromText("`"), GetDiagnosticName(target.Name), ShellValue.FromText("["),
                                     ShellValue.FromBytes(target.Subscript.Bytes), ShellValue.FromText("]': not a valid identifier")])
                                 .ConfigureAwait(false);
@@ -3536,7 +3558,7 @@ public sealed partial class Evaluation : IFileTester
                         else
                         {
                             await WriteInvalidIdentifierDiagnosticAsync(command, ShellValue.Empty, _builtinDiagnostics,
-                                ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
+                                ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(declarationScope.Context)).ConfigureAwait(false);
                         }
                     }
                     return;
