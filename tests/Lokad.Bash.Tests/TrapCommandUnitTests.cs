@@ -83,6 +83,35 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvalidTransformationInPipelineArgumentKeepsTheFunctionFrameOnErrexit(bool prepared)
+    {
+        var script = $$"""
+            set -e
+            set -- outer
+            value=present
+            stage() {
+                local x=local
+                trap '{{PrintParserExitFrame}}' EXIT
+                : | : "${value@Z}" 2>unreached-error
+                printf skipped
+            }
+            stage inner 2>reached-error
+            printf skipped
+            """;
+        await using var host = new TestHost();
+        var exitCode = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("<exit:1:1:inner:local><exit:1:0 1:inner:unset>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 7: ${value@Z}: bad substitution\nhandlerhandler", host.ReadFile("/reached-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "false 2>inner-error",
         "<exit:1:1:reader:unset><prefix:value>", "reader-error")]
     [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "fail() { return 7; }; fail",

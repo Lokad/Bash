@@ -204,7 +204,9 @@ public sealed partial class Evaluation
             var prefixes = scope.Context.GlobalPrefixes;
             var callerSource = scope.Context.CallerSource;
             var returnTarget = scope.Context.ReturnTarget;
-            if (useInheritedPipelineAction)
+            var keepsInheritedBindings = failure is { Kind: ExpansionFailureKind.InvalidParameterTransform }
+                && _state.ErrexitEnabled;
+            if (useInheritedPipelineAction && !keepsInheritedBindings)
             {
                 (function, prefixes) = RestoreBindings(scope, scope.LoadedSyntaxFunctionDepth, restorePositionals: true);
                 var functionDepth = function?.Depth ?? 0;
