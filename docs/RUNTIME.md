@@ -261,6 +261,9 @@ and other dynamic syntax stay late-bound. Pathname expansion scans components in
 the existing pattern and quote mask. It prepares the literal prefix once and
 keeps separate spellings for output and lookup. Lookup preserves dot and dot-dot
 components for host traversal.
+Bracket lookahead and revisited wide memberships are shared across entries of a
+pathname component. The component retains its admitted membership through any
+pending link lookup and releases it before advancing or publishing results.
 
 Command lists prepare immutable navigation once per reached syntax root. Each
 execution keeps its cursor, status and scope locally and dispatches leaves through

@@ -83,6 +83,87 @@ public sealed class GlobPatternTests
     }
 
     [Fact]
+    public void PathComponentMatcherReusesWideMembershipAndRefundsIt()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var memory = new MemoryCapacity(governor, 0);
+        using (var matcher = new TextGlobMatcher.PathComponentMatcher(
+                   ("[!" + new string('a', 64) + "[:digit:]🙂]").AsMemory(), default, memory))
+        {
+            Assert.False(matcher.Matches("🙂", CancellationToken.None));
+            Assert.Equal(0, memory.Bytes);
+            Assert.True(matcher.Matches("é", CancellationToken.None));
+            var prepared = memory.Bytes;
+            Assert.True(prepared > 0);
+            Assert.False(matcher.Matches("5", CancellationToken.None));
+            Assert.False(matcher.Matches("a", CancellationToken.None));
+            Assert.False(matcher.Matches("éé", CancellationToken.None));
+            Assert.Equal(prepared, memory.Bytes);
+        }
+        Assert.Equal(0, memory.Bytes);
+        memory.ReleaseUnusedCapacity();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PathnameBracketStateSettlesThroughALinkLookup(bool failLookup)
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var spelling = "[" + new string('a', 64) + "]*/[" + new string('b', 64) + "]";
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(spelling), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        using var matches = new MemoryCapacity(owner, 0);
+        var listing = new PendingGlobLink();
+        var operation = new GlobEvaluation(pattern, ShellPath.Root, matches, CancellationToken.None).EvaluateAsync(listing);
+
+        Assert.False(operation.IsCompleted);
+        Assert.Equal(["/", "/a-link"], listing.Requests);
+        var pendingBytes = matches.Bytes;
+        if (failLookup)
+        {
+            listing.Link.SetException(new InvalidOperationException("synthetic link lookup failure"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
+            Assert.True(matches.Bytes < pendingBytes);
+            Assert.Equal(["/", "/a-link"], listing.Requests);
+        }
+        else
+        {
+            listing.Link.SetResult(true);
+            Assert.Equal(["a-link/b", "a-real/b"], await operation);
+            Assert.Equal(["/", "/a-link", "/a-real", "/a-link"], listing.Requests);
+        }
+        matches.Dispose();
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class PendingGlobLink : IFileTester
+    {
+        public List<string> Requests { get; } = [];
+        public TaskCompletionSource<bool> Link { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IReadOnlyList<DirectoryEntry>> ListDirectoryAsync(string path)
+        {
+            Requests.Add(path);
+            IReadOnlyList<DirectoryEntry> entries = path == "/"
+                ? [new("a-real", FilePathKind.Directory), new("a-link", FilePathKind.SymbolicLink),
+                    new("a-file", FilePathKind.File), new(".a-hidden", FilePathKind.Directory)]
+                : [new("a", FilePathKind.File), new("b", FilePathKind.File)];
+            return Task.FromResult(entries);
+        }
+
+        public Task<bool> IsDirectoryAsync(string path)
+        {
+            Requests.Add(path);
+            return Link.Task;
+        }
+    }
+
+    [Fact]
     public async Task LongLiteralPrefixUsesOneLookupWithinLinearAllowance()
     {
         const int Count = 1024;

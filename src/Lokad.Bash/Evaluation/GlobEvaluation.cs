@@ -115,44 +115,44 @@ internal sealed class GlobEvaluation
                 var hasWildcard = component.Start.Value == firstWildcardStart
                     || GlobPattern.RequiresExpansion(name.Span, _pattern.GetMask(component));
                 long matchPathBytes = 0;
-                foreach (var parent in candidates)
+                using (var matcher = new TextGlobMatcher.PathComponentMatcher(name, _pattern.GetMaskMemory(component), _memory))
                 {
-                    _cancellationToken.ThrowIfCancellationRequested();
-                    var entries = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
-                    _cancellationToken.ThrowIfCancellationRequested();
-                    foreach (var entry in entries)
+                    foreach (var parent in candidates)
                     {
                         _cancellationToken.ThrowIfCancellationRequested();
-                        var entryName = entry.Name.AsSpan();
-                        if (entryName.IsEmpty || !matchDot && entryName[0] == '.')
-                            continue;
-                        if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
-                            continue;
-                        var matchesName = hasWildcard
-                            ? TextGlobMatcher.MatchesPathComponent(name.Span, _pattern.GetMask(component), entryName,
-                                _memory, _cancellationToken)
-                            : name.Span.SequenceEqual(entryName);
-                        if (!matchesName)
-                            continue;
-
-                        var checkLink = requireDirectory && entry.Kind == FilePathKind.SymbolicLink;
-                        var lookupPath = hasNext || checkLink
-                            ? AppendPath(parent.ListPath, entry.Name, markDirectory: false) : string.Empty;
-                        if (checkLink)
+                        var entries = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
+                        _cancellationToken.ThrowIfCancellationRequested();
+                        foreach (var entry in entries)
                         {
-                            var isDirectory = await tester.IsDirectoryAsync(lookupPath).ConfigureAwait(false);
-                            if (!hasNext || !isDirectory)
-                            {
-                                _memory.Resize(_memory.Bytes - TextBytes(lookupPath.Length));
-                                lookupPath = string.Empty;
-                            }
-                            if (!isDirectory)
+                            _cancellationToken.ThrowIfCancellationRequested();
+                            var entryName = entry.Name.AsSpan();
+                            if (entryName.IsEmpty || !matchDot && entryName[0] == '.')
                                 continue;
+                            if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
+                                continue;
+                            var matchesName = hasWildcard ? matcher.Matches(entryName, _cancellationToken) : name.Span.SequenceEqual(entryName);
+                            if (!matchesName)
+                                continue;
+
+                            var checkLink = requireDirectory && entry.Kind == FilePathKind.SymbolicLink;
+                            var lookupPath = hasNext || checkLink
+                                ? AppendPath(parent.ListPath, entry.Name, markDirectory: false) : string.Empty;
+                            if (checkLink)
+                            {
+                                var isDirectory = await tester.IsDirectoryAsync(lookupPath).ConfigureAwait(false);
+                                if (!hasNext || !isDirectory)
+                                {
+                                    _memory.Resize(_memory.Bytes - TextBytes(lookupPath.Length));
+                                    lookupPath = string.Empty;
+                                }
+                                if (!isDirectory)
+                                    continue;
+                            }
+                            var match = new Candidate(lookupPath, AppendPath(parent.OutputPath, entry.Name, markDirectory));
+                            _memory.PrepareListCapacity(matches, 1);
+                            matches.Add(match);
+                            matchPathBytes = checked(matchPathBytes + match.PathBytes);
                         }
-                        var match = new Candidate(lookupPath, AppendPath(parent.OutputPath, entry.Name, markDirectory));
-                        _memory.PrepareListCapacity(matches, 1);
-                        matches.Add(match);
-                        matchPathBytes = checked(matchPathBytes + match.PathBytes);
                     }
                 }
 

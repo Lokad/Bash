@@ -156,6 +156,8 @@ internal sealed class GlobPattern
         return true;
     }
 
-    public GlobMaskSpan GetMask(Range component) =>
-        MetaMask.Memory.IsEmpty ? default : new GlobMaskSpan(MetaMask.Memory.Span[component]);
+    public GlobMaskSpan GetMask(Range component) => new(GetMaskMemory(component).Span);
+
+    internal ReadOnlyMemory<byte> GetMaskMemory(Range component) =>
+        MetaMask.Memory.IsEmpty ? default : MetaMask.Memory[component];
 }

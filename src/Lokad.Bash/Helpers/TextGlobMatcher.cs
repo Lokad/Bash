@@ -156,18 +156,32 @@ public static class TextGlobMatcher
     public static GlobMatchResult MatchText(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
         CancellationToken cancellationToken) =>
-        MatchText(pattern, in mask, text, scalarCharacters: false, memory: null, cancellationToken);
+        Match(new PatternInput(new GlobInput(pattern, scalarCharacters: false), mask, default, PatternTraversal.Forward, memory: null),
+            new GlobInput(text, scalarCharacters: false), requireEnd: true, shortestPrefix: false, cancellationToken, out _, out _);
 
-    internal static bool MatchesPathComponent(
-        ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> name,
-        MemoryCapacity memory, CancellationToken cancellationToken) =>
-        MatchText(pattern, in mask, name, scalarCharacters: true, memory, cancellationToken) == GlobMatchResult.Match;
+    /// <summary>Retains bracket decisions for repeated scalar matches of one pathname component.</summary>
+    internal struct PathComponentMatcher(ReadOnlyMemory<char> pattern, ReadOnlyMemory<byte> mask, MemoryCapacity memory) : IDisposable
+    {
+        private PatternBrackets _brackets;
 
-    private static GlobMatchResult MatchText(
-        ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,
-        bool scalarCharacters, MemoryCapacity? memory, CancellationToken cancellationToken) =>
-        Match(new PatternInput(new GlobInput(pattern, scalarCharacters), mask, default, PatternTraversal.Forward, memory),
-            new GlobInput(text, scalarCharacters), requireEnd: true, shortestPrefix: false, cancellationToken, out _, out _);
+        public bool Matches(ReadOnlySpan<char> name, CancellationToken cancellationToken)
+        {
+            var input = new PatternInput(new GlobInput(pattern.Span, scalarCharacters: true), new GlobMaskSpan(mask.Span),
+                default, PatternTraversal.Forward, memory)
+            {
+                Brackets = _brackets,
+                RepeatedMatches = true
+            };
+            try
+            {
+                return MatchCore(ref input, new GlobInput(name, scalarCharacters: true), requireEnd: true,
+                    shortestPrefix: false, cancellationToken, out _, out _) == GlobMatchResult.Match;
+            }
+            finally { _brackets = input.Brackets; }
+        }
+
+        public void Dispose() => _brackets.Release(memory);
+    }
 
     private static GlobMatchResult Match(PatternInput pattern, GlobInput text, bool requireEnd,
         bool shortestPrefix, CancellationToken cancellationToken, out int start, out int length)
@@ -522,6 +536,28 @@ public static class TextGlobMatcher
 
     private enum PatternTraversal { Forward, Reverse, Search }
 
+    private struct PatternBrackets
+    {
+        public BracketScan Scan;
+        public int FurthestPositionPlusOne;
+        public Dictionary<int, PreparedBracket>? Prepared;
+        public long Bytes;
+
+        public void Refund(MemoryCapacity? memory, long bytes)
+        {
+            if (memory == null || bytes == 0)
+                return;
+            memory.Resize(memory.Bytes - bytes);
+            Bytes -= bytes;
+        }
+
+        public void Release(MemoryCapacity? memory)
+        {
+            Refund(memory, Bytes);
+            this = default;
+        }
+    }
+
     /// <summary>Maps traversal positions to original pattern atoms and their quoting metadata.</summary>
     private ref struct PatternInput
     {
@@ -531,10 +567,8 @@ public static class TextGlobMatcher
         private readonly ReadOnlySpan<int> _atoms;
         private readonly PatternTraversal _traversal;
         private readonly MemoryCapacity? _memory;
-        private BracketScan _bracketScan;
-        private int _furthestBracket;
-        private Dictionary<int, PreparedBracket>? _preparedBrackets;
-        private long _bracketBytes;
+        public PatternBrackets Brackets;
+        public bool RepeatedMatches { get; init; }
         private bool Reverse => _traversal == PatternTraversal.Reverse;
         private bool Search => _traversal == PatternTraversal.Search;
 
@@ -546,8 +580,6 @@ public static class TextGlobMatcher
             _atoms = atoms;
             _traversal = traversal;
             _memory = memory;
-            _bracketScan = default;
-            _furthestBracket = -1;
         }
         public int Length => (Reverse ? _atoms.Length : _source.Length) + (Search ? 1 : 0);
         public bool IsSearchStar(int position) => Search && position == 0;
@@ -560,7 +592,7 @@ public static class TextGlobMatcher
             : position + _source.Width(Original(position));
         public bool MatchBracket(ref int position, int value, bool mayRetry, CancellationToken cancellationToken)
         {
-            if (_preparedBrackets is { } brackets && brackets.TryGetValue(position, out var prepared))
+            if (Brackets.Prepared is { } brackets && brackets.TryGetValue(position, out var prepared))
             {
                 position = prepared.End;
                 return prepared.Matches(value);
@@ -576,19 +608,19 @@ public static class TextGlobMatcher
             }
             var end = original;
             var members = new BracketMembership(value, default);
-            if (!TryReadBracket(_source, in _mask, ref end, ref members, ref _bracketScan, cancellationToken))
+            if (!TryReadBracket(_source, in _mask, ref end, ref members, ref Brackets.Scan, cancellationToken))
                 return false;
 
             var endPosition = Reverse ? position + 1 : end + (Search ? 1 : 0);
-            // A retry is the only way to reach a previous traversal position. Keep
-            // small and unrevisited brackets allocation-free.
-            if (mayRetry && end - original >= PrepareBracketThreshold)
+            // A wildcard retry or another subject can revisit a wide bracket.
+            // Keep small and unrevisited brackets allocation-free.
+            if ((mayRetry || RepeatedMatches) && end - original >= PrepareBracketThreshold)
             {
-                if (position <= _furthestBracket)
+                if (position < Brackets.FurthestPositionPlusOne)
                     PrepareBracket(position, original, endPosition, members.RangeCount, members.Classes,
                         members.Negate, cancellationToken);
                 else
-                    _furthestBracket = position;
+                    Brackets.FurthestPositionPlusOne = position + 1;
             }
             position = endPosition;
             return members.Matched != members.Negate;
@@ -605,7 +637,7 @@ public static class TextGlobMatcher
                 cancellationToken.ThrowIfCancellationRequested();
                 var ranges = new ulong[rangeCount];
                 var members = new BracketMembership(-1, ranges);
-                _ = TryReadBracket(_source, in _mask, ref original, ref members, ref _bracketScan, cancellationToken);
+                _ = TryReadBracket(_source, in _mask, ref original, ref members, ref Brackets.Scan, cancellationToken);
                 ranges.AsSpan().Sort();
                 var used = 0;
                 // Disjoint intervals allow membership queries even when source ranges overlap.
@@ -623,25 +655,25 @@ public static class TextGlobMatcher
                 normalized = ranges.AsMemory(0, used);
             }
 
-            if (_preparedBrackets == null)
+            if (Brackets.Prepared == null)
             {
                 ChargeBracketMemory(128);
                 cancellationToken.ThrowIfCancellationRequested();
-                _preparedBrackets = new Dictionary<int, PreparedBracket>();
+                Brackets.Prepared = new Dictionary<int, PreparedBracket>();
             }
-            var capacity = _preparedBrackets.EnsureCapacity(0);
-            if (_preparedBrackets.Count == capacity)
+            var capacity = Brackets.Prepared.EnsureCapacity(0);
+            if (Brackets.Prepared.Count == capacity)
             {
                 var target = checked(Math.Max(4, capacity * 2));
                 const int entryBytes = 64;
                 var replacementBytes = 128 + entryBytes * (2L * target + 1);
                 ChargeBracketMemory(replacementBytes);
                 cancellationToken.ThrowIfCancellationRequested();
-                var actual = _preparedBrackets.EnsureCapacity(target);
+                var actual = Brackets.Prepared.EnsureCapacity(target);
                 var retired = capacity == 0 ? 0 : 128L + entryBytes * capacity;
-                RefundBracketMemory(replacementBytes + retired - (128L + entryBytes * actual));
+                Brackets.Refund(_memory, replacementBytes + retired - (128L + entryBytes * actual));
             }
-            _preparedBrackets.Add(position, new PreparedBracket(end, normalized, classes, negate));
+            Brackets.Prepared.Add(position, new PreparedBracket(end, normalized, classes, negate));
         }
 
         private void ChargeBracketMemory(long bytes)
@@ -649,22 +681,10 @@ public static class TextGlobMatcher
             if (_memory == null)
                 return;
             _memory.Grow(bytes);
-            _bracketBytes += bytes;
+            Brackets.Bytes += bytes;
         }
 
-        private void RefundBracketMemory(long bytes)
-        {
-            if (_memory == null || bytes == 0)
-                return;
-            _memory.Resize(_memory.Bytes - bytes);
-            _bracketBytes -= bytes;
-        }
-
-        public void ReleaseBracketMemory()
-        {
-            _preparedBrackets = null;
-            RefundBracketMemory(_bracketBytes);
-        }
+        public void ReleaseBracketMemory() => Brackets.Release(_memory);
     }
 
     // Text is traversed in its native byte/code-unit representation; no decoded or reversed copy is needed.
