@@ -175,26 +175,30 @@ internal readonly record struct ScopedEvaluation(
         && prefixes.Contains(binding.Name);
 }
 
-internal sealed record CaptureReaderFrame(int RedirectionDepth, int FunctionDepth, CaptureReaderFrame? Enclosing);
+internal sealed record CaptureReaderFrame(int RedirectionDepth, int FunctionDepth, Evaluation.SourceCallerFrame? Source,
+    CaptureReaderFrame? Enclosing)
+{
+    internal PipelineExitBoundary Boundary => new(RedirectionDepth, FunctionDepth, Source);
+}
 
-/// <summary>Enumerates the descriptor ranges unwound on ordinary errexit, from newest to oldest.</summary>
-internal struct LoadedExitRedirections(ScopedEvaluation scope, int reachedDepth)
+/// <summary>Enumerates the reader intervals unwound on ordinary errexit, from newest to oldest.</summary>
+internal struct LoadedExitUnwind(ScopedEvaluation scope, int reachedDepth)
 {
     private readonly PipelineExitBoundary _outermost = scope.PipelineExitReader;
+    private readonly PipelineExitBoundary _reached = new(reachedDepth, scope.LoadedSyntaxFunctionDepth, scope.Context.CallerSource);
+    private bool _hasSingleInterval = scope.CaptureReader == null;
     private CaptureReaderFrame? _reader = scope.CaptureReader;
     private Evaluation.FunctionContext? _function = scope.Context.FunctionContext;
-    private int _depth = reachedDepth;
     private bool _retainsReaderCommands;
 
-    internal bool TryTake(out int outerDepth, out int innerDepth)
+    internal bool TryTake(out PipelineExitBoundary outer, out PipelineExitBoundary inner)
     {
         while (_reader is { } reader)
         {
             _reader = reader.Enclosing;
-            innerDepth = reader.RedirectionDepth;
-            outerDepth = _reader?.RedirectionDepth ?? _outermost.RedirectionDepth;
-            _depth = outerDepth;
-            var outerFunctionDepth = _reader?.FunctionDepth ?? _outermost.FunctionDepth.GetValueOrDefault();
+            inner = reader.Boundary;
+            outer = _reader?.Boundary ?? _outermost;
+            var outerFunctionDepth = outer.FunctionDepth.GetValueOrDefault();
             var unwindsFunction = false;
             for (; _function is { } frame && frame.Depth > outerFunctionDepth; _function = frame.Enclosing)
                 unwindsFunction |= frame.Depth <= reader.FunctionDepth && frame.CallerPositionals != null;
@@ -204,14 +208,15 @@ internal struct LoadedExitRedirections(ScopedEvaluation scope, int reachedDepth)
             // reader discard its command's cleanup instead of running it.
             var restore = !_retainsReaderCommands;
             _retainsReaderCommands = restore && unwindsFunction;
-            if (restore && innerDepth != outerDepth)
+            if (restore)
                 return true;
         }
 
-        innerDepth = _depth;
-        outerDepth = _outermost.RedirectionDepth;
-        _depth = outerDepth;
-        return innerDepth != outerDepth;
+        outer = _outermost;
+        inner = _reached;
+        var hasSingleInterval = _hasSingleInterval;
+        _hasSingleInterval = false;
+        return hasSingleInterval;
     }
 }
 

@@ -1218,7 +1218,9 @@ scopes that unwind. Other descriptors retain their reached mappings. In a comman
 substitution, an unwind across a function between reader entries can leave the
 next enclosing reader's descriptor mappings active. This applies to readers
 entered through a `mapfile` callback.
-Function and source unwinds consume saved positional arguments in stack order.
+A command substitution also uses the selected reader unwind to determine which
+function and source frames restore the action's state. Those unwinds consume
+saved positional arguments in stack order.
 A source with arguments can keep a replacement made by `set --` at global
 scope. The action selects the return target and diagnostic filename separately
 from the positional arguments.

@@ -452,6 +452,83 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData("eval", "f() { false; }; f reached 2>function-error", "<frame:1:1:outer>")]
+    [InlineData("source ./sample.sh source", ": | false", "<frame:1:0 1:outer>")]
+    [InlineData("source ./sample.sh", "f() { : | false; }; f reached 2>function-error", "<frame:1:0 1:inner>")]
+    public async Task CaptureExitRestoresTheRemainingCallbackReturnFrame(string reader, string body, string expected)
+    {
+        var invocation = reader == "eval" ? $"eval '{body}'" : reader;
+        var script = $$"""
+            set -e
+            set -- capture
+            captured=$(
+                set -e
+                trap 'printf "<frame:%s:%s:%s>" "$?" "${PIPESTATUS[*]}" "$1" >&2; return 8' EXIT
+                outer() {
+                    set -- outer
+                    mapfile -c 1 -C inner innerRows <input 2>inner-error
+                }
+                inner() {
+                    set -- inner
+                    {{invocation}} 2>reader-error
+                }
+                mapfile -c 1 -C outer outerRows <input 2>outer-error
+            )
+            printf skipped
+            """;
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/input", "record\n");
+        host.AddFile("/sample.sh", body);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(8, result.ExitCode);
+        Assert.Equal(expected, host.StandardError.TextContent);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.ReadFileBytes("/outer-error"));
+        Assert.Empty(host.ReadFileBytes("/inner-error"));
+        Assert.Empty(host.ReadFileBytes("/reader-error"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task CaptureExitRestoresTheDiagnosticSourceThroughDisjointReaderUnwinds()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "record\n");
+        host.AddFile("/driver.sh", """
+            outer() {
+                set -- outer
+                mapfile -c 1 -C inner innerRows <input 2>inner-error
+            }
+            inner() {
+                set -- inner
+                source ./reached.sh reached 2>reached-error
+            }
+            mapfile -c 1 -C outer outerRows <input 2>outer-error
+            """);
+        host.AddFile("/reached.sh", "f() { false; }; f reached 2>function-error");
+        var result = await host.RunAsync("""
+            set -e
+            set -- capture
+            captured=$(
+                set -e
+                trap 'printf "<frame:%s:%s:%s>" "$?" "${PIPESTATUS[*]}" "$1" >&2; return 8' EXIT
+                source ./driver.sh driver 2>driver-error
+            )
+            """, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("<frame:1:1:driver>./driver.sh: line 1: return: can only `return' from a function or sourced script\n",
+            host.StandardError.TextContent);
+        Assert.Empty(host.ReadFileBytes("/driver-error"));
+        Assert.Empty(host.ReadFileBytes("/reached-error"));
+        Assert.Empty(host.ReadFileBytes("/function-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("set -- from-reader", ":", "reached")]
     [InlineData(":", "set -- from-function", "reader")]
     [InlineData("set -- from-reader", "set -- from-function", "from-function")]

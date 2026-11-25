@@ -76,9 +76,9 @@ internal struct RedirectionState
     }
 
     /// <summary>Projects unwound reader mappings onto a temporary copy of the reached table.</summary>
-    internal readonly DescriptorTable? CaptureLoadedExitTable(LoadedExitRedirections ranges, EvaluationMemory memory)
+    internal readonly DescriptorTable? CaptureLoadedExitTable(LoadedExitUnwind unwind, EvaluationMemory memory)
     {
-        if (CurrentTable is not { } reached || !ranges.TryTake(out var outerDepth, out var innerDepth))
+        if (CurrentTable is not { } reached || !TryTakeRange(out var outerDepth, out var innerDepth))
             return null;
         var depth = Depth;
         if ((uint)outerDepth > (uint)innerDepth || (uint)innerDepth > (uint)depth)
@@ -93,11 +93,24 @@ internal struct RedirectionState
                 foreach (var descriptor in changed)
                     table.Set(descriptor, previous.ResolveBinding(descriptor), memory);
             }
-            if (--depth == outerDepth && !ranges.TryTake(out outerDepth, out innerDepth))
+            if (--depth == outerDepth && !TryTakeRange(out outerDepth, out innerDepth))
                 break;
             changed = frame.Changed;
         }
         return table;
+
+        bool TryTakeRange(out int start, out int end)
+        {
+            while (unwind.TryTake(out var outer, out var inner))
+            {
+                start = outer.RedirectionDepth;
+                end = inner.RedirectionDepth;
+                if (start != end)
+                    return true;
+            }
+            start = end = 0;
+            return false;
+        }
     }
 
     private readonly CapturedRedirections? CaptureRestoration(int depth, int endDepth, bool keepChangedFrames, EvaluationMemory memory)

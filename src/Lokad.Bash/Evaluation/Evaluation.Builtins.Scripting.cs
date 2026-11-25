@@ -329,8 +329,9 @@ public sealed partial class Evaluation
             var captureReader = scope.CaptureReader;
             if (_state.ForkKind == ShellForkKind.CommandSubstitution)
             {
-                Memory.Charge(32);
-                captureReader = new CaptureReaderFrame(redirectionDepth, functionDepth, captureReader);
+                Memory.Charge(40);
+                captureReader = new CaptureReaderFrame(redirectionDepth, functionDepth, scope.Context.CallerSource,
+                    captureReader);
             }
             scope = scope with
             {

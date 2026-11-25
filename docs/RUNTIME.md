@@ -642,10 +642,11 @@ An ordinary failure reached by eval or source carries its binding policy through
 any deferred redirection cleanup. A nested reader can restore descriptor mappings
 between reader entries for the action while the command scopes own the handles.
 A command substitution walks its reader entries in reverse order to select
-the restored scopes. It applies the selected descriptor changes to one
+the scopes that unwind. It uses those intervals to select both descriptor changes
+and function and source cleanup. EXIT projects the selected descriptors to one
 temporary table and settles the action before those scopes release their handles.
-EXIT projects the arguments, return target and diagnostic source from the active
-function and source frames before their owners unwind. A source unwind consumes
+The selected function and source cleanup projects the arguments, return target
+and diagnostic source before the active frames unwind. A source unwind consumes
 a saved argument frame when it supplied arguments. The active values survive
 that unwind when a global `set --` replacement is pending.
 A directly invoked pipeline stage owns its descriptor mapping through EXIT.

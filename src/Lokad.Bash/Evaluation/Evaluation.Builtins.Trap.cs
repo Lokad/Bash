@@ -207,6 +207,8 @@ public sealed partial class Evaluation
             var callerSource = scope.Context.CallerSource;
             var returnTarget = scope.Context.ReturnTarget;
             var sourceMemory = scope.Context.SourceMemory;
+            var readerDepth = kind == ExitTrapKind.LoadedErrexit ? scope.InnerReaderRedirectionDepth : null;
+            var readerUnwind = readerDepth is { } reachedDepth ? new LoadedExitUnwind(scope, reachedDepth) : default;
             var keepsInheritedBindings = parameterTransform
                 && (_state.ErrexitEnabled || _pipelineExitBoundary.KeepsReachedBindings);
             if (useInheritedPipelineAction && !keepsInheritedBindings)
@@ -226,8 +228,8 @@ public sealed partial class Evaluation
             }
             else if (kind is ExitTrapKind.Errexit or ExitTrapKind.LoadedErrexit)
             {
-                if (kind == ExitTrapKind.LoadedErrexit && scope.InnerReaderRedirectionDepth.HasValue)
-                    (returnTarget, sourceMemory) = RestoreLoadedReaderExitFrame(scope);
+                if (readerDepth.HasValue)
+                    (returnTarget, sourceMemory) = RestoreLoadedReaderExitFrame(scope, readerUnwind);
                 if (!_state.KeepsLocalsOnErrexit || kind == ExitTrapKind.LoadedErrexit && function != null)
                 {
                     (function, prefixes) = RestoreBindings(scope, retainDepth: null, restorePositionals: false);
@@ -250,9 +252,8 @@ public sealed partial class Evaluation
                 ErrexitRedirections = null,
                 InDirectPipelineReader = false
             };
-            var handler = kind == ExitTrapKind.LoadedErrexit && scope.InnerReaderRedirectionDepth is { } innerDepth
-                && innerDepth > scope.PipelineExitReader.RedirectionDepth
-                ? await EvaluateWithReaderRedirectionsAsync(trapScope, innerDepth).ConfigureAwait(false)
+            var handler = readerDepth > scope.PipelineExitReader.RedirectionDepth
+                ? await EvaluateWithReaderRedirectionsAsync(trapScope, readerUnwind).ConfigureAwait(false)
                 : await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap).ConfigureAwait(false);
             // A discarded action leaves the pending exit status in effect.
             if (!handler.DiscardsCommandUnit && (handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
@@ -280,10 +281,9 @@ public sealed partial class Evaluation
             _state.LastExitCode = result.ExitCode;
         }
 
-        (ReturnTargetKind Target, SourceMemory? DiagnosticSource) RestoreLoadedReaderExitFrame(ScopedEvaluation active)
+        (ReturnTargetKind Target, SourceMemory? DiagnosticSource) RestoreLoadedReaderExitFrame(
+            ScopedEvaluation active, LoadedExitUnwind unwind)
         {
-            var boundary = active.PipelineExitReader;
-            var innerDepth = active.LoadedSyntaxFunctionDepth.GetValueOrDefault();
             var returnTarget = active.Context.ReturnTarget;
             var diagnosticSource = active.Context.SourceMemory;
             // Calls between the reader entries unwind their control targets. The arguments
@@ -294,31 +294,29 @@ public sealed partial class Evaluation
             var preserveCurrentArguments = active.Variables.GlobalPositionalsReplaced;
             Variables.PositionalParametersScope? argumentsToRestore = null;
             var unwindsArguments = false;
-            while (callbacks.TryPop(out var call))
+            while (unwind.TryTake(out var outer, out var inner))
             {
-                if (call.Source is { } source ? ReferenceEquals(source, boundary.Source)
-                    : call.FunctionDepth <= boundary.FunctionDepth.GetValueOrDefault())
-                    break;
-                if (call.FunctionDepth > innerDepth)
-                    continue;
-
-                returnTarget = callbacks.ReturnTarget;
-                if (diagnosticFrames.TryPop(out var diagnostic))
-                    diagnosticSource = diagnostic.CallerSourceMemory;
-                if (call.Positionals == null)
-                    continue;
-
-                // Each unwind consumes the newest saved arguments. The reached command's
-                // function can have left its saved frame above the reader's unwind callbacks.
-                while (savedArguments.TryPop(out var saved))
+                callbacks.TrimTo(inner);
+                while (callbacks.TryPopAbove(outer, out var call))
                 {
-                    if (saved.Positionals == null)
+                    returnTarget = callbacks.ReturnTarget;
+                    if (diagnosticFrames.TryPop(out var diagnostic))
+                        diagnosticSource = diagnostic.CallerSourceMemory;
+                    if (call.Positionals == null)
                         continue;
-                    if (call.Source == null || !preserveCurrentArguments)
-                        argumentsToRestore = saved.Positionals;
-                    preserveCurrentArguments = false;
-                    unwindsArguments = true;
-                    break;
+
+                    // The reached command can have left saved arguments above the
+                    // callbacks selected by the reader unwind.
+                    while (savedArguments.TryPop(out var saved))
+                    {
+                        if (saved.Positionals == null)
+                            continue;
+                        if (!call.IsSource || !preserveCurrentArguments)
+                            argumentsToRestore = saved.Positionals;
+                        preserveCurrentArguments = false;
+                        unwindsArguments = true;
+                        break;
+                    }
                 }
             }
             if (argumentsToRestore != null)
@@ -328,11 +326,10 @@ public sealed partial class Evaluation
             return (returnTarget, diagnosticSource);
         }
 
-        async Task<EvaluationResult> EvaluateWithReaderRedirectionsAsync(ScopedEvaluation active, int innerDepth)
+        async Task<EvaluationResult> EvaluateWithReaderRedirectionsAsync(ScopedEvaluation active, LoadedExitUnwind unwind)
         {
             using var memory = Memory.BeginCommand(active);
-            var ranges = new LoadedExitRedirections(scope, innerDepth);
-            var table = _state.CaptureLoadedExitTable(ranges, Memory);
+            var table = _state.CaptureLoadedExitTable(unwind, Memory);
             if (table == null)
                 return await EvaluateCopiedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
 
@@ -402,7 +399,7 @@ public sealed partial class Evaluation
         }
     }
 
-    private readonly record struct ExitCall(int FunctionDepth, SourceCallerFrame? Source,
+    private readonly record struct ExitCall(bool IsSource,
         Variables.PositionalParametersScope? Positionals, SourceMemory? CallerSourceMemory);
 
     private struct ExitCallFrames(EvaluationContext context)
@@ -422,24 +419,40 @@ public sealed partial class Evaluation
             }
         }
 
-        public bool TryPop(out ExitCall call)
+        public void TrimTo(PipelineExitBoundary boundary)
+        {
+            var depth = boundary.FunctionDepth.GetValueOrDefault();
+            while (_function is { } function && function.Depth > depth)
+                _function = function.Enclosing;
+            while (_source is { } source && !ReferenceEquals(source, boundary.Source))
+                _source = source.Enclosing;
+            while (_source is { } source && source.FunctionDepth > depth)
+                _source = source.Enclosing;
+        }
+
+        public bool TryPopAbove(PipelineExitBoundary boundary, out ExitCall call)
         {
             SkipTemporaryFunctions();
             if (SourceIsNewest && _source is { } source)
             {
-                _source = source.Enclosing;
-                call = new ExitCall(source.FunctionDepth, source, source.CallerPositionals, source.CallerSourceMemory);
-                return true;
+                if (!ReferenceEquals(source, boundary.Source))
+                {
+                    _source = source.Enclosing;
+                    call = new ExitCall(IsSource: true, source.CallerPositionals, source.CallerSourceMemory);
+                    return true;
+                }
             }
-            if (_function is { } function)
+            else if (_function is { } function && function.Depth > boundary.FunctionDepth.GetValueOrDefault())
             {
                 _function = function.Enclosing;
-                call = new ExitCall(function.Depth, Source: null, function.CallerPositionals, function.CallerSourceMemory);
+                call = new ExitCall(IsSource: false, function.CallerPositionals, function.CallerSourceMemory);
                 return true;
             }
             call = default;
             return false;
         }
+
+        public bool TryPop(out ExitCall call) => TryPopAbove(default, out call);
 
         private void SkipTemporaryFunctions()
         {
