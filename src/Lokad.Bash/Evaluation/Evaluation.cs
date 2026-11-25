@@ -2644,8 +2644,20 @@ public sealed partial class Evaluation : IFileTester
                     && targetVars.IsReadonlyBinding(name);
                 var namedAssignmentBinding = setsNamedAttribute && operand.Value.HasValue ? selectedWholeBinding : null;
                 var writesNamedElement = namedAssignmentBinding is { Reference.Kind: VariableReferenceKind.Element };
+                var ordinaryAssignment = options.Builtin == BuiltinKind.Declare && !local && operand.Value.HasValue
+                    && options.NamerefChange == DeclarationAttributeChange.Unchanged;
+                if (ordinaryAssignment && selectedWholeBinding is { IsUnsetNameref: true } unsetBinding
+                    && unsetBinding.Name != sourceName)
+                    continue; // Only the declaration of the unset reference itself can give it a target.
+                var ordinaryAssignmentBinding = ordinaryAssignment && !global ? selectedWholeBinding : null;
+                var ordinaryElement = ordinaryAssignmentBinding is { Reference.Kind: VariableReferenceKind.Element } reachedElement
+                    && options.IndexedChange != DeclarationAttributeChange.Clear
+                    && options.AssociativeChange != DeclarationAttributeChange.Clear
+                    ? reachedElement
+                    : (VariableBinding?)null;
+                var prefixedOrdinaryElement = ordinaryElement is { } selectedElement && bindings?.Contains(selectedElement.Name) == true;
                 // Local redeclarations apply readonly and initialization to the reached binding.
-                var readonlyBinding = namedAssignmentBinding is { IsUnsetNameref: false } assignmentBinding
+                var readonlyBinding = (namedAssignmentBinding ?? ordinaryAssignmentBinding) is { IsUnsetNameref: false } assignmentBinding
                     ? !writesNamedElement && assignmentBinding.Owner.IsReadonlyBinding(assignmentBinding.Name)
                     : followsLocalNameref ? !shadowEnclosingLocal && targetVars.IsReadonlyBinding(localDeclarationTarget)
                         : options.NamerefChange != DeclarationAttributeChange.Unchanged && reference.Kind == VariableReferenceKind.Name
@@ -2677,7 +2689,12 @@ public sealed partial class Evaluation : IFileTester
                         if (local && element && operand.Value != null && existingTargetLocal && functionContext is { } function)
                             function.Locals.PrepareReadonlyElementDeclaration(targetVars, localDeclarationTarget,
                                 arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
-                        await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
+                        if (ordinaryAssignment && directPipelineStage)
+                            operandFailureStatus = PipelineAssignmentFailure;
+                        var readonlyName = ordinaryAssignmentBinding is { Reference.Kind: VariableReferenceKind.Element } readonlyElement
+                            ? readonlyElement.Name : ordinaryAssignment && global && reference.Kind == VariableReferenceKind.Name
+                                ? sourceName : declarationName;
+                        await DiagnoseReadonlyAsync(readonlyName).ConfigureAwait(false);
                     }
                     continue;
                 }
@@ -2907,7 +2924,7 @@ public sealed partial class Evaluation : IFileTester
                         continue;
                     }
                 }
-                else if ((!operand.CompoundApplied || convertedReference) && !local && arrayKind != ArrayAssignmentKind.Auto)
+                else if (ordinaryElement == null && (!operand.CompoundApplied || convertedReference) && !local && arrayKind != ArrayAssignmentKind.Auto)
                 {
                     var kind = arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
                     var arrayDeclarationBinding = referentAttributes ?? new VariableBinding(VariableReference.ForName(name), targetVars);
@@ -3082,8 +3099,17 @@ public sealed partial class Evaluation : IFileTester
                             SetAttributes(attributeName, targetVars, assignmentExport);
                             elementAttributesApplied = true;
                         }
+                        if (ordinaryElement is { } elementDeclaration)
+                        {
+                            if (!await PrepareReferencedElementDeclarationAsync(elementDeclaration, arrayKind, assignmentExport).ConfigureAwait(false))
+                                continue;
+                            writeReference = elementDeclaration.Reference;
+                            writeVariables = prefixedOrdinaryElement && arrayKind == ArrayAssignmentKind.Auto && bindings is { } elementPrefix
+                                ? elementPrefix.SavedVariables : elementDeclaration.Owner;
+                            elementAttributesApplied = true;
+                        }
                         // Element assignments can reach the binding saved under a command prefix.
-                        if (reference.Kind != VariableReferenceKind.Name && bindings?.Contains(writeReference.Name) == true
+                        else if (reference.Kind != VariableReferenceKind.Name && bindings?.Contains(writeReference.Name) == true
                             && !commandVars.TryGetNameref(writeReference.Name, out _))
                             writeVariables = bindings.SavedVariables;
                         else if (writesNamedElement && namedAssignmentBinding is { } elementBinding
@@ -3093,15 +3119,19 @@ public sealed partial class Evaluation : IFileTester
                             writeVariables = bindings.SavedVariables;
                         }
                         var writeScope = global ? declarationScope : executionScope;
+                        var selectorOwner = ordinaryElement?.Owner ?? writeVariables;
                         var writeTarget = await AwaitWordExpansionAsync(WordExpansion.ResolveDeclarationReferenceAsync(
-                            writeReference, writeScope, writeVariables,
-                            reference.Kind != VariableReferenceKind.Name || writesNamedElement ? commandVars : writeVariables))
+                            writeReference, ordinaryElement == null ? writeScope : GetDeclarationElementScope(), selectorOwner,
+                            reference.Kind != VariableReferenceKind.Name || writesNamedElement || ordinaryElement != null ? commandVars : writeVariables))
                             .ConfigureAwait(false);
+                        if (writeTarget != null && !ReferenceEquals(selectorOwner, writeVariables))
+                            writeTarget = writeTarget with { ReadOwner = writeVariables };
                         if (HasPendingExpansionError || writeTarget == null
                             || !await TryAssignDeclarationValueAsync(writeTarget, writeReference,
                                 writeScope, writeVariables, value, operand.Operator,
-                                declarationWrite, local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName,
-                                applyAssignmentAttributes: true, writesNamedElement).ConfigureAwait(false))
+                                declarationWrite, ordinaryElement?.Name
+                                    ?? (local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName),
+                                applyAssignmentAttributes: ordinaryElement == null, writesNamedElement).ConfigureAwait(false))
                         {
                             RecordOperandFailure();
                             if (HasPendingExpansionError) break;
@@ -3153,10 +3183,10 @@ public sealed partial class Evaluation : IFileTester
                     continue; // A valueless -n on a prefix does not create a function local.
                 if (selfNameref && namerefReference is { } assignedReference && assignedReference.Name == name)
                     await ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
-                var attributeBinding = referentAttributes
+                var attributeBinding = referentAttributes ?? (elementAttributesApplied ? ordinaryElement : null)
                     ?? (local && !options.Nameref && targetVars.TryResolveBinding(name, null, out var localBinding)
                         ? localBinding : new VariableBinding(VariableReference.ForName(name), targetVars));
-                if (referentElement == null
+                if (referentElement == null && !prefixedOrdinaryElement
                     && (global || reference.Kind == VariableReferenceKind.Name || bindings?.Contains(attributeBinding.Name) != true))
                 {
                     if (elementAttributesApplied)
@@ -3438,6 +3468,37 @@ public sealed partial class Evaluation : IFileTester
                 return true;
             }
 
+            async Task<bool> PrepareReferencedElementDeclarationAsync(
+                VariableBinding element, ArrayAssignmentKind arrayKind, DeclarationAttributeChange exportChange)
+            {
+                var owner = element.Owner;
+                var name = element.Name;
+                var kind = arrayKind == ArrayAssignmentKind.Associative
+                    || arrayKind == ArrayAssignmentKind.Auto && owner.AssociativeArrays.ContainsKey(name)
+                    ? ArrayKind.Associative : ArrayKind.Indexed;
+                if (owner.TryGetNameref(name, out _))
+                {
+                    await ReportCommandDiagnosticAsync([ShellValue.FromText("warning")],
+                        [GetDiagnosticName(name), ShellValue.FromText(": removing nameref attribute")], declarationScope).ConfigureAwait(false);
+                    if (!owner.TryRemoveNamerefAttribute(name))
+                    {
+                        await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                        return false;
+                    }
+                }
+                var declared = owner.GetArrayMetadata(name) != null || owner.Scalars.ContainsKey(name)
+                    ? owner.TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.RetainValue)
+                    : owner.TryAssignResolvedArray(name, [], kind, initializeReadonly: false);
+                if (!declared)
+                {
+                    await DiagnoseAsync(name, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                    return false;
+                }
+                // Attributes and array kind are visible during deferred selector expansion.
+                SetAttributes(name, owner, exportChange);
+                return true;
+            }
+
             async Task<bool> AssignReferencedElementAsync(
                 VariableReference reference, VariableBinding attributes, ShellValue value, AssignmentOperator operation,
                 bool assignsGlobalElement, DeclarationAttributeChange exportChange)
@@ -3450,10 +3511,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 SetAttributes(attributes.Name, attributes.Owner, exportChange);
 
-                var selectionScope = prefixNames == null ? executionScope : executionScope with
-                {
-                    ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(bindings?.SavedVariables ?? declarationScope.Variables, prefixNames)
-                };
+                var selectionScope = GetDeclarationElementScope();
                 var variables = bindings?.Contains(reference.Name) == true ? bindings.SavedVariables : declarationScope.Variables;
                 if (prefixNames != null && variables.TryGetNameref(reference.Name, out _)
                     && (prefixNames.Contains(reference.Name) || selectionScope.GetExpansionWriteTarget(reference.Name) == null))
@@ -3481,6 +3539,11 @@ public sealed partial class Evaluation : IFileTester
                     RecordOperandFailure();
                 return true;
             }
+
+            ScopedEvaluation GetDeclarationElementScope() => prefixNames == null ? executionScope : executionScope with
+            {
+                ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(bindings?.SavedVariables ?? declarationScope.Variables, prefixNames)
+            };
 
             async Task<bool> TryAssignDeclarationValueAsync(
                 WordExpansion.ResolvedVariableReference target, VariableReference reference, ScopedEvaluation writeScope, Variables destination,

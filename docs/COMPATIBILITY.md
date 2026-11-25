@@ -760,6 +760,15 @@ an element reports a separate diagnostic. A temporary command prefix over the
 target supplies the visible selector bindings and bounds. The selected
 element write reaches the array saved under that prefix.
 
+For nonlocal `declare` and `typeset` assignments, a readonly nameref can
+select a writable target. A readonly array already present at the target
+rejects the assignment before selector expansion. A direct pipeline stage
+reports status 4 for that refusal. Ordinary element declarations make the
+array and its attributes visible to the selector. A newly applied `-r` lets
+a successful selector finish and reports the rejected write with status 0.
+An ordinary assignment through a chain ending at an unset nameref leaves
+the chain intact.
+
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the
 pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.

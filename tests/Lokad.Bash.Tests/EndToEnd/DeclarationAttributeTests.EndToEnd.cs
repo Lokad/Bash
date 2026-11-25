@@ -53,6 +53,79 @@ public sealed class DeclarationAttributeTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("item=old; declare -rn link=item", "declare -x link+=more",
+        "<0:0>declare -x item=\"oldmore\"\ndeclare -nr link=\"item\"\n", "")]
+    [InlineData("item=(old); declare -rn link='item[i++]'", "typeset link=new",
+        "<0:1>declare -a item=([0]=\"new\")\ndeclare -nr link=\"item[i++]\"\n", "")]
+    [InlineData("declare -ar item=(old); declare -n link='item[i++]'", "declare -x link=new",
+        "<1:0>declare -ar item=([0]=\"old\")\ndeclare -n link=\"item[i++]\"\n",
+        "line 2: declare: item: readonly variable\n")]
+    [InlineData("item=(old); declare -rn link='item[i++]'", "declare -r link=new",
+        "<0:1>declare -ar item=([0]=\"old\")\ndeclare -nr link=\"item[i++]\"\n",
+        "line 2: item: readonly variable\n")]
+    [InlineData("item=(2 8); declare -rn link='item[(item[1]+=1,0)]'", "declare -r link=7",
+        "<1:0>declare -ar item=([0]=\"2\" [1]=\"8\")\ndeclare -nr link=\"item[(item[1]+=1,0)]\"\n",
+        "line 2: item: readonly variable\n")]
+    public async Task OrdinaryDeclarationsApplyAttributesToTheReachedNamerefBinding(
+        string setup, string command, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync("i=0; " + setup + "\n" + command
+            + "\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item link");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("readonly item=old; declare -rn link=item", "declare -g", "link")]
+    [InlineData("declare -ar item=(old); declare -rn link='item[i++]'", "typeset", "item")]
+    public async Task ReadonlyDeclarationsReportTheDirectPipelineStageStatus(string setup, string command, string subject)
+    {
+        var result = await EvaluationTestHelper.RunAsync("i=0; " + setup + "\n" + command
+            + " link=new | :\nprintf '<%s:%s>' \"${PIPESTATUS[*]}\" \"$i\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<4 0:0>", result.StdOut);
+        Assert.Equal($"line 2: {command.Split(' ')[0]}: {subject}: readonly variable\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("typeset -r")]
+    [InlineData("declare -gx")]
+    public async Task OrdinaryDeclarationsLeaveAnIndirectUnsetNamerefIntact(string command)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -rn hop; declare -n link=hop
+            {command} link=new
+            printf '<%s>' "$?"; declare -p link hop
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0>declare -n link=\"hop\"\ndeclare -nr hop\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("-r", 2, "sparenew")]
+    [InlineData("-x", 2, "sparenew")]
+    [InlineData("-A", 0, "spare")]
+    public async Task OrdinaryElementDeclarationPrefixesKeepTemporaryAttributes(
+        string flags, int finalIndex, string finalElement)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            i=0; item=(old spare); declare -rn link='item[i++]'
+            item=scoped i=1 declare {flags} link+=new
+            printf '<%s:%s>' "$?" "$i"; declare -p item link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:{finalIndex}>declare -a item=([0]=\"old\" [1]=\"{finalElement}\")\ndeclare -nr link=\"item[i++]\"\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("export -a x; declare -p x", "declare -x x\n", "")]
     [InlineData("x=old; readonly -A x; declare -p x", "declare -r x=\"old\"\n", "")]
     [InlineData("x=(one two); export -A x; declare -p x", "declare -ax x=([0]=\"one\" [1]=\"two\")\n", "")]
