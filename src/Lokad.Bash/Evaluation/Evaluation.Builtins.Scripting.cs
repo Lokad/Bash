@@ -323,15 +323,26 @@ public sealed partial class Evaluation
                     scope.Context.FunctionContext?.Depth ?? 0, scope.Context.CallerSource)
             };
         if (nestedLoadedReader)
+        {
+            var redirectionDepth = _state.RedirectionDepth;
+            var functionDepth = scope.Context.FunctionContext?.Depth ?? 0;
+            var captureReader = scope.CaptureReader;
+            if (_state.ForkKind == ShellForkKind.CommandSubstitution)
+            {
+                Memory.Charge(32);
+                captureReader = new CaptureReaderFrame(redirectionDepth, functionDepth, captureReader);
+            }
             scope = scope with
             {
                 InNestedCommandUnits = true,
                 InnerReaderRedirectionDepth = !outermostLoadedReader || _state.ForkKind == ShellForkKind.CommandSubstitution
-                    ? _state.RedirectionDepth : null,
+                    ? redirectionDepth : null,
+                CaptureReader = captureReader,
                 ReaderEntryTiming = scope.Timing,
-                LoadedSyntaxFunctionDepth = scope.Context.FunctionContext?.Depth ?? 0,
+                LoadedSyntaxFunctionDepth = functionDepth,
                 LoadedReaderIgnoresErrexit = scope.Context.ErrexitIgnored
             };
+        }
         var lineOffset = kind switch
         {
             ScriptExecutionKind.Eval => Math.Max(1, scope.Context.Coordinates.Line) - 1,

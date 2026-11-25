@@ -802,6 +802,7 @@ public sealed partial class Evaluation : IFileTester
                 ReaderEntryTiming = null,
                 InNestedCommandUnits = false,
                 InnerReaderRedirectionDepth = null,
+                CaptureReader = null,
                 InDirectPipelineReader = false
             };
             if (redirections != null)

@@ -331,7 +331,8 @@ public sealed partial class Evaluation
         async Task<EvaluationResult> EvaluateWithReaderRedirectionsAsync(ScopedEvaluation active, int innerDepth)
         {
             using var memory = Memory.BeginCommand(active);
-            var table = _state.CaptureLoadedExitTable(active.PipelineExitReader.RedirectionDepth, innerDepth, Memory);
+            var ranges = new LoadedExitRedirections(scope, innerDepth);
+            var table = _state.CaptureLoadedExitTable(ranges, Memory);
             if (table == null)
                 return await EvaluateCopiedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
 

@@ -75,13 +75,28 @@ internal struct RedirectionState
             : _inheritedExitBindings;
     }
 
-    /// <summary>Projects the mappings restored between two reader entries onto the reached table.</summary>
-    internal readonly DescriptorTable? CaptureLoadedExitTable(int outerDepth, int innerDepth, EvaluationMemory memory)
+    /// <summary>Projects unwound reader mappings onto a temporary copy of the reached table.</summary>
+    internal readonly DescriptorTable? CaptureLoadedExitTable(LoadedExitRedirections ranges, EvaluationMemory memory)
     {
-        if (CurrentTable == null || CaptureRestoration(outerDepth, innerDepth, keepChangedFrames: true, memory) is not { } saved)
+        if (CurrentTable is not { } reached || !ranges.TryTake(out var outerDepth, out var innerDepth))
             return null;
-        var table = CurrentTable.Clone();
-        RestoreChangedDescriptors(table, saved.Bindings, saved.ChangedFrames, memory);
+        var depth = Depth;
+        if ((uint)outerDepth > (uint)innerDepth || (uint)innerDepth > (uint)depth)
+            throw new InvalidOperationException("The reader's redirection boundaries must be active.");
+        DescriptorTable? table = null;
+        var changed = _changedDescriptors;
+        foreach (var frame in _frames)
+        {
+            if (depth <= innerDepth && changed.Count != 0 && frame.Table is { } previous)
+            {
+                table ??= reached.Clone();
+                foreach (var descriptor in changed)
+                    table.Set(descriptor, previous.ResolveBinding(descriptor), memory);
+            }
+            if (--depth == outerDepth && !ranges.TryTake(out outerDepth, out innerDepth))
+                break;
+            changed = frame.Changed;
+        }
         return table;
     }
 

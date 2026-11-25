@@ -641,6 +641,9 @@ Ordinary shell command units restore local and temporary bindings before the act
 An ordinary failure reached by eval or source carries its binding policy through
 any deferred redirection cleanup. A nested reader can restore descriptor mappings
 between reader entries for the action while the command scopes own the handles.
+A command substitution walks its reader entries in reverse order to select
+the restored scopes. It applies the selected descriptor changes to one
+temporary table and settles the action before those scopes release their handles.
 EXIT projects the arguments, return target and diagnostic source from the active
 function and source frames before their owners unwind. A source unwind consumes
 a saved argument frame when it supplied arguments. The active values survive

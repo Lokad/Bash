@@ -377,6 +377,81 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CallbackReaderExitInACaptureUsesTheEnclosingDescriptorMappings(bool useSource)
+    {
+        const string body = "f() { : | false; printf skipped; }; f 2>function-error";
+        var reader = useSource ? "source ./sample.sh" : $"eval '{body}'";
+        var script = $$"""
+            set -e
+            captured=$(
+                set -e
+                trap 'printf output; printf handler >&2; printf third >&3' EXIT
+                callback() { {{reader}} >reader-out 2>reader-error 3>reader-three; }
+                {
+                    mapfile -c 1 -C callback rows <input >mapfile-out 3>mapfile-three
+                } 2>group-error
+            )
+            printf skipped
+            """;
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/input", "record\n");
+        host.AddFile("/sample.sh", body);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("output", host.ReadFile("/mapfile-out"));
+        Assert.Equal("handler", host.ReadFile("/group-error"));
+        Assert.Equal("third", host.ReadFile("/mapfile-three"));
+        Assert.Empty(host.ReadFileBytes("/reader-out"));
+        Assert.Empty(host.ReadFileBytes("/reader-error"));
+        Assert.Empty(host.ReadFileBytes("/reader-three"));
+        Assert.Empty(host.ReadFileBytes("/function-error"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task NestedCallbackReaderExitInACaptureRestoresDisjointDescriptorScopes()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/input", "record\n");
+        var result = await host.RunAsync("""
+            set -e
+            {
+                captured=$(
+                    set -e
+                    trap 'printf handler >&2; printf third >&3; printf fourth >&4' EXIT
+                    outer() {
+                        mapfile -c 1 -C inner innerRows <input 2>inner-error 3>inner-three
+                    }
+                    inner() {
+                        eval 'exec 4>persisted-four; f() { : | false; }; f 2>function-error' 2>eval-error 3>eval-three
+                    }
+                    mapfile -c 1 -C outer outerRows <input 2>outer-error
+                )
+            } 3>base-three 4>base-four
+            """, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("handler", host.StandardError.TextContent);
+        Assert.Empty(host.ReadFileBytes("/outer-error"));
+        Assert.Empty(host.ReadFileBytes("/inner-error"));
+        Assert.Empty(host.ReadFileBytes("/eval-error"));
+        Assert.Empty(host.ReadFileBytes("/function-error"));
+        Assert.Empty(host.ReadFileBytes("/base-three"));
+        Assert.Empty(host.ReadFileBytes("/eval-three"));
+        Assert.Equal("third", host.ReadFile("/inner-three"));
+        Assert.Equal("fourth", host.ReadFile("/persisted-four"));
+        Assert.Empty(host.ReadFileBytes("/base-four"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("set -- from-reader", ":", "reached")]
     [InlineData(":", "set -- from-function", "reader")]
     [InlineData("set -- from-reader", "set -- from-function", "from-function")]

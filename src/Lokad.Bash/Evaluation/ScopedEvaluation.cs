@@ -93,6 +93,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>The descriptor depth at the inner reader's entry for ordinary errexit.</summary>
     internal int? InnerReaderRedirectionDepth { get; init; }
 
+    /// <summary>Reader entries within the current command substitution.</summary>
+    internal CaptureReaderFrame? CaptureReader { get; init; }
+
     /// <summary>A directly piped source or eval invocation catches ordinary errexit with status 1.</summary>
     internal bool InDirectPipelineReader { get; init; }
 
@@ -170,6 +173,46 @@ internal readonly record struct ScopedEvaluation(
         Variables.TryGetNameref(name, out _)
         && Variables.TryResolveBinding(name, selectOwner: null, out var binding)
         && prefixes.Contains(binding.Name);
+}
+
+internal sealed record CaptureReaderFrame(int RedirectionDepth, int FunctionDepth, CaptureReaderFrame? Enclosing);
+
+/// <summary>Enumerates the descriptor ranges unwound on ordinary errexit, from newest to oldest.</summary>
+internal struct LoadedExitRedirections(ScopedEvaluation scope, int reachedDepth)
+{
+    private readonly PipelineExitBoundary _outermost = scope.PipelineExitReader;
+    private CaptureReaderFrame? _reader = scope.CaptureReader;
+    private Evaluation.FunctionContext? _function = scope.Context.FunctionContext;
+    private int _depth = reachedDepth;
+    private bool _retainsReaderCommands;
+
+    internal bool TryTake(out int outerDepth, out int innerDepth)
+    {
+        while (_reader is { } reader)
+        {
+            _reader = reader.Enclosing;
+            innerDepth = reader.RedirectionDepth;
+            outerDepth = _reader?.RedirectionDepth ?? _outermost.RedirectionDepth;
+            _depth = outerDepth;
+            var outerFunctionDepth = _reader?.FunctionDepth ?? _outermost.FunctionDepth.GetValueOrDefault();
+            var unwindsFunction = false;
+            for (; _function is { } frame && frame.Depth > outerFunctionDepth; _function = frame.Enclosing)
+                unwindsFunction |= frame.Depth <= reader.FunctionDepth && frame.CallerPositionals != null;
+
+            // The first reader clears the active function context. A later unwind that
+            // pops a function frame from that cleared context makes the next enclosing
+            // reader discard its command's cleanup instead of running it.
+            var restore = !_retainsReaderCommands;
+            _retainsReaderCommands = restore && unwindsFunction;
+            if (restore && innerDepth != outerDepth)
+                return true;
+        }
+
+        innerDepth = _depth;
+        outerDepth = _outermost.RedirectionDepth;
+        _depth = outerDepth;
+        return innerDepth != outerDepth;
+    }
 }
 
 internal readonly record struct PipelineExitBoundary(int RedirectionDepth, int? FunctionDepth, Evaluation.SourceCallerFrame? Source)

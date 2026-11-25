@@ -513,8 +513,8 @@ internal sealed class EvaluationState
     internal void RestorePipelineExitRedirections(RedirectionState.PipelineExitRedirections redirections, EvaluationMemory memory) =>
         _redirections.RestoreForPipelineExit(redirections, memory);
 
-    internal DescriptorTable? CaptureLoadedExitTable(int outerDepth, int innerDepth, EvaluationMemory memory) =>
-        _redirections.CaptureLoadedExitTable(outerDepth, innerDepth, memory);
+    internal DescriptorTable? CaptureLoadedExitTable(LoadedExitRedirections ranges, EvaluationMemory memory) =>
+        _redirections.CaptureLoadedExitTable(ranges, memory);
 
     internal long RetainedDescriptorMemoryBytes => _redirections.OwnedMemoryBytes;
 
