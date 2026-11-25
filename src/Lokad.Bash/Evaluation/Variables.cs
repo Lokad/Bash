@@ -14,12 +14,13 @@ namespace Lokad.Bash.Evaluation;
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
 internal enum ForAssignmentFailure { None, InvalidTarget, Readonly, IncompatibleAttributes }
-internal enum BindingResolution { Referent, LastNameref }
+internal enum BindingResolution { Referent, LastNameref, LastExpansionNameref }
 internal readonly record struct VariableBinding(VariableReference Reference, Variables Owner)
 {
     public BindingName Name => Reference.Name;
     public bool IsUnsetNameref => Reference.Kind == VariableReferenceKind.Name
         && Owner.TryGetNameref(Name, out var target) && target.IsEmpty;
+    internal bool IsArrayNameref => Reference.Kind == VariableReferenceKind.Name && Owner.IsArrayNameref(Name);
 }
 internal readonly record struct VariableUnsetTarget(BindingName Name, bool RequiresSelector, BindingName ReadonlyName);
 
@@ -1774,7 +1775,8 @@ public sealed partial class Variables
                 var selected = SelectReference(reference, target.LiteralName);
                 var isNameref = selected.Reference.Kind == VariableReferenceKind.Name
                     && selected.Owner.NamerefTargets.TryGetValue(selected.Name, out target);
-                if (resolution == BindingResolution.LastNameref && !isNameref)
+                if (resolution != BindingResolution.Referent && !isNameref
+                    && !(resolution == BindingResolution.LastExpansionNameref && selected.IsArrayNameref))
                     return true;
 
                 binding = selected;

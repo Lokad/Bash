@@ -1035,7 +1035,7 @@ internal static partial class WordExpansion
                 }
 
                 var name = content.Slice(nameStart, nameEnd - nameStart).ToUtf8String();
-                var target = await ResolveReferenceAsync(VariableReference.ForName(name), ReferenceUse.Read,
+                var target = await ResolveReferenceAsync(VariableReference.ForName(name), ReferenceUse.ShortRead,
                     scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
                 var selectedValue = ShellValue.Empty;
                 if (target != null) target.TryRead(scope.Variables, out selectedValue);

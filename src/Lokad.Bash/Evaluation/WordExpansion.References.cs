@@ -9,6 +9,10 @@ namespace Lokad.Bash.Evaluation;
 
 internal static partial class WordExpansion
 {
+    // The two Bash 5.2 references expose the empty indexed array's signed maximum index in this position.
+    private static readonly ShellValue IndexedArrayNamerefSpelling =
+        ShellValue.FromBytes(new byte[] { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff });
+
     internal enum DeclarationWrite { Ordinary, ActiveGlobalIndexed, ReadonlyInitializer }
 
     /// <summary>A selected location; its typed index is not expanded again when read.</summary>
@@ -187,7 +191,7 @@ internal static partial class WordExpansion
             return new(false, BindingName.Empty);
         }
         var resolvedName = variables.ResolveNamerefName(name);
-        if (!variables.HasBinding(resolvedName))
+        if (!variables.HasBinding(resolvedName) || variables.IsArrayNameref(resolvedName))
             return new(true, BindingName.Empty);
 
         // The unset policy is selected before the selector can change the binding's kind.
@@ -406,7 +410,7 @@ internal static partial class WordExpansion
 
     /// <summary>Reads a selected binding through ordinary nameref/array expansion rules.</summary>
     internal static Task<ResolvedVariableReference?> ResolveReadReferenceAsync(VariableReference reference, ScopedEvaluation scope) =>
-        ResolveReferenceAsync(reference, ReferenceUse.Read, scope, ExpansionPurpose.ArithmeticSource);
+        ResolveReferenceAsync(reference, ReferenceUse.BindingRead, scope, ExpansionPurpose.ArithmeticSource);
 
     internal static Task<bool> TestVariableAsync(UnaryPredicateKind predicate, ShellValue operand, ScopedEvaluation scope)
     {
@@ -516,7 +520,7 @@ internal static partial class WordExpansion
         if (!scope.CanExpand)
             return null;
         var convertedNameref = false;
-        if (use is ReferenceUse.Read or ReferenceUse.DefaultRead or ReferenceUse.Length or ReferenceUse.Presence
+        if (use is ReferenceUse.Read or ReferenceUse.BindingRead or ReferenceUse.DefaultRead or ReferenceUse.Length or ReferenceUse.Presence
             && reference.Kind != VariableReferenceKind.Name
             && !targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out _))
         {
@@ -532,7 +536,8 @@ internal static partial class WordExpansion
         {
             var sourceName = reference.Name;
             VariableBinding binding;
-            if (use is ReferenceUse.Read or ReferenceUse.DefaultRead or ReferenceUse.Length)
+            var parameterRead = use is ReferenceUse.Read or ReferenceUse.ShortRead or ReferenceUse.DefaultRead;
+            if (parameterRead || use is ReferenceUse.BindingRead or ReferenceUse.Length)
             {
                 var selected = await ResolveReadBindingAsync(reference, use, scope, targetVariables).ConfigureAwait(false);
                 if (selected is not { } readBinding)
@@ -553,6 +558,14 @@ internal static partial class WordExpansion
                 }
                 else
                     return new ResolvedVariableReference.Scalar(BindingName.Empty);
+            }
+            if (parameterRead && binding.IsArrayNameref && (use != ReferenceUse.ShortRead
+                || binding.Owner.GetArrayMetadata(binding.Name) is { IsInitialized: true }))
+            {
+                await scope.Effects.ReportParameterExpansionFailureAsync([GetArrayNamerefDiagnosticSubject(binding)],
+                    [ShellValue.FromText("invalid variable name for name reference")], scope, ExpansionFailureKind.ParameterTarget)
+                    .ConfigureAwait(false);
+                return null;
             }
             if (binding.Reference.Kind == VariableReferenceKind.Name)
                 return ResolveNameReference(binding.Name, targetVariables);
@@ -591,18 +604,28 @@ internal static partial class WordExpansion
         }
 
         var builtinOutput = use == ReferenceUse.BuiltinAssign && !command.IsEmpty;
+        var writesElement = use == ReferenceUse.DirectAssign || builtinOutput;
+        var assignsDefault = use == ReferenceUse.Assign;
         // Compound preparation has already selected the binding.
         var name = reference.Name;
         var selectAfterIndex = false;
+        var reachedArrayNameref = false;
         if (use != ReferenceUse.CompoundAssign)
         {
             var reached = targetVariables.TryResolveBinding(name, selectOwner: null, out var initial);
+            reachedArrayNameref = reached && initial.IsArrayNameref;
+            // Length lookup has no selector to expand when the array nameref has no referent.
+            if (reachedArrayNameref && use == ReferenceUse.Length)
+                return null;
             name = reached && initial.Reference.Kind == VariableReferenceKind.Name && !initial.IsUnsetNameref
+                && !(reachedArrayNameref && (writesElement || assignsDefault))
                 ? initial.Name : BindingName.Empty;
             selectAfterIndex = reached && name.IsEmpty
-                && (use is ReferenceUse.DirectAssign or ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign || builtinOutput);
+                && (writesElement || assignsDefault && reachedArrayNameref
+                    || use is ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign);
         }
-        var associative = use != ReferenceUse.RejectedNamerefDeclaration && targetVariables.AssociativeArrays.ContainsKey(name);
+        var associative = !reachedArrayNameref && use != ReferenceUse.RejectedNamerefDeclaration
+            && targetVariables.AssociativeArrays.ContainsKey(name);
         // Prepared and staged selectors validate expanded bytes.
         var selector = preparedSubscript is { } preparedSelector
             ? VariableReference.ForElement(reference.Name, ShellSource.FromBytes(preparedSelector.Value.Bytes))
@@ -687,7 +710,8 @@ internal static partial class WordExpansion
                 {
                     // Selector expansion may initialize the nameref. Keep the already validated index.
                     var stillUnset = binding.IsUnsetNameref;
-                    if (!stillUnset && binding.Reference.Kind == VariableReferenceKind.Name
+                    var arrayNameref = (writesElement || assignsDefault) && binding.IsArrayNameref;
+                    if (!stillUnset && !arrayNameref && binding.Reference.Kind == VariableReferenceKind.Name
                         && !targetVariables.AssociativeArrays.ContainsKey(binding.Name))
                     {
                         return new ResolvedVariableReference.Indexed(binding.Name, position)
@@ -696,13 +720,18 @@ internal static partial class WordExpansion
                             ReadAsUnset = use == ReferenceUse.ArithmeticRead
                         };
                     }
-                    if (use == ReferenceUse.DirectAssign || builtinOutput)
+                    if (writesElement || arrayNameref)
                     {
-                        if (stillUnset || binding.Reference.Kind != VariableReferenceKind.Name)
+                        if (stillUnset || arrayNameref || binding.Reference.Kind != VariableReferenceKind.Name)
                         {
-                            var spelling = stillUnset ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory);
+                            var spelling = arrayNameref ? GetArrayNamerefDiagnosticSubject(binding)
+                                : stillUnset ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory);
                             if (builtinOutput)
                                 await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, spelling, scope).ConfigureAwait(false);
+                            else if (assignsDefault)
+                                await scope.Effects.ReportParameterDefaultFailureAsync(
+                                    [ShellValue.FromText("`"), spelling, ShellValue.FromText("'")],
+                                    [ShellValue.FromText("not a valid identifier")], scope).ConfigureAwait(false);
                             else
                                 await scope.Effects.ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
                         }
@@ -741,7 +770,7 @@ internal static partial class WordExpansion
         Task ReportBadSubscriptAsync()
         {
             var referenceName = reference.Name.ToValue();
-            if (use is ReferenceUse.Read or ReferenceUse.Presence or ReferenceUse.DefaultRead)
+            if (use is ReferenceUse.Read or ReferenceUse.ShortRead or ReferenceUse.BindingRead or ReferenceUse.Presence or ReferenceUse.DefaultRead)
                 return scope.Effects.ReportArrayReadFailureAsync([referenceName], scope, length: false);
             if (use == ReferenceUse.Length)
                 return scope.Effects.ReportArrayReadFailureAsync([reference.Subscript.ToValue(), ShellValue.FromText("]")],
@@ -784,6 +813,9 @@ internal static partial class WordExpansion
         }
     }
 
+    private static ShellValue GetArrayNamerefDiagnosticSubject(VariableBinding binding) =>
+        binding.Owner.IndexedArrays.ContainsKey(binding.Name) ? IndexedArrayNamerefSpelling : binding.Name.ToValue();
+
     /// <summary>Warns at a reached read, then selects Bash's global fallback for a local cycle.</summary>
     private static async ValueTask<VariableBinding?> ResolveReadBindingAsync(
         VariableReference reference, ReferenceUse use, ScopedEvaluation scope, Variables variables)
@@ -801,6 +833,8 @@ internal static partial class WordExpansion
     private enum ReferenceUse
     {
         Read,
+        ShortRead,
+        BindingRead,
         DefaultRead,
         Length,
         Presence,

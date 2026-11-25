@@ -182,6 +182,17 @@ reference can leave the same array state. With `+n` on an empty selector,
 the array keeps the nameref flag when the write is rejected. A reference in
 the current frame whose target is missing can declare a separate local for
 that target.
+A braced whole-value read of the resulting array nameref discards the
+current command unit, including when an operator tests or inspects the
+value. An unbraced read expands to empty when the array is uninitialized.
+An unbraced read of an initialized array nameref discards its unit.
+Element reads still use an arithmetic selector. Length reads and element
+removal skip the selector. A direct element write diagnoses the invalid
+target after the RHS and a valid selector have run. A parameter default
+write selects the element again after evaluating its operand.
+Indexed array namerefs use the pinned Bash byte spelling for the diagnostic
+subject and for indirect expansion. Associative diagnostics use the binding
+name, and associative indirection starts with an empty spelling.
 Initializer validation can reject the value after the array kind is prepared
 and before the requested attributes are applied.
 When this preparation reaches a nonempty selector, its arithmetic effects

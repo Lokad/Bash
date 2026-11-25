@@ -1,6 +1,7 @@
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Tree;
 namespace Lokad.Bash.Tests.EndToEnd;
 
@@ -147,5 +148,115 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
         Assert.Equal("<1:1:1>\ndeclare -An slot\ndeclare -A after=([0]=\"kept\" )\n", result.StdOut);
         Assert.Equal("line 4: local: `slot[i++]': not a valid identifier\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("$slot")]
+    [InlineData("${slot:-fallback$((i++))}")]
+    [InlineData("${slot@a}")]
+    [InlineData("$alias")]
+    public async Task MixedIndexedNamerefWholeReadsDiscardTheCallingUnit(string operand)
+    {
+        var script = "slot=outer; dest=target; i=0\nf() {\n"
+            + "  local -n slot=dest\n  local -n 'slot[]='\n  local -n alias=slot\n"
+            + $"  printf 'read:%s' \"{operand}\"\n"
+            + "  : >inside\n}\nf || : >fallback\n"
+            + "printf '<%s:%s:%s:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$slot\" \"$dest\" \"$i\"\n";
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        await using var host = new TestHost { MemoryBudget = governor };
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:1:outer:target:0>", host.StandardOutput.TextContent);
+        Assert.Equal<byte>([
+            .. "line 4: local: slot: reference variable cannot be an array\nline 6: "u8,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            .. ": invalid variable name for name reference\n"u8
+        ], host.StandardError.Content.ToArray());
+        Assert.Empty(host.CaptureEntries());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("slot[i++]=value$((j++))", "<1:1:outer:target:1:1>")]
+    [InlineData("printf '%s' \"${slot[i++]:=value$((j++))}\"", "<2:2:outer:target:2:1>")]
+    public async Task MixedIndexedNamerefElementWritesRejectAfterSelectingTheIndex(string command, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync("slot=outer; dest=target; i=0; j=0\nf() {\n"
+            + "  local -n slot=dest\n  local -n 'slot[]='\n"
+            + $"  {command}\n"
+            + "  printf inside\n}\nf; printf same\n"
+            + "printf '<%s:%s:%s:%s:%s:%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$slot\" \"$dest\" \"$i\" \"$j\"\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal<byte>([
+            .. "line 4: local: slot: reference variable cannot be an array\nline 5: `"u8,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            .. "': not a valid identifier\n"u8
+        ], result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task MixedAssociativeNamerefElementReadUsesArithmeticButLengthAndUnsetSkipTheSelector()
+    {
+        var result = await EvaluationTestHelper.RunAsync("slot=outer; dest=target; i=0\nf() {\n"
+            + "  local -n slot=dest\n  local -An 'slot[]='\n"
+            + "  printf '<%s:%s:%s>' \"${#slot[i++]}\" \"${slot[i++]}\" \"$i\"\n"
+            + "  unset 'slot[i++]'; printf '<%s:%s>' \"$?\" \"$i\"\n"
+            + "}\nf\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0::1><0:1>", result.StdOut);
+        Assert.Equal("line 4: local: slot: reference variable cannot be an array\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task MixedIndexedNamerefIndirectionKeepsTheReachedSpellingBytes()
+    {
+        var result = await EvaluationTestHelper.RunAsync("dest=target\nf() {\n"
+            + "  local -n slot=dest\n  local -n 'slot[]='\n  local -n alias=slot\n"
+            + "  printf '<%s><%s><%s>' \"${!alias}\" \"${!slot:0:1}\" \"${!slot@a}\"\n"
+            + "}\nf\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal<byte>([
+            .. "<"u8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, .. "><"u8, 0xff, .. "><>"u8
+        ], result.Host.StandardOutput.Content.ToArray());
+        Assert.Equal("line 4: local: slot: reference variable cannot be an array\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task MixedAssociativeNamerefUsesTheBindingNameInTheReadDiagnostic()
+    {
+        var result = await EvaluationTestHelper.RunAsync("dest=target\nf() {\n"
+            + "  local -n slot=dest\n  local -An 'slot[]='\n"
+            + "  printf 'value:%s' \"$slot\"\n  printf inside\n}\nf\nprintf 'after:%s' \"$?\"\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("after:1", result.StdOut);
+        Assert.Equal("line 4: local: slot: reference variable cannot be an array\n"
+            + "line 5: slot: invalid variable name for name reference\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task UnbracedReadOfUninitializedArrayNamerefExpandsToEmptyBeforeABracedReadFails()
+    {
+        var result = await EvaluationTestHelper.RunAsync("f() {\n"
+            + "  local -n slot\n  local -n 'slot[]='\n"
+            + "  (printf '<%s>' \"$slot\")\n"
+            + "  printf 'braced:%s' \"${slot}\"\n  printf inside\n"
+            + "}\nf\nprintf 'after:%s' \"$?\"\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<>after:1", result.StdOut);
+        Assert.Equal<byte>([
+            .. "line 3: local: slot: reference variable cannot be an array\nline 5: "u8,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            .. ": invalid variable name for name reference\n"u8
+        ], result.Host.StandardError.Content.ToArray());
     }
 }

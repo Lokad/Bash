@@ -572,10 +572,17 @@ internal static partial class WordExpansion
             // A bare nameref initially supplies its referent's spelling. Value operators
             // can use that referent to select an array or inspect a scalar binding.
             if (syntax.Reference is { Kind: VariableReferenceKind.Name } binding
-                && scope.Variables.TryGetNameref(binding.Name, out _))
+                && scope.Variables.HasNamerefAttribute(binding.Name))
             {
-                if (!scope.Variables.TryResolveBinding(binding.Name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
-                    || !terminal.Owner.TryGetNameref(terminal.Name, out var referent) || referent.IsEmpty)
+                var found = scope.Variables.TryResolveBinding(binding.Name, selectOwner: null,
+                    BindingResolution.LastExpansionNameref, out var terminal);
+                var referent = ShellValue.Empty;
+                if (found && terminal.IsArrayNameref)
+                {
+                    if (terminal.Owner.IndexedArrays.ContainsKey(terminal.Name))
+                        referent = IndexedArrayNamerefSpelling;
+                }
+                else if (!found || !terminal.Owner.TryGetNameref(terminal.Name, out referent) || referent.IsEmpty)
                 {
                     await ReportParameterTargetFailureAsync([name.ToValue()], "invalid indirect expansion").ConfigureAwait(false);
                     return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
