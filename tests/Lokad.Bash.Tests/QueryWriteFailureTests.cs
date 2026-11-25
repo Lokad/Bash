@@ -314,7 +314,7 @@ public sealed class QueryWriteFailureTests
         await new Engine().RunAsync(state, host);
 
         Assert.Equal(expectedStatus, state.LastExitCode);
-        Assert.Equal(report ? "type: write error: " + (message ?? "Write failed") + "\n" : "", error.ToString());
+        Assert.Equal(report ? "line 1: type: write error: " + (message ?? "Write failed") + "\n" : "", error.ToString());
         Assert.Equal(report ? 2 : 1, writes);
     }
 
@@ -328,11 +328,11 @@ public sealed class QueryWriteFailureTests
         lookup.SetResult([new CommandLookupResult.Missing()]);
         await WriteAsync(FileDescriptor.StdOut, "printf is a shell builtin\n",
             DescriptorWriteResult.Failure(new OperationError(knownFirstCause ? "first failure\n" : "Write failed\n")));
-        await WriteAsync(FileDescriptor.StdErr, "type: missing: not found\n",
+        await WriteAsync(FileDescriptor.StdErr, "line 1: type: missing: not found\n",
             DescriptorWriteResult.Failure(new OperationError("diagnostic failure\n")));
         await WriteAsync(FileDescriptor.StdOut, ": is a shell builtin\n",
             DescriptorWriteResult.Failure(new OperationError("later failure\n")));
-        await WriteAsync(FileDescriptor.StdErr, knownFirstCause ? "type: write error: first failure\n" : "type: write error: Write failed\n",
+        await WriteAsync(FileDescriptor.StdErr, knownFirstCause ? "line 1: type: write error: first failure\n" : "line 1: type: write error: Write failed\n",
                 DescriptorWriteResult.Failure(new OperationError("final diagnostic failure\n")));
 
         Assert.Null(await state.GetNextStep());
@@ -352,7 +352,7 @@ public sealed class QueryWriteFailureTests
     {
         const int RowsPerChannel = 512;
         const string OutputRow = "echo is a shell builtin\n";
-        const string ErrorRow = "type: missing: not found\n";
+        const string ErrorRow = "line 1: type: missing: not found\n";
         var grouped = await MeasureAsync(alternating: false);
         var alternating = await MeasureAsync(alternating: true);
         Assert.Equal(grouped.Lookup, alternating.Lookup);
@@ -623,10 +623,10 @@ public sealed class QueryWriteFailureTests
     }
 
     [Theory]
-    [InlineData("type printf : 1>&-", "type: write error: Bad file descriptor\n")]
-    [InlineData("type -t printf : 1>&-", "type: write error: Bad file descriptor\n")]
-    [InlineData("type -p cat 1>&-", "type: write error: Bad file descriptor\n")]
-    [InlineData("type printf : 1</dev/null", "type: write error: Bad file descriptor\n")]
+    [InlineData("type printf : 1>&-", "line 1: type: write error: Bad file descriptor\n")]
+    [InlineData("type -t printf : 1>&-", "line 1: type: write error: Bad file descriptor\n")]
+    [InlineData("type -p cat 1>&-", "line 1: type: write error: Bad file descriptor\n")]
+    [InlineData("type printf : 1</dev/null", "line 1: type: write error: Bad file descriptor\n")]
     public async Task TypeReportsTheHostWriteBoundary(string script, string expectedError)
     {
         var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));

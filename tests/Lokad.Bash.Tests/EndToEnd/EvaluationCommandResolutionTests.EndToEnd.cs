@@ -259,7 +259,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Empty(result.StdOut);
-        Assert.Equal("type: missing: not found\n", result.StdErr);
+        Assert.Equal("line 1: type: missing: not found\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -460,7 +460,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("type ]; builtin ]; echo status:$?");
 
         Assert.Equal("status:1\n", result.StdOut);
-        Assert.Equal("type: ]: not found\nbuiltin: ]: not a shell builtin\n", result.StdErr);
+        Assert.Equal("line 1: type: ]: not found\nbuiltin: ]: not a shell builtin\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

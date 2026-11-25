@@ -49,7 +49,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("type: second: lookup unavailable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: type: second: lookup unavailable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         var last = await NextWriteAsync(state);
@@ -83,7 +83,7 @@ public partial class EvaluationTests
         output.SetResult(DescriptorWriteResult.Open);
         var error = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, error.FileDescriptor);
-        Assert.Equal("type: damaged: lookup unavailable\n", Text(error.Content));
+        Assert.Equal("line 1: type: damaged: lookup unavailable\n", Text(error.Content));
         error.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -122,9 +122,9 @@ public partial class EvaluationTests
         string[] expected =
         [
             "echo is a shell builtin\n",
-            builtin + ": missing: not found\n",
+            "line 1: " + builtin + ": missing: not found\n",
             ": is a shell builtin\n",
-            builtin + ": absent: not found\n"
+            "line 1: " + builtin + ": absent: not found\n"
         ];
 
         for (var index = 0; index < expected.Length; index++)
@@ -141,7 +141,7 @@ public partial class EvaluationTests
         {
             var diagnostic = await NextWriteAsync(state);
             Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-            Assert.Equal("type: write error: Write failed\n", Text(diagnostic.Content));
+            Assert.Equal("line 1: type: write error: Write failed\n", Text(diagnostic.Content));
             diagnostic.SetResult(DescriptorWriteResult.Open);
         }
 

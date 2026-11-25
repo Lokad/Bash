@@ -3551,7 +3551,7 @@ public partial class EvaluationTests
 
         var append = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, append.FileDescriptor);
-        Assert.Equal("type: missing: not found\n", Text(append.Content));
+        Assert.Equal("line 1: type: missing: not found\n", Text(append.Content));
         append.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -3599,7 +3599,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("type: echo: lookup unavailable\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: type: echo: lookup unavailable\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         var remaining = await NextWriteAsync(state);
@@ -3639,7 +3639,7 @@ public partial class EvaluationTests
         output.SetResult(DescriptorWriteResult.Open);
         var error = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, error.FileDescriptor);
-        Assert.Equal("type: damaged: lookup unavailable\n", Text(error.Content));
+        Assert.Equal("line 1: type: damaged: lookup unavailable\n", Text(error.Content));
         error.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

@@ -259,6 +259,7 @@ public sealed partial class Evaluation
                 var unresolvedCount = 0;
                 var lookupFailed = false;
                 var hostIndex = 0;
+                SyntaxDiagnosticPrefix? sourcePrefix = null;
                 for (var index = 0; index < nameCount; index++)
                 {
                     CheckCancellation();
@@ -308,6 +309,11 @@ public sealed partial class Evaluation
                         FinishRun(diagnostic: false);
                         if (error.HasValue || outputMode == CommandQueryOutputMode.TypeDescription)
                         {
+                            var prefix = sourcePrefix ?? GetBuiltinDiagnosticPrefix(context);
+                            sourcePrefix = prefix;
+                            if (!output.CanAppend(prefix.Length))
+                                return await OutputLimitAsync().ConfigureAwait(false);
+                            prefix.AppendTo(output);
                             if (!output.TryAppend(builtinName.Bytes.Span) || !output.TryAppend(": "u8)
                                 || !output.TryAppend(name.Bytes.Span) || !output.TryAppend(": "u8)
                                 || !(error?.Message is { } message
@@ -414,8 +420,9 @@ public sealed partial class Evaluation
                     }
                     startOffset = endOffset;
                 }
-                if (builtin == BuiltinKind.Type && !errorClosed)
-                    await ReportBuiltinWriteFailureAsync(builtinName, appendResult).ConfigureAwait(false);
+                if (builtin == BuiltinKind.Type && !errorClosed && appendResult.IsError)
+                    await ReportBuiltinWriteFailureAsync(builtinName, appendResult, sourcePrefix ?? GetBuiltinDiagnosticPrefix(context))
+                        .ConfigureAwait(false);
                 // Unlike type, command -v/-V report resolution success even when stdout cannot be written.
                 return builtin == BuiltinKind.Command || !appendResult.IsError ? queryExitCode : 1;
             }

@@ -765,6 +765,10 @@ followed by the command resolution returned by the host for that name. The
 host interface supplies one result per name. With `-p`, local matches count
 toward the status and only the host path is printed. `-f` skips shell functions
 and `-P` selects host-only lookup with or without `-a`.
+Descriptive lookup misses and host lookup failures report the reached source
+location. A `type` output failure includes that location and the descriptor's
+reported cause. `command -v` and `command -V` retain their lookup status after
+a failed write.
 During option scanning, `--help` writes the builtin synopsis and returns 2.
 It returns 2 silently with closed stdout. After `--` or the first name,
 `--help` is an ordinary name.
