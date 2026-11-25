@@ -209,6 +209,41 @@ public sealed class DescriptorMemoryTests
     }
 
     [Fact]
+    public void InheritedExitRefusalLeavesTheStageBindingsInPlace()
+    {
+        var descriptor = new LogicalDescriptor(10);
+        var root = new DescriptorTable();
+        root.Set(descriptor, FileDescriptor.StdOut);
+        var parent = new RedirectionState(root);
+        var redirected = root.Clone();
+        redirected.Set(LogicalDescriptor.StdErr, FileDescriptor.DevNull);
+        redirected.Set(descriptor, FileDescriptor.DevNull);
+        parent.Push(redirected, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>
+        {
+            LogicalDescriptor.StdErr, descriptor
+        }, memory: null);
+
+        using var owner = new MemoryGovernor(64 * 1024).CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var stage = parent.ForkForSubshell(parent.CaptureInheritedExitBindings(0, memory));
+        var entry = stage.CurrentTable;
+        var restoration = Assert.IsType<RedirectionState.PipelineExitRedirections>(
+            stage.CaptureForPipelineExit(0, useInherited: true, memory));
+        using var refusedOwner = new MemoryGovernor(0).CreateScope();
+
+        Assert.Throws<MemoryBudgetExceededException>(() => stage.RestoreForPipelineExit(restoration, new EvaluationMemory(refusedOwner)));
+        Assert.Same(entry, stage.CurrentTable);
+        Assert.Equal(FileDescriptor.DevNull, stage.CurrentTable?.StdErr);
+        Assert.Equal(FileDescriptor.DevNull, stage.CurrentTable?.Resolve(descriptor));
+
+        stage.RestoreForPipelineExit(restoration, memory);
+        Assert.Equal(FileDescriptor.StdErr, stage.CurrentTable?.StdErr);
+        Assert.Equal(FileDescriptor.StdOut, stage.CurrentTable?.Resolve(descriptor));
+        Assert.Equal(FileDescriptor.DevNull, redirected.StdErr);
+        Assert.Equal(FileDescriptor.DevNull, redirected.Resolve(descriptor));
+    }
+
+    [Fact]
     public void PreserveRefusalLeavesTheScopeActiveForOrdinaryRestoration()
     {
         var root = DescriptorTable.Snapshot.FromInheritedBindings(Bindings(4096).Capture()).Fork();

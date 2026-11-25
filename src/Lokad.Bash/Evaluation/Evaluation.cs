@@ -183,7 +183,8 @@ public sealed partial class Evaluation : IFileTester
             CaptureFunctionDepth = context.FunctionContext?.Depth ?? 0,
             HereDocumentWarningLine = hereDocumentWarningLine
         });
-        var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution, outer.Memory);
+        var state = outer._state.CloneForNestedEvaluation(script, descriptors, ShellForkKind.CommandSubstitution,
+            outer.Memory, inheritedExitBindings: null);
         return new Evaluation(
             state,
             variables,
@@ -775,7 +776,10 @@ public sealed partial class Evaluation : IFileTester
         var coordinates = childContext.Coordinates;
         if (coordinates.Locations?.TryGet(subshellCommand, out var location) == true)
             childContext = childContext.WithCoordinates(coordinates with { CompoundOpenLine = coordinates.Offset + location.EndLine });
-        var childState = parentState.CloneForSubshell(Memory);
+        var exitBoundary = SubshellExitBoundary(scope);
+        var inheritedExitBindings = exitBoundary.KeepsReachedBindings ? null
+            : parentState.CaptureInheritedExitBindings(scope.PipelineExitReader.RedirectionDepth, Memory);
+        var childState = parentState.CloneForSubshell(Memory, inheritedExitBindings);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
@@ -812,7 +816,7 @@ public sealed partial class Evaluation : IFileTester
 
             if (result.ExitCode == 0)
             {
-                childScope = childScope with { PipelineExitReader = scope.SubshellExitBoundary(_state.RedirectionDepth) };
+                childScope = childScope with { PipelineExitReader = exitBoundary with { RedirectionDepth = _state.RedirectionDepth } };
                 result = await EvaluateCommandAsync(subshellCommand.Body, childScope, negated: false)
                     .ConfigureAwait(false);
                 result = CompleteDiscardInChild(result);
@@ -879,6 +883,13 @@ public sealed partial class Evaluation : IFileTester
     private bool IsPipelineStageCommand(ICommand command) =>
         _pipelineStageSource != null && _state.Script.Commands is [var stage] && ReferenceEquals(stage, command);
 
+    private PipelineExitBoundary SubshellExitBoundary(ScopedEvaluation scope) =>
+        new(0, FunctionDepth: null, Source: null)
+        {
+            KeepsReachedBindings = scope.InNestedCommandUnits || scope.PipelineExitReader.KeepsReachedBindings
+                || _state.ForkKind == ShellForkKind.CommandSubstitution
+        };
+
     /// <summary>
     /// Evaluates a pipeline by preparing pipe descriptors, running commands, and collecting exit codes.
     /// </summary>
@@ -936,7 +947,11 @@ public sealed partial class Evaluation : IFileTester
             var exitReader = scope.PipelineExitReader;
             var exitRedirections = !_state.ErrexitEnabled && !exitReader.KeepsReachedBindings
                 && _state.Traps?.HasPendingExitAction == true
-                    ? _state.CapturePipelineExitRedirections(exitReader.RedirectionDepth) : null;
+                    ? _state.CapturePipelineExitRedirections(exitReader.RedirectionDepth,
+                        useInherited: !scope.InNestedCommandUnits, Memory) : null;
+            var subshellExitBoundary = SubshellExitBoundary(scope);
+            RedirectionState.InheritedExitBindings? inheritedExitBindings = null;
+            var capturedInheritedExitBindings = false;
             for (var index = 0; index < stageCount; index++)
             {
                 var stdIn = index > 0 ? new DescriptorBinding(pipes[index - 1].Read)
@@ -950,8 +965,14 @@ public sealed partial class Evaluation : IFileTester
                 var descriptors = new EvaluationDescriptorSetup(
                     bindings.WithStandardStreams(stdIn, stdOut, bindings.ResolveBinding(LogicalDescriptor.StdErr)), borrowedDescriptors);
                 var forkKind = command is SimpleCommand ? ShellForkKind.PipelineSimpleCommand : ShellForkKind.Subshell;
+                if (forkKind == ShellForkKind.Subshell && !subshellExitBoundary.KeepsReachedBindings && !capturedInheritedExitBindings)
+                {
+                    inheritedExitBindings = _state.CaptureInheritedExitBindings(exitReader.RedirectionDepth, Memory);
+                    capturedInheritedExitBindings = true;
+                }
                 var (stageVars, stageContext) = scope.ForkBindings();
-                var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory);
+                var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory,
+                    forkKind == ShellForkKind.Subshell ? inheritedExitBindings : null);
                 var stage = new Evaluation(
                     stageState,
                     stageVars,
@@ -980,7 +1001,7 @@ public sealed partial class Evaluation : IFileTester
                     stage._pipelineExitRedirections = exitRedirections;
                 }
                 else
-                    stage._pipelineExitBoundary = scope.SubshellExitBoundary(redirectionDepth: 0);
+                    stage._pipelineExitBoundary = subshellExitBoundary;
                 stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
                     && (scope.InNestedCommandUnits || _state.ForkKind == ShellForkKind.CommandSubstitution
                         || PipelineInheritsLoadedUnitStatus);

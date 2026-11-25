@@ -193,7 +193,7 @@ public sealed partial class ComplexityRegressionTests
         var parent = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
         parent.PushRedirectionTable(rootTable, new DescriptorHandleOwner(owned), new HashSet<LogicalDescriptor>(), null);
         using var memory = new MemoryGovernor(1024).CreateScope();
-        var child = parent.CloneForSubshell(new EvaluationMemory(memory));
+        var child = parent.CloneForSubshell(new EvaluationMemory(memory), inheritedExitBindings: null);
         child.SetPersistentDescriptor(new LogicalDescriptor(11), new DescriptorBinding(rootHandle), null, acquired: false);
         var middleTable = new DescriptorTable();
         middleTable.Set(new LogicalDescriptor(12), middleHandle);

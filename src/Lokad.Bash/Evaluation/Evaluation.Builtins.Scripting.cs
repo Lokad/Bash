@@ -316,7 +316,7 @@ public sealed partial class Evaluation
         var outermostLoadedReader = nestedLoadedReader && !scope.InNestedCommandUnits;
         var enclosingReaderTiming = scope.ReaderEntryTiming;
         scope = scope with { InEvalReader = kind == ScriptExecutionKind.Eval };
-        if (outermostLoadedReader)
+        if (outermostLoadedReader && _state.ForkKind != ShellForkKind.CommandSubstitution)
             scope = scope with
             {
                 PipelineExitReader = new PipelineExitBoundary(_state.RedirectionDepth,

@@ -261,8 +261,9 @@ public sealed class CollectionOwnershipTests
         finally { compact.Finish(retainVariables: false); }
         Assert.Equal(0, tight.ReservedBytes);
 
-        EvaluationState Fork(EvaluationMemory owner) => inlineSubshell ? parent.CloneForSubshell(owner)
-            : parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.PipelineSimpleCommand, owner);
+        EvaluationState Fork(EvaluationMemory owner) => inlineSubshell ? parent.CloneForSubshell(owner, inheritedExitBindings: null)
+            : parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.PipelineSimpleCommand,
+                owner, inheritedExitBindings: null);
     }
 
     [Fact]
@@ -318,7 +319,8 @@ public sealed class CollectionOwnershipTests
         Assert.Equal(0, budget.ReservedBytes);
 
         EvaluationState Fork(EvaluationMemory owner) =>
-            parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.CommandSubstitution, owner);
+            parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.CommandSubstitution,
+                owner, inheritedExitBindings: null);
     }
 
     [Theory]

@@ -214,7 +214,7 @@ public sealed partial class Evaluation
                 if (parameterTransform)
                 {
                     if (_pipelineExitRedirections is { } redirections)
-                        _state.RestorePipelineExitRedirections(redirections);
+                        _state.RestorePipelineExitRedirections(redirections, Memory);
                     retainDepth = _pipelineExitBoundary.FunctionDepth;
                     callerSource = _pipelineExitBoundary.Source;
                 }

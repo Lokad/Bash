@@ -105,8 +105,8 @@ public sealed class RedirectionStateTests
 
         var child = nestedEvaluation
             ? state.ForkForNestedEvaluation(redirected.Capture().WithStandardStreams(
-                FileDescriptor.StdIn, FileDescriptor.DevNull, FileDescriptor.StdErr))
-            : state.ForkForSubshell();
+                FileDescriptor.StdIn, FileDescriptor.DevNull, FileDescriptor.StdErr), inheritedExitBindings: null)
+            : state.ForkForSubshell(inheritedExitBindings: null);
         var childTable = Assert.IsType<DescriptorTable>(child.CurrentTable);
 
         Assert.Equal(temporary, childTable.Resolve(number));

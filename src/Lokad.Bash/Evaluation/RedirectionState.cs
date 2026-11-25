@@ -2,18 +2,21 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
 /// <summary>Tracks Bash redirection scopes, persistent bindings and handles opened by redirections.</summary>
 /// <remarks>
 /// Keep one mutable value per evaluation; use forks instead of copying this value.
-/// Forks start with independent mappings and an empty restoration stack, retaining inherited handle lists.
+/// Forks start with independent mappings and an empty restoration stack. A terminating pipeline child can
+/// also restore saved logical bindings from enclosing shells while those shells retain the handles.
 /// Bookkeeping never closes handles; the evaluator's lexical scopes retain cleanup responsibility.
 /// </remarks>
 internal struct RedirectionState
 {
     private readonly Stack<RedirectionFrame> _frames;
+    private readonly InheritedExitBindings? _inheritedExitBindings;
     // A lexical restoration boundary belongs to a logical number even when its handle is unchanged.
     private IReadOnlySet<LogicalDescriptor> _changedDescriptors;
     private long _savedAdditionalBytes;
@@ -28,29 +31,51 @@ internal struct RedirectionState
     public readonly int Depth => _frames.Count;
 
     public RedirectionState(DescriptorTable? inheritedTable)
-        : this(inheritedTable, new DescriptorHandleOwner())
+        : this(inheritedTable, new DescriptorHandleOwner(), inheritedExitBindings: null)
     {
     }
 
-    private RedirectionState(DescriptorTable? table, DescriptorHandleOwner openedDescriptors)
+    private RedirectionState(DescriptorTable? table, DescriptorHandleOwner openedDescriptors,
+        InheritedExitBindings? inheritedExitBindings)
     {
         _frames = new();
         _changedDescriptors = new HashSet<LogicalDescriptor>();
         _savedAdditionalBytes = 0;
         CurrentTable = table;
         _openedDescriptors = openedDescriptors;
+        _inheritedExitBindings = inheritedExitBindings;
     }
 
     /// <summary>Forks the active mappings without carrying enclosing restoration frames into a subshell.</summary>
-    public readonly RedirectionState ForkForSubshell() => new(CurrentTable?.Clone(), _openedDescriptors.Capture());
+    public readonly RedirectionState ForkForSubshell(InheritedExitBindings? inheritedExitBindings) =>
+        new(CurrentTable?.Clone(), _openedDescriptors.Capture(), inheritedExitBindings);
 
     /// <summary>Forks supplied bindings for a substitution or pipeline stage, retaining inherited handle lists.</summary>
-    public readonly RedirectionState ForkForNestedEvaluation(DescriptorTable.Snapshot bindings) =>
-        new(bindings.Fork(), _openedDescriptors.Capture());
+    public readonly RedirectionState ForkForNestedEvaluation(DescriptorTable.Snapshot bindings,
+        InheritedExitBindings? inheritedExitBindings) =>
+        new(bindings.Fork(), _openedDescriptors.Capture(), inheritedExitBindings);
 
     /// <summary>Captures the reader's descriptor mappings and the standard streams its child must restore.</summary>
     /// <remarks>The parent retains the referenced handles through all stage completions.</remarks>
-    internal readonly PipelineExitRedirections? CaptureForPipelineExit(int depth)
+    internal readonly PipelineExitRedirections? CaptureForPipelineExit(int depth, bool useInherited, EvaluationMemory memory)
+    {
+        var local = CaptureRestoration(depth, keepChangedFrames: false, memory);
+        var inherited = useInherited ? _inheritedExitBindings : null;
+        return local == null && inherited == null ? null
+            : new PipelineExitRedirections(local?.Bindings, local?.RestoresInput == true, local?.RestoresOutput == true, inherited);
+    }
+
+    /// <summary>Captures the enclosing shell's temporarily rebound logical descriptors.</summary>
+    /// <remarks>The parent retains the committed change sets and handles until the child settles.</remarks>
+    internal readonly InheritedExitBindings? CaptureInheritedExitBindings(int depth, EvaluationMemory memory)
+    {
+        var local = CaptureRestoration(depth, keepChangedFrames: true, memory);
+        return local is { } restore
+            ? new InheritedExitBindings(restore.Bindings, restore.ChangedFrames, _inheritedExitBindings)
+            : _inheritedExitBindings;
+    }
+
+    private readonly CapturedRedirections? CaptureRestoration(int depth, bool keepChangedFrames, EvaluationMemory memory)
     {
         var remaining = _frames.Count - depth;
         if (remaining == 0)
@@ -60,33 +85,69 @@ internal struct RedirectionState
         var restoresMappings = false;
         var restoresInput = false;
         var restoresOutput = false;
+        IReadOnlySet<LogicalDescriptor>[]? changedFrames = null;
+        var count = 0;
         foreach (var frame in _frames)
         {
             restoresMappings |= changed.Count != 0;
             restoresInput |= changed.Contains(LogicalDescriptor.StdIn);
             restoresOutput |= changed.Contains(LogicalDescriptor.StdOut);
+            if (keepChangedFrames && changed.Count != 0)
+            {
+                if (changedFrames == null)
+                {
+                    memory.Charge(MemoryCapacity.ArrayBackingBytes<IReadOnlySet<LogicalDescriptor>>(remaining));
+                    changedFrames = new IReadOnlySet<LogicalDescriptor>[remaining];
+                }
+                changedFrames[count++] = changed;
+            }
             if (--remaining == 0)
                 return restoresMappings && frame.Table is { } table
-                    ? new PipelineExitRedirections(table.Capture(), restoresInput, restoresOutput) : null;
+                    ? new CapturedRedirections(table.Capture(), restoresInput, restoresOutput,
+                        changedFrames == null ? default : new ArraySegment<IReadOnlySet<LogicalDescriptor>>(changedFrames, 0, count))
+                    : null;
             changed = frame.Changed;
         }
         throw new InvalidOperationException("The reader's redirection boundary must be active.");
     }
 
     /// <summary>Restores borrowed bindings at child completion while retaining the child's handle ownership.</summary>
-    internal void RestoreForPipelineExit(PipelineExitRedirections redirections)
+    internal void RestoreForPipelineExit(PipelineExitRedirections redirections, EvaluationMemory memory)
     {
         if (_frames.Count != 0 || CurrentTable == null)
             throw new InvalidOperationException("Pipeline EXIT requires the child shell's base mappings.");
-        CurrentTable = redirections.Restore(CurrentTable);
+        CurrentTable = redirections.Restore(CurrentTable, memory);
     }
 
-    internal sealed class PipelineExitRedirections(DescriptorTable.Snapshot bindings, bool restoresInput, bool restoresOutput)
+    private readonly record struct CapturedRedirections(DescriptorTable.Snapshot Bindings, bool RestoresInput, bool RestoresOutput,
+        ArraySegment<IReadOnlySet<LogicalDescriptor>> ChangedFrames);
+
+    internal sealed class PipelineExitRedirections(DescriptorTable.Snapshot? local, bool restoresInput, bool restoresOutput,
+        InheritedExitBindings? inherited)
     {
-        internal DescriptorTable Restore(DescriptorTable active) => bindings.WithStandardStreams(
-            restoresInput ? bindings.ResolveBinding(LogicalDescriptor.StdIn) : active.ResolveBinding(LogicalDescriptor.StdIn),
-            restoresOutput ? bindings.ResolveBinding(LogicalDescriptor.StdOut) : active.ResolveBinding(LogicalDescriptor.StdOut),
-            bindings.ResolveBinding(LogicalDescriptor.StdErr)).Fork();
+        internal DescriptorTable Restore(DescriptorTable active, EvaluationMemory memory)
+        {
+            var restored = local is { } bindings ? bindings.WithStandardStreams(
+                restoresInput ? bindings.ResolveBinding(LogicalDescriptor.StdIn) : active.ResolveBinding(LogicalDescriptor.StdIn),
+                restoresOutput ? bindings.ResolveBinding(LogicalDescriptor.StdOut) : active.ResolveBinding(LogicalDescriptor.StdOut),
+                bindings.ResolveBinding(LogicalDescriptor.StdErr)).Fork() : active.Clone();
+            for (var frame = inherited; frame != null; frame = frame.Enclosing)
+                frame.Restore(restored, memory);
+            return restored;
+        }
+    }
+
+    internal sealed class InheritedExitBindings(DescriptorTable.Snapshot bindings,
+        ArraySegment<IReadOnlySet<LogicalDescriptor>> changedFrames, InheritedExitBindings? enclosing)
+    {
+        internal InheritedExitBindings? Enclosing { get; } = enclosing;
+
+        internal void Restore(DescriptorTable active, EvaluationMemory memory)
+        {
+            foreach (var changed in changedFrames)
+                foreach (var descriptor in changed)
+                    active.Set(descriptor, bindings.ResolveBinding(descriptor), memory);
+        }
     }
 
     /// <summary>

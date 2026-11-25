@@ -503,11 +503,15 @@ internal sealed class EvaluationState
 
     internal int RedirectionDepth => _redirections.Depth;
 
-    internal RedirectionState.PipelineExitRedirections? CapturePipelineExitRedirections(int depth) =>
-        _redirections.CaptureForPipelineExit(depth);
+    internal RedirectionState.PipelineExitRedirections? CapturePipelineExitRedirections(int depth, bool useInherited,
+        EvaluationMemory memory) =>
+        _redirections.CaptureForPipelineExit(depth, useInherited, memory);
 
-    internal void RestorePipelineExitRedirections(RedirectionState.PipelineExitRedirections redirections) =>
-        _redirections.RestoreForPipelineExit(redirections);
+    internal RedirectionState.InheritedExitBindings? CaptureInheritedExitBindings(int depth, EvaluationMemory memory) =>
+        _redirections.CaptureInheritedExitBindings(depth, memory);
+
+    internal void RestorePipelineExitRedirections(RedirectionState.PipelineExitRedirections redirections, EvaluationMemory memory) =>
+        _redirections.RestoreForPipelineExit(redirections, memory);
 
     internal long RetainedDescriptorMemoryBytes => _redirections.OwnedMemoryBytes;
 
@@ -516,11 +520,11 @@ internal sealed class EvaluationState
     /// <summary>
     /// Creates an isolated shell-state copy for subshell evaluation.
     /// </summary>
-    public EvaluationState CloneForSubshell(EvaluationMemory memory)
+    public EvaluationState CloneForSubshell(EvaluationMemory memory, RedirectionState.InheritedExitBindings? inheritedExitBindings)
     {
         // Keep the parent's saved handlers admitted through restoration if the child clears them.
         memory.Charge(checked(EstimateForkBytes() + (Traps?.EstimatedMemoryBytes ?? 0)));
-        var clone = CloneShellState(Script, _redirections.ForkForSubshell(), ShellForkKind.Subshell);
+        var clone = CloneShellState(Script, _redirections.ForkForSubshell(inheritedExitBindings), ShellForkKind.Subshell);
         clone._pendingExpansionError = _pendingExpansionError;
         clone.FatalExpansion = FatalExpansion;
         return clone;
@@ -533,10 +537,11 @@ internal sealed class EvaluationState
         ParsedScript script,
         EvaluationDescriptorSetup descriptors,
         ShellForkKind kind,
-        EvaluationMemory memory)
+        EvaluationMemory memory,
+        RedirectionState.InheritedExitBindings? inheritedExitBindings)
     {
         memory.Charge(EstimateForkBytes());
-        return CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings), kind);
+        return CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings, inheritedExitBindings), kind);
     }
 
     private long EstimateForkBytes() => checked(EstimatedFunctionMemoryBytes

@@ -105,12 +105,6 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>The first reader's entry in this shell, for inherited EXIT after pipeline expansion.</summary>
     internal PipelineExitBoundary PipelineExitReader { get; init; }
 
-    internal PipelineExitBoundary SubshellExitBoundary(int redirectionDepth) =>
-        new(redirectionDepth, FunctionDepth: null, Source: null)
-        {
-            KeepsReachedBindings = InNestedCommandUnits || PipelineExitReader.KeepsReachedBindings
-        };
-
     /// <summary>Redirections and builtin execution run after a pipeline stage resets its EXIT action.</summary>
     internal bool AfterPipelineExitReset { get; init; }
 
