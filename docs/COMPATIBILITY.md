@@ -1192,6 +1192,9 @@ base has no leading zero. Stored variable/array values are arithmetic
 expressions evaluated against current bindings; they are not re-expanded as shell
 source. Active numeric recursion shares the structural nesting guard and observes
 cancellation. Completed arithmetic work consumes no execution allowance.
+A doubled sign before a variable name stays a mutation token in infix position,
+including when blanks separate it from the name. An earlier postfix mutation
+remains applied when the following token causes a syntax error.
 Arithmetic diagnostics report the reached source line and active `source`
 filename. Parser errors preserve the failing operand and token bytes, including
 trailing whitespace and physical LF in arithmetic `for` clauses. Arithmetic

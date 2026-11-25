@@ -7,6 +7,25 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArithmeticErrorTestsEndToEnd
 {
     [Theory]
+    [InlineData("let 'x++++y'", "1:4:8:5", "let: x++++y: syntax error in expression", "++y")]
+    [InlineData("((x-- ++ y))", "1:2:8:5", "((: x-- ++ y: syntax error in expression", "++ y")]
+    [InlineData("result=$((x++--y))", "1:4:8:5", "x++--y: syntax error in expression", "--y")]
+    [InlineData("let '1--y'", "1:3:8:5", "let: 1--y: syntax error in expression", "--y")]
+    [InlineData("let '(x++++y)'", "1:4:8:5", "let: (x++++y): missing `)'", "++y)")]
+    [InlineData("let '1 || x++++y'", "1:3:8:5", "let: 1 || x++++y: syntax error in expression", "++y")]
+    [InlineData("let 'q=1 + x++++y'", "1:4:8:4", "let: q=1 + x++++y: syntax error in expression", "++y")]
+    public async Task DoubledInfixSignsBeforeVariable_KeepReachedWritesAndReportTheToken(
+        string command, string state, string diagnostic, string token)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"x=3; y=8; q=5\n{command}\nprintf '%s:%s:%s:%s' \"$?\" \"$x\" \"$y\" \"$q\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(state, result.StdOut);
+        Assert.Equal($"line 2: {diagnostic} (error token is \"{token}\")\n", result.StdErr);
+    }
+
+    [Theory]
     [InlineData(": \\\n\"$((8/0))\"", 3, "8/0: division by 0 (error token is \"0\")", 0, "<1><3>")]
     [InlineData(": first \\\n\"$((8/0))\"", 2, "8/0: division by 0 (error token is \"0\")", 0, "<1><3>")]
     [InlineData("((8/\n0))", 3, "((: 8/\n0: division by 0 (error token is \"\n0\")", 0, "<1><3>")]

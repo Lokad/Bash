@@ -709,7 +709,8 @@ public static partial class ArithmeticEvaluation
             {
                 var token = parser.PeekToken(out var kind);
                 binary = parser._operand.Syntax is { } syntax && syntax.TryGetToken(parser._index, out var cached)
-                    ? cached.Binary : GetBinaryToken(token, kind);
+                    ? cached.Binary
+                    : GetBinaryToken(token, kind, parser.Span[(parser._index + token.Length)..], parser._cancellationToken);
                 return binary.Length != 0;
             }
         }

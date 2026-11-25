@@ -90,8 +90,26 @@ public static partial class ArithmeticEvaluation
         return true;
     }
 
-    private static BinaryToken GetBinaryToken(ReadOnlySpan<byte> token, ArithmeticTokenKind kind) =>
-        kind == ArithmeticTokenKind.Operator ? token switch
+    private static BinaryToken GetBinaryToken(ReadOnlySpan<byte> token, ArithmeticTokenKind kind,
+        ReadOnlySpan<byte> following, CancellationToken cancellationToken)
+    {
+        if (kind != ArithmeticTokenKind.Operator)
+            return default;
+
+        if (token is [(byte)'+', (byte)'+'] or [(byte)'-', (byte)'-'])
+        {
+            // A doubled sign before a name stays a mutation token in infix position.
+            var next = 0;
+            while (next < following.Length && IsArithmeticBlank(following[next]))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                next++;
+            }
+            if (next < following.Length && VariableNames.IsNameStart((char)following[next]))
+                return default;
+        }
+
+        return token switch
         {
             [(byte)'|', (byte)'|'] => new(BinaryOperator.LogicalOr, ArithmeticPrecedence.LogicalOr, 2),
             [(byte)'&', (byte)'&'] => new(BinaryOperator.LogicalAnd, ArithmeticPrecedence.LogicalAnd, 2),
@@ -113,7 +131,8 @@ public static partial class ArithmeticEvaluation
             [(byte)'%'] => new(BinaryOperator.Remainder, ArithmeticPrecedence.Multiplicative, 1),
             [(byte)'*', (byte)'*'] => new(BinaryOperator.Power, ArithmeticPrecedence.Power, 2),
             _ => default
-        } : default;
+        };
+    }
 
     private static TokenShape ReadTokenShape(ReadOnlySpan<byte> remaining, CancellationToken cancellationToken)
     {
@@ -237,14 +256,17 @@ public static partial class ArithmeticEvaluation
 
                 RememberBlanks(previousEnd, index);
                 memory?.Grow(256);
-                (tokens ??= new()).Add(index, new CachedToken(shape, numberError, value, GetBinaryToken(token, shape.Kind), GetAssignment(token)));
+                (tokens ??= new()).Add(index, new CachedToken(shape, numberError, value,
+                    GetBinaryToken(token, shape.Kind, bytes[end..], CancellationToken.None), GetAssignment(token)));
                 if (shape.Kind == ArithmeticTokenKind.Operator && token.Length == 2
                     && token[0] == token[1] && token[0] is (byte)'+' or (byte)'-')
                 {
                     var tail = ReadTokenShape(bytes[(index + 1)..], CancellationToken.None);
                     var tailText = bytes.Slice(index + 1, tail.Length);
                     memory?.Grow(256);
-                    tokens.Add(index + 1, new CachedToken(tail, null, 0, GetBinaryToken(tailText, tail.Kind), GetAssignment(tailText)));
+                    tokens.Add(index + 1, new CachedToken(tail, null, 0,
+                        GetBinaryToken(tailText, tail.Kind, bytes[(index + 1 + tail.Length)..], CancellationToken.None),
+                        GetAssignment(tailText)));
                 }
                 RememberBlanks(end, next);
                 if (shape.Kind == ArithmeticTokenKind.Identifier)
