@@ -613,6 +613,104 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     }
 
     [Fact]
+    public async Task PublishedEmptyNamerefHasAnAssignedSpelling()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -n link untouched
+            link=temporary declare -x link=''
+            printf '<declare=%s value=%s>\n' "$?" "${link-missing}"
+            [[ -R link ]] && printf 'assigned\n'
+            [[ -R untouched ]] || printf 'unset\n'
+            declare +n link
+            declare -p link untouched
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<declare=0 value=missing>\nassigned\nunset\ndeclare -nx link=\"\"\ndeclare -n untouched\n", result.StdOut);
+        Assert.Equal("line 2: declare: `': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("item[]")]
+    [InlineData("bad name")]
+    public async Task PublishedMalformedNamerefKeepsItsSpellingForInspectionAndErrors(string target)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -n link
+            link=temporary declare -x link='{{target}}'
+            printf '<target=%s>\n' "${!link}"
+            printf '<read=%s>\n' "$link"; printf continued
+            printf '<read-status=%s>\n' "$?"
+            printf -v link %s new
+            printf '<write-status=%s>\n' "$?"
+            unset link
+            declare -p link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<target={target}>\n<read-status=1>\n<write-status=1>\ndeclare -nx link=\"{target}\"\n", result.StdOut);
+        Assert.Equal($"line 2: declare: `{target}': not a valid identifier\n"
+            + $"line 4: {target}: invalid variable name for name reference\n"
+            + $"line 6: printf: `{target}': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("-x", "<0:1>declare -nx link=\"item[i++]\"\ndeclare -ax item=([0]=\"item[i++]\")\n", "")]
+    [InlineData("-r", "<1:0>declare -nrx link=\"item[]\"\ndeclare -a item=([0]=\"old\")\n",
+        "line 2: declare: link: readonly variable\n")]
+    public async Task LaterDeclarationOperandsCanInitializeTheSavedNameref(string flags, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -n link; item=(old); i=0
+            link=temporary declare {flags} link='item[]' link='item[i++]'
+            printf '<%s:%s>' "$?" "$i"
+            declare -p link item
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal("line 2: declare: `item[]': not a valid identifier\n" + error, result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("", "<0:1>declare -a link=([0]=\"leaf\")\n", "")]
+    [InlineData("item[]", "<1:1>declare -nx link=\"item[]\"\n", "line 3: `item[]': not a valid identifier\n")]
+    public async Task IndexedAssignmentEvaluatesItsIndexBeforeReachingAPublishedNameref(string target, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -n link; i=0
+            link=temporary declare -x link='{target}'
+            link[i++]=leaf
+            printf '<%s:%s>' "$?" "$i"
+            declare -p link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal($"line 2: declare: `{target}': not a valid identifier\n" + error, result.StdErr);
+    }
+
+    [Fact]
+    public async Task MapfilePreservesAReferenceWithAMalformedTarget()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -n link
+            link=temporary declare -x link='bad name'
+            mapfile -t link <<< leaf
+            printf '<%s>' "$?"
+            declare -p link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>declare -nx link=\"bad name\"\n", result.StdOut);
+        Assert.Equal("line 2: declare: `bad name': not a valid identifier\n"
+            + "line 3: mapfile: `bad name': not a valid identifier\n", result.StdErr);
+    }
+
+    [Fact]
     public async Task Evaluation_UnsetNamerefChain_FailsAfterRhsWithoutRebinding()
     {
         var evaluation = new ShellEvaluation(Parser.Parse(

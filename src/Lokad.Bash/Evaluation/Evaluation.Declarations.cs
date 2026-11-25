@@ -135,7 +135,7 @@ public sealed partial class Evaluation
                             GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                         break;
                     }
-                    var unsetReference = targetVariables.TryGetNameref(name, out var referenceTarget) && referenceTarget.IsEmpty;
+                    var unsetReference = targetVariables.IsUnsetNameref(name);
                     if (local && scope.Context.FunctionContext is { } function)
                     {
                         // Redeclaring a local nameref localizes its referent, even when the reference already exists.
@@ -474,7 +474,7 @@ public sealed partial class Evaluation
         SimpleCommand Command, DeclarationOptions Options, IReadOnlyList<PreparedDeclarationOperand> Operands, ShellValue? LastArgument);
 
     private enum DeclarationAttributeChange { Unchanged, Set, Clear }
-    private enum DeclarationPrefixPromotion { Element, InitializedNameref }
+    private enum DeclarationPrefixPromotion { Element, Nameref }
 
     /// <summary>Positive options select listing attributes even when a later option clears mutation intent.</summary>
     [Flags]

@@ -158,7 +158,7 @@ while the outer assigned name still appears in the listing. Matching names
 appear once in unsigned-byte order. Ordinary parameter reads follow the
 active binding, and quoted `*` uses the ordinary IFS join rules.
 
-A nameref target with an empty array selector is rejected. A selector
+Ordinary nameref initialization rejects an empty array selector. A selector
 containing a space is accepted and remains unevaluated until reference use.
 A malformed nonempty replacement fails before creating a local binding.
 A failed empty or appended initializer can leave an ordinary local binding
@@ -817,6 +817,13 @@ its first valid target while processing operands. The final temporary value
 publishes through that reference after restoration, with the destination's
 assignment attributes. A later assignment operand can change the temporary
 value while the saved reference keeps its first target.
+An invalid first target reports an invalid identifier during operand
+processing. If the saved reference is still unset at publication, it
+retains the final spelling. This includes an explicitly empty value,
+which reads as unset and satisfies `[[ -R name ]]`. Storage inspection
+prints that value as an empty string. Direct reads of a malformed
+nonempty target report an invalid name reference. Indirect expansion
+returns the malformed nonempty spelling.
 For a nonlocal declaration through an element nameref, `+a` and `+A`
 reject removal of a matching array kind before evaluating the selector.
 With neither array kind explicitly set, `+a` clears a scalar before the

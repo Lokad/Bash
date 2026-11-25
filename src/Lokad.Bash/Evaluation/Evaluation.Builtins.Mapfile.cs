@@ -430,6 +430,10 @@ public sealed partial class Evaluation
         var target = reference.Name;
         var resolvedBinding = scope.Variables.TryResolveBinding(target, selectOwner: null, out var binding);
         var resolved = resolvedBinding ? binding.Name : target;
+        var rawTarget = ShellValue.Empty;
+        var invalidNameref = resolvedBinding && binding.TryGetInvalidNameref(out rawTarget);
+        if (invalidNameref && !rawTarget.IsEmpty)
+            return await InvalidTargetAsync(rawTarget).ConfigureAwait(false);
         if (resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name)
             return await InvalidTargetAsync(binding.Reference.ToValue(Memory)).ConfigureAwait(false);
         if (!resolved.IsIdentifier)
@@ -439,7 +443,7 @@ public sealed partial class Evaluation
         var variables = resolvedBinding ? binding.Owner : scope.Context.GetGlobalBindingOwner(target, scope.Variables);
         var recreatesCycle = !resolvedBinding && ReferenceEquals(variables, scope.Variables);
         var kind = recreatesCycle ? IndexedInputTargetKind.CircularNameref
-            : resolvedBinding && variables.TryGetNameref(resolved, out var referenced) && referenced.IsEmpty
+            : resolvedBinding && (binding.IsUnsetNameref || invalidNameref)
                 ? IndexedInputTargetKind.UnassignedNameref
                 : IndexedInputTargetKind.ExistingOrNew;
         ShellValue? namerefValue = !resolvedBinding && !recreatesCycle
@@ -448,7 +452,7 @@ public sealed partial class Evaluation
         {
             if (!resolvedBinding)
                 await ReportCircularNameReferenceAsync(target, scope).ConfigureAwait(false);
-            else if (kind == IndexedInputTargetKind.UnassignedNameref)
+            else if (kind == IndexedInputTargetKind.UnassignedNameref && !invalidNameref)
                 await ReportRemovingNamerefAsync(target).ConfigureAwait(false);
         }
         if (!BuiltinDiagnosticsOpen)

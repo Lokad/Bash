@@ -1817,7 +1817,7 @@ public sealed partial class Evaluation : IFileTester
                 if (circularPrefix)
                     await ReportCircularNameReferenceAsync(target, assignmentScope).ConfigureAwait(false);
                 var elementNameref = resolvedPrefix && prefixBinding.Reference.Kind != VariableReferenceKind.Name;
-                var unsetNameref = resolvedPrefix && prefixBinding.IsUnsetNameref;
+                var shadowNameref = resolvedPrefix && (prefixBinding.IsUnsetNameref || prefixBinding.TryGetInvalidNameref(out _));
                 BindingName selectedName = resolvedPrefix ? prefixBinding.Name : target;
                 if (elementNameref && commandVars.TryResolveBinding(target, selectOwner: null,
                         BindingResolution.LastNameref, out var elementAlias))
@@ -1844,8 +1844,8 @@ public sealed partial class Evaluation : IFileTester
                 if (_state.TryConsumeExpansionError(out error))
                     return error;
 
-                BindingName name = elementNameref || unsetNameref ? target : selectedName;
-                if (elementNameref || unsetNameref || circularPrefix)
+                BindingName name = elementNameref || shadowNameref ? target : selectedName;
+                if (elementNameref || shadowNameref || circularPrefix)
                 {
                     if (assignment.Operator == AssignmentOperator.Append)
                     {
@@ -2482,7 +2482,7 @@ public sealed partial class Evaluation : IFileTester
                         }
                         else if (!assignsGlobalElement && !circular && arrayKind != ArrayAssignmentKind.Auto
                             && (resolution == BindingResolution.Referent
-                                || binding.Owner.TryGetNameref(binding.Name, out var lastTarget) && lastTarget.IsEmpty))
+                                || binding.Owner.IsUnsetNameref(binding.Name)))
                         {
                             var declaredOwner = SelectGlobalOwner(reference.Name);
                             binding = declaredOwner.SelectArrayDeclarationBinding(reference.Name, binding);
@@ -2518,16 +2518,17 @@ public sealed partial class Evaluation : IFileTester
                 ShellValue? clearedNamerefTarget = options.NamerefChange == DeclarationAttributeChange.Clear
                     && (!local || existingLocal) && targetVars.TryGetNameref(name, out var removedTarget) ? removedTarget : null;
                 var clearsWholeNameref = clearedNamerefTarget.HasValue && arrayKind == ArrayAssignmentKind.Auto && !element;
+                var clearsUnsetNameref = clearsWholeNameref && targetVars.IsUnsetNameref(name);
                 var rejectsIntegerNamerefRemoval = hasIntegerInitializer && clearsWholeNameref
-                    && (local || name == sourceName && clearedNamerefTarget is { IsEmpty: true });
+                    && (local || name == sourceName && clearsUnsetNameref);
                 if (resolution == BindingResolution.LastNameref && name != sourceName
                     && arrayKind == ArrayAssignmentKind.Auto && !operand.CompoundApplied
-                    && targetVars.TryGetNameref(name, out var unsetTarget) && unsetTarget.IsEmpty)
+                    && targetVars.IsUnsetNameref(name))
                     continue; // +n cannot detach an indirectly reached unset reference or apply attributes to it.
                 if (!assignsGlobalElement && !operand.CompoundApplied && !local && options.NamerefChange != DeclarationAttributeChange.Set
                     && arrayKind != ArrayAssignmentKind.Auto
                     && (recreateArrayReference || targetVars.TryResolveBinding(name, selectOwner: null, out var arrayBinding)
-                        && arrayBinding.Owner.TryGetNameref(arrayBinding.Name, out var arrayTarget) && arrayTarget.IsEmpty))
+                        && arrayBinding.Owner.IsUnsetNameref(arrayBinding.Name)))
                 {
                     // Recreating an unset reference discards its old attributes before checking the initializer.
                     targetVars.RecreateDeclarationArray(name,
@@ -2538,6 +2539,64 @@ public sealed partial class Evaluation : IFileTester
                     && (local || options.NamerefChange != DeclarationAttributeChange.Set);
                 VariableBinding? selectedWholeBinding = checksWholeBinding && !circular
                     && targetVars.TryResolveBinding(name, selectOwner: null, out var wholeBinding) ? wholeBinding : null;
+                if (!element && (!local || existingLocal)
+                    && options.NamerefChange != DeclarationAttributeChange.Set
+                    && selectedWholeBinding is { } rawBinding && rawBinding.TryGetInvalidNameref(out var rawTarget)
+                    && (arrayKind == ArrayAssignmentKind.Auto || !rawTarget.IsEmpty))
+                {
+                    if (setsNamedAttribute)
+                    {
+                        if (operand.Value.HasValue)
+                            RecordOperandFailure();
+                        if (!rawTarget.IsEmpty)
+                        {
+                            if (operand.Value.HasValue || options.ExportChange != DeclarationAttributeChange.Clear)
+                                await ReportInvalidAssignmentIdentifierAsync(ShellValue.FromText(commandName), rawTarget, declarationScope)
+                                    .ConfigureAwait(false);
+                            if (operand.Value.HasValue && options.ExportChange != DeclarationAttributeChange.Clear)
+                                await ReportInvalidAssignmentIdentifierAsync(ShellValue.FromText(commandName), rawTarget, declarationScope)
+                                    .ConfigureAwait(false);
+                        }
+                        continue;
+                    }
+                    if (clearsWholeNameref && rawBinding.Owner.IsReadonlyBinding(rawBinding.Name))
+                    {
+                        await DiagnoseReadonlyAsync(sourceName).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (rawTarget.IsEmpty)
+                        continue;
+                    var emptySelector = operand.Value.HasValue
+                        && TryParseDeclarationReference(ShellSource.FromBytes(rawTarget.Bytes), out var rawReference)
+                        && rawReference is { Kind: VariableReferenceKind.Element, Subscript.IsEmpty: true };
+                    if (clearsWholeNameref && (!operand.Value.HasValue || emptySelector)
+                        && rawBinding.Owner.TryRemoveNamerefAttribute(rawBinding.Name))
+                        rawBinding.Owner.TrySetResolvedScalar(rawBinding.Name, rawTarget, Memory);
+                    if (operand.Value is { } invalidAssignment)
+                    {
+                        RecordOperandFailure();
+                        if (emptySelector)
+                            await ReportCommandDiagnosticAsync([rawTarget], [ShellValue.FromText("bad array subscript")], declarationScope)
+                                .ConfigureAwait(false);
+                        else
+                            await ReportDeclarationDiagnosticAsync([ShellValue.FromText("`"), rawTarget, operand.AssignmentSeparator,
+                                invalidAssignment, ShellValue.FromText("': not a valid identifier")]).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var (set, clear) = GetAttributeChanges(assignmentExport);
+                        var hasOtherOptions = options.Global || (set | clear) != BindingAttributes.None
+                            || options.ReadonlyChange != DeclarationAttributeChange.Unchanged
+                            || options.IndexedChange != DeclarationAttributeChange.Unchanged
+                            || options.AssociativeChange != DeclarationAttributeChange.Unchanged;
+                        if (hasOtherOptions)
+                            RecordOperandFailure();
+                        if (!clearsWholeNameref || hasOtherOptions)
+                            await ReportInvalidAssignmentIdentifierAsync(ShellValue.FromText(commandName), rawTarget, declarationScope)
+                                .ConfigureAwait(false);
+                    }
+                    continue;
+                }
                 if (checksWholeBinding && selectedWholeBinding == null)
                 {
                     await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
@@ -2664,7 +2723,7 @@ public sealed partial class Evaluation : IFileTester
                 var localizesTarget = clearsWholeNameref && keepLocalNameref && !rejectsIntegerNamerefRemoval;
                 var localizesElementSpelling = selectedLocalBinding is { Reference.Kind: VariableReferenceKind.Element }
                     && (element || arrayKind == ArrayAssignmentKind.Auto);
-                var clearsReadonlyUnsetNameref = clearsWholeNameref && clearedNamerefTarget is { IsEmpty: true }
+                var clearsReadonlyUnsetNameref = clearsUnsetNameref
                     && operand.Value == null && options.ReadonlyChange != DeclarationAttributeChange.Clear
                     && targetVars.IsReadonlyBinding(name);
                 var namedAssignmentBinding = setsNamedAttribute && operand.Value.HasValue ? selectedWholeBinding : null;
@@ -3321,7 +3380,15 @@ public sealed partial class Evaluation : IFileTester
                 foreach (var (name, value, attributes) in promotions)
                 {
                     CheckCancellation();
-                    if (!commandVars.TryResolveBinding(name, selectOwner: null, out var binding) || binding.IsUnsetNameref)
+                    if (deferredPromotions.TryGetValue(name, out var promotion) && promotion == DeclarationPrefixPromotion.Nameref
+                        && commandVars.IsUnsetNameref(name))
+                    {
+                        commandVars.PublishNamerefPrefix(name, value, Memory);
+                        commandVars.UpdateBindingAttributes(name, attributes, BindingAttributes.None);
+                        continue;
+                    }
+                    if (!commandVars.TryResolveBinding(name, selectOwner: null, out var binding)
+                        || binding.IsUnsetNameref || binding.TryGetInvalidNameref(out _))
                         continue;
                     var publicationScope = executionScope with { Variables = binding.Owner };
                     if (binding.Reference.Kind == VariableReferenceKind.Name)
@@ -3874,23 +3941,30 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (mayDeferPrefixPromotion && commandBindings.Contains(name))
                     {
-                        if (deferredPrefixPromotions?.TryGetValue(name, out var promotion) == true
-                            && promotion == DeclarationPrefixPromotion.InitializedNameref)
-                            return;
-
                         var caller = commandBindings.SavedVariables;
-                        if (caller.TryGetNameref(name, out var target) && target.IsEmpty
-                            && variables.Scalars.TryGetValue(name, out var initializer) && !initializer.IsEmpty)
+                        if (caller.IsUnsetNameref(name) && variables.Scalars.TryGetValue(name, out var initializer))
                         {
                             var deferred = GetDeferredPrefixPromotions(commandBindings.PrefixNames.Count);
                             Memory.Charge(checked(4L * initializer.Bytes.Length));
-                            if (caller.TrySetNameref(name, initializer, Memory))
+                            if (!initializer.IsEmpty && caller.TrySetNameref(name, initializer, Memory))
                             {
                                 // The saved binding keeps the first target. Later operands can still replace the temporary value.
                                 caller.UpdateBindingAttributes(name, GetPromotionAttributes(variables, name), BindingAttributes.None);
-                                deferred[name] = DeclarationPrefixPromotion.InitializedNameref;
-                                return;
                             }
+                            else
+                                await ReportInvalidAssignmentIdentifierAsync(ShellValue.FromText(commandName), initializer, declarationScope)
+                                    .ConfigureAwait(false);
+                            deferred[name] = DeclarationPrefixPromotion.Nameref;
+                            return;
+                        }
+                        if (deferredPrefixPromotions?.TryGetValue(name, out var promotion) == true
+                            && promotion == DeclarationPrefixPromotion.Nameref)
+                            return;
+                        if (caller.TryGetInvalidNameref(name, out var rawTarget))
+                        {
+                            if (!rawTarget.IsEmpty)
+                                await ReportInvalidAssignmentIdentifierAsync(ShellValue.Empty, rawTarget, declarationScope).ConfigureAwait(false);
+                            return;
                         }
                     }
                     // A named attribute builtin can use a temporary scalar while restoring its saved element reference.
@@ -6835,7 +6909,7 @@ public sealed partial class Evaluation : IFileTester
                     target = new LocalNamerefAssignment.Circular(binding.Name == lookupName ? (BindingName?)lookupName : null);
                     return true;
                 }
-                if (!binding.Owner.TryGetNameref(binding.Name, out var next) || !next.IsEmpty)
+                if (!binding.Owner.IsUnsetNameref(binding.Name))
                 {
                     target = new LocalNamerefAssignment.Write(binding);
                     return true;
@@ -6863,7 +6937,7 @@ public sealed partial class Evaluation : IFileTester
                 return owner.TryResolveBinding(name, SelectActiveOwner, resolution, out binding);
 
             // An unset global chain can still name an active referent; +n must not detach that chain.
-            return !binding.Owner.TryGetNameref(binding.Name, out var target) || !target.IsEmpty
+            return !binding.Owner.IsUnsetNameref(binding.Name)
                 || owner.TryResolveBinding(name, SelectActiveOwner, out binding);
 
             Variables SelectGlobalOwner(BindingName current) => context.GetGlobalBindingOwner(current, persistent, commandBindings);

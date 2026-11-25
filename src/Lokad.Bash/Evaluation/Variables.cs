@@ -13,14 +13,20 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Whether a kind-only local declaration discards an existing scalar value.</summary>
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
-internal enum ForAssignmentFailure { None, InvalidTarget, Readonly, IncompatibleAttributes }
+internal enum ForAssignmentFailure { None, InvalidTarget, EmptyTarget, Readonly, IncompatibleAttributes }
 internal enum BindingResolution { Referent, LastNameref, LastExpansionNameref }
 internal readonly record struct VariableBinding(VariableReference Reference, Variables Owner)
 {
     public BindingName Name => Reference.Name;
     public bool IsUnsetNameref => Reference.Kind == VariableReferenceKind.Name
-        && Owner.TryGetNameref(Name, out var target) && target.IsEmpty;
+        && Owner.IsUnsetNameref(Name);
     internal bool IsArrayNameref => Reference.Kind == VariableReferenceKind.Name && Owner.IsArrayNameref(Name);
+
+    internal bool TryGetInvalidNameref(out ShellValue target)
+    {
+        target = ShellValue.Empty;
+        return Reference.Kind == VariableReferenceKind.Name && Owner.TryGetInvalidNameref(Name, out target);
+    }
 }
 internal readonly record struct VariableUnsetTarget(BindingName Name, bool RequiresSelector, BindingName ReadonlyName);
 
@@ -42,10 +48,12 @@ public sealed partial class Variables
     internal static readonly BindingName LastArgumentName = "_";
     private static readonly BindingName LineNumberName = "LINENO";
 
-    /// <summary>Retains bytes and parsed selectors; a null reference denotes an unset nameref.</summary>
-    private readonly record struct NamerefTarget(ShellValue Value, VariableReference? Reference, BindingName? LiteralName)
+    /// <summary>Retains an assigned spelling even when it does not parse as a reference.</summary>
+    private readonly record struct NamerefTarget(ShellValue? AssignedValue, VariableReference? Reference, BindingName? LiteralName)
     {
-        public bool IsEmpty => Value.IsEmpty;
+        public ShellValue Value => AssignedValue.GetValueOrDefault();
+        public bool IsUnset => !AssignedValue.HasValue;
+        public bool IsInvalid => AssignedValue.HasValue && !Reference.HasValue;
     }
     /// <summary>
     /// Holds the shell name used for $0 expansion.
@@ -744,7 +752,7 @@ public sealed partial class Variables
                     if ((inherit || command.IsTemporaryBinding(name))
                         && local.NamerefTargets.TryGetValue(name, out var inheritedReference))
                     {
-                        if (inherit && inheritedReference.IsEmpty)
+                        if (inherit && inheritedReference.IsUnset)
                             local.ReplaceValue(name, new UnassignedSlot());
                         else
                             local.SetResolvedScalar(name, inheritedReference.Value);
@@ -1000,7 +1008,7 @@ public sealed partial class Variables
 
         if (resolved.IsEmpty)
         {
-            if (!NamerefTargets.TryGetValue(name, out var target) || !target.IsEmpty || value.IsEmpty)
+            if (!IsUnsetNameref(name) || value.IsEmpty)
                 return false;
             memory?.Charge(checked(4L * value.Bytes.Length));
             return TrySetNameref(name, value, memory);
@@ -1030,8 +1038,13 @@ public sealed partial class Variables
     {
         if (name.IsEmpty || IsReadonly(name))
             return false;
-        if (NamerefTargets.TryGetValue(name, out var target) && target.IsEmpty)
-            return TrySetScalar(name, value, memory);
+        if (NamerefTargets.TryGetValue(name, out var target))
+        {
+            if (target.IsInvalid)
+                return false;
+            if (target.IsUnset)
+                return TrySetScalar(name, value, memory);
+        }
         SetAssignedScalar(name, value, memory);
         return true;
     }
@@ -1115,6 +1128,8 @@ public sealed partial class Variables
         // An absent resolution (including a cycle) or an unset nameref keeps the operand's name.
         if (referent is not { } binding)
             return new(name, false, ReadonlyName(name));
+        if (binding.TryGetInvalidNameref(out var rawTarget))
+            return rawTarget.IsEmpty ? new(name, false, ReadonlyName(name)) : new(BindingName.Empty, false, BindingName.Empty);
         var requiresSelector = binding.Reference.Kind != VariableReferenceKind.Name;
         if (!requiresSelector && !binding.IsUnsetNameref)
             return new(binding.Name, false, ReadonlyName(binding.Name));
@@ -1128,8 +1143,10 @@ public sealed partial class Variables
 
     internal bool TryUnsetSelected(VariableUnsetTarget target, UnsetFlags flags)
     {
-        if (target.Name.IsEmpty || target.RequiresSelector || !target.ReadonlyName.IsEmpty)
+        if (target.RequiresSelector || !target.ReadonlyName.IsEmpty)
             return false;
+        if (target.Name.IsEmpty)
+            return true;
 
         var name = target.Name;
         if (IsArrayNameref(name))
@@ -1336,7 +1353,7 @@ public sealed partial class Variables
             return TryAssignArrayElement(reference.Name, reference.Subscript.ToValue(), value, ArrayAssignmentKind.Auto, memory);
 
         if (!TryResolveBinding(reference.Name, selectOwner: null, out var binding)
-            || binding.Reference.Kind != VariableReferenceKind.Name
+            || binding.Reference.Kind != VariableReferenceKind.Name || binding.TryGetInvalidNameref(out _)
             || IsReadonly(reference.Name) || binding.Owner.IsReadonly(binding.Name))
             return false;
         if (binding.IsUnsetNameref)
@@ -1528,7 +1545,7 @@ public sealed partial class Variables
         var appended = slot switch
         {
             ScalarSlot scalar => !appendScalarValue || AppendValue(scalar.Value, valueStyle),
-            NamerefSlot reference when !reference.Value.IsEmpty => !appendScalarValue || AppendValue(reference.Value.Value, valueStyle),
+            NamerefSlot reference when !reference.Value.IsUnset => !appendScalarValue || AppendValue(reference.Value.Value, valueStyle),
             _ => TryAppendArrayAssignment(slot, output, CancellationToken.None)
         };
         return appended && output.TryAppend((byte)'\n');
@@ -1696,14 +1713,26 @@ public sealed partial class Variables
             reference = parsed;
         }
 
-        SetNamerefTarget(name, target, reference, memory);
+        SetNamerefTarget(name, target.IsEmpty ? null : target, reference, memory);
         return true;
+    }
+
+    /// <summary>Publishes a deferred prefix to the selected unset reference, including an invalid spelling.</summary>
+    internal void PublishNamerefPrefix(BindingName name, ShellValue value, EvaluationMemory memory)
+    {
+        memory.Charge(checked(4L * value.Bytes.Length));
+        value = ConvertAssignmentCase(name, value, memory);
+        var reference = VariableReference.TryParseNamerefTarget(value, memory, out var parsed)
+            ? parsed : (VariableReference?)null;
+        SetNamerefTarget(name, value, reference, memory);
     }
 
     internal ForAssignmentFailure AssignForIteration(BindingName name, ShellValue item, EvaluationMemory memory)
     {
-        if (NamerefTargets.ContainsKey(name))
+        if (NamerefTargets.TryGetValue(name, out var previous))
         {
+            if (previous is { IsInvalid: true, Value.IsEmpty: true })
+                return ForAssignmentFailure.EmptyTarget;
             // A loop selects a new referent. Validate it before checking the reference's readonly attribute.
             if (!VariableReference.TryParseNamerefTarget(item, memory, out var target))
                 return ForAssignmentFailure.InvalidTarget;
@@ -1723,14 +1752,14 @@ public sealed partial class Variables
         return ForAssignmentFailure.None;
     }
 
-    private void SetNamerefTarget(BindingName name, ShellValue target, VariableReference? reference, EvaluationMemory? memory)
+    private void SetNamerefTarget(BindingName name, ShellValue? target, VariableReference? reference, EvaluationMemory? memory)
     {
         BindingName? literalName = null;
-        if (reference is { Kind: not VariableReferenceKind.Name })
+        if (target is { } spelling && reference is { Kind: not VariableReferenceKind.Name })
         {
             // Local declarations can create a binding whose literal name includes the selector.
-            memory?.Charge(checked(4L * target.Bytes.Length));
-            literalName = BindingName.FromValue(target);
+            memory?.Charge(checked(4L * spelling.Bytes.Length));
+            literalName = BindingName.FromValue(spelling);
         }
 
         ReplaceValue(name, new NamerefSlot(new NamerefTarget(target, reference, literalName)));
@@ -1743,8 +1772,21 @@ public sealed partial class Variables
     internal bool HasNamerefAttribute(BindingName name) => TryGetBinding(name, detachBorrowed: false, out var slot)
         && (slot is NamerefSlot || slot.IsArrayNameref);
 
+    internal bool IsUnsetNameref(BindingName name) => NamerefTargets.TryGetValue(name, out var target) && target.IsUnset;
+
+    internal bool TryGetInvalidNameref(BindingName name, out ShellValue spelling)
+    {
+        if (NamerefTargets.TryGetValue(name, out var target) && target.IsInvalid)
+        {
+            spelling = target.Value;
+            return true;
+        }
+        spelling = ShellValue.Empty;
+        return false;
+    }
+
     internal bool IsNamerefSet(BindingName name) => TryGetBinding(name, detachBorrowed: false, out var slot)
-        && (slot is NamerefSlot reference ? !reference.Value.IsEmpty
+        && (slot is NamerefSlot reference ? !reference.Value.IsUnset
             : slot.IsArrayNameref && IsAssigned(slot));
 
     internal bool TryRemoveNamerefAttribute(BindingName name)
@@ -1948,7 +1990,7 @@ public sealed partial class Variables
         // A missing binding first receives the indexed kind. An assigned scalar stays
         // scalar with an empty value, even when its declaration carries readonly.
         if (!TryGetBinding(name, detachBorrowed: false, out var slot)
-            || slot is AttributeSlot or NamerefSlot { Value.IsEmpty: true })
+            || slot is AttributeSlot or NamerefSlot { Value.IsUnset: true })
         {
             ReplaceValue(name, new IndexedSlot(new IndexedArray(isInitialized: hasInitializer)));
             return true;
@@ -2008,7 +2050,7 @@ public sealed partial class Variables
                 case ScalarSlot scalar:
                     value = scalar.Value;
                     break;
-                case NamerefSlot reference when !reference.Value.IsEmpty:
+                case NamerefSlot reference when !reference.Value.IsUnset:
                     value = reference.Value.Value;
                     break;
                 case IndexedSlot or AssociativeSlot:
@@ -2099,7 +2141,8 @@ public sealed partial class Variables
             return false;
         if (binding.Reference.Kind != VariableReferenceKind.Name)
             return false;
-        resolved = binding.IsUnsetNameref ? BindingName.Empty : binding.Name;
+        resolved = binding.Owner.NamerefTargets.TryGetValue(binding.Name, out var target) && !target.Reference.HasValue
+            ? BindingName.Empty : binding.Name;
         return true;
     }
 }

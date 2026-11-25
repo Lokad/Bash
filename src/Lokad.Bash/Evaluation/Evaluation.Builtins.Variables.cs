@@ -110,6 +110,8 @@ public sealed partial class Evaluation
                 && !terminal.IsUnsetNameref && terminal.Owner.IsReadonlyBinding(terminal.Name))
                 target = target with { ReadonlyName = terminal.Name };
             var removedName = target.Name;
+            if (removedName.IsEmpty)
+                continue;
             if (!namerefs && target.ReadonlyName.IsEmpty && commandVars.IsArrayNameref(removedName))
                 continue;
             var keepExport = commandVars.IsExported(removedName)
@@ -573,6 +575,12 @@ public sealed partial class Evaluation
             destination = persistentOutputs.SavedVariables;
             if (target is WordExpansion.ResolvedVariableReference.Indexed indexed && destination.AssociativeArrays.ContainsKey(target.Name))
                 target = indexed with { ReplaceAssociative = true };
+        }
+        if ((target.ReadOwner ?? destination).TryGetInvalidNameref(target.Name, out var rawTarget))
+        {
+            if (!rawTarget.IsEmpty && kind != BuiltinAssignmentKind.Getopts)
+                await ReportInvalidAssignmentIdentifierAsync(command, rawTarget, scope).ConfigureAwait(false);
+            return kind == BuiltinAssignmentKind.Directory ? BuiltinAssignmentResult.NoWrite : BuiltinAssignmentResult.Failed;
         }
         if (destination.IsReadonly(target.Name))
         {

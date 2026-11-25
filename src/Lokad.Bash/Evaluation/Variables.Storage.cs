@@ -304,7 +304,7 @@ public sealed partial class Variables
         ScalarSlot => true,
         IndexedSlot indexed => indexed.Value.IsInitialized,
         AssociativeSlot associative => associative.Value.IsInitialized,
-        NamerefSlot reference => !reference.Value.IsEmpty,
+        NamerefSlot reference => !reference.Value.IsUnset,
         _ => false
     };
 

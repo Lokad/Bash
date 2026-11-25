@@ -191,6 +191,10 @@ internal static partial class WordExpansion
             return new(false, BindingName.Empty);
         }
         var resolvedName = variables.ResolveNamerefName(name);
+        if (resolvedName.IsEmpty && kind == UnsetReferenceKind.Direct
+            && variables.TryResolveBinding(name, selectOwner: null, out var binding)
+            && binding.TryGetInvalidNameref(out var rawTarget))
+            return new(true, rawTarget.IsEmpty ? name : BindingName.Empty);
         if (!variables.HasBinding(resolvedName) || variables.IsArrayNameref(resolvedName))
             return new(true, BindingName.Empty);
 
@@ -300,12 +304,14 @@ internal static partial class WordExpansion
             scope.Effects.SetFatalExpansionError(failure);
             return new(NamerefAssignmentAction.Fail, value);
         }
+        if (selectedBinding.TryGetInvalidNameref(out var rawTarget))
+            return await RejectAssignmentAsync(rawTarget.IsEmpty ? null : rawTarget).ConfigureAwait(false);
         switch (Variables.GetNamerefAssignmentFailure(name, selectedBinding, value, scope.Effects.Memory))
         {
             case NamerefAssignmentFailure.None:
                 return new(NamerefAssignmentAction.Assign, value);
             case NamerefAssignmentFailure.InvalidTarget:
-                return await RejectAssignmentAsync(NamerefAssignmentFailure.InvalidTarget).ConfigureAwait(false);
+                return await RejectAssignmentAsync(value).ConfigureAwait(false);
             case NamerefAssignmentFailure.IndirectUnsetTarget:
                 if (scope.Context.TryResolveLocalNamerefAssignment(name, scope.Variables, scope.Effects.Memory, out var fallback))
                 {
@@ -327,7 +333,8 @@ internal static partial class WordExpansion
                         // Retrying does not make an indirectly reached unset nameref a direct initializer.
                         var retryFailure = global.Owner.GetNamerefAssignmentFailure(name, global.Name, value, scope.Effects.Memory);
                         if (retryFailure != NamerefAssignmentFailure.None)
-                            return await RejectAssignmentAsync(retryFailure).ConfigureAwait(false);
+                            return await RejectAssignmentAsync(retryFailure == NamerefAssignmentFailure.InvalidTarget ? value : null)
+                                .ConfigureAwait(false);
                         selected = global;
                     }
                     else if (fallback is Evaluation.LocalNamerefAssignment.Write write)
@@ -345,12 +352,14 @@ internal static partial class WordExpansion
                     }
                     return new(NamerefAssignmentAction.Handled, value);
                 }
-                return await RejectAssignmentAsync(NamerefAssignmentFailure.IndirectUnsetTarget).ConfigureAwait(false);
+                return await RejectAssignmentAsync(null).ConfigureAwait(false);
         }
         return new(NamerefAssignmentAction.Fail, value);
 
         async Task<NamerefAssignmentResult> AssignSelectedAsync(VariableBinding binding)
         {
+            if (binding.TryGetInvalidNameref(out var spelling))
+                return await RejectAssignmentAsync(spelling.IsEmpty ? null : spelling).ConfigureAwait(false);
             var reference = binding.Reference;
             var target = await ResolveDeclarationReferenceAsync(reference, scope, binding.Owner, binding.Owner).ConfigureAwait(false);
             if (!scope.CanExpand)
@@ -380,11 +389,11 @@ internal static partial class WordExpansion
             return new(NamerefAssignmentAction.Handled, value);
         }
 
-        async Task<NamerefAssignmentResult> RejectAssignmentAsync(NamerefAssignmentFailure reason)
+        async Task<NamerefAssignmentResult> RejectAssignmentAsync(ShellValue? invalidTarget)
         {
-            if (reason == NamerefAssignmentFailure.InvalidTarget)
+            if (invalidTarget is { } spelling)
                 await scope.Effects.ReportNamerefAssignmentFailureAsync(
-                    [ShellValue.FromText("`"), value, ShellValue.FromText("'")],
+                    [ShellValue.FromText("`"), spelling, ShellValue.FromText("'")],
                     [ShellValue.FromText("not a valid identifier")], failure, scope).ConfigureAwait(false);
             else
                 scope.Effects.SetFatalExpansionError(failure);
@@ -563,6 +572,14 @@ internal static partial class WordExpansion
                 else
                     return new ResolvedVariableReference.Scalar(BindingName.Empty);
             }
+            if (binding.TryGetInvalidNameref(out var rawTarget) && use != ReferenceUse.BuiltinAssign)
+            {
+                if (parameterRead && !rawTarget.IsEmpty)
+                    await scope.Effects.ReportParameterExpansionFailureAsync([rawTarget],
+                        [ShellValue.FromText("invalid variable name for name reference")], scope, ExpansionFailureKind.ParameterTarget)
+                        .ConfigureAwait(false);
+                return new ResolvedVariableReference.Scalar(BindingName.Empty);
+            }
             if (parameterRead && binding.IsArrayNameref && (use != ReferenceUse.ShortRead
                 || binding.Owner.GetArrayMetadata(binding.Name) is { IsInitialized: true }))
             {
@@ -617,11 +634,14 @@ internal static partial class WordExpansion
         if (use != ReferenceUse.CompoundAssign)
         {
             var reached = targetVariables.TryResolveBinding(name, selectOwner: null, out var initial);
+            var invalidNameref = reached && initial.TryGetInvalidNameref(out _);
+            if (invalidNameref && use != ReferenceUse.DirectAssign)
+                return new ResolvedVariableReference.Scalar(BindingName.Empty);
             reachedArrayNameref = reached && initial.IsArrayNameref;
             // Length lookup has no selector to expand when the array nameref has no referent.
             if (reachedArrayNameref && use == ReferenceUse.Length)
                 return null;
-            name = reached && initial.Reference.Kind == VariableReferenceKind.Name && !initial.IsUnsetNameref
+            name = reached && initial.Reference.Kind == VariableReferenceKind.Name && !initial.IsUnsetNameref && !invalidNameref
                 && !(reachedArrayNameref && (writesElement || assignsDefault))
                 ? initial.Name : BindingName.Empty;
             selectAfterIndex = reached && name.IsEmpty
@@ -713,6 +733,16 @@ internal static partial class WordExpansion
                 if (selectAfterIndex && targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
                 {
                     // Selector expansion may initialize the nameref. Keep the already validated index.
+                    if (use == ReferenceUse.DirectAssign && binding.TryGetInvalidNameref(out var rawTarget))
+                    {
+                        if (!rawTarget.IsEmpty)
+                        {
+                            await scope.Effects.ReportInvalidNamerefElementTargetAsync(rawTarget, scope).ConfigureAwait(false);
+                            return null;
+                        }
+                        targetVariables.RecreateDeclarationArray(reference.Name, ArrayKind.Indexed);
+                        return new ResolvedVariableReference.Indexed(reference.Name, position) { ReadOwner = targetVariables };
+                    }
                     var stillUnset = binding.IsUnsetNameref;
                     var arrayNameref = (writesElement || assignsDefault) && binding.IsArrayNameref;
                     if (!stillUnset && !arrayNameref && binding.Reference.Kind == VariableReferenceKind.Name

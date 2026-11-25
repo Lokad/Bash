@@ -52,7 +52,7 @@ public sealed partial class Evaluation
             var failure = scope.Variables.AssignForIteration(name, value, Memory);
             if (failure == ForAssignmentFailure.InvalidTarget)
                 return await RejectIdentifierAsync(ReportInvalidAssignmentIdentifierAsync(ShellValue.Empty, item, scope)).ConfigureAwait(false);
-            if (failure == ForAssignmentFailure.IncompatibleAttributes)
+            if (failure is ForAssignmentFailure.EmptyTarget or ForAssignmentFailure.IncompatibleAttributes)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
             if (failure == ForAssignmentFailure.Readonly)
             {

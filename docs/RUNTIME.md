@@ -413,6 +413,11 @@ When a declaration creates the first target of a saved nameref, that slot
 retains the target while subsequent operands can update the temporary scalar.
 The existing deferred publication path restores the saved slot before
 selecting the destination and applying its assignment attributes.
+An invalid initializer leaves the saved nameref unset during operand
+processing. Later operands can retry it. If it stays unset until
+restoration, the publication path stores the final byte spelling with
+its own assigned state. A malformed assigned spelling has no parsed
+destination. Inspection and diagnostics consume those stored bytes.
 Nonlocal declaration promotion retains the reached prefix slot when it belongs
 to a whole-name referent. The existing retained store stages its value and
 assignment attributes before restoration. A named attribute command that sees

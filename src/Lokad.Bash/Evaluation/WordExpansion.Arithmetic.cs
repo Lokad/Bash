@@ -203,9 +203,17 @@ internal static partial class WordExpansion
                 }
                 // Bad read subscripts diagnose and yield zero. A later write may select a newly created array.
                 long value = 0;
-                if (use == ArithmeticReferenceUse.Read && target.Location is { } location
-                    && location is not ResolvedVariableReference.Indexed { ReadAsUnset: true }
-                    && location.TryRead(scope.Variables, out var stored) && !stored.IsEmpty)
+                var stored = ShellValue.Empty;
+                if (use == ArithmeticReferenceUse.Read)
+                {
+                    if (target.Fallback is ArithmeticReferenceFallback.Invalid { IsNameref: true } raw)
+                        stored = raw.Subject;
+                    else if (target.Location is { } location
+                        && location is not ResolvedVariableReference.Indexed { ReadAsUnset: true }
+                        && location.TryRead(scope.Variables, out var read))
+                        stored = read;
+                }
+                if (!stored.IsEmpty)
                 {
                     if (!ArithmeticEvaluation.TryParseIntegerLiteral(stored.Bytes.Span,
                             scope.Effects.CancellationToken, out value))
@@ -248,7 +256,7 @@ internal static partial class WordExpansion
                 }
                 if (binding.Fallback is { } fallback)
                 {
-                    if (fallback is ArithmeticElementFallback.Circular circular)
+                    if (fallback is ArithmeticReferenceFallback.Circular circular)
                     {
                         var rebound = scope.Variables.TryResolveBinding(circular.Target.Name, selectOwner: null, out var current)
                             ? current : (VariableBinding?)null;
@@ -257,7 +265,7 @@ internal static partial class WordExpansion
                         if (scope.CanExpand)
                             return AssignCircular(circular.Target, rebound);
                     }
-                    else if (fallback is ArithmeticElementFallback.Invalid invalid)
+                    else if (fallback is ArithmeticReferenceFallback.Invalid invalid && (!invalid.IsNameref || !invalid.Subject.IsEmpty))
                         await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, invalid.Subject, scope)
                             .ConfigureAwait(false);
                     return null;
@@ -342,19 +350,26 @@ internal static partial class WordExpansion
                     use == ArithmeticReferenceUse.Read ? ReferenceUse.ArithmeticRead : ReferenceUse.ArithmeticAssign,
                     scope, ExpansionPurpose.ArithmeticSource, null, scope.Variables, scope.Variables, selected.ExpandedSubscript, command)
                     .ConfigureAwait(false);
-                ArithmeticElementFallback? fallback = null;
-                if (reference.Kind != VariableReferenceKind.Name && target is { Name.IsEmpty: true })
+                ArithmeticReferenceFallback? fallback = null;
+                if (target is { Name.IsEmpty: true })
                 {
                     // Retain the selected index even when a cyclic write must create its own array.
-                    if (cyclic && target is ResolvedVariableReference.Indexed indexed)
-                        fallback = new ArithmeticElementFallback.Circular(new ResolvedVariableReference.Indexed(reference.Name, indexed.Index));
+                    if (reference.Kind == VariableReferenceKind.Name)
+                    {
+                        if (scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
+                            && binding.TryGetInvalidNameref(out var raw))
+                            fallback = new ArithmeticReferenceFallback.Invalid(raw, IsNameref: true);
+                    }
+                    else if (cyclic && target is ResolvedVariableReference.Indexed indexed)
+                        fallback = new ArithmeticReferenceFallback.Circular(new ResolvedVariableReference.Indexed(reference.Name, indexed.Index));
                     else
                     {
                         scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding);
-                        fallback = new ArithmeticElementFallback.Invalid(binding.Reference.Kind == VariableReferenceKind.Name
-                            ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory));
+                        fallback = new ArithmeticReferenceFallback.Invalid(binding.Reference.Kind == VariableReferenceKind.Name
+                            ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory), IsNameref: false);
                     }
-                    target = null;
+                    if (fallback != null)
+                        target = null;
                 }
                 return new ArithmeticTarget(target, use, fallback);
             }
@@ -403,14 +418,14 @@ internal static partial class WordExpansion
 
     // Missing read locations are selected again for writing unless selection retained a fallback.
     private readonly record struct ArithmeticTarget(
-        ResolvedVariableReference? Location, ArithmeticReferenceUse Use, ArithmeticElementFallback? Fallback);
+        ResolvedVariableReference? Location, ArithmeticReferenceUse Use, ArithmeticReferenceFallback? Fallback);
 
-    private abstract record ArithmeticElementFallback
+    private abstract record ArithmeticReferenceFallback
     {
-        private ArithmeticElementFallback() { }
+        private ArithmeticReferenceFallback() { }
 
-        internal sealed record Circular(ResolvedVariableReference.Indexed Target) : ArithmeticElementFallback;
-        internal sealed record Invalid(ShellValue Subject) : ArithmeticElementFallback;
+        internal sealed record Circular(ResolvedVariableReference.Indexed Target) : ArithmeticReferenceFallback;
+        internal sealed record Invalid(ShellValue Subject, bool IsNameref) : ArithmeticReferenceFallback;
     }
 
     internal enum ArithmeticFailureMode { Diagnostic, Expansion, ArrayIndex, IntegerAssignment }
