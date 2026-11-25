@@ -12,6 +12,76 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     private const string CircularFallbackWarnings = "warning: s: circular name reference\nwarning: s: circular name reference\n"
         + "warning: s: circular name reference\nwarning: r: circular name reference\n";
 
+    [Fact]
+    public async Task UnsetElementAssignmentDiscardsTheTestedListEvenWithErrexit()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "declare -n ref; i=0; j=0; set -e\n"
+            + "ref[i++]=data$((j++)) || printf recovered\n"
+            + "printf '<%s|%s|%s|%s>\\n' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$j\"; declare -p ref");
+
+        Assert.Equal("<1|1|1|1>\ndeclare -n ref\n", result.StdOut);
+        Assert.Equal("line 2: `': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("ref")]
+    [InlineData("ref=tail tail")]
+    public async Task UnsetElementAssignmentRestoresCallerBindings(string locals)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "i=0; j=0; ref=outer\n"
+            + "f(){ local -n " + locals + "; local PIPESTATUS=(0);\n"
+            + "ref[i++]=data$((j++))\nprintf inside; }\nf\n"
+            + "printf '<%s|%s|%s|%s|%s>\\n' \"$?\" \"${PIPESTATUS[*]}\" \"$i\" \"$j\" \"$ref\"");
+
+        Assert.Equal("<1|0|1|1|outer>\n", result.StdOut);
+        Assert.Equal("line 3: `': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("eval", false)]
+    [InlineData("eval", true)]
+    [InlineData("source", false)]
+    [InlineData("source", true)]
+    public async Task LoadedUnsetElementAssignmentReturnsFailureToItsCaller(string reader, bool errexit)
+    {
+        const string body = "ref[i++]=data$((j++)); printf inside";
+        var invocation = reader == "eval" ? "eval '" + body + "'" : "source /script";
+        var result = await EndToEndHarness.RunScriptAsync(
+            "declare -n ref; i=0; j=0" + (errexit ? "; set -e" : "") + "\n"
+            + invocation + "\nprintf '<%s|%s|%s>\\n' \"$?\" \"$i\" \"$j\"",
+            EndToEndHarness.BuildTree([("/script", body)]));
+
+        Assert.Equal(errexit ? "" : "<1|1|1>\n", result.StdOut);
+        Assert.Equal((reader == "eval" ? "line 2" : "/script: line 1") + ": `': not a valid identifier\n",
+            result.StdErr);
+        Assert.Equal(errexit ? 1 : 0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("counter=0", "counter", "${ref:=counter},2", "=", "counter", "([0]=\"0\" [2]=\"data\")", "")]
+    [InlineData("values=(0 0 0)", "values", "${ref:=values},2", "=", "values", "([0]=\"0\" [1]=\"0\" [2]=\"data\")", "")]
+    [InlineData("values=(0 0 0)", "values", "${ref:=values},2", "+=", "values", "([0]=\"0\" [1]=\"0\" [2]=\"0data\")", "")]
+    [InlineData("values=(0 0 0)", "values", "${ref:=values},-1", "=", "values", "([0]=\"0\" [1]=\"0\" [2]=\"0\")",
+        "line 3: ref[${ref:=values},-1]: bad array subscript\n")]
+    [InlineData("values=(0 0 0)", "values[1]", "${ref:=\"values[1]\"},2", "=", "values", "([0]=\"0\" [1]=\"0\" [2]=\"0\")",
+        "line 3: `values[1]': not a valid identifier\n")]
+    public async Task DirectElementAssignmentUsesTheTargetInitializedByItsSelector(
+        string setup, string target, string selector, string operation, string array, string elements, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            setup + "\ndeclare -n ref\nref[" + selector + "]" + operation + "data\n"
+            + "printf '<%s>\\n' \"$?\"; declare -p ref " + array);
+
+        var status = diagnostic.Length == 0 ? 0 : 1;
+        Assert.Equal($"<{status}>\ndeclare -n ref=\"{target}\"\ndeclare -a {array}={elements}\n", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Theory]
     [InlineData("r=target")]
     [InlineData("r+=target")]

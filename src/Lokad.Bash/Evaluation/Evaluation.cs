@@ -4266,6 +4266,11 @@ public sealed partial class Evaluation : IFileTester
         ReportFatalExpansionAsync(name, message, ExpansionFailureKind.AssignmentTarget,
             GetCommandDiagnosticPrefix(scope));
 
+    internal Task ReportInvalidNamerefElementTargetAsync(ShellValue target, ScopedEvaluation scope) =>
+        ReportFatalExpansionAsync([ShellValue.FromText("`"), target, ShellValue.FromText("'")],
+            [ShellValue.FromText("not a valid identifier")], ExpansionFailureKind.AssignmentTarget,
+            GetCommandDiagnosticPrefix(scope), canResumeUntestedUnit: true);
+
     internal Task ReportArrayReadFailureAsync(ReadOnlySpan<ShellValue> subject, ScopedEvaluation scope, bool length)
     {
         if (_state.FatalExpansion.HasValue)
@@ -4321,7 +4326,7 @@ public sealed partial class Evaluation : IFileTester
             kind == ExpansionFailureKind.AssignmentTarget ? GetCommandDiagnosticPrefix(scope) : GetBuiltinDiagnosticPrefix(scope.Context));
 
     private Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
-        ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)
+        ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix, bool canResumeUntestedUnit = false)
     {
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
@@ -4329,6 +4334,8 @@ public sealed partial class Evaluation : IFileTester
         if (kind == ExpansionFailureKind.IntegerAssignment && _state.ForkKind is null or ShellForkKind.Subshell
             && _state.LastExitCode is { } previousStatus && previousStatus != 0)
             SetFatalExpansionError(new ExpansionFailure(kind, previousStatus));
+        else if (canResumeUntestedUnit)
+            SetFatalExpansionError(new ExpansionFailure(kind, 1) { CanResumeUntestedUnit = true });
         else
             SetFatalExpansionError(kind);
         return WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
@@ -4383,7 +4390,7 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion is not { Kind: ExpansionFailureKind.AssignmentTarget } failure)
             return;
 
-        var canResume = !_state.ErrexitEnabled;
+        var canResume = failure.CanResumeUntestedUnit || !_state.ErrexitEnabled;
         var previousStatus = _state.LastExitCode.GetValueOrDefault();
         var status = !canResume && previousStatus != 0 ? previousStatus : 1;
         _state.FatalExpansion = failure with { ExitCode = status, CanResumeUntestedUnit = canResume };

@@ -586,6 +586,9 @@ internal static partial class WordExpansion
 
         // Compound preparation has already selected the binding.
         var name = use == ReferenceUse.CompoundAssign ? reference.Name : targetVariables.ResolveNamerefName(reference.Name);
+        var unsetNameref = use == ReferenceUse.DirectAssign && name.IsEmpty
+            && targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out var initialBinding)
+            && initialBinding.IsUnsetNameref;
         var associative = use != ReferenceUse.RejectedNamerefDeclaration && targetVariables.AssociativeArrays.ContainsKey(name);
         // Prepared and staged selectors validate expanded bytes.
         var selector = preparedSubscript is { } preparedSelector
@@ -667,6 +670,23 @@ internal static partial class WordExpansion
                 // A reached scalar length still reads as scalar after selector effects.
                 if (scalarLength && !targetVariables.Scalars.ContainsKey(name))
                     return null;
+                if (unsetNameref)
+                {
+                    // Selector expansion may initialize the nameref. The index has already been validated.
+                    if (!targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
+                        return null;
+                    var stillUnset = binding.IsUnsetNameref;
+                    if (stillUnset || binding.Reference.Kind != VariableReferenceKind.Name)
+                    {
+                        var spelling = stillUnset
+                            ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory);
+                        await scope.Effects.ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
+                        return null;
+                    }
+                    if (targetVariables.AssociativeArrays.ContainsKey(binding.Name))
+                        return null;
+                    name = binding.Name;
+                }
                 return new ResolvedVariableReference.Indexed(name, position) { ReadOwner = targetVariables };
             }
             if (compound is { } item)
