@@ -15,7 +15,7 @@ public sealed class PrefixPreparationTests
     [InlineData("readonly HDS_VALUE=; HDS_VALUE=set true; printf 'after:%s' \"$?\"", "after:0", "line 1: HDS_VALUE: readonly variable\n", 0)]
     [InlineData("readonly HDS_VALUE=; HDS_VALUE=set false; printf 'after:%s' \"$?\"", "after:1", "line 1: HDS_VALUE: readonly variable\n", 0)]
     [InlineData("readonly HDS_VALUE=; HDS_VALUE=set HDS_NEXT=$(printf later >&2) printf executed; printf 'after:%s' \"$?\"", "executedafter:0", "line 1: HDS_VALUE: readonly variable\nlater", 0)]
-    [InlineData("readonly HDS_VALUE=; HDS_VALUE=set command -x; printf 'after:%s' \"$?\"", "after:2", "line 1: HDS_VALUE: readonly variable\ncommand: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", 0)]
+    [InlineData("readonly HDS_VALUE=; HDS_VALUE=set command -x; printf 'after:%s' \"$?\"", "after:2", "line 1: HDS_VALUE: readonly variable\nline 1: command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", 0)]
     [InlineData("readonly HDS_VALUE=; HDS_VALUE=set cat 2>/dev/null </dev/null; printf 'after:%s' \"$?\"", "after:0", "line 1: HDS_VALUE: readonly variable\n", 0)]
     [InlineData("readonly HDS_VALUE=; HDS_VALUE=set; printf 'after:%s' \"$?\"", "", "line 1: HDS_VALUE: readonly variable\n", 1)]
     [InlineData("unset HDS_MISSING; HDS_VALUE=${HDS_MISSING:?stop} : 2>/dev/null; printf after", "", "line 1: HDS_MISSING: stop\n", 1)]

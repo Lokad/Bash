@@ -39,7 +39,7 @@ public sealed partial class ComplexityRegressionTests
             {
                 var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
                 Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-                Assert.True(diagnostic.Content.Span.StartsWith("command: -x: invalid option\n"u8));
+                Assert.True(diagnostic.Content.Span.StartsWith("line 1: command: -x: invalid option\n"u8));
                 diagnostic.SetResult(DescriptorWriteResult.Open);
             }
             Assert.Null(await state.GetNextStep());

@@ -34,7 +34,7 @@ public sealed class CommandInvocationTests
 
         var write = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdErr, write.Descriptor);
-        byte[] expected = [.. "builtin: "u8, .. name, .. ": not a shell builtin\n"u8];
+        byte[] expected = [.. "line 1: builtin: "u8, .. name, .. ": not a shell builtin\n"u8];
         Assert.Equal(expected, write.Content);
         Assert.Equal(1, result.ExitCode);
         owner.Dispose();

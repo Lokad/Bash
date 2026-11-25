@@ -72,7 +72,7 @@ public sealed class QueryDiagnosticTests
     [InlineData("type -t -- -a shift", "builtin\n", "", 1)]
     [InlineData("type -- --help", "", "line 1: type: --help: not found\n", 1)]
     [InlineData("type echo --help", "echo is a shell builtin\n", "line 1: type: --help: not found\n", 1)]
-    [InlineData("type -taz --help", "", "type: -z: invalid option\ntype: usage: type [-aftpP] [--] [name ...]\n", 2)]
+    [InlineData("type -taz --help", "", "line 1: type: -z: invalid option\ntype: usage: type [-afptP] name [name ...]\n", 2)]
     [InlineData("command -v printf qdg_missing", "printf\n", "", 0)]
     [InlineData("command -V -- -v printf", "printf is a shell builtin\n", "line 1: command: -v: not found\n", 0)]
     [InlineData("command -V printf -v", "printf is a shell builtin\n", "line 1: command: -v: not found\n", 0)]
@@ -100,7 +100,7 @@ public sealed class QueryDiagnosticTests
     [InlineData("command -V $'a\\n\\xff\\r' 2>&1",
         "6C696E6520313A20636F6D6D616E643A20610AFF0D3A206E6F7420666F756E640A", "", 1)]
     [InlineData("type -t $'\\xff'", "", "", 1)]
-    [InlineData("type $'-t\\xff'", "", "747970653A202DFF3A20696E76616C6964206F7074696F6E0A747970653A2075736167653A2074797065205B2D61667470505D205B2D2D5D205B6E616D65202E2E2E5D0A", 2)]
+    [InlineData("type $'-t\\xff'", "", "6C696E6520313A20747970653A202DFF3A20696E76616C6964206F7074696F6E0A747970653A2075736167653A2074797065205B2D61667074505D206E616D65205B6E616D65202E2E2E5D0A", 2)]
     [InlineData("command -v $'\\xff'", "", "", 1)]
     public async Task QueriesRetainInvalidUtf8InDiagnostics(
         string script, string outputHex, string errorHex, int expectedExitCode)
@@ -134,9 +134,9 @@ public sealed class QueryDiagnosticTests
     }
 
     [Theory]
-    [InlineData("command -Vq printf", "command: -q: invalid option\n")]
-    [InlineData("command -V -z printf", "command: -z: invalid option\n")]
-    [InlineData("command -V --unknown printf", "command: --: invalid option\n")]
+    [InlineData("command -Vq printf", "line 1: command: -q: invalid option\n")]
+    [InlineData("command -V -z printf", "line 1: command: -z: invalid option\n")]
+    [InlineData("command -V --unknown printf", "line 1: command: --: invalid option\n")]
     public async Task InvalidQueryOptionsUseTheCommandRedirection(string command, string expectedError)
     {
         var result = await EndToEndHarness.RunScriptAsync(command + " 2>/errors", EndToEndHarness.BuildTree([]));
@@ -156,7 +156,7 @@ public sealed class QueryDiagnosticTests
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.StdOut);
         Assert.Empty(result.StdErr);
-        Assert.Equal("type: -z: invalid option\ntype: usage: type [-aftpP] [--] [name ...]\n",
+        Assert.Equal("line 1: type: -z: invalid option\ntype: usage: type [-afptP] name [name ...]\n",
             await EndToEndHarness.ReadFileAsync(result.Host, "/errors"));
     }
 }

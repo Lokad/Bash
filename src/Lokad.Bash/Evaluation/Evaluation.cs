@@ -1485,8 +1485,17 @@ public sealed partial class Evaluation : IFileTester
                         BuiltinHelpOutput.Prepared, negated: false).ConfigureAwait(false);
                     return CompleteCommandResult(helpResult, terminal.Completion, commandInvoked: true);
                 }
-                if (!terminal.Message.IsEmpty)
-                    await ExecuteWriteAsync(GetStdErrDescriptor(), terminal.Message.Bytes).ConfigureAwait(false);
+                if (terminal.Diagnostic is { } diagnostic)
+                {
+                    var prefix = GetBuiltinDiagnosticPrefix(scope.Context);
+                    if (diagnostic.UsageKind is { } kind)
+                        await WriteBuiltinOptionDiagnosticAsync(diagnostic.Command, ShellValue.Empty, diagnostic.Operand,
+                            diagnostic.Detail, kind, diagnostic.CommandName, prefix).ConfigureAwait(false);
+                    else
+                        await WriteDiagnosticUnlessStderrClosedAsync(
+                            [diagnostic.Command, ShellValue.FromText(": "), diagnostic.Operand],
+                            [ShellValue.FromText(diagnostic.Detail)], scope: null, prefix).ConfigureAwait(false);
+                }
                 var terminalResult = await FinalizeResultAsync(terminal.Result, false).ConfigureAwait(false);
                 return CompleteCommandResult(terminalResult, terminal.Completion, commandInvoked: true);
             }
@@ -5871,7 +5880,7 @@ public sealed partial class Evaluation : IFileTester
     {
         public sealed record Terminal(
             EvaluationResult Result,
-            ShellValue Message,
+            PreparedWrapperDiagnostic? Diagnostic,
             PreparedHelp? Help,
             CommandWords Words,
             ShellValue LastReadArgument,
@@ -5900,6 +5909,9 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private sealed record ExecOptions(ShellValue? ArgumentZero, bool Login, bool ClearEnvironment);
+
+    private readonly record struct PreparedWrapperDiagnostic(
+        ShellValue Command, ShellValue Operand, string Detail, BuiltinKind? UsageKind, string CommandName);
 
     private readonly record struct PreparedHelp(ShellValue Name, string CommandName, BuiltinKind Kind);
 

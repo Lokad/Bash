@@ -66,7 +66,7 @@ public sealed class ExecutionLifetimeTests
     public Task CancelledPreparedTerminalDiagnosticStaysChargedUntilTheHostSettles()
     {
         var target = new string('x', 4096);
-        return VerifyPendingWriteAsync($"builtin '{target}' 2>out; after=1", $"builtin: {target}: not a shell builtin\n");
+        return VerifyPendingWriteAsync($"builtin '{target}' 2>out; after=1", $"line 1: builtin: {target}: not a shell builtin\n");
     }
 
     [Fact]

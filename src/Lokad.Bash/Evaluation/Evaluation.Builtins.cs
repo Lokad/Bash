@@ -117,7 +117,7 @@ public sealed partial class Evaluation
             {
                 allowsPersistentRedirections = false;
                 if (next is not { } first)
-                    return Terminal(0, ShellValue.Empty, help: null, builtinKind);
+                    return Terminal(0, diagnostic: null, help: null, builtinKind);
                 var field = ClassifyShortOptionField(first.Bytes.Span);
                 if (field == ShortOptionField.Help)
                     return Help(builtinKind);
@@ -127,12 +127,11 @@ public sealed partial class Evaluation
                     return InvalidOption(builtinKind, first.Bytes.Span[1]);
 
                 if (next is not { } name)
-                    return Terminal(0, ShellValue.Empty, help: null, builtinKind);
+                    return Terminal(0, diagnostic: null, help: null, builtinKind);
                 if (!BuiltinClassification.TryResolve(name.Bytes.Span, out var targetName, out var targetKind))
                 {
-                    return Terminal(1, BuildTerminalMessage(
-                        [ShellValue.FromText("builtin: "), name, ShellValue.FromText(": not a shell builtin\n")]),
-                        help: null, builtinKind);
+                    return Terminal(1, new PreparedWrapperDiagnostic(commandValue, name, "not a shell builtin",
+                        UsageKind: null, commandName), help: null, builtinKind);
                 }
 
                 resolution = CommandResolution.ForBuiltin(targetKind);
@@ -192,7 +191,7 @@ public sealed partial class Evaluation
 
                             argumentZero = await ReadFieldAsync().ConfigureAwait(false);
                             if (!argumentZero.HasValue)
-                                return OptionFailure(builtinKind, ShellValue.FromText("-a"), ": option requires an argument");
+                                return OptionFailure(builtinKind, ShellValue.FromText("-a"), "option requires an argument");
                             break;
                         default:
                             return InvalidOption(builtinKind, flag);
@@ -253,7 +252,7 @@ public sealed partial class Evaluation
             }
 
             if (next is not { } target)
-                return Terminal(0, ShellValue.Empty, help: null, builtinKind);
+                return Terminal(0, diagnostic: null, help: null, builtinKind);
 
             commandValue = target;
             lookupMode = CommandLookupMode.BypassFunctions;
@@ -280,43 +279,16 @@ public sealed partial class Evaluation
             RedirectionLifetime.Command);
 
         PreparedCommand.Terminal InvalidOption(BuiltinKind kind, byte option) =>
-            OptionFailure(kind, ShellValue.FromBytes(new[] { (byte)'-', option }), ": invalid option");
+            OptionFailure(kind, ShellValue.FromBytes(new[] { (byte)'-', option }), "invalid option");
 
-        PreparedCommand.Terminal OptionFailure(BuiltinKind kind, ShellValue option, string reason)
-        {
-            var usage = ShellValue.FromText(BuiltinDocumentation.For(kind).Synopsis(commandName));
-            var newline = ShellValue.FromText("\n");
-            var output = BuildTerminalMessage([commandValue, ShellValue.FromText(": "), option, ShellValue.FromText(reason),
-                newline, commandValue, ShellValue.FromText(": usage: "), usage, newline]);
-            return Terminal(2, output, help: null, kind);
-        }
+        PreparedCommand.Terminal OptionFailure(BuiltinKind kind, ShellValue option, string reason) =>
+            Terminal(2, new PreparedWrapperDiagnostic(commandValue, option, reason, kind, commandName), help: null, kind);
 
-        // Keep help symbolic through argument expansion and descriptor setup.
         PreparedCommand.Terminal Help(BuiltinKind kind) =>
-            Terminal(2, ShellValue.Empty, new PreparedHelp(commandValue, commandName, kind), kind);
+            Terminal(2, diagnostic: null, new PreparedHelp(commandValue, commandName, kind), kind);
 
-        ShellValue BuildTerminalMessage(ReadOnlySpan<ShellValue> parts)
-        {
-            long length = 0;
-            foreach (var part in parts)
-                length += part.Bytes.Length;
-            if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
-                throw new ByteMemoryBuilder.LimitExceededException();
-
-            // The prepared command keeps the record through later expansion, redirections and host writes.
-            Memory.Charge(length);
-            var output = new byte[(int)length];
-            Span<byte> remaining = output;
-            foreach (var part in parts)
-            {
-                part.Bytes.Span.CopyTo(remaining);
-                remaining = remaining[part.Bytes.Length..];
-            }
-            return ShellValue.FromBytes(output);
-        }
-
-        PreparedCommand.Terminal Terminal(int exitCode, ShellValue message, PreparedHelp? help, BuiltinKind kind) =>
-            new(EvaluationResult.FromExitCode(exitCode), message, help, RemainingWords(null), lastReadArgument, completion,
+        PreparedCommand.Terminal Terminal(int exitCode, PreparedWrapperDiagnostic? diagnostic, PreparedHelp? help, BuiltinKind kind) =>
+            new(EvaluationResult.FromExitCode(exitCode), diagnostic, help, RemainingWords(null), lastReadArgument, completion,
                 // Direct exec retains redirections even on option failure/help; builtin exec restores them.
                 kind == BuiltinKind.Exec && allowsPersistentRedirections
                     ? RedirectionLifetime.Evaluation : RedirectionLifetime.Command);

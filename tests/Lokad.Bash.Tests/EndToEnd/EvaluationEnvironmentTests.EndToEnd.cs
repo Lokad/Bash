@@ -333,7 +333,7 @@ sh -c 'printf ""unexported-child=<%s>\n"" ""${LK_EXPORT_PROBE-unset}""';".Replac
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("side\ncommand: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", result.StdErr);
+        Assert.Equal("side\nline 1: command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 
@@ -344,7 +344,7 @@ sh -c 'printf ""unexported-child=<%s>\n"" ""${LK_EXPORT_PROBE-unset}""';".Replac
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("word\nassignment\ncommand: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", result.StdErr);
+        Assert.Equal("word\nassignment\nline 1: command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 

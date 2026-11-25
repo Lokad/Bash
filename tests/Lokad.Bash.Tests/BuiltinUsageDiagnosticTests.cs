@@ -140,7 +140,7 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("eval", "-", "[arg ...]", false)]
     [InlineData("source", "-", "filename [arguments]", false)]
     [InlineData(".", "-", "filename [arguments]", false)]
-    [InlineData("type", "-t", "[-aftpP] [--] [name ...]", true)]
+    [InlineData("type", "-t", "[-afptP] name [name ...]", true)]
     public async Task InvalidOptionPreservesRawByteAndUsageWriteBoundaries(
         string name, string optionPrefix, string arguments, bool combined)
     {
@@ -155,7 +155,7 @@ public sealed class BuiltinUsageDiagnosticTests
         await new Engine().RunAsync(state, host);
 
         var descriptor = new FileDescriptor(9);
-        var prefix = System.Text.Encoding.ASCII.GetBytes($"{name}: -");
+        var prefix = System.Text.Encoding.ASCII.GetBytes(combined ? $"line 1: {name}: -" : $"{name}: -");
         byte[] invalid = [.. prefix, 0xff, .. ": invalid option\n"u8];
         var usage = System.Text.Encoding.ASCII.GetBytes($"{name}: usage: {name} {arguments}\n");
         if (combined)

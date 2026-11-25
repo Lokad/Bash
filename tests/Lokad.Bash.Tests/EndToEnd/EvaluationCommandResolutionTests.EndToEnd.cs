@@ -51,7 +51,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("command -x echo");
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", result.StdErr);
+        Assert.Equal("line 1: command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 
@@ -321,7 +321,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("builtin: missing: not a shell builtin\n", result.StdErr);
+        Assert.Equal("line 1: builtin: missing: not a shell builtin\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -381,7 +381,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("exec builtin missing; echo unreachable");
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("builtin: missing: not a shell builtin\n", result.StdErr);
+        Assert.Equal("line 1: builtin: missing: not a shell builtin\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -460,7 +460,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("type ]; builtin ]; echo status:$?");
 
         Assert.Equal("status:1\n", result.StdOut);
-        Assert.Equal("line 1: type: ]: not found\nbuiltin: ]: not a shell builtin\n", result.StdErr);
+        Assert.Equal("line 1: type: ]: not found\nline 1: builtin: ]: not a shell builtin\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

@@ -3387,7 +3387,7 @@ public partial class EvaluationTests
 
         var append = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, append.FileDescriptor);
-        Assert.Equal("command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", Text(append.Content));
+        Assert.Equal("line 1: command: -x: invalid option\ncommand: usage: command [-pVv] command [arg ...]\n", Text(append.Content));
         append.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -3700,7 +3700,7 @@ public partial class EvaluationTests
 
         var append = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, append.FileDescriptor);
-        Assert.Equal("builtin: missing: not a shell builtin\n", Text(append.Content));
+        Assert.Equal("line 1: builtin: missing: not a shell builtin\n", Text(append.Content));
         append.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

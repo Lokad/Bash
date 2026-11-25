@@ -207,9 +207,8 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> InvalidOptionAsync(ShellValue option)
         {
-            await WriteDiagnosticAsync(GetStdErrDescriptor(), [ShellValue.FromText("type")], [ShellValue.FromText("-"),
-                option, ShellValue.FromText(": invalid option\ntype: usage: "
-                    + BuiltinDocumentation.For(BuiltinKind.Type).Synopsis("type"))], scope: null).ConfigureAwait(false);
+            await WriteBuiltinOptionDiagnosticAsync(words[0], ShellValue.FromText("-"), option, "invalid option",
+                BuiltinKind.Type, "type", GetBuiltinDiagnosticPrefix(context)).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
     }

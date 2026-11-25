@@ -53,9 +53,23 @@ public sealed partial class Evaluation
     private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
         ShellValue command, ShellValue sign, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name,
         SyntaxDiagnosticPrefix sourcePrefix) =>
-        WriteDiagnosticAsync([command], [sign, ShellValue.FromBytes(flag),
-            ShellValue.FromText(": invalid option\n" + name + ": usage: " + BuiltinDocumentation.For(kind).Synopsis(name))],
-            scope: null, ClosedStderrHandling.Discard, sourcePrefix);
+        WriteBuiltinOptionDiagnosticAsync(command, sign, ShellValue.FromBytes(flag), "invalid option", kind, name, sourcePrefix);
+
+    private Task<DescriptorWriteResult> WriteBuiltinOptionDiagnosticAsync(
+        ShellValue command, ShellValue optionPrefix, ShellValue option, string detail,
+        BuiltinKind kind, string name, SyntaxDiagnosticPrefix sourcePrefix)
+    {
+        var descriptor = GetStdErrDescriptor();
+        if (descriptor.IsClosed)
+        {
+            CheckCancellation();
+            return Task.FromResult(DescriptorWriteResult.Closed);
+        }
+
+        var synopsis = kind == BuiltinKind.Type ? "type [-afptP] name [name ...]" : BuiltinDocumentation.For(kind).Synopsis(name);
+        return WriteDiagnosticAsync(descriptor, [command], [optionPrefix, option,
+            ShellValue.FromText(": " + detail + "\n" + name + ": usage: " + synopsis)], scope: null, sourcePrefix);
+    }
 
     private Task<DescriptorWriteResult> WriteInvalidIdentifierDiagnosticAsync(ShellValue command, ShellValue operand,
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>

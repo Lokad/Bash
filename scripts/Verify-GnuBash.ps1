@@ -168,15 +168,13 @@ $results = foreach ($sample in $catalog.cases) {
     $actual = Invoke-Reference -Arguments $arguments -Locale $sample.locale -InputBytes ([Convert]::FromHexString($sample.stdinHex)) -WorkingDirectory $fixtureRoot
     $comparedStderr = $actual.stderrHex
     if ($sample.stderrNormalization) {
-        $prefixPattern = switch ($sample.stderrNormalization) {
-            'bash-command-location' { 'lokad-conformance: line [1-9][0-9]*: ' }
-            'bash-command-name' { 'lokad-conformance: (?=line [1-9][0-9]*: )' }
-            default { throw 'Unknown diagnostic normalization.' }
+        if ($sample.stderrNormalization -ne 'bash-command-name') {
+            throw 'Unknown diagnostic normalization.'
         }
         # Latin-1 maps every byte reversibly, including malformed UTF-8 diagnostic operands.
         $raw = [System.Text.Encoding]::Latin1.GetString([Convert]::FromHexString($actual.stderrHex))
         # The diagnostic can follow script output on the same line.
-        $normalized = [regex]::Replace($raw, $prefixPattern, '')
+        $normalized = [regex]::Replace($raw, 'lokad-conformance: (?=line [1-9][0-9]*: )', '')
         $comparedStderr = [Convert]::ToHexString([System.Text.Encoding]::Latin1.GetBytes($normalized)).ToLowerInvariant()
         $actual | Add-Member -NotePropertyName normalizedStderrHex -NotePropertyValue $comparedStderr
     }

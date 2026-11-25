@@ -769,6 +769,10 @@ Descriptive lookup misses and host lookup failures report the reached source
 location. A `type` output failure includes that location and the descriptor's
 reported cause. `command -v` and `command -V` retain their lookup status after
 a failed write.
+Invalid options for `type`, `command`, `builtin`, and `exec` add the reached
+source location to the first diagnostic line. The usage line follows without a
+location. Unknown `builtin` operands and a missing `exec -a` operand also report
+the reached location. Argument expansion and redirection errors take precedence.
 During option scanning, `--help` writes the builtin synopsis and returns 2.
 It returns 2 silently with closed stdout. After `--` or the first name,
 `--help` is an ordinary name.
