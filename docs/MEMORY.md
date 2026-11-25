@@ -287,8 +287,10 @@ command owner.
 
 Pathname component ranges borrow the admitted pattern and quote mask. The command
 admits the lookup and output forms of the literal prefix before creating them.
-Pathname expansion admits both candidate lists and their path strings, releases
-rejected candidates after lookup, and reuses list backing across components.
+Pathname expansion admits both candidate lists and their path strings and reuses
+list backing across components. A reached link lookup keeps its path admitted
+through settlement. Terminal matches retain their output spelling. The evaluator
+releases an unused lookup path before advancing through the remaining entries.
 Sorting admits and orders the final path array directly. The sorted paths retain
 their allowance until the caller finishes encoding them.
 

@@ -83,6 +83,38 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task GlobReleasesTerminalLookupPathsForAcceptedLinks()
+    {
+        var cwd = new ShellPath("/" + string.Join('/', Enumerable.Repeat(new string('d', 64), 12)));
+        var entries = Enumerable.Range(0, 256).Reverse()
+            .Select(index => new DirectoryEntry($"link_{index:D3}", FilePathKind.SymbolicLink)).ToArray();
+        var state = new Eval(Parser.Parse("cmd */"), options: EvaluationOptions.Default with { CurrentDirectory = cwd });
+        var budget = new MemoryGovernor(256 * 1024);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
+        var listing = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
+        Assert.Equal(cwd.Path, listing.Path.Path);
+        listing.SetResult(DirectoryListingResult.Success(entries));
+
+        foreach (var entry in entries)
+        {
+            var lookup = await NextPathKindsAsync(state);
+            Assert.Equal(new FilePathLookup(RawShellPath.Parse(entry.Name), cwd, FileLinkFollowing.Follow),
+                Assert.Single(lookup.Paths));
+            lookup.SetResult([PathKindResult(FilePathKind.Directory)]);
+        }
+
+        var command = await NextCommandAsync(state, "cmd");
+        Assert.Equal(entries.Reverse().Select(entry => entry.Name + "/"),
+            command.Command.Arguments.Select(argument => argument.ToUtf8String()));
+        command.SetResult(new CommandExecutionResult.Completed(0));
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
     public async Task GlobReusesCandidateAllowanceAcrossComponents()
     {
         const int Width = 64;

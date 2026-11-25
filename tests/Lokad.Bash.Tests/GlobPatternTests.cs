@@ -109,6 +109,36 @@ public sealed class GlobPatternTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("*", FilePathKind.File, "")]
+    [InlineData("*/", FilePathKind.Directory, "/")]
+    public async Task TerminalGlobKeepsOnlyItsOutputSpelling(string spelling, FilePathKind kind, string suffix)
+    {
+        var directory = new ShellPath("/" + string.Join('/', Enumerable.Repeat(new string('d', 64), 12)));
+        var governor = new MemoryGovernor(96 * 1024);
+        using var scope = governor.CreateScope();
+        var budget = new EvaluationMemory(scope);
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(spelling), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, budget, out var pattern));
+        using var globMemory = new MemoryCapacity(scope, 0);
+        var glob = new GlobEvaluation(pattern, directory, globMemory, CancellationToken.None);
+        var entries = Enumerable.Range(0, 256)
+            .Select(index => new DirectoryEntry($"entry_{index:D3}", kind)).ToArray();
+        var listings = 0;
+        var listing = new GlobListing(path =>
+        {
+            Assert.Equal(directory.Path, path);
+            listings++;
+            return entries.Reverse().ToArray();
+        });
+
+        Assert.Equal(entries.Select(entry => entry.Name + suffix), await glob.EvaluateAsync(listing));
+        Assert.Equal(1, listings);
+        globMemory.Dispose();
+        budget.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task LiteralPrefixAdmissionRefusalPrecedesListing()
     {

@@ -98,7 +98,9 @@ internal sealed class GlobEvaluation
                 for (var index = 0; index < candidates.Count; index++)
                 {
                     var previous = candidates[index];
-                    var replacement = AppendComponent(previous, literal, markDirectory);
+                    var replacement = new Candidate(
+                        hasNext ? AppendPath(previous.ListPath, literal, markDirectory: false) : string.Empty,
+                        AppendPath(previous.OutputPath, literal, markDirectory));
                     candidates[index] = replacement;
                     _memory.Resize(_memory.Bytes - previous.PathBytes);
                     candidatePathBytes = checked(candidatePathBytes - previous.PathBytes + replacement.PathBytes);
@@ -108,13 +110,13 @@ internal sealed class GlobEvaluation
             else
             {
                 var requireDirectory = hasNext || markDirectory;
+                var matchDot = name.Span[0] == '.';
                 long matchPathBytes = 0;
                 foreach (var parent in candidates)
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
                     var entries = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
                     _cancellationToken.ThrowIfCancellationRequested();
-                    var matchDot = name.Span[0] == '.';
                     foreach (var entry in entries)
                     {
                         _cancellationToken.ThrowIfCancellationRequested();
@@ -127,13 +129,21 @@ internal sealed class GlobEvaluation
                                 _memory, _cancellationToken))
                             continue;
 
-                        var match = AppendComponent(parent, entry.Name, markDirectory);
-                        if (requireDirectory && entry.Kind == FilePathKind.SymbolicLink
-                            && !await tester.IsDirectoryAsync(match.ListPath).ConfigureAwait(false))
+                        var checkLink = requireDirectory && entry.Kind == FilePathKind.SymbolicLink;
+                        var lookupPath = hasNext || checkLink
+                            ? AppendPath(parent.ListPath, entry.Name, markDirectory: false) : string.Empty;
+                        if (checkLink)
                         {
-                            _memory.Resize(_memory.Bytes - match.PathBytes);
-                            continue;
+                            var isDirectory = await tester.IsDirectoryAsync(lookupPath).ConfigureAwait(false);
+                            if (!hasNext || !isDirectory)
+                            {
+                                _memory.Resize(_memory.Bytes - TextBytes(lookupPath.Length));
+                                lookupPath = string.Empty;
+                            }
+                            if (!isDirectory)
+                                continue;
                         }
+                        var match = new Candidate(lookupPath, AppendPath(parent.OutputPath, entry.Name, markDirectory));
                         _memory.PrepareListCapacity(matches, 1);
                         matches.Add(match);
                         matchPathBytes = checked(matchPathBytes + match.PathBytes);
@@ -230,27 +240,21 @@ internal sealed class GlobEvaluation
         return new Candidate(lookupPath, outputPath);
     }
 
-    private Candidate AppendComponent(Candidate parent, string name, bool markDirectory)
+    private string AppendPath(string prefix, string name, bool markDirectory)
     {
         _cancellationToken.ThrowIfCancellationRequested();
-        var lookupSeparator = Separator(parent.ListPath);
-        var outputSeparator = Separator(parent.OutputPath);
+        var separator = prefix.Length == 0 || prefix.EndsWith('/') ? string.Empty : "/";
         var suffix = markDirectory ? "/" : string.Empty;
-        var lookupLength = checked(parent.ListPath.Length + lookupSeparator.Length + name.Length);
-        var outputLength = checked(parent.OutputPath.Length + outputSeparator.Length + name.Length + suffix.Length);
-        _memory.Grow(checked(TextBytes(lookupLength) + TextBytes(outputLength)));
-        return new Candidate(
-            string.Concat(parent.ListPath, lookupSeparator, name),
-            string.Concat(parent.OutputPath, outputSeparator, name, suffix));
-
-        static string Separator(string prefix) => prefix.Length == 0 || prefix.EndsWith('/') ? string.Empty : "/";
+        var length = checked(prefix.Length + separator.Length + name.Length + suffix.Length);
+        _memory.Grow(TextBytes(length));
+        return string.Concat(prefix, separator, name, suffix);
     }
 
     private static long TextBytes(int length) => length == 0 ? 0 : 32L + 2L * length;
 
     private readonly record struct Candidate(string ListPath, string OutputPath)
     {
-        // A prefix can borrow the current directory. Its charge is tracked separately.
+        // Terminal candidates have no list path. A prefix can borrow the current directory.
         public long PathBytes => checked(TextBytes(ListPath.Length) + TextBytes(OutputPath.Length));
     }
 }
