@@ -342,6 +342,53 @@ public sealed class ByteStoredValueTests
     }
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(16384)]
+    public void ReadFieldEndingAtAQuotedNulBorrowsItsUnchangedPrefix(int length)
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var variables = Variables.CreateEmpty();
+        var options = new ReadBuiltinOptions(FieldSeparators.Empty,
+            ReadBackslashMode.InterpretEscapes, ReadFieldMode.PreserveInput);
+        var record = new byte[length + 2];
+        record.AsSpan(0, length).Fill(0xff);
+        record[length] = (byte)'\\';
+        var prefix = record.AsMemory(0, length);
+
+        using (var plain = new MemoryCapacity(owner, 0))
+        using (var truncated = new MemoryCapacity(owner, 0))
+        {
+            var control = Assert.Single(ReadFieldSplitter.Split(prefix, 1, options, plain,
+                variables, memory, CancellationToken.None));
+            var field = Assert.Single(ReadFieldSplitter.Split(record, 1, options, truncated,
+                variables, memory, CancellationToken.None));
+
+            Assert.Equal(control, field);
+            Assert.Equal(plain.Bytes, truncated.Bytes);
+            Assert.True(field.Bytes.Equals(length == 0 ? ShellValue.Empty.Bytes : prefix));
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ReadDetachesItsTruncatedFieldBeforeReusingTheRecord()
+    {
+        byte[] input = [.. "first"u8, 0xff, (byte)'\\', 0, .. "discarded\nsecond value\n"u8];
+        const string script = "IFS= read first; IFS= read second; printf '<%s><%s>' \"$first\" \"$second\"";
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host, input);
+
+        Assert.Equal(0, result.ExitCode);
+        byte[] expected = [.. "<first"u8, 0xff, .. "><second value>"u8];
+        Assert.Equal(expected, host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("unset IFS", "read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "2009C3A9FF09612020620D20090A", "3CC3A9FF3E3C612020620D3E")]
     [InlineData("unset IFS", "read -ra values; printf '<%s>' \"${values[@]}\"", "09C3A9FF2061625C63200A", "3CC3A9FF3E3C61625C633E")]
     [InlineData("unset IFS", "read -ra values; printf '<%s>' \"${#values[@]}\"", "2009200A", "3C303E")]

@@ -252,6 +252,13 @@ internal static class ReadFieldSplitter
                 if (runEnd < 0)
                     return ShellValue.FromBytes(source);
 
+                if (EndsField(remaining[runEnd..]))
+                {
+                    // Only truncation is needed. The unchanged prefix can borrow the record.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return runEnd == 0 ? ShellValue.Empty : ShellValue.FromBytes(source[..runEnd]);
+                }
+
                 scratch.Grow(remaining.Length);
                 var value = new byte[remaining.Length];
                 var written = 0;
@@ -261,8 +268,7 @@ internal static class ReadFieldSplitter
                     remaining[..runEnd].CopyTo(value.AsSpan(written));
                     written += runEnd;
                     remaining = remaining[runEnd..];
-                    // A quoted NUL can create a field but ends the assigned bytes.
-                    if (remaining.Length <= 1 || remaining[0] == 0 || remaining[1] == 0)
+                    if (EndsField(remaining))
                         break;
                     // Removing an escape preserves the rest of the original byte spelling.
                     value[written++] = remaining[1];
@@ -272,7 +278,11 @@ internal static class ReadFieldSplitter
                         runEnd = remaining.Length;
                 }
 
-                return written == 0 ? ShellValue.Empty : ShellValue.FromBytes(value.AsMemory(0, written));
+                return ShellValue.FromBytes(value.AsMemory(0, written));
+
+                // A quoted NUL can create a field but ends the assigned bytes.
+                static bool EndsField(ReadOnlySpan<byte> suffix) =>
+                    suffix.Length <= 1 || suffix[0] == 0 || suffix[1] == 0;
             }
         }
     }
