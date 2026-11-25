@@ -727,7 +727,7 @@ public static partial class ArithmeticEvaluation
                 var valid = TryReadNumberToken(token, out var number);
                 ConsumeToken(token.Length);
                 _parsed = valid ? new ParseResult(true, IsSuppressed ? 0 : number) : default;
-                return null;
+                return valid ? PrepareTrailingReference() : null;
             }
             return Parse(this);
 
@@ -746,6 +746,9 @@ public static partial class ArithmeticEvaluation
                             parser._parsed = default;
                             yield break;
                         }
+                        var trailing = parser.PrepareTrailingReference();
+                        if (parser.Error != null)
+                            yield break;
                         if (parser.IsSuppressed)
                         {
                             parser.CompletePrefixMutation(0);
@@ -760,6 +763,8 @@ public static partial class ArithmeticEvaluation
                         }
                         yield return parser.Write(reference, binding, assigned);
                         parser.CompletePrefixMutation(assigned);
+                        if (parser._parsed.Success && trailing != null)
+                            yield return parser.Call(trailing);
                         yield break;
                     }
 
@@ -820,7 +825,15 @@ public static partial class ArithmeticEvaluation
                 {
                     parser.ConsumeToken(1);
                     yield return parser.Call(parser.TryParseNested(ParseProduction.Expression));
-                    if (parser._parsed.Success && !parser.TryMatch(")"u8))
+                    if (!parser._parsed.Success)
+                        yield break;
+                    if (parser.TryMatch(")"u8))
+                    {
+                        var trailing = parser.PrepareTrailingReference();
+                        if (trailing != null)
+                            yield return parser.Call(trailing);
+                    }
+                    else
                     {
                         if (parser.IsNextTokenValid())
                             parser.Error = parser.CreateError(ArithmeticErrorKind.MissingParenthesis, parser.CurrentTokenStart());
@@ -835,6 +848,10 @@ public static partial class ArithmeticEvaluation
                     parser._parsed = default;
                     yield break;
                 }
+                var postfix = parser.TryMatch("++"u8) || parser.TryMatch("--"u8);
+                var trailingReference = postfix ? null : parser.PrepareTrailingReference();
+                if (parser.Error != null)
+                    yield break;
                 ArithmeticBinding<TTarget>.Bound? selected = null;
                 if (!parser.IsSuppressed)
                 {
@@ -847,7 +864,8 @@ public static partial class ArithmeticEvaluation
                     }
                 }
                 var currentValue = selected?.Value ?? 0;
-                if (parser.TryMatch("++"u8) || parser.TryMatch("--"u8))
+                parser._parsed = new ParseResult(true, currentValue);
+                if (postfix)
                 {
                     var op = parser.Span[parser._index - 1] == (byte)'+' ? BinaryOperator.Add : BinaryOperator.Subtract;
                     if (!parser.TryApplyBinary(op, currentValue, 1, out var assigned))
@@ -864,9 +882,11 @@ public static partial class ArithmeticEvaluation
                             yield break;
                         }
                     }
+                    trailingReference = parser.PrepareTrailingReference();
                 }
 
-                parser._parsed = new ParseResult(true, currentValue);
+                if (trailingReference != null)
+                    yield return parser.Call(trailingReference);
             }
         }
 
@@ -882,6 +902,45 @@ public static partial class ArithmeticEvaluation
                     Error = CreateError(ArithmeticErrorKind.DecrementRequiresVariable, _index);
             }
             _parsed = Error == null ? new ParseResult(true, value) : default;
+        }
+
+        private IEnumerable<ParseStep>? PrepareTrailingReference()
+        {
+            SkipWhitespace();
+            if (IsAtEnd || !VariableNames.IsNameStart((char)Span[_index]))
+                return null;
+
+            // A reference token checks the next token before its value is read. Consecutive
+            // names extend that lexical lookahead without evaluating the later references.
+            var cursor = (_index, _lastTokenStart);
+            try
+            {
+                if (TryParseReference(out var first))
+                {
+                    var assignment = PeekToken(out _).SequenceEqual("="u8);
+                    while (!IsAtEnd && VariableNames.IsNameStart((char)Span[_index]))
+                    {
+                        if (!TryParseReference(out _))
+                            break;
+                        SkipWhitespace();
+                    }
+                    if (Error == null && IsNextTokenValid())
+                        return IsSuppressed || assignment ? null : Read(this, first);
+                }
+                _parsed = default;
+                return null;
+            }
+            finally
+            {
+                (_index, _lastTokenStart) = cursor;
+            }
+
+            static IEnumerable<ParseStep> Read(Parser<TTarget> parser, ArithmeticReference reference)
+            {
+                yield return parser.Bind(reference, ArithmeticReferenceUse.Read);
+                if (parser._bound == null)
+                    parser._parsed = default;
+            }
         }
 
         private bool TryParseReference(out ArithmeticReference reference)

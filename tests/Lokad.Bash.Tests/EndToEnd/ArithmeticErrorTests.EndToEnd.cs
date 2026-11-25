@@ -7,6 +7,25 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArithmeticErrorTestsEndToEnd
 {
     [Theory]
+    [InlineData("x++ y", "1:4:9", "syntax error in expression", "y")]
+    [InlineData("(x) a[z++]", "1:3:1", "syntax error in expression", "a[z++]")]
+    [InlineData("x++ y 12red", "1:4:0", "value too great for base", "12red")]
+    [InlineData("++x y@", "1:3:0", "syntax error: invalid arithmetic operator", "@")]
+    [InlineData("x++ a[", "1:4:0", "bad array subscript", "a[")]
+    [InlineData("1 || x++ y", "1:3:0", "syntax error in expression", "y")]
+    [InlineData("1 || x++ y@", "1:3:0", "syntax error: invalid arithmetic operator", "@")]
+    public async Task TrailingArithmeticReference_ValidatesAndReadsInEvaluationOrder(
+        string expression, string state, string diagnostic, string token)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            $"x=3; y='z=9'; z=0; a=(8 9)\nlet '{expression}'\nprintf '%s:%s:%s' \"$?\" \"$x\" \"$z\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(state, result.StdOut);
+        Assert.Equal($"line 2: let: {expression}: {diagnostic} (error token is \"{token}\")\n", result.StdErr);
+    }
+
+    [Theory]
     [InlineData("let 'x++++y'", "1:4:8:5", "let: x++++y: syntax error in expression", "++y")]
     [InlineData("((x-- ++ y))", "1:2:8:5", "((: x-- ++ y: syntax error in expression", "++ y")]
     [InlineData("result=$((x++--y))", "1:4:8:5", "x++--y: syntax error in expression", "--y")]

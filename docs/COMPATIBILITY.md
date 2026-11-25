@@ -1195,6 +1195,10 @@ cancellation. Completed arithmetic work consumes no execution allowance.
 A doubled sign before a variable name stays a mutation token in infix position,
 including when blanks separate it from the name. An earlier postfix mutation
 remains applied when the following token causes a syntax error.
+When a value is followed by a reference without an operator, arithmetic checks
+the reference and its following token before reading the binding. A reached
+read can apply arithmetic effects before the enclosing expression reports its
+syntax error. A lexical fault can stop a prefix write before it commits.
 Arithmetic diagnostics report the reached source line and active `source`
 filename. Parser errors preserve the failing operand and token bytes, including
 trailing whitespace and physical LF in arithmetic `for` clauses. Arithmetic
