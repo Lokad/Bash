@@ -104,7 +104,8 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("source --", 2, "source: filename argument required", "source: usage: source filename [arguments]")]
     [InlineData(". -xyz", 2, ".: -x: invalid option", ".: usage: . filename [arguments]")]
     [InlineData("caller 0xno", 2, "caller: 0xno: invalid hex number", "caller: usage: caller [expr]")]
-    public async Task ScriptingUsagePrefixesOnlyTheErrorInTheReachedFile(
+    [InlineData("getopts -xyz spec flag", 2, "getopts: -x: invalid option", "getopts: usage: getopts optstring name [arg ...]")]
+    public async Task BuiltinUsagePrefixesOnlyTheErrorInTheReachedFile(
         string invocation, int line, string diagnostic, string usage)
     {
         await using var host = EndToEndHarness.BuildTree([("/loaded", ":\n" + invocation + " 2>log\n")]);

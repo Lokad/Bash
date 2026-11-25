@@ -1005,6 +1005,8 @@ byte at a time, including bundled flags. A colon after an option byte requires a
 argument. The attached remainder or the next argument is assigned to `OPTARG`,
 including an empty argument. A leading colon selects silent errors. `OPTERR=0`
 suppresses diagnostics while retaining the normal error results.
+An invalid option to the `getopts` builtin reports the reached source location
+on the error line. The usage line has no location.
 `getopts` reads the signed decimal prefix of the stored `OPTIND` and
 `OPTERR` values after skipping leading ASCII whitespace.
 An explicit `OPTIND=1` restarts the scan. A visible `OPTIND` can stay unchanged

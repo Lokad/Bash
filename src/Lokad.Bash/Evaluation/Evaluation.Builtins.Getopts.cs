@@ -24,7 +24,7 @@ public sealed partial class Evaluation
             else if (first.Length > 1 && first.Span[0] == (byte)'-')
             {
                 await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromBytes(first[..2]), ShellValue.FromText(": invalid option")],
-                    diagnostics).ConfigureAwait(false);
+                    diagnostics, GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
                 return await UsageAsync().ConfigureAwait(false);
             }
         }
