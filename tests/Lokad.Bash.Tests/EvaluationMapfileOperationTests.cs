@@ -83,6 +83,105 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData("break", "<first>[callback]<tail:0:three><values:one two>")]
+    [InlineData("continue", "<first>[callback]<second>[callback]<tail:1:><values:three four>")]
+    public async Task ArrayReaderSettlesTheRequestedRecordsBeforeApplyingCallbackLoopControl(string action, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/records", "one\ntwo\nthree\nfour\n");
+        var result = await host.RunAsync($$"""
+            exec 3<records
+            for step in first second; do
+                printf '<%s>' "$step"
+                readarray -u 3 -tn2 -c1 -C 'printf "[callback]"; {{action}}; :' values
+                printf unreachable
+            done
+            IFS= read -r -u 3 tail
+            printf '<tail:%s:%s><values:%s>' "$?" "$tail" "${values[*]}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("break", false, 1, "[callback]")]
+    [InlineData("continue", false, 1, "[callback]")]
+    [InlineData("break", true, 0, "[callback]<tail:three><exit:0:one two>")]
+    public async Task ArrayReaderAppliesErrexitToUntestedLoopControlFailures(
+        string command, bool tested, int status, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/records", "one\ntwo\nthree\n");
+        var action = tested ? $"{command} 0 || :" : $"{command} 0";
+        var result = await host.RunAsync($$"""
+            set -e
+            trap 'printf "<exit:%s:%s>" "$?" "${values[*]-unset}"' EXIT
+            exec 3<records
+            for step in once; do
+                mapfile -u3 -tn2 -c1 -C 'printf "[callback]"; {{action}}; :' values
+                printf unreachable
+            done
+            IFS= read -r -u3 tail
+            printf '<tail:%s>' "$tail"
+            """, CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal($"line 5: {command}: 0: loop count out of range\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MapfileSettlesAnInputBatchAfterCallbackRequestsBreak(bool cancel)
+    {
+        var state = new Eval(Parser.Parse("""
+            values=(prior)
+            for step in once; do
+                mapfile -tn3 -c1 -C 'break; :' values
+                printf unreachable
+            done
+            """));
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = state.EnsureRunning(cancellation.Token);
+        var first = await NextReadAsync(state);
+        Assert.Equal(1, first.Limit);
+        using var firstMemory = Assert.IsAssignableFrom<IMemoryBudget>(first.DestinationBudget).Reserve(512);
+        first.SetResult(ReadResult.Success(Utf8Bytes("one\n"), [], reachedEoF: false));
+
+        var rest = await NextReadAsync(state);
+        Assert.Equal(2, rest.Limit);
+        Assert.Equal(0, firstMemory.Bytes);
+        Assert.Equal(ShellValue.FromText("one"), Assert.Single(state.IndexedArrays["values"]));
+        using var restMemory = Assert.IsAssignableFrom<IMemoryBudget>(rest.DestinationBudget).Reserve(512);
+        if (cancel)
+        {
+            cancellation.Cancel();
+            var next = state.GetNextStep();
+            Assert.False(next.IsCompleted);
+            Assert.Equal(512, restMemory.Bytes);
+            rest.SetResult(ReadResult.Success(Utf8Bytes("two\nthree\n"), [4], reachedEoF: false));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => next);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluation);
+            Assert.Equal(0, restMemory.Bytes);
+            Assert.Equal(ShellValue.FromText("prior"), Assert.Single(state.IndexedArrays["values"]));
+            return;
+        }
+
+        rest.SetResult(ReadResult.Success(Utf8Bytes("two\nthree\n"), [4], reachedEoF: false));
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, restMemory.Bytes);
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(new[] { ShellValue.FromText("one"), ShellValue.FromText("two"), ShellValue.FromText("three") },
+            state.IndexedArrays["values"]);
+    }
+
+    [Theory]
     [InlineData("mixed", "MIXED")]
     [InlineData("UPPER", "UPPER")]
     [InlineData("", "")]

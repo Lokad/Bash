@@ -117,8 +117,12 @@ With `-C`, a batch ends at the next callback record. Earlier records are
 visible during the callback and the current record is stored when it returns.
 The parsed callback uses the active bindings and descriptor frame. The reader
 settles the callback before dispatching more input. Cancellation or failure to
-read or admit input restores the saved target. Explicit flow out of the
-callback carries the completed prefix.
+read or admit input restores the saved target. Pending `break` and `continue`
+flow survives input and assignment settlement, and later batches skip callback
+dispatch. `return` and `exit` leave the reader with the completed prefix.
+Callback commands test loop-control failures with the current errexit policy.
+An untested failure that triggers errexit leaves the reader before storing the
+current record and skips the EXIT action.
 
 `read -a` validates the array destination after consuming its logical record.
 It shares the field scanner with scalar `read` and publishes all split fields

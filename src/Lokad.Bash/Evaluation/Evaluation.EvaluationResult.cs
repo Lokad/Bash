@@ -17,6 +17,7 @@ public partial class Evaluation
         Completion,
         ExtraArguments,
         InvalidLoopCount,
+        ArrayReaderLoopFailure,
         CompoundInitializerSyntax,
         CompoundRedirectionSyntax,
         NestedPipelineReader
@@ -78,6 +79,9 @@ public partial class Evaluation
         /// <summary>Runs EXIT after restoring the inner reader of a direct pipeline builtin.</summary>
         public bool ExitsNestedPipelineReader => Cause == ExitCause.NestedPipelineReader;
 
+        /// <summary>An untested loop-control failure in a generated array-reader callback exits directly.</summary>
+        public bool SkipsExitTrap => Cause == ExitCause.ArrayReaderLoopFailure;
+
         /// <summary>Restores a function's saved options before reaching the EXIT action.</summary>
         public bool RestoresLocalOptions => DiscardsCommandUnit || Cause == ExitCause.InvalidLoopCount;
 
@@ -137,6 +141,9 @@ public partial class Evaluation
 
         public static EvaluationResult InvalidLoopCount(int exitCode) =>
             Exit(exitCode) with { Cause = ExitCause.InvalidLoopCount };
+
+        public static EvaluationResult ExitFromArrayReaderLoopFailure(int exitCode) =>
+            Exit(exitCode) with { Cause = ExitCause.ArrayReaderLoopFailure };
 
         public static EvaluationResult ExitAfterNestedPipelineReader() =>
             Exit(1) with { Cause = ExitCause.NestedPipelineReader };

@@ -190,7 +190,7 @@ public sealed partial class Evaluation
         var status = kind == ExitTrapKind.Completion && result.Flow == FlowControlKind.Exit
             && failure is { Kind: ExpansionFailureKind.ReaderSyntax } readerFailure
                 ? ExitActionStatus(readerFailure) : result.ExitCode;
-        if (_state.Traps is not { } traps || _state.ExitedThroughExec
+        if (result.SkipsExitTrap || _state.Traps is not { } traps || _state.ExitedThroughExec
             || !traps.TryBeginExit(status, useInheritedPipelineAction, out var action))
             return result;
 

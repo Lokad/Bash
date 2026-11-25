@@ -60,6 +60,11 @@ decimal values. Destination indices continue from zero after index 4294967295.
 after trimming the delimiter requested by `-t`. It appends the index and
 record as arguments. The callback sees the earlier assignments before the
 current record is stored and can consume input from the same descriptor.
+If a callback issues loop control, the reader stores the current record and
+finishes the requested input without invoking more callbacks. The requested
+`break` or `continue` takes effect after the reader settles.
+With effective errexit, a reached untested loop-control failure in a callback
+exits before storing the current record and skips EXIT.
 The index is spelled as signed decimal, while the array position uses
 the unsigned index. `-c quantum` accepts positive unsigned 32-bit decimal
 values and defaults to 5,000. Skipped records are excluded from the interval.

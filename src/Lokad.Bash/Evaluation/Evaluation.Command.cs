@@ -80,12 +80,16 @@ public sealed partial class Evaluation
                     UseInheritedPipelineExitAction: false, UnwindsLoadedReader: false })
                 return await RunExitTrapAsync(scope, result, ExitTrapKind.Expansion).ConfigureAwait(false);
         }
-        if (result.Flow == FlowControlKind.None && result.ExitCode != 0)
+        var callbackLoopFlow = scope.InArrayReaderCallback && result.Flow is FlowControlKind.Break or FlowControlKind.Continue;
+        if ((result.Flow == FlowControlKind.None || callbackLoopFlow) && result.ExitCode != 0)
         {
             if (scope.Context.ErrexitIgnored)
                 result = result.WithTestedStatus(true);
             else if (ShouldExitForFailure(result))
             {
+                if (callbackLoopFlow)
+                    return EvaluationResult.ExitFromArrayReaderLoopFailure(result.ExitCode);
+
                 result = EvaluationResult.Exit(scope.InDirectPipelineReader ? 1 : result.ExitCode);
                 if (hasExitAction)
                 {

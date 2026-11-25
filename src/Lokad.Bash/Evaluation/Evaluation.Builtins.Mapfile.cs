@@ -27,6 +27,7 @@ public sealed partial class Evaluation
         uint? origin = null;
         ShellValue? callback = null;
         uint quantum = 5000;
+        EvaluationResult? pendingLoopControl = null;
         var options = new ShortOptionCursor(arguments);
         while (options.TryReadFlag(out var flag))
         {
@@ -107,7 +108,7 @@ public sealed partial class Evaluation
                 var skipping = skip != 0;
                 var remaining = count == 0 ? ReadBatchRecords : count - CollectedCount();
                 // A callback may read the next record from the same descriptor.
-                if (callback.HasValue)
+                if (callback.HasValue && pendingLoopControl == null)
                     remaining = Math.Min(remaining, toCallback);
                 var limit = (int)Math.Min(ReadBatchRecords, skipping ? skip : remaining);
                 // A skipped batch never reaches arithmetic or array publication.
@@ -257,12 +258,15 @@ public sealed partial class Evaluation
         {
             var assignment = StartCallbackAssignment();
             var position = unchecked(origin.GetValueOrDefault() + written);
-            if (--toCallback == 0)
+            if (pendingLoopControl == null && --toCallback == 0)
             {
                 toCallback = quantum;
                 var result = await RunMapfileCallbackAsync(action, unchecked((int)position), value, scope)
                     .ConfigureAwait(false);
-                if (result.Flow != FlowControlKind.None)
+                // The reader completes the requested input before applying loop control.
+                if (result.Flow is FlowControlKind.Break or FlowControlKind.Continue)
+                    pendingLoopControl = result;
+                else if (result.Flow != FlowControlKind.None)
                 {
                     assignment.Commit();
                     return result;
@@ -298,8 +302,12 @@ public sealed partial class Evaluation
             return null;
         }
 
-        Task<EvaluationResult> FinishAsync(int status) => FinalizeResultAsync(
-            EvaluationResult.FromExitCode(diagnostics.Result.IsError ? 1 : status), negated);
+        Task<EvaluationResult> FinishAsync(int status)
+        {
+            var exitCode = diagnostics.Result.IsError ? 1 : status;
+            return FinalizeResultAsync(pendingLoopControl?.WithExitCode(exitCode)
+                ?? EvaluationResult.FromExitCode(exitCode), negated);
+        }
 
         async Task<EvaluationResult> RejectInputAsync()
         {
@@ -355,7 +363,7 @@ public sealed partial class Evaluation
             // Bash evaluates the callback with errexit active even if the mapfile status is tested.
             var context = scope.Context with { SourceMemory = sourceMemory, ErrexitIgnored = false };
             return await EvaluateCommandUnitsAsync(ShellSource.FromBytes(builder.DetachSnapshot()),
-                scope with { Context = context }, ScriptExecutionKind.ArrayReaderCallback)
+                scope with { Context = context, InArrayReaderCallback = true }, ScriptExecutionKind.ArrayReaderCallback)
                 .ConfigureAwait(false);
         }
         finally { sourceMemory.Release(); }
