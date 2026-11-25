@@ -115,6 +115,132 @@ public sealed class CircularDeclarationTestsEndToEnd
         Assert.Equal("rhs\nline 3: warning: first: circular name reference\n", result.StdErr);
     }
 
+    [Fact]
+    public async Task InheritedCircularElementDeclarationCreatesASeparateLocal()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            declare -n first=second second=first
+            f() {
+                command declare 'first[i++]'=value
+                printf '<%s:%s:%s>\n' "$?" "$i" "${first[0]}"
+            }
+            f
+            declare -p first second
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:1:value>\ndeclare -n first=\"second\"\ndeclare -n second=\"first\"\n", result.StdOut);
+        Assert.Equal("line 4: warning: first: circular name reference\nline 4: warning: first: circular name reference\n",
+            result.StdErr);
+    }
+
+    [Fact]
+    public async Task CurrentCircularElementInitializerEvaluatesTheSelectorAndRejectsTheWrite()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; first=outer
+            f() {
+                local -n first=second second=first
+                local 'first[i++]'=$(printf 'rhs\n' >&2; printf value) after=kept
+                printf '<%s:%s:%s>\n' "$?" "$i" "$after"
+                declare -p first second
+            }
+            f
+            declare -p first
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:1:kept>\ndeclare -an first=()\ndeclare -n second=\"first\"\ndeclare -- first=\"outer\"\n", result.StdOut);
+        Assert.Equal<byte>([
+            .. "rhs\nline 4: warning: first: circular name reference\nline 4: warning: first: circular name reference\nline 4: local: `"u8,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            .. "': not a valid identifier\n"u8
+        ], result.Host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task CurrentReadonlyCircularElementDeclarationWithoutInitializerSkipsTheSelector()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -nr first=second; local -n second=first
+                declare 'first[i++]'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p first
+            }
+            f
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0>\ndeclare -anr first=()\n", result.StdOut);
+        Assert.Equal("line 4: warning: first: circular name reference\nline 4: warning: first: circular name reference\n",
+            result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("declare -g", "=", "value")]
+    [InlineData("command declare -ga", "+=", "outervalue")]
+    [InlineData("declare -g +n", "=", "value")]
+    public async Task GlobalElementDeclarationUsesTheBindingBehindAnActiveCycle(string declaration, string operation, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; first=outer
+            f() {
+                local -nr first=second; local -n second=first
+                g() { {{declaration}} 'first[i++]'{{operation}}value; }
+                g
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p first second
+            }
+            f
+            declare -p first
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:1>\ndeclare -nr first=\"second\"\ndeclare -n second=\"first\"\ndeclare -a first=([0]=\"{expected}\")\n",
+            result.StdOut);
+        Assert.Equal("line 4: warning: first: circular name reference\nline 4: warning: first: circular name reference\n",
+            result.StdErr);
+    }
+
+    [Fact]
+    public async Task ClearingGlobalCircularElementNamerefRecreatesItsBinding()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            declare -nr first=second; declare -n second=first
+            declare -g +n 'first[i++]'=value
+            printf '<%s:%s>\n' "$?" "$i"
+            declare -p first second
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:1>\ndeclare -a first=([0]=\"value\")\ndeclare -n second=\"first\"\n", result.StdOut);
+        Assert.Equal("line 3: warning: first: circular name reference\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task GlobalAssociativeElementDeclarationUsesItsKeyBehindAnActiveCycle()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -A first=([key]=old)
+            f() {
+                local -n first=second second=first
+                declare -g 'first[key]'+=value
+                printf '<%s>\n' "$?"
+                declare -p first second
+            }
+            f
+            printf '<%s>\n' "${first[key]}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0>\ndeclare -n first=\"second\"\ndeclare -n second=\"first\"\n<oldvalue>\n", result.StdOut);
+        Assert.Equal("line 4: warning: first: circular name reference\n", result.StdErr);
+    }
+
     [Theory]
     [InlineData("declare -n first=second second=first; declare -gx first=value", false)]
     [InlineData("declare -nr first=second; declare -n second=first; declare -ga first=(value)", true)]

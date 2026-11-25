@@ -207,6 +207,13 @@ reference can leave the same array state. With `+n` on an empty selector,
 the array keeps the nameref flag when the write is rejected. A reference in
 the current frame whose target is missing can declare a separate local for
 that target.
+A local element declaration through an inherited cycle reports the lookup
+warnings and can create a separate local. In the cycle's owning frame, it
+prepares an empty array with the nameref attribute. A name-only declaration
+stops there. A valid indexed initializer evaluates its selector once and
+rejects the write using the indexed array's diagnostic spelling. An explicit
+global element initializer can write to the global declaration behind the
+active cycle while leaving the local references in place.
 A braced whole-value read of the resulting array nameref discards the
 current command unit, including when an operator tests or inspects the
 value. An unbraced read expands to empty when the array is uninitialized.

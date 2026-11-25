@@ -2371,7 +2371,7 @@ public sealed partial class Evaluation : IFileTester
                         }
                     }
                 }
-                else if (local && reference.Kind == VariableReferenceKind.Element && operand.Value != null
+                else if (local && reference.Kind == VariableReferenceKind.Element
                     && functionContext is { } selectorFunction
                     && await TryRejectLocalElementInitializerAsync(reference, operand, selectorFunction, setsNameref: false).ConfigureAwait(false))
                 {
@@ -2497,6 +2497,13 @@ public sealed partial class Evaluation : IFileTester
                         : VariableReference.ForElement(lastTarget.Name, reference.Subscript);
                 }
                 var name = reference.Name;
+                if (assignsGlobalElement && circular)
+                {
+                    // +n replaces the circular global declaration before evaluating the selector.
+                    await ReportCircularNameReferenceAsync(sourceName, declarationScope).ConfigureAwait(false);
+                    targetVars.RecreateDeclarationArray(name,
+                        arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
+                }
                 var existingLocal = declarationScope.Context.FunctionContext?.Locals.Declares(name) == true;
                 var hasIntegerInitializer = options.IntegerChange == DeclarationAttributeChange.Set && operand.Value != null;
                 var rejectsIntegerNamerefInitializer = hasIntegerInitializer && options.Nameref;
@@ -3016,7 +3023,8 @@ public sealed partial class Evaluation : IFileTester
                     if (global && !assignsGlobalElement && bindings?.Contains(elementAttributes.Name) == true)
                         elementAttributes = elementAttributes with { Owner = bindings.SavedVariables };
                     if (!await AwaitWordExpansionAsync(AssignReferencedElementAsync(
-                            elementReference, elementAttributes, elementValue, operand.Operator, assignsGlobalElement, assignmentExport)).ConfigureAwait(false))
+                            elementReference, elementAttributes, elementValue, operand.Operator, assignsGlobalElement,
+                            circular, assignmentExport)).ConfigureAwait(false))
                         break;
                 }
                 else if (!operand.CompoundApplied)
@@ -3246,11 +3254,23 @@ public sealed partial class Evaluation : IFileTester
                 var emptySelector = reference.Subscript.IsEmpty;
                 var clearsNameref = options.NamerefChange == DeclarationAttributeChange.Clear;
                 var existing = function.Locals.Declares(name);
-                if (!setsNameref && !existing)
-                    return false;
                 var hasReference = commandVars.TryGetNameref(name, out var previous);
+                VariableBinding reached = default;
+                var resolved = hasReference && commandVars.TryResolveBinding(name, selectOwner: null, out reached);
+                var circular = hasReference && !resolved;
+                if (circular && !setsNameref)
+                {
+                    await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
+                    await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
+                    if (!existing)
+                        return false;
+                    await PrepareAndRejectNamerefArrayAsync(initialized: true).ConfigureAwait(false);
+                    return true;
+                }
+                if (!setsNameref && (!existing || operand.Value == null))
+                    return false;
                 var prepareTarget = setsNameref && (!existing || !hasReference && commandVars.GetArrayMetadata(name) == null);
-                if (existing && hasReference && commandVars.TryResolveBinding(name, selectOwner: null, out var reached))
+                if (existing && resolved)
                 {
                     if (reached.Reference.Kind == VariableReferenceKind.Name)
                     {
@@ -3291,7 +3311,7 @@ public sealed partial class Evaluation : IFileTester
                     var kind = options.ArrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
                     var readonlyBinding = commandVars.IsReadonlyBinding(name);
                     var initializer = operand.Value.GetValueOrDefault();
-                    var invalidTarget = !setsNameref && !clearsNameref
+                    var invalidTarget = operand.Value.HasValue && !setsNameref && !clearsNameref
                         && !TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out _);
                     var destroysArray = !setsNameref && (kind == ArrayKind.Indexed
                         ? options.IndexedChange == DeclarationAttributeChange.Clear
@@ -3299,6 +3319,8 @@ public sealed partial class Evaluation : IFileTester
                     var applyAttributes = !setsNameref && !invalidTarget && !readonlyBinding && !destroysArray && !conflictingArrayKinds;
                     function.Locals.PrepareRejectedNamerefArray(commandVars, name, kind, initialized,
                         applyAttributes ? GetAttributeChanges(options.ExportChange) : default, Memory);
+                    if (operand.Value == null)
+                        return;
                     if (setsNameref)
                         await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
                     else if (invalidTarget)
@@ -3317,7 +3339,11 @@ public sealed partial class Evaluation : IFileTester
                         var target = await AwaitWordExpansionAsync(WordExpansion.ResolveRejectedNamerefSelectorAsync(reference, executionScope))
                             .ConfigureAwait(false);
                         if (target != null && !HasPendingExpansionError)
-                            await DiagnoseQuotedAsync(operand.Name, "not a valid identifier").ConfigureAwait(false);
+                        {
+                            var subject = circular && kind == ArrayKind.Indexed
+                                ? WordExpansion.IndexedArrayNamerefSpelling : operand.Name;
+                            await DiagnoseQuotedAsync(subject, "not a valid identifier").ConfigureAwait(false);
+                        }
                     }
                 }
             }
@@ -3552,7 +3578,7 @@ public sealed partial class Evaluation : IFileTester
 
             async Task<bool> AssignReferencedElementAsync(
                 VariableReference reference, VariableBinding attributes, ShellValue value, AssignmentOperator operation,
-                bool assignsGlobalElement, DeclarationAttributeChange exportChange)
+                bool assignsGlobalElement, bool circularGlobal, DeclarationAttributeChange exportChange)
             {
                 // Attributes select the declaration binding; element writes use the active caller array.
                 if (!assignsGlobalElement && attributes.Owner.IsReadonly(attributes.Name))
@@ -3567,12 +3593,26 @@ public sealed partial class Evaluation : IFileTester
                 if (prefixNames != null && variables.TryGetNameref(reference.Name, out _)
                     && (prefixNames.Contains(reference.Name) || selectionScope.GetExpansionWriteTarget(reference.Name) == null))
                     variables = commandVars; // Indirect writes stay inside a prefix, including one hiding the nameref itself.
-                VariableBinding? activeBinding = assignsGlobalElement
-                    && variables.TryResolveBinding(reference.Name, selectOwner: null, out var selected) ? selected : null;
+                VariableBinding? activeBinding = null;
+                var indexVariables = commandVars;
+                if (assignsGlobalElement)
+                {
+                    if (variables.TryResolveBinding(reference.Name, selectOwner: null, out var selected))
+                        activeBinding = selected;
+                    else if (declarationScope.Context.TryResolveCircularBinding(reference.Name, variables, out var fallback))
+                    {
+                        await ReportCircularNameReferenceAsync(reference.Name, declarationScope).ConfigureAwait(false);
+                        // Indexed declarations also look up the binding for arithmetic selection.
+                        if (!circularGlobal && !fallback.Owner.AssociativeArrays.ContainsKey(fallback.Name))
+                            await ReportCircularNameReferenceAsync(reference.Name, declarationScope).ConfigureAwait(false);
+                        variables = indexVariables = fallback.Owner;
+                        activeBinding = fallback;
+                    }
+                }
                 var activeUnsetNameref = activeBinding is { IsUnsetNameref: true };
                 // Prefixes affect selector arithmetic and negative-index bounds, not the stored value used by +=.
                 var target = await WordExpansion.ResolveDeclarationReferenceAsync(
-                    reference, selectionScope, variables, commandVars).ConfigureAwait(false);
+                    reference, selectionScope, variables, indexVariables).ConfigureAwait(false);
                 if (HasPendingExpansionError)
                     return false;
                 if (target is { Name.IsEmpty: true }

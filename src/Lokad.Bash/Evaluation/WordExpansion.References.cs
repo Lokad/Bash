@@ -10,7 +10,7 @@ namespace Lokad.Bash.Evaluation;
 internal static partial class WordExpansion
 {
     // The two Bash 5.2 references expose the empty indexed array's signed maximum index in this position.
-    private static readonly ShellValue IndexedArrayNamerefSpelling =
+    internal static readonly ShellValue IndexedArrayNamerefSpelling =
         ShellValue.FromBytes(new byte[] { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff });
 
     internal enum DeclarationWrite { Ordinary, ActiveGlobalIndexed, ReadonlyInitializer }
