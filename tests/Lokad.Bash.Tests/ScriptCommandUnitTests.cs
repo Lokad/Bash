@@ -613,7 +613,8 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(status, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
         Assert.Equal("line 2: syntax error: arithmetic expression required\n"
-            + "line 2: syntax error: `((i=7))'\n", host.StandardError.TextContent);
+            + "line 2: syntax error: `((i=7))'\n"
+            + "line 2: unexpected EOF while looking for matching `\"'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -632,9 +633,34 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("line 1: syntax error: arithmetic expression required\n"
-            + "line 1: syntax error: `((i=7))'\n", host.StandardError.TextContent);
+            + "line 1: syntax error: `((i=7))'\n"
+            + "line 1: unexpected EOF while looking for matching `\"'\n", host.StandardError.TextContent);
         Assert.Equal("prefix", host.ReadFile("/diag"));
         Assert.Equal("diag", Assert.Single(host.CaptureEntries()).Key);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("\"", "line 3: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("\"\n: \"x\"", "line 4: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("\"\n: \"", "")]
+    [InlineData("\"\n: \"x`", "line 4: unexpected EOF while looking for matching ``'\n")]
+    [InlineData("'", "line 3: unexpected EOF while looking for matching `''\n")]
+    [InlineData("\n: \"", "")]
+    public async Task QuotedArithmeticForRecoveryReportsTheUnclosedSuffixDelimiter(string suffix, string diagnostic)
+    {
+        var script = "value=\"$(for ((1;)); do\n: >body\ndone)" + suffix;
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("line 1: syntax error: arithmetic expression required\n"
+            + "line 1: syntax error: `((1;))'\n" + diagnostic, host.StandardError.TextContent);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Empty(host.CaptureEntries());
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
     }

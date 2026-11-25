@@ -218,11 +218,13 @@ public static class Parser
             {
                 var prefix = tokenizer.Error == null && command != null && tokenizer.HereDocuments is not { HasPending: true }
                     ? CompleteHereDocuments(tokenizer, command) : null;
+                var header = quotedFailure.ArithmeticForHeader;
                 yield return new CommandUnitParseResult.Failed(quotedFailure)
                 {
                     CompletedPrefix = prefix,
                     Locations = prefix != null ? tokenizer.Locations : null,
-                    DiagnosticLine = quotedFailure.ArithmeticForHeader is { } header ? tokenizer.GetLine(header.Start) : 0,
+                    DiagnosticLine = header is { } reached ? tokenizer.GetLine(reached.Start) : 0,
+                    QuotedRecovery = header is { } recovery ? tokenizer.ReadQuotedRecoveryDelimiter(recovery.BodyEnd) : null,
                     ReadDiagnostics = diagnostics
                 };
                 yield break;

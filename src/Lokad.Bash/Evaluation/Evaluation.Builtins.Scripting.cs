@@ -384,6 +384,9 @@ public sealed partial class Evaluation
                     }
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
+                    if (failedUnit.QuotedRecovery is { } recovery)
+                        await ReportUnclosedDelimiterAsync(recovery.Delimiter, lineOffset + recovery.Line, path, diagnosticOrigin)
+                            .ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)
                     {
                         PreparePipelineStatusStorage(1);

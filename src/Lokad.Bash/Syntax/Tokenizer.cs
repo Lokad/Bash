@@ -326,9 +326,33 @@ internal sealed class Tokenizer
         {
             ArithmeticForHeader = TrackUnexpectedTokens
                 ? new ArithmeticForHeaderError(ReadArithmeticDiagnosticExpression(token),
-                    SecondArithmeticOpener(start).Source.Start.Value, hasExtraSeparator)
+                    SecondArithmeticOpener(start).Source.Start.Value, ConsumedPosition, hasExtraSeparator)
                 : null
         });
+    }
+
+    internal (UnclosedDelimiter Delimiter, int Line)? ReadQuotedRecoveryDelimiter(int bodyEnd)
+    {
+        // The reader discards tokens after the loop body through the next unquoted newline.
+        // A quote that closed the original word can now open a new one.
+        using var memory = _scanContext.SyntaxMemory is { } syntax ? new MemoryCapacity(syntax.Budget, 0) : null;
+        var context = new ShellScanContext
+        {
+            LegacyOrigin = _scanContext.LegacyOrigin,
+            ReadsCommandString = _scanContext.ReadsCommandString,
+            ScriptInput = _input,
+            SyntaxMemory = memory
+        };
+        var suffix = new Tokenizer(_input, bodyEnd, context)
+        {
+            AllowEofHereDocuments = AllowEofHereDocuments,
+            TrackCommandLocations = true,
+            TrackUnexpectedTokens = true
+        };
+        while (suffix.NextTokenCore().Kind is not (TokenKind.Newline or TokenKind.EndOfInput)) { }
+        return suffix.Failure?.UnclosedDelimiter is { } delimiter
+            ? (delimiter, GetLine(delimiter.ReadPosition) + delimiter.LineAdvance)
+            : null;
     }
 
     private ShellSource ReadArithmeticDiagnosticExpression(Token token)

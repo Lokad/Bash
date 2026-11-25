@@ -372,13 +372,13 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Theory]
-    [InlineData("\n", "for ((i=7)); do : >loop; break; done", "2:early/EXIT:2", true, 5)]
-    [InlineData("; ", "for ((i=7)); do : >loop; break; done", "2:/EXIT:2", false, 3)]
-    [InlineData("\n", "inner=$(for ((i=7)); do : >loop; break; done)", "1:early/EXIT:1", true, 5)]
-    [InlineData("\n", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "2:early/EXIT:2", true, 5)]
-    [InlineData("; ", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "0:early/EXIT:0", true, 3)]
+    [InlineData("\n", "for ((i=7)); do : >loop; break; done", "2:early/EXIT:2", true, 5, false)]
+    [InlineData("; ", "for ((i=7)); do : >loop; break; done", "2:/EXIT:2", false, 3, false)]
+    [InlineData("\n", "inner=$(for ((i=7)); do : >loop; break; done)", "1:early/EXIT:1", true, 5, false)]
+    [InlineData("\n", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "2:early/EXIT:2", true, 5, true)]
+    [InlineData("; ", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "0:early/EXIT:0", true, 3, true)]
     public async Task FailedBacktickCaptureKeepsEarlierCompleteUnits(
-        string separator, string malformed, string output, bool earlierUnit, int line)
+        string separator, string malformed, string output, bool earlierUnit, int line, bool quoteRecovery)
     {
         var script = "value=`trap 'printf \"/EXIT:%s\" \"$?\"' EXIT\nprintf early; : >early"
             + separator + malformed + "`\nprintf '%s:%s' \"$?\" \"$value\"";
@@ -394,8 +394,11 @@ public sealed class CommandSubstitutionSyntaxTests
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(output, host.StandardOutput.TextContent);
-            Assert.Equal($"command substitution: line {line}: syntax error: arithmetic expression required\n"
-                + $"command substitution: line {line}: syntax error: `((i=7))'\n", host.StandardError.TextContent);
+            var diagnostics = $"command substitution: line {line}: syntax error: arithmetic expression required\n"
+                + $"command substitution: line {line}: syntax error: `((i=7))'\n";
+            if (quoteRecovery)
+                diagnostics += $"command substitution: line {line}: unexpected EOF while looking for matching `\"'\n";
+            Assert.Equal(diagnostics, host.StandardError.TextContent);
             Assert.Equal(earlierUnit ? new[] { "early" } : [], host.CaptureEntries().Keys);
             Assert.Equal(0, host.OpenFileCount);
             if (!prepared)
