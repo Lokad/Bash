@@ -449,7 +449,7 @@ public sealed class EvaluationCommandResolutionTestsEndToEnd
             $"{invocation} 3>/out; echo marker >&3; true");
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal(expectedContent.Length == 0 ? "3: Bad file descriptor\n" : string.Empty, result.StdErr);
+        Assert.Equal(expectedContent.Length == 0 ? "line 1: 3: Bad file descriptor\n" : string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expectedContent, await EndToEndHarness.ReadFileAsync(result.Host, "/out"));
     }

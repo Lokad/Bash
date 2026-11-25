@@ -497,6 +497,9 @@ same host handle. An open destination keeps the source close temporary unless
 `exec` preserves it. Child moves retain their own bindings. Source handles retire
 through the ordinary alias and cleanup path after their last reference.
 Invalid descriptor words report shell failures through the active descriptor map.
+Closed descriptor diagnostics take their location from the reached redirection.
+Literal numbers and the selected operand spelling are formatted without
+repeating expansion.
 Ambiguity diagnostics use the reached stderr mapping before the frame is restored.
 Their expansion preserves direct substitution spelling and runs even when stderr
 is closed. Diagnostic bytes remain admitted through completion of the write.

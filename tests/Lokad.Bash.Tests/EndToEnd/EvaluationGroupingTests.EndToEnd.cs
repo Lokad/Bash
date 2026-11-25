@@ -144,7 +144,7 @@ public sealed class EvaluationGroupingTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("isolated\n", result.StdOut);
-        Assert.Equal("3: Bad file descriptor\n", result.StdErr);
+        Assert.Equal("line 1: 3: Bad file descriptor\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(string.Empty, await EndToEndHarness.ReadFileAsync(result.Host, "/out"));
     }

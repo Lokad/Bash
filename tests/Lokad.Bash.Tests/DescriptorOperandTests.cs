@@ -103,12 +103,12 @@ public sealed class DescriptorOperandTests
         var result = await host.RunAsync("x=; : " + redirection, CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal(diagnosticOperand + ": Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: " + diagnosticOperand + ": Bad file descriptor\n", host.StandardError.TextContent);
     }
 
     [Theory]
-    [InlineData("", "3: Bad file descriptor\n")]
-    [InlineData("3>&1 ", "redirection error: cannot duplicate fd: Bad file descriptor\n3: Bad file descriptor\n")]
+    [InlineData("", "line 1: 3: Bad file descriptor\n")]
+    [InlineData("3>&1 ", "redirection error: cannot duplicate fd: Bad file descriptor\nline 1: 3: Bad file descriptor\n")]
     public async Task EmptyMoveReportsWhetherTheDestinationWasOpen(string earlier, string error)
     {
         await using var host = new TestHost();
@@ -124,10 +124,10 @@ public sealed class DescriptorOperandTests
     }
 
     [Theory]
-    [InlineData(": >&\"$x\"- | cat", "1: Bad file descriptor\n")]
-    [InlineData("{ : >&\"$x\"-; } | cat", "redirection error: cannot duplicate fd: Bad file descriptor\n1: Bad file descriptor\n")]
-    [InlineData("(printf skipped) >&\"$x\"-", "1: Bad file descriptor\n")]
-    [InlineData("exec cat >&\"$x\"-", "redirection error: cannot duplicate fd: Bad file descriptor\n1: Bad file descriptor\n")]
+    [InlineData(": >&\"$x\"- | cat", "line 1: 1: Bad file descriptor\n")]
+    [InlineData("{ : >&\"$x\"-; } | cat", "redirection error: cannot duplicate fd: Bad file descriptor\nline 1: 1: Bad file descriptor\n")]
+    [InlineData("(printf skipped) >&\"$x\"-", "line 1: 1: Bad file descriptor\n")]
+    [InlineData("exec cat >&\"$x\"-", "redirection error: cannot duplicate fd: Bad file descriptor\nline 1: 1: Bad file descriptor\n")]
     public async Task EmptyMoveReportsTheReachedCommandBoundary(string command, string error)
     {
         await using var host = new TestHost();
@@ -156,6 +156,55 @@ public sealed class DescriptorOperandTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("4>&3-", "3")]
+    [InlineData("4>&\"$closed\"-", "4")]
+    public async Task ClosedMoveReportsTheSourceLocationAndOperandKind(string redirection, string label)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", $"closed=0003\n: 2>report {redirection} >unreached\n");
+        var result = await host.RunAsync("exec 3>initial 4>target; exec 3>&-; source ./body", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./body: redirection error: cannot duplicate fd: Bad file descriptor\n"
+            + $"./body: line 2: {label}: Bad file descriptor\n", host.ReadFile("/report"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/unreached"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ClosedDescriptorWordUsesItsSpellingAfterOneExpansion()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            i=0
+            : 2>report >&"$((i++ + 3))"
+            printf '%s:%s' "$?" "$i"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:1", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 2: \"$((i++ + 3))\": Bad file descriptor\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ClosedDescriptorInExitActionUsesTheActionLine()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            trap 'printf handler >&2; printf skipped >&3' EXIT
+            :
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal("handlerline 1: 3: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task MoveWithMultipleFieldsClosesAndRestoresTheDestination()
     {
@@ -167,7 +216,7 @@ public sealed class DescriptorOperandTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal("3: Bad file descriptor\n", host.ReadFile("/error"));
+        Assert.Equal("line 1: 3: Bad file descriptor\n", host.ReadFile("/error"));
         Assert.Equal("outer", host.ReadFile("/out"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -243,13 +292,13 @@ public sealed class DescriptorOperandTests
     }
 
     [Theory]
-    [InlineData(": 4>&3-", "alias", 1, "3: Bad file descriptor\n")]
-    [InlineData(": 4>&3- 3>&4", "alias", 1, "3: Bad file descriptor\n")]
+    [InlineData(": 4>&3-", "alias", 1, "line 1: 3: Bad file descriptor\n")]
+    [InlineData(": 4>&3- 3>&4", "alias", 1, "line 1: 3: Bad file descriptor\n")]
     [InlineData(": 3>&5 4>&3-", "afteralias", 0, "")]
-    [InlineData(": 3>&3 4>&3-", "alias", 1, "3: Bad file descriptor\n")]
+    [InlineData(": 3>&3 4>&3-", "alias", 1, "line 1: 3: Bad file descriptor\n")]
     [InlineData("exec 4>&5; : 4>&3-", "afteralias", 0, "")]
     [InlineData("exec 3>&3-", "afteralias", 0, "")]
-    [InlineData(": 4>&3- 4>&99", "alias", 1, "99: Bad file descriptor\n3: Bad file descriptor\n")]
+    [InlineData(": 4>&3- 4>&99", "alias", 1, "line 1: 99: Bad file descriptor\nline 1: 3: Bad file descriptor\n")]
     [InlineData("( : ) 4>&3-", "afteralias", 0, "")]
     [InlineData("cat /dev/null 4>&3-", "afteralias", 0, "")]
     public async Task MoveRestoresOnlySavedBindings(string command, string file, int writeStatus, string error)
@@ -276,7 +325,7 @@ public sealed class DescriptorOperandTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("", host.StandardOutput.TextContent);
-        Assert.Equal("3: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: 3: Bad file descriptor\n", host.StandardError.TextContent);
         Assert.Equal("after", host.ReadFile("/out"));
         Assert.Equal(0, host.OpenFileCount);
     }

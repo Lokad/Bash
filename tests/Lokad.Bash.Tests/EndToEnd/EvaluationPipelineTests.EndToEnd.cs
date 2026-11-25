@@ -128,7 +128,7 @@ public sealed class EvaluationPipelineTestsEndToEnd
         Assert.True(host.StandardOutput.Content.IsEmpty);
         Assert.True(host.StandardError.Content.IsEmpty);
         Assert.Equal("", host.ReadFile("/before"));
-        Assert.Equal("99: Bad file descriptor\n", host.ReadFile("/err"));
+        Assert.Equal("line 1: 99: Bad file descriptor\n", host.ReadFile("/err"));
         Assert.False(host.FileExists("/after"));
         Assert.Equal(0, host.OpenFileCount);
     }

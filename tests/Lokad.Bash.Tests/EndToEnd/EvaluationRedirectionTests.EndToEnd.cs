@@ -372,7 +372,7 @@ public sealed class EvaluationRedirectionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("status:1\n", result.StdOut);
-        Assert.Equal("3: Bad file descriptor\n", result.StdErr);
+        Assert.Equal("line 3: 3: Bad file descriptor\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -383,7 +383,7 @@ public sealed class EvaluationRedirectionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("status:1\n", result.StdOut);
-        Assert.Equal("3: Bad file descriptor\n", result.StdErr);
+        Assert.Equal("line 3: 3: Bad file descriptor\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -394,7 +394,7 @@ public sealed class EvaluationRedirectionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("status:1\n", result.StdOut);
-        Assert.Equal("3: Bad file descriptor\n", result.StdErr);
+        Assert.Equal("line 3: 3: Bad file descriptor\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("old\n", await EndToEndHarness.ReadFileAsync(result.Host, "/out"));
     }
@@ -408,7 +408,7 @@ public sealed class EvaluationRedirectionTestsEndToEnd
         Assert.Equal("status:1\n", result.StdOut);
         Assert.Equal("after\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("3: Bad file descriptor\n", await EndToEndHarness.ReadFileAsync(result.Host, "/errors"));
+        Assert.Equal("line 2: 3: Bad file descriptor\n", await EndToEndHarness.ReadFileAsync(result.Host, "/errors"));
     }
 
     [Fact]

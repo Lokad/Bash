@@ -3854,11 +3854,11 @@ public sealed partial class Evaluation : IFileTester
         WriteOperationDiagnosticAsync(descriptor, variable, string.Empty, path: null,
             new OperationError("cannot assign fd to variable\n"), GetBuiltinDiagnosticPrefix(context));
 
-    internal async Task WriteEmptyDescriptorDiagnosticAsync(FileDescriptor descriptor, LogicalDescriptor? destination,
-        bool reportDuplication, EvaluationContext context)
+    internal async Task WriteBadDescriptorDiagnosticAsync(FileDescriptor descriptor, LogicalDescriptor? label,
+        Word? spelling, bool reportDuplication, EvaluationContext context)
     {
         var path = context.DiagnosticPath;
-        var error = new OperationError("Bad file descriptor\n");
+        var error = OperationError.BadFileDescriptor;
         if (reportDuplication)
         {
             await WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, "redirection error: cannot duplicate fd: ", path: null,
@@ -3866,9 +3866,14 @@ public sealed partial class Evaluation : IFileTester
                 .ConfigureAwait(false);
         }
         var line = context.Coordinates.RedirectionOpenLine ?? context.Coordinates.Line;
-        var prefix = new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, line == 0 ? null : line);
-        await WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, destination?.ToString() ?? string.Empty,
-            error, prefix).ConfigureAwait(false);
+        var prefix = line == 0 ? new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.Script, line: null)
+            : new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, line);
+        if (spelling != null)
+            await WriteRedirectionSpellingDiagnosticAsync(descriptor, spelling, ShellValue.FromText(error.MessageWithoutTerminator),
+                prefix).ConfigureAwait(false);
+        else
+            await WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, label?.ToString() ?? string.Empty,
+                error, prefix).ConfigureAwait(false);
     }
 
     private Task WriteOperationDiagnosticAsync(FileDescriptor descriptor, ShellValue name, string prefix, string? path,
@@ -4726,6 +4731,21 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Writes one diagnostic to the descriptor reached during redirection.</summary>
     internal Task WriteRedirectionDiagnosticAsync(FileDescriptor descriptor, ShellValue name, ShellValue message) =>
         WriteDiagnosticAsync(descriptor, [name], [message], scope: null);
+
+    internal Task WriteRedirectionSpellingDiagnosticAsync(FileDescriptor descriptor, Word target, ShellValue detail) =>
+        WriteRedirectionSpellingDiagnosticAsync(descriptor, target, detail, default);
+
+    private async Task WriteRedirectionSpellingDiagnosticAsync(
+        FileDescriptor descriptor, Word target, ShellValue detail, SyntaxDiagnosticPrefix prefix)
+    {
+        using var diagnostic = new ByteMemoryBuilder(0, Memory.Budget);
+        prefix.AppendTo(diagnostic);
+        if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, Memory.Budget, _cancellationToken))
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        diagnostic.Append(": "u8).Append(detail.Bytes).Append((byte)'\n');
+        await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
+    }
 
     private Task<DescriptorWriteResult> WriteDiagnosticAsync(FileDescriptor descriptor, ReadOnlySpan<ShellValue> name,
         ReadOnlySpan<ShellValue> message, BuiltinDiagnosticScope? scope) =>

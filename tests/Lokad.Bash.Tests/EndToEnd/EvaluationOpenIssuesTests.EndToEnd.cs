@@ -72,7 +72,7 @@ public sealed class EvaluationOpenIssuesTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("before\nother\n", result.StdOut);
-        Assert.Equal("3: Bad file descriptor\n", result.StdErr);
+        Assert.Equal("line 5: 3: Bad file descriptor\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("before\n", await EndToEndHarness.ReadFileAsync(result.Host, "/out"));
         Assert.Equal("other\n", await EndToEndHarness.ReadFileAsync(result.Host, "/other"));

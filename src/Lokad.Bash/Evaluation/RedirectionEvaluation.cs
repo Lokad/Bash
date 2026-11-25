@@ -216,7 +216,8 @@ internal sealed class RedirectionEvaluation
         var move = redirection.MovesDescriptor;
         var target = redirection.DescriptorOperand;
         if (move && target.Parts.Count == 0)
-            return await RejectEmptyDescriptorAsync(scope, targetDescriptor, allocate).ConfigureAwait(false);
+            return await RejectBadDescriptorAsync(scope, redirection, targetDescriptor, sourceDescriptor: null)
+                .ConfigureAwait(false);
         var (fieldCount, sourceWord) = await scope.Effects.ExpandRedirectionFieldsAsync(target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
         if (fieldCount != 1 && !move)
@@ -233,7 +234,8 @@ internal sealed class RedirectionEvaluation
         }
 
         if ((move || allocate) && sourceWord.Length == 0)
-            return await RejectEmptyDescriptorAsync(scope, targetDescriptor, allocate).ConfigureAwait(false);
+            return await RejectBadDescriptorAsync(scope, redirection, targetDescriptor, sourceDescriptor: null)
+                .ConfigureAwait(false);
 
         if (allocate && !_descriptorTable.TryFindAvailableDescriptor(out targetDescriptor))
         {
@@ -244,18 +246,8 @@ internal sealed class RedirectionEvaluation
         if (!LogicalDescriptor.TryParse(sourceWord.AsSpan(), out var sourceDescriptor))
         {
             if (sourceWord.AsSpan().IndexOfAnyExceptInRange('0', '9') < 0)
-            {
-                if (!allocate && !move && targetDescriptor.Number == redirection.DefaultFileDescriptor)
-                {
-                    var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
-                    if (!standardError.IsClosed)
-                        await WriteTargetSpellingDiagnosticAsync(scope, standardError, target,
-                            ShellValue.FromText("Bad file descriptor")).ConfigureAwait(false);
-                    scope.Effects.SetExpansionError(1);
-                }
-                else await ReportFailureAsync(scope, new OperationError($"{targetDescriptor}: Bad file descriptor\n")).ConfigureAwait(false);
-                return RedirectionOutcome.Failure;
-            }
+                return await RejectBadDescriptorAsync(scope, redirection, targetDescriptor, sourceDescriptor: null)
+                    .ConfigureAwait(false);
             if (move || redirection.Kind != RedirectionKind.DuplicateOutput || targetDescriptor != LogicalDescriptor.StdOut)
             {
                 await ReportAmbiguousRedirectAsync(scope, target).ConfigureAwait(false);
@@ -279,11 +271,8 @@ internal sealed class RedirectionEvaluation
         var sourceBinding = _descriptorTable.ResolveBinding(sourceDescriptor);
         var resolvedSource = sourceBinding.Handle;
         if (resolvedSource.IsClosed)
-        {
-            await ReportFailureAsync(scope, new OperationError($"{sourceDescriptor}: Bad file descriptor\n"))
+            return await RejectBadDescriptorAsync(scope, redirection, targetDescriptor, sourceDescriptor)
                 .ConfigureAwait(false);
-            return RedirectionOutcome.Failure;
-        }
 
         var previouslyTouched = _touchedDescriptors.Contains(targetDescriptor);
         var consumeSource = move && !allocate && persistence == RedirectionPersistence.AllocationsAndMoves
@@ -307,20 +296,28 @@ internal sealed class RedirectionEvaluation
             await BindAllocatedDescriptorAsync(scope, redirection.VariableName,
                 targetDescriptor, sourceBinding, previouslyTouched, persistence != RedirectionPersistence.None).ConfigureAwait(false);
         return RedirectionOutcome.Success;
-
     }
 
-    private async Task<RedirectionOutcome> RejectEmptyDescriptorAsync(
-        ScopedEvaluation scope, LogicalDescriptor targetDescriptor, bool allocate)
+    private async Task<RedirectionOutcome> RejectBadDescriptorAsync(ScopedEvaluation scope, Redirection redirection,
+        LogicalDescriptor targetDescriptor, LogicalDescriptor? sourceDescriptor)
     {
         var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
         if (!standardError.IsClosed)
         {
-            // A named allocation has no destination number until its source is
-            // valid. An ordinary move only saves the source if the target is open.
-            var reportDuplication = allocate || _reportMoveRestorationFailure && !_descriptorTable.Resolve(targetDescriptor).IsClosed;
-            await scope.Effects.WriteEmptyDescriptorDiagnosticAsync(standardError, allocate ? null : targetDescriptor,
-                reportDuplication, scope.Context).ConfigureAwait(false);
+            var allocate = redirection.VariableName.Length != 0;
+            var move = redirection.MovesDescriptor;
+            LogicalDescriptor? label = allocate ? null : targetDescriptor;
+            Word? spelling = null;
+            if (sourceDescriptor.HasValue && (allocate || redirection.TryGetLiteralDescriptor(out _)))
+                label = sourceDescriptor;
+            else if (!allocate && !move && targetDescriptor.Number == redirection.DefaultFileDescriptor)
+                spelling = redirection.DescriptorOperand;
+
+            // A restorable move saves the source when the destination is open.
+            var reportDuplication = allocate || move && _reportMoveRestorationFailure
+                && !_descriptorTable.Resolve(targetDescriptor).IsClosed;
+            await scope.Effects.WriteBadDescriptorDiagnosticAsync(standardError, label, spelling, reportDuplication,
+                scope.Context).ConfigureAwait(false);
         }
         scope.Effects.SetExpansionError(1);
         return RedirectionOutcome.Failure;
@@ -460,22 +457,10 @@ internal sealed class RedirectionEvaluation
             if (field is { } value)
                 await scope.Effects.WriteRedirectionDiagnosticAsync(standardError, value,
                     ShellValue.FromText("ambiguous redirect")).ConfigureAwait(false);
-            else await WriteTargetSpellingDiagnosticAsync(scope, standardError, target,
+            else await scope.Effects.WriteRedirectionSpellingDiagnosticAsync(standardError, target,
                 ShellValue.FromText("ambiguous redirect")).ConfigureAwait(false);
         }
         scope.Effects.SetExpansionError(1);
-    }
-
-    private static async Task WriteTargetSpellingDiagnosticAsync(ScopedEvaluation scope,
-        FileDescriptor standardError, Word target, ShellValue detail)
-    {
-        using var diagnostic = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
-        if (!FunctionDefinitionFormatter.TryAppendWordSource(target, diagnostic, scope.Effects.Memory.Budget,
-                scope.Effects.CancellationToken))
-            throw new ByteMemoryBuilder.LimitExceededException();
-
-        diagnostic.Append(": "u8).Append(detail.Bytes).Append((byte)'\n');
-        await scope.Effects.ExecuteWriteAsync(standardError, diagnostic.ToMemory()).ConfigureAwait(false);
     }
 
     private void SetDescriptor(ScopedEvaluation scope, LogicalDescriptor logicalDescriptor, DescriptorBinding binding)

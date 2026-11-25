@@ -91,7 +91,7 @@ public sealed class DescriptorOwnershipLifetimeTests
 
     [Theory]
     [InlineData("", "")]
-    [InlineData(" 7>&99", "99: Bad file descriptor\n")]
+    [InlineData(" 7>&99", "line 1: 99: Bad file descriptor\n")]
     public async Task ConsumedHandleClosesBeforeTheNextCommandBegins(string laterRedirection, string error)
     {
         var governor = new MemoryGovernor(1024 * 1024);

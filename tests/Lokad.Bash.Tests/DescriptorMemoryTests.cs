@@ -450,7 +450,7 @@ public sealed class DescriptorMemoryTests
 
         Assert.Equal(0, (await running.WaitAsync(deadline.Token)).ExitCode);
         Assert.Equal("|1|:1:", host.StandardOutput.TextContent);
-        Assert.Equal("3: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal("line 4: 3: Bad file descriptor\n", host.StandardError.TextContent);
         Assert.Empty(host.ReadFile("/one"));
         Assert.Empty(host.ReadFile("/two"));
         Assert.Contains("shared memory budget exhausted", host.ReadFile("/error"));
