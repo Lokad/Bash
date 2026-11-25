@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
-using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -33,13 +32,13 @@ public sealed partial class Evaluation
             // Bash accepts leading C whitespace, but only space/tab after the number.
             if (!TryParseControlNumber(operand, out var status))
             {
-                await ReportControlDiagnosticAsync([ShellValue.FromText("return")],
-                    [operand, ShellValue.FromText(": numeric argument required")], scope)
+                await ReportBuiltinDiagnosticAsync([ShellValue.FromText("return")],
+                    [operand, ShellValue.FromText(": numeric argument required")], scope.Context)
                     .ConfigureAwait(false);
                 exitCode = 2;
             }
             else if (words.Count - firstOperand > 1)
-                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("return"), scope).ConfigureAwait(false);
+                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("return"), scope.Context).ConfigureAwait(false);
             else
             {
                 exitCode = (int)(status & 255);
@@ -48,16 +47,8 @@ public sealed partial class Evaluation
 
         if (scope.Context.ReturnTarget == ReturnTargetKind.None)
         {
-            var name = ShellValue.FromText("return");
-            var message = ShellValue.FromText("can only `return' from a function or sourced script");
-            if (_state.Traps?.ExitTrapStatus.HasValue != true)
-                await ReportControlDiagnosticAsync([name], [message], scope).ConfigureAwait(false);
-            else if (_builtinDiagnostics is not { Result.CanAcceptMore: false })
-            {
-                var prefix = new SyntaxDiagnosticPrefix(scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine,
-                    Math.Max(1, scope.Context.Coordinates.Line));
-                await WriteDiagnosticAsync(GetStdErrDescriptor(), [name], [message], _builtinDiagnostics, prefix).ConfigureAwait(false);
-            }
+            await ReportBuiltinDiagnosticAsync(ShellValue.FromText("return"),
+                "can only `return' from a function or sourced script", scope.Context).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
 
@@ -74,8 +65,8 @@ public sealed partial class Evaluation
         var name = ShellValue.FromText(commandName);
         if (scope.Context.LoopDepth == 0)
         {
-            await ReportControlDiagnosticAsync([name],
-                [ShellValue.FromText("only meaningful in a `for', `while', or `until' loop")], scope).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync(name,
+                "only meaningful in a `for', `while', or `until' loop", scope.Context).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
         }
         var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
@@ -85,18 +76,18 @@ public sealed partial class Evaluation
             if (!TryParseControlNumber(words[first], out count))
             {
                 var status = (_state.LastExitCode ?? 0) | 128;
-                await ReportControlDiagnosticAsync([name], [words[first], ShellValue.FromText(": numeric argument required")], scope)
+                await ReportBuiltinDiagnosticAsync([name], [words[first], ShellValue.FromText(": numeric argument required")], scope.Context)
                     .ConfigureAwait(false);
                 // Use the reached binding and the simple command's admitted status storage.
                 scope.Variables.SetPipelineStatuses([status], scope.Context, _cancellationToken);
                 return EvaluationResult.InvalidLoopCount(status);
             }
             if (words.Count - first > 1)
-                return await DiscardForExtraControlArgumentsAsync(name, scope).ConfigureAwait(false);
+                return await DiscardForExtraControlArgumentsAsync(name, scope.Context).ConfigureAwait(false);
             if (count <= 0)
             {
                 // Bash reports the first operand, including a leading option terminator.
-                await ReportControlDiagnosticAsync([name], [words[1], ShellValue.FromText(": loop count out of range")], scope)
+                await ReportBuiltinDiagnosticAsync([name], [words[1], ShellValue.FromText(": loop count out of range")], scope.Context)
                     .ConfigureAwait(false);
                 // Both builtins abandon every active loop after a nonpositive count.
                 return await FinalizeResultAsync(EvaluationResult.Break(scope.Context.LoopDepth, 1), negated).ConfigureAwait(false);
@@ -119,13 +110,13 @@ public sealed partial class Evaluation
         {
             if (!TryParseControlNumber(words[first], out var status))
             {
-                await ReportControlDiagnosticAsync([ShellValue.FromText("exit")],
-                    [words[first], ShellValue.FromText(": numeric argument required")], scope)
+                await ReportBuiltinDiagnosticAsync([ShellValue.FromText("exit")],
+                    [words[first], ShellValue.FromText(": numeric argument required")], scope.Context)
                     .ConfigureAwait(false);
                 return await CompleteExitAsync(2).ConfigureAwait(false);
             }
             if (words.Count - first > 1)
-                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("exit"), scope).ConfigureAwait(false);
+                return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("exit"), scope.Context).ConfigureAwait(false);
             exitCode = (int)(status & 255);
         }
         return await CompleteExitAsync(exitCode).ConfigureAwait(false);
@@ -140,15 +131,11 @@ public sealed partial class Evaluation
         }
     }
 
-    private async Task<EvaluationResult> DiscardForExtraControlArgumentsAsync(ShellValue command, ScopedEvaluation scope)
+    private async Task<EvaluationResult> DiscardForExtraControlArgumentsAsync(ShellValue command, EvaluationContext context)
     {
-        await ReportControlDiagnosticAsync([command], [ShellValue.FromText("too many arguments")], scope).ConfigureAwait(false);
+        await ReportBuiltinDiagnosticAsync(command, "too many arguments", context).ConfigureAwait(false);
         return EvaluationResult.DiscardCommandUnit();
     }
-
-    private Task ReportControlDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope) =>
-        WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
-            GetNamedSourceDiagnosticPrefix(scope.Context));
 
     private static bool TryParseControlNumber(ShellValue operand, out long status) =>
         Integers.TryParseBuiltinNumber(operand.Bytes.Span, out status);

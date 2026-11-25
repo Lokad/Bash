@@ -3103,9 +3103,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "7374617475733a30",
-      "stderrHex": "627265616b3a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
+      "stderrHex": "6c696e6520313a20627265616b3a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "continue-outside-loop",
@@ -3118,9 +3118,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "7374617475733a30",
-      "stderrHex": "636f6e74696e75653a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
+      "stderrHex": "6c696e6520313a20636f6e74696e75653a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-outside-ignores-count",
@@ -3133,9 +3133,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "7374617475733a30",
-      "stderrHex": "627265616b3a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
+      "stderrHex": "6c696e6520313a20627265616b3a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "continue-outside-ignores-count",
@@ -3148,9 +3148,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "7374617475733a30",
-      "stderrHex": "636f6e74696e75653a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
+      "stderrHex": "6c696e6520313a20636f6e74696e75653a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-outside-under-errexit",
@@ -3163,9 +3163,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "6166746572",
-      "stderrHex": "627265616b3a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
+      "stderrHex": "6c696e6520313a20627265616b3a206f6e6c79206d65616e696e6766756c20696e20612060666f72272c20607768696c65272c206f722060756e74696c27206c6f6f700a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-loop-zero",
@@ -3178,9 +3178,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "613a31",
-      "stderrHex": "627265616b3a20303a206c6f6f7020636f756e74206f7574206f662072616e67650a",
+      "stderrHex": "6c696e6520313a20627265616b3a20303a206c6f6f7020636f756e74206f7574206f662072616e67650a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "continue-loop-zero",
@@ -3193,9 +3193,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "613a31",
-      "stderrHex": "636f6e74696e75653a20303a206c6f6f7020636f756e74206f7574206f662072616e67650a",
+      "stderrHex": "6c696e6520313a20636f6e74696e75653a20303a206c6f6f7020636f756e74206f7574206f662072616e67650a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "continue-zero-nested",
@@ -3208,9 +3208,9 @@
       "files": [],
       "exitCode": 0,
       "stdoutHex": "61633a31",
-      "stderrHex": "636f6e74696e75653a20303a206c6f6f7020636f756e74206f7574206f662072616e67650a",
+      "stderrHex": "6c696e6520313a20636f6e74696e75653a20303a206c6f6f7020636f756e74206f7574206f662072616e67650a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-loop-invalid",
@@ -3223,9 +3223,9 @@
       "files": [],
       "exitCode": 128,
       "stdoutHex": "61",
-      "stderrHex": "627265616b3a206261643a206e756d6572696320617267756d656e742072657175697265640a",
+      "stderrHex": "6c696e6520313a20627265616b3a206261643a206e756d6572696320617267756d656e742072657175697265640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "continue-loop-invalid",
@@ -3238,9 +3238,9 @@
       "files": [],
       "exitCode": 128,
       "stdoutHex": "61",
-      "stderrHex": "636f6e74696e75653a206261643a206e756d6572696320617267756d656e742072657175697265640a",
+      "stderrHex": "6c696e6520313a20636f6e74696e75653a206261643a206e756d6572696320617267756d656e742072657175697265640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-loop-surplus",
@@ -3253,9 +3253,9 @@
       "files": [],
       "exitCode": 1,
       "stdoutHex": "61",
-      "stderrHex": "627265616b3a20746f6f206d616e7920617267756d656e74730a",
+      "stderrHex": "6c696e6520313a20627265616b3a20746f6f206d616e7920617267756d656e74730a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "continue-loop-surplus",
@@ -3268,9 +3268,9 @@
       "files": [],
       "exitCode": 1,
       "stdoutHex": "61",
-      "stderrHex": "636f6e74696e75653a20746f6f206d616e7920617267756d656e74730a",
+      "stderrHex": "6c696e6520313a20636f6e74696e75653a20746f6f206d616e7920617267756d656e74730a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-loop-surplus-byte",
@@ -3283,9 +3283,9 @@
       "files": [],
       "exitCode": 1,
       "stdoutHex": "",
-      "stderrHex": "627265616b3a20746f6f206d616e7920617267756d656e74730a",
+      "stderrHex": "6c696e6520313a20627265616b3a20746f6f206d616e7920617267756d656e74730a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-loop-invalid-byte",
@@ -3298,9 +3298,9 @@
       "files": [],
       "exitCode": 128,
       "stdoutHex": "",
-      "stderrHex": "627265616b3a20ff3a206e756d6572696320617267756d656e742072657175697265640a",
+      "stderrHex": "6c696e6520313a20627265616b3a20ff3a206e756d6572696320617267756d656e742072657175697265640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "break-loop-separator",
@@ -3355,9 +3355,9 @@
       "files": [],
       "exitCode": 1,
       "stdoutHex": "",
-      "stderrHex": "657869743a20746f6f206d616e7920617267756d656e74730a",
+      "stderrHex": "6c696e6520313a20657869743a20746f6f206d616e7920617267756d656e74730a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "exit-invalid-before-arity",
@@ -3370,9 +3370,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "657869743a206261643a206e756d6572696320617267756d656e742072657175697265640a",
+      "stderrHex": "6c696e6520313a20657869743a206261643a206e756d6572696320617267756d656e742072657175697265640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "exit-negative",
@@ -3427,9 +3427,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "657869743a20393232333337323033363835343737353830383a206e756d6572696320617267756d656e742072657175697265640a",
+      "stderrHex": "6c696e6520313a20657869743a20393232333337323033363835343737353830383a206e756d6572696320617267756d656e742072657175697265640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "exit-leading-whitespace",
@@ -3484,9 +3484,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "657869743a20ff3a206e756d6572696320617267756d656e742072657175697265640a",
+      "stderrHex": "6c696e6520313a20657869743a20ff3a206e756d6572696320617267756d656e742072657175697265640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "exit-surplus-byte",
@@ -3499,9 +3499,9 @@
       "files": [],
       "exitCode": 1,
       "stdoutHex": "",
-      "stderrHex": "657869743a20746f6f206d616e7920617267756d656e74730a",
+      "stderrHex": "6c696e6520313a20657869743a20746f6f206d616e7920617267756d656e74730a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "pipestatus-initial",

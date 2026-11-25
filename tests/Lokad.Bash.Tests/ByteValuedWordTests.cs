@@ -226,7 +226,7 @@ public sealed class ByteValuedWordTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("shift: too many arguments\n", result.StdErr);
+        Assert.Equal("line 1: shift: too many arguments\n", result.StdErr);
     }
 
     [Theory]

@@ -692,7 +692,7 @@ public partial class EvaluationTests
 
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("break: nope: numeric argument required\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: break: nope: numeric argument required\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(128, state.LastExitCode);
@@ -3250,7 +3250,7 @@ public partial class EvaluationTests
 
         var diagnostic = Assert.IsType<WriteOperation>(await NextStepAsync(state));
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("shift: nope: numeric argument required\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: shift: nope: numeric argument required\n", Text(diagnostic.Content));
         Assert.Equal("kept", Assert.Single(state.PositionalParameters).ToUtf8String());
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));

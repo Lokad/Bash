@@ -182,7 +182,7 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("shift nope");
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("shift: nope: numeric argument required\n", result.StdErr);
+        Assert.Equal("line 1: shift: nope: numeric argument required\n", result.StdErr);
         Assert.Equal(1, result.ExitCode);
     }
 
@@ -193,12 +193,12 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
     [InlineData("shift -0", "<0:3><a><b c><>", "")]
     [InlineData("shift 4294967296", "<1:3><a><b c><>", "")]
     [InlineData("shift 9223372036854775807", "<1:3><a><b c><>", "")]
-    [InlineData("shift 9223372036854775808", "<1:3><a><b c><>", "shift: 9223372036854775808: numeric argument required\n")]
-    [InlineData("shift -9223372036854775808", "<1:3><a><b c><>", "shift: -9223372036854775808: shift count out of range\n")]
-    [InlineData("shift -- -1", "<1:3><a><b c><>", "shift: --: shift count out of range\n")]
-    [InlineData("shift nope extra", "<1:3><a><b c><>", "shift: nope: numeric argument required\n")]
+    [InlineData("shift 9223372036854775808", "<1:3><a><b c><>", "line 1: shift: 9223372036854775808: numeric argument required\n")]
+    [InlineData("shift -9223372036854775808", "<1:3><a><b c><>", "line 1: shift: -9223372036854775808: shift count out of range\n")]
+    [InlineData("shift -- -1", "<1:3><a><b c><>", "line 1: shift: --: shift count out of range\n")]
+    [InlineData("shift nope extra", "<1:3><a><b c><>", "line 1: shift: nope: numeric argument required\n")]
     [InlineData("unset count; shift $count", "<0:2><b c><>", "")]
-    [InlineData("count=; shift \"$count\"", "<1:3><a><b c><>", "shift: : numeric argument required\n")]
+    [InlineData("count=; shift \"$count\"", "<1:3><a><b c><>", "line 1: shift: : numeric argument required\n")]
     public async Task Evaluation_ShiftBuiltin_ValidatesExpandedCountBeforeChangingFrame(
         string command, string output, string error)
     {
@@ -221,7 +221,7 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal("once", host.ReadFile("/fact"));
-        Assert.Equal("shift: too many arguments\n", host.ReadFile("/err"));
+        Assert.Equal("line 1: shift: too many arguments\n", host.ReadFile("/err"));
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -232,7 +232,7 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
         var result = await host.RunAsync("shift $'\\377'", CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal("73686966743A20FF3A206E756D6572696320617267756D656E742072657175697265640A",
+        Assert.Equal("6C696E6520313A2073686966743A20FF3A206E756D6572696320617267756D656E742072657175697265640A",
             Convert.ToHexString(host.StandardError.Content.Span));
     }
 

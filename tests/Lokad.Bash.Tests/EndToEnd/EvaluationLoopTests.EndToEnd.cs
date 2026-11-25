@@ -21,7 +21,7 @@ public sealed class EvaluationLoopTestsEndToEnd
         var invocation = pipeline ? "{ " + child + " } | { read text; printf '%s' \"$text\"; }" : "( " + child + " )";
         var script = "for outer in a b; do " + invocation + "; printf '<%s:%s>' \"$outer\" \"$?\"; done";
         var result = await EvaluationTestHelper.RunAsync(script);
-        var diagnostic = flow + ": only meaningful in a `for', `while', or `until' loop\n";
+        var diagnostic = "line 1: " + flow + ": only meaningful in a `for', `while', or `until' loop\n";
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal($"start{innerOutput}end<a:0>start{innerOutput}end<b:0>", result.StdOut);
@@ -208,7 +208,7 @@ public sealed class EvaluationLoopTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("break: nope: numeric argument required\n", result.StdErr);
+        Assert.Equal("line 1: break: nope: numeric argument required\n", result.StdErr);
         Assert.Equal(128, result.ExitCode);
     }
 

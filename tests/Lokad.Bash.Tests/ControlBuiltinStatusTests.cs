@@ -19,7 +19,7 @@ public sealed class ControlBuiltinStatusTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1>", host.StandardOutput.TextContent);
-        Assert.Equal($"{command}: {operand}: loop count out of range\n", host.StandardError.TextContent);
+        Assert.Equal($"line 1: {command}: {operand}: loop count out of range\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -36,7 +36,7 @@ public sealed class ControlBuiltinStatusTests
         var result = await host.RunAsync(command + "; printf unexpected", CancellationToken.None);
         Assert.Equal(status, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Equal(diagnostic, host.StandardError.TextContent);
+        Assert.Equal("line 1: " + diagnostic, host.StandardError.TextContent);
     }
 
     [Theory]
@@ -58,7 +58,7 @@ public sealed class ControlBuiltinStatusTests
 
         Assert.Equal(status, result.ExitCode);
         Assert.Equal($"<{status}:{status}>", host.StandardOutput.TextContent);
-        Assert.Equal($"{command}: bad: numeric argument required\n", host.StandardError.TextContent);
+        Assert.Equal($"line 2: {command}: bad: numeric argument required\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -77,7 +77,7 @@ public sealed class ControlBuiltinStatusTests
         Assert.Equal(135, result.ExitCode);
         Assert.Equal($"<135:135:{flag}>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal("break: bad: numeric argument required\n", host.ReadFile("/errors"));
+        Assert.Equal("line 2: break: bad: numeric argument required\n", host.ReadFile("/errors"));
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
     }
@@ -124,7 +124,7 @@ public sealed class ControlBuiltinStatusTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1:1>", host.StandardOutput.TextContent);
-        Assert.Equal($"{command}: too many arguments\n", host.StandardError.TextContent);
+        Assert.Equal($"line 2: {command}: too many arguments\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -169,7 +169,7 @@ public sealed class ControlBuiltinStatusTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1>", host.StandardOutput.TextContent);
-        Assert.Equal("shift: bad: numeric argument required\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: shift: bad: numeric argument required\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -189,7 +189,7 @@ public sealed class ControlBuiltinStatusTests
 
         Assert.Equal(7, result.ExitCode);
         Assert.Equal("<7:0 7>", host.StandardOutput.TextContent);
-        Assert.Equal("return: too many arguments\n", host.StandardError.TextContent);
+        Assert.Equal("line 3: return: too many arguments\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -204,16 +204,16 @@ public sealed class ControlBuiltinStatusTests
 
         Assert.Equal(7, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Equal($"{command}: too many arguments\n", host.StandardError.TextContent);
+        Assert.Equal($"line 1: {command}: too many arguments\n", host.StandardError.TextContent);
     }
 
     [Theory]
-    [InlineData("( (exit 7); return 1 2; printf unexpected )", "<7:7>")]
-    [InlineData("{ (exit 7); return 1 2; printf unexpected; } | :", "<7:7 0>")]
-    [InlineData("f(){ (exit 7); return 1 2; printf unexpected; }; f | :", "<7:7 0>")]
-    [InlineData("(exit 7); return 1 2 | :", "<1:1 0>")]
-    [InlineData("value=`(exit 7)\nreturn 1 2\nprintf unexpected`", "<1:1>")]
-    public async Task DiscardUsesTheReachedChildBoundary(string invocation, string status)
+    [InlineData("( (exit 7); return 1 2; printf unexpected )", "<7:7>", 1)]
+    [InlineData("{ (exit 7); return 1 2; printf unexpected; } | :", "<7:7 0>", 1)]
+    [InlineData("f(){ (exit 7); return 1 2; printf unexpected; }; f | :", "<7:7 0>", 1)]
+    [InlineData("(exit 7); return 1 2 | :", "<1:1 0>", 1)]
+    [InlineData("value=`(exit 7)\nreturn 1 2\nprintf unexpected`", "<1:1>", 4)]
+    public async Task DiscardUsesTheReachedChildBoundary(string invocation, string status, int line)
     {
         await using var host = new TestHost();
         var result = await host.RunAsync(invocation + """
@@ -222,7 +222,7 @@ public sealed class ControlBuiltinStatusTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(status, host.StandardOutput.TextContent);
-        Assert.Equal("return: too many arguments\n", host.StandardError.TextContent);
+        Assert.Equal($"line {line}: return: too many arguments\n", host.StandardError.TextContent);
     }
 
     [Fact]
@@ -244,16 +244,16 @@ public sealed class ControlBuiltinStatusTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1:1:outer><1>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal("return: too many arguments\n", host.ReadFile("/errors"));
+        Assert.Equal("line 3: return: too many arguments\n", host.ReadFile("/errors"));
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Theory]
     [InlineData("exit -1", 255, "inner", "")]
-    [InlineData("exit bad", 2, "inner", "exit: bad: numeric argument required\n")]
-    [InlineData("exit 2 3", 1, "outer", "exit: too many arguments\n")]
-    [InlineData("for x in a; do break bad; done", 128, "outer", "break: bad: numeric argument required\n")]
+    [InlineData("exit bad", 2, "inner", "line 1: exit: bad: numeric argument required\n")]
+    [InlineData("exit 2 3", 1, "outer", "line 1: exit: too many arguments\n")]
+    [InlineData("for x in a; do break bad; done", 128, "outer", "line 1: break: bad: numeric argument required\n")]
     public async Task ExitTrapUsesTheCorrectScopeAfterOperandFailure(
         string command, int status, string visible, string diagnostic)
     {

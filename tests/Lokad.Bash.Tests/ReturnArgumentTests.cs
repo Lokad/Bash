@@ -17,47 +17,47 @@ public sealed class ReturnArgumentTests
     [InlineData("f(){ set -- 5 6; return --; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
         0, "[root:0]", "")]
     [InlineData("f(){ set -- 5 6; return 1 2; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        1, "", "return: too many arguments\n")]
+        1, "", "line 1: return: too many arguments\n")]
     [InlineData("f() { return 7 $'\\377'; }; f; printf '%s' \"$?\"",
-        1, "", "return: too many arguments\n")]
+        1, "", "line 1: return: too many arguments\n")]
     [InlineData("f(){ set -- 5 6; return word; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: word: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: word: numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return ''; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: : numeric argument required\n")]
+        0, "[root:2]", "line 1: return: : numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return -x; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: -x: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: -x: numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return \"$@\"; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        1, "", "return: too many arguments\n")]
+        1, "", "line 1: return: too many arguments\n")]
     [InlineData("f(){ set -- 5 6; return ' 3 '; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
         0, "[root:3]", "")]
     [InlineData("f(){ set -- 5 6; return $'\\t3\\t'; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
         0, "[root:3]", "")]
     [InlineData("f(){ set -- 5 6; return $'3\\n'; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: 3\n: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: 3\n: numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return $'\\r3\\r'; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: \r3\r: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: \r3\r: numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return +7; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
         0, "[root:7]", "")]
     [InlineData("f(){ set -- 5 6; return 9223372036854775807; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
         0, "[root:255]", "")]
     [InlineData("f(){ set -- 5 6; return 9223372036854775808; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: 9223372036854775808: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: 9223372036854775808: numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return -9223372036854775808; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
         0, "[root:0]", "")]
     [InlineData("f(){ set -- 5 6; return 0x10; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: 0x10: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: 0x10: numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return 3.0; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: 3.0: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: 3.0: numeric argument required\n")]
     [InlineData("f(){ set -- 5 6; return -- -- 5; printf '[continued:%s]' \"$?\"; }; f; printf '[root:%s]' \"$?\"",
-        0, "[root:2]", "return: --: numeric argument required\n")]
+        0, "[root:2]", "line 1: return: --: numeric argument required\n")]
     [InlineData("set -- 5 6; return ; printf '[continued:%s]' \"$?\"",
-        0, "[continued:2]", "return: can only `return' from a function or sourced script\n")]
+        0, "[continued:2]", "line 1: return: can only `return' from a function or sourced script\n")]
     [InlineData("set -- 5 6; return word; printf '[continued:%s]' \"$?\"",
-        0, "[continued:2]", "return: word: numeric argument required\nreturn: can only `return' from a function or sourced script\n")]
+        0, "[continued:2]", "line 1: return: word: numeric argument required\nline 1: return: can only `return' from a function or sourced script\n")]
     [InlineData("f(){ return word 2; printf wrong; }; f; printf '[%s]' \"$?\"",
-        0, "[2]", "return: word: numeric argument required\n")]
+        0, "[2]", "line 1: return: word: numeric argument required\n")]
     [InlineData("return word 2; printf '[%s]' \"$?\"",
-        0, "[2]", "return: word: numeric argument required\nreturn: can only `return' from a function or sourced script\n")]
+        0, "[2]", "line 1: return: word: numeric argument required\nline 1: return: can only `return' from a function or sourced script\n")]
     [InlineData("f(){ ! return 7; printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[7]", "")]
     [InlineData("f(){ ! { return 7; }; printf wrong; }; f; printf '[%s]' \"$?\"",
@@ -69,21 +69,21 @@ public sealed class ReturnArgumentTests
     [InlineData("f(){ ! { return 7; }; }; ! f; printf '[%s]' \"$?\"",
         0, "[0]", "")]
     [InlineData("f(){ ! return word; printf wrong; }; f; printf '[%s]' \"$?\"",
-        0, "[2]", "return: word: numeric argument required\n")]
+        0, "[2]", "line 1: return: word: numeric argument required\n")]
     [InlineData("! return 1 2; printf wrong",
-        1, "", "return: too many arguments\n")]
+        1, "", "line 1: return: too many arguments\n")]
     [InlineData("f(){ false; return $(true); printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[0]", "")]
     [InlineData("f(){ set --; false; return \"$@\"; printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[1]", "")]
     [InlineData("f(){ value='3 4'; return $value; printf wrong; }; f; printf wrong",
-        1, "", "return: too many arguments\n")]
+        1, "", "line 1: return: too many arguments\n")]
     [InlineData("unset value; f(){ return ${value:=7}; printf wrong; }; f; printf '[%s:%s]' \"$?\" \"$value\"",
         0, "[7:7]", "")]
     [InlineData("value=outer; f(){ value=temp return 7; printf wrong; }; f; printf '[%s:%s]' \"$?\" \"$value\"",
         0, "[7:outer]", "")]
     [InlineData("f(){ return 1 \"$((x+=1))\" \"$(printf E >&2)\"; printf wrong; }; f; printf wrong",
-        1, "", "Ereturn: too many arguments\n")]
+        1, "", "Eline 1: return: too many arguments\n")]
     // Keep the platform's current fatal-expansion status (1); Bash -c reports 127 here.
     [InlineData("f(){ value=${missing?bad} return word; printf wrong; }; f; printf wrong",
         1, "", "line 1: missing: bad\n")]
@@ -92,9 +92,9 @@ public sealed class ReturnArgumentTests
     [InlineData("f(){ return word 2>/dev/null; printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[2]", "")]
     [InlineData("(return 1 2; printf wrong); printf '[%s]' \"$?\"",
-        0, "[1]", "return: too many arguments\n")]
+        0, "[1]", "line 1: return: too many arguments\n")]
     [InlineData("f(){ value=$(return 1 2; printf wrong); printf '[%s:%s]' \"$value\" \"$?\"; }; f",
-        0, "[:1]", "return: too many arguments\n")]
+        0, "[:1]", "line 1: return: too many arguments\n")]
     [InlineData("f(){ return $'3\\0wrong'; printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[3]", "")]
     [InlineData("f(){ return $'\\n3'; printf wrong; }; f; printf '[%s]' \"$?\"",
@@ -106,11 +106,11 @@ public sealed class ReturnArgumentTests
     [InlineData("f(){ return $'\\f3'; printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[3]", "")]
     [InlineData("f(){ return $'3\\v'; printf wrong; }; f; printf '[%s]' \"$?\"",
-        0, "[2]", "return: 3\u000b: numeric argument required\n")]
+        0, "[2]", "line 1: return: 3\u000b: numeric argument required\n")]
     [InlineData("f(){ return $'3\\f'; printf wrong; }; f; printf '[%s]' \"$?\"",
-        0, "[2]", "return: 3\f: numeric argument required\n")]
+        0, "[2]", "line 1: return: 3\f: numeric argument required\n")]
     [InlineData("f(){ return -- --help; printf wrong; }; f; printf '[%s]' \"$?\"",
-        0, "[2]", "return: --help: numeric argument required\n")]
+        0, "[2]", "line 1: return: --help: numeric argument required\n")]
     [InlineData("f(){ false; value=$(true) return; printf wrong; }; f; printf '[%s]' \"$?\"",
         0, "[0]", "")]
     [InlineData("f(){ false; return 2>$(printf /dev/null); printf wrong; }; f; printf '[%s]' \"$?\"",
@@ -142,6 +142,26 @@ public sealed class ReturnArgumentTests
     }
 
     [Fact]
+    public async Task InvalidReturnInExitActionReportsBothErrorsAtTheReachedLine()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            trap ':
+            return invalid 2>reached-error
+            printf "<body:%s>" "$?"
+            ' EXIT
+            exit 5
+            """, CancellationToken.None);
+
+        Assert.Equal(5, result.ExitCode);
+        Assert.Equal("<body:2>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 2: return: invalid: numeric argument required\n"
+            + "line 2: return: can only `return' from a function or sourced script\n", host.ReadFile("/reached-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task NumericDiagnosticPreservesInvalidUtf8AndReturnsFromTheFunction()
     {
         var result = await EndToEndHarness.RunScriptAsync(
@@ -149,7 +169,7 @@ public sealed class ReturnArgumentTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("[2]", result.StdOut);
-        Assert.Equal(Convert.FromHexString("72657475726E3A20FF3A206E756D6572696320617267756D656E742072657175697265640A"),
+        Assert.Equal(Convert.FromHexString("6C696E6520313A2072657475726E3A20FF3A206E756D6572696320617267756D656E742072657175697265640A"),
             result.Host.StandardError.Content.ToArray());
     }
 
