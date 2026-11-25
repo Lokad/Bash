@@ -801,6 +801,9 @@ array and its attributes visible to the selector. A newly applied `-r` lets
 a successful selector finish and reports the rejected write with status 0.
 An ordinary assignment through a chain ending at an unset nameref leaves
 the chain intact.
+When an ordinary declaration gives an unset nameref its first target,
+export and readonly apply to that reference. This assignment leaves an
+element selector unevaluated.
 When nonlocal `declare` or `typeset` promotes a temporary value through
 a whole-name reference, the active prefix supplies its value and new
 attributes. The saved referent retains its array kind and other elements.
@@ -809,6 +812,11 @@ declaration's operands finish. It evaluates the restored reference's selector
 once using the caller's bindings and earlier promotions. Multiple prefixes
 publish in Bash's temporary table order. A bad subscript reports a diagnostic
 at publication and leaves the status selected by the operands.
+At script scope a promoted temporary scalar can give a saved unset nameref
+its first valid target while processing operands. The final temporary value
+publishes through that reference after restoration, with the destination's
+assignment attributes. A later assignment operand can change the temporary
+value while the saved reference keeps its first target.
 For a nonlocal declaration through an element nameref, `+a` and `+A`
 reject removal of a matching array kind before evaluating the selector.
 With neither array kind explicitly set, `+a` clears a scalar before the

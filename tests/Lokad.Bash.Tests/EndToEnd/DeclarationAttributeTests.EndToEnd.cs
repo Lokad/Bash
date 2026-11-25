@@ -88,6 +88,27 @@ public sealed class DeclarationAttributeTestsEndToEnd
     [InlineData("item=(2 8); declare -rn link='item[(item[1]+=1,0)]'", "declare -r link=7",
         "<1:0>declare -ar item=([0]=\"2\" [1]=\"8\")\ndeclare -nr link=\"item[(item[1]+=1,0)]\"\n",
         "line 2: item: readonly variable\n")]
+    [InlineData("item=old; declare -n link", "typeset -rx link=item",
+        "<0:0>declare -- item=\"old\"\ndeclare -nrx link=\"item\"\n", "")]
+    [InlineData("item=old; declare -nx link", "declare +x link=item",
+        "<0:0>declare -- item=\"old\"\ndeclare -n link=\"item\"\n", "")]
+    [InlineData("item=(old); declare -n link", "declare -r link='item[i++]'",
+        "<0:0>declare -a item=([0]=\"old\")\ndeclare -nr link=\"item[i++]\"\n", "")]
+    [InlineData("item=(old); declare -n link", "f() { link=temporary declare -gx link='item[i++]'; }; f",
+        "<0:0>declare -a item=([0]=\"old\")\ndeclare -nx link=\"item[i++]\"\n", "")]
+    [InlineData("item=old; declare -n link", "link=temporary declare -x link=item",
+        "<0:0>declare -x item=\"item\"\ndeclare -nx link=\"item\"\n", "")]
+    [InlineData("item=(old other); declare -n link", "link=temporary declare -x link='item[i++]' link+=tail",
+        "<0:1>declare -ax item=([0]=\"item[i++]tail\" [1]=\"other\")\ndeclare -nx link=\"item[i++]\"\n", "")]
+    [InlineData("item=(old other); declare -n link", "link=temporary declare -x link='item[i++]' i=1",
+        "<0:2>declare -ax item=([0]=\"old\" [1]=\"item[i++]\")\ndeclare -nx link=\"item[i++]\"\n", "")]
+    [InlineData("item=(old other); declare -n link", "link=temporary declare -r link='item[i++]' link=later",
+        "<1:1>declare -arx item=([0]=\"item[i++]\" [1]=\"other\")\ndeclare -nrx link=\"item[i++]\"\n",
+        "line 2: declare: link: readonly variable\n")]
+    [InlineData("declare -i item=22; declare -n link", "link=temporary declare -x link=item",
+        "<0:0>declare -ix item=\"22\"\ndeclare -nx link=\"item\"\n", "")]
+    [InlineData("declare -ai item=(21 22); declare -n link", "link=temporary declare -x link='item[i++]'",
+        "<0:2>declare -aix item=([0]=\"22\" [1]=\"22\")\ndeclare -nx link=\"item[i++]\"\n", "")]
     public async Task OrdinaryDeclarationsApplyAttributesToTheReachedNamerefBinding(
         string setup, string command, string output, string error)
     {
@@ -115,6 +136,26 @@ public sealed class DeclarationAttributeTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
         Assert.Equal($"{status}declare {flags} item=([0]=\"{first}\" [1]=\"{second}\")\n", result.StdOut);
         Assert.Equal(error, result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task LocalNamerefInitializerKeepsReadonlyOnTheReference()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            item=(old); i=0
+            f() {
+                local -n link
+                local -r link='item[i++]'
+                printf '<%s:%s>' "$?" "$i"
+                declare -p item link
+            }
+            f
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0>declare -a item=([0]=\"old\")\ndeclare -nr link=\"item[i++]\"\n", result.StdOut);
+        Assert.Equal("", result.StdErr);
         Assert.Equal(0, result.Host.OpenFileCount);
     }
 

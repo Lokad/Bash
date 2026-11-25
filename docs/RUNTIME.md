@@ -84,6 +84,8 @@ Nameref target validation uses the reference parser without evaluating
 selectors. A nonempty replacement is validated before creating a local.
 An empty or appended initializer can fail after local creation and
 attribute application.
+Ordinary declarations apply the first assignment's attributes to the
+initialized nameref slot.
 An empty element initializer can publish the array kind before reporting failure.
 Nonlocal preparation retains a scalar at index zero. Local preparation uses the
 function's ordinary declaration and restoration rules.
@@ -407,6 +409,10 @@ same-value writes, with nameref and array-kind rules intact. In-process
 execution consumes only the prepared prefix slots and preserves the original
 slots in the saved store. An installation refusal leaves the caller's bindings
 at their state after operand expansion.
+When a declaration creates the first target of a saved nameref, that slot
+retains the target while subsequent operands can update the temporary scalar.
+The existing deferred publication path restores the saved slot before
+selecting the destination and applying its assignment attributes.
 Nonlocal declaration promotion retains the reached prefix slot when it belongs
 to a whole-name referent. The existing retained store stages its value and
 assignment attributes before restoration. A named attribute command that sees

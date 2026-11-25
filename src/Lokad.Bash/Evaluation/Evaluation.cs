@@ -1286,9 +1286,9 @@ public sealed partial class Evaluation : IFileTester
         var commandVars = scope.Variables;
         var commandAssignmentsSuccessful = true;
         var prefixNames = simpleCommand.Assignments.Count == 0 ? null : new HashSet<BindingName>();
-        var mayDeferElementPromotion = prefixNames != null && scope.Context.FunctionContext == null
-            && declaration is { Options.PromotesElementPrefixes: true };
-        List<BindingName>? declarationPrefixOrder = mayDeferElementPromotion && simpleCommand.Assignments.Count > 1 ? [] : null;
+        var mayDeferPrefixPromotion = prefixNames != null && scope.Context.FunctionContext == null
+            && declaration is { Options.PromotesTemporaryBindings: true };
+        List<BindingName>? declarationPrefixOrder = mayDeferPrefixPromotion && simpleCommand.Assignments.Count > 1 ? [] : null;
         var assignmentError = await AwaitWordExpansionAsync(PrepareAssignmentsAsync()).ConfigureAwait(false);
         if (assignmentError.HasValue)
             return PublishStatus(await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false));
@@ -2312,7 +2312,7 @@ public sealed partial class Evaluation : IFileTester
             var exitCode = 0;
             var operandFailureStatus = 1;
             List<Variables.CommandBindings>? exposedPrefixes = null;
-            HashSet<BindingName>? deferredElementPromotions = null;
+            Dictionary<BindingName, DeclarationPrefixPromotion>? deferredPrefixPromotions = null;
             for (var index = 0; index < operands.Count; index++)
             {
                 var operand = operands[index];
@@ -2672,7 +2672,8 @@ public sealed partial class Evaluation : IFileTester
                 var ordinaryDeclaration = options.Builtin == BuiltinKind.Declare && !local
                     && options.NamerefChange == DeclarationAttributeChange.Unchanged;
                 var ordinaryAssignment = ordinaryDeclaration && operand.Value.HasValue;
-                if (ordinaryAssignment && selectedWholeBinding is { IsUnsetNameref: true } unsetBinding
+                var selectedUnsetNameref = selectedWholeBinding is { IsUnsetNameref: true } ? selectedWholeBinding : null;
+                if (ordinaryAssignment && selectedUnsetNameref is { } unsetBinding
                     && unsetBinding.Name != sourceName)
                     continue; // Only the declaration of the unset reference itself can give it a target.
                 var ordinaryAssignmentBinding = ordinaryAssignment && !global ? selectedWholeBinding : null;
@@ -2858,6 +2859,7 @@ public sealed partial class Evaluation : IFileTester
                     convertedReference = true;
                 }
                 var localReferenceAssigned = false;
+                VariableBinding? initializedNameref = null;
                 if ((!operand.CompoundApplied || prefixNames?.Contains(name) == true) && !convertedReference
                     && local && !circularLocalReference && declarationScope.Context.FunctionContext is { } localFunction)
                 {
@@ -2900,6 +2902,8 @@ public sealed partial class Evaluation : IFileTester
                         continue;
                     }
                     localReferenceAssigned = options.Nameref || initializingReference;
+                    if (initializingReference)
+                        initializedNameref = new VariableBinding(VariableReference.ForName(name), targetVars);
                 }
                 if ((options.Nameref || (operand.CompoundApplied || local) && options.NamerefChange == DeclarationAttributeChange.Set)
                     && (targetVars.IndexedArrays.ContainsKey(name) || targetVars.AssociativeArrays.ContainsKey(name)))
@@ -3223,6 +3227,12 @@ public sealed partial class Evaluation : IFileTester
                         }
                         wroteUnmarkedPrefix = retainUnmarkedPrefix && writeTarget.Name == sourceName
                             && ReferenceEquals(writeVariables, commandVars);
+                        if (!setsNamedAttribute && arrayKind == ArrayAssignmentKind.Auto
+                            && options.NamerefChange == DeclarationAttributeChange.Unchanged
+                            && selectedUnsetNameref is { } unset
+                            && writeTarget is WordExpansion.ResolvedVariableReference.Scalar
+                            && writeTarget.Name == unset.Name && ReferenceEquals(writeVariables, unset.Owner))
+                            initializedNameref = unset;
                     }
                     else if (inferElementArray)
                     {
@@ -3266,7 +3276,14 @@ public sealed partial class Evaluation : IFileTester
                 var attributeBinding = referentAttributes ?? (elementAttributesApplied ? ordinaryElement : null)
                     ?? (local && !options.Nameref && targetVars.TryResolveBinding(name, null, out var localBinding)
                         ? localBinding : new VariableBinding(VariableReference.ForName(name), targetVars));
-                if (referentElement == null && !prefixedOrdinaryElement
+                if (initializedNameref is { } initialized)
+                {
+                    // The first write binds this slot. Resolving its new target here would move the declaration's flags.
+                    SetAttributes(initialized.Name, initialized.Owner, assignmentExport);
+                    if (local)
+                        declarationScope.Context.FunctionContext?.Locals.Publish(initialized.Name, initialized.Owner);
+                }
+                else if (referentElement == null && !prefixedOrdinaryElement
                     && (global || reference.Kind == VariableReferenceKind.Name || bindings?.Contains(attributeBinding.Name) != true))
                 {
                     if (elementAttributesApplied)
@@ -3284,12 +3301,12 @@ public sealed partial class Evaluation : IFileTester
                     await ApplyNamedAttributesAsync(sourceName, assignmentPrefix).ConfigureAwait(false);
             }
 
-            if (deferredElementPromotions != null && bindings != null)
-                await PublishDeclarationPrefixesAsync(bindings, declarationPrefixOrder, deferredElementPromotions).ConfigureAwait(false);
+            if (deferredPrefixPromotions is { Count: > 0 } && bindings != null)
+                await PublishDeclarationPrefixesAsync(bindings, declarationPrefixOrder, deferredPrefixPromotions).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
 
             async Task PublishDeclarationPrefixesAsync(Variables.CommandBindings commandBindings,
-                IReadOnlyList<BindingName>? prefixOrder, IReadOnlySet<BindingName> elementPromotions)
+                IReadOnlyList<BindingName>? prefixOrder, IReadOnlyDictionary<BindingName, DeclarationPrefixPromotion> deferredPromotions)
             {
                 using var promotionMemory = new MemoryCapacity(Memory.Budget, 0);
                 var promotions = new List<(BindingName Name, ShellValue Value, BindingAttributes Attributes)>();
@@ -3304,16 +3321,24 @@ public sealed partial class Evaluation : IFileTester
                 foreach (var (name, value, attributes) in promotions)
                 {
                     CheckCancellation();
-                    if (!commandVars.TryResolveBinding(name, selectOwner: null, out var binding))
+                    if (!commandVars.TryResolveBinding(name, selectOwner: null, out var binding) || binding.IsUnsetNameref)
                         continue;
+                    var publicationScope = executionScope with { Variables = binding.Owner };
                     if (binding.Reference.Kind == VariableReferenceKind.Name)
-                        binding.Owner.SetResolvedValuePreservingArray(binding.Name, value, Memory);
+                    {
+                        var prepared = await WordExpansion.PrepareAssignmentValueAsync(value, previous: null,
+                            binding.Owner.GetAssignmentAttributes(binding.Name), publicationScope, ShellValue.Empty).ConfigureAwait(false);
+                        if (prepared is not { } assigned)
+                            continue;
+                        binding.Owner.SetResolvedValuePreservingArray(binding.Name, assigned, Memory);
+                    }
                     else
                     {
                         var target = await WordExpansion.ResolveDeclarationReferenceAsync(binding.Reference,
                             executionScope, binding.Owner, binding.Owner).ConfigureAwait(false);
-                        if (target == null || !target.TryPublishValue(executionScope with { Variables = binding.Owner },
-                            binding.Name, value, WordExpansion.DeclarationWrite.PromotedPrefix))
+                        if (target == null || await target.AssignValueAsync(publicationScope, binding.Owner, binding.Name,
+                            value, AssignmentOperator.Replace, ShellValue.Empty, WordExpansion.DeclarationWrite.PromotedPrefix)
+                            .ConfigureAwait(false) == null)
                             continue;
                     }
                     binding.Owner.UpdateBindingAttributes(binding.Name, attributes, BindingAttributes.None);
@@ -3355,14 +3380,12 @@ public sealed partial class Evaluation : IFileTester
 
                 void CapturePromotion(BindingName name)
                 {
-                    if ((!elementPromotions.Contains(name) && !commandBindings.RetainsBinding(name))
+                    if ((!deferredPromotions.ContainsKey(name) && !commandBindings.RetainsBinding(name))
                         || !commandBindings.Contains(name) || !commandVars.Scalars.TryGetValue(name, out var value))
                         return;
                     promotionMemory.Grow(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
                     promotionMemory.PrepareListCapacity(promotions, 1);
-                    var attributes = commandVars.GetAssignmentAttributes(name)
-                        & (BindingAttributes.Integer | BindingAttributes.Case | BindingAttributes.Exported | BindingAttributes.Readonly);
-                    promotions.Add((name, value, attributes));
+                    promotions.Add((name, value, GetPromotionAttributes(commandVars, name)));
                 }
             }
 
@@ -3849,8 +3872,29 @@ public sealed partial class Evaluation : IFileTester
                         commandBindings.RetainBinding(attributeName, Memory, _cancellationToken, assignmentAttributes);
                         return;
                     }
+                    if (mayDeferPrefixPromotion && commandBindings.Contains(name))
+                    {
+                        if (deferredPrefixPromotions?.TryGetValue(name, out var promotion) == true
+                            && promotion == DeclarationPrefixPromotion.InitializedNameref)
+                            return;
+
+                        var caller = commandBindings.SavedVariables;
+                        if (caller.TryGetNameref(name, out var target) && target.IsEmpty
+                            && variables.Scalars.TryGetValue(name, out var initializer) && !initializer.IsEmpty)
+                        {
+                            var deferred = GetDeferredPrefixPromotions(commandBindings.PrefixNames.Count);
+                            Memory.Charge(checked(4L * initializer.Bytes.Length));
+                            if (caller.TrySetNameref(name, initializer, Memory))
+                            {
+                                // The saved binding keeps the first target. Later operands can still replace the temporary value.
+                                caller.UpdateBindingAttributes(name, GetPromotionAttributes(variables, name), BindingAttributes.None);
+                                deferred[name] = DeclarationPrefixPromotion.InitializedNameref;
+                                return;
+                            }
+                        }
+                    }
                     // A named attribute builtin can use a temporary scalar while restoring its saved element reference.
-                    if ((setsNamedAttribute && options.ArrayKind == ArrayAssignmentKind.Auto || mayDeferElementPromotion)
+                    if ((setsNamedAttribute && options.ArrayKind == ArrayAssignmentKind.Auto || mayDeferPrefixPromotion)
                         && commandBindings.Contains(name)
                         && commandBindings.SavedVariables.TryResolveBinding(name,
                             current => commandBindings.Contains(current) ? commandBindings.SavedVariables : variables, out var saved)
@@ -3859,13 +3903,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         if (!setsNamedAttribute)
                         {
-                            if (deferredElementPromotions == null)
-                            {
-                                var count = commandBindings.PrefixNames.Count;
-                                Memory.Charge(checked(64L + (long)global::Lokad.Bash.Evaluation.Variables.BindingNameSelectionBytes * count));
-                                deferredElementPromotions = new HashSet<BindingName>(count);
-                            }
-                            deferredElementPromotions.Add(name);
+                            GetDeferredPrefixPromotions(commandBindings.PrefixNames.Count)[name] = DeclarationPrefixPromotion.Element;
                             if (options.Readonly)
                                 await ReportCommandDiagnosticAsync([GetDiagnosticName(name)],
                                     [ShellValue.FromText("readonly variable")], declarationScope).ConfigureAwait(false);
@@ -3875,6 +3913,21 @@ public sealed partial class Evaluation : IFileTester
                 }
                 PublishAttributes(name, variables, global, local, exportChange);
             }
+
+            Dictionary<BindingName, DeclarationPrefixPromotion> GetDeferredPrefixPromotions(int prefixCount)
+            {
+                if (deferredPrefixPromotions == null)
+                {
+                    const int EntryBytes = global::Lokad.Bash.Evaluation.Variables.BindingNameSelectionBytes + 4 * sizeof(int);
+                    Memory.Charge(checked(64L + (long)EntryBytes * prefixCount));
+                    deferredPrefixPromotions = new Dictionary<BindingName, DeclarationPrefixPromotion>(prefixCount);
+                }
+                return deferredPrefixPromotions;
+            }
+
+            static BindingAttributes GetPromotionAttributes(Variables variables, BindingName name) =>
+                variables.GetAssignmentAttributes(name)
+                & (BindingAttributes.Integer | BindingAttributes.Case | BindingAttributes.Exported | BindingAttributes.Readonly);
 
             void PublishAttributes(
                 BindingName name, Variables variables, bool global, bool local, DeclarationAttributeChange exportChange)
