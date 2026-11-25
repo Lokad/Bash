@@ -85,6 +85,20 @@ public sealed class EvaluationBraceExpansionTests
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("\\", true)]
+    [InlineData("\\\\", false)]
+    public async Task BraceSequenceChecksQuotedCommasAcrossALongLiteral(string escape, bool keepsBraces)
+    {
+        var payload = new string('x', 4095) + escape + ",tail";
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' {bad..'" + payload + "'}");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(keepsBraces ? "<{bad.." + payload + "}>" : "<bad.." + payload + ">", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task BraceBranchesReuseQuotedSubstitutionsAndPreserveTheirEffects()
     {

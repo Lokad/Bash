@@ -280,7 +280,14 @@ internal static class BraceExpansion
                         switch (cursor.Current)
                         {
                             case (byte)'{':
-                                CountRawCommas(bytes, offset, ref rawOffset);
+                                if (open.Count == 0)
+                                {
+                                    // Only comma counts inside the current group affect its expansion.
+                                    rawOffset = offset + 1;
+                                    rawCommas = 0;
+                                }
+                                else
+                                    CountRawCommas(bytes, offset, ref rawOffset);
                                 scratch.Grow(256);
                                 var candidate = new Brace(new(new(partIndex, offset), braces.Count + 1), rawCommas);
                                 braces.Add(candidate);
@@ -330,11 +337,25 @@ internal static class BraceExpansion
             while (offset < end)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var value = bytes[offset++];
-                if (value == (byte)'\\')
-                    offset++;
-                else if (value == (byte)',')
-                    rawCommas++;
+                if (bytes[offset] == (byte)'\\')
+                {
+                    offset += 2;
+                    continue;
+                }
+                if (end - offset < 16)
+                {
+                    if (bytes[offset++] == (byte)',')
+                        rawCommas++;
+                    continue;
+                }
+
+                // Count commas in unescaped runs, keeping cancellation checks between bounded scans.
+                const int MaximumScanBytes = 4096;
+                var window = bytes.Slice(offset, Math.Min(end - offset, MaximumScanBytes));
+                var escape = window.IndexOf((byte)'\\');
+                var literalLength = escape < 0 ? window.Length : escape;
+                rawCommas += window[..literalLength].Count((byte)',');
+                offset += literalLength + (escape < 0 ? 0 : 2);
             }
         }
     }
