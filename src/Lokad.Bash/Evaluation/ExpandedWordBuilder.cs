@@ -6,6 +6,7 @@ using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using static Lokad.Bash.Evaluation.CaseQuoting;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -34,6 +35,23 @@ internal enum CasePatternOperand { None, SelectFields, PreserveQuotedNulls }
 
 [Flags]
 internal enum CaseQuoteBytes : byte { None, Escape = 1, Null = 2, Captured = 4 }
+
+internal static class CaseQuoting
+{
+    internal const byte CaseQuoteEscape = 0x01;
+    internal const byte CaseQuoteNull = 0x7f;
+
+    internal static CaseQuoteBytes GetCaseQuoteBytes(ReadOnlySpan<byte> bytes)
+    {
+        var first = bytes.IndexOfAny(CaseQuoteEscape, CaseQuoteNull);
+        if (first < 0)
+            return CaseQuoteBytes.None;
+        var rest = bytes[(first + 1)..];
+        if (bytes[first] == CaseQuoteEscape)
+            return rest.Contains(CaseQuoteNull) ? CaseQuoteBytes.Escape | CaseQuoteBytes.Null : CaseQuoteBytes.Escape;
+        return rest.Contains(CaseQuoteEscape) ? CaseQuoteBytes.Escape | CaseQuoteBytes.Null : CaseQuoteBytes.Null;
+    }
+}
 
 /// <summary>Controls whether an unquoted positional star selects spaces with empty IFS.</summary>
 internal enum PositionalStarSplit { Default, WhenPresent, EvenWhenEmpty }
@@ -72,8 +90,6 @@ internal sealed class ExpandedWordBuilder
     private const int UntrackedSourceSeparators = 0;
     private const int EmptySourceSeparators = -1;
     private const int DefaultSourceSeparators = -2;
-    private const byte CaseQuoteEscape = 0x01;
-    private const byte CaseQuoteNull = 0x7f;
 
     private static readonly ShellValue Space = ShellValue.FromText(" ");
     private static readonly ShellValue QuotedNullByte = ShellValue.FromText("\u007f");
@@ -299,11 +315,11 @@ internal sealed class ExpandedWordBuilder
                 else
                     _current.HasUnquotedSpaces = true;
             }
-            if (Purpose == ExpansionPurpose.CasePattern && origin == PartOrigin.Expansion
-                && value.Bytes.Span.ContainsAny(CaseQuoteEscape, CaseQuoteNull))
+            var quoteBytes = Purpose == ExpansionPurpose.CasePattern && origin == PartOrigin.Expansion
+                ? GetCaseQuoteBytes(value.Bytes.Span) : CaseQuoteBytes.None;
+            if (quoteBytes != CaseQuoteBytes.None)
             {
-                var raw = GetCaseQuoteBytes(value.Bytes.Span)
-                    & GetCaseQuoteBytes(FieldSeparators.FromVariables(_variables).Bytes.Span);
+                var raw = quoteBytes & FieldSeparators.FromVariables(_variables).CaseQuoteDelimiters;
                 GetPart(origin, globQuoted, UntrackedSourceSeparators, CaseQuoteBytes.Captured | raw).AppendValue(value);
             }
             else
@@ -826,11 +842,7 @@ internal sealed class ExpandedWordBuilder
         !separators.IsEmpty && separators.Bytes.Span[0] != (byte)' ';
 
     private bool UsesCaseQuoteBytes(FieldSeparators separators) =>
-        _casePatternHasRawQuoteBytes || separators.Bytes.Span.ContainsAny(CaseQuoteEscape, CaseQuoteNull);
-
-    private static CaseQuoteBytes GetCaseQuoteBytes(ReadOnlySpan<byte> bytes) =>
-        (bytes.Contains(CaseQuoteEscape) ? CaseQuoteBytes.Escape : CaseQuoteBytes.None)
-        | (bytes.Contains(CaseQuoteNull) ? CaseQuoteBytes.Null : CaseQuoteBytes.None);
+        _casePatternHasRawQuoteBytes || separators.CaseQuoteDelimiters != CaseQuoteBytes.None;
 
     private static ShellValue AggregateSeparator(FieldSeparators separators)
     {
@@ -876,8 +888,9 @@ internal sealed class ExpandedWordBuilder
         var splitCasePattern = selection is CaseFieldSelection.All or CaseFieldSelection.First;
         var assembleCasePattern = selection != CaseFieldSelection.None;
         var singleCaseSeparator = splitCasePattern && fieldSeparators.Bytes.Span is [var single] ? single : -1;
-        var splitsCaseEscape = assembleCasePattern && fieldSeparators.Bytes.Span.Contains(CaseQuoteEscape);
-        var splitsCaseNull = assembleCasePattern && fieldSeparators.Bytes.Span.Contains(CaseQuoteNull);
+        var quoteDelimiters = assembleCasePattern ? fieldSeparators.CaseQuoteDelimiters : CaseQuoteBytes.None;
+        var splitsCaseEscape = (quoteDelimiters & CaseQuoteBytes.Escape) != 0;
+        var splitsCaseNull = (quoteDelimiters & CaseQuoteBytes.Null) != 0;
         var encodesCaseQuoting = assembleCasePattern && (_casePatternHasRawQuoteBytes || splitsCaseEscape || splitsCaseNull);
         var splitHereDocument = !quotedGroup && _hereDocumentHasAt && !AssigningHereDocumentOperand;
         var splitAggregateOnSpace = (!quotedGroup && _splitOnSpaces)

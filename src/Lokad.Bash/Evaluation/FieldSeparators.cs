@@ -24,6 +24,7 @@ internal sealed class FieldSeparators
     // new backing belongs to a replacement snapshot in that child's variable scope.
     private readonly HashSet<Rune>? _characters;
     private readonly ByteMembership? _byteMembership;
+    private volatile CaseQuoteBytes _caseQuoteDelimiters;
 
     /// <summary>Initializes separators from an <c>IFS</c> value.</summary>
     private FieldSeparators(ShellValue value, HashSet<Rune>? characters, ByteMembership? byteMembership)
@@ -52,6 +53,22 @@ internal sealed class FieldSeparators
 
     /// <summary>Gets the configured bytes without decoding or copying them.</summary>
     public ReadOnlyMemory<byte> Bytes => _value.Bytes;
+
+    /// <summary>Finds which case quote markers can act as delimiters in this IFS value.</summary>
+    internal CaseQuoteBytes CaseQuoteDelimiters
+    {
+        get
+        {
+            var delimiters = _caseQuoteDelimiters;
+            if (delimiters == CaseQuoteBytes.None)
+            {
+                // Publish both bits together. A concurrent read may compute the same flags.
+                delimiters = CaseQuoting.GetCaseQuoteBytes(Bytes.Span) | CaseQuoteBytes.Captured;
+                _caseQuoteDelimiters = delimiters;
+            }
+            return delimiters & ~CaseQuoteBytes.Captured;
+        }
+    }
 
     /// <summary>
     /// Returns the current <c>IFS</c> value, or the shell default when it is unset.
@@ -137,7 +154,7 @@ internal sealed class FieldSeparators
 
     private FieldSeparators Publish(Variables variables, HashSet<Rune>? characters, ByteMembership? byteMembership)
     {
-        var prepared = new FieldSeparators(_value, characters, byteMembership);
+        var prepared = new FieldSeparators(_value, characters, byteMembership) { _caseQuoteDelimiters = _caseQuoteDelimiters };
         if (ReferenceEquals(variables.CachedFieldSeparators, this))
             variables.CachedFieldSeparators = prepared;
         return prepared;

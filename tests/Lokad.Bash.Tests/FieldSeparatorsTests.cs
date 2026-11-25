@@ -95,6 +95,27 @@ public sealed class FieldSeparatorsTests : IDisposable
     }
 
     [Fact]
+    public void CaseQuoteDelimitersFollowTheSelectedIfsSnapshot()
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("separators", ShellValue.FromText("long\u0001")));
+        Assert.True(variables.TrySetNameref("IFS", ShellValue.FromText("separators")));
+        var original = FieldSeparators.FromVariables(variables);
+        Assert.Equal(CaseQuoteBytes.Escape, original.CaseQuoteDelimiters);
+        Assert.Equal(0, _governor.ReservedBytes);
+
+        var child = variables.Clone();
+        Assert.Same(original, FieldSeparators.FromVariables(child));
+        Assert.Equal(CaseQuoteBytes.Escape, Prepare(child).CaseQuoteDelimiters);
+        Assert.True(child.TrySetScalar("separators", ShellValue.FromBytes(new byte[] { 0xff, 0x7f, 0x01 })));
+        Assert.Equal(CaseQuoteBytes.Escape | CaseQuoteBytes.Null, FieldSeparators.FromVariables(child).CaseQuoteDelimiters);
+        Assert.True(child.TrySetScalar("separators", ShellValue.FromText("abc")));
+        Assert.Equal(CaseQuoteBytes.None, FieldSeparators.FromVariables(child).CaseQuoteDelimiters);
+        Assert.Same(original, FieldSeparators.FromVariables(variables));
+        Assert.Equal(CaseQuoteBytes.Escape, original.CaseQuoteDelimiters);
+    }
+
+    [Fact]
     public void AHereDocumentJoinRetainsItsSelectedSeparatorDuringFieldEnumeration()
     {
         var variables = Variables.CreateEmpty();
