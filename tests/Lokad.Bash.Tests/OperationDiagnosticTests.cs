@@ -14,7 +14,7 @@ public sealed class OperationDiagnosticTests
     [InlineData("read value", "read", "read: read error: 0: ", true)]
     [InlineData("read -d : value", "read", "line 1: read: read error: 0: ", false)]
     [InlineData("read -d : value", "read", "read: read error: 0: ", true)]
-    [InlineData("echo ok", "echo", "echo: write error: ", false)]
+    [InlineData("echo ok", "echo", "line 1: echo: write error: ", false)]
     [InlineData("echo ok", "echo", "echo: write error: ", true)]
     [InlineData("cd /unavailable", "cd", "line 1: cd: /unavailable: ", false)]
     [InlineData("cd /unavailable", "cd", "cd: /unavailable: ", true)]

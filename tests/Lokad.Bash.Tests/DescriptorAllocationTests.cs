@@ -196,7 +196,7 @@ public sealed class DescriptorAllocationTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("after:1", host.StandardOutput.TextContent);
-        Assert.Equal("printf: write error: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: printf: write error: Bad file descriptor\n", host.StandardError.TextContent);
     }
 
     [Theory]

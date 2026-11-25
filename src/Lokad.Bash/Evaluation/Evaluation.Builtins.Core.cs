@@ -83,6 +83,7 @@ public sealed partial class Evaluation
     /// <returns>The finalized evaluation result.</returns>
     private async Task<EvaluationResult> EvaluateBuiltinEchoAsync(
         ReadOnlyMemory<byte> content,
+        EvaluationContext context,
         bool negated)
     {
         var write = content.IsEmpty ? DescriptorWriteResult.Open
@@ -90,7 +91,8 @@ public sealed partial class Evaluation
         if (write.IsError)
         {
             using var diagnostics = new BuiltinDiagnosticScope(this);
-            await ReportBuiltinWriteFailureAsync(ShellValue.FromText("echo"), write).ConfigureAwait(false);
+            await ReportBuiltinWriteFailureAsync(ShellValue.FromText("echo"), write, GetBuiltinDiagnosticPrefix(context))
+                .ConfigureAwait(false);
         }
         var exitCode = write.IsError ? 1 : 0;
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated);

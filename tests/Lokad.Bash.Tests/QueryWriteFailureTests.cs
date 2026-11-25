@@ -24,7 +24,49 @@ public sealed class QueryWriteFailureTests
         var result = await host.RunAsync(script, CancellationToken.None);
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal("line 1: " + error, host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("echo", "payload", "echo")]
+    [InlineData("command", "printf '%s' payload", "printf")]
+    public async Task FormattingWriteFailureUsesTheRetainedDefinitionAndReachedLine(
+        string command, string tail, string name)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/define.sh", $$"""
+            :
+            f() {
+                {{command}} \
+                    {{tail}} \
+                    2>report >&-
+            }
+            """);
+        host.AddFile("/invoke.sh", ":\nf\n");
+
+        var result = await host.RunAsync("source ./define.sh\nsource ./invoke.sh", CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(host.StandardOutput.Content.IsEmpty);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal($"./define.sh: line 4: {name}: write error: Bad file descriptor\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PrintfPublishesCountBeforeReportingAnOutputFailure()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            printf 'abcd%n' count 2>report >&-
+            printf '<%s:%s>' "$?" "$count"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:4>", host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal("line 1: printf: write error: Bad file descriptor\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
@@ -100,15 +142,15 @@ public sealed class QueryWriteFailureTests
     }
 
     [Theory]
-    [InlineData("printf x")]
-    [InlineData("echo x")]
-    [InlineData("printf --help")]
-    [InlineData("read --help")]
-    [InlineData("mapfile --help")]
-    [InlineData("readarray --help")]
-    [InlineData("dirs --help")]
-    [InlineData("eval --help")]
-    public async Task BuiltinOutputFailureKeepsTheHostCause(string script)
+    [InlineData("printf x", "line 1: printf")]
+    [InlineData("echo x", "line 1: echo")]
+    [InlineData("printf --help", "printf")]
+    [InlineData("read --help", "read")]
+    [InlineData("mapfile --help", "mapfile")]
+    [InlineData("readarray --help", "readarray")]
+    [InlineData("dirs --help", "dirs")]
+    [InlineData("eval --help", "eval")]
+    public async Task BuiltinOutputFailureKeepsTheHostCause(string script, string diagnosticName)
     {
         var host = new TestOperationVisitor([]) { RecordAppends = true };
         host.EnqueueAppendResult(DescriptorWriteResult.Failure(new OperationError("reported output failure\n")));
@@ -117,7 +159,8 @@ public sealed class QueryWriteFailureTests
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(2, host.Appends.Count);
         Assert.Equal(FileDescriptor.StdErr, host.Appends[1].Descriptor);
-        Assert.Contains("write error: reported output failure", Encoding.UTF8.GetString(host.Appends[1].Content));
+        Assert.Equal($"{diagnosticName}: write error: reported output failure\n",
+            Encoding.UTF8.GetString(host.Appends[1].Content));
     }
 
     [Theory]

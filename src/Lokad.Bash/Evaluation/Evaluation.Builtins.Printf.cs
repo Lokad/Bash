@@ -105,7 +105,8 @@ public sealed partial class Evaluation
                 var write = await ExecuteWriteAsync(GetStdOutDescriptor(), result.Output).ConfigureAwait(false);
                 if (write.IsError)
                 {
-                    await ReportBuiltinWriteFailureAsync(ShellValue.FromText("printf"), write).ConfigureAwait(false);
+                    await ReportBuiltinWriteFailureAsync(ShellValue.FromText("printf"), write, GetBuiltinDiagnosticPrefix(context))
+                        .ConfigureAwait(false);
                     exitCode = 1;
                 }
             }

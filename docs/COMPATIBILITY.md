@@ -1392,6 +1392,8 @@ Option errors, invalid destination names and format diagnostics report
 the reached builtin line and any active `source` filename. Usage lines
 have no source prefix. An unfinished conversion quotes its full spelling
 from the opening percent sign.
+When `echo` or `printf` output fails, the write diagnostic uses the
+reached source location and stderr mapping.
 `printf -v` assigns the bytes before the first NUL. Later formatted bytes
 still contribute to `%n` and the output length limit. Later conversions
 retain their normal diagnostic and count-assignment effects.
