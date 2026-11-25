@@ -1537,7 +1537,12 @@ public sealed partial class Variables
         TryGetBinding(name, detachBorrowed: false, out var slot);
         Span<byte> flags = stackalloc byte[8];
         var count = WriteDeclarationAttributes(slot, flags);
-        return count == 0 ? ShellValue.Empty : ShellValue.FromBytes(flags[..count].ToArray());
+        return count switch
+        {
+            0 => ShellValue.Empty,
+            1 => ShellValue.FromByte(flags[0]),
+            _ => ShellValue.FromBytes(flags[..count].ToArray())
+        };
     }
 
     private static int WriteDeclarationAttributes(VariableSlot? slot, Span<byte> flags)

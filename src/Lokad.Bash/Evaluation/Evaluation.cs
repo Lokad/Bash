@@ -232,7 +232,7 @@ public sealed partial class Evaluation : IFileTester
     /// <summary> Gets evaluation options. </summary>
     public EvaluationOptions Options { get; }
 
-    internal ShellValue ShellOptionFlags => _state.ErrexitEnabled ? ShellValue.FromText("e") : ShellValue.Empty;
+    internal ShellValue ShellOptionFlags => _state.ErrexitEnabled ? ShellValue.FromByte((byte)'e') : ShellValue.Empty;
 
     /// <summary> Gets the last recorded exit code, if any. </summary>
     public int? LastExitCode => _state.LastExitCode;

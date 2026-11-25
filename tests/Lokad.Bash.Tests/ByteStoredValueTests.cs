@@ -12,6 +12,24 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteStoredValueTests
 {
+    [Fact]
+    public void SingleByteValuesReuseCompactBackingForEveryByte()
+    {
+        for (var index = 0; index <= byte.MaxValue; index++)
+        {
+            var value = ShellValue.FromByte((byte)index);
+            var repeated = ShellValue.FromByte((byte)index);
+
+            Assert.Equal(1, value.Bytes.Length);
+            Assert.Equal((byte)index, value.Bytes.Span[0]);
+            Assert.True(MemoryMarshal.TryGetArray(value.Bytes, out var backing));
+            Assert.True(MemoryMarshal.TryGetArray(repeated.Bytes, out var repeatedBacking));
+            Assert.Same(backing.Array, repeatedBacking.Array);
+            Assert.True(value.TryGetCompactArrayCapacity(out var capacity));
+            Assert.Equal(1, capacity);
+        }
+    }
+
     [Theory]
     [InlineData("plain", false)]
     [InlineData("plain", true)]

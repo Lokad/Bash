@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text.Unicode;
+using System.Threading;
 using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash;
@@ -47,6 +48,19 @@ public readonly struct ShellValue : IEquatable<ShellValue>
 
     /// <summary>Encodes source or host text as UTF-8 value bytes.</summary>
     public static ShellValue FromText(string text) => new(Utf8Text.Encode(text));
+
+    internal static ShellValue FromByte(byte value)
+    {
+        ref var entry = ref SingleByteStorage.Values[value];
+        var bytes = Volatile.Read(ref entry);
+        if (bytes == null)
+        {
+            // A slice of a shared large array would require copying into variable storage.
+            bytes = [value];
+            bytes = Interlocked.CompareExchange(ref entry, bytes, null) ?? bytes;
+        }
+        return new ShellValue(bytes);
+    }
 
     internal static ShellValue FromInteger(long value) => new(NumberFormatting.FormatNumber(value));
 
@@ -108,4 +122,9 @@ public readonly struct ShellValue : IEquatable<ShellValue>
     public static bool operator ==(ShellValue left, ShellValue right) => left.Equals(right);
 
     public static bool operator !=(ShellValue left, ShellValue right) => !left.Equals(right);
+
+    private static class SingleByteStorage
+    {
+        internal static readonly byte[]?[] Values = new byte[byte.MaxValue + 1][];
+    }
 }

@@ -48,7 +48,7 @@ public sealed partial class Evaluation
         {
             var text = option.Outcome == GetoptsOutcome.Missing ? "option requires an argument -- " : "illegal option -- ";
             await WriteDiagnosticUnlessStderrClosedAsync([variables.ArgumentZero.IsEmpty ? command : variables.ArgumentZero],
-                [ShellValue.FromText(text), ByteValue(option.Flag)], diagnostics).ConfigureAwait(false);
+                [ShellValue.FromText(text), ShellValue.FromByte(option.Flag)], diagnostics).ConfigureAwait(false);
         }
 
         int status;
@@ -67,7 +67,7 @@ public sealed partial class Evaluation
                     status = await SetNameAsync(silent && option.Outcome == GetoptsOutcome.Missing ? (byte)':' : (byte)'?')
                         .ConfigureAwait(false);
                     if (silent)
-                        _ = await AssignAsync("OPTARG", ByteValue(option.Flag)).ConfigureAwait(false);
+                        _ = await AssignAsync("OPTARG", ShellValue.FromByte(option.Flag)).ConfigureAwait(false);
                     else
                         ClearArgument();
                     break;
@@ -112,7 +112,7 @@ public sealed partial class Evaluation
                 return 1;
 
             var target = BindingNameExpansion.FromValue(name, Memory);
-            var assigned = await AssignAsync(target, ByteValue(optionByte)).ConfigureAwait(false);
+            var assigned = await AssignAsync(target, ShellValue.FromByte(optionByte)).ConfigureAwait(false);
             return assigned switch
             {
                 BuiltinAssignmentResult.Readonly => 2,
@@ -129,8 +129,6 @@ public sealed partial class Evaluation
             destination.ClearGetoptsArgument();
             bindings?.CompleteOutput("OPTARG", destination);
         }
-
-        static ShellValue ByteValue(byte value) => ShellValue.FromBytes(new[] { value });
 
         static GetoptsOption Scan(ReadOnlySpan<byte> spec, IReadOnlyList<ShellValue> args, int start,
             ref GetoptsCursor cursor)
