@@ -170,14 +170,20 @@ internal static partial class WordExpansion
         ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode,
         Func<VariableReference, ResolvedVariableReference, ShellValue, bool>? assignOutput, ShellValue command)
     {
-        var context = scope.Arithmetic ?? new ArithmeticContext(0);
+        var context = scope.Arithmetic ?? new ArithmeticContext(0)
+        {
+            IsIntegerPromotion = failureMode == ArithmeticFailureMode.Promotion
+        };
         return context.Depth == 0 ? context.Work.RunAsync(EvaluateCoreAsync) : context.Work.Enqueue(EvaluateCoreAsync);
 
         async Task<long?> EvaluateCoreAsync()
         {
             if (context.Depth >= ShellSourceCursor.MaximumNestedExpansionDepth)
             {
-                await ReportAsync(new ArithmeticError(ArithmeticErrorKind.NestingLimit, expression.Value)).ConfigureAwait(false);
+                var recursionError = context.IsIntegerPromotion
+                    ? new ArithmeticError(ArithmeticErrorKind.ExpressionRecursionLimit, expression.Value) { Token = expression.Value }
+                    : new ArithmeticError(ArithmeticErrorKind.NestingLimit, expression.Value);
+                await ReportAsync(recursionError).ConfigureAwait(false);
                 return null;
             }
             scope = scope with { Arithmetic = context with { Depth = context.Depth + 1 } };
@@ -221,8 +227,11 @@ internal static partial class WordExpansion
                         // Values are arithmetic expressions, not fresh shell source. Share the
                         // existing numeric pump so recursive reads never grow a callback stack.
                         scope.Effects.Memory.Charge(checked(256L + 4L * stored.Bytes.Length));
+                        var nestedScope = selected.Syntax.Kind != VariableReferenceKind.Name
+                            && scope.Arithmetic is { IsIntegerPromotion: true, ReadThroughElement: false } active
+                            ? scope with { Arithmetic = active with { ReadThroughElement = true } } : scope;
                         var nested = await EvaluateArithmeticAsync(ArithmeticOperand.FromValue(stored),
-                            scope, failureMode, assignOutput, command).ConfigureAwait(false);
+                            nestedScope, failureMode, assignOutput, command).ConfigureAwait(false);
                         if (nested is not { } number)
                         {
                             referenceFailureReported = true;
@@ -399,14 +408,15 @@ internal static partial class WordExpansion
         {
             var message = ShellValue.FromText(error.Message);
             var showCommand = !command.IsEmpty && (error.Token.HasValue
-                || failureMode == ArithmeticFailureMode.IntegerAssignment && error.Kind != ArithmeticErrorKind.ReadonlyVariable);
+                || failureMode == ArithmeticFailureMode.IntegerAssignment && error.Kind != ArithmeticErrorKind.ReadonlyVariable)
+                && (error.Kind != ArithmeticErrorKind.ExpressionRecursionLimit || !context.ReadThroughElement);
             ReadOnlySpan<ShellValue> subject = showCommand
                 ? [command, ShellValue.FromText(": "), error.Subject]
                 : [error.Subject];
             ReadOnlySpan<ShellValue> detail = error.Token is { } token
                 ? [message, ShellValue.FromText(" (error token is \""), token, ShellValue.FromText("\")")]
                 : [message];
-            if (failureMode == ArithmeticFailureMode.Diagnostic)
+            if (failureMode is ArithmeticFailureMode.Diagnostic or ArithmeticFailureMode.Promotion)
                 return scope.Effects.ReportBuiltinDiagnosticAsync(subject, detail, scope.Context);
             if (failureMode == ArithmeticFailureMode.IntegerAssignment)
                 return scope.Effects.ReportIntegerAssignmentFailureAsync(subject, detail, scope);
@@ -428,5 +438,5 @@ internal static partial class WordExpansion
         internal sealed record Invalid(ShellValue Subject, bool IsNameref) : ArithmeticReferenceFallback;
     }
 
-    internal enum ArithmeticFailureMode { Diagnostic, Expansion, ArrayIndex, IntegerAssignment }
+    internal enum ArithmeticFailureMode { Diagnostic, Expansion, ArrayIndex, IntegerAssignment, Promotion }
 }

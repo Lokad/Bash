@@ -86,7 +86,8 @@ internal static partial class WordExpansion
 
         internal async ValueTask<ShellValue?> AssignValueAsync(
             ScopedEvaluation scope, Variables destination, BindingName sourceName, ShellValue value,
-            AssignmentOperator operation, ShellValue command, DeclarationWrite declarationWrite)
+            AssignmentOperator operation, ShellValue command, DeclarationWrite declarationWrite,
+            ScopedEvaluation? valueScope = null)
         {
             if (Name.IsEmpty)
                 return null;
@@ -96,7 +97,8 @@ internal static partial class WordExpansion
             if ((attributes & Variables.BindingAttributes.Integer) != 0
                 && declarationWrite == DeclarationWrite.Ordinary && destination.IsReadonly(Name))
                 return null;
-            if (await PrepareAssignmentValueAsync(value, previous, attributes, scope, command).ConfigureAwait(false) is not { } prepared)
+            if (await PrepareAssignmentValueAsync(value, previous, attributes, valueScope ?? scope, command)
+                .ConfigureAwait(false) is not { } prepared)
                 return null;
             value = prepared;
             if (!TryPublishValue(scope with { Variables = destination }, sourceName, value, declarationWrite))
@@ -709,7 +711,10 @@ internal static partial class WordExpansion
             var operand = preparedSubscript is { QuoteForArithmetic: true }
                 ? ArithmeticOperand.FromExpandedIndex(QuoteExpandedArithmeticIndex(expanded, scope))
                 : ArithmeticOperand.FromValue(expanded);
-            var evaluated = await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.ArrayIndex).ConfigureAwait(false);
+            // A literal index does not need another recursive arithmetic frame during promotion.
+            var evaluated = scope.Arithmetic is { IsIntegerPromotion: true }
+                && ArithmeticEvaluation.TryParseIntegerLiteral(operand.Value.Bytes.Span, scope.Effects.CancellationToken, out var literal)
+                ? literal : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.ArrayIndex).ConfigureAwait(false);
             if (evaluated is not { } index)
                 return null;
 

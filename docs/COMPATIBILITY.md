@@ -807,6 +807,18 @@ element selector unevaluated.
 When nonlocal `declare` or `typeset` promotes a temporary value through
 a whole-name reference, the active prefix supplies its value and new
 attributes. The saved referent retains its array kind and other elements.
+At script scope, applying export or readonly to a temporary scalar over an
+integer binding converts the value before the next declaration operand.
+Publication evaluates the staged text again in the restored bindings.
+An explicit integer attribute on the temporary assignment converts its
+value to decimal during assignment. Publication then reads that decimal
+value. Arithmetic writes reached during conversion follow the prefix
+scope's ordinary expansion rules.
+An operand's failed conversion stops later operands. Previously completed
+integer promotions still publish. If publication reports an arithmetic
+diagnostic without an expansion failure, it retains the staged bytes and
+preserves the status selected by the operands. A selector expansion failure
+ends publication of that value and leaves the converted operand value in place.
 When the prefix hides an element reference, promotion waits until the
 declaration's operands finish. It evaluates the restored reference's selector
 once using the caller's bindings and earlier promotions. Multiple prefixes

@@ -429,33 +429,38 @@ public sealed partial class Variables
                 return;
 
             if (_owner.Scalars.TryGetValue(name, out var value))
-            {
-                // A scalar promotion updates element zero of a caller array, not its whole binding.
-                var previousCursor = _retained._getoptsCursor;
-                _retained.TryGetBinding(name, out var previous);
-                StageRetainedBinding(_saved, name, memory, cancellationToken);
-                try
-                {
-                    _retained.UpdateBindingAttributes(name, assignmentAttributes, BindingAttributes.None);
-                    _retained.SetResolvedValuePreservingArray(name, value, memory);
-                }
-                catch (MemoryBudgetExceededException)
-                {
-                    // The staged replacement was never selected. Preserve an earlier output.
-                    if (previous != null)
-                        _retained.StoreBinding(name, previous);
-                    else
-                        _retained.ClearBinding(name);
-                    _retained._getoptsCursor = previousCursor;
-                    throw;
-                }
-                _retained.SetAttribute(name, BindingAttributes.Readonly, _owner.IsReadonlyBinding(name));
-                _retained.SetExported(name, _owner.IsExported(name));
-            }
+                RetainScalarBinding(name, value, memory, cancellationToken, assignmentAttributes);
             else
             {
                 StageRetainedBinding(_owner, name, memory, cancellationToken);
+                _retainedNames.Add(name);
             }
+        }
+
+        /// <summary>Stages a prepared value for an already selected scalar prefix, preserving a saved array's kind.</summary>
+        internal void RetainScalarBinding(BindingName name, ShellValue value, EvaluationMemory memory,
+            CancellationToken cancellationToken, BindingAttributes assignmentAttributes)
+        {
+            var previousCursor = _retained._getoptsCursor;
+            _retained.TryGetBinding(name, out var previous);
+            StageRetainedBinding(_saved, name, memory, cancellationToken);
+            try
+            {
+                _retained.UpdateBindingAttributes(name, assignmentAttributes, BindingAttributes.None);
+                _retained.SetResolvedValuePreservingArray(name, value, memory);
+            }
+            catch (MemoryBudgetExceededException)
+            {
+                // The staged replacement was never selected. Preserve an earlier output.
+                if (previous != null)
+                    _retained.StoreBinding(name, previous);
+                else
+                    _retained.ClearBinding(name);
+                _retained._getoptsCursor = previousCursor;
+                throw;
+            }
+            _retained.SetAttribute(name, BindingAttributes.Readonly, _owner.IsReadonlyBinding(name));
+            _retained.SetExported(name, _owner.IsExported(name));
             _retainedNames.Add(name);
         }
 

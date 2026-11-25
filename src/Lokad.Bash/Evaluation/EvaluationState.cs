@@ -629,7 +629,8 @@ internal sealed class EvaluationState
         return false;
     }
 
-    public void SetExpansionError(int exitCode) => _pendingExpansionError = (exitCode, ExpansionErrorKind.General);
+    public void SetExpansionError(int exitCode, ExpansionErrorKind kind = ExpansionErrorKind.General) =>
+        _pendingExpansionError = (exitCode, kind);
 
     internal void SetHereDocumentSyntaxError() => _pendingExpansionError = (1, ExpansionErrorKind.HereDocumentSyntax);
 

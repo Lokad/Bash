@@ -139,6 +139,107 @@ public sealed class DeclarationAttributeTestsEndToEnd
         Assert.Equal(0, result.Host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("-x", 13, "-ax", "marker")]
+    [InlineData("-ix", 10, "-aix", "0")]
+    public async Task PromotedIntegerExpressionsUpdateOtherPrefixesBeforeTheNextOperand(
+        string flags, int value, string arrayFlags, string marker)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -i a=22; declare -n link=a; i=0; note=()
+            i=7 link=5 declare {flags} link='i+=3' 'note[i]=marker'
+            printf '<%s:%s>\n' "$?" "$i"
+            declare -p a link note
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:{value}>\ndeclare -ix a=\"{value}\"\ndeclare -n link=\"a\"\n"
+            + $"declare {arrayFlags} note=([10]=\"{marker}\")\n", result.StdOut);
+        Assert.Equal("", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("link='i+=3' 'note[i]=marker'", 3)]
+    [InlineData("'note[i]=marker' link='i+=3'", 0)]
+    public async Task IntegerPrefixPromotionReevaluatesAfterRestoringAnIndexedBinding(string operands, int index)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -ai a=(22 33); declare -n link=a; i=0; note=()
+            link=5 declare -x {operands}
+            printf '<%s:%s>\n' "$?" "$i"
+            declare -p a link note
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:6>\ndeclare -aix a=([0]=\"6\" [1]=\"33\")\ndeclare -n link=\"a\"\n"
+            + $"declare -ax note=([{index}]=\"marker\")\n", result.StdOut);
+        Assert.Equal("", result.StdErr);
+    }
+
+    [Fact]
+    public async Task IntegerPrefixPublicationRunsAfterALaterOperandFails()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -i a=22 b=44; declare -n link=a; i=0; note=(); trap 'printf "EXIT:%s:%s\n" "$?" "$i"; declare -p a b' EXIT
+            link=5 declare -x link='i+=3' b='++i/0' later=yes
+            printf "AFTER:%s:%s\n" "$?" "$i"
+            :
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("AFTER:1:7\nEXIT:0:7\ndeclare -ix a=\"7\"\ndeclare -ix b=\"44\"\n", result.StdOut);
+        Assert.Equal("line 2: declare: ++i/0: division by 0 (error token is \"0\")\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task IntegerPrefixPublicationKeepsTheSpellingWhenReevaluationFails()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -i a=22; declare -n link=a; i=0
+            set -e; trap 'printf "EXIT:%s:%s\n" "$?" "$i"; declare -p a' EXIT
+            link=5 declare -x link='1/(2-++i)' later=yes
+            printf '<%s:%s>\n' "$?" "$i"
+            declare -p a later
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:2>\ndeclare -ix a=\"1/(2-++i)\"\ndeclare -x later=\"yes\"\n"
+            + "EXIT:0:2\ndeclare -ix a=\"1/(2-++i)\"\n", result.StdOut);
+        Assert.Equal("line 3: 1/(2-++i): division by 0 (error token is \"(2-++i)\")\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("a[0]", "a[0]")]
+    [InlineData("a[i]", "i")]
+    public async Task RecursiveIntegerPrefixConversionPreservesTheSavedBinding(string value, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -i a=22; declare -n link=a; i=0
+            link=5 declare -x earlier=yes link='{value}' later=yes
+            printf '<%s:%s:%s>\n' "$?" "$earlier" "$later"
+            declare -p a link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:yes:>\ndeclare -i a=\"22\"\ndeclare -n link=\"a\"\n", result.StdOut);
+        Assert.Equal($"line 2: {diagnostic}: expression recursion level exceeded (error token is \"{diagnostic}\")\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task IntegerPrefixPublicationPreservesTheConvertedValueWhenItsSelectorFails()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -i a=22; declare -n link=a; item=(4 8); i=0
+            link=5 declare -x earlier=yes link='item[1/(2-++i)]' later=yes
+            printf '<%s:%s:%s:%s>\n' "$?" "$i" "$earlier" "$later"
+            declare -p a item
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:2:yes:yes>\ndeclare -ix a=\"8\"\ndeclare -a item=([0]=\"4\" [1]=\"8\")\n", result.StdOut);
+        Assert.Equal("line 2: 1/(2-++i): division by 0 (error token is \"(2-++i)\")\n", result.StdErr);
+    }
+
     [Fact]
     public async Task LocalNamerefInitializerKeepsReadonlyOnTheReference()
     {

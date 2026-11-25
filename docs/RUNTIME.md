@@ -427,6 +427,13 @@ It reserves the staged values before restoring the command bindings and releases
 the ordering scratch before any selector runs. The evaluator publishes the
 selected elements once through the existing assignment path, in temporary-table
 order, before returning the declaration's result.
+For a temporary scalar over an integer binding, the retained store stages
+the converted value beside the temporary operand spelling. The evaluator
+reads the active command bindings during operand conversion and uses the
+existing write target to retain direct arithmetic effects. Publication
+feeds the captured spelling to the shared arithmetic evaluator after
+restoration. A pending operand failure keeps its original status and
+reader disposition while completed integer promotions finish.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.

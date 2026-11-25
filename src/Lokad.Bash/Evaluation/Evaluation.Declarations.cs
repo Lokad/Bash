@@ -474,7 +474,7 @@ public sealed partial class Evaluation
         SimpleCommand Command, DeclarationOptions Options, IReadOnlyList<PreparedDeclarationOperand> Operands, ShellValue? LastArgument);
 
     private enum DeclarationAttributeChange { Unchanged, Set, Clear }
-    private enum DeclarationPrefixPromotion { Element, Nameref }
+    private enum DeclarationPrefixPromotion { Element, Nameref, Integer }
 
     /// <summary>Positive options select listing attributes even when a later option clears mutation intent.</summary>
     [Flags]

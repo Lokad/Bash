@@ -2313,6 +2313,7 @@ public sealed partial class Evaluation : IFileTester
             var operandFailureStatus = 1;
             List<Variables.CommandBindings>? exposedPrefixes = null;
             Dictionary<BindingName, DeclarationPrefixPromotion>? deferredPrefixPromotions = null;
+            ExpansionFailure? failedIntegerPromotion = null;
             for (var index = 0; index < operands.Count; index++)
             {
                 var operand = operands[index];
@@ -3350,6 +3351,8 @@ public sealed partial class Evaluation : IFileTester
                     else
                         await ApplyAttributesAsync(attributeBinding.Name, attributeBinding.Owner, global, local, assignmentExport).ConfigureAwait(false);
                 }
+                if (failedIntegerPromotion.HasValue)
+                    break;
                 if (wroteUnmarkedPrefix && bindings != null)
                 {
                     // The assignment persists without carrying export from the command prefix.
@@ -3362,6 +3365,8 @@ public sealed partial class Evaluation : IFileTester
 
             if (deferredPrefixPromotions is { Count: > 0 } && bindings != null)
                 await PublishDeclarationPrefixesAsync(bindings, declarationPrefixOrder, deferredPrefixPromotions).ConfigureAwait(false);
+            if (failedIntegerPromotion is { } failedPromotion)
+                SetFatalExpansionError(failedPromotion);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
 
             async Task PublishDeclarationPrefixesAsync(Variables.CommandBindings commandBindings,
@@ -3393,11 +3398,19 @@ public sealed partial class Evaluation : IFileTester
                     var publicationScope = executionScope with { Variables = binding.Owner };
                     if (binding.Reference.Kind == VariableReferenceKind.Name)
                     {
-                        var prepared = await WordExpansion.PrepareAssignmentValueAsync(value, previous: null,
-                            binding.Owner.GetAssignmentAttributes(binding.Name), publicationScope, ShellValue.Empty).ConfigureAwait(false);
-                        if (prepared is not { } assigned)
-                            continue;
-                        binding.Owner.SetResolvedValuePreservingArray(binding.Name, assigned, Memory);
+                        var assignmentAttributes = binding.Owner.GetAssignmentAttributes(binding.Name);
+                        if (promotion == DeclarationPrefixPromotion.Integer && (assignmentAttributes & BindingAttributes.Integer) != 0)
+                        {
+                            await PublishIntegerAsync(binding, value, publicationScope).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            var prepared = await WordExpansion.PrepareAssignmentValueAsync(value, previous: null,
+                                assignmentAttributes, publicationScope, ShellValue.Empty).ConfigureAwait(false);
+                            if (prepared is not { } assigned)
+                                continue;
+                            binding.Owner.SetResolvedValuePreservingArray(binding.Name, assigned, Memory);
+                        }
                     }
                     else
                     {
@@ -3409,6 +3422,32 @@ public sealed partial class Evaluation : IFileTester
                             continue;
                     }
                     binding.Owner.UpdateBindingAttributes(binding.Name, attributes, BindingAttributes.None);
+                }
+
+                async ValueTask PublishIntegerAsync(VariableBinding binding, ShellValue value, ScopedEvaluation publicationScope)
+                {
+                    var failedOperand = _state.TryConsumeExpansionError(out var status, out var kind);
+                    var fatalOperand = _state.FatalExpansion;
+                    if (failedOperand)
+                        _state.FatalExpansion = null;
+                    try
+                    {
+                        var converted = await WordExpansion.EvaluateIntegerAssignmentAsync(value, addend: null,
+                            publicationScope, ShellValue.Empty,
+                            WordExpansion.ArithmeticFailureMode.Promotion).ConfigureAwait(false);
+                        // An arithmetic diagnostic keeps the staged spelling. A failed selector stops the write.
+                        if (!HasPendingExpansionError)
+                            binding.Owner.SetResolvedValuePreservingArray(binding.Name, converted ?? value, Memory);
+                    }
+                    finally
+                    {
+                        // A completed operand publishes during unwind. The failed operand still selects the result.
+                        if (failedOperand)
+                        {
+                            _state.FatalExpansion = fatalOperand;
+                            _state.SetExpansionError(status, kind);
+                        }
+                    }
                 }
 
                 void CaptureInBashOrder(IReadOnlyList<BindingName> order)
@@ -3845,6 +3884,14 @@ public sealed partial class Evaluation : IFileTester
                 ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(bindings?.SavedVariables ?? declarationScope.Variables, prefixNames)
             };
 
+            ScopedEvaluation GetIntegerPromotionScope(ScopedEvaluation writeScope, Variables.CommandBindings commandBindings) => writeScope with
+            {
+                ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(commandBindings.SavedVariables, commandBindings.PrefixNames)
+                {
+                    PreparingPrefixes = true
+                }
+            };
+
             async Task<bool> TryAssignDeclarationValueAsync(
                 WordExpansion.ResolvedVariableReference target, VariableReference reference, ScopedEvaluation writeScope, Variables destination,
                 ShellValue value, AssignmentOperator operation, WordExpansion.DeclarationWrite declarationWrite, BindingName diagnosticName,
@@ -3874,8 +3921,19 @@ public sealed partial class Evaluation : IFileTester
                         destination.SetIntegerBinding(target.Name, options.IntegerChange == DeclarationAttributeChange.Set);
                     destination.SetCaseAttributes(target.Name, options.CaseChange);
                 }
-                return await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
-                    ShellValue.FromText(commandName), declarationWrite).ConfigureAwait(false) is not null;
+                var valueScope = mayDeferPrefixPromotion && !options.Global && bindings is { } commandBindings
+                    && ReferenceEquals(destination, commandVars) && target is WordExpansion.ResolvedVariableReference.Scalar
+                    && commandBindings.Contains(target.Name) && destination.IsIntegerBinding(target.Name)
+                    ? GetIntegerPromotionScope(writeScope, commandBindings) : writeScope;
+                if (await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
+                    ShellValue.FromText(commandName), declarationWrite, valueScope).ConfigureAwait(false) is not null)
+                    return true;
+                if (applyAssignmentAttributes && reference.Kind == VariableReferenceKind.Name
+                    && target is WordExpansion.ResolvedVariableReference.Scalar
+                    && deferredPrefixPromotions?.ContainsValue(DeclarationPrefixPromotion.Integer) == true
+                    && bindings?.Contains(target.Name) == false && _state.FatalExpansion?.Kind == ExpansionFailureKind.IntegerAssignment)
+                    SetAttributes(target.Name, destination, options.ExportChange);
+                return false;
             }
 
             async Task ApplyNamedAttributesAsync(BindingName name, ShellValue? assignmentPrefix)
@@ -3930,6 +3988,28 @@ public sealed partial class Evaluation : IFileTester
                 if (!global && !local && bindings is { } commandBindings
                     && (exportChange == DeclarationAttributeChange.Set || options.Readonly))
                 {
+                    if (mayDeferPrefixPromotion && commandBindings.Contains(attributeName)
+                        && commandBindings.SavedVariables.IsIntegerBinding(attributeName)
+                        && variables.Scalars.TryGetValue(attributeName, out var integerOperand))
+                    {
+                        var deferred = GetDeferredPrefixPromotions(commandBindings.PrefixNames.Count);
+                        var converted = await WordExpansion.EvaluateIntegerAssignmentAsync(integerOperand, addend: null,
+                            GetIntegerPromotionScope(executionScope, commandBindings), ShellValue.FromText(commandName),
+                            WordExpansion.ArithmeticFailureMode.Promotion)
+                            .ConfigureAwait(false);
+                        if (converted is not { } integerValue)
+                        {
+                            failedIntegerPromotion = GetIntegerAssignmentFailure();
+                            return;
+                        }
+                        // Arithmetic reads the temporary scalar. The caller receives the converted value
+                        // before the original spelling is evaluated again after restoration.
+                        var assignmentAttributes = GetPromotionAttributes(variables, attributeName)
+                            & (BindingAttributes.Integer | BindingAttributes.Case);
+                        commandBindings.RetainScalarBinding(attributeName, integerValue, Memory, _cancellationToken, assignmentAttributes);
+                        deferred[attributeName] = DeclarationPrefixPromotion.Integer;
+                        return;
+                    }
                     // A nonlocal declaration promotes the prefix reached through its reference.
                     if (options.Builtin == BuiltinKind.Declare && options.NamerefChange == DeclarationAttributeChange.Unchanged
                         && attributeName != name && commandBindings.Contains(attributeName))
@@ -4874,15 +4954,19 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
 
-        if (kind == ExpansionFailureKind.IntegerAssignment && _state.ForkKind is null or ShellForkKind.Subshell
-            && _state.LastExitCode is { } previousStatus && previousStatus != 0)
-            SetFatalExpansionError(new ExpansionFailure(kind, previousStatus));
+        if (kind == ExpansionFailureKind.IntegerAssignment)
+            SetFatalExpansionError(GetIntegerAssignmentFailure());
         else if (canResumeUntestedUnit)
             SetFatalExpansionError(new ExpansionFailure(kind, 1) { CanResumeUntestedUnit = true });
         else
             SetFatalExpansionError(kind);
         return WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
     }
+
+    private ExpansionFailure GetIntegerAssignmentFailure() =>
+        _state.ForkKind is null or ShellForkKind.Subshell && _state.LastExitCode is { } previousStatus && previousStatus != 0
+            ? new ExpansionFailure(ExpansionFailureKind.IntegerAssignment, previousStatus)
+            : new ExpansionFailure(ExpansionFailureKind.IntegerAssignment);
 
     internal void SetFatalExpansionError(ExpansionFailureKind kind) =>
         SetFatalExpansionError(new ExpansionFailure(kind));
