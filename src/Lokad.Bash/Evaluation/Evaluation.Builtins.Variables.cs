@@ -84,7 +84,7 @@ public sealed partial class Evaluation
                     _builtinDiagnostics, ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
                 continue;
             }
-            if (name.IsEmpty || namerefs && !commandVars.TryGetNameref(name, out _))
+            if (name.IsEmpty || namerefs && !commandVars.HasNamerefAttribute(name))
                 continue;
             var unsetFlags = namerefs ? UnsetFlags.NamerefOnly : UnsetFlags.None;
             if (!namerefs && (directSelector || resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name))
@@ -110,6 +110,8 @@ public sealed partial class Evaluation
                 && !terminal.IsUnsetNameref && terminal.Owner.IsReadonlyBinding(terminal.Name))
                 target = target with { ReadonlyName = terminal.Name };
             var removedName = target.Name;
+            if (!namerefs && target.ReadonlyName.IsEmpty && commandVars.IsArrayNameref(removedName))
+                continue;
             var keepExport = commandVars.IsExported(removedName)
                 && context.FunctionContext?.Locals.IsDeclaredPrefix(removedName) == true;
             if (!commandVars.TryUnsetSelected(target, unsetFlags))

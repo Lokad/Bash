@@ -566,6 +566,18 @@ public sealed partial class Variables
                 Publish(name, command);
         }
 
+        internal void PrepareRejectedNamerefArray(Variables command, BindingName name, ArrayKind kind, bool initialized,
+            EvaluationMemory memory)
+        {
+            memory.Charge(BindingOverheadBytes);
+            VariableSlot array = kind == ArrayKind.Indexed
+                ? new IndexedSlot(new IndexedArray(isInitialized: initialized))
+                : new AssociativeSlot(new AssociativeArray(isInitialized: initialized));
+            array.Attributes = BindingAttributes.ArrayNameref;
+            command.ReplaceValue(name, array);
+            Publish(name, command);
+        }
+
         public bool Declares(BindingName name) => DeclarationOwner(name).OwnsDeclaration(name);
 
         public bool IsDeclaredPrefix(BindingName name)
@@ -1034,7 +1046,7 @@ public sealed partial class Variables
     {
         if (name.IsEmpty || IsReadonly(name))
             return false;
-        if (!NamerefTargets.ContainsKey(name))
+        if (!HasNamerefAttribute(name))
             ReplaceValue(name, new UnassignedSlot());
         return true;
     }
@@ -1063,6 +1075,8 @@ public sealed partial class Variables
 
     private void SetResolvedScalar(BindingName resolved, VariableSlot? slot, ShellValue value)
     {
+        if (slot?.IsArrayNameref == true)
+            return;
         if (slot is ScalarSlot scalar)
         {
             using var memory = TrackBindingMemory(resolved);
@@ -1110,6 +1124,12 @@ public sealed partial class Variables
             return false;
 
         var name = target.Name;
+        if (IsArrayNameref(name))
+        {
+            if (flags == UnsetFlags.NamerefOnly)
+                ClearBinding(name);
+            return true;
+        }
         if (flags == UnsetFlags.NamerefOnly)
         {
             if (RemoveValue<NamerefSlot>(name))
@@ -1362,7 +1382,7 @@ public sealed partial class Variables
             return false;
 
         TryGetBinding(resolved, out var slot);
-        if (slot is AssociativeSlot && !replaceAssociative)
+        if (slot is AssociativeSlot && !replaceAssociative || slot?.IsArrayNameref == true)
             return false;
         if (value is { } assigned)
         {
@@ -1434,7 +1454,7 @@ public sealed partial class Variables
             return false;
 
         TryGetBinding(resolved, out var slot);
-        if (slot is IndexedSlot)
+        if (slot is IndexedSlot || slot?.IsArrayNameref == true)
             return false;
         if (value is { } assigned)
             value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, assigned, memory);
@@ -1530,7 +1550,7 @@ public sealed partial class Variables
             flags[length++] = kind;
         if ((attributes & BindingAttributes.Integer) != 0)
             flags[length++] = (byte)'i';
-        if (slot is NamerefSlot)
+        if (slot is NamerefSlot || slot?.IsArrayNameref == true)
             flags[length++] = (byte)'n';
         if ((attributes & BindingAttributes.Readonly) != 0)
             flags[length++] = (byte)'r';
@@ -1703,8 +1723,24 @@ public sealed partial class Variables
             SetIntegerBinding(name, false);
     }
 
-    internal bool TryRemoveNamerefAttribute(BindingName name) =>
-        !HasAttribute(name, BindingAttributes.Readonly) && RemoveValue<NamerefSlot>(name);
+    internal bool IsArrayNameref(BindingName name) => HasAttribute(name, BindingAttributes.ArrayNameref);
+
+    internal bool HasNamerefAttribute(BindingName name) => TryGetBinding(name, detachBorrowed: false, out var slot)
+        && (slot is NamerefSlot || slot.IsArrayNameref);
+
+    internal bool IsNamerefSet(BindingName name) => TryGetBinding(name, detachBorrowed: false, out var slot)
+        && (slot is NamerefSlot reference ? !reference.Value.IsEmpty
+            : slot.IsArrayNameref && IsAssigned(slot));
+
+    internal bool TryRemoveNamerefAttribute(BindingName name)
+    {
+        if (HasAttribute(name, BindingAttributes.Readonly))
+            return false;
+        if (!IsArrayNameref(name))
+            return RemoveValue<NamerefSlot>(name);
+        SetAttribute(name, BindingAttributes.ArrayNameref, false);
+        return true;
+    }
 
     /// <summary>Replaces a nameref with an unassigned scalar while preserving its declaration attributes.</summary>
     internal void DetachNamerefToUnassigned(BindingName name) => ReplaceValue(name, new UnassignedSlot());

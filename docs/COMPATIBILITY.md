@@ -169,6 +169,12 @@ selector with `-n` selects that local before rejecting the nameref flag.
 A nonempty replacement initializer in that form is validated as a nameref
 target before the array can be prepared. An append follows selector handling.
 A nonempty selector with `-n` fails before that selection or selector evaluation.
+When an empty element declaration with `-n` instead reaches an existing local
+reference to a whole variable, the rejected declaration leaves an empty array
+with the nameref attribute and no target. The array is initialized when the
+old reference had a target. Named `+n` clears the attribute and makes the array
+available for assignment. `unset -n` clears the local value. An ordinary
+whole-name assignment before clearing the attribute leaves the array empty.
 
 For a whole-name `local +n` declaration, a target spelling that has no
 binding becomes a local of its own. A readonly alias can take this path and

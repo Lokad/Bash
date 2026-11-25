@@ -32,6 +32,30 @@ public sealed class CollectionOwnershipTests
     }
 
     [Fact]
+    public void RefusedRejectedNamerefArrayPreparationPreservesBothBindingOwners()
+    {
+        var owner = Variables.CreateEmpty();
+        var command = Variables.CreateEmpty();
+        var oldTarget = ShellValue.FromText("dest");
+        Assert.True(owner.TrySetNameref("slot", oldTarget));
+        Assert.True(command.TrySetNameref("slot", oldTarget));
+        var locals = new Variables.LocalBindings(owner, parent: null, prefixes: null);
+        var governor = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                locals.PrepareRejectedNamerefArray(command, "slot", ArrayKind.Indexed, initialized: true, memory));
+            Assert.True(command.TryGetNameref("slot", out var commandTarget));
+            Assert.Equal(oldTarget, commandTarget);
+            Assert.True(owner.TryGetNameref("slot", out var ownerTarget));
+            Assert.Equal(oldTarget, ownerTarget);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void IndexedWriteAdmitsBackingOverlapBeforeAddingAPosition()
     {
         var variables = Variables.CreateEmpty();

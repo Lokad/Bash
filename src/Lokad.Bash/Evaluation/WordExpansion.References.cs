@@ -105,6 +105,8 @@ internal static partial class WordExpansion
         private bool TryPublishValue(
             ScopedEvaluation scope, BindingName sourceName, ShellValue value, DeclarationWrite declarationWrite)
         {
+            if (IsWholeBindingRead && this is Indexed or Associative && scope.Variables.IsArrayNameref(Name))
+                return !scope.Variables.IsReadonly(Name);
             if (!TryAssignTo(scope.Variables, Name))
                 return false;
 
@@ -415,7 +417,7 @@ internal static partial class WordExpansion
             return Task.FromResult(false);
         if (predicate == UnaryPredicateKind.NamerefIsSet)
             return Task.FromResult(reference.Kind == VariableReferenceKind.Name
-                && scope.Variables.TryGetNameref(reference.Name, out var target) && !target.IsEmpty);
+                && scope.Variables.IsNamerefSet(reference.Name));
         return IsVariableSetAsync(reference, scope, null);
     }
 

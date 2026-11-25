@@ -21,7 +21,9 @@ public sealed partial class Variables
     {
         None = 0, Readonly = 1, Exported = 2, Temporary = 4, Integer = 8,
         Capitalize = 16, Lowercase = 32, Uppercase = 64,
-        Case = Capitalize | Lowercase | Uppercase
+        Case = Capitalize | Lowercase | Uppercase,
+        // Rejected local declarations can retain -n on an array without a reference target.
+        ArrayNameref = 128
     }
 
     internal readonly record struct CaseAttributeChange(BindingAttributes Set, BindingAttributes Clear)
@@ -36,6 +38,7 @@ public sealed partial class Variables
     private abstract class VariableSlot
     {
         public BindingAttributes Attributes { get; set; }
+        public bool IsArrayNameref => (Attributes & BindingAttributes.ArrayNameref) != 0;
 
         /// <summary>Copies mutable containers and attributes, sharing only immutable name/value bytes.</summary>
         public VariableSlot Clone()
@@ -116,7 +119,7 @@ public sealed partial class Variables
     private void ReplaceValue(BindingName name, VariableSlot replacement)
     {
         if (TryGetBinding(name, detachBorrowed: false, out var previous))
-            replacement.Attributes = previous.Attributes;
+            replacement.Attributes |= previous.Attributes & ~BindingAttributes.ArrayNameref;
         StoreBinding(name, replacement);
         ResetGetoptsPosition(name);
     }

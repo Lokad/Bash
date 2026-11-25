@@ -2033,7 +2033,7 @@ public sealed partial class Evaluation : IFileTester
                     var flags = options.ListingAttributes;
                     return (!flags.HasFlag(DeclarationListingAttributes.Indexed) || variables.IndexedArrays.ContainsKey(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Associative) || variables.AssociativeArrays.ContainsKey(name))
-                        && (!flags.HasFlag(DeclarationListingAttributes.Nameref) || variables.TryGetNameref(name, out _))
+                        && (!flags.HasFlag(DeclarationListingAttributes.Nameref) || variables.HasNamerefAttribute(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Exported) || variables.IsExported(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Integer) || variables.IsIntegerBinding(name))
                         && (!flags.HasFlag(DeclarationListingAttributes.Readonly) || variables.IsReadonlyBinding(name))
@@ -2612,7 +2612,15 @@ public sealed partial class Evaluation : IFileTester
                         await DiagnoseQuotedAsync(initializer, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
-                if (clearsReadonlyUnsetNameref)
+                if (!element && options.NamerefChange == DeclarationAttributeChange.Clear && targetVars.IsArrayNameref(name))
+                {
+                    if (!targetVars.TryRemoveNamerefAttribute(name))
+                    {
+                        await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+                else if (clearsReadonlyUnsetNameref)
                     targetVars.DetachNamerefToUnassigned(name);
                 else if (local && !keepLocalNameref && clearedNamerefTarget is { } oldTarget
                     && (!oldTarget.IsEmpty || clearsWholeNameref))
@@ -3062,9 +3070,17 @@ public sealed partial class Evaluation : IFileTester
                 {
                     // An element target can declare its full spelling before -n is rejected.
                     var existing = function.Locals.Declares(name);
-                    var localizesElement = existing && hasReference
-                        && variables.TryResolveBinding(name, selectOwner: null, out var binding)
-                        && binding.Reference.Kind == VariableReferenceKind.Element;
+                    var localizesElement = false;
+                    if (existing && hasReference && variables.TryResolveBinding(name, selectOwner: null, out var binding))
+                    {
+                        if (binding.Reference.Kind == VariableReferenceKind.Name)
+                        {
+                            var localKind = options.ArrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
+                            function.Locals.PrepareRejectedNamerefArray(variables, name, localKind, !referenceValue.IsEmpty, Memory);
+                        }
+                        else
+                            localizesElement = binding.Reference.Kind == VariableReferenceKind.Element;
+                    }
                     var declaration = new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty);
                     if ((!existing || localizesElement || !indexed && !associative && !hasReference)
                         && !function.Locals.TryDeclare(declarationScope.Variables, variables, declaration,
