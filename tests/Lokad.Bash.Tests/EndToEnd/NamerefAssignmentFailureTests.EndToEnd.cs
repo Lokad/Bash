@@ -565,10 +565,15 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     [Theory]
     [InlineData("declare -n ref; ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "", "line 1: `bad name': not a valid identifier\n", 1)]
     [InlineData("declare -n ref; ref=''; printf 'after=<%s>\\n' \"$?\"", "", "line 1: `': not a valid identifier\n", 1)]
+    [InlineData("declare -n ref\nref='item[]'; printf after", "", "line 2: `item[]': not a valid identifier\n", 1)]
     [InlineData("target=value; declare -n ref; ref+=target; printf '<%s>\\n' \"$ref\"", "<value>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; first=target; printf 'after=<%s>\\n' \"$?\"", "", "", 1)]
     [InlineData("target=value; declare -n first=second second; first+=target; printf 'after=<%s>\\n' \"$?\"", "", "", 1)]
     [InlineData("declare -n ref; declare ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "line 1: declare: `bad name': not a valid identifier\n", 0)]
+    [InlineData("declare -n ref\ndeclare ref='item[]' later=kept\nprintf '<%s>:<%s>\\n' \"$?\" \"$later\"; declare -p ref",
+        "<1>:<kept>\n", "line 2: declare: `item[]': not a valid identifier\nline 3: declare: ref: not found\n", 1)]
+    [InlineData("declare -n ref\nprintf -v ref %s 'item[]'\nprintf '<%s>\\n' \"$?\"; declare -p ref",
+        "<1>\ndeclare -n ref\n", "line 2: printf: `item[]': not a valid identifier\n", 0)]
     [InlineData("declare -n ref; export ref='bad name'; printf 'after=<%s>\\n' \"$?\"", "after=<1>\n", "line 1: export: `bad name': not a valid identifier\nline 1: export: `': not a valid identifier\n", 0)]
     [InlineData("target=value; declare -n first=second second; declare -g first=target; printf 'after=<%s>\\n' \"$?\"", "after=<0>\n", "", 0)]
     [InlineData("target=value; declare -n first=second second; declare first=target; printf 'after=<%s>\\n' \"$?\"", "after=<0>\n", "", 0)]

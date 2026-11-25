@@ -15,10 +15,10 @@ public sealed partial class Evaluation
         bool negated)
     {
         if (!forCommand.InvalidName.IsEmpty)
-            return await RejectIdentifierAsync(forCommand.InvalidName).ConfigureAwait(false);
+            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(forCommand.InvalidName)).ConfigureAwait(false);
         BindingName name = forCommand.Name;
         if (!name.IsIdentifier)
-            return await RejectIdentifierAsync(GetDiagnosticName(name)).ConfigureAwait(false);
+            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(GetDiagnosticName(name))).ConfigureAwait(false);
 
         var items = new List<ShellValue>();
         foreach (var word in forCommand.Items)
@@ -51,7 +51,7 @@ public sealed partial class Evaluation
             }
             var failure = scope.Variables.AssignForIteration(name, value, Memory);
             if (failure == ForAssignmentFailure.InvalidTarget)
-                return await RejectIdentifierAsync(item).ConfigureAwait(false);
+                return await RejectIdentifierAsync(ReportInvalidAssignmentIdentifierAsync(ShellValue.Empty, item, scope)).ConfigureAwait(false);
             if (failure == ForAssignmentFailure.IncompatibleAttributes)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
             if (failure == ForAssignmentFailure.Readonly)
@@ -76,9 +76,9 @@ public sealed partial class Evaluation
 
         return await FinalizeResultAsync(lastBodyResult, negated);
 
-        async Task<EvaluationResult> RejectIdentifierAsync(ShellValue invalid)
+        async Task<EvaluationResult> RejectIdentifierAsync(Task diagnostic)
         {
-            await ReportInvalidIdentifierAsync(invalid).ConfigureAwait(false);
+            await diagnostic.ConfigureAwait(false);
             // Identifier failures end the loop without triggering errexit at the loop boundary.
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1).WithTestedStatus(true), negated)
                 .ConfigureAwait(false);

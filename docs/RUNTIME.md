@@ -80,7 +80,10 @@ while keeping the completed stack change and its status. When stdout is closed
 by the shell, the directory listing reports the failure without formatting
 output or sending a write request to the host.
 
-Nameref declaration validation precedes replacement of values and attributes.
+Nameref target validation uses the reference parser without evaluating
+selectors. A nonempty replacement is validated before creating a local.
+An empty or appended initializer can fail after local creation and
+attribute application.
 An empty element initializer can publish the array kind before reporting failure.
 Nonlocal preparation retains a scalar at index zero. Local preparation uses the
 function's ordinary declaration and restoration rules.

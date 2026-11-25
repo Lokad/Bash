@@ -158,6 +158,11 @@ while the outer assigned name still appears in the listing. Matching names
 appear once in unsigned-byte order. Ordinary parameter reads follow the
 active binding, and quoted `*` uses the ordinary IFS join rules.
 
+A nameref target with an empty array selector is rejected. A selector
+containing a space is accepted and remains unevaluated until reference use.
+A malformed nonempty replacement fails before creating a local binding.
+A failed empty or appended initializer can leave an ordinary local binding
+with the attributes established by the declaration.
 Self-referencing nameref declaration initializers fail at script scope without
 replacing the binding. Function declarations warn instead; circular local reads
 and ordinary writes can select the global binding. A self-element target keeps

@@ -1691,7 +1691,7 @@ public sealed partial class Variables
         VariableReference? reference = null;
         if (!target.IsEmpty)
         {
-            if (!VariableReference.TryParse(ShellSource.FromBytes(target.Bytes), memory, out var parsed))
+            if (!VariableReference.TryParseNamerefTarget(target, memory, out var parsed))
                 return false;
             reference = parsed;
         }
@@ -1705,7 +1705,7 @@ public sealed partial class Variables
         if (NamerefTargets.ContainsKey(name))
         {
             // A loop selects a new referent. Validate it before checking the reference's readonly attribute.
-            if (item.IsEmpty || !VariableReference.TryParse(ShellSource.FromBytes(item.Bytes), memory, out var target))
+            if (!VariableReference.TryParseNamerefTarget(item, memory, out var target))
                 return ForAssignmentFailure.InvalidTarget;
             if (IsReadonlyBinding(name))
                 return ForAssignmentFailure.Readonly;
@@ -1876,7 +1876,7 @@ public sealed partial class Variables
         // Plain names need only byte validation; selectors also require structural parsing.
         var valid = !value.Bytes.Span.Contains((byte)'[')
             ? VariableNames.IsValidVariableName(value.Bytes.Span)
-            : VariableReference.TryParse(ShellSource.FromBytes(value.Bytes), memory, out _);
+            : VariableReference.TryParseNamerefTarget(value, memory, out _);
         return valid
             ? NamerefAssignmentFailure.None : NamerefAssignmentFailure.InvalidTarget;
     }

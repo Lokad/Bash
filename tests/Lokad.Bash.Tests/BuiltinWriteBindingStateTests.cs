@@ -45,8 +45,8 @@ public sealed class BuiltinWriteBindingStateTests
 
     [Theory]
     [InlineData("declare -n ref; declare -n hop=ref; printf -v hop destination; printf '<%s>' \"$?\"", "<1>", "", true)]
-    [InlineData("declare -n ref; printf -v ref 'bad name'; printf '<%s>' \"$?\"", "<1>", "7072696E74663A2060626164206E616D65273A206E6F7420612076616C6964206964656E7469666965720A", false)]
-    [InlineData("declare -n ref; read ref <<< 'bad target'; printf '<%s>' \"$?\"", "<1>", "726561643A206062616420746172676574273A206E6F7420612076616C6964206964656E7469666965720A", false)]
+    [InlineData("declare -n ref; printf -v ref 'bad name'; printf '<%s>' \"$?\"", "<1>", "6C696E6520313A207072696E74663A2060626164206E616D65273A206E6F7420612076616C6964206964656E7469666965720A", false)]
+    [InlineData("declare -n ref; read ref <<< 'bad target'; printf '<%s>' \"$?\"", "<1>", "6C696E6520313A20726561643A206062616420746172676574273A206E6F7420612076616C6964206964656E7469666965720A", false)]
     [InlineData("declare -n ref; declare -n hop=ref; read hop <<< target; printf '<%s>' \"$?\"", "<1>", "", true)]
     public async Task RejectedWritesRetainUnsetNamerefBindings(
         string script, string output, string errorHex, bool indirect)

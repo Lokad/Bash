@@ -779,6 +779,39 @@ public sealed class DeclarationAttributeTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(":", "declare -n ref='item[]'", "", "declare: `item[]': invalid variable name for name reference")]
+    [InlineData("spelling='item[]'", "declare -n \"ref=$spelling\"", "", "declare: `item[]': invalid variable name for name reference")]
+    [InlineData("declare -n ref='item[0]'", "declare -n ref='item[]'", "declare -n ref=\"item[0]\"\n", "declare: `item[]': invalid variable name for name reference")]
+    [InlineData("declare -n ref=item", "declare -n ref+='[]'", "declare -n ref=\"item\"\n", "declare: `[]': not a valid identifier")]
+    [InlineData("declare -n ref='item[0]'", "declare -n ref+=suffix", "declare -n ref=\"item[0]\"\n", "")]
+    [InlineData("ref='item[]'", "declare -n ref", "declare -- ref=\"item[]\"\n", "declare: `item[]': invalid variable name for name reference")]
+    public async Task NamerefTargetsRejectEmptySelectorsBeforeChangingTheBinding(
+        string setup, string command, string listing, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            setup + "\n" + command + "\nprintf '<%s>\\n' \"$?\"; declare -p ref 2>/dev/null; :");
+
+        Assert.Equal("<1>\n" + listing, result.StdOut);
+        Assert.Equal(diagnostic.Length == 0 ? "" : "line 2: " + diagnostic + "\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -n ref=''", "declare -- ref\n", "local: `': not a valid identifier")]
+    [InlineData("typeset -n ref+='[]'", "declare -- ref\n", "typeset: `[]': not a valid identifier")]
+    [InlineData("local -nx ref=''", "declare -x ref\n", "local: `': not a valid identifier")]
+    [InlineData("local -n ref='item[]'", "declare -- ref=\"outer\"\n", "local: `item[]': invalid variable name for name reference")]
+    public async Task FailedLocalNamerefInitializationPreservesDeclarationTiming(string command, string inside, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "ref=outer\nf() {\n" + command + "\nprintf '<%s>\\n' \"$?\"; declare -p ref; }\nf\ndeclare -p ref");
+
+        Assert.Equal("<1>\n" + inside + "declare -- ref=\"outer\"\n", result.StdOut);
+        Assert.Equal("line 3: " + diagnostic + "\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("export x=old; export -n x", false, "old", false)]
     [InlineData("export x=old; declare +x x", false, "old", false)]
     [InlineData("export x; export -n x", false, null, false)]

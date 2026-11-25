@@ -2354,7 +2354,7 @@ public sealed partial class Evaluation : IFileTester
                         || options.AssociativeChange == DeclarationAttributeChange.Clear;
                     if (setsNameref && !clearsArrayKind && operand.Operator == AssignmentOperator.Replace
                         && operand.Value is { IsEmpty: false } initializer
-                        && !TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out _))
+                        && !VariableReference.TryParseNamerefTarget(initializer, Memory, out _))
                     {
                         await DiagnoseQuotedAsync(initializer, "invalid variable name for name reference").ConfigureAwait(false);
                         continue;
@@ -2567,13 +2567,23 @@ public sealed partial class Evaluation : IFileTester
                             arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                 }
                 var selfNameref = false;
+                var rejectsNamerefAssignment = false;
                 ShellValue? namerefTarget = null;
                 VariableReference? namerefReference = null;
+                if (!operand.CompoundApplied && (setsNameref || circularLocalReference)
+                    && operand.Value is { } initializerValue)
+                {
+                    if (VariableReference.TryParseNamerefTarget(initializerValue, Memory, out var initializerReference))
+                        namerefReference = initializerReference;
+                    else if (setsNameref && operand.Operator == AssignmentOperator.Replace && !initializerValue.IsEmpty)
+                    {
+                        await DiagnoseQuotedAsync(initializerValue, "invalid variable name for name reference").ConfigureAwait(false);
+                        continue;
+                    }
+                }
+                var validNamerefOperand = namerefReference.HasValue;
                 if (!operand.CompoundApplied && (options.Nameref || circularLocalReference))
                 {
-                    if (operand.Value is { } initializer
-                        && TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out var initializerReference))
-                        namerefReference = initializerReference;
                     // Declaration initializers reject self targets at script scope, before
                     // replacing values or attributes. Ordinary assignments may create cycles.
                     if (options.Nameref && namerefReference is { } selfReference && selfReference.Name == name)
@@ -2604,14 +2614,17 @@ public sealed partial class Evaluation : IFileTester
                         if (namerefTarget is { } targetValue)
                         {
                             if (operand.Value == null || operand.Operator == AssignmentOperator.Append)
-                                namerefReference = TryParseDeclarationReference(ShellSource.FromBytes(targetValue.Bytes), out var targetReference)
+                                namerefReference = VariableReference.TryParseNamerefTarget(targetValue, Memory, out var targetReference)
                                     ? targetReference : null;
                             if (namerefReference == null)
                             {
-                                await DiagnoseQuotedAsync(targetValue, operand.Value is { IsEmpty: true }
-                                        ? "not a valid identifier" : "invalid variable name for name reference")
-                                    .ConfigureAwait(false);
-                                continue;
+                                if (options.Nameref && operand.Value.HasValue)
+                                    rejectsNamerefAssignment = true;
+                                else
+                                {
+                                    await DiagnoseQuotedAsync(targetValue, "invalid variable name for name reference").ConfigureAwait(false);
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -2717,9 +2730,9 @@ public sealed partial class Evaluation : IFileTester
                     }
                     continue;
                 }
-                if (rejectsIntegerNamerefInitializer || rejectsIntegerNamerefRemoval)
+                if (rejectsNamerefAssignment || rejectsIntegerNamerefInitializer || rejectsIntegerNamerefRemoval)
                 {
-                    if (rejectsIntegerNamerefInitializer && (!local || existingLocal)
+                    if ((rejectsNamerefAssignment || rejectsIntegerNamerefInitializer) && (!local || existingLocal)
                         && (targetVars.IndexedArrays.ContainsKey(name) || targetVars.AssociativeArrays.ContainsKey(name)))
                     {
                         await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
@@ -2732,6 +2745,18 @@ public sealed partial class Evaluation : IFileTester
                             elementAttributes: default, Memory, function.Enclosing))
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    if (rejectsNamerefAssignment)
+                    {
+                        // Attributes and local creation precede an empty or appended value's binding failure.
+                        if (targetVars.HasBinding(name))
+                            SetAttributes(name, targetVars, assignmentExport);
+                        if (validNamerefOperand)
+                            RecordOperandFailure();
+                        else
+                            await DiagnoseQuotedAsync(operand.Value.GetValueOrDefault(), "not a valid identifier").ConfigureAwait(false);
                         continue;
                     }
 
@@ -2759,7 +2784,7 @@ public sealed partial class Evaluation : IFileTester
                     if (HasPendingExpansionError)
                         break;
                     if (rejectsIntegerNamerefRemoval)
-                        namerefReference = TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out var target) ? target : null;
+                        namerefReference = VariableReference.TryParseNamerefTarget(initializer, Memory, out var target) ? target : null;
                     if (namerefReference == null)
                         await DiagnoseQuotedAsync(initializer, "not a valid identifier").ConfigureAwait(false);
                     continue;
@@ -2782,9 +2807,9 @@ public sealed partial class Evaluation : IFileTester
                         // Validate the bound spelling while the name is still a reference.
                         var append = operand.Operator == AssignmentOperator.Append;
                         var value = append ? WordExpansion.AppendAssignmentValue(oldTarget, initializer, declarationScope) : initializer;
-                        if (!TryParseDeclarationReference(ShellSource.FromBytes(value.Bytes), out _))
+                        if (!VariableReference.TryParseNamerefTarget(value, Memory, out _))
                         {
-                            if (!append || !TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out _))
+                            if (!append || !VariableReference.TryParseNamerefTarget(initializer, Memory, out _))
                                 await DiagnoseQuotedAsync(initializer, "not a valid identifier").ConfigureAwait(false);
                             else
                                 RecordOperandFailure();
@@ -2840,7 +2865,7 @@ public sealed partial class Evaluation : IFileTester
                         && operand.Value != null && targetVars.TryResolveBinding(name, selectOwner: null, out var terminalBinding)
                         && terminalBinding.IsUnsetNameref;
                     var localValue = operand.Value ?? ShellValue.Empty;
-                    if (initializingReference && !TryParseDeclarationReference(ShellSource.FromBytes(localValue.Bytes), out _))
+                    if (initializingReference && !VariableReference.TryParseNamerefTarget(localValue, Memory, out _))
                     {
                         await DiagnoseQuotedAsync(localValue, "invalid variable name for name reference").ConfigureAwait(false);
                         continue;
@@ -3115,7 +3140,13 @@ public sealed partial class Evaluation : IFileTester
                             {
                                 // Declarations recover and visit later operands; indirect unset targets remain unchanged.
                                 if (failure == NamerefAssignmentFailure.InvalidTarget)
+                                {
+                                    if (ordinaryAssignment && arrayKind == ArrayAssignmentKind.Auto
+                                        && !writeVariables.IsReadonlyBinding(sourceName))
+                                        _ = writeVariables.TryUnsetSelected(
+                                            new VariableUnsetTarget(sourceName, RequiresSelector: false, BindingName.Empty), UnsetFlags.None);
                                     await DiagnoseQuotedAsync(value, "not a valid identifier").ConfigureAwait(false);
+                                }
                                 if (options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly)
                                 {
                                     // Attribute-setting also diagnoses the unresolved name; export -n only fails.
@@ -3400,7 +3431,7 @@ public sealed partial class Evaluation : IFileTester
                     var readonlyBinding = commandVars.IsReadonlyBinding(name);
                     var initializer = operand.Value.GetValueOrDefault();
                     var invalidTarget = operand.Value.HasValue && !setsNameref && !clearsNameref
-                        && !TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out _);
+                        && !VariableReference.TryParseNamerefTarget(initializer, Memory, out _);
                     var destroysArray = !setsNameref && (kind == ArrayKind.Indexed
                         ? options.IndexedChange == DeclarationAttributeChange.Clear
                         : options.AssociativeChange == DeclarationAttributeChange.Clear);

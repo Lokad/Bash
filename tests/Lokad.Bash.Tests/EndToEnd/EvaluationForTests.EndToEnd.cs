@@ -83,9 +83,10 @@ public sealed class EvaluationForTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("''", "`': not a valid identifier\n")]
-    [InlineData("'arr[1'", "`arr[1': not a valid identifier\n")]
-    [InlineData("$'bad\\377name'", "`bad\u00ffname': not a valid identifier\n")]
+    [InlineData("''", "line 1: `': not a valid identifier\n")]
+    [InlineData("'arr[1'", "line 1: `arr[1': not a valid identifier\n")]
+    [InlineData("'arr[]'", "line 1: `arr[]': not a valid identifier\n")]
+    [InlineData("$'bad\\377name'", "line 1: `bad\u00ffname': not a valid identifier\n")]
     public async Task InvalidNamerefLoopItemPreservesBindingAndDiagnosticBytes(string item, string expectedError)
     {
         await using var host = new TestHost();
@@ -110,14 +111,14 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<next><1>:<changed>:<old>:<changed>", host.StandardOutput.TextContent);
-        Assert.Equal("`bad-name': not a valid identifier\n", host.ReadFile("/err"));
+        Assert.Equal("line 1: `bad-name': not a valid identifier\n", host.ReadFile("/err"));
         Assert.True(host.StandardError.Content.IsEmpty);
         Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
     [InlineData("readonly x=old", "line 1: x: readonly variable\n", 1, "")]
-    [InlineData("declare -nr x=old", "`bad-name': not a valid identifier\n", 0, "fallback:1")]
+    [InlineData("declare -nr x=old", "line 1: `bad-name': not a valid identifier\n", 0, "fallback:1")]
     public async Task TestedLoopAssignmentFailureDistinguishesReadonlyFromInvalidTarget(
         string setup, string expectedError, int exitCode, string expectedOutput)
     {
@@ -137,7 +138,7 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("after:1", result.StdOut);
-        Assert.Equal("`bad-name': not a valid identifier\n", result.StdErr);
+        Assert.Equal("line 1: `bad-name': not a valid identifier\n", result.StdErr);
     }
 
     [Theory]

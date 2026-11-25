@@ -64,6 +64,11 @@ internal readonly record struct VariableReference
     internal static bool TryParse(ShellSource text, EvaluationMemory? memory, out VariableReference reference)
         => TryParseSource(text, memory?.Workspace, out reference);
 
+    /// <summary>Recognizes a storable nameref target without expanding its selector.</summary>
+    internal static bool TryParseNamerefTarget(ShellValue value, EvaluationMemory? memory, out VariableReference reference) =>
+        TryParse(ShellSource.FromBytes(value.Bytes), memory, out reference)
+        && reference is not { Kind: VariableReferenceKind.Element, Subscript.IsEmpty: true };
+
     internal static bool TryParseSource(ShellSource text, MemoryCapacity? memory, out VariableReference reference) =>
         TryParseSource(text, memory, recognizeAnsiC: true, out reference);
 

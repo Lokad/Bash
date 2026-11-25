@@ -586,8 +586,7 @@ public sealed partial class Evaluation
         if (failure != NamerefAssignmentFailure.None)
         {
             if (failure == NamerefAssignmentFailure.InvalidTarget && kind != BuiltinAssignmentKind.Getopts)
-                await WriteInvalidIdentifierDiagnosticAsync(command, value.GetValueOrDefault(), _builtinDiagnostics,
-                    ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
+                await ReportInvalidAssignmentIdentifierAsync(command, value.GetValueOrDefault(), scope).ConfigureAwait(false);
             return kind == BuiltinAssignmentKind.Directory ? BuiltinAssignmentResult.NoWrite : BuiltinAssignmentResult.Failed;
         }
         var writeScope = scope with
