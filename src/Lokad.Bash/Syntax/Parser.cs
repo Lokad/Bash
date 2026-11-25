@@ -222,6 +222,7 @@ public static class Parser
                 {
                     CompletedPrefix = prefix,
                     Locations = prefix != null ? tokenizer.Locations : null,
+                    DiagnosticLine = quotedFailure.ArithmeticForHeader is { } header ? tokenizer.GetLine(header.Start) : 0,
                     ReadDiagnostics = diagnostics
                 };
                 yield break;
@@ -236,6 +237,7 @@ public static class Parser
                         { UnclosedDelimiter: { } captureEnd } =>
                             tokenizer.GetLine(captureEnd.ReadPosition) + captureEnd.LineAdvance,
                         { UnexpectedToken: { } diagnostic } => tokenizer.GetLine(diagnostic.ReadPosition) + diagnostic.LineAdvance,
+                        { ArithmeticForHeader: { } header } => tokenizer.GetLine(header.Start),
                         { Kind: ParserFailureKind.Grammar or ParserFailureKind.RedirectionOperand } when trailing.Kind == TokenKind.EndOfInput
                             && failure.Error.Offset == input.Length && tokenizer.Position == input.Length =>
                             tokenizer.GetLine(input.Length) + tokenizer.EndOfInputLineAdvance,
@@ -1039,8 +1041,7 @@ public static class Parser
             if (!ArithmeticForSyntax.TryParse(nameToken.CommandExpression, separators, tokenizer.ScanContext.SyntaxMemory,
                     out var syntax, out var error))
             {
-                tokenizer.RecordFailure(new ParserFailure(new SyntaxError(error, nameToken.Source.Start.Value),
-                    ParserFailureKind.ArithmeticForHeader));
+                tokenizer.RecordArithmeticForHeaderFailure(nameToken, error, separators.HasExtra);
                 return null;
             }
             return new ArithmeticForCommand(syntax, arithmeticBody);

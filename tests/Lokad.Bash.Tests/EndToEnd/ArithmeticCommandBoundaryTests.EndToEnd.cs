@@ -41,16 +41,16 @@ public sealed class ArithmeticCommandBoundaryTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("i=7", "\n", "", true)]
-    [InlineData("i=7;1", "; ", "", false)]
-    [InlineData("i=7;0;;i++", "\n", "", true)]
-    [InlineData("i=$(printf 7; :);1", "\n", "", true)]
-    [InlineData("i=\"7;1\";1", "\n", "", true)]
-    [InlineData(@"i=7\;1;1", "\n", "", true)]
-    [InlineData("i=7", "\n", "false && ", true)]
-    [InlineData("a[raw;key]=7;1;", "\n", "", true)]
+    [InlineData("i=7", "\n", "", true, false)]
+    [InlineData("i=7;1", "; ", "", false, false)]
+    [InlineData("i=7;0;;i++", "\n", "", true, true)]
+    [InlineData("i=$(printf 7; :);1", "\n", "", true, false)]
+    [InlineData("i=\"7;1\";1", "\n", "", true, false)]
+    [InlineData(@"i=7\;1;1", "\n", "", true, false)]
+    [InlineData("i=7", "\n", "false && ", true, false)]
+    [InlineData("a[raw;key]=7;1;", "\n", "", true, true)]
     public async Task ArithmeticForRequiresExactlyTwoSourceSeparators(
-        string header, string separator, string prefix, bool earlierUnit)
+        string header, string separator, string prefix, bool earlierUnit, bool extraSeparator)
     {
         var script = ": >before" + separator + prefix +
             $"for (({header})); do : >body; break; done\n: >after";
@@ -65,10 +65,29 @@ public sealed class ArithmeticCommandBoundaryTestsEndToEnd
         var result = await host.RunAsync(script, CancellationToken.None);
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Contains(error.Message, host.StandardError.TextContent);
+        var line = earlierUnit ? 2 : 1;
+        var reason = extraSeparator ? "`;' unexpected" : "arithmetic expression required";
+        Assert.Equal($"line {line}: syntax error: {reason}\nline {line}: syntax error: `(({header}))'\n",
+            host.StandardError.TextContent);
         Assert.Equal(earlierUnit ? new[] { "before" } : [], host.CaptureEntries().Keys);
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("printf 'before\\n'\nfor ((1; 0; \\\n2; 3)); do :; done", "before\n", 2, "line 2: ", "1; 0; 2; 3")]
+    [InlineData("eval 'for ((1;\n0;\n2;3)); do :; done'\nprintf '%s' \"$?\"", "2", 0, "eval: line 3: ", "1;\n0;\n2;3")]
+    [InlineData("for (\\\n( $(printf   '1;2'); 0; 2; 3 )); do :; done", "", 2, "line 2: ", " $(printf '1;2'); 0; 2; 3 ")]
+    [InlineData("for (( 1 + $'2 ; 3'; 0; 2; 3 )); do :; done", "", 2, "line 1: ", " 1 + '2 ; 3'; 0; 2; 3 ")]
+    public async Task ArithmeticForExtraSeparatorPreservesReaderLineAndHeaderSpelling(
+        string script, string output, int status, string location, string header)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal($"{location}syntax error: `;' unexpected\n{location}syntax error: `(({header}))'\n",
+            host.StandardError.TextContent);
     }
 
     [Theory]

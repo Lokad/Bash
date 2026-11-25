@@ -930,7 +930,9 @@ A word loop needs a semicolon or line break before the opening brace. An
 arithmetic loop can place the opening brace immediately after `))`.
 An arithmetic `for` header requires exactly two unquoted semicolons outside
 shell expansions. A malformed separator count is a syntax error before any
-clause or loop body runs. An empty condition or one containing only spaces
+clause or loop body runs. The command-unit reader distinguishes a missing
+separator from an extra separator and quotes the normalized header on the
+next diagnostic line. An empty condition or one containing only spaces
 and tabs is true. If the condition contains only spaces, tabs and one or
 more physical LFs, it evaluates to zero. Backslash-LF continuations are removed first.
 

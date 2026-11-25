@@ -302,22 +302,8 @@ internal sealed class Tokenizer
                 return;
             }
 
-            var expression = token.CommandExpression;
+            var expression = ReadArithmeticDiagnosticExpression(token);
             var end = token.Source.End.Value;
-            if (expression.AsSpan().IndexOfAny((byte)'$', (byte)'`') >= 0)
-            {
-                var start = SecondArithmeticOpener(token.Source.Start.Value).Source.End.Value;
-                var spelling = ShellSourceCursor.ReadAdjacentCaptureSpelling(_scanContext, _input, start, end - 2,
-                    _scanContext.SyntaxMemory, prepareReplay: false, out _, out _, out _);
-                expression = spelling.Source;
-                if (spelling.Captures != null)
-                {
-                    using var rendered = _scanContext.CreateByteBuilder(0);
-                    if (!FunctionDefinitionFormatter.TryAppendDiagnosticSpelling(spelling, rendered, _scanContext.SyntaxMemory?.Budget))
-                        throw new ByteMemoryBuilder.LimitExceededException();
-                    expression = ShellSource.FromBytes(rendered.ToMemory());
-                }
-            }
             if (expression.AsSpan().IndexOfAnyExceptInRange((byte)0x20, (byte)0x7e) >= 0)
             {
                 using var quoted = _scanContext.CreateByteBuilder(0);
@@ -331,6 +317,36 @@ internal sealed class Tokenizer
             });
         }
         finally { _scanContext.RetainCaptureLookahead = retainLookahead; }
+    }
+
+    internal void RecordArithmeticForHeaderFailure(Token token, string message, bool hasExtraSeparator)
+    {
+        var start = token.Source.Start.Value;
+        RecordFailure(new ParserFailure(new SyntaxError(message, start), ParserFailureKind.ArithmeticForHeader)
+        {
+            ArithmeticForHeader = TrackUnexpectedTokens
+                ? new ArithmeticForHeaderError(ReadArithmeticDiagnosticExpression(token),
+                    SecondArithmeticOpener(start).Source.Start.Value, hasExtraSeparator)
+                : null
+        });
+    }
+
+    private ShellSource ReadArithmeticDiagnosticExpression(Token token)
+    {
+        var expression = token.CommandExpression;
+        if (expression.AsSpan().IndexOfAny((byte)'$', (byte)'`') < 0)
+            return expression;
+
+        var start = SecondArithmeticOpener(token.Source.Start.Value).Source.End.Value;
+        var spelling = ShellSourceCursor.ReadAdjacentCaptureSpelling(_scanContext, _input, start, token.Source.End.Value - 2,
+            _scanContext.SyntaxMemory, prepareReplay: false, out _, out _, out _);
+        if (spelling.Captures == null)
+            return spelling.Source;
+
+        using var rendered = _scanContext.CreateByteBuilder(0);
+        if (!FunctionDefinitionFormatter.TryAppendDiagnosticSpelling(spelling, rendered, _scanContext.SyntaxMemory?.Budget))
+            throw new ByteMemoryBuilder.LimitExceededException();
+        return ShellSource.FromBytes(rendered.ToMemory());
     }
 
     /// <summary>Selects the local opener diagnostic when a failed arithmetic scan occurred in a word position.</summary>

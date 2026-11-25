@@ -612,7 +612,8 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(status, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
-        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+        Assert.Equal("line 2: syntax error: arithmetic expression required\n"
+            + "line 2: syntax error: `((i=7))'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -630,7 +631,8 @@ public sealed class ScriptCommandUnitTests
         var result = await host.RunAsync(Script, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: syntax error: arithmetic expression required\n"
+            + "line 1: syntax error: `((i=7))'\n", host.StandardError.TextContent);
         Assert.Equal("prefix", host.ReadFile("/diag"));
         Assert.Equal("diag", Assert.Single(host.CaptureEntries()).Key);
         Assert.Equal(0, host.OpenFileCount);
@@ -638,7 +640,7 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
-    [InlineData(true, "value=$(for ((i=7)); do : >body; break; done)", 2, "2:inner:source-arg", "Arithmetic for header")]
+    [InlineData(true, "value=$(for ((i=7)); do : >body; break; done)", 2, "2:inner:source-arg", "arithmetic expression required")]
     [InlineData(false, "value=\"$(printf hidden |)\"", 1, "257:inner:caller-arg", "syntax error near unexpected token `)'")]
     public async Task FatalSubstitutionInsideScriptBuiltinRunsExitWithActiveScope(
         bool source, string malformed, int status, string trapOutput, string diagnostic)
@@ -724,7 +726,8 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
-        Assert.Contains("Arithmetic for header", host.StandardError.TextContent, StringComparison.Ordinal);
+        Assert.Equal("unit: line 1: syntax error: arithmetic expression required\n"
+            + "unit: line 1: syntax error: `((i=7))'\n", host.StandardError.TextContent);
         Assert.False(host.FileExists("/child-after"));
         Assert.Equal(0, host.OpenFileCount);
     }

@@ -308,10 +308,12 @@ public sealed class FunctionDefinitionOutputTests
         await using var host = new TestHost();
         var result = await EndToEndHarness.RunScriptAsync(source, host);
 
-        const string Diagnostic = "syntax error: Arithmetic for header requires two semicolons.\n";
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2:><2:>", result.StdOut);
-        Assert.Equal(Diagnostic + Diagnostic, result.StdErr);
+        Assert.Equal("command substitution: line 6: syntax error: arithmetic expression required\n"
+            + "command substitution: line 6: syntax error: `((i=7))'\n"
+            + "command substitution: line 1: syntax error: arithmetic expression required\n"
+            + "command substitution: line 1: syntax error: `((i=7))'\n", result.StdErr);
         Assert.Empty(host.CaptureEntries());
         Assert.Equal(0, host.OpenFileCount);
     }

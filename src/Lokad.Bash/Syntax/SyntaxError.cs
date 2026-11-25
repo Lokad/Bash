@@ -19,6 +19,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
     internal UnclosedDelimiter? UnclosedDelimiter { get; init; }
     internal CaptureHereDocumentWarnings? CaptureWarnings { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
+    internal ArithmeticForHeaderError? ArithmeticForHeader { get; init; }
     internal ConditionalEndOfInput? ConditionalEndOfInput { get; init; }
     internal bool UnexpectedEndOfInput { get; init; }
     internal bool IsNestedSubstitution { get; init; }
@@ -40,6 +41,9 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
     internal ParserFailure InDoubleQuotes(bool quoted) => quoted && Kind == ParserFailureKind.SubstitutionForHeader
         ? this with { Kind = ParserFailureKind.QuotedSubstitutionForHeader } : this;
 }
+
+/// <summary>The reached header spelling and location used by the command-unit reader.</summary>
+internal readonly record struct ArithmeticForHeaderError(ShellSource Expression, int Start, bool HasExtraSeparator);
 
 /// <summary>Byte slices and reader position for a reached token diagnostic.</summary>
 internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int ReadPosition)

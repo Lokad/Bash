@@ -370,6 +370,8 @@ public sealed partial class Evaluation
                     else if (failedUnit.Failure.UnexpectedToken is { } token)
                         await ReportUnexpectedSyntaxAsync(token, path, diagnosticOrigin, diagnosticLine, includeLine: true)
                             .ConfigureAwait(false);
+                    else if (failedUnit.Failure.ArithmeticForHeader is { } header)
+                        await ReportArithmeticForHeaderAsync(header, path, diagnosticOrigin, diagnosticLine).ConfigureAwait(false);
                     else if (failedUnit.Failure.ConditionalEndOfInput is { } conditionalEnd)
                         await ReportConditionalEndOfInputAsync(conditionalEnd, path, diagnosticOrigin, lineOffset).ConfigureAwait(false);
                     else if (failedUnit.DiagnosticLine != 0 && (failedUnit.Failure.UnexpectedEndOfInput

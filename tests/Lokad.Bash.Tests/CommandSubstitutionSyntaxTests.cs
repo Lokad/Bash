@@ -342,7 +342,8 @@ public sealed class CommandSubstitutionSyntaxTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("2:<earlier>", host.StandardOutput.TextContent);
-        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+        Assert.Equal("command substitution: line 3: syntax error: arithmetic expression required\n"
+            + "command substitution: line 3: syntax error: `((i=7))'\n", host.StandardError.TextContent);
         Assert.Equal("kept", Assert.Single(host.CaptureEntries()).Key);
         Assert.Equal(0, host.OpenFileCount);
         if (!prepared)
@@ -371,13 +372,13 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Theory]
-    [InlineData("\n", "for ((i=7)); do : >loop; break; done", "2:early/EXIT:2", true)]
-    [InlineData("; ", "for ((i=7)); do : >loop; break; done", "2:/EXIT:2", false)]
-    [InlineData("\n", "inner=$(for ((i=7)); do : >loop; break; done)", "1:early/EXIT:1", true)]
-    [InlineData("\n", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "2:early/EXIT:2", true)]
-    [InlineData("; ", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "0:early/EXIT:0", true)]
+    [InlineData("\n", "for ((i=7)); do : >loop; break; done", "2:early/EXIT:2", true, 5)]
+    [InlineData("; ", "for ((i=7)); do : >loop; break; done", "2:/EXIT:2", false, 3)]
+    [InlineData("\n", "inner=$(for ((i=7)); do : >loop; break; done)", "1:early/EXIT:1", true, 5)]
+    [InlineData("\n", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "2:early/EXIT:2", true, 5)]
+    [InlineData("; ", "inner=\"$(for ((i=7)); do : >loop; break; done)\"", "0:early/EXIT:0", true, 3)]
     public async Task FailedBacktickCaptureKeepsEarlierCompleteUnits(
-        string separator, string malformed, string output, bool earlierUnit)
+        string separator, string malformed, string output, bool earlierUnit, int line)
     {
         var script = "value=`trap 'printf \"/EXIT:%s\" \"$?\"' EXIT\nprintf early; : >early"
             + separator + malformed + "`\nprintf '%s:%s' \"$?\" \"$value\"";
@@ -393,7 +394,8 @@ public sealed class CommandSubstitutionSyntaxTests
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(output, host.StandardOutput.TextContent);
-            Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", host.StandardError.TextContent);
+            Assert.Equal($"command substitution: line {line}: syntax error: arithmetic expression required\n"
+                + $"command substitution: line {line}: syntax error: `((i=7))'\n", host.StandardError.TextContent);
             Assert.Equal(earlierUnit ? new[] { "early" } : [], host.CaptureEntries().Keys);
             Assert.Equal(0, host.OpenFileCount);
             if (!prepared)
@@ -427,7 +429,8 @@ public sealed class CommandSubstitutionSyntaxTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("0:earlier", result.StdOut);
-        Assert.Equal("syntax error: Arithmetic for header requires two semicolons.\n", result.StdErr);
+        Assert.Equal("command substitution: line 2: syntax error: arithmetic expression required\n"
+            + "command substitution: line 2: syntax error: `((i=7))'\n", result.StdErr);
         Assert.False(result.Host.FileExists("/loop"));
         Assert.Equal(0, result.Host.OpenFileCount);
     }

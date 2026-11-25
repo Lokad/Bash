@@ -4884,6 +4884,33 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
+    private async Task ReportArithmeticForHeaderAsync(ArithmeticForHeaderError header, string? path,
+        SyntaxDiagnosticOrigin origin, int line)
+    {
+        var descriptor = GetStdErrDescriptor();
+        CheckCancellation();
+        if (descriptor.IsClosed)
+            return;
+
+        var prefix = new SyntaxDiagnosticPrefix(path,
+            origin == SyntaxDiagnosticOrigin.Script ? SyntaxDiagnosticOrigin.ScriptLine : origin, line);
+        var reason = header.HasExtraSeparator ? "syntax error: `;' unexpected\n"u8
+            : "syntax error: arithmetic expression required\n"u8;
+        var expressionPrefix = "syntax error: `(("u8;
+        var expressionSuffix = "))'\n"u8;
+        var length = 2L * prefix.Length + reason.Length + expressionPrefix.Length + header.Expression.Length + expressionSuffix.Length;
+        if (!TryReserveDiagnostic(length, out var reservation))
+            throw new MemoryBudgetExceededException();
+
+        using var memory = reservation;
+        using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
+        prefix.AppendTo(diagnostic);
+        diagnostic.Append(reason);
+        prefix.AppendTo(diagnostic);
+        diagnostic.Append(expressionPrefix).Append(header.Expression.AsSpan()).Append(expressionSuffix);
+        await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
+    }
+
     private static readonly ShellValue HereDocumentWarningName = ShellValue.FromText("warning");
     private static readonly ShellValue HereDocumentWarningPrefix = ShellValue.FromText("here-document at line ");
     private static readonly ShellValue HereDocumentWarningDelimiter = ShellValue.FromText(" delimited by end-of-file (wanted `");
