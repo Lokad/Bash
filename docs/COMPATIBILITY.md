@@ -768,6 +768,13 @@ array and its attributes visible to the selector. A newly applied `-r` lets
 a successful selector finish and reports the rejected write with status 0.
 An ordinary assignment through a chain ending at an unset nameref leaves
 the chain intact.
+For a nonlocal declaration through an element nameref, `+a` and `+A`
+reject removal of a matching array kind before evaluating the selector.
+With neither array kind explicitly set, `+a` clears a scalar before the
+selector runs and creates an indexed array for an absent binding before
+rejecting removal. `+A` allows a scalar to become indexed and preserves
+its value at index zero. A name-only declaration prepares the selected
+binding without evaluating the selector.
 
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the

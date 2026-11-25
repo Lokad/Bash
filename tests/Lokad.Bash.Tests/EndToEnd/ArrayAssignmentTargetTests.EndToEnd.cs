@@ -159,6 +159,73 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
         AssertDeclarationAsync(body + "\n", output, error);
 
     [Theory]
+    [InlineData(":", "+a", "item[i++]", "declare -a item=()")]
+    [InlineData("item=(old)", "+a -A", "item[i++]", "declare -a item=([0]=\"old\")")]
+    [InlineData("declare -A item=([fixed]=old)", "+A", "item[$(printf reached >&2; printf fixed)]",
+        "declare -A item=([fixed]=\"old\" )")]
+    public Task ArrayAttributeRemovalRejectsTheReachedKindBeforeSelection(
+        string setup, string flags, string reference, string expectedDeclaration) =>
+        AssertDeclarationAsync($"""
+            i=0; {setup}; declare -n link='{reference}'
+            declare {flags} link=new
+            printf '<%s:%s>\n' "$?" "$i"; declare -p item
+            """ + "\n", $"<1:0>\n{expectedDeclaration}\n", "line 2: declare: item: cannot destroy array variables in this way\n");
+
+    [Theory]
+    [InlineData("+a", true, "declare -- item=\"\"", "new")]
+    [InlineData("+A", true, "declare -a item=([0]=\"old\")", "oldnew")]
+    [InlineData("+A", false, "declare -a item=([0]=\"old\")", "oldnew")]
+    public Task ArrayAttributeRemovalExposesThePreparedBindingToASelector(
+        string flag, bool useNameref, string beforeAppend, string appended)
+    {
+        const string reference = "item[$(declare -p item >during; printf 0)]";
+        var target = useNameref ? "link" : $"'{reference}'";
+        var script = $"""
+            item=old; declare -n link='{reference}'
+            declare {flag} {target}+=new
+            printf '<%s>\n' "$?"; IFS= read -r earlier <during; printf '%s\n' "$earlier"; declare -p item
+            """;
+        return AssertDeclarationAsync(script + "\n", $"<0>\n{beforeAppend}\ndeclare -a item=([0]=\"{appended}\")\n", "");
+    }
+
+    [Theory]
+    [InlineData("+a", 1, "line 2: declare: item: cannot destroy array variables in this way\n")]
+    [InlineData("+A", 0, "")]
+    public Task NameOnlyArrayAttributeRemovalPreparesAnUninitializedBinding(string flag, int status, string error) =>
+        AssertDeclarationAsync($"""
+            i=0; declare -n link='item[i++]'
+            declare {flag} link
+            printf '<%s:%s>\n' "$?" "$i"; declare -p item
+            """ + "\n", $"<{status}:0>\ndeclare -a item\n", error);
+
+    [Fact]
+    public Task GlobalAttributeRemovalPreparesItsOwnerBeforeAnActiveElementWrite() =>
+        AssertDeclarationAsync("""
+            i=1; item=outer; declare -n link='item[i++]'
+            f() { local -a item=([1]=inner); declare -g +a link+=new; printf '<%s:%s>\n' "$?" "$i"; declare -p item; }; f
+            declare -p item
+            """ + "\n", "<0:2>\ndeclare -a item=([1]=\"innernew\")\ndeclare -- item=\"\"\n", "");
+
+    [Theory]
+    [InlineData(":", "link=new", "declare -n link=\"item[i++]\"\n")]
+    [InlineData("export item", "+A link+=new", "declare -ax item=([0]=\"new\")\ndeclare -n link=\"item[i++]\"\n")]
+    [InlineData("declare -A item=([0]=old)", "+A link=new", "declare -a item=([0]=\"new\")\ndeclare -n link=\"item[i++]\"\n")]
+    public Task ATemporaryElementBindingCanWriteToAnExistingSavedSlotOnly(string setup, string operand, string bindings) =>
+        AssertDeclarationAsync($"""
+            i=0; {setup}; declare -n link='item[i++]'
+            item=scoped declare {operand}
+            printf '<%s:%s>\n' "$?" "$i"; declare -p item link 2>/dev/null; :
+            """ + "\n", "<0:1>\n" + bindings, "");
+
+    [Fact]
+    public Task ClearingIndexedAttributeKeepsTheScalarWhenAWriteBecomesReadonly() =>
+        AssertDeclarationAsync("""
+            i=0; item=old
+            declare +a -r 'item[i++]+=new'
+            printf '<%s:%s>\n' "$?" "$i"; declare -p item
+            """ + "\n", "<0:1>\ndeclare -r item=\"\"\n", "line 2: item: readonly variable\n");
+
+    [Theory]
     [InlineData("declare +n 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr",
         "<1>\ndeclare -a arr=()\n", "line 1: arr[]: bad array subscript\n")]
     [InlineData("declare -n middle; declare -nr arr=middle; declare +n -i 'arr[]=new'; printf '<%s>\\n' \"$?\"; declare -p arr middle",
