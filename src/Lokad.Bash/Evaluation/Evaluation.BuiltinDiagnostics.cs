@@ -43,10 +43,6 @@ public sealed partial class Evaluation
             [name, ShellValue.FromText(function ? ": cannot unset: readonly function" : ": cannot unset: readonly variable")], context);
 
     private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
-        ShellValue command, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
-        WriteInvalidShortOptionUnlessStderrClosedAsync(command, ShellValue.FromText("-"), flag, kind, name);
-
-    private Task<DescriptorWriteResult> WriteInvalidShortOptionUnlessStderrClosedAsync(
         ShellValue command, ShellValue sign, ReadOnlyMemory<byte> flag, BuiltinKind kind, string name) =>
         WriteInvalidShortOptionUnlessStderrClosedAsync(command, sign, flag, kind, name, default);
 

@@ -787,7 +787,8 @@ Both succeed silently, including when bundled or repeated. With named operands,
 status 1. Both options require a name. When combined, `-t` selects the query
 and `-d` supplies the missing-name diagnostic. Names supplied for cache
 population return 1 silently. A leading `--` ends option scanning, and a reached
-`--help` prints the supported usage and returns 2.
+`--help` prints the supported usage and returns 2. Each query miss, option
+error and empty-table write failure reports the reached source location.
 
 `shift` uses expanded fields and accepts a leading `--`. Its count defaults to
 one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII

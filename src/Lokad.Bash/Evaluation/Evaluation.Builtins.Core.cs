@@ -99,7 +99,7 @@ public sealed partial class Evaluation
     }
 
     /// <summary>Handles reset, deletion and queries against the emulator's empty command cache.</summary>
-    private async Task<EvaluationResult> EvaluateBuiltinHashAsync(IReadOnlyList<ShellValue> words)
+    private async Task<EvaluationResult> EvaluateBuiltinHashAsync(IReadOnlyList<ShellValue> words, EvaluationContext context)
     {
         var command = words[0];
         var options = new ShortOptionCursor(words);
@@ -116,7 +116,8 @@ public sealed partial class Evaluation
                 case (byte)'t': query = true; continue;
             }
 
-            await WriteInvalidShortOptionUnlessStderrClosedAsync(command, flag, BuiltinKind.Hash, "hash")
+            await WriteInvalidShortOptionUnlessStderrClosedAsync(command, ShellValue.FromText("-"), flag,
+                    BuiltinKind.Hash, "hash", GetBuiltinDiagnosticPrefix(context))
                 .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated: false).ConfigureAwait(false);
         }
@@ -132,10 +133,11 @@ public sealed partial class Evaluation
             if (query)
             {
                 var notFound = ShellValue.FromText(": not found");
+                var prefix = GetBuiltinDiagnosticPrefix(context);
                 for (var index = firstName; index < words.Count; index++)
                 {
                     CheckCancellation();
-                    var write = await WriteDiagnosticUnlessStderrClosedAsync([command], [words[index], notFound], scope: null)
+                    var write = await WriteDiagnosticUnlessStderrClosedAsync([command], [words[index], notFound], scope: null, prefix)
                         .ConfigureAwait(false);
                     if (!write.CanAcceptMore)
                         break;
@@ -145,13 +147,15 @@ public sealed partial class Evaluation
         else if (delete || query)
         {
             var missingOption = ShellValue.FromText(delete ? "-d" : "-t");
-            await WriteDiagnosticUnlessStderrClosedAsync([command],
-                [missingOption, ShellValue.FromText(": option requires an argument")], scope: null).ConfigureAwait(false);
+            await WriteDiagnosticUnlessStderrClosedAsync([command], [missingOption, ShellValue.FromText(": option requires an argument")],
+                    scope: null, GetBuiltinDiagnosticPrefix(context))
+                .ConfigureAwait(false);
             status = 1;
         }
         else if (!silent)
         {
-            var write = await WriteBuiltinOutputAsync(command, EmptyHashTableOutput).ConfigureAwait(false);
+            var write = await WriteBuiltinOutputAsync(command, EmptyHashTableOutput, GetBuiltinDiagnosticPrefix(context))
+                .ConfigureAwait(false);
             status = write.IsError ? 1 : 0;
         }
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false).ConfigureAwait(false);

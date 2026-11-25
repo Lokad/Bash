@@ -80,7 +80,7 @@ public sealed class ExecutionLifetimeTests
     public Task CancelledHashTargetDiagnosticStaysChargedUntilTheHostSettles()
     {
         var name = new string('x', 4096);
-        return VerifyPendingWriteAsync($"hash -t '{name}' 2>out; after=1", $"hash: {name}: not found\n");
+        return VerifyPendingWriteAsync($"hash -t '{name}' 2>out; after=1", $"line 1: hash: {name}: not found\n");
     }
 
     [Fact]

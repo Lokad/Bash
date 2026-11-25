@@ -64,10 +64,10 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
     [Theory]
     [InlineData("hash -- -r", 1, "")]
     [InlineData("hash -r -- --help", 1, "")]
-    [InlineData("hash -rz --help", 2, "hash: -z: invalid option\nhash: usage: hash [-dlrt] [--] [name ...]\n")]
+    [InlineData("hash -rz --help", 2, "line 1: hash: -z: invalid option\nhash: usage: hash [-dlrt] [--] [name ...]\n")]
     [InlineData("hash -z 2>&-", 2, "")]
     [InlineData("hash -r --help 1>&-", 2, "")]
-    [InlineData("hash 1>&-", 1, "hash: write error: Bad file descriptor\n")]
+    [InlineData("hash 1>&-", 1, "line 1: hash: write error: Bad file descriptor\n")]
     public async Task Evaluation_HashBuiltin_RespectsTheOptionAndDescriptorBoundaries(
         string script, int status, string error)
     {
@@ -80,11 +80,11 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
 
     [Theory]
     [InlineData("hash -d absent_one absent_two", 0, "")]
-    [InlineData("hash -d", 1, "hash: -d: option requires an argument\n")]
-    [InlineData("hash -t", 1, "hash: -t: option requires an argument\n")]
-    [InlineData("hash -t -d --", 1, "hash: -d: option requires an argument\n")]
-    [InlineData("hash -dt directory/name", 1, "hash: directory/name: not found\n")]
-    [InlineData("command hash -t -- -name --help", 1, "hash: -name: not found\nhash: --help: not found\n")]
+    [InlineData("hash -d", 1, "line 1: hash: -d: option requires an argument\n")]
+    [InlineData("hash -t", 1, "line 1: hash: -t: option requires an argument\n")]
+    [InlineData("hash -t -d --", 1, "line 1: hash: -d: option requires an argument\n")]
+    [InlineData("hash -dt directory/name", 1, "line 1: hash: directory/name: not found\n")]
+    [InlineData("command hash -t -- -name --help", 1, "line 1: hash: -name: not found\nline 1: hash: --help: not found\n")]
     [InlineData("builtin hash -rt echo 2>&-", 1, "")]
     public async Task Evaluation_HashBuiltin_UsesEmptyCacheEntrySemantics(string script, int status, string error)
     {
@@ -96,15 +96,21 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_HashTargetMissPreservesRawBytesOnRedirectedStderr()
+    public async Task Evaluation_HashTargetMissUsesDefinitionLocationAndPreservesRawBytes()
     {
         await using var host = new TestHost();
-        var result = await host.RunAsync("hash -t $'\\377' echo 2>diagnostic", CancellationToken.None);
+        host.AddFile("/define.sh", "f() {\n command hash -t $'\\377' echo 2>diagnostic\n}\n");
+        host.AddFile("/invoke.sh", ":\nf\n");
+        var result = await host.RunAsync("source ./define.sh\nsource ./invoke.sh", CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
-        byte[] expected = [.. "hash: "u8, 0xff, .. ": not found\nhash: echo: not found\n"u8];
+        byte[] expected =
+        [
+            .. "./define.sh: line 2: hash: "u8, 0xff, .. ": not found\n"u8,
+            .. "./define.sh: line 2: hash: echo: not found\n"u8
+        ];
         Assert.Equal(expected, host.ReadFileBytes("/diagnostic"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -130,7 +136,7 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
 
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.StdOut);
-        byte[] expected = [.. "hash: -"u8, 0xff, .. ": invalid option\nhash: usage: hash [-dlrt] [--] [name ...]\n"u8];
+        byte[] expected = [.. "line 1: hash: -"u8, 0xff, .. ": invalid option\nhash: usage: hash [-dlrt] [--] [name ...]\n"u8];
         Assert.Equal(expected, host.StandardError.Content.ToArray());
     }
 

@@ -1646,7 +1646,7 @@ public sealed partial class Evaluation : IFileTester
                         .ConfigureAwait(false),
                     BuiltinKind.Shift => await AwaitWordExpansionAsync(EvaluateBuiltinShiftAsync(
                         byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
-                    BuiltinKind.Hash => await EvaluateBuiltinHashAsync(byteOperands).ConfigureAwait(false),
+                    BuiltinKind.Hash => await EvaluateBuiltinHashAsync(byteOperands, builtinScope.Context).ConfigureAwait(false),
                     _ => throw new InvalidOperationException($"Builtin '{commandName}' has no evaluator dispatch.")
                 };
                 if (directPipelineStage && executable.Completion == CommandCompletion.Continue
