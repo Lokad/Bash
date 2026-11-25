@@ -1,5 +1,7 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -13,6 +15,25 @@ namespace Lokad.Bash.Evaluation;
 public sealed partial class Evaluation
 {
     private static readonly ShellValue ConditionalCommandName = ShellValue.FromText("[[");
+    private static readonly SearchValues<byte> RegexMetacharacters = CreateRegexMetacharacters();
+
+    private static SearchValues<byte> CreateRegexMetacharacters()
+    {
+        Span<byte> characters = stackalloc byte[128];
+        var count = 0;
+        for (var index = 0; index < characters.Length; index++)
+        {
+            var value = (byte)index;
+            if (RequiresRegexEscape(value))
+                characters[count++] = value;
+        }
+        return SearchValues.Create(characters[..count]);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool RequiresRegexEscape(byte value) => value is (byte)'.' or (byte)'^' or (byte)'$' or (byte)'|'
+        or (byte)'?' or (byte)'*' or (byte)'+' or (byte)'(' or (byte)')' or (byte)'[' or (byte)']' or (byte)'{'
+        or (byte)'}' or (byte)'\\';
 
     /// <summary>Evaluates retained conditional structure, expanding only reached operands.</summary>
     private async Task<EvaluationResult> EvaluateConditionalCommandAsync(
@@ -285,11 +306,24 @@ public sealed partial class Evaluation
                         var end = segmentStart + segment.Content.Bytes.Length;
                         if (segment.IsGlobQuoted)
                         {
-                            for (var index = segmentStart; index < end; index++)
+                            const int MaximumScanBytes = 4096;
+                            var index = segmentStart;
+                            while (end - index >= 32)
                             {
                                 _cancellationToken.ThrowIfCancellationRequested();
-                                if (source[index] is not ((byte)'.' or (byte)'^' or (byte)'$' or (byte)'|' or (byte)'?' or (byte)'*'
-                                    or (byte)'+' or (byte)'(' or (byte)')' or (byte)'[' or (byte)']' or (byte)'{' or (byte)'}' or (byte)'\\'))
+                                var length = Math.Min(end - index, MaximumScanBytes);
+                                var next = source.Slice(index, length).IndexOfAny(RegexMetacharacters);
+                                if (next >= 0)
+                                {
+                                    index += next;
+                                    break;
+                                }
+                                index += length;
+                            }
+                            for (; index < end; index++)
+                            {
+                                _cancellationToken.ThrowIfCancellationRequested();
+                                if (!RequiresRegexEscape(source[index]))
                                     continue;
                                 (escaped ??= new ByteMemoryBuilder(0, Memory.Budget))
                                     .Append(source[copyStart..index]).Append((byte)'\\');

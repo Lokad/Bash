@@ -196,6 +196,30 @@ public sealed class RegexCaptureTests
     }
 
     [Theory]
+    [InlineData(4095)]
+    [InlineData(4096)]
+    [InlineData(4097)]
+    public async Task RegexEscapesQuotedPunctuationAcrossScanBoundaries(int prefixLength)
+    {
+        var literal = new string('a', prefixLength) + @".[[:alpha:]]\";
+        var subject = $"4{literal}9";
+        var script = $$"""
+            literal='{{literal}}'
+            [[ '{{subject}}' =~ ^([[:digit:]])"$literal"[[:digit:]]$ ]]
+            """;
+        var evaluation = new Eval(Parser.Parse(script));
+        await using var host = new TestHost();
+        using var owner = host.MemoryBudget.CreateScope();
+
+        var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal<ShellValue>([ShellValue.FromText(subject), ShellValue.FromText("4")],
+            evaluation.IndexedArrays[Variables.RegexCaptureName]);
+    }
+
+    [Theory]
     [InlineData("prefix", "bb")]
     [InlineData("é😀", "é😀")]
     public async Task CapturesKeepCompactBytesAtNonzeroOffsets(string prefix, string captured)
