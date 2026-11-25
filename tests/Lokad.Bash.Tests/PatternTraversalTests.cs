@@ -106,6 +106,54 @@ public sealed class PatternTraversalTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("61C3A9F09F9982", false)]
+    [InlineData("61FFC3A961", true)]
+    public void TerminalWildcardKeepsPrefixLengthsAndTheLeftmostSearchOrigin(string hex, bool byteCharacters)
+    {
+        var text = Convert.FromHexString(hex);
+        var mask = default(GlobMaskSpan);
+        Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Prefix("a*"u8, in mask, text,
+            shortest: true, byteCharacters, memory: null, CancellationToken.None, out var length));
+        Assert.Equal(1, length);
+        Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Prefix("a*"u8, in mask, text,
+            shortest: false, byteCharacters, memory: null, CancellationToken.None, out length));
+        Assert.Equal(text.Length, length);
+
+        byte[] prefixed = [(byte)'z', .. text];
+        Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.FindUtf8("a*"u8, in mask, prefixed, byteCharacters,
+            memory: null, CancellationToken.None, out var start, out length));
+        Assert.Equal(1, start);
+        Assert.Equal(text.Length, length);
+    }
+
+    [Fact]
+    public void TerminalWildcardUsesTheSelectedDirectionForSuffixes()
+    {
+        var mask = default(GlobMaskSpan);
+        int[] atoms = [0, 1];
+        Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Suffix("*é"u8, in mask, atoms,
+            "aé🙂é"u8, shortest: false, byteCharacters: false, memory: null, CancellationToken.None, out var length));
+        Assert.Equal("aé🙂é"u8.Length, length);
+        Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Suffix("*é"u8, in mask, atoms,
+            "aé🙂é"u8, shortest: true, byteCharacters: false, memory: null, CancellationToken.None, out length));
+        Assert.Equal(2, length);
+    }
+
+    [Fact]
+    public void EmptySearchAndQuotedTerminalStarKeepTheirOwnMatchingRules()
+    {
+        var mask = default(GlobMaskSpan);
+        Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.FindUtf8(ReadOnlySpan<byte>.Empty, in mask, "é🙂"u8,
+            byteCharacters: false, memory: null, CancellationToken.None, out var start, out var length));
+        Assert.Equal(0, start);
+        Assert.Equal(0, length);
+
+        var quoted = new GlobMaskSpan([GlobMask.Active, 0]);
+        Assert.False(TextGlobMatcher.IsMatch("a*", in quoted, "aé"));
+        Assert.True(TextGlobMatcher.IsMatch("a*", in quoted, "a*"));
+    }
+
     [Fact]
     public void SearchAndSuffixTraversalMatchExhaustiveCandidateSelection()
     {

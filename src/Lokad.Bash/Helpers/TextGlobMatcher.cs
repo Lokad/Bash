@@ -211,6 +211,14 @@ public static class TextGlobMatcher
             {
                 star = p;
                 p = pattern.Next(p);
+                // An authored final wildcard supplies the longest match at this origin.
+                // The implicit search wildcard still selects the leftmost empty match.
+                if (p == pattern.Length && !shortestPrefix && !pattern.IsSearchStar(star))
+                {
+                    start = origin;
+                    length = text.Length - origin;
+                    return GlobMatchResult.Match;
+                }
                 match = t;
                 continue;
             }
