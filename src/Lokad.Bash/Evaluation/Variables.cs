@@ -567,7 +567,7 @@ public sealed partial class Variables
         }
 
         internal void PrepareRejectedNamerefArray(Variables command, BindingName name, ArrayKind kind, bool initialized,
-            EvaluationMemory memory)
+            (BindingAttributes Set, BindingAttributes Clear) attributes, EvaluationMemory memory)
         {
             memory.Charge(BindingOverheadBytes);
             VariableSlot array = kind == ArrayKind.Indexed
@@ -575,6 +575,7 @@ public sealed partial class Variables
                 : new AssociativeSlot(new AssociativeArray(isInitialized: initialized));
             array.Attributes = BindingAttributes.ArrayNameref;
             command.ReplaceValue(name, array);
+            command.UpdateBindingAttributes(name, attributes.Set, attributes.Clear);
             Publish(name, command);
         }
 

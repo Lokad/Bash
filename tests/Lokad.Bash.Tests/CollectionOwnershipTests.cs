@@ -45,11 +45,14 @@ public sealed class CollectionOwnershipTests
         try
         {
             Assert.Throws<MemoryBudgetExceededException>(() =>
-                locals.PrepareRejectedNamerefArray(command, "slot", ArrayKind.Indexed, initialized: true, memory));
+                locals.PrepareRejectedNamerefArray(command, "slot", ArrayKind.Indexed, initialized: true,
+                    (Variables.BindingAttributes.Exported, Variables.BindingAttributes.None), memory));
             Assert.True(command.TryGetNameref("slot", out var commandTarget));
             Assert.Equal(oldTarget, commandTarget);
+            Assert.False(command.IsExported("slot"));
             Assert.True(owner.TryGetNameref("slot", out var ownerTarget));
             Assert.Equal(oldTarget, ownerTarget);
+            Assert.False(owner.IsExported("slot"));
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);

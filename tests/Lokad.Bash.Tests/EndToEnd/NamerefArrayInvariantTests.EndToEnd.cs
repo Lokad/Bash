@@ -73,4 +73,46 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
         Assert.Equal("line 4: local: slot: reference variable cannot be an array\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
+
+    [Theory]
+    [InlineData("local -n ref=dest", "local +n 'ref[]='", "-an ref=()", "ref[]: bad array subscript")]
+    [InlineData("local -n ref", "declare -A 'ref[]=value'", "-An ref", "ref[]: bad array subscript")]
+    [InlineData("local -n ref", "local -ix 'ref[]=value'", "-ainx ref", "ref[]: bad array subscript")]
+    [InlineData("local -n ref", "local -ix 'ref[]=two words'", "-an ref",
+        "local: `two words': invalid variable name for name reference")]
+    [InlineData("local -nr ref=dest", "local -A +n 'ref[]=value'", "-Anr ref=()", "local: ref: readonly variable")]
+    [InlineData("local -nr through; local -n ref=through", "local -A 'ref[]=value'", "-An ref=()", "ref[]: bad array subscript")]
+    public async Task EmptyLocalElementRejectionRetainsThePreparedNamerefArray(
+        string setup, string command, string declaration, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync("ref=outer; dest=target\nf(){\n"
+            + $"  {setup}\n  {command}\n"
+            + "  printf 'reached=%s\\n' \"$?\"; declare -p ref dest\n"
+            + "}\nf\ndeclare -p ref dest\n");
+
+        Assert.Equal($"reached=1\ndeclare {declaration}\ndeclare -- dest=\"target\"\n"
+            + "declare -- ref=\"outer\"\ndeclare -- dest=\"target\"\n", result.StdOut);
+        Assert.Equal($"line 4: {diagnostic}\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -n ref=dest", "local -n 'ref[]=value'", "-n ref=\"dest\"\ndeclare -a dest",
+        "local: ref: reference variable cannot be an array")]
+    [InlineData("local -n through=dest ref=through", "local +n 'ref[]=value'", "-n ref=\"through\"\ndeclare -a dest",
+        "ref[]: bad array subscript")]
+    [InlineData("declare -gn through=dest; local -n ref=through", "local -Ax 'ref[]=two words'", "-An ref=()",
+        "local: `two words': invalid variable name for name reference")]
+    public async Task EmptyLocalElementRejectionDistinguishesMissingTargetOwners(
+        string setup, string command, string declaration, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync("ref=outer\nf(){\n"
+            + $"  {setup}\n  {command}\n"
+            + "  printf 'reached=%s\\n' \"$?\"; declare -p ref; declare -p dest 2>/dev/null || :\n"
+            + "}\nf\ndeclare -p ref\n");
+
+        Assert.Equal($"reached=1\ndeclare {declaration}\ndeclare -- ref=\"outer\"\n", result.StdOut);
+        Assert.Equal($"line 4: {diagnostic}\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
 }
