@@ -453,12 +453,16 @@ terminate the invoking shell even in a tested command. A token following the
 body where the closer is required is reported with its reader line. A malformed
 arithmetic `for` header in an unquoted substitution terminates with status 2. With an
 enclosing double quote, the builtin returns the status of any complete command
-prefix in that unit, or 2 if the unit has no complete prefix. A compound array
-assignment with that quoted error returns 1. For errors such as a pipeline
-with a missing command, EXIT sees parser status 257 and shell completion
-returns its low byte, 1. In a command capture or a simple pipeline stage,
-the child unwinds the builtin and completes with status 1. Ordinary syntax
-errors and incomplete substitutions continue to use the builtin's return path.
+prefix in that unit, or 2 if the unit has no complete prefix. A recovered
+array delimiter error uses status 1 and ends a child shell running the builtin.
+For a substitution grammar error such as a pipe with a missing command,
+the parser publishes 257 in `PIPESTATUS` and shell completion uses its low byte, 1.
+A command-substitution child unwinds the builtin before EXIT and uses status 1.
+A direct pipeline builtin uses status 1 while EXIT still has the loaded reader's
+bindings and descriptors. If an inner reader fails, the pipeline builtin
+restores it before running EXIT in the outer reader. A function stage retains
+its active reader and its parser status through EXIT. Ordinary syntax errors and incomplete substitutions
+outside array initializers continue to use the builtin's return path.
 An absent redirection operand reports the rejected token. An implicit final
 newline counts as that token if the input reaches it before the operand. At
 the end of a continuation in token spacing, an open capture instead reports

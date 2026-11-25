@@ -96,6 +96,125 @@ public sealed class TrapCommandUnitTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData(true, "items=(\"$(for ((1;)); do :; done)\")", 1,
+        "./sample.sh: line 2: syntax error: arithmetic expression required\n"
+        + "./sample.sh: line 2: syntax error: `((1;))'\n"
+        + "./sample.sh: line 2: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData(false, "items=(\"$(for ((1;)); do :; done)\")", 1,
+        "./sample.sh: line 2: syntax error: arithmetic expression required\n"
+        + "./sample.sh: line 2: syntax error: `((1;))'\n"
+        + "./sample.sh: line 2: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData(false, "items=(unfinished", 1, "./sample.sh: line 2: unexpected EOF while looking for matching `)'\n")]
+    [InlineData(true, "value=$(printf hidden |)", 257, "./sample.sh: line 2: syntax error near unexpected token `)'\n"
+        + "./sample.sh: line 2: `value=$(printf hidden |)'\n")]
+    public async Task LoadedParserFailureEndsTheChildThroughItsOwnExitScope(
+        bool capture, string unit, int pipelineStatus, string diagnostic)
+    {
+        var commands = $"set -- child\ntrap '{PrintParserExitFrame}' EXIT\n"
+            + "source ./sample.sh inner 2>error || printf skipped\nprintf skipped\n";
+        var script = capture ? "result=$(" + commands + ")\nprintf '<caller:%s:%s>' \"$?\" \"$result\"\n"
+            : "(" + commands + ")\nprintf '<caller:%s>' \"$?\"\n";
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", "printf earlier\n" + unit + "\nprintf skipped\n");
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(capture ? $"<caller:1:earlier<exit:1:{pipelineStatus}:child:unset>>"
+            : $"earlier<exit:1:{pipelineStatus}:inner:unset><caller:1>", host.StandardOutput.TextContent);
+        Assert.Equal(capture ? "handler" : "", host.StandardError.TextContent);
+        Assert.Equal(diagnostic + (capture ? "" : "handler"), host.ReadFile("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(true, false, 1, 2, 1)]
+    [InlineData(false, false, 2, 2, 2)]
+    [InlineData(true, true, 1, 257, 1)]
+    [InlineData(false, true, 257, 257, 1)]
+    public async Task LoadedParserFailureKeepsTheActivePipelineInvocation(
+        bool direct, bool grammar, int exitStatus, int pipelineStatus, int stageStatus)
+    {
+        var syntax = grammar ? "value=$(printf hidden |)" : "items=($(for ((1;)); do :; done))";
+        var diagnostic = grammar ? "./sample.sh: line 3: syntax error near unexpected token `)'\n"
+                + "./sample.sh: line 3: `value=$(printf hidden |)'\n"
+            : "./sample.sh: line 3: syntax error: arithmetic expression required\n"
+                + "./sample.sh: line 3: syntax error: `((1;))'\n";
+        const string Call = "source ./sample.sh reader 2>error";
+        var script = (direct ? "set -- outer\ntrue | " + Call
+            : "stage() { local x=local;\n" + Call + "\nprintf skipped\n}\ntrue | stage child")
+            + "\nprintf '<caller:%s>' \"${PIPESTATUS[*]}\"\n";
+
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            await using var host = new TestHost { MemoryBudget = governor };
+            host.AddFile("/sample.sh", $"trap '{PrintParserExitFrame}' EXIT\nprintf earlier\n{syntax}\nprintf skipped\n");
+            using var owner = governor.CreateScope();
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            var local = direct ? "unset" : "local";
+            Assert.Equal($"earlier<exit:{exitStatus}:{pipelineStatus}:reader:{local}><caller:0 {stageStatus}>",
+                host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(diagnostic + "handler", host.ReadFile("/error"));
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task DirectPipelineReaderKeepsItsExitStatusWithTemporaryBindings()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", $"trap '{PrintParserExitFrame}; printf \"<binding:%s>\" \"$prefix\"' EXIT\n"
+            + "printf earlier\nitems=($(for ((1;)); do :; done))\n");
+        var result = await host.RunAsync("""
+            caller() { local x=local; true | prefix=value source ./sample.sh inner 2>error
+            printf "<stage:%s>" "${PIPESTATUS[*]}"
+            }
+            caller outer
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("earlier<exit:1:2:inner:local><binding:value><stage:0 1>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./sample.sh: line 3: syntax error: arithmetic expression required\n"
+            + "./sample.sh: line 3: syntax error: `((1;))'\nhandler", host.ReadFile("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("items=(\"$(for ((1;)); do :; done)\")", 1,
+        "./inner.sh: line 3: syntax error: arithmetic expression required\n"
+        + "./inner.sh: line 3: syntax error: `((1;))'\n"
+        + "./inner.sh: line 3: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("value=$(printf hidden |)", 257, "./inner.sh: line 3: syntax error near unexpected token `)'\n"
+        + "./inner.sh: line 3: `value=$(printf hidden |)'\n")]
+    public async Task DirectPipelineReaderRunsExitAfterRestoringItsNestedSource(string syntax, int parserStatus, string diagnostic)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/outer.sh", "source ./inner.sh innermost 2>inner-error\nprintf skipped\n");
+        host.AddFile("/inner.sh", $"trap '{PrintParserExitFrame}' EXIT\nprintf before\n{syntax}\nprintf skipped\n");
+        var result = await host.RunAsync("""
+            set -- outer
+            true | source ./outer.sh middle 2>outer-error
+            printf "<stage:%s>" "${PIPESTATUS[*]}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"before<exit:1:{parserStatus}:middle:unset><stage:0 1>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(diagnostic, host.ReadFile("/inner-error"));
+        Assert.Equal("handler", host.ReadFile("/outer-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task TestedEvalKeepsItsQuotedHeaderRecoveryUnderErrexit()
     {

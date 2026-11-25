@@ -308,8 +308,13 @@ public sealed partial class Evaluation
         // independently of the caller's function/eval execution depth.
         if (kind is not (ScriptExecutionKind.Root or ScriptExecutionKind.LegacyCapture))
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        var sourceOrEval = kind is ScriptExecutionKind.Source or ScriptExecutionKind.Eval;
+        var pipelineReader = sourceOrEval && IsPipelineEntryScope(scope);
+        var nestedPipelineReader = pipelineReader && scope.InNestedCommandUnits;
+        var directPipelineReader = pipelineReader && !nestedPipelineReader;
+        var nestedLoadedReader = IsNestedLoadedReader(kind);
         scope = scope with { InEvalReader = kind == ScriptExecutionKind.Eval };
-        if (IsNestedLoadedReader(kind))
+        if (nestedLoadedReader)
             scope = scope with
             {
                 InNestedCommandUnits = true,
@@ -331,7 +336,7 @@ public sealed partial class Evaluation
         };
         using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
         var streamedRoot = kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.Script;
-        var usesImmediateParserExit = streamedRoot || kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap;
+        var usesImmediateParserExit = streamedRoot || sourceOrEval || kind == ScriptExecutionKind.Trap;
         while (true)
         {
             CheckCancellation();
@@ -360,7 +365,7 @@ public sealed partial class Evaluation
                 }
                 if (readDiagnostics.CompoundItems is { } items
                     && await ReportCompoundItemReadDiagnosticsAsync(items, scope, lineOffset).ConfigureAwait(false) is { } readFailure)
-                    return IsNestedLoadedReader(kind)
+                    return nestedLoadedReader
                         ? await ExitLoadedExpansionSyntaxAsync(scope, readFailure).ConfigureAwait(false)
                         : EvaluationResult.Exit(readFailure.ExitCode);
                 var skipExecution = result.Flow is FlowControlKind.Break or FlowControlKind.Continue;
@@ -408,16 +413,21 @@ public sealed partial class Evaluation
                         || quotedArrayFailure && failedUnit.QuotedRecovery.HasValue;
                     var parserStatus = arrayDelimiterFailure ? 1 : 2;
                     var exitsSubstitution = failure.ExitsSubstitution || quotedArrayFailure && !arrayDelimiterFailure;
-                    var exitsLoadedReader = IsNestedLoadedReader(kind) && exitsSubstitution;
+                    var exitsLoadedReader = nestedLoadedReader && (exitsSubstitution
+                        || sourceOrEval && arrayDelimiterFailure && _state.ForkKind.HasValue);
+                    var publishesLoadedParserStatus = sourceOrEval && exitsLoadedReader;
+                    var loadedParserStatus = failure.Kind == ParserFailureKind.SubstitutionGrammar
+                        ? BuiltinSyntaxErrorStatus : parserStatus;
                     if (failure.IsDirectQuotedSubstitutionFailure
-                        || exitsLoadedReader && failure.ArithmeticForHeader.HasValue
+                        || publishesLoadedParserStatus || exitsLoadedReader && failure.ArithmeticForHeader.HasValue
                         || streamedRoot && (arrayDelimiterFailure || failure.ArithmeticForHeader.HasValue
                             || failure.UnexpectedToken != null || failure.ConditionalEndOfInput is { DoubleQuoted: null }
                             || failedUnit.DiagnosticLine != 0 && failure.UnclosedDelimiter == null))
                     {
+                        var publishedStatus = publishesLoadedParserStatus ? loadedParserStatus : parserStatus;
                         PreparePipelineStatusStorage(1);
-                        scope.Variables.SetPipelineStatuses([parserStatus], scope.Context, _cancellationToken);
-                        _state.LastExitCode = parserStatus;
+                        scope.Variables.SetPipelineStatuses([publishedStatus], scope.Context, _cancellationToken);
+                        _state.LastExitCode = publishedStatus;
                     }
                     if (failedUnit.CompletedPrefix is { } prefix && !skipExecution)
                         command = prefix;
@@ -427,9 +437,13 @@ public sealed partial class Evaluation
                             return EvaluationResult.Exit(1);
                         if (exitsLoadedReader)
                         {
-                            var status = failure.Kind == ParserFailureKind.SubstitutionGrammar
-                                ? BuiltinSyntaxErrorStatus : 2;
-                            return await ExitLoadedSyntaxFailureAsync(scope, status, unwindChildFirst: true).ConfigureAwait(false);
+                            // Unwind inner readers before running EXIT in the directly invoked builtin.
+                            if (nestedPipelineReader)
+                                return EvaluationResult.ExitAfterNestedPipelineReader();
+                            // A pipeline builtin can exit with 1 while PIPESTATUS still holds the parser status.
+                            var status = directPipelineReader ? 1 : loadedParserStatus;
+                            return await ExitLoadedSyntaxFailureAsync(scope, status, substitutionStatus: 1,
+                                unwindPipelineBuiltin: !sourceOrEval).ConfigureAwait(false);
                         }
                         return result.WithExitCode(parserStatus);
                     }
@@ -458,7 +472,9 @@ public sealed partial class Evaluation
                         resetStatus: IsLoadedReader(kind) && result.DiscardsCompoundRedirection).ConfigureAwait(false);
                 else if (result.Flow == FlowControlKind.Exit)
                 {
-                    if (IsNestedLoadedReader(kind)
+                    if (directPipelineReader && result.ExitsNestedPipelineReader)
+                        return await RunExitTrapAsync(scope, result).ConfigureAwait(false);
+                    if (nestedLoadedReader
                         && _state.FatalExpansion is { Kind: ExpansionFailureKind.ReaderSyntax } failure)
                         return await ExitLoadedExpansionSyntaxAsync(scope, failure).ConfigureAwait(false);
                     // Recover only the expansion failures that end the current command unit.
@@ -484,15 +500,18 @@ public sealed partial class Evaluation
     {
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
-        return ExitLoadedSyntaxFailureAsync(scope, ExitActionStatus(failure), unwindChildFirst: false);
+        var status = ExitActionStatus(failure);
+        return ExitLoadedSyntaxFailureAsync(scope, status, substitutionStatus: status & byte.MaxValue, unwindPipelineBuiltin: false);
     }
 
-    private async ValueTask<EvaluationResult> ExitLoadedSyntaxFailureAsync(ScopedEvaluation scope, int status, bool unwindChildFirst)
+    private async ValueTask<EvaluationResult> ExitLoadedSyntaxFailureAsync(ScopedEvaluation scope, int status,
+        int substitutionStatus, bool unwindPipelineBuiltin)
     {
         // A capturing child unwinds the builtin before running its own EXIT action.
-        if (_state.ForkKind == ShellForkKind.CommandSubstitution
-            || unwindChildFirst && _state.ForkKind == ShellForkKind.PipelineSimpleCommand)
-            return EvaluationResult.Exit(unwindChildFirst ? 1 : status & byte.MaxValue);
+        if (_state.ForkKind == ShellForkKind.CommandSubstitution)
+            return EvaluationResult.Exit(substitutionStatus);
+        if (unwindPipelineBuiltin && _state.ForkKind == ShellForkKind.PipelineSimpleCommand)
+            return EvaluationResult.Exit(1);
 
         // In the invoking shell, EXIT sees the full parser status and the active
         // builtin scope. The result crossing the shell boundary uses its low byte.

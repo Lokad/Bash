@@ -12,7 +12,15 @@ public partial class Evaluation
         Exit
     }
 
-    private enum ExitCause { Completion, ExtraArguments, InvalidLoopCount, CompoundInitializerSyntax, CompoundRedirectionSyntax }
+    private enum ExitCause
+    {
+        Completion,
+        ExtraArguments,
+        InvalidLoopCount,
+        CompoundInitializerSyntax,
+        CompoundRedirectionSyntax,
+        NestedPipelineReader
+    }
 
     /// <summary> Represents the exit code and flow-control outcome of evaluating a node. </summary>
     private readonly struct EvaluationResult(int exitCode, FlowControlKind flow, int level, bool testedStatus)
@@ -63,6 +71,9 @@ public partial class Evaluation
         public bool DiscardsLoadedCommandUnit => Cause is ExitCause.CompoundInitializerSyntax or ExitCause.CompoundRedirectionSyntax;
 
         public bool DiscardsCompoundRedirection => Cause == ExitCause.CompoundRedirectionSyntax;
+
+        /// <summary>Runs EXIT after restoring the inner reader of a direct pipeline builtin.</summary>
+        public bool ExitsNestedPipelineReader => Cause == ExitCause.NestedPipelineReader;
 
         /// <summary>Restores a function's saved options before reaching the EXIT action.</summary>
         public bool RestoresLocalOptions => DiscardsCommandUnit || Cause == ExitCause.InvalidLoopCount;
@@ -123,6 +134,9 @@ public partial class Evaluation
 
         public static EvaluationResult InvalidLoopCount(int exitCode) =>
             Exit(exitCode) with { Cause = ExitCause.InvalidLoopCount };
+
+        public static EvaluationResult ExitAfterNestedPipelineReader() =>
+            Exit(1) with { Cause = ExitCause.NestedPipelineReader };
     }
 
 }

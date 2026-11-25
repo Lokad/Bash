@@ -4468,8 +4468,18 @@ public sealed partial class Evaluation : IFileTester
         !ReaderErrexitEnabled(scope) && scope.LoadedSyntaxFunctionDepth.HasValue ? 1 : 2;
 
     private bool IsDirectPipelineStageScope(ScopedEvaluation scope) =>
-        _state.ForkKind == ShellForkKind.PipelineSimpleCommand && !scope.InNestedCommandUnits
-        && ReferenceEquals(scope.Context.FunctionContext, _initialContext.FunctionContext);
+        !scope.InNestedCommandUnits && IsPipelineEntryScope(scope);
+
+    private bool IsPipelineEntryScope(ScopedEvaluation scope)
+    {
+        if (_state.ForkKind != ShellForkKind.PipelineSimpleCommand)
+            return false;
+
+        var function = scope.Context.FunctionContext;
+        while (!ReferenceEquals(function, _initialContext.FunctionContext) && function?.Locals.IsTemporaryPrefixScope == true)
+            function = function.Enclosing;
+        return ReferenceEquals(function, _initialContext.FunctionContext);
+    }
 
     private bool UsesInheritedPipelineExitAction(ScopedEvaluation scope) =>
         IsDirectPipelineStageScope(scope) && _state.Traps?.HasInheritedPipelineExitAction == true;

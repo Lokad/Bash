@@ -635,6 +635,11 @@ Ordinary shell command units restore local and temporary bindings before the act
 Direct child execution retains them. Eval and source restore bindings at their
 command-unit boundary for ordinary failures. A parser exit under effective
 errexit runs EXIT in the active reader, then unwinds through its owning
-builtin invocation without reporting its pending timers. Ordinary errexit
-reports pending timers once, before the action. The
+builtin invocation without reporting its pending timers. A terminating
+substitution parse or array delimiter failure in source or eval with errexit
+disabled publishes its parser status. A command-substitution child restores
+the invocation before EXIT. Subshells and function stages run EXIT within
+the active reader. A directly invoked pipeline builtin restores inner readers
+before running EXIT within its outer reader. Ordinary errexit reports pending
+timers once, before the action. The
 enclosing descriptor and command owners still settle before completion returns.
