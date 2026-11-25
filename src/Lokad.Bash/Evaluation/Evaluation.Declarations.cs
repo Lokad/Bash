@@ -512,6 +512,9 @@ public sealed partial class Evaluation
             ? DeclarationAttributeChange.Set : DeclarationAttributeChange.Unchanged;
         public bool Nameref => NamerefChange == DeclarationAttributeChange.Set && ArrayKind == ArrayAssignmentKind.Auto;
         public bool Readonly => ReadonlyChange == DeclarationAttributeChange.Set;
+        public bool PromotesElementPrefixes => Builtin == BuiltinKind.Declare && !Global
+            && NamerefChange == DeclarationAttributeChange.Unchanged && ArrayKind == ArrayAssignmentKind.Auto
+            && (ExportChange == DeclarationAttributeChange.Set || Readonly);
         public bool Global { get; private set; }
         public bool Inherit { get; private set; }
         public bool Print { get; private set; }

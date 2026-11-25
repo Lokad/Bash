@@ -799,6 +799,11 @@ the chain intact.
 When nonlocal `declare` or `typeset` promotes a temporary value through
 a whole-name reference, the active prefix supplies its value and new
 attributes. The saved referent retains its array kind and other elements.
+When the prefix hides an element reference, promotion waits until the
+declaration's operands finish. It evaluates the restored reference's selector
+once using the caller's bindings and earlier promotions. Multiple prefixes
+publish in Bash's temporary table order. A bad subscript reports a diagnostic
+at publication and leaves the status selected by the operands.
 For a nonlocal declaration through an element nameref, `+a` and `+A`
 reject removal of a matching array kind before evaluating the selector.
 With neither array kind explicitly set, `+a` clears a scalar before the

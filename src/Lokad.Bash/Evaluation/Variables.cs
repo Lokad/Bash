@@ -309,6 +309,7 @@ public sealed partial class Variables
         }
 
         public bool Contains(BindingName name) => _prefixes.Contains(name);
+        internal bool RetainsBinding(BindingName name) => _retainedNames.Contains(name);
         internal Variables SavedVariables => _saved;
         internal IReadOnlySet<BindingName> PrefixNames => _prefixes;
         internal long ForkMemoryBytes => checked(384 + _saved.EstimatedMemoryBytes

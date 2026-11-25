@@ -13,7 +13,7 @@ internal static partial class WordExpansion
     internal static readonly ShellValue IndexedArrayNamerefSpelling =
         ShellValue.FromBytes(new byte[] { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff });
 
-    internal enum DeclarationWrite { Ordinary, ActiveGlobalIndexed, ReadonlyInitializer }
+    internal enum DeclarationWrite { Ordinary, ActiveGlobalIndexed, ReadonlyInitializer, PromotedPrefix }
 
     /// <summary>A selected location; its typed index is not expanded again when read.</summary>
     internal abstract record ResolvedVariableReference(BindingName Name)
@@ -108,7 +108,7 @@ internal static partial class WordExpansion
         internal bool TryPublishValue(ScopedEvaluation scope, BindingName sourceName, ShellValue value) =>
             TryPublishValue(scope, sourceName, value, DeclarationWrite.Ordinary);
 
-        private bool TryPublishValue(
+        internal bool TryPublishValue(
             ScopedEvaluation scope, BindingName sourceName, ShellValue value, DeclarationWrite declarationWrite)
         {
             if (IsWholeBindingRead && this is Indexed or Associative && scope.Variables.IsArrayNameref(Name))

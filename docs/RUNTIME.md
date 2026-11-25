@@ -408,6 +408,11 @@ Nonlocal declaration promotion retains the reached prefix slot when it belongs
 to a whole-name referent. The existing retained store stages its value and
 assignment attributes before restoration. A named attribute command that sees
 a temporary scalar above an element reference uses ordinary prefix restoration.
+An ordinary declaration can instead stage that scalar for element promotion.
+It reserves the staged values before restoring the command bindings and releases
+the ordering scratch before any selector runs. The evaluator publishes the
+selected elements once through the existing assignment path, in temporary-table
+order, before returning the declaration's result.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.

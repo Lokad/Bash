@@ -1286,6 +1286,9 @@ public sealed partial class Evaluation : IFileTester
         var commandVars = scope.Variables;
         var commandAssignmentsSuccessful = true;
         var prefixNames = simpleCommand.Assignments.Count == 0 ? null : new HashSet<BindingName>();
+        var mayDeferElementPromotion = prefixNames != null && scope.Context.FunctionContext == null
+            && declaration is { Options.PromotesElementPrefixes: true };
+        List<BindingName>? declarationPrefixOrder = mayDeferElementPromotion && simpleCommand.Assignments.Count > 1 ? [] : null;
         var assignmentError = await AwaitWordExpansionAsync(PrepareAssignmentsAsync()).ConfigureAwait(false);
         if (assignmentError.HasValue)
             return PublishStatus(await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false));
@@ -1881,7 +1884,11 @@ public sealed partial class Evaluation : IFileTester
                     }
                 }
 
-                prefixNames.Add(name);
+                if (prefixNames.Add(name) && declarationPrefixOrder != null)
+                {
+                    Memory.PrepareListCapacity(declarationPrefixOrder, 1);
+                    declarationPrefixOrder.Add(name);
+                }
                 // The temporary binding drops the integer attribute after preparing its value.
                 if (commandVars.IsIntegerBinding(name))
                     commandVars.SetIntegerBinding(name, false);
@@ -2305,6 +2312,7 @@ public sealed partial class Evaluation : IFileTester
             var exitCode = 0;
             var operandFailureStatus = 1;
             List<Variables.CommandBindings>? exposedPrefixes = null;
+            HashSet<BindingName>? deferredElementPromotions = null;
             for (var index = 0; index < operands.Count; index++)
             {
                 var operand = operands[index];
@@ -3245,7 +3253,87 @@ public sealed partial class Evaluation : IFileTester
                     await ApplyNamedAttributesAsync(sourceName, assignmentPrefix).ConfigureAwait(false);
             }
 
+            if (deferredElementPromotions != null && bindings != null)
+                await PublishDeclarationPrefixesAsync(bindings, declarationPrefixOrder, deferredElementPromotions).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
+
+            async Task PublishDeclarationPrefixesAsync(Variables.CommandBindings commandBindings,
+                IReadOnlyList<BindingName>? prefixOrder, IReadOnlySet<BindingName> elementPromotions)
+            {
+                using var promotionMemory = new MemoryCapacity(Memory.Budget, 0);
+                var promotions = new List<(BindingName Name, ShellValue Value, BindingAttributes Attributes)>();
+                if (prefixOrder is { Count: > 1 })
+                    CaptureInBashOrder(prefixOrder);
+                else
+                    foreach (var name in commandBindings.PrefixNames)
+                        CapturePromotion(name);
+
+                // The declaration has settled its operands. Selectors read the restored caller and earlier publications.
+                commandBindings.Dispose();
+                foreach (var (name, value, attributes) in promotions)
+                {
+                    CheckCancellation();
+                    if (!commandVars.TryResolveBinding(name, selectOwner: null, out var binding))
+                        continue;
+                    if (binding.Reference.Kind == VariableReferenceKind.Name)
+                        binding.Owner.SetResolvedValuePreservingArray(binding.Name, value, Memory);
+                    else
+                    {
+                        var target = await WordExpansion.ResolveDeclarationReferenceAsync(binding.Reference,
+                            executionScope, binding.Owner, binding.Owner).ConfigureAwait(false);
+                        if (target == null || !target.TryPublishValue(executionScope with { Variables = binding.Owner },
+                            binding.Name, value, WordExpansion.DeclarationWrite.PromotedPrefix))
+                            continue;
+                    }
+                    binding.Owner.UpdateBindingAttributes(binding.Name, attributes, BindingAttributes.None);
+                }
+
+                void CaptureInBashOrder(IReadOnlyList<BindingName> order)
+                {
+                    using var orderMemory = new MemoryCapacity(Memory.Budget, 0);
+                    var count = order.Count;
+                    orderMemory.Grow(checked(MemoryCapacity.ArrayBackingBytes<BindingName>(count)
+                        + MemoryCapacity.ArrayBackingBytes<ulong>(count)));
+                    var names = new BindingName[count];
+                    var keys = new ulong[count];
+                    for (var index = 0; index < count; index++)
+                        names[index] = order[index];
+
+                    // Bash inserts at the head of a bucket and reverses each surviving chain when it grows.
+                    var buckets = 4;
+                    while (count > 2 * buckets)
+                    {
+                        names.AsSpan(0, 2 * buckets).Reverse();
+                        buckets = checked(4 * buckets);
+                    }
+                    for (var index = 0; index < count; index++)
+                    {
+                        CheckCancellation();
+                        var name = names[index];
+                        if (name.NeedsValueEncoding)
+                            orderMemory.Grow(checked(4L * name.ByteLength));
+                        var hash = 2166136261u;
+                        foreach (var value in name.ToValue().Bytes.Span)
+                            hash = unchecked(hash * 16777619u ^ value);
+                        keys[index] = ((ulong)(hash & (uint)(buckets - 1)) << 32) | (uint)(count - index - 1);
+                    }
+                    Array.Sort(keys, names);
+                    foreach (var name in names)
+                        CapturePromotion(name);
+                }
+
+                void CapturePromotion(BindingName name)
+                {
+                    if ((!elementPromotions.Contains(name) && !commandBindings.RetainsBinding(name))
+                        || !commandBindings.Contains(name) || !commandVars.Scalars.TryGetValue(name, out var value))
+                        return;
+                    promotionMemory.Grow(global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(value));
+                    promotionMemory.PrepareListCapacity(promotions, 1);
+                    var attributes = commandVars.GetAssignmentAttributes(name)
+                        & (BindingAttributes.Integer | BindingAttributes.Case | BindingAttributes.Exported | BindingAttributes.Readonly);
+                    promotions.Add((name, value, attributes));
+                }
+            }
 
             async Task<bool> TryRejectLocalElementInitializerAsync(VariableReference reference, PreparedDeclarationOperand operand,
                 FunctionContext function, bool setsNameref)
@@ -3731,11 +3819,28 @@ public sealed partial class Evaluation : IFileTester
                         return;
                     }
                     // A named attribute builtin can use a temporary scalar while restoring its saved element reference.
-                    if (setsNamedAttribute && options.ArrayKind == ArrayAssignmentKind.Auto && commandBindings.Contains(name)
+                    if ((setsNamedAttribute && options.ArrayKind == ArrayAssignmentKind.Auto || mayDeferElementPromotion)
+                        && commandBindings.Contains(name)
                         && commandBindings.SavedVariables.TryResolveBinding(name,
                             current => commandBindings.Contains(current) ? commandBindings.SavedVariables : variables, out var saved)
-                        && saved.Reference.Kind == VariableReferenceKind.Element)
+                        && saved.Reference.Kind == VariableReferenceKind.Element
+                        && (setsNamedAttribute || !saved.Reference.Subscript.IsEmpty))
+                    {
+                        if (!setsNamedAttribute)
+                        {
+                            if (deferredElementPromotions == null)
+                            {
+                                var count = commandBindings.PrefixNames.Count;
+                                Memory.Charge(checked(64L + (long)global::Lokad.Bash.Evaluation.Variables.BindingNameSelectionBytes * count));
+                                deferredElementPromotions = new HashSet<BindingName>(count);
+                            }
+                            deferredElementPromotions.Add(name);
+                            if (options.Readonly)
+                                await ReportCommandDiagnosticAsync([GetDiagnosticName(name)],
+                                    [ShellValue.FromText("readonly variable")], declarationScope).ConfigureAwait(false);
+                        }
                         return;
+                    }
                 }
                 PublishAttributes(name, variables, global, local, exportChange);
             }

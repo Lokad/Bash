@@ -100,6 +100,74 @@ public sealed class DeclarationAttributeTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("i++", "link=3 declare -x link+=7 link+=8", "<0:1>", "378", "other", "-ax", "")]
+    [InlineData("i++", "link=3 declare -x link+=7 i=1", "<0:2>", "old", "37", "-ax", "")]
+    [InlineData("i++", "link=3 i=1 declare -x link+=7", "<0:1>", "37", "other", "-ax", "")]
+    [InlineData("i++", "link=p declare -xr link+=new 'not a name'", "<1:1>", "pnew", "other", "-arx",
+        "line 2: link: readonly variable\nline 2: declare: `not a name': not a valid identifier\n")]
+    [InlineData("$(printf 1)", "link=p declare -x link+=new", "<0:0>", "old", "pnew", "-ax", "")]
+    public async Task DeclarationPrefixPromotionUsesTheRestoredElementSelector(
+        string selector, string command, string status, string first, string second, string flags, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync("i=0; item=(old other); declare -n link='item[" + selector + "]'\n"
+            + command + "\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"{status}declare {flags} item=([0]=\"{first}\" [1]=\"{second}\")\n", result.StdOut);
+        Assert.Equal(error, result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("link", 1)]
+    [InlineData("a", 2)]
+    public async Task DeferredElementAndScalarPrefixesPublishInTemporaryTableOrder(string alias, int index)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            i=0; item=(old other third); declare -n {alias}='item[i++]'
+            {alias}=prefix i=1 declare -x {alias} i
+            printf '<%s:%s>' "$?" "$i"; declare -p item
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:{index}>declare -ax item=([0]=\"old\" [1]=\"prefix\" [2]=\"third\")\n", result.StdOut);
+        Assert.Equal("", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("-5", "<0:1>declare -ax item=([0]=\"Lone\" [1]=\"other\")\n", "item[-5]: bad array subscript")]
+    [InlineData("1/0", "<1:0>declare -a item=([0]=\"old\" [1]=\"other\")\n", "1/0: division by 0 (error token is \"0\")")]
+    public async Task DeferredSelectorsPreserveTheReachedFailureBoundary(string selector, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            i=0; item=(old other); declare -n left='item[i++]' right='item[{selector}]'
+            left=L right=R declare -x left+=one right+=two
+            printf '<%s:%s>' "$?" "$i"; declare -p item
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal($"line 2: {error}\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task FailedDeclarationPublishesItsDeferredElementBeforeExit()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; item=(old other); declare -n link='item[i++]'
+            trap 'printf "<exit:%s:%s>" "$?" "$i"; declare -p item link' EXIT
+            set -e
+            link=prefix declare -x link+=new "not a name"
+            printf skipped
+            """);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("<exit:1:1>declare -ax item=([0]=\"prefixnew\" [1]=\"other\")\ndeclare -n link=\"item[i++]\"\n", result.StdOut);
+        Assert.Equal("line 4: declare: `not a name': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("readonly item=old; declare -rn link=item", "declare -g", "link")]
     [InlineData("declare -ar item=(old); declare -rn link='item[i++]'", "typeset", "item")]
     public async Task ReadonlyDeclarationsReportTheDirectPipelineStageStatus(string setup, string command, string subject)
