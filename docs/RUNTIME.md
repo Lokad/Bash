@@ -633,7 +633,11 @@ Simple failures settle the nearest reached simple invocation with restorable
 redirections first. Compound failures run through the reached descriptor mapping.
 Ordinary shell command units restore local and temporary bindings before the action.
 Direct child execution retains them. Eval and source restore bindings at their
-command-unit boundary for ordinary failures. A parser exit under effective
+command-unit boundary for ordinary failures. On ordinary pipeline completion,
+a direct builtin or redirected group runs EXIT through its stage descriptors.
+A direct function runs EXIT before unwinding its locals, arguments and return
+target. A valid return leaves the current pipeline status in place until its
+invocation publishes the return status. A parser exit under effective
 errexit runs EXIT in the active reader, then unwinds through its owning
 builtin invocation without reporting its pending timers. A terminating
 substitution parse or array delimiter failure in source or eval with errexit

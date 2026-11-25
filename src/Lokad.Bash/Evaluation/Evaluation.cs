@@ -685,7 +685,11 @@ public sealed partial class Evaluation : IFileTester
                     result = await CompleteRedirectionFailureAsync(redirectionExitCode, errorKind, scope).ConfigureAwait(false);
             }
             else
+            {
                 result = await EvaluateCommandAsync(redirectedCommand.Body, scope, negated: false).ConfigureAwait(false);
+                if (IsPipelineStageCommand(redirectedCommand) && result.Flow is FlowControlKind.None or FlowControlKind.Return)
+                    result = await RunExitTrapAsync(scope, result).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -1374,7 +1378,8 @@ public sealed partial class Evaluation : IFileTester
 
         EvaluationResult PublishStatus(EvaluationResult result)
         {
-            if (publishStatus && result.Flow != FlowControlKind.Exit)
+            // A return unwinds to its caller before publishing the invocation status.
+            if (publishStatus && result.Flow is not (FlowControlKind.Exit or FlowControlKind.Return))
                 scope.Variables.SetPipelineStatuses([result.ExitCode], scope.Context, _cancellationToken);
             return result;
         }
@@ -1585,6 +1590,10 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Hash => await EvaluateBuiltinHashAsync(byteOperands).ConfigureAwait(false),
                     _ => throw new InvalidOperationException($"Builtin '{commandName}' has no evaluator dispatch.")
                 };
+                if (directPipelineStage && executable.Completion == CommandCompletion.Continue
+                    && builtinResult.Flow is FlowControlKind.None or FlowControlKind.Return)
+                    builtinResult = await RunExitTrapAsync(builtinScope with { Variables = commandVars }, builtinResult)
+                        .ConfigureAwait(false);
                 if (scriptFunction != null)
                     CompletePromotions(scriptFunction, enclosingFunction, commandVars, bindings);
                 clearedExports?.Commit();

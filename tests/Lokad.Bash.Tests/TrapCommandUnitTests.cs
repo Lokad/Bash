@@ -18,6 +18,92 @@ public sealed class TrapCommandUnitTests
         "printf \"<exit:%s:%s:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" \"$1\" \"${x-unset}\"; printf handler >&2";
 
     [Theory]
+    [InlineData("true | stage inner", "", "<exit:7:0:inner:local><parent:7:0 7>")]
+    [InlineData("true | stage inner", "; return 9", "<exit:7:0:inner:local><parent:9:0 9>")]
+    [InlineData("(stage inner)", "", "<exit:7:7:outer:unset><parent:7:7>")]
+    public async Task FunctionStageRunsExitWhileItsReturnTargetIsActive(
+        string invocation, string actionSuffix, string expectedOutput)
+    {
+        var script = $$"""
+            set -- outer
+            stage() {
+                local x=local
+                trap '{{PrintParserExitFrame}}{{actionSuffix}}' EXIT
+                :
+                return 7
+            }
+            {{invocation}} 2>stage-error
+            printf "<parent:%s:%s>" "$?" "${PIPESTATUS[*]}"
+            """;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var exitCode = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal("handler", host.ReadFile("/stage-error"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "return 7", 7, 0, "")]
+    [InlineData(false, "false", 1, 1, "")]
+    [InlineData(false, ")", 2, 257, "./sample.sh: line 3: syntax error near unexpected token `)'\n./sample.sh: line 3: `)'\n")]
+    [InlineData(true, ")", 2, 257, "eval: line 4: syntax error near unexpected token `)'\neval: line 4: `)'\n")]
+    public async Task OrdinaryPipelineReaderRestoresReaderArgumentsBeforeStageBindings(
+        bool eval, string lastCommand, int status, int pipelineStatus, string diagnostic)
+    {
+        var body = $"trap '{PrintParserExitFrame}; printf \"<%s>\" \"$prefix\"' EXIT\n:\n{lastCommand}\n";
+        var invocation = eval ? "eval '" + body.Replace("'", "'\\''", StringComparison.Ordinal) + "'" : "source ./sample.sh inner";
+        var script = $$"""
+            set -- outer
+            true | prefix=local {{invocation}} 2>stage-error
+            printf "<parent:%s:%s>" "$?" "${PIPESTATUS[*]}"
+            """;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (!eval)
+                host.AddFile("/sample.sh", body);
+            var exitCode = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal($"<exit:{status}:{pipelineStatus}:outer:unset><local><parent:{status}:0 {status}>",
+                host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(diagnostic + "handler", host.ReadFile("/stage-error"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task RedirectedGroupStageRunsExitWithItsInheritedReturnTarget()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($$"""
+            caller() {
+                true | {
+                    trap '{{PrintParserExitFrame}}; return 9' EXIT
+                    false
+                } 2>stage-error
+                printf "<parent:%s:%s>" "$?" "${PIPESTATUS[*]}"
+            }
+            caller outer
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<exit:1:1:outer:unset><parent:9:0 9>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("handler", host.ReadFile("/stage-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData(false, false, 1, "trap:257:<inner>:<>\n")]
     [InlineData(true, false, 1, "trap:257:<outer>:<>\n")]
     [InlineData(false, true, 2, "trap:2:<inner>:<>\n")]

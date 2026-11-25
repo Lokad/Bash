@@ -415,14 +415,18 @@ public sealed partial class Evaluation
                     var exitsSubstitution = failure.ExitsSubstitution || quotedArrayFailure && !arrayDelimiterFailure;
                     var exitsLoadedReader = nestedLoadedReader && (exitsSubstitution
                         || sourceOrEval && arrayDelimiterFailure && _state.ForkKind.HasValue);
-                    var publishesLoadedParserStatus = sourceOrEval && exitsLoadedReader;
+                    var reportsGrammarStatus = failure.UnexpectedToken != null || failure.ConditionalEndOfInput is { DoubleQuoted: null }
+                        || failedUnit.DiagnosticLine != 0 && failure.UnclosedDelimiter == null;
+                    var publishesPipelineReaderStatus = directPipelineReader && !exitsLoadedReader
+                        && (failure.ArithmeticForHeader.HasValue || reportsGrammarStatus);
+                    var publishesLoadedParserStatus = sourceOrEval && exitsLoadedReader
+                        || publishesPipelineReaderStatus;
                     var loadedParserStatus = failure.Kind == ParserFailureKind.SubstitutionGrammar
+                        || publishesPipelineReaderStatus && !failure.ArithmeticForHeader.HasValue
                         ? BuiltinSyntaxErrorStatus : parserStatus;
                     if (failure.IsDirectQuotedSubstitutionFailure
                         || publishesLoadedParserStatus || exitsLoadedReader && failure.ArithmeticForHeader.HasValue
-                        || streamedRoot && (arrayDelimiterFailure || failure.ArithmeticForHeader.HasValue
-                            || failure.UnexpectedToken != null || failure.ConditionalEndOfInput is { DoubleQuoted: null }
-                            || failedUnit.DiagnosticLine != 0 && failure.UnclosedDelimiter == null))
+                        || streamedRoot && (arrayDelimiterFailure || failure.ArithmeticForHeader.HasValue || reportsGrammarStatus))
                     {
                         var publishedStatus = publishesLoadedParserStatus ? loadedParserStatus : parserStatus;
                         PreparePipelineStatusStorage(1);

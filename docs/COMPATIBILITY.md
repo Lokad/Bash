@@ -1205,6 +1205,12 @@ the action. For a failing top-level brace group with a redirection, incremental
 execution follows the pinned Bash script reader. Bash command-string invocation
 can restore that mapping before EXIT.
 
+On ordinary pipeline completion, EXIT runs with the stage's active redirections.
+A direct function stage retains its arguments, local bindings and return target.
+A direct source stage restores the source arguments before the action. An
+ordinary grammar error reached by a direct source or eval stage exposes 257 in
+`PIPESTATUS` to EXIT and completes the stage with status 2.
+
 EXIT actions preserve the triggering status on ordinary completion and parse failure
 without errexit. Explicit return/exit and errexit failures can replace that status.
 Parser diagnostics from the EXIT action reader carry the `exit trap:` prefix.

@@ -52,15 +52,18 @@ public sealed partial class Evaluation
             functionResult = await EvaluateCommandAsync(functionDefinition.Body, functionScope, negated: false)
                 .ConfigureAwait(false);
 
-            if (functionResult.Flow == FlowControlKind.Exit && IsDirectPipelineStageScope(scope)
-                && _state.Traps?.HasPendingExitAction == true
-                && _state.FatalExpansion is { Kind: ExpansionFailureKind.ReaderSyntax })
+            if (IsDirectPipelineStageScope(scope) && _state.Traps?.HasPendingExitAction == true)
             {
-                // A child action installed by the function sees its arguments after the return target unwinds.
-                var exitScope = functionScope with { Context = functionScope.Context with { ReturnTarget = scope.Context.ReturnTarget } };
-                functionResult = await RunExitTrapAsync(exitScope, functionResult).ConfigureAwait(false);
-                _state.FatalExpansion = null;
-                _state.TryConsumeExpansionError(out _);
+                if (functionResult.Flow is FlowControlKind.None or FlowControlKind.Return)
+                    functionResult = await RunExitTrapAsync(functionScope, functionResult).ConfigureAwait(false);
+                else if (functionResult.Flow == FlowControlKind.Exit && _state.FatalExpansion is { Kind: ExpansionFailureKind.ReaderSyntax })
+                {
+                    // A child action installed by the function sees its arguments after the return target unwinds.
+                    var exitScope = functionScope with { Context = functionScope.Context with { ReturnTarget = scope.Context.ReturnTarget } };
+                    functionResult = await RunExitTrapAsync(exitScope, functionResult).ConfigureAwait(false);
+                    _state.FatalExpansion = null;
+                    _state.TryConsumeExpansionError(out _);
+                }
             }
 
             // A terminating exit or errexit leaves the active options visible to EXIT.
