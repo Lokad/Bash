@@ -59,7 +59,7 @@ internal struct RedirectionState
     /// <remarks>The parent retains the referenced handles through all stage completions.</remarks>
     internal readonly PipelineExitRedirections? CaptureForPipelineExit(int depth, bool useInherited, EvaluationMemory memory)
     {
-        var local = CaptureRestoration(depth, keepChangedFrames: false, memory);
+        var local = CaptureRestoration(depth, Depth, keepChangedFrames: false, memory);
         var inherited = useInherited ? _inheritedExitBindings : null;
         return local == null && inherited == null ? null
             : new PipelineExitRedirections(local?.Bindings, local?.RestoresInput == true, local?.RestoresOutput == true, inherited);
@@ -69,18 +69,31 @@ internal struct RedirectionState
     /// <remarks>The parent retains the committed change sets and handles until the child settles.</remarks>
     internal readonly InheritedExitBindings? CaptureInheritedExitBindings(int depth, EvaluationMemory memory)
     {
-        var local = CaptureRestoration(depth, keepChangedFrames: true, memory);
+        var local = CaptureRestoration(depth, Depth, keepChangedFrames: true, memory);
         return local is { } restore
             ? new InheritedExitBindings(restore.Bindings, restore.ChangedFrames, _inheritedExitBindings)
             : _inheritedExitBindings;
     }
 
-    private readonly CapturedRedirections? CaptureRestoration(int depth, bool keepChangedFrames, EvaluationMemory memory)
+    /// <summary>Projects the mappings restored between two reader entries onto the reached table.</summary>
+    internal readonly DescriptorTable? CaptureLoadedExitTable(int outerDepth, int innerDepth, EvaluationMemory memory)
     {
-        var remaining = _frames.Count - depth;
+        if (CurrentTable == null || CaptureRestoration(outerDepth, innerDepth, keepChangedFrames: true, memory) is not { } saved)
+            return null;
+        var table = CurrentTable.Clone();
+        RestoreChangedDescriptors(table, saved.Bindings, saved.ChangedFrames, memory);
+        return table;
+    }
+
+    private readonly CapturedRedirections? CaptureRestoration(int depth, int endDepth, bool keepChangedFrames, EvaluationMemory memory)
+    {
+        if ((uint)depth > (uint)endDepth || (uint)endDepth > (uint)Depth)
+            throw new InvalidOperationException("The reader's redirection boundaries must be active.");
+        var remaining = endDepth - depth;
         if (remaining == 0)
             return null;
 
+        var newer = _frames.Count - endDepth;
         var changed = _changedDescriptors;
         var restoresMappings = false;
         var restoresInput = false;
@@ -89,6 +102,12 @@ internal struct RedirectionState
         var count = 0;
         foreach (var frame in _frames)
         {
+            if (newer > 0)
+            {
+                newer--;
+                changed = frame.Changed;
+                continue;
+            }
             restoresMappings |= changed.Count != 0;
             restoresInput |= changed.Contains(LogicalDescriptor.StdIn);
             restoresOutput |= changed.Contains(LogicalDescriptor.StdOut);
@@ -142,12 +161,16 @@ internal struct RedirectionState
     {
         internal InheritedExitBindings? Enclosing { get; } = enclosing;
 
-        internal void Restore(DescriptorTable active, EvaluationMemory memory)
-        {
-            foreach (var changed in changedFrames)
-                foreach (var descriptor in changed)
-                    active.Set(descriptor, bindings.ResolveBinding(descriptor), memory);
-        }
+        internal void Restore(DescriptorTable active, EvaluationMemory memory) =>
+            RestoreChangedDescriptors(active, bindings, changedFrames, memory);
+    }
+
+    private static void RestoreChangedDescriptors(DescriptorTable active, DescriptorTable.Snapshot bindings,
+        ArraySegment<IReadOnlySet<LogicalDescriptor>> changedFrames, EvaluationMemory memory)
+    {
+        foreach (var changed in changedFrames)
+            foreach (var descriptor in changed)
+                active.Set(descriptor, bindings.ResolveBinding(descriptor), memory);
     }
 
     /// <summary>

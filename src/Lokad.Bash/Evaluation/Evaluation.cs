@@ -801,6 +801,7 @@ public sealed partial class Evaluation : IFileTester
                 Timing = null,
                 ReaderEntryTiming = null,
                 InNestedCommandUnits = false,
+                InnerReaderRedirectionDepth = null,
                 InDirectPipelineReader = false
             };
             if (redirections != null)

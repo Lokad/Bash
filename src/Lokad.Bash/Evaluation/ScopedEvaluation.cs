@@ -90,6 +90,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Eval and source use a command-unit boundary even in a child shell.</summary>
     internal bool InNestedCommandUnits { get; init; }
 
+    /// <summary>The descriptor depth at the inner reader's entry for ordinary errexit.</summary>
+    internal int? InnerReaderRedirectionDepth { get; init; }
+
     /// <summary>A directly piped source or eval invocation catches ordinary errexit with status 1.</summary>
     internal bool InDirectPipelineReader { get; init; }
 

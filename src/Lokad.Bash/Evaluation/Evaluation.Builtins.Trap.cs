@@ -245,8 +245,10 @@ public sealed partial class Evaluation
                 ErrexitRedirections = null,
                 InDirectPipelineReader = false
             };
-            var handler = await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap)
-                .ConfigureAwait(false);
+            var handler = kind == ExitTrapKind.LoadedErrexit && scope.InnerReaderRedirectionDepth is { } innerDepth
+                && innerDepth > scope.PipelineExitReader.RedirectionDepth
+                ? await EvaluateWithReaderRedirectionsAsync(trapScope, innerDepth).ConfigureAwait(false)
+                : await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap).ConfigureAwait(false);
             // A discarded action leaves the pending exit status in effect.
             if (!handler.DiscardsCommandUnit && (handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
                 && (_state.FatalExpansion == null
@@ -271,6 +273,29 @@ public sealed partial class Evaluation
                 && failure is { IsTerminalParameterFailure: true } parameterFailure
                     ? parameterFailure with { ExitCode = result.ExitCode } : failure;
             _state.LastExitCode = result.ExitCode;
+        }
+
+        async Task<EvaluationResult> EvaluateWithReaderRedirectionsAsync(ScopedEvaluation active, int innerDepth)
+        {
+            using var memory = Memory.BeginCommand(active);
+            var table = _state.CaptureLoadedExitTable(active.PipelineExitReader.RedirectionDepth, innerDepth, Memory);
+            if (table == null)
+                return await EvaluateCopiedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
+
+            // The enclosing command scopes still own the borrowed handles through the action.
+            _state.PushRedirectionTable(table, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), Memory);
+            var redirections = new RedirectionScope(this, active: true, [], []);
+            var handler = EvaluationResult.FromExitCode(1);
+            OperationError? closeError;
+            try
+            {
+                handler = await EvaluateCopiedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
+            }
+            finally
+            {
+                closeError = await redirections.CloseAsync(handler.ExitCode != 0).ConfigureAwait(false);
+            }
+            return await ApplyCloseErrorAsync(handler, closeError).ConfigureAwait(false);
         }
 
         (FunctionContext? Function, GlobalPrefixBindings? Prefixes) RestoreBindings(

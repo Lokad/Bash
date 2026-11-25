@@ -309,6 +309,39 @@ public sealed class TrapCommandUnitTests
         }
     }
 
+    [Theory]
+    [InlineData("false", " 2>inner-error", "<exit:1:1:outer:unset>", "/outer-error")]
+    [InlineData(": | false", " 2>inner-error", "<exit:1:0 1:inner:unset>", "/outer-error")]
+    [InlineData(": | false", "", "<exit:1:0 1:inner:unset>", "/function-error")]
+    public async Task NestedLoadedErrexitRestoresOnlyMappingsBetweenReaderEntries(
+        string failure, string innerRedirection, string expectedOutput, string handlerPath)
+    {
+        var script = $$"""
+            set -e
+            set -- outer
+            trap '{{PrintParserExitFrame}}' EXIT
+            f() {
+                local x=local
+                {{failure}}
+                printf skipped
+            }
+            eval 'eval "f inner 2>function-error"{{innerRedirection}}' 2>outer-error
+            """;
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(handlerPath == "/outer-error" ? "handler" : "", host.ReadFile("/outer-error"));
+        Assert.Equal(handlerPath == "/function-error" ? "handler" : "", host.ReadFile("/function-error"));
+        if (innerRedirection.Length != 0)
+            Assert.Empty(host.ReadFileBytes("/inner-error"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task ExitActionKeepsItsOwnErrexitStatusInADirectPipelineReader()
     {

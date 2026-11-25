@@ -1212,6 +1212,10 @@ the action. For a failing top-level brace group with a redirection, incremental
 execution follows the pinned Bash script reader. Bash command-string invocation
 can restore that mapping before EXIT.
 
+When ordinary errexit in a nested reader reaches EXIT before its command
+scopes unwind, the action restores descriptor mappings from between the outer
+and inner reader entries. Other descriptors retain their reached mappings.
+
 An ordinary errexit failure inside a directly piped source or eval stage runs
 EXIT with status 1 while `PIPESTATUS` retains the reached command's status.
 The stage's redirections stay active. For a failing simple command, an inner

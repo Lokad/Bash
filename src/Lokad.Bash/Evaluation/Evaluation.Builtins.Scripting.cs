@@ -326,6 +326,8 @@ public sealed partial class Evaluation
             scope = scope with
             {
                 InNestedCommandUnits = true,
+                InnerReaderRedirectionDepth = !outermostLoadedReader || _state.ForkKind == ShellForkKind.CommandSubstitution
+                    ? _state.RedirectionDepth : null,
                 ReaderEntryTiming = scope.Timing,
                 LoadedSyntaxFunctionDepth = scope.Context.FunctionContext?.Depth ?? 0,
                 LoadedReaderIgnoresErrexit = scope.Context.ErrexitIgnored
