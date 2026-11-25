@@ -1026,6 +1026,10 @@ they are parsed. Earlier units retain their effects before later syntax failure.
 A malformed arithmetic `for` header in a direct double-quoted command substitution
 can also leave a complete prefix within the current unit. The shell emits the
 diagnostic, publishes status 2, then executes that prefix and returns its status.
+With effective errexit in `source` or `eval`, the parser reports its first
+diagnostic and exits with status 2 before any same-unit recovery. EXIT sees
+the loaded reader's active arguments, locals, and descriptors, and the
+previous pipeline status. A tested invocation suppresses this immediate exit.
 Explicit whole-script parsing remains available for callers that require validation
 before execution.
 Recoverable expansion failures discard the rest of their unit and expose the

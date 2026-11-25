@@ -330,14 +330,15 @@ public sealed partial class Evaluation
             ReadsCommandString = kind != ScriptExecutionKind.Root || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
         };
         using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
+        var usesImmediateParserExit = kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.Trap;
         while (true)
         {
             CheckCancellation();
             var parent = scope.Context.SourceMemory;
             var unitMemory = new SourceMemory((parent?.Budget ?? Memory.Budget).CreateScope(), parent);
             scanContext.SyntaxMemory = unitMemory.SyntaxMemory;
-            // Earlier action units can change errexit before the next parse.
-            var stopAfterPrimaryDiagnostic = ReportsOnlyPrimarySyntaxDiagnostic(diagnosticOrigin);
+            // A completed unit can change errexit before the next parse.
+            var stopAfterPrimaryDiagnostic = usesImmediateParserExit && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored;
             scanContext.ReadQuotedRecovery = !stopAfterPrimaryDiagnostic;
             try
             {
@@ -365,20 +366,21 @@ public sealed partial class Evaluation
                 ICommand command;
                 if (failedUnit != null)
                 {
+                    var detail = stopAfterPrimaryDiagnostic ? SyntaxDiagnosticDetail.PrimaryOnly : SyntaxDiagnosticDetail.Complete;
                     if (failedUnit.Failure.CaptureWarnings is { } captureWarnings)
                         await ReportCaptureHereDocumentWarningsAsync(captureWarnings, path, lineOffset,
                             failedUnit.Failure.UnclosedDelimiter == null ? diagnosticLine : diagnosticLine - 1).ConfigureAwait(false);
                     if (failedUnit.Failure.UnclosedDelimiter is { } captureEnd)
                     {
-                        await ReportUnclosedDelimiterAsync(captureEnd, diagnosticLine, path, diagnosticOrigin).ConfigureAwait(false);
+                        await ReportUnclosedDelimiterAsync(captureEnd, diagnosticLine, path, diagnosticOrigin, detail).ConfigureAwait(false);
                     }
                     else if (failedUnit.Failure.UnexpectedToken is { } token)
-                        await ReportUnexpectedSyntaxAsync(token, path, diagnosticOrigin, diagnosticLine, includeLine: true)
+                        await ReportUnexpectedSyntaxAsync(token, path, diagnosticOrigin, diagnosticLine, detail)
                             .ConfigureAwait(false);
                     else if (failedUnit.Failure.ArithmeticForHeader is { } header)
-                        await ReportArithmeticForHeaderAsync(header, path, diagnosticOrigin, diagnosticLine).ConfigureAwait(false);
+                        await ReportArithmeticForHeaderAsync(header, path, diagnosticOrigin, diagnosticLine, detail).ConfigureAwait(false);
                     else if (failedUnit.Failure.ConditionalEndOfInput is { } conditionalEnd)
-                        await ReportConditionalEndOfInputAsync(conditionalEnd, path, diagnosticOrigin, lineOffset).ConfigureAwait(false);
+                        await ReportConditionalEndOfInputAsync(conditionalEnd, path, diagnosticOrigin, lineOffset, detail).ConfigureAwait(false);
                     else if (failedUnit.DiagnosticLine != 0 && (failedUnit.Failure.UnexpectedEndOfInput
                         || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution
                         || failedUnit.Failure.Kind == ParserFailureKind.RedirectionOperand))
@@ -390,10 +392,15 @@ public sealed partial class Evaluation
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
                     if (stopAfterPrimaryDiagnostic)
-                        return EvaluationResult.Exit(2);
+                    {
+                        // The parser exits from the active reader, abandoning its pending timing reports.
+                        for (var timing = scope.Timing; timing != null; timing = timing.Enclosing)
+                            timing.Settled = true;
+                        return await RunExitTrapAsync(scope, EvaluationResult.Exit(2)).ConfigureAwait(false);
+                    }
                     if (failedUnit.QuotedRecovery is { } recovery)
-                        await ReportUnclosedDelimiterAsync(recovery.Delimiter, lineOffset + recovery.Line, path, diagnosticOrigin)
-                            .ConfigureAwait(false);
+                        await ReportUnclosedDelimiterAsync(recovery.Delimiter, lineOffset + recovery.Line, path,
+                            diagnosticOrigin, detail).ConfigureAwait(false);
                     if (failedUnit.Failure.IsDirectQuotedSubstitutionFailure)
                     {
                         PreparePipelineStatusStorage(1);

@@ -282,14 +282,14 @@ public sealed partial class Evaluation
         internal bool Portable { get; } = portable;
         internal Variables Variables { get; } = variables;
         internal ActiveTiming? Enclosing { get; } = enclosing;
-        internal bool Reported { get; set; }
+        internal bool Settled { get; set; }
     }
 
     private async ValueTask ReportTimingAsync(ActiveTiming timing)
     {
-        if (timing.Reported)
+        if (timing.Settled)
             return;
-        timing.Reported = true;
+        timing.Settled = true;
         var ended = await AwaitOperationAsync(ReadTimingOperation.AsTask(PublishOperation)).ConfigureAwait(false);
         var format = timing.Portable
             ? ShellTimeFormatting.PortableFormat

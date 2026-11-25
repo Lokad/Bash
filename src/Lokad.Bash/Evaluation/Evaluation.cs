@@ -4540,7 +4540,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 var path = scope.Context.DiagnosticPath;
                 await ReportUnexpectedSyntaxAsync(token, path, SyntaxDiagnosticOrigin.CommandSubstitution,
-                    line, includeLine: !errexit).ConfigureAwait(false);
+                    line, errexit ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
                 if (rejectedSelector.NeedsParameterDiagnostic && !errexit && word != null)
                 {
                     var descriptor = GetStdErrDescriptor();
@@ -4724,9 +4724,7 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private enum SyntaxDiagnosticOrigin { Script, ScriptLine, Eval, ExitTrap, CommandSubstitution, ArrayAssignment }
-
-    private bool ReportsOnlyPrimarySyntaxDiagnostic(SyntaxDiagnosticOrigin origin) =>
-        origin == SyntaxDiagnosticOrigin.ExitTrap && _state.ErrexitEnabled;
+    private enum SyntaxDiagnosticDetail { Complete, WithoutSourceLine, PrimaryOnly }
 
     private readonly struct SyntaxDiagnosticPrefix
     {
@@ -4781,11 +4779,11 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, SyntaxDiagnosticOrigin origin,
-        int line, bool includeLine) =>
-        ReportUnexpectedSyntaxAsync(syntax, path, ShellValue.Empty, origin, line, includeLine);
+        int line, SyntaxDiagnosticDetail detail) =>
+        ReportUnexpectedSyntaxAsync(syntax, path, ShellValue.Empty, origin, line, detail);
 
     private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, ShellValue subject,
-        SyntaxDiagnosticOrigin origin, int line, bool includeLine)
+        SyntaxDiagnosticOrigin origin, int line, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
         CheckCancellation();
@@ -4818,8 +4816,8 @@ public sealed partial class Evaluation : IFileTester
         };
         // Operator lookahead can reach EOF between physical lines, leaving no text to quote.
         var hasNearToken = conditional == null || !syntax.Token.IsEmpty;
-        var primaryOnly = ReportsOnlyPrimarySyntaxDiagnostic(origin);
-        includeLine &= hasNearToken && !primaryOnly;
+        var primaryOnly = detail == SyntaxDiagnosticDetail.PrimaryOnly;
+        var includeLine = hasNearToken && detail == SyntaxDiagnosticDetail.Complete;
         var groups = conditional?.UnclosedGroupLines;
         var groupCount = groups?.Count ?? 0;
         if (primaryOnly)
@@ -4898,7 +4896,7 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private async Task ReportArithmeticForHeaderAsync(ArithmeticForHeaderError header, string? path,
-        SyntaxDiagnosticOrigin origin, int line)
+        SyntaxDiagnosticOrigin origin, int line, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
         CheckCancellation();
@@ -4911,7 +4909,7 @@ public sealed partial class Evaluation : IFileTester
             : "syntax error: arithmetic expression required\n"u8;
         var expressionPrefix = "syntax error: `(("u8;
         var expressionSuffix = "))'\n"u8;
-        var includeExpression = !ReportsOnlyPrimarySyntaxDiagnostic(origin);
+        var includeExpression = detail != SyntaxDiagnosticDetail.PrimaryOnly;
         var length = (long)prefix.Length + reason.Length;
         if (includeExpression)
             length += prefix.Length + expressionPrefix.Length + (long)header.Expression.Length + expressionSuffix.Length;
@@ -4956,7 +4954,7 @@ public sealed partial class Evaluation : IFileTester
     private static readonly byte[] MissingConditionalTermAtEnd = "unexpected token `EOF' in conditional command\n"u8.ToArray();
 
     private async Task ReportConditionalEndOfInputAsync(ConditionalEndOfInput failure, string? path,
-        SyntaxDiagnosticOrigin origin, int lineOffset)
+        SyntaxDiagnosticOrigin origin, int lineOffset, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
@@ -4964,7 +4962,7 @@ public sealed partial class Evaluation : IFileTester
         lineOffset += failure.CaptureLineOffset.GetValueOrDefault();
         if (origin == SyntaxDiagnosticOrigin.Script)
             origin = SyntaxDiagnosticOrigin.ScriptLine;
-        var primaryOnly = ReportsOnlyPrimarySyntaxDiagnostic(origin);
+        var primaryOnly = detail == SyntaxDiagnosticDetail.PrimaryOnly;
         if (failure.DoubleQuoted is { } doubleQuoted)
         {
             await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.QuoteLine),
@@ -5005,7 +5003,7 @@ public sealed partial class Evaluation : IFileTester
             ? SyntaxDiagnosticOrigin.CommandSubstitution
             : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
         await ReportUnclosedDelimiterAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
-            scope.Context.DiagnosticPath, origin).ConfigureAwait(false);
+            scope.Context.DiagnosticPath, origin, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
     }
 
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>
@@ -5035,7 +5033,7 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private async Task ReportUnclosedDelimiterAsync(
-        UnclosedDelimiter endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin)
+        UnclosedDelimiter endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
@@ -5052,7 +5050,7 @@ public sealed partial class Evaluation : IFileTester
             _ => Utf8Text.EncodeLine($"unexpected EOF while looking for matching `{endOfInput.Delimiter}'")
         };
         await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, message).ConfigureAwait(false);
-        if (endOfInput.Conditional is { } conditional && !ReportsOnlyPrimarySyntaxDiagnostic(origin))
+        if (endOfInput.Conditional is { } conditional && detail != SyntaxDiagnosticDetail.PrimaryOnly)
         {
             var lineOffset = line - conditional.ReadLine;
             await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, lineOffset + conditional.ReasonLine),

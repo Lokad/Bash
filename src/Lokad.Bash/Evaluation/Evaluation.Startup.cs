@@ -110,7 +110,7 @@ public sealed partial class Evaluation
                 // Bash imports before setting the script reader's initial line to one.
                 var line = source.ToMemory().Span[..token.ReadPosition].Count((byte)'\n') + token.LineAdvance;
                 await ReportUnexpectedSyntaxAsync(token, inherited.CommandName, definition.Name.Value,
-                    SyntaxDiagnosticOrigin.Script, line, includeLine: true).ConfigureAwait(false);
+                    SyntaxDiagnosticOrigin.Script, line, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
             }
             else
                 await ReportSyntaxErrorAsync(failed.Error).ConfigureAwait(false);

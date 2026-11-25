@@ -14,6 +14,8 @@ public sealed class TrapCommandUnitTests
         "value=\"$(printf latent; printf \"%s\" \"$({ cat <<DATA\nbody\nDATA\n}; printf extra)tail\")\"";
     private const string PrintExitFrame = "printf \"trap:%s:<%s>:<%s>\\n\" \"$?\" \"$1\" \"${x-}\"";
     private const string PrintStages = "\nprintf \"stages:%s\\n\" \"${PIPESTATUS[*]}\"\n";
+    private const string PrintParserExitFrame =
+        "printf \"<exit:%s:%s:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" \"$1\" \"${x-unset}\"; printf handler >&2";
 
     [Theory]
     [InlineData(false, false, 1, "trap:257:<inner>:<>\n")]
@@ -39,6 +41,96 @@ public sealed class TrapCommandUnitTests
             Assert.Contains("syntax error near unexpected token `printf'", host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
         }
+    }
+
+    [Theory]
+    [InlineData(false, ")", "./sample.sh: line 2: syntax error near unexpected token `)'\n")]
+    [InlineData(true, ")", "eval: line 5: syntax error near unexpected token `)'\n")]
+    [InlineData(false, "v=$(printf hidden |)", "./sample.sh: line 2: syntax error near unexpected token `)'\n")]
+    [InlineData(false, "if true; then :", "./sample.sh: line 3: syntax error: unexpected end of file\n")]
+    [InlineData(true, "printf \"unclosed", "eval: line 5: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData(true, "printf prefix; v=\"$(for ((1;)); do :; done)\"",
+        "eval: line 5: syntax error: arithmetic expression required\n")]
+    public async Task ErrexitParserFailureKeepsTheLoadedFrameAndRedirection(bool eval, string syntax, string diagnostic)
+    {
+        var body = "printf reached\n" + syntax + "\n";
+        var invocation = eval ? $"eval '{body}'" : "source ./sample.sh inner";
+        var script = $"set -e\nrun() {{ local x=local; trap '{PrintParserExitFrame}' EXIT; {invocation} 2>error\n"
+            + "printf skipped\n}\nrun function\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            await using var host = new TestHost { MemoryBudget = governor };
+            if (!eval)
+                host.AddFile("/sample.sh", body);
+            using var owner = governor.CreateScope();
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Equal(eval ? "reached<exit:2:0:function:local>" : "reached<exit:2:0:inner:local>",
+                host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(diagnostic + "handler", host.ReadFile("/error"));
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task ErrexitParserFailureRunsTheCapturingChildActionBeforeSourceUnwinds()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", "printf reached\nv=$(printf hidden |)\n");
+        var script = $"result=$(set -- child; trap '{PrintParserExitFrame}' EXIT; set -e; source ./sample.sh inner 2>error\n"
+            + "printf skipped\n)\nprintf \":parent:%s:<%s>:\" \"$?\" \"$result\"\n";
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(":parent:2:<reached<exit:2:0:inner:unset>>:", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./sample.sh: line 2: syntax error near unexpected token `)'\nhandler", host.ReadFile("/error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task TestedEvalKeepsItsQuotedHeaderRecoveryUnderErrexit()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            trap 'printf ":%s:" "$?"' EXIT
+            set -e
+            eval 'printf inner
+            printf prefix; value="$(for ((1;)); do :; done)"
+            ' || printf fallback
+            printf after
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("innerprefixafter:0:", result.StdOut);
+        Assert.Equal("eval: line 6: syntax error: arithmetic expression required\n"
+            + "eval: line 6: syntax error: `((1;))'\n"
+            + "eval: line 6: unexpected EOF while looking for matching `\"'\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task ErrexitParserFailureDiscardsTheLoadedCommandsTiming()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", "printf reached\n)\n");
+        var result = await host.RunAsync("""
+            trap 'printf handler >&2' EXIT
+            set -e
+            time -p source ./sample.sh
+            printf skipped
+            """, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("reached", host.StandardOutput.TextContent);
+        Assert.Equal("./sample.sh: line 2: syntax error near unexpected token `)'\nhandler", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]

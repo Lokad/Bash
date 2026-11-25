@@ -629,5 +629,8 @@ Simple failures settle the nearest reached simple invocation with restorable
 redirections first. Compound failures run through the reached descriptor mapping.
 Ordinary shell command units restore local and temporary bindings before the action.
 Direct child execution retains them. Eval and source restore bindings at their
-command-unit boundary. Pending timers report once, before the action. The
+command-unit boundary for ordinary failures. A parser exit under effective
+errexit runs EXIT in the active reader, then unwinds through its owning
+builtin invocation without reporting its pending timers. Ordinary errexit
+reports pending timers once, before the action. The
 enclosing descriptor and command owners still settle before completion returns.

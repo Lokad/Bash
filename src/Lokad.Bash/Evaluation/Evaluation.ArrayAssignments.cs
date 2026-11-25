@@ -257,7 +257,8 @@ public sealed partial class Evaluation
         _state.LastExitCode = status;
         if (failure.UnexpectedToken is { } token)
             await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.ArrayAssignment,
-                line, includeLine: !ReaderErrexitEnabled(scope)).ConfigureAwait(false);
+                line, ReaderErrexitEnabled(scope) ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete)
+                .ConfigureAwait(false);
         else
             await ReportSyntaxErrorAsync(failure.Error).ConfigureAwait(false);
         return false;
@@ -315,7 +316,8 @@ public sealed partial class Evaluation
             if (token == null)
                 return false;
             await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.CommandSubstitution,
-                GetCaptureDiagnosticLine(token, source.Bytes, lineOffset + line), includeLine: !errexit).ConfigureAwait(false);
+                GetCaptureDiagnosticLine(token, source.Bytes, lineOffset + line),
+                errexit ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
             return true;
         }
     }
