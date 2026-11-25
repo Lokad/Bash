@@ -27,6 +27,8 @@ The runtime supports deterministic, non-interactive shell workflows:
 A reached `--help` prints help and returns 2. With closed stdout it returns 2 silently.
 Invalid options report the first invalid flag and usage on stderr. A shell-closed
 stderr suppresses the message and preserves status 2.
+In a named source, invalid options, invalid conditions and listing write failures
+include the file and line. A lone unrecognized operand reports usage.
 Trap listings report a known output failure through the active stderr.
 With shell-closed stdout, named listings check the remaining signal names
 before reporting the write failure. Downstream reader closure stops output

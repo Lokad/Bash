@@ -110,6 +110,45 @@ public sealed class TrapCommandUnitTests
         Assert.Null(state.Traps);
     }
 
+    [Theory]
+    [InlineData("trap -p UNKNOWN EXIT", 1, "trap -- ':' EXIT\n",
+        "./part: line 2: trap: UNKNOWN: invalid signal specification\n")]
+    [InlineData("trap -pz EXIT", 2, "",
+        "./part: line 2: trap: -z: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n")]
+    [InlineData("trap \\\n-pz EXIT", 2, "",
+        "./part: line 3: trap: -z: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n")]
+    [InlineData("trap -p \\\nUNKNOWN EXIT", 1, "trap -- ':' EXIT\n",
+        "./part: line 2: trap: UNKNOWN: invalid signal specification\n")]
+    [InlineData("trap UNKNOWN", 2, "", "trap: usage: trap [-p] [--] [action condition ...]\n")]
+    public async Task SourcedTrapDiagnosticsUseTheReachedStderr(string command, int status, string output, string diagnostic)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/part", "trap ':' EXIT\n" + command + "\nprintf '|result:%s|' \"$?\"\ntrap - EXIT\n");
+
+        var result = await host.RunAsync(". ./part 2>errs\nprintf '|caller:%s|' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output + $"|result:{status}||caller:0|", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(diagnostic, host.ReadFile("/errs"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task TrapListingErrorsUseTheRetainedFunctionSourceInOrder()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/part", "f(){\n  trap ':' EXIT TERM\n  trap -p EXIT UNKNOWN TERM >&-\n  printf '|result:%s|' \"$?\"\n  trap - EXIT TERM\n}\n");
+
+        var result = await host.RunAsync(". ./part\nf\nprintf '|caller:%s|' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("|result:1||caller:0|", host.StandardOutput.TextContent);
+        Assert.Equal("./part: line 3: trap: UNKNOWN: invalid signal specification\n"
+            + "./part: line 3: trap: write error: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ResetDuringExitKeepsTheSavedStatus()
     {

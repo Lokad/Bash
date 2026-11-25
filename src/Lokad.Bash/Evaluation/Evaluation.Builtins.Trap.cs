@@ -12,9 +12,10 @@ public sealed partial class Evaluation
 {
     internal long RetainedTrapMemoryBytes => _state.Traps?.EstimatedMemoryBytes ?? 0;
 
-    private async Task<EvaluationResult> EvaluateBuiltinTrapAsync(IReadOnlyList<ShellValue> words)
+    private async Task<EvaluationResult> EvaluateBuiltinTrapAsync(IReadOnlyList<ShellValue> words, EvaluationContext context)
     {
         var command = words[0];
+        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
         var index = 1;
         var list = false;
         if (index < words.Count && words[index].Bytes.Span is [(byte)'-', _, ..])
@@ -82,7 +83,7 @@ public sealed partial class Evaluation
             }
             if (output.IsError)
             {
-                await ReportBuiltinWriteFailureAsync(command, output).ConfigureAwait(false);
+                await ReportBuiltinWriteFailureAsync(command, output, sourcePrefix).ConfigureAwait(false);
                 status = 1;
             }
             return EvaluationResult.FromExitCode(status);
@@ -133,14 +134,15 @@ public sealed partial class Evaluation
             var synopsis = ShellValue.FromText(BuiltinDocumentation.For(BuiltinKind.Trap).Synopsis("trap"));
             var diagnostic = invalidOption is { } operand
                 ? WriteDiagnosticUnlessStderrClosedAsync([command],
-                    [operand, ShellValue.FromText(": invalid option\ntrap: usage: "), synopsis], scope: null)
+                    [operand, ShellValue.FromText(": invalid option\ntrap: usage: "), synopsis], scope: null, sourcePrefix)
                 : WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: "), synopsis], scope: null);
             var written = await diagnostic.ConfigureAwait(false);
             return EvaluationResult.FromExitCode(written.IsError ? 1 : 2);
         }
 
         Task InvalidConditionAsync(ShellValue operand) =>
-            ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(": invalid signal specification")]);
+            WriteDiagnosticAsync([command], [operand, ShellValue.FromText(": invalid signal specification")],
+                _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, sourcePrefix);
 
         async ValueTask<DescriptorWriteResult> PrintAsync(TrapCondition condition, FileDescriptor stdout)
         {
