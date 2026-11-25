@@ -2156,9 +2156,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a206162633a20696e74656765722065787072657373696f6e2065787065637465640a",
+      "stderrHex": "6c696e6520313a20746573743a206162633a20696e74656765722065787072657373696f6e2065787065637465640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "test-empty-integer",
@@ -2171,9 +2171,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a203a20696e74656765722065787072657373696f6e2065787065637465640a",
+      "stderrHex": "6c696e6520313a20746573743a203a20696e74656765722065787072657373696f6e2065787065637465640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "test-arithmetic-is-not-decimal",
@@ -2186,9 +2186,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a20312b313a20696e74656765722065787072657373696f6e2065787065637465640a",
+      "stderrHex": "6c696e6520313a20746573743a20312b313a20696e74656765722065787072657373696f6e2065787065637465640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "test-integer-overflow",
@@ -2201,9 +2201,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a20393232333337323033363835343737353830383a20696e74656765722065787072657373696f6e2065787065637465640a",
+      "stderrHex": "6c696e6520313a20746573743a20393232333337323033363835343737353830383a20696e74656765722065787072657373696f6e2065787065637465640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "test-error-in-and",
@@ -2216,9 +2216,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a206162633a20696e74656765722065787072657373696f6e2065787065637465640a",
+      "stderrHex": "6c696e6520313a20746573743a206162633a20696e74656765722065787072657373696f6e2065787065637465640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "test-error-in-or",
@@ -2231,9 +2231,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a206162633a20696e74656765722065787072657373696f6e2065787065637465640a",
+      "stderrHex": "6c696e6520313a20746573743a206162633a20696e74656765722065787072657373696f6e2065787065637465640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "test-invalid-byte-integer",
@@ -2246,9 +2246,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a20ff3a20696e74656765722065787072657373696f6e2065787065637465640a",
+      "stderrHex": "6c696e6520313a20746573743a20ff3a20696e74656765722065787072657373696f6e2065787065637465640a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "test-general-negation-grammar",
@@ -2261,9 +2261,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "746573743a20746f6f206d616e7920617267756d656e74730a",
+      "stderrHex": "6c696e6520313a20746573743a20746f6f206d616e7920617267756d656e74730a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "bracket-missing-close",
@@ -2276,9 +2276,9 @@
       "files": [],
       "exitCode": 2,
       "stdoutHex": "",
-      "stderrHex": "5b3a206d697373696e6720605d270a",
+      "stderrHex": "6c696e6520313a205b3a206d697373696e6720605d270a",
       "fileEffects": [],
-      "stderrNormalization": "bash-command-location"
+      "stderrNormalization": "bash-command-name"
     },
     {
       "id": "bracket-empty",

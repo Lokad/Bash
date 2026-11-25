@@ -1291,7 +1291,8 @@ fallback, a first operand beginning with `(` and a third beginning with `)`
 select the middle string. Numeric operands accept signed 64-bit decimal integers
 with leading ASCII whitespace and trailing spaces or tabs allowed. Invalid
 integers, malformed expressions and a missing closing `]` report a diagnostic
-and status 2. File predicates retain the UTF-8 path boundary.
+and status 2. The diagnostic uses the reached command's line and source file
+when available. File predicates retain the UTF-8 path boundary.
 
 For `-t`, a descriptor operand is a signed decimal with leading ASCII
 whitespace and trailing spaces or tabs allowed. Only numbers in the

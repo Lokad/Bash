@@ -93,7 +93,7 @@ public sealed class TestBuiltinTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("2", host.StandardOutput.TextContent);
-        Assert.Equal(diagnostic, host.StandardError.TextContent);
+        Assert.Equal("line 1: " + diagnostic, host.StandardError.TextContent);
     }
 
     [Theory]
@@ -122,7 +122,7 @@ public sealed class TestBuiltinTests
         var result = await host.RunAsync("test $'\\377' -eq 0", CancellationToken.None);
 
         Assert.Equal(2, result.ExitCode);
-        Assert.Equal(Convert.FromHexString("746573743a20ff3a20696e74656765722065787072657373696f6e2065787065637465640a"),
+        Assert.Equal<byte>([.. "line 1: test: "u8, 0xff, .. ": integer expression expected\n"u8],
             host.StandardError.Content.ToArray());
     }
 
@@ -133,6 +133,53 @@ public sealed class TestBuiltinTests
         var result = await host.RunAsync("test x -a '(' x $'\\377' ')'", CancellationToken.None);
 
         Assert.Equal(2, result.ExitCode);
-        Assert.Equal<byte>([.. "test: `)' expected, found "u8, 0xff, 10], host.StandardError.Content.ToArray());
+        Assert.Equal<byte>([.. "line 1: test: `)' expected, found "u8, 0xff, 10], host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task RetainedPredicateReportsTheDefinitionLineThroughItsRedirection()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", """
+
+            f(){
+            :
+            test bad -eq 1 2>\
+            errors
+            printf "<status:%s>" "$?"
+            }
+            """);
+        var result = await host.RunAsync("""
+            :
+            source ./sample.sh
+
+            f
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<status:2>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./sample.sh: line 4: test: bad: integer expression expected\n", host.ReadFile("/errors"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task EvalPredicateReportsTheParsedInvocationLineThroughItsRedirection()
+    {
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync("""
+            :
+            eval ':
+            [ 1 -eq bad ] \
+             2>errors
+            printf "<status:%s>" "$?"
+            '
+            """, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<status:2>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 7: [: bad: integer expression expected\n", host.ReadFile("/errors"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 }

@@ -116,7 +116,7 @@ public partial class EvaluationTests
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(ShellValue.FromText("4"), state.Variables["i"]);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("test: argument expected\n"u8.ToArray(), diagnostic.Content.ToArray());
+        Assert.Equal("line 1: test: argument expected\n"u8.ToArray(), diagnostic.Content.ToArray());
         diagnostic.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
@@ -129,7 +129,7 @@ public partial class EvaluationTests
         var state = new Eval(Parser.Parse("a=([0]=present); i=0; test -v 'a[i++]' -a -t invalid -a -v 'a[i++]'"));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(ShellValue.FromText("1"), state.Variables["i"]);
-        Assert.Equal("test: too many arguments\n", Text(diagnostic.Content));
+        Assert.Equal("line 1: test: too many arguments\n", Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(2, state.LastExitCode);
@@ -181,7 +181,7 @@ public partial class EvaluationTests
         var state = new Eval(Parser.Parse(script));
         var diagnostic = await NextWriteAsync(state);
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal(message, Text(diagnostic.Content));
+        Assert.Equal("line 1: " + message, Text(diagnostic.Content));
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(2, state.LastExitCode);

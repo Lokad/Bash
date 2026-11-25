@@ -25,7 +25,7 @@ public sealed class ConformanceTests
             var expectation = classification == "deviation" ? sample.GetProperty("managedExpectation") : sample;
             var script = Text("script");
             if (sample.TryGetProperty("stderrNormalization", out var normalization)
-                && normalization.GetString() != "bash-command-location")
+                && normalization.GetString() is not ("bash-command-location" or "bash-command-name"))
                 throw new InvalidOperationException("Unknown diagnostic normalization.");
             if (!StringComparer.OrdinalIgnoreCase.Equals(Text("scriptSha256"),
                     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script)))))

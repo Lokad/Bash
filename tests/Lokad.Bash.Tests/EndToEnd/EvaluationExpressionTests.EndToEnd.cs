@@ -247,7 +247,7 @@ public sealed class EvaluationExpressionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("[: missing `]'\n", result.StdErr);
+        Assert.Equal("line 1: [: missing `]'\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 

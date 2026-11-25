@@ -37,7 +37,7 @@ public sealed partial class Evaluation
         {
             if (words.Count < 2 || !words[^1].Bytes.Span.SequenceEqual("]"u8))
             {
-                await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("missing `]'"))
+                await ReportBuiltinDiagnosticAsync(ShellValue.FromText(commandName), "missing `]'", scope.Context)
                     .ConfigureAwait(false);
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
             }
@@ -57,8 +57,8 @@ public sealed partial class Evaluation
         }
         if (evaluation.ParseError is { } error)
         {
-            await ReportExpansionDiagnosticAsync([ShellValue.FromText(commandName)],
-                [ShellValue.FromText(error.Prefix), error.Operand, ShellValue.FromText(error.Suffix)])
+            await ReportBuiltinDiagnosticAsync([ShellValue.FromText(commandName)],
+                [ShellValue.FromText(error.Prefix), error.Operand, ShellValue.FromText(error.Suffix)], scope.Context)
                 .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated);
         }
