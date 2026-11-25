@@ -116,6 +116,22 @@ public sealed class EvaluationBraceExpansionTests
     }
 
     [Fact]
+    public async Task BraceGeneratedArgumentsExpandLeadingTildesAndKeepAssignmentTildesLiteral()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            HOME=/root
+            printf '<%s>' item=~:~ item=~:{a,b} item=path:{left,~} {~,tail}
+            declare item={left,~}
+            printf '<%s>' "$item"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<item=/root:/root><item=~:a><item=~:b><item=path:left><item=path:~></root><tail><~>",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
     public async Task DeepLiteralBraceParentsExposeTheInnerChoice()
     {
         var left = new string('{', 1024);

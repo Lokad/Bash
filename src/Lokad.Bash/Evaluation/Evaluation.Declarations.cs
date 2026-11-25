@@ -249,6 +249,16 @@ public sealed partial class Evaluation
                             : FlattenCompoundArrayItem(item.ExpandedSubscript, item.Value, item.Operator);
                     }
                 }
+                else if (WordExpansion.ExpandBraceAlternatives(word, scope) is { } alternatives)
+                {
+                    // Generated operands use ordinary argument expansion before declaration dispatch.
+                    var expanded = await WordExpansion.ExpandBraceArgumentsAsync(alternatives, scope).ConfigureAwait(false);
+                    if (HasPendingExpansionError
+                        || !await AppendExpandedWordsAsync(expanded, fields, Memory.Workspace, static value => value)
+                            .ConfigureAwait(false))
+                        break;
+                    AddExpandedFields();
+                }
                 else
                 {
                     // Shell target expansion precedes the RHS; builtin subscript interpretation happens on application.
@@ -279,11 +289,7 @@ public sealed partial class Evaluation
             await AppendOperandValuesAsync(word, scope, fields).ConfigureAwait(false);
             if (HasPendingExpansionError)
                 break;
-            if (words != null)
-                Memory.PrepareListCapacity(words, fields.Count);
-            for (var fieldIndex = 0; fieldIndex < fields.Count; fieldIndex++)
-                AddField(fields[fieldIndex], sourceWord: null, remainingFields: fields.Count - fieldIndex);
-            fields.Clear();
+            AddExpandedFields();
         }
 
         Memory.Workspace.Resize(Memory.Workspace.Bytes - MemoryCapacity.ArrayBackingBytes<ShellValue>(fields.Capacity));
@@ -295,6 +301,15 @@ public sealed partial class Evaluation
                 ? await GetDeclarationOperandValueAsync(assignmentArgument, scope).ConfigureAwait(false)
                 : assignmentArgument.Name;
         return new PreparedDeclaration(words == null ? command : command with { Words = words }, options, operands, lastArgument);
+
+        void AddExpandedFields()
+        {
+            if (words != null)
+                Memory.PrepareListCapacity(words, fields.Count);
+            for (var fieldIndex = 0; fieldIndex < fields.Count; fieldIndex++)
+                AddField(fields[fieldIndex], sourceWord: null, remainingFields: fields.Count - fieldIndex);
+            fields.Clear();
+        }
 
         PreparedDeclarationOperand PrepareVariableOperand(ShellValue input) =>
             !options.UsesCompleteOperands

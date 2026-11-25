@@ -58,16 +58,19 @@ internal static class BraceExpansion
     private readonly record struct Branch(Continuation? Continuation, Fragment? Prefix);
 
     /// <summary>Expands brace expressions across existing lexical parts in encounter order.</summary>
-    public static IReadOnlyList<Word> Expand(Word word, EvaluationMemory memory, CancellationToken cancellationToken)
+    public static IReadOnlyList<Word> Expand(Word word, EvaluationMemory memory, CancellationToken cancellationToken) =>
+        ExpandAlternatives(word, memory, cancellationToken) ?? [word];
+
+    internal static IReadOnlyList<Word>? ExpandAlternatives(Word word, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!word.Parts.Any(static part => part is SourceWordPart { Kind: WordPartKind.Unquoted } source
             && source.Source.AsSpan().Contains((byte)'{')))
-            return [word];
+            return null;
         using var scratch = new MemoryCapacity(memory.Budget, 0);
         var braces = Scan(word.Parts, scratch, cancellationToken);
         if (braces.Count == 0)
-            return [word];
+            return null;
 
         // Invalid and unclosed groups remain literal. Link around them so their valid
         // descendants can be found without revisiting the enclosing text.
@@ -103,7 +106,7 @@ internal static class BraceExpansion
         }
 
         if (nextBrace[0] == braces.Count)
-            return [word];
+            return null;
 
         var wholeWord = new FragmentRange(new(new(0, 0), 0), new(new(word.Parts.Count, 0), braces.Count));
         var total = Count(wholeWord);

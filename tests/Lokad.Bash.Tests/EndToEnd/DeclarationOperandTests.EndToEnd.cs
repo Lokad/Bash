@@ -7,6 +7,71 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationOperandTestsEndToEnd
 {
     [Theory]
+    [InlineData("declare item={1..3}; printf '<%s:%s>' \"$item\" \"$_\"", "<3:item=3>")]
+    [InlineData("item=seed; typeset item+={a,\"$item\"}; printf '<%s:%s>' \"$item\" \"$_\"", "<seedaseed:item+=seed>")]
+    [InlineData("export item={left,\"b c\"}; declare -p item", "declare -x item=\"b c\"\n")]
+    [InlineData("f(){ local item={left,}; printf '<%s:%s>' \"$item\" \"$_\"; }; f", "<:item=>")]
+    [InlineData("declare(){ printf '<%s>' \"$@\"; }; value='a b'; declare item={$value,tail}",
+        "<item=a><b><item=tail>")]
+    [InlineData("i=0; declare item[i++]={a,b}; printf '<%s:%s>' \"$i\" \"$_\"; declare -p item",
+        "<2:item[i++]=b>declare -a item=([0]=\"a\" [1]=\"b\")\n")]
+    public async Task BraceGeneratedDeclarationOperandsUseOrdinaryArgumentExpansion(string script, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task BraceGeneratedAssignmentsExpandTheirCommonPrefixForEachOperand()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare item="$(printf x >> log; printf start)"{a,b}
+            printf '<%s:%s>' "$item" "$_"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<startb:item=startb>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("xx", result.Host.ReadFile("/log"));
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task BraceGeneratedReadonlyAssignmentsKeepTheFirstPublishedValue()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -r item={red,blue}
+            printf '<%s:%s:%s>' "$?" "$item" "$_"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:red:item=blue>", result.StdOut);
+        Assert.Equal("line 1: declare: item: readonly variable\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task BraceGeneratedDeclarationOperandsExpandPathnamesAsCompleteArguments()
+    {
+        await using var host = EvaluationTestHelper.BuildDefaultTree();
+        host.AddFile("/item=matched", "data");
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare item=*
+            printf '<%s>' "$item"
+            declare item={left,*}
+            printf '<%s:%s>' "$item" "$_"
+            """, host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<*><matched:item=matched>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal("data", host.ReadFile("/item=matched"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("local", "-ga", "declare -- x=\"local\"\ndeclare -a x=([0]=\"one\" [1]=\"two\")\n")]
     [InlineData("local", "\"-ga\"", "declare -a x=([0]=\"one\" [1]=\"two\")\ndeclare -a x=([0]=\"old\")\n")]
     [InlineData("local", "\"$flags\"", "declare -a x=([0]=\"one\" [1]=\"two\")\ndeclare -a x=([0]=\"old\")\n")]

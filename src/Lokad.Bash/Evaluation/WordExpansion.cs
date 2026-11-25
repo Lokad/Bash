@@ -78,32 +78,49 @@ internal static partial class WordExpansion
         ScopedEvaluation scope) =>
         ExpandInternalAsync(word, scope, allowWordSplitting: true, ExpansionPurpose.Normal);
 
-    private static async Task<IReadOnlyList<ExpandedWord>> ExpandInternalAsync(
+    private static Task<IReadOnlyList<ExpandedWord>> ExpandInternalAsync(
         Word word,
         ScopedEvaluation scope,
         bool allowWordSplitting,
         ExpansionPurpose purpose)
     {
         if (!scope.CanExpand)
-            return [];
+            return Task.FromResult<IReadOnlyList<ExpandedWord>>([]);
 
         scope.Effects.CancellationToken.ThrowIfCancellationRequested();
         if (word.LiteralFields is { } literal)
-            return literal;
+            return Task.FromResult(literal);
 
-        var braceExpanded = ExpandBraceWords(word, scope);
+        var alternatives = ExpandBraceAlternatives(word, scope);
+        return alternatives == null
+            ? ExpandWordsAsync([word], scope, allowWordSplitting, purpose, TildeExpansion.Argument)
+            : ExpandWordsAsync(alternatives, scope, allowWordSplitting, purpose, TildeExpansion.Leading);
+    }
+
+    internal static IReadOnlyList<Word>? ExpandBraceAlternatives(Word word, ScopedEvaluation scope) =>
+        word.LiteralFields == null ? BraceExpansion.ExpandAlternatives(
+            word, scope.Effects.Memory, scope.Effects.CancellationToken) : null;
+
+    internal static Task<IReadOnlyList<ExpandedWord>> ExpandBraceArgumentsAsync(
+        IReadOnlyList<Word> alternatives, ScopedEvaluation scope) =>
+        ExpandWordsAsync(alternatives, scope, allowWordSplitting: true, ExpansionPurpose.Normal, TildeExpansion.Leading);
+
+    private static async Task<IReadOnlyList<ExpandedWord>> ExpandWordsAsync(
+        IReadOnlyList<Word> words, ScopedEvaluation scope, bool allowWordSplitting, ExpansionPurpose purpose,
+        TildeExpansion tildeExpansion)
+    {
         var results = new List<ExpandedWord>();
         // Scalar consumers join fields per alternative before selecting their value.
         var joinFields = purpose is ExpansionPurpose.Scalar or ExpansionPurpose.Assignment or ExpansionPurpose.AssociativeCompound;
 
-        foreach (var expansion in braceExpanded)
+        foreach (var expansion in words)
         {
             var expanded = await ExpandWithoutBraceAsync(
                     expansion,
                     scope,
                     allowWordSplitting,
                     purpose,
-                    TildeExpansion.Argument,
+                    tildeExpansion,
                     joinFields ? null : results,
                     scope.Effects.Memory.Workspace)
                 .ConfigureAwait(false);
