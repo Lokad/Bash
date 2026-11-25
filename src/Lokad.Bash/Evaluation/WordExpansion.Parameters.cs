@@ -989,8 +989,11 @@ internal static partial class WordExpansion
                 if (!scope.CanExpand)
                     return;
                 var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken) : null;
-                var syntaxStart = replacement.Value.Bytes.Span.IndexOfAny((byte)'&', (byte)'\\');
-                using var encoded = matcher != null && syntaxStart >= 0 && replacement.Mask is not { Memory.IsEmpty: true }
+                var replacementMask = replacement.Mask;
+                var syntaxStart = replacementMask == null ? -1
+                    : replacement.Value.Bytes.Span.IndexOfAny((byte)'&', (byte)'\\');
+                var activity = replacementMask?.Memory ?? default;
+                using var encoded = matcher != null && syntaxStart >= 0 && !activity.IsEmpty
                     ? new ByteMemoryBuilder(0, budget.Budget)
                     : null;
                 ReadOnlyMemory<byte>? template = null;
@@ -1020,14 +1023,13 @@ internal static partial class WordExpansion
                     if (encoded == null)
                         return replacement.Value.Bytes;
                     var bytes = replacement.Value.Bytes.Span;
-                    var activity = replacement.Mask;
-                    var mask = activity == null ? default : activity.AsSpan();
+                    var mask = new GlobMaskSpan(activity.Span);
                     var copiedThrough = 0;
                     for (var index = syntaxStart; index < bytes.Length; index++)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         // Preserve quoted escapes in one stream: an earlier unquoted backslash can consume them.
-                        if (bytes[index] is not ((byte)'&' or (byte)'\\') || activity != null && mask[index] == GlobMask.Active)
+                        if (bytes[index] is not ((byte)'&' or (byte)'\\') || mask[index] == GlobMask.Active)
                             continue;
                         encoded.Append(bytes[copiedThrough..index]).Append((byte)'\\');
                         copiedThrough = index;
@@ -1106,12 +1108,12 @@ internal static partial class WordExpansion
                     void AppendReplacement(ReadOnlySpan<byte> match)
                     {
                         // Operand expansion is eager; template spelling is needed only after a match.
-                        var insert = (template ??= EncodeReplacement()).Span;
                         if (syntaxStart < 0)
                         {
-                            Append(insert);
+                            Append(replacement.Value.Bytes.Span);
                             return;
                         }
+                        var insert = (template ??= EncodeReplacement()).Span;
                         var literalStart = 0;
                         for (var index = syntaxStart; index < insert.Length; index++)
                         {

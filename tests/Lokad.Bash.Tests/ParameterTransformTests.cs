@@ -173,36 +173,43 @@ public sealed class ParameterTransformTests
     }
 
     [Theory]
-    [InlineData("""${x//b/"$r"}""", true)]
-    [InlineData("""${x//z/"$r"}""", false)]
-    public async Task QuotedReplacementWorkspaceFollowsEmittedBytes(string expansion, bool matched)
+    [InlineData("b", true)]
+    [InlineData("z", false)]
+    public async Task QuotedReplacementWorkspaceFollowsEmittedBytes(string subject, bool matched)
     {
-        const int width = 16 * 1024;
-        const string subject = "b";
-        var replacement = new string('x', width - 1) + "&";
-        var governor = new MemoryGovernor(4 * 1024 * 1024);
-        using var owner = governor.CreateScope();
-        var evaluation = new Eval(Parser.Parse(string.Empty));
-        evaluation.Memory.Budget = owner;
-        var variables = Variables.CreateEmpty();
-        Assert.True(variables.TrySetScalar("x", ShellValue.FromText(subject)));
-        Assert.True(variables.TrySetScalar("r", ShellValue.FromText(replacement)));
-        var scope = new ScopedEvaluation(evaluation, variables, default);
-        var tokenizer = new Tokenizer(ShellSource.FromText("\"" + expansion + "\""));
-        Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
-        var word = Assert.IsType<WordToken>(token).Word;
+        const int width = 64 * 1024;
+        var prefix = new string('x', width - 1);
+        var plain = await MeasureAsync(prefix + "x");
+        var withAmpersand = await MeasureAsync(prefix + "&");
+        Assert.Equal(plain, withAmpersand);
 
-        using (evaluation.Memory.BeginCommand(scope))
+        async Task<long> MeasureAsync(string replacement)
         {
-            var baseline = evaluation.Memory.Workspace.Bytes;
-            var result = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
-            Assert.Equal(matched ? replacement : subject, result.ToUtf8String());
-            var workspace = evaluation.Memory.Workspace.Bytes - baseline;
-            // Only a match retains the emitted replacement backing.
-            Assert.InRange(workspace, 0, (matched ? 6L : 4L) * width);
+            var governor = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = governor.CreateScope();
+            var evaluation = new Eval(Parser.Parse(string.Empty));
+            evaluation.Memory.Budget = owner;
+            var variables = Variables.CreateEmpty();
+            Assert.True(variables.TrySetScalar("x", ShellValue.FromText(subject)));
+            Assert.True(variables.TrySetScalar("r", ShellValue.FromText(replacement)));
+            var scope = new ScopedEvaluation(evaluation, variables, default);
+            var tokenizer = new Tokenizer(ShellSource.FromText("\"${x//b/\"$r\"}\""));
+            Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+            var word = Assert.IsType<WordToken>(token).Word;
+
+            using (evaluation.Memory.BeginCommand(scope))
+            {
+                var baseline = evaluation.Memory.Workspace.Bytes;
+                var result = await WordExpansion.ExpandAsync(word, scope, ExpansionPurpose.Scalar);
+                Assert.Equal(matched ? replacement : subject, result.ToUtf8String());
+                var workspace = evaluation.Memory.Workspace.Bytes - baseline;
+                // Only a match retains the emitted replacement backing.
+                Assert.InRange(workspace, 0, (matched ? 6L : 4L) * width);
+            }
+            evaluation.Memory.Finish(retainVariables: false);
+            Assert.Equal(0, governor.ReservedBytes);
+            return governor.PeakBytes;
         }
-        evaluation.Memory.Finish(retainVariables: false);
-        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]
